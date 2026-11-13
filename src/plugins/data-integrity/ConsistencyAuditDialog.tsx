@@ -95,6 +95,37 @@ function describeCheck(name: string, c: ConsistencyCheckResult): CheckView {
       offending: num(c, 'strandedLocalOnly') + num(c, 'equalStampStandoff') + num(c, 'localRicherNoPending'),
     }
   }
+  if (name === 'property_field_row_duplicates') {
+    return {
+      label: 'Duplicate property field rows',
+      detail: num(c, 'duplicatePairs')
+        ? `${num(c, 'duplicatePairs')} (block, property) pairs with more than one field row`
+        : 'none',
+      offending: num(c, 'duplicatePairs'),
+    }
+  }
+  if (name === 'property_cell_coverage') {
+    const buckets: Array<[string, string]> = [
+      ['missing', 'missing'], ['refused', 'refused by the codec'],
+      ['deletedThroughChildren', 'deleted through children'],
+    ]
+    const parts: string[] = []
+    let offending = 0
+    for (const [key, text] of buckets) {
+      const bucket = c[key] as { cells?: number; blocks?: number } | undefined
+      if (bucket?.cells) parts.push(`${bucket.cells} ${text}`)
+      offending += Number(bucket?.blocks ?? 0)
+    }
+    return { label: 'Property cells without blocks', detail: parts.join(', ') || 'every cell is backed', offending }
+  }
+  if (name === 'property_cell_divergence') {
+    const keys = Array.isArray(c.keys) ? (c.keys as { key: string; cells: number }[]) : []
+    return {
+      label: 'Property cells vs. blocks',
+      detail: keys.map((k) => `${k.key}: ${k.cells}`).join(', ') || 'consistent',
+      offending: num(c, 'divergentBlocks'),
+    }
+  }
   return { label: name, detail: c.status, offending: c.status === 'anomaly' ? 1 : 0 }
 }
 
@@ -278,7 +309,9 @@ export function ConsistencyAuditDialog({
                   <div className="mt-0.5 pl-6 text-xs text-muted-foreground">
                     {check.status === 'error'
                       ? `couldn't run: ${String(check.error ?? 'unknown error')}`
-                      : view.detail}
+                      : check.status === 'skipped'
+                        ? `skipped: ${String(check.reason ?? 'not applicable')}`
+                        : view.detail}
                   </div>
                   {samples.length > 0 && (
                     <div className="mt-1 space-y-1 pl-6">

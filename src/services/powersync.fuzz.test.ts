@@ -1,33 +1,17 @@
 // @vitest-environment node
 /**
  * Fuzz suite for the two pure upload-queue transforms in `powersync.ts` —
- * `compactBlockCrudEntries` (~powersync.ts:211) and `orderedBlockUpserts`
- * (~powersync.ts:300), exported for tests as `__compactBlockCrudEntriesForTest`
- * / `__orderedBlockUpsertsForTest`. See `src/test/fuzz.ts` for the
+ * `compactBlockCrudEntries` and `chunkBlockUpserts`, exported for tests as
+ * `__compactBlockCrudEntriesForTest` / `__chunkBlockUpsertsForTest`. See `src/test/fuzz.ts` for the
  * smoke/deep tier mechanics and `docs/fuzzing.md` for conventions.
  *
- * ## `orderedBlockUpserts` (topological create-order for a batch of rows)
+ * ## `chunkBlockUpserts` (RPC-sized, parent-first chunks of a batch of rows)
  *
- * The function is a post-order DFS over the `parent_id` functional graph
- * (powersync.ts:305-316): `visit(row)` recurses into the parent *before*
- * pushing `row`, so a resolved parent is always pushed before its child —
- * except the cycle guard (`if (current === 'visiting') return`,
- * powersync.ts:308) short-circuits a re-entrant visit of a node already on
- * the current DFS stack. For a cycle of size 1 (self-loop, `parent_id ===
- * id`) that guard fires immediately and the row is pushed like any
- * childless row — no violation. For a cycle of size k>=2, exactly one
- * internal edge is broken: whichever node is reached *first* by the overall
- * traversal (a "top-level" row in input order, or an external row whose
- * parent chain leads in) becomes the entry point; every other cycle member
- * is fully resolved (pushed) before the DFS unwinds back to the entry, and
- * the entry itself is pushed last. So among the k parent-edges internal to
- * the cycle, exactly k-1 satisfy "parent before child" and exactly 1
- * (the edge whose target is the entry point) does not — proved by
- * hand-tracing both a plain cycle and a cycle reached through an external
- * predecessor (see the property below for the derivation). This is the
- * "exact guarantee for cycle members" the property encodes, rather than
- * asserting a specific relative order among cycle members (which depends on
- * input order and isn't part of the function's contract).
+ * The rows are laid out in preorder from each root (a row whose parent is not
+ * in the batch), so a resolved parent precedes its child — across chunks too.
+ * A cycle in the `parent_id` graph has no root; its members are placed from the
+ * first one in input order, so exactly one of its internal edges (the one into
+ * that entry row) is reversed. A subtree that fits in one chunk is never split.
  *
  * Oracles:
  *  - Permutation: output has the same length and the same set of row
@@ -103,7 +87,7 @@ vi.mock('@/services/supabase.js', () => ({
 
 import {
   __compactBlockCrudEntriesForTest,
-  __orderedBlockUpsertsForTest,
+  __chunkBlockUpsertsForTest,
   type CompactedBlockOperation,
 } from './powersync'
 
@@ -129,7 +113,7 @@ const del = (id: string, txId: number, clientId = 0) =>
   crudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
 
 // ──────────────────────────────────────────────────────────────────────
-// orderedBlockUpserts
+// chunkBlockUpserts
 // ──────────────────────────────────────────────────────────────────────
 
 type Row = {id: string; parent_id: string | null}
@@ -149,7 +133,7 @@ const rowsArb: fc.Arbitrary<Row[]> = idsArb.chain(ids =>
  *  a member of one cycle. Assigns each detected cycle a distinct group id
  *  so multiple disjoint cycles in one batch can be told apart. This is a
  *  standard functional-graph cycle check, computed independently of
- *  `orderedBlockUpserts`'s own push order — it only establishes set
+ *  `chunkBlockUpserts`'s own layout — it only establishes set
  *  membership, never an ordering. */
 const detectCycleGroups = (rows: readonly Row[]): Map<string, number> => {
   const byId = new Map(rows.map(r => [r.id, r]))
@@ -180,21 +164,26 @@ const detectCycleGroups = (rows: readonly Row[]): Map<string, number> => {
   return groupOf
 }
 
-describe('orderedBlockUpserts', () => {
-  it('is a permutation; non-cycle parents precede children; exactly one reversed edge per cycle (size >= 2)', () => {
+describe('chunkBlockUpserts', () => {
+  it('is a capped, parent-first permutation that keeps every subtree that fits whole', () => {
     fc.assert(
-      fc.property(rowsArb, rows => {
-        const ordered = __orderedBlockUpsertsForTest(rows)
+      fc.property(rowsArb, fc.integer({min: 1, max: 6}), (rows, cap) => {
+        const chunks = __chunkBlockUpsertsForTest(rows, cap)
+        const ordered = chunks.flat()
 
         // Permutation: same size, same set of row *references* (not copies).
         expect(ordered.length).toBe(rows.length)
         const orderedSet = new Set(ordered)
         expect(orderedSet.size).toBe(rows.length)
         for (const row of rows) expect(orderedSet.has(row)).toBe(true)
-        expect([...ordered].map(r => r.id).sort()).toEqual([...rows].map(r => r.id).sort())
+        for (const chunk of chunks) {
+          expect(chunk.length).toBeGreaterThan(0)
+          expect(chunk.length).toBeLessThanOrEqual(cap)
+        }
 
         const byId = new Map(rows.map(r => [r.id, r]))
         const indexOf = new Map(ordered.map((r, i) => [r.id, i]))
+        const chunkOf = new Map(chunks.flatMap((chunk, c) => chunk.map(r => [r.id, c] as const)))
         const cycleGroup = detectCycleGroups(rows)
 
         const violationsByGroup = new Map<number, number>()
@@ -212,6 +201,22 @@ describe('orderedBlockUpserts', () => {
           }
         }
         for (const count of violationsByGroup.values()) expect(count).toBe(1)
+
+        // Every acyclic subtree that fits in one chunk sits in one chunk.
+        const childrenOf = new Map<string, string[]>()
+        for (const row of rows) {
+          const parentId = typeof row.parent_id === 'string' ? row.parent_id : undefined
+          if (parentId === undefined || parentId === row.id || !byId.has(parentId)) continue
+          childrenOf.set(parentId, [...(childrenOf.get(parentId) ?? []), row.id])
+        }
+        const subtreeOf = (id: string): string[] =>
+          [id, ...(childrenOf.get(id) ?? []).flatMap(subtreeOf)]
+        for (const row of rows) {
+          if (cycleGroup.has(row.id)) continue
+          const members = subtreeOf(row.id)
+          if (members.some(id => cycleGroup.has(id)) || members.length > cap) continue
+          for (const id of members) expect(chunkOf.get(id)).toBe(chunkOf.get(row.id))
+        }
       }),
       fuzzParams(200),
     )
