@@ -1,1 +1,1 @@
-export{zD as BlockLink}from"../../../chunks/app-s5pmzoHj.js";
+export{zD as BlockLink}from"../../../chunks/app-CHolVKlA.js";
