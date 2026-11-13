@@ -294,8 +294,8 @@ const moveVertical = async (
   // walk the model handler does on its own when spatial nav is off.
   const modelNext = deps.scopeRootId
     ? (direction === 'down'
-        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
-        : await previousVisibleBlock(block, deps.scopeRootId))
+        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen, deps.propertyDisplay)
+        : await previousVisibleBlock(block, deps.scopeRootId, deps.propertyDisplay))
     : null
 
   // A second keystroke or a click can land while that walk waits on an

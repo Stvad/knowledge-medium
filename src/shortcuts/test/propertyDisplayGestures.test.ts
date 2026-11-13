@@ -14,7 +14,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ChangeScope, seedProperty, type BlockData, type User } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { propertyDisplayProp, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { focusBlock, isCollapsedProp, peekFocusedBlockLocation } from '@/data/properties'
+import { nextVisibleBlock, previousVisibleBlock, getLastVisibleDescendant } from '@/utils/selection'
+import { getVimNormalModeActions } from '@/plugins/vim-normal-mode/actions'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -111,5 +114,48 @@ describe('the block actions pass their surface\'s display scope', () => {
     }
     await indent.handler(deps, {kind: 'test'} as never)
     expect(await parentOf('b')).toBe(statusRow)
+  })
+})
+
+
+describe('navigation follows the property rows drawn by its surface', () => {
+  it('walks forward and backward through the field and its value', async () => {
+    expect((await nextVisibleBlock(repo.block('a'), 'page', true, NON_HIDDEN))?.id).toBe(statusRow)
+    expect((await nextVisibleBlock(repo.block(statusRow), 'page', true, NON_HIDDEN))?.id).toBe(draftRow)
+    expect((await nextVisibleBlock(repo.block(draftRow), 'page', true, NON_HIDDEN))?.id).toBe('b')
+    expect((await previousVisibleBlock(repo.block('b'), 'page', NON_HIDDEN))?.id).toBe(draftRow)
+    expect((await previousVisibleBlock(repo.block(draftRow), 'page', NON_HIDDEN))?.id).toBe(statusRow)
+    expect((await previousVisibleBlock(repo.block(statusRow), 'page', NON_HIDDEN))?.id).toBe('a')
+  })
+
+  it('resolves each parent override during a walk, including the last descendant', async () => {
+    await repo.block('owner').set(propertyDisplayProp, 'none')
+    expect((await nextVisibleBlock(repo.block('a'), 'page', true, NON_HIDDEN))?.id).toBe('b')
+    await repo.block('owner').set(propertyDisplayProp, 'all')
+    await repo.tx(tx => tx.move(statusRow, {parentId: 'owner', orderKey: 'a3'}), {scope: ChangeScope.BlockDefault})
+    const hiddenScope: PropertyDisplayScopeLevels = {...NON_HIDDEN, workspace: 'none'}
+    expect((await getLastVisibleDescendant(repo.block('owner'), 'page', true, hiddenScope)).id).toBe(draftRow)
+    await repo.block(statusRow).set(isCollapsedProp, true)
+    expect((await getLastVisibleDescendant(repo.block('owner'), 'page', true, hiddenScope)).id).toBe(statusRow)
+  })
+
+  it('still omits property rows without a surface or on a cell-backed surface', async () => {
+    expect((await nextVisibleBlock(repo.block('a'), 'page'))?.id).toBe('b')
+    expect((await nextVisibleBlock(repo.block('a'), 'page', true, {...NON_HIDDEN, childBacked: false}))?.id).toBe('b')
+  })
+
+  it('Vim j and k pass the display scope to both directions', async () => {
+    const actions = getVimNormalModeActions({repo})
+    const uiStateBlock = repo.block('page')
+    for (const [actionId, from, to] of [
+      ['move_down', 'a', statusRow],
+      ['move_up', 'b', draftRow],
+    ]) {
+      await focusBlock(uiStateBlock, from)
+      const action = actions.find(action => action.id === actionId)!
+      expect(action).toBeDefined()
+      await action.handler({block: repo.block(from), uiStateBlock, scopeRootId: 'page', propertyDisplay: NON_HIDDEN}, {kind: 'test'} as never)
+      await vi.waitFor(() => expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(to))
+    }
   })
 })

@@ -35,7 +35,7 @@ import { propertyRowsPlugin } from '../index'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
-import { focusBlock, showPropertiesProp } from '@/data/properties'
+import { focusBlock, isCollapsedProp, showPropertiesProp } from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { setBlockPropertyDisplay } from '../actions'
 
@@ -659,5 +659,36 @@ describe('moving the caret off a row the listing leaves out', () => {
 
   it('steps on to the sibling after it', async () => {
     expect((await nextVisibleBlock(repo.block('nav-row'), OWNER))?.id).toBe('after')
+  })
+})
+
+
+describe('field row expansion affordance', () => {
+  it('only hides the wide-row control for one expanded leaf value', async () => {
+    mount({workspace: 'non-hidden'})
+    const input = await screen.findByDisplayValue('draft')
+    const row = input.closest('[data-property-field-row="true"]')!
+    const fieldId = row.getAttribute('data-block-id')!
+    const [valueId] = await repo.query.childIds({id: fieldId, propertyChildren: 'all'}).load()
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
+    await act(() => repo.block(fieldId).set(isCollapsedProp, true))
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('false'))
+    await act(() => repo.block(fieldId).set(isCollapsedProp, false))
+    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
+    await act(() => repo.tx(tx => tx.create({id: 'nested-note', workspaceId: WS, parentId: valueId, orderKey: 'a0', content: 'nested detail'}), {scope: ChangeScope.BlockDefault}))
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('false'))
+    expect(await screen.findByText('nested detail')).toBeTruthy()
+  })
+
+  it('keeps the control for multiple values, then follows a change to one value', async () => {
+    await repo.block(OWNER).set(tagsProp, ['alpha', 'beta'])
+    mount({workspace: 'non-hidden'})
+    const alpha = await screen.findByText('alpha')
+    expect(await screen.findByText('beta')).toBeTruthy()
+    const row = alpha.closest('[data-property-field-row="true"]')!
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('false'))
+    await act(() => repo.block(OWNER).set(tagsProp, ['alpha']))
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
   })
 })
