@@ -1,1 +1,1 @@
-export{Oq as preferredSpanReplacement}from"../../../chunks/app-C_SF6UCd.js";
+export{Aq as preferredSpanReplacement}from"../../../chunks/app-C3pyyVAZ.js";

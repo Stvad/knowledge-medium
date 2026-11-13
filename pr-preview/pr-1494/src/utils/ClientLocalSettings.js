@@ -1,1 +1,1 @@
-export{UP as ClientLocalSettings,WP as clientLocalSettings}from"../../chunks/app-C_SF6UCd.js";
+export{UP as ClientLocalSettings,WP as clientLocalSettings}from"../../chunks/app-C3pyyVAZ.js";
