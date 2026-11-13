@@ -37,6 +37,8 @@ import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { focusBlock, showPropertiesProp } from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
+import type { OutlineSurface } from '@/data/outlineSurface'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 import { setBlockPropertyDisplay } from '../actions'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -641,6 +643,9 @@ describe('a child the user turns into a field row', () => {
 })
 
 describe('moving the caret off a row the listing leaves out', () => {
+  const OWNER_SURFACE: OutlineSurface = {
+    scopeRootId: OWNER, scopeRootForcesOpen: true, propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
+  }
   // The focused row a display mode hides is on screen between its siblings,
   // so the walkers the arrow keys and merges use must place it there too.
   beforeEach(async () => {
@@ -654,10 +659,10 @@ describe('moving the caret off a row the listing leaves out', () => {
   })
 
   it('steps back to the sibling before it', async () => {
-    expect((await previousVisibleBlock(repo.block('nav-row'), OWNER))?.id).toBe(NOTE)
+    expect((await previousVisibleBlock(repo.block('nav-row'), OWNER_SURFACE))?.id).toBe(NOTE)
   })
 
   it('steps on to the sibling after it', async () => {
-    expect((await nextVisibleBlock(repo.block('nav-row'), OWNER))?.id).toBe('after')
+    expect((await nextVisibleBlock(repo.block('nav-row'), OWNER_SURFACE))?.id).toBe('after')
   })
 })

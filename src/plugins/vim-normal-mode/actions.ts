@@ -22,6 +22,7 @@ import {
   createSharedBlockActions,
   enterEditMode,
 } from '@/shortcuts/blockActions.js'
+import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface.js'
 import type { BlockAction } from '@/shortcuts/blockActions.js'
 import {
   ActionConfig,
@@ -57,17 +58,16 @@ const focusMovedDuringWalk = (deps: BlockShortcutDependencies): boolean => {
  *  jump_many_{up,down} actions are thin focus wrappers around it. */
 export const jumpVisibleBlocks = async (
   startBlock: BlockShortcutDependencies['block'],
-  scopeRootId: string,
+  surface: OutlineSurface,
   count: number,
   direction: 'up' | 'down',
-  scopeRootForcesOpen = true,
 ) => {
   let current = startBlock
   let last = startBlock
   for (let i = 0; i < count; i++) {
     const next = direction === 'up'
-      ? await previousVisibleBlock(current, scopeRootId)
-      : await nextVisibleBlock(current, scopeRootId, scopeRootForcesOpen)
+      ? await previousVisibleBlock(current, surface)
+      : await nextVisibleBlock(current, surface)
     if (!next) break
     current = next
     last = next
@@ -116,10 +116,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'move_down',
       description: 'Move to next block',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, scopeRootId} = deps
-        if (!block || !uiStateBlock || !scopeRootId) return
+        const {block, uiStateBlock} = deps
+        const surface = outlineSurfaceOf(deps)
+        if (!block || !uiStateBlock || !surface) return
 
-        const next = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        const next = await nextVisibleBlock(block, surface)
         if (next && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
         }
@@ -132,10 +133,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'move_up',
       description: 'Move to previous block',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, scopeRootId} = deps
-        if (!block || !uiStateBlock || !scopeRootId) return
+        const {block, uiStateBlock} = deps
+        const surface = outlineSurfaceOf(deps)
+        if (!block || !uiStateBlock || !surface) return
 
-        const prev = await previousVisibleBlock(block, scopeRootId)
+        const prev = await previousVisibleBlock(block, surface)
         if (prev && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
         }
@@ -167,13 +169,13 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'create_block_below_and_edit',
       description: 'Create block below (or as child) and enter edit mode',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, scopeRootId} = deps
-        if (!block || !uiStateBlock || !scopeRootId) return
+        const {block, uiStateBlock} = deps
+        if (!block || !uiStateBlock || !deps.scopeRootId) return
 
         // child-first when the block shows children OR is the scope root
         // (where a sibling would be created outside the visible surface —
         // the "invisible block" bug). Otherwise a sibling below.
-        const {createBelowPlacement} = await structuralEditPolicyForBlock(block, scopeRootId)
+        const {createBelowPlacement} = await structuralEditPolicyForBlock(block, deps)
         const newId = createBelowPlacement === 'child-first'
           ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}, revealParent: true})
           : await repo.mutate.createSiblingBelow({siblingId: block.id})
@@ -224,14 +226,16 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_to_last_visible_block',
       description: 'Jump to last visible block',
-      handler: async ({uiStateBlock, scopeRootId, renderScopeId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
-        if (!scopeRootId) return
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {uiStateBlock, renderScopeId} = deps
+        const surface = outlineSurfaceOf(deps)
+        if (!surface) return
 
-        const lastBlock = await getLastVisibleDescendant(repo.block(scopeRootId), scopeRootId, scopeRootForcesOpen)
+        const lastBlock = await getLastVisibleDescendant(repo.block(surface.scopeRootId), surface)
         if (!lastBlock) return
 
         void focusBlock(uiStateBlock, lastBlock.id, {
-          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
+          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, surface.scopeRootId),
         })
       },
       defaultBinding: {
@@ -241,10 +245,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_down',
       description: 'Jump down several blocks',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
-        if (!scopeRootId) return
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock, renderScopeId} = deps
+        const surface = outlineSurfaceOf(deps)
+        if (!surface) return
 
-        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'down', scopeRootForcesOpen)
+        const target = await jumpVisibleBlocks(block, surface, JUMP_BLOCK_COUNT, 'down')
         if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {
@@ -254,10 +260,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_up',
       description: 'Jump up several blocks',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
-        if (!scopeRootId) return
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock, renderScopeId} = deps
+        const surface = outlineSurfaceOf(deps)
+        if (!surface) return
 
-        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'up', scopeRootForcesOpen)
+        const target = await jumpVisibleBlocks(block, surface, JUMP_BLOCK_COUNT, 'up')
         if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {
@@ -268,7 +276,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'create_block_above_and_edit',
       description: 'Create block above (or as child) and enter edit mode',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock, scopeRootId} = deps
+        const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
 
         // sibling-above normally, but at the scope root (e.g. a backlink
@@ -277,7 +285,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         // child, the only insertion point the surface can render. With no
         // scope root (imperative/CLI dispatch) the policy yields
         // 'sibling-above', preserving the plain create-above behaviour.
-        const {createAbovePlacement} = await structuralEditPolicyForBlock(block, scopeRootId)
+        const {createAbovePlacement} = await structuralEditPolicyForBlock(block, deps)
         const newId = createAbovePlacement === 'child-first'
           ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}, revealParent: true})
           : await repo.mutate.createSiblingAbove({siblingId: block.id})
@@ -291,10 +299,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'paste_after',
       description: 'Paste from clipboard after current block',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, propertyDisplay}: BlockShortcutDependencies) => {
         const pasted = await pasteFromClipboard(block, repo, {
           position: 'after',
           scopeRootId,
+          propertyDisplay,
         })
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
@@ -305,10 +314,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'paste_before',
       description: 'Paste from clipboard before current block',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId}: BlockShortcutDependencies) => {
+      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, propertyDisplay}: BlockShortcutDependencies) => {
         const pasted = await pasteFromClipboard(block, repo, {
           position: 'before',
           scopeRootId,
+          propertyDisplay,
         })
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },

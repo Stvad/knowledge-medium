@@ -1,7 +1,8 @@
 import type { SubtreeRow } from '@/data/api'
 import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
 import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
-import { isLeftOutOfChildrenView, type PropertyRowClassifier } from '@/data/propertyChildren'
+import type { Block } from '@/data/block'
+import { isLeftOutOfChildrenView, isPropertyFieldInstance, type PropertyRowClassifier } from '@/data/propertyChildren'
 import {
   childrenViewIn,
   NO_PROPERTY_DISPLAY_SCOPE,
@@ -45,6 +46,23 @@ export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): Prop
     isFieldDefinition: fieldId => isResolvableFieldDefinition(resolver.resolveField(fieldId)),
     isOutlineSkipped: fieldId => skipped.has(fieldId),
   }
+}
+
+/** Whether a surface with `scope` draws `block` as a PROPERTY ROW — the
+ *  property's name beside its value, in place of the row's own `::((id))`
+ *  text: a recognized field row under a parent whose listing there shows
+ *  property rows. (In a listing that shows none, a field row on screen — the
+ *  focused one — is an ordinary block showing its text.) */
+export const isDrawnAsPropertyRow = async (
+  block: Block,
+  scope: PropertyDisplayScopeLevels,
+): Promise<boolean> => {
+  if (!scope.childBacked) return false
+  const data = await block.load()
+  if (!data?.parentId) return false
+  const {isFieldDefinition} = repoPropertyRowClassifier(block.repo, data.workspaceId)
+  if (!isPropertyFieldInstance(data, isFieldDefinition)) return false
+  return childrenViewIn(scope, await block.repo.load(data.parentId)) !== 'none'
 }
 
 /** The subtree under `id` a copy carries (see {@link PropertyCopy}), in

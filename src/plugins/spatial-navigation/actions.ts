@@ -28,6 +28,7 @@ import {
   type FocusedBlockLocation,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { hasBlockSelection } from '@/data/stateBlocks.js'
 import type { Block } from '@/data/block'
 import {
@@ -292,10 +293,11 @@ const moveVertical = async (
   //
   // Costs one O(depth) walk per keystroke over handle-cached rows — the same
   // walk the model handler does on its own when spatial nav is off.
-  const modelNext = deps.scopeRootId
+  const surface = outlineSurfaceOf(deps)
+  const modelNext = surface
     ? (direction === 'down'
-        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
-        : await previousVisibleBlock(block, deps.scopeRootId))
+        ? await nextVisibleBlock(block, surface)
+        : await previousVisibleBlock(block, surface))
     : null
 
   // A second keystroke or a click can land while that walk waits on an

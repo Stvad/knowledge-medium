@@ -177,7 +177,7 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     await env.repo.load(tutorialId, { descendants: true })
 
     const tutorial = env.repo.block(tutorialId)
-    const childIds = await tutorial.childIds.load()
+    const childIds = await childIdsOf(env.repo, tutorial.id)
     // The outline has many top-level sections (Welcome, basics,
     // navigation, …, extensions). Asserting the exact count would make
     // this brittle against future copy-edits; just sanity-check it's

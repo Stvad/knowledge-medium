@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The outline's data walkers read the list the surface DRAWS: a property row
  * the display mode shows is a row to step onto, a merge neighbour, a child
@@ -29,7 +30,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { pasteMultilineText } from '@/paste/operations'
 import { extendSelectionDown } from '@/shortcuts/blockActions'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
-import { focusBlock } from '@/shortcuts/utils'
+import { focusBlock } from '@/data/properties'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -104,7 +105,6 @@ beforeEach(async () => {
 const editorAt = (content: string, cursor: number): EditorView => {
   let text = content
   const view = {
-    dom: document.createElement('div'),
     dispatch: vi.fn((spec: {changes?: {from: number; to: number; insert: string}}) => {
       if (spec.changes) text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
     }),
