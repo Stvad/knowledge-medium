@@ -21,16 +21,16 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
-import { selectionStateProp } from '@/data/properties'
+import { focusBlock, isCollapsedProp, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { pasteMultilineText } from '@/paste/operations'
 import { extendSelectionDown } from '@/shortcuts/blockActions'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
-import { focusBlock } from '@/data/properties'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -177,6 +177,24 @@ describe('range selection and the data walker step onto drawn property rows', ()
   it('focus after deleting a drawn row goes to its drawn neighbour', async () => {
     expect((await blockAfterSubtreeRemoval(repo.block(statusRow), DRAWN))?.id).toBe('b')
   })
+
+  it('a row its listing leaves out counts from where the outline draws it', async () => {
+    // Mode none lists [a, b]; the row sorts between them, so `b` takes its place.
+    expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN))?.id).toBe('b')
+    await repo.tx(tx => tx.move(statusRow, {parentId: 'owner', orderKey: 'a3'}), {scope: ChangeScope.BlockDefault})
+    expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN))?.id).toBe('b')
+    expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN, new Set(['b'])))?.id).toBe('a')
+  })
+
+  it('shift-click ranges over the drawn row', async () => {
+    const ui = repo.block('ui')
+    await focusBlock(ui, 'a')
+    await extendBlockSelectionAction.handler({
+      block: repo.block('b'), uiStateBlock: ui, scopeRootId: 'page', propertyDisplay: NON_HIDDEN,
+      targetElement: document.createElement('div'),
+    }, {kind: 'test'} as never)
+    expect(ui.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['a', statusRow, 'b'])
+  })
 })
 
 describe('merge targets are the drawn neighbours', () => {
@@ -202,6 +220,19 @@ describe('merge targets are the drawn neighbours', () => {
   it('in mode none the same Delete folds `b` into `a`', async () => {
     await pressInEditor('merge_next_block_cm', 'a', 'end', NONE)
     expect(await contentOf('a')).toBe('ab')
+  })
+
+  it('a block showing only drawn property rows is not folded into a block with children of its own', async () => {
+    await repo.block('owner').set(isCollapsedProp, true)
+    await pressInEditor('delete_empty_block_cm', 'solo', 'start', NON_HIDDEN)
+    expect(await contentOf('owner')).toBe('owner')
+    expect(await parentOf(soloStatusRow)).toBe('solo')
+  })
+
+  it('in mode none that block shows no children, and folds in', async () => {
+    await repo.block('owner').set(isCollapsedProp, true)
+    await pressInEditor('delete_empty_block_cm', 'solo', 'start', NONE)
+    expect(await contentOf('owner')).toBe('ownersolo')
   })
 
   it('Delete at the end of a drawn value folds the next drawn row into it', async () => {

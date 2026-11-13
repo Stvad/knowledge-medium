@@ -171,8 +171,15 @@ const insertionForSiblingRun = (
 const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): boolean =>
   scopeRootId === target.id || target.parentId === null
 
-type PlacementOptions =
-  Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId' | 'propertyDisplay'>
+/** {@link PasteOptions} as the placement rule reads them: every field
+ *  decided. The public entry points resolve the caller's display scope
+ *  (`displayScopeOf`), so nothing below them can drop it. */
+interface PlacementOptions {
+  position: PastePosition
+  placement: PastePlacement
+  scopeRootId: string | undefined
+  propertyDisplay: PropertyDisplayScopeLevels
+}
 
 /** THE placement rule for a run of pasted roots: whether they land in
  *  `target`'s own child list (its first-child slot) rather than beside it.
@@ -183,8 +190,7 @@ const rootsLandAsChildren = async (
   target: BlockData,
   {position, placement, scopeRootId, propertyDisplay}: PlacementOptions,
 ): Promise<{asChildren: boolean; visibleChildren: BlockData[]}> => {
-  const visibleChildren = await visibleChildrenOf(
-    tx, target.id, target.workspaceId, displayScopeOf({propertyDisplay}))
+  const visibleChildren = await visibleChildrenOf(tx, target.id, target.workspaceId, propertyDisplay)
   const hasVisibleChildren = visibleChildren.length > 0 && !isCollapsed(target.properties)
   // With no sibling slot, roots land in the target's child list whatever
   // `placement` says.
@@ -438,7 +444,7 @@ async function pasteParsedBlocks(
     const destination = await resolveRootDestination(tx, target, {
       position,
       scopeRootId,
-      propertyDisplay,
+      propertyDisplay: displayScopeOf({propertyDisplay}),
       placement,
       parsed,
       absorbedRootId: absorbedRoot?.id,
@@ -496,7 +502,7 @@ export async function pasteEditModeMultilineText(
     const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
-      propertyDisplay: options.propertyDisplay,
+      propertyDisplay: displayScopeOf(options),
       placement: 'visible',
       parsed: plan.parsed,
       absorbedRootId: plan.absorbedRoot.id,
@@ -658,7 +664,9 @@ export async function pasteArmedCut(
         if (!await isInsideAny(tx, id, liveSet)) roots.push(id)
       }
 
-      const destination = await cutDestination(tx, target, {position, placement, scopeRootId, propertyDisplay})
+      const destination = await cutDestination(tx, target, {
+        position, placement, scopeRootId, propertyDisplay: displayScopeOf({propertyDisplay}),
+      })
       await moveBlocksInTx(tx, roots, destination.move)
       if (destination.move.parentId === target.id) await revealChildren(tx, target.id)
       if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})

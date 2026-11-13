@@ -412,6 +412,12 @@ describe('Block.parent', () => {
     await env.repo.mutate.createChild({parentId: 'p', id: 'c2'})
   })
 
+  it('the deprecated child getters still answer the no-property-rows view', async () => {
+    const p = new Block(env.repo, 'p')
+    expect(p.childIds).toBe(env.repo.query.childIds({id: 'p', propertyChildren: 'none'}))
+    expect((await p.children.load()).map(child => child.id)).toEqual(['c1', 'c2'])
+  })
+
   it('parent returns the parent Block whenever this block is loaded', () => {
     const c = new Block(env.repo, 'c1')
     const p = c.parent

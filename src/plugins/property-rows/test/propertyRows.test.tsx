@@ -37,8 +37,7 @@ import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { focusBlock, showPropertiesProp } from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
-import type { OutlineSurface } from '@/data/outlineSurface'
-import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { setBlockPropertyDisplay } from '../actions'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -643,9 +642,7 @@ describe('a child the user turns into a field row', () => {
 })
 
 describe('moving the caret off a row the listing leaves out', () => {
-  const OWNER_SURFACE: OutlineSurface = {
-    scopeRootId: OWNER, scopeRootForcesOpen: true, propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
-  }
+  const OWNER_SURFACE = outlineSurfaceOf({scopeRootId: OWNER})!
   // The focused row a display mode hides is on screen between its siblings,
   // so the walkers the arrow keys and merges use must place it there too.
   beforeEach(async () => {
