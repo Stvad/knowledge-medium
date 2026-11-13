@@ -572,6 +572,17 @@ describe('a child the user turns into a field row', () => {
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
 
+  it('keeps a hidden field row mounted while the caret edits its value child', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await repo.tx(tx => tx.create({id: 'typed-value', workspaceId: WS, parentId: TYPED,
+      orderKey: 'a0', content: ''}), {scope: ChangeScope.BlockDefault})
+    await act(async () => { await focusBlock(repo.block(PANEL), 'typed-value', {edit: true}) })
+    await waitFor(() => expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull())
+    expect(typedRow()).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
+    await waitFor(() => expect(typedRow()).toBeNull())
+  })
+
   it('lets the mode hide the row once the user moves on', async () => {
     await typeIntoChild('none', '::((def-plain))')
     await outlineSettled()

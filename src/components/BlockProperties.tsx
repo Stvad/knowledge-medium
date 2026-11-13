@@ -24,6 +24,7 @@ import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
+import { showError } from '@/utils/toast.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
@@ -224,6 +225,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         }
       } catch (err) {
         console.error(`[BlockProperties] failed to register schema for "${row.name}":`, err)
+        showError(err instanceof Error ? err.message : String(err))
       }
       return
     }
@@ -333,6 +335,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               return schema
             } catch (err) {
               console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
+              showError(err instanceof Error ? err.message : String(err))
               return undefined
             }
           }}

@@ -85,11 +85,8 @@ export const BlockChildren = ({block}: { block: Block }) => {
   </PropertyRowListingContext>
 }
 
-/** The live row of `parent`'s child focused in this panel and render scope,
- *  or null. Follows the panel's focus AND the focused row itself, so moving
- *  that row into, out of or within `parent` re-lists it; the snapshot is null
- *  for every other parent, so only the listings it enters, leaves or moves
- *  within re-render. */
+/** The child containing this surface's focus. Follow ancestors too: a hidden
+ * field row must stay mounted while its value or a nested comment is edited. */
 const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | null => {
   const uiStateBlock = useUIStateBlock()
   const focusedRowId = useCallback((): string | null => {
@@ -99,12 +96,21 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | nul
     return location.blockId
   }, [uiStateBlock, renderScopeId])
   const subscribe = useCallback((notify: () => void) => {
-    let followed: {id: string; unsubscribe: () => void} | null = null
+    let followed: (() => void)[] = []
     const followFocusedRow = () => {
-      const id = focusedRowId()
-      if (followed?.id === id) return
-      followed?.unsubscribe()
-      followed = id === null ? null : {id, unsubscribe: parent.repo.block(id).subscribe(notify)}
+      followed.forEach(unsubscribe => unsubscribe())
+      followed = []
+      let id = focusedRowId()
+      const seen = new Set<string>()
+      while (id !== null && id !== parent.id && !seen.has(id)) {
+        seen.add(id)
+        const row = parent.repo.block(id)
+        followed.push(row.subscribe(() => {
+          followFocusedRow()
+          notify()
+        }))
+        id = row.peek()?.parentId ?? null
+      }
     }
     followFocusedRow()
     const unsubscribeFocus = uiStateBlock.subscribe(() => {
@@ -113,13 +119,20 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | nul
     })
     return () => {
       unsubscribeFocus()
-      followed?.unsubscribe()
+      followed.forEach(unsubscribe => unsubscribe())
     }
   }, [uiStateBlock, parent, focusedRowId])
   return useSyncExternalStore(subscribe, () => {
-    const id = focusedRowId()
-    const row = id === null ? null : parent.repo.block(id).peek()
-    return row?.parentId === parent.id ? row : null
+    let id = focusedRowId()
+    const seen = new Set<string>()
+    while (id !== null && id !== parent.id && !seen.has(id)) {
+      seen.add(id)
+      const row = parent.repo.block(id).peek()
+      if (!row) return null
+      if (row.parentId === parent.id) return row
+      id = row.parentId
+    }
+    return null
   })
 }
 

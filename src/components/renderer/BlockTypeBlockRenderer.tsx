@@ -41,6 +41,7 @@ import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import { trimIfEdited } from '@/utils/nameFieldCommit.js'
+import { showError } from '@/utils/toast.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -199,6 +200,7 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
       // Refused: snap the field back to the committed label so it never
       // shows a name that wasn't saved.
       console.error(`[BlockTypeBlockRenderer] ${err.message}`)
+      showError(err.message)
       setDraftLabel(label)
     }
   }, [block, data?.content, label])

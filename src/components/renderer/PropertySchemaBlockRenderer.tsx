@@ -457,6 +457,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // wherever the name is rendered.
     if (!isRoundTrippableReferenceLabel(next) || isGrammarShapedLabel(next)) {
       setDraftName(null)
+      showError('Property names must work as [[name]] links and cannot look like block references.')
       return
     }
     setRequestedNames(names => [...names, next])

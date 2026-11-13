@@ -376,6 +376,7 @@ describe('renaming a property with many consumers', () => {
     await waitFor(() => { expect(nameInput().value).toBe('test:myProp') })
     expect(screen.queryByRole('button', {name: 'Rename'})).toBeNull()
     expect(await storedName()).toBe('test:myProp')
+    expect(showError).toHaveBeenCalledWith(expect.stringMatching(/block references/i))
   })
 
   it('writes nothing when the definition moved while the user was deciding', async () => {
