@@ -1,1 +1,1 @@
-export{pS as VideoNotesLayout,mS as VideoNotesRenderer,hS as videoNotesLayoutContribution}from"../../../chunks/app-DHsA6Twl.js";
+export{PS as VideoNotesLayout,FS as VideoNotesRenderer,IS as videoNotesLayoutContribution}from"../../../chunks/app-DggkGp59.js";

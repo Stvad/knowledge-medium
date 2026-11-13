@@ -1,1 +1,1 @@
-export{Hs as aggregateDiagnostics,Us as useDiagnostics}from"../../../chunks/app-DHsA6Twl.js";
+export{fc as aggregateDiagnostics,pc as useDiagnostics}from"../../../chunks/app-DggkGp59.js";

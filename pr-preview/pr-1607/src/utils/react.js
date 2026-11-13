@@ -1,1 +1,1 @@
-export{DI as useIsMobile,OI as usePointerCoarse}from"../../chunks/app-DHsA6Twl.js";
+export{EL as useIsMobile,DL as usePointerCoarse}from"../../chunks/app-DggkGp59.js";

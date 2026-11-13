@@ -1,1 +1,1 @@
-export{UV as clipboardHtmlFor,WV as clipboardTextFor,GV as outlineFromClipboard}from"../../chunks/app-DHsA6Twl.js";
+export{mU as clipboardHtmlFor,hU as clipboardTextFor,gU as outlineFromClipboard}from"../../chunks/app-DggkGp59.js";

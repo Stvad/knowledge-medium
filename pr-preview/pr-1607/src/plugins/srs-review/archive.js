@@ -1,1 +1,1 @@
-export{Cc as archiveSrsCard}from"../../../chunks/app-DHsA6Twl.js";
+export{qc as archiveSrsCard}from"../../../chunks/app-DggkGp59.js";

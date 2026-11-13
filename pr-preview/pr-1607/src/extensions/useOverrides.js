@@ -1,1 +1,1 @@
-export{BN as useOverrides}from"../../chunks/app-DHsA6Twl.js";
+export{LP as useOverrides}from"../../chunks/app-DggkGp59.js";
