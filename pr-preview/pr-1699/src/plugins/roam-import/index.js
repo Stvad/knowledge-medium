@@ -1,1 +1,1 @@
-export{Ju as computePromotedFromChildren,Au as ensureRoamImportWindowHook,Nu as importRoam,Ru as planImport,Ou as roamImportPlugin}from"../../../chunks/app-B651sOA2.js";
+export{Ju as computePromotedFromChildren,Au as ensureRoamImportWindowHook,Nu as importRoam,Ru as planImport,Ou as roamImportPlugin}from"../../../chunks/app-C_lbCY6b.js";

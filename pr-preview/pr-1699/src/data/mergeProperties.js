@@ -1,1 +1,1 @@
-export{f5 as mergeProperties}from"../../chunks/app-B651sOA2.js";
+export{f5 as mergeProperties}from"../../chunks/app-C_lbCY6b.js";
