@@ -25,7 +25,7 @@ import { cycleScanSql } from '@/data/internals/treeQueries'
 import type { TestDb } from '@/data/test/createTestDb'
 import { aliasesProp, typesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { PropertyValueSetMoveError, SPLIT_PLACEMENTS, type SplitPlacement } from '@/data/mutators'
+import { SPLIT_PLACEMENTS, type SplitPlacement } from '@/data/mutators'
 
 // ──── legal-rejection allowlist ────
 
@@ -47,7 +47,6 @@ const LEGAL_ERRORS = [
   ParentDeletedError,
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
-  PropertyValueSetMoveError,
   WorkspaceMismatchError,
 ]
 

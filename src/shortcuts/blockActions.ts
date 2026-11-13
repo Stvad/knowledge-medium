@@ -18,8 +18,6 @@ import {
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
-import { isPropertyValueSetMoveError } from '@/data/mutators.js'
-import { showInfo } from '@/utils/toast.js'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
   ActionConfig,
@@ -95,19 +93,6 @@ const reorderBlock = async (
   {block, scopeRootId, propertyDisplay}: BlockShortcutDependencies,
 ): Promise<boolean> =>
   repo.mutate.moveVertical({id: block.id, direction, scopeRootId, propertyDisplay})
-
-/** Run a structural gesture, telling the user when it was refused for taking a
- *  property's value out of its field row rather than failing silently.
- *  Resolves `false` for that refusal. */
-export const withValueMoveFeedback = async <T>(gesture: () => Promise<T>): Promise<T | false> => {
-  try {
-    return await gesture()
-  } catch (error) {
-    if (!isPropertyValueSetMoveError(error)) throw error
-    showInfo(error.message)
-    return false
-  }
-}
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
@@ -209,7 +194,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // mutator separately no-ops when there's no previous sibling.
       const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps.scopeRootId)
       if (!canIndent) return
-      await withValueMoveFeedback(() => repo.mutate.indent({id: deps.block.id, propertyDisplay: deps.propertyDisplay}))
+      await repo.mutate.indent({id: deps.block.id, propertyDisplay: deps.propertyDisplay})
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -233,7 +218,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {canOutdent} = await structuralEditPolicyForBlock(block, scopeRootId)
       if (!canOutdent) return
 
-      await withValueMoveFeedback(() => repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay}))
+      await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -249,7 +234,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ArrowUp,
     handler: async (deps: BlockShortcutDependencies) => {
       if (!deps.block) return
-      await withRowSlide(() => withValueMoveFeedback(() => reorderBlock(repo, -1, deps)))
+      await withRowSlide(() => reorderBlock(repo, -1, deps))
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -266,7 +251,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ArrowDown,
     handler: async (deps: BlockShortcutDependencies) => {
       if (!deps.block) return
-      await withRowSlide(() => withValueMoveFeedback(() => reorderBlock(repo, 1, deps)))
+      await withRowSlide(() => reorderBlock(repo, 1, deps))
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {

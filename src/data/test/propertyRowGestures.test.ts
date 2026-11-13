@@ -25,7 +25,7 @@ import {
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { moveBlocksInTx, PropertyValueSetMoveError } from '@/data/mutators'
+import { moveBlocksInTx } from '@/data/mutators'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -133,10 +133,10 @@ describe('move up / down', () => {
     expect((await childIds('owner')).slice(0, 2)).toEqual([ids.status, ids.a])
   })
 
-  it('refuses at a value row\'s edge rather than taking it out of its field row', async () => {
-    await expect(repo.mutate.moveVertical({id: ids.x, direction: -1, scopeRootId: 'page', propertyDisplay: ALL}))
-      .rejects.toBeInstanceOf(PropertyValueSetMoveError)
-    expect(await parentOf(ids.x)).toBe(ids.tags)
+  it('steps a value at its field row\'s edge into the neighbouring row, like any block', async () => {
+    expect(await repo.mutate.moveVertical({id: ids.x, direction: -1, scopeRootId: 'page', propertyDisplay: ALL}))
+      .toBe(true)
+    expect(await parentOf(ids.x)).toBe(ids.secret)
   })
 
   it('steps into a drawn field row at an edge, like into any block', async () => {
@@ -197,9 +197,9 @@ describe('indent', () => {
     expect(await parentOf(ids.tags)).toBe(ids.status)
   })
 
-  it('refuses a value row rather than nesting it under its sibling value', async () => {
-    await expect(repo.mutate.indent({id: ids.y, propertyDisplay: ALL})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
-    expect(await parentOf(ids.y)).toBe(ids.tags)
+  it('nests a value under its sibling value, like any block', async () => {
+    await repo.mutate.indent({id: ids.y, propertyDisplay: ALL})
+    expect(await parentOf(ids.y)).toBe(ids.x)
   })
 })
 
@@ -219,9 +219,9 @@ describe('outdent', () => {
     expect(await childIds('page')).toEqual(['owner', ids.b, pageStatus.id])
   })
 
-  it('refuses a value row rather than taking it out of its field row', async () => {
-    await expect(repo.mutate.outdent({id: ids.draft, propertyDisplay: ALL})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
-    expect(await parentOf(ids.draft)).toBe(ids.status)
+  it('outdents a value out of its field row, like any block', async () => {
+    expect(await repo.mutate.outdent({id: ids.draft, propertyDisplay: ALL})).toBe(true)
+    expect(await parentOf(ids.draft)).toBe('owner')
   })
 })
 
@@ -247,11 +247,10 @@ describe('without a display scope (mode none, as before property rows)', () => {
 })
 
 describe('every other user move (move command, drag, cut and paste)', () => {
-  it('refuses to take a value out of its field row, moving nothing', async () => {
-    await expect(repo.tx(tx => moveBlocksInTx(tx, [ids.b, ids.x], {parentId: 'page', position: {kind: 'last'}}),
-      {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(PropertyValueSetMoveError)
-    expect(await parentOf(ids.x)).toBe(ids.tags)
-    expect(await parentOf(ids.b)).toBe('owner')
+  it('moves a value out of its field row, like any block', async () => {
+    await repo.tx(tx => moveBlocksInTx(tx, [ids.b, ids.x], {parentId: 'page', position: {kind: 'last'}}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await parentOf(ids.x)).toBe('page')
   })
 
   it('moves a block in among a field row\'s values', async () => {

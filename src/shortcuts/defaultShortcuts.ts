@@ -12,7 +12,7 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { isPropertyValueSetMoveError, merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
+import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
 import {
@@ -833,10 +833,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // root-level crossfade ghosts the shifting siblings, which
         // reads as blur. The unwrapped shift is cleaner.
         else if (editorView.state.doc.length === 0) {
-          // An empty value can't leave its property; it gets a sibling value instead.
-          const moved = policy.canOutdent && await repo.mutate
-            .outdent({id: block.id, scopeRootId, propertyDisplay: deps.propertyDisplay})
-            .catch(error => isPropertyValueSetMoveError(error) ? false : Promise.reject(error))
+          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay: deps.propertyDisplay})
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed

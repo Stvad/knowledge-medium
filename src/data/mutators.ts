@@ -31,7 +31,6 @@ import {
 } from './orderKeyPlacement'
 import { isCollapsedProp } from '@/data/properties'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { isPropertyValueRow } from '@/data/propertyChildren'
 import {
   propertyDisplayScopeSchema,
   type PropertyDisplayScopeLevels,
@@ -498,9 +497,7 @@ export interface MoveTarget {
  * Move `ids` to `target` inside `tx`, keeping their order. `ids` must be
  * roots: none may be a descendant of another, or it is pulled out of its
  * ancestor. Every user-facing move (the move command, drag-and-drop, a cut
- * completed by paste) lands through here, inside the caller's one tx; a move
- * that would take a value out of its property throws
- * {@link PropertyValueSetMoveError} and the tx rolls back whole.
+ * completed by paste) lands through here, inside the caller's one tx.
  *
  * ## The ordering rule
  *
@@ -527,9 +524,6 @@ export const moveBlocksInTx = async (
 ): Promise<void> => {
   let position = target.position
   for (const id of ids) {
-    if (await leavesValueSet(tx, await requireBlock(tx, id), target.parentId)) {
-      throw new PropertyValueSetMoveError()
-    }
     await tx.run(move, {id, parentId: target.parentId, position})
     position = {kind: 'after', siblingId: id}
   }
@@ -557,42 +551,16 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  * left out). A hidden row can therefore neither be picked as a gesture's
  * target nor absorb a step aimed past it; where a moved block lands
  * *physically* relative to a hidden row carries no semantics. A drawn property
- * row is an ordinary row to all three.
+ * row is an ordinary row to all three, values included: a block moved in among
+ * a field row's values becomes one, a value moved out leaves the property.
  *
  * Corollary: when the subject or the anchor is absent from that list, the
  * gesture is a clean **no-op** rather than a surprising relocation.
- *
- * One rule on top, shared with every other user move ({@link moveBlocksInTx}):
- * none takes a property's value out of its field row ({@link leavesValueSet});
- * each throws {@link PropertyValueSetMoveError}. Reordering values within their
- * field row, and moving a block in among them, are fine.
  *
  * Deliberate machinery movement is not blocked, it just doesn't go through an
  * outline gesture: `core.move` places a block at an explicit position on the
  * structural list, which is what materialization, merge, and the bridge use.
  */
-
-/** Would moving `self` under `newParentId` take a property's value out of its
- *  field row? Out, the property loses it at the next projection. */
-const leavesValueSet = async (
-  tx: Tx,
-  self: BlockData,
-  newParentId: string | null,
-): Promise<boolean> =>
-  newParentId !== self.parentId && await isPropertyValueRow(tx, self)
-
-/** A user move refused by {@link leavesValueSet}; its message is for the user. */
-export class PropertyValueSetMoveError extends Error {
-  constructor() {
-    super('A property\'s value can\'t be moved out of it')
-    this.name = 'PropertyValueSetMoveError'
-  }
-}
-
-/** Is `error` a {@link PropertyValueSetMoveError}? By name, so it holds for an
- *  error that crossed a structured-clone boundary. */
-export const isPropertyValueSetMoveError = (error: unknown): error is PropertyValueSetMoveError =>
-  (error as {name?: unknown} | null)?.name === 'PropertyValueSetMoveError'
 
 const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
 
@@ -620,7 +588,6 @@ export const indent = defineMutator<IndentArgs, void>({
     const ix = siblings.findIndex(s => s.id === id)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
-    if (await leavesValueSet(tx, self, newParent.id)) throw new PropertyValueSetMoveError()
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
@@ -680,7 +647,6 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     // parent, or a stale read): a no-op, not a fallback to the grandparent's
     // end, which would be exactly the silent relocation this rule prevents.
     if (parentIx < 0) return false
-    if (await leavesValueSet(tx, self, grandparent)) throw new PropertyValueSetMoveError()
     // Place the outdented block immediately after its parent (between the
     // parent and the parent's next sibling), breaking a tie by re-keying the
     // run when the parent shares an order_key with its next grand-sibling (A1).
@@ -792,7 +758,6 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     if (pIdx < 0) return false
     const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
     if (!neighbourParent) return false
-    if (await leavesValueSet(tx, self, neighbourParent.id)) throw new PropertyValueSetMoveError()
     // Moving INTO a neighbouring subtree reveals it if collapsed, so the block
     // stays visible.
     await revealChildren(tx, neighbourParent.id)
