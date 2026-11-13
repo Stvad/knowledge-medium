@@ -1,1 +1,1 @@
-export{YN as appUpdatePromptExtension}from"../../../chunks/app-DtV18g_Z.js";
+export{YN as appUpdatePromptExtension}from"../../../chunks/app-Cbu_PjBh.js";

@@ -1,1 +1,1 @@
-export{Qm as extensionsOverridesProp,$m as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DtV18g_Z.js";
+export{Qm as extensionsOverridesProp,$m as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-Cbu_PjBh.js";

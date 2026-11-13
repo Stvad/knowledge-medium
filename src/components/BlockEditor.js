@@ -1,1 +1,1 @@
-export{iR as BlockEditor}from"../../chunks/app-DtV18g_Z.js";
+export{iR as BlockEditor}from"../../chunks/app-Cbu_PjBh.js";

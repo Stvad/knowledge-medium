@@ -1,1 +1,1 @@
-export{KA as adoptTypedBlock,qA as createTypedChild,Cat as derivedBlockId,JA as getOrCreateTypedChild}from"../../chunks/app-DtV18g_Z.js";
+export{KA as adoptTypedBlock,qA as createTypedChild,Cat as derivedBlockId,JA as getOrCreateTypedChild}from"../../chunks/app-Cbu_PjBh.js";
