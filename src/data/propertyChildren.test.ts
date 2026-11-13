@@ -8,7 +8,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
-import { keyAtStart, keysBetween } from './orderKey'
+import { keyAtEnd, keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -1753,6 +1753,68 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
     const siblings = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
     expect(siblings.map(v => v.content).sort()).toEqual(['archived', 'from-status'])
   })
+})
+
+describe('a scalar copy other blocks link to is kept, not folded away', () => {
+  // Folding deletes the copy's row; a link to it would then name a deleted
+  // block. Unlinked, the same copy folds — the control that the scenario
+  // reaches the fold at all.
+  const linkTo = async (repo: Repo, target: string): Promise<void> => {
+    await repo.tx(async tx => {
+      const content = `see ((${target}))`
+      await tx.create({
+        id: 'linker', workspaceId: WS, parentId: null, orderKey: 'k-linker',
+        content, references: [{id: target, alias: target}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await repo.tx(tx => tx.hasLiveReferrer(target, WS), {scope: ChangeScope.BlockDefault})).toBe(true)
+  }
+  const isLive = async (id: string): Promise<boolean> =>
+    (await sharedDb.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])).deleted === 0
+
+  it.each([['linked', true], ['unlinked', false]] as const)(
+    'a write equal to a second value row — %s', async (_label, linked) => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'draft'), {scope: ChangeScope.BlockDefault})
+      const [field] = await liveFieldRows('p')
+      const [first] = await childrenRows(field!.id)
+      await repo.tx(tx => tx.create({
+        id: 'moved', workspaceId: WS, parentId: field!.id, orderKey: keyAtEnd(first!.order_key), content: 'final',
+      }), {scope: ChangeScope.BlockDefault})
+      if (linked) await linkTo(repo, 'moved')
+
+      // The first row is the value and takes the write; `moved` now equals it.
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'final'), {scope: ChangeScope.BlockDefault})
+
+      expect(await isLive('moved')).toBe(linked)
+      expect(await cellValue('p')).toBe('final')
+    })
+
+  it.each([['linked', true], ['unlinked', false]] as const)(
+    'a duplicate field row\'s equal value — %s', async (_label, linked) => {
+      await seedWorkspace('children')
+      const repo = setup()
+      await createBlock(repo, 'p')
+      await repo.tx(async tx => {
+        await tx.create({id: 'field-a', workspaceId: WS, parentId: 'p', orderKey: 'a', content: `::((${STATUS_FIELD_ID}))`})
+        await tx.create({id: 'value-a', workspaceId: WS, parentId: 'field-a', orderKey: keyAtStart(), content: 'alpha'})
+        await tx.create({id: 'field-b', workspaceId: WS, parentId: 'p', orderKey: 'b', content: `::((${STATUS_FIELD_ID}))`})
+        await tx.create({id: 'value-b', workspaceId: WS, parentId: 'field-b', orderKey: keyAtStart(), content: 'alpha'})
+      }, {scope: ChangeScope.BlockDefault})
+      if (linked) await linkTo(repo, 'value-b')
+
+      // The write folds field-b into field-a; value-b equals value-a.
+      await repo.tx(tx => tx.setProperty('p', statusSchema, 'gamma'), {scope: ChangeScope.BlockDefault})
+
+      expect((await liveFieldRows('p')).map(f => f.id)).toEqual(['field-a'])
+      expect(await isLive('value-b')).toBe(linked)
+      if (linked) {
+        const valueB = await sharedDb.db.get<{parent_id: string}>('SELECT parent_id FROM blocks WHERE id = ?', ['value-b'])
+        expect(valueB.parent_id).toBe('field-a')
+      }
+    })
 })
 
 describe('a scalar write rewrites the value the cell reads', () => {
@@ -4674,6 +4736,28 @@ describe('multi-value properties are N sibling value children (km-h1hy)', () => 
       await addDuplicateFieldRow(repo, 'p', TAGS_FIELD_ID, ['alpha', 'beta'])
 
       expect((await bagOf('p')).tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('a merge folds an equal member even when a block links to it', async () => {
+      // A list's equal row is an occurrence, not a redundant copy: keeping a
+      // linked one as a peer would double the member.
+      const repo = await setupWithLists()
+      await createBlock(repo, 'into')
+      await createBlock(repo, 'from')
+      await repo.tx(tx => tx.setProperty('into', tagsSchema, ['alpha']), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.setProperty('from', tagsSchema, ['alpha']), {scope: ChangeScope.BlockDefault})
+      const [fromField] = await liveFieldRowsFor(TAGS_FIELD_ID)('from')
+      const [fromMember] = await childrenRows(fromField!.id)
+      await repo.tx(tx => tx.create({
+        id: 'linker', workspaceId: WS, parentId: null, orderKey: 'k-linker',
+        content: `see ((${fromMember!.id}))`, references: [{id: fromMember!.id, alias: fromMember!.id}],
+      }), {scope: ChangeScope.BlockDefault})
+
+      await repo.tx(async tx => {
+        await mergeBlocksInTx(tx, {into: (await tx.get('into'))!, from: (await tx.get('from'))!})
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect((await bagOf('into')).tags).toEqual(['alpha'])
     })
 
     it('a duplicate field row holding DIVERGENT members still unions', async () => {

@@ -958,11 +958,19 @@ const reconcileSingleValueChild = async (
   // conflict — from a merge or divergent concurrent write — and are kept as
   // peer values, not silently collapsed onto the winner.
   for (const duplicate of values) {
-    if (duplicate !== primary && duplicate.content === content) {
+    if (duplicate !== primary && duplicate.content === content && await isRedundantScalarCopy(tx, duplicate)) {
       await collapseDuplicateValueChild(tx, primary.id, duplicate)
     }
   }
 }
+
+/** Whether an equal-valued sibling of a SCALAR's value is a redundant copy the
+ *  fold may delete. Not when a block links to it: the fold would leave those
+ *  links naming a deleted row, so it stays as a peer value — the cell reads the
+ *  same either way. A list's equal row is an occurrence, folded by its own rule
+ *  whatever links to it. */
+const isRedundantScalarCopy = async (tx: Tx, copy: BlockData): Promise<boolean> =>
+  !(await tx.hasLiveReferrer(copy.id, copy.workspaceId))
 
 const freshSlots = (
   values: readonly BlockData[],
@@ -1181,9 +1189,9 @@ export const collapseDuplicateFieldRow = async (
   // a disagreement between the two costs. Resolves to raw-text matching for a
   // scalar, and for a field row whose definition does not resolve.
   const fieldId = getPropertyFieldTargetId(duplicate)
-  const keys = memberKeysFor(fieldId === undefined
-    ? null
-    : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId))
+  const schema = fieldId === undefined ? null : tx.resolvePropertyFieldSchema(duplicate.workspaceId, fieldId)
+  const keys = memberKeysFor(schema)
+  const isList = schema !== null && memberCodecOf(schema.codec) !== undefined
   for (const child of duplicateChildren) {
     const survivorChildren = await tx.childrenOf(
       survivorFieldRowId, undefined,
@@ -1208,7 +1216,7 @@ export const collapseDuplicateFieldRow = async (
     const match = additive
       ? undefined
       : survivorValues.find(v => keys.row(v).key === keys.row(child).key)
-    if (match) {
+    if (match && (isList || await isRedundantScalarCopy(tx, child))) {
       await collapseDuplicateValueChild(tx, match.id, child)
     } else {
       await appendUnder(tx, child, survivorFieldRowId, survivorChildren)
