@@ -116,6 +116,14 @@ export const NO_PROPERTY_DISPLAY_SCOPE: PropertyDisplayScopeLevels = Object.free
   panel: 'inherit',
 })
 
+/** The scope a gesture, paste or mutator call carries, or
+ *  {@link NO_PROPERTY_DISPLAY_SCOPE} when it carries none (the bridge, a
+ *  global command, a plugin). The ONE place an absent scope becomes mode
+ *  `none`: the children readers below this take a scope, never a default. */
+export const displayScopeOf = (
+  carrier: {readonly propertyDisplay?: PropertyDisplayScopeLevels},
+): PropertyDisplayScopeLevels => carrier.propertyDisplay ?? NO_PROPERTY_DISPLAY_SCOPE
+
 /** The mode for one block in one panel. */
 export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): PropertyDisplayMode => {
   if (!levels.childBacked) return 'none'

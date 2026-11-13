@@ -14,7 +14,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { propertyDisplayProp, resolvePropertyDisplayMode, type PropertyDisplayMode, type PropertyDisplaySetting } from '@/data/propertyDisplayMode'
 import { useHandle } from '@/hooks/block'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
@@ -650,7 +650,7 @@ describe('moving the caret off a row the listing leaves out', () => {
       await tx.create({id: 'nav-row', workspaceId: WS, parentId: OWNER, orderKey: 'a0V', content: '::((def-nav))'})
       await tx.create({id: 'after', workspaceId: WS, parentId: OWNER, orderKey: 'a1', content: 'after'})
     }, {scope: ChangeScope.BlockDefault})
-    await waitFor(async () => expect(await repo.block(OWNER).childIds.load()).toEqual([NOTE, 'after']))
+    await waitFor(async () => expect(await childIdsOf(repo, OWNER)).toEqual([NOTE, 'after']))
   })
 
   it('steps back to the sibling before it', async () => {

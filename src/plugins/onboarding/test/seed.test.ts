@@ -17,7 +17,7 @@ import { ChangeScope } from '@/data/api'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
 import { EXTENSION_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -161,7 +161,7 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   it('seeds advanced sections collapsed and keeps essentials expanded', async () => {
     await env.repo.load(tutorialId, { descendants: true })
 
-    const childIds = await env.repo.block(tutorialId).childIds.load()
+    const childIds = await childIdsOf(env.repo, tutorialId)
     const sectionByContent = new Map(
       childIds.map(id => [env.repo.block(id).peek()?.content ?? '', env.repo.block(id)]),
     )
@@ -237,7 +237,7 @@ describe('seedTutorial', {timeout: 30_000}, () => {
 
     const [comment] = demoComments(tutorialOutline('default'))
     const firstComments = await Promise.all(roots.filter(root => !threadReplacementOf(root)).map(async root =>
-      (await env.repo.block(root.id).childIds.load()).map(id => env.repo.block(id).peek()?.content)))
+      (await childIdsOf(env.repo, root.id)).map(id => env.repo.block(id).peek()?.content)))
     expect(firstComments).toEqual([[comment], [comment]])
   })
 

@@ -176,7 +176,7 @@ export const startSessionAction: ActionConfig<typeof ActionContextTypes.NORMAL_M
     // Loaded rather than peeked: "does this block already hold something" is
     // the difference between taking an empty line's place and burying the
     // session under a heading, and children are not on the row.
-    const children = (await block.repo.block(block.id).children.load()) ?? []
+    const children = (await block.repo.query.children({id: block.id, propertyChildren: 'none'}).load()) ?? []
     // `uiStateBlock` IS the pane block in this context — the same thing core's
     // own zoom action navigates by.
     await runStartSession(block.repo, placeAtFocus({

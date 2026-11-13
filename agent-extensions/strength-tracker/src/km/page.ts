@@ -69,7 +69,7 @@ const carriesKnobs = (block: BlockData): boolean =>
  *  the knobs only would abandon exactly the workspace that had answered a
  *  question and changed nothing else. */
 const carriesChoices = async (repo: Repo, block: BlockData): Promise<boolean> =>
-  ((await repo.block(block.id).children.load()) ?? [])
+  ((await repo.query.children({id: block.id, propertyChildren: 'none'}).load()) ?? [])
     .some(child => asAltChoice(child) !== null)
 
 /** The one ordered rule for "where are this page's settings", used by the
@@ -109,7 +109,7 @@ const locateSettings = async (
   // this is the handful of loose blocks under the page, and the child load per
   // candidate below is bounded by that. It only runs at all when there is no
   // tagged settings block AND no seat, which is the rescue case.
-  const loose = ((await repo.block(pageId).children.load()) ?? [])
+  const loose = ((await repo.query.children({id: pageId, propertyChildren: 'none'}).load()) ?? [])
     .filter(block => !block.deleted && !hasBlockType(block, SETTINGS_TYPE))
   const byKnobs = loose.find(carriesKnobs)
   if (byKnobs) return byKnobs

@@ -5,7 +5,7 @@ import {EditorView} from '@codemirror/view'
 import {ChangeScope} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {editorContentFlushFacet} from '@/editor/contentFlush.js'
 import {ActionContextTypes} from '@/shortcuts/types.js'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
@@ -183,7 +183,7 @@ describe('commenting on an editor selection', () => {
     const commentOnSelection = annotationActions.find(action => action.id === COMMENT_ON_SELECTION_ACTION_ID)!
     await commentOnSelection.handler({block: repo.block('B'), uiStateBlock: repo.block('p'), renderScopeId: PANEL, editorView: editor} as never, new CustomEvent('test'))
     const [threadId] = await threadsOnB()
-    const [comment] = await repo.block(threadId).children.load()
+    const [comment] = await childrenOf(repo, threadId)
     expect(isEditingBlock(repo.block('p'), comment.id, cardRenderScopeId('comments', PANEL, threadId))).toBe(true)
   })
 

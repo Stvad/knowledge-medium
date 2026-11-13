@@ -436,7 +436,7 @@ export const readAltChoices = async (
   repo: Repo,
   settingsBlockId: string,
 ): Promise<Record<string, string>> => {
-  const children = await repo.block(settingsBlockId).children.load()
+  const children = await repo.query.children({id: settingsBlockId, propertyChildren: 'none'}).load()
   // Through `asAltChoice`, so removing `strength-alt-choice` from a block
   // actually removes its preference. The group and option properties survive
   // an untag, and folding them regardless meant a choice you had visibly taken

@@ -4,8 +4,8 @@
  *
  * Block satisfies the Handle interface structurally (peek/load/subscribe/
  * read/status/key) AND adds the OO sugar that 95% of imperative call
- * sites use: `data` (sync, throws), `childIds` / `children` / `parent`
- * (sync tree relatives), `get` / `peekProperty` (typed property reads),
+ * sites use: `data` (sync, throws), `parent`
+ * (sync tree relative), `get` / `peekProperty` (typed property reads),
  * `set` / `setContent` / `delete` (single-block write sugar). Picking one
  * object that does both jobs (vs. a separate `Handle` and `Block`) keeps
  * the call-site surface uniform and unifies "row reactivity" with "row
@@ -32,7 +32,6 @@ import {
   type Unsubscribe,
 } from '@/data/api'
 import type { Repo } from './repo'
-import type { LoaderHandle } from './internals/handleStore'
 import { getBlockTypes } from './properties'
 import { getResolvedProperty, peekResolvedProperty } from './internals/propertySchemaResolution'
 
@@ -229,28 +228,10 @@ export class Block implements Handle<BlockData | null> {
 
   // ──── Tree relatives ────
 
-  /** Reactive child-id list. Delegates to `repo.query.childIds({id})` —
-   *  the LoaderHandle owns SQL + caching + invalidation, so call sites
-   *  never need to ask the BlockCache about children directly.
-   *  Imperative call sites do `await block.childIds.load()`; reactive
-   *  ones use `useChildIds(block)` (which subscribes to the same
-   *  handle).
-   *
-   *  Facade getters speak the mode-`none` view (every property field row
-   *  excluded, §9); drop to `repo.query.*` / `tx.childrenOf` for the
-   *  structural everything-view. */
-  get childIds(): LoaderHandle<string[]> {
-    return this.repo.query.childIds({id: this.id, propertyChildren: 'none'})
-  }
-
-  /** Reactive children-rows list. Same shape as `childIds` but loads
-   *  the full BlockData rows (per-row deps included), suitable for
-   *  imperative tree walks that need content / properties without an
-   *  extra `repo.block(id).load()` per child. Callers wanting Block
-   *  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
-  get children(): LoaderHandle<BlockData[]> {
-    return this.repo.query.children({id: this.id, propertyChildren: 'none'})
-  }
+  // No child-list getter: a list of children is always a VIEW (which property
+  // rows it includes), so the reader names it. A fixed view is
+  // `repo.query.children / childIds({id, propertyChildren})`; the list a
+  // surface draws is `visibleChildIds(block, scope)` (`@/data/visibleChildren`).
 
   /** Parent as Block, or null only if this block has no parent
    *  (workspace root). Returns the identity-stable facade from

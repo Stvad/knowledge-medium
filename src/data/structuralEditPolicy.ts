@@ -1,5 +1,8 @@
 import { Block } from './block'
+import type { SurfaceCarrier } from './outlineSurface'
 import { isCollapsedProp } from './properties.js'
+import { displayScopeOf } from './propertyDisplayMode'
+import { visibleChildIds } from './visibleChildren'
 
 /**
  * Where a "new block below" gesture (vim `o`, Enter-at-end-of-line)
@@ -102,19 +105,22 @@ export const resolveStructuralEditPolicy = (
 /**
  * Convenience resolver that reads the inputs `resolveStructuralEditPolicy`
  * needs from a live `Block`, centralizing the load idiom the structural
- * action handlers used to repeat (`load` + `childIds` + `isCollapsed`).
+ * action handlers used to repeat. `surface` is what the gesture knows of
+ * where it ran (its dependencies): "has children" means children that
+ * surface draws, and a caller with no scope root gets the policy of a block
+ * that is not one.
  */
 export const structuralEditPolicyForBlock = async (
   block: Block,
-  scopeRootId: string | undefined,
+  surface: SurfaceCarrier,
 ): Promise<StructuralEditPolicy> => {
   const data = block.peek() ?? await block.load()
-  const childIds = await block.childIds.load()
+  const childIds = await visibleChildIds(block, displayScopeOf(surface))
   const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
   return resolveStructuralEditPolicy({
     blockId: block.id,
     parentId: data?.parentId ?? null,
     hasUncollapsedChildren: childIds.length > 0 && !isCollapsed,
-    scopeRootId,
+    scopeRootId: surface.scopeRootId,
   })
 }

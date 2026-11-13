@@ -12,16 +12,15 @@ import {
 import { ChangeScope, type BlockData } from '@/data/api'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import { siblingPrecedes, unlistedIndexAmong } from '@/data/orderKey'
+import type { OutlineSurface } from '@/data/outlineSurface'
+import { visibleChildIds } from '@/data/visibleChildren'
 
-/** True if `block` is collapsed *and* the caller cares. The scope root
- *  is treated as always-expanded ONLY when its surface force-opens it
- *  (`scopeRootForcesOpen`) — true for a focal panel/top-level root
- *  (rendered `open` regardless of its own collapse flag), false for a
- *  nested surface root (backlink/embed), which honours its collapse flag
- *  in both render and navigation. Reads the property synchronously from
- *  cache; assumes the row has been loaded. */
-const isExpanded = (block: Block, scopeRootId: string, scopeRootForcesOpen: boolean): boolean => {
-  if (block.id === scopeRootId && scopeRootForcesOpen) return true
+/** Whether `block` shows its children on `surface`: not collapsed, or the
+ *  scope root of a surface that draws its root open whatever the flag
+ *  (`OutlineSurface.scopeRootForcesOpen`). Reads the property synchronously
+ *  from cache; assumes the row has been loaded. */
+const isExpanded = (block: Block, surface: OutlineSurface): boolean => {
+  if (block.id === surface.scopeRootId && surface.scopeRootForcesOpen) return true
   return !(block.peekProperty(isCollapsedProp) ?? false)
 }
 
@@ -36,13 +35,15 @@ export const unlistedSiblingIndex = (
   row: BlockData,
 ): number => unlistedIndexAmong(listedIds.map(id => repo.block(id).peek()), row)
 
-/** Returns the next visible block in document order under
- *  `scopeRootId` (the surface's visible-subtree root — the panel's zoom
- *  root on the main outline, the shown block in a backlink entry, …),
+/** Returns the next visible block in document order on `surface`,
  *  walking *relatively* — descend into the first child if `current` is
  *  expanded and has children, otherwise climb ancestors looking for a
- *  next sibling. Stops at the scope boundary (`scopeRootId`); returns
- *  null when `current` is the last visible block.
+ *  next sibling. Stops at the scope boundary (`surface.scopeRootId`);
+ *  returns null when `current` is the last visible block.
+ *
+ *  Every child list the walkers in this file read is the one the surface
+ *  draws (`visibleChildIds`), so a property row the display mode shows is a
+ *  row to land on and one it hides is passed by.
  *
  *  Touches O(depth) blocks (one SQL per parent's child list, all small
  *  + handle-cached) instead of materializing the surface's full
@@ -50,27 +51,25 @@ export const unlistedSiblingIndex = (
  *  scope root because no global "active panel" state is consulted. */
 export const nextVisibleBlock = async (
   current: Block,
-  scopeRootId: string,
-  scopeRootForcesOpen = true,
+  surface: OutlineSurface,
 ): Promise<Block | null> => {
   const repo = current.repo
   await current.load()
 
   // Step into the first child if expanded.
-  if (isExpanded(current, scopeRootId, scopeRootForcesOpen)) {
-    const childIds = await current.childIds.load()
+  if (isExpanded(current, surface)) {
+    const childIds = await visibleChildIds(current, surface.propertyDisplay)
     if (childIds.length > 0) return repo.block(childIds[0])
   }
 
   // Climb ancestors looking for a next sibling. Stop at the scope root.
   let walker: Block = current
-  while (walker.id !== scopeRootId) {
+  while (walker.id !== surface.scopeRootId) {
     const data = walker.peek()
     if (!data || data.parentId === null) return null
     const parentId = data.parentId
     const parent = repo.block(parentId)
-    await parent.load()
-    const siblingIds = await parent.childIds.load()
+    const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
     const idx = siblingIds.indexOf(walker.id)
     const nextIdx = idx !== -1 ? idx + 1 : unlistedSiblingIndex(repo, siblingIds, data)
     if (nextIdx < siblingIds.length) {
@@ -81,16 +80,15 @@ export const nextVisibleBlock = async (
   return null
 }
 
-/** Returns the previous visible block in document order under
- *  `scopeRootId`. Mirror of `nextVisibleBlock`: if `current` has a
- *  previous sibling, descend into that sibling's last visible
- *  descendant; otherwise return the parent. Stops at `scopeRootId`
- *  (returns null when `current` is the surface's scope root). */
+/** Returns the previous visible block in document order on `surface`.
+ *  Mirror of `nextVisibleBlock`: if `current` has a previous sibling,
+ *  descend into that sibling's last visible descendant; otherwise return
+ *  the parent. Stops at the scope root (returns null when `current` is it). */
 export const previousVisibleBlock = async (
   current: Block,
-  scopeRootId: string,
+  surface: OutlineSurface,
 ): Promise<Block | null> => {
-  if (current.id === scopeRootId) return null
+  if (current.id === surface.scopeRootId) return null
   const repo = current.repo
   await current.load()
 
@@ -100,16 +98,16 @@ export const previousVisibleBlock = async (
 
   const parent = repo.block(parentId)
   await parent.load()
-  const siblingIds = await parent.childIds.load()
+  const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
   const idx = siblingIds.indexOf(current.id)
   const prevIdx = (idx !== -1 ? idx : unlistedSiblingIndex(repo, siblingIds, data)) - 1
 
   if (prevIdx >= 0) {
     // Descend into the previous sibling's last visible descendant.
-    return getLastVisibleDescendant(repo.block(siblingIds[prevIdx]))
+    return getLastVisibleDescendant(repo.block(siblingIds[prevIdx]), surface)
   }
   // No previous sibling — the parent is the previous visible block.
-  // When current is a direct child of scopeRootId, parent === scopeRootId,
+  // When current is a direct child of the scope root, parent is that root,
   // which is itself the first visible block in the surface.
   return parent
 }
@@ -126,9 +124,11 @@ export const previousVisibleBlock = async (
  *       removal the parent is now empty, and it's the natural place
  *       to land.
  *
- *  Returns null when `current` is the surface's `scopeRootId` (no
+ *  Returns null when `current` is the surface's scope root (no
  *  meaningful target, the surface is about to be empty), or when the
- *  block is detached from the tree.
+ *  block is detached from the tree. A row the surface lists out of its
+ *  parent's view (the focused row a display mode hides) counts from the
+ *  position the outline draws it at.
  *
  *  `leaving`: the rest of a multi-selection going with `current` (a delete or
  *  a cut of several blocks). Siblings in it are passed over, so the last two
@@ -139,10 +139,10 @@ export const previousVisibleBlock = async (
  *  recovery's choice for the disappear-from-DOM case. */
 export const blockAfterSubtreeRemoval = async (
   current: Block,
-  scopeRootId: string,
+  surface: OutlineSurface,
   leaving: ReadonlySet<string> = new Set(),
 ): Promise<Block | null> => {
-  if (current.id === scopeRootId) return null
+  if (current.id === surface.scopeRootId) return null
   const repo = current.repo
   await current.load()
   const data = current.peek()
@@ -150,11 +150,11 @@ export const blockAfterSubtreeRemoval = async (
 
   const parent = repo.block(data.parentId)
   await parent.load()
-  const siblingIds = await parent.childIds.load()
-  const idx = siblingIds.indexOf(current.id)
-  if (idx === -1) return parent
+  const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
+  const listedAt = siblingIds.indexOf(current.id)
+  const idx = listedAt !== -1 ? listedAt : unlistedSiblingIndex(repo, siblingIds, data)
 
-  const next = siblingIds.slice(idx + 1).find(id => !leaving.has(id))
+  const next = siblingIds.slice(listedAt !== -1 ? idx + 1 : idx).find(id => !leaving.has(id))
   if (next !== undefined) return repo.block(next)
   const previous = siblingIds.slice(0, idx).reverse().find(id => !leaving.has(id))
   if (previous !== undefined) return repo.block(previous)
@@ -164,31 +164,24 @@ export const blockAfterSubtreeRemoval = async (
 /** Last visible descendant of `block` (deepest, last child of last
  *  child, etc.). Used by keyboard navigation that needs to land on
  *  the bottom of an expanded subtree. Returns the input block if it
- *  is collapsed or has no children.
+ *  does not show children (`isExpanded`) or has none.
  *
- *  When `scopeRootId` is supplied, equals the block's id, AND the
- *  surface force-opens it (`scopeRootForcesOpen`), its own
- *  `isCollapsedProp` is ignored — matches `isExpanded`'s rule. Necessary
- *  so vim `Shift+G` (jump to last visible block) still descends from a
- *  focal panel root whose own flag carries a stale collapsed flag from
- *  when it was viewed as a child. A nested scope root that honours its
- *  collapse flag (`scopeRootForcesOpen === false`) terminates the
- *  descent instead. Mid-walk collapsed blocks still terminate the
- *  descent so `previousVisibleBlock`'s contract (don't dive into a
- *  collapsed sibling) is preserved. */
+ *  A scope root its surface force-opens is descended whatever its collapse
+ *  flag, so vim `Shift+G` (jump to last visible block) still descends from
+ *  a focal panel root carrying a stale collapsed flag from when it was
+ *  viewed as a child; a nested scope root that honours its flag terminates
+ *  the descent. So does a collapsed block mid-walk, which is
+ *  `previousVisibleBlock`'s contract (don't dive into a collapsed sibling). */
 export const getLastVisibleDescendant = async (
   block: Block,
-  scopeRootId?: string,
-  scopeRootForcesOpen = true,
+  surface: OutlineSurface,
 ): Promise<Block> => {
   const repo = block.repo
   await block.load()
   let current = block
   while (true) {
-    const isScopeRoot = current.id === scopeRootId && scopeRootForcesOpen
-    const collapsed = current.peekProperty(isCollapsedProp) ?? false
-    if (collapsed && !isScopeRoot) return current
-    const childIds = await current.childIds.load()
+    if (!isExpanded(current, surface)) return current
+    const childIds = await visibleChildIds(current, surface.propertyDisplay)
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
     await current.load()
@@ -439,9 +432,8 @@ export async function commitSelectionRange(
 export async function getBlocksInRange(
   startBlockId: string,
   endBlockId: string,
-  scopeRootId: string,
+  surface: OutlineSurface,
   repo: Repo,
-  scopeRootForcesOpen = true,
 ): Promise<string[]> {
   if (startBlockId === endBlockId) {
     return validateSelectionHierarchy([startBlockId], repo)
@@ -454,7 +446,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await nextVisibleBlock(walker, scopeRootId, scopeRootForcesOpen)
+      walker = await nextVisibleBlock(walker, surface)
       if (!walker) return null
       ids.push(walker.id)
       if (walker.id === endBlockId) return ids
@@ -466,7 +458,7 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await previousVisibleBlock(walker, scopeRootId)
+      walker = await previousVisibleBlock(walker, surface)
       if (!walker) return null
       ids.unshift(walker.id)
       if (walker.id === endBlockId) return ids
@@ -483,7 +475,7 @@ export async function getBlocksInRange(
   // endpoints we know exist.
   console.warn(
     '[getBlocksInRange] endpoints not connected via visible navigation.',
-    {startBlockId, endBlockId, scopeRootId},
+    {startBlockId, endBlockId, scopeRootId: surface.scopeRootId},
   )
   const fallback: string[] = []
   if (start.peek()) fallback.push(startBlockId)
@@ -494,20 +486,18 @@ export async function getBlocksInRange(
 /** Extends selection to include blocks in range between current
  *  anchor and target block. Reads selection state + focus from the
  *  UI-state block (sync), computes the range against the visible
- *  document order within the surface's scope root, then writes the
- *  new selection state. With no active selection the range starts at
+ *  document order on `surface` (none: nothing to extend over), then writes
+ *  the new selection state. With no active selection the range starts at
  *  `originBlockId` when given, else at the focused block. */
 export async function extendSelection(
   targetBlockId: string,
   uiStateBlock: Block,
   repo: Repo,
-  scopeRootId: string | undefined,
+  surface: OutlineSurface | null,
   {
-    scopeRootForcesOpen = true,
     clearEditing = false,
     originBlockId,
   }: {
-    scopeRootForcesOpen?: boolean
     clearEditing?: boolean
     originBlockId?: string
   } = {},
@@ -515,12 +505,12 @@ export async function extendSelection(
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
 
-  if (!scopeRootId) return false
+  if (!surface) return false
 
   const currentAnchor = currentState?.anchorBlockId || originBlockId || focusedId
   if (!currentAnchor) return false
 
-  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)
+  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, surface, repo)
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
   // Returns false when the range resolved empty (commitSelectionRange writes
@@ -533,7 +523,7 @@ export async function extendSelection(
     anchorBlockId: currentAnchor,
     targetLocation: {
       blockId: targetBlockId,
-      renderScopeId: currentLocation?.renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
+      renderScopeId: currentLocation?.renderScopeId ?? uiStateRenderScopeId(uiStateBlock, surface.scopeRootId),
     },
     selectedBlockIds: rangeIds,
     clearEditing,
