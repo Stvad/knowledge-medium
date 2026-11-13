@@ -14,7 +14,8 @@
 }
 
 @container property-field-row (width >= 28rem) {
-  .tm-property-field-row[data-expanded-single-leaf="true"] > .block-controls > .expand-collapse-button {
+  .tm-property-field-row[data-expanded-single-leaf="true"] > .block-controls > .expand-collapse-button,
+  .tm-property-field-row[data-expanded-single-leaf="true"] > .block-body > [data-property-row-layout] > [data-property-name-cell] .expand-collapse-button {
     visibility: hidden;
   }
 }

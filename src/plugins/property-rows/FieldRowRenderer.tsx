@@ -71,10 +71,7 @@ const FieldRowLayout: BlockLayout = ({
   const soleChildIsLeaf = useHandle(block.repo.query.childIds({
     id: soleChildId ?? '', hydrate: true, propertyChildren: childMode,
   }), {
-    selector: childIds => soleChildId !== null
-      && soleChildId !== undefined
-      && childIds !== undefined
-      && childIds.length === 0,
+    selector: childIds => soleChildId !== null && childIds?.length === 0,
   })
 
   return (
