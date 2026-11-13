@@ -1,1 +1,1 @@
-export{nP as approveExtensionHere}from"../../chunks/app-ZfxiM_fL.js";
+export{nP as approveExtensionHere}from"../../chunks/app-DD3-vEDc.js";

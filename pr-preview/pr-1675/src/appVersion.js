@@ -1,1 +1,1 @@
-export{Cc as appVersion}from"../chunks/app-ZfxiM_fL.js";
+export{Cc as appVersion}from"../chunks/app-DD3-vEDc.js";

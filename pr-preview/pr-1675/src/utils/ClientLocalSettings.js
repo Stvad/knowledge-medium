@@ -1,1 +1,1 @@
-export{HP as ClientLocalSettings,UP as clientLocalSettings}from"../../chunks/app-ZfxiM_fL.js";
+export{HP as ClientLocalSettings,UP as clientLocalSettings}from"../../chunks/app-DD3-vEDc.js";

@@ -1,1 +1,1 @@
-export{lQ as pluginPrefsExtension,uQ as pluginUIStateExtension}from"../../chunks/app-ZfxiM_fL.js";
+export{lQ as pluginPrefsExtension,uQ as pluginUIStateExtension}from"../../chunks/app-DD3-vEDc.js";

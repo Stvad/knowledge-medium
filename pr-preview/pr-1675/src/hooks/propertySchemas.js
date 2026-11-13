@@ -1,1 +1,1 @@
-export{yG as usePropertySchemas}from"../../chunks/app-ZfxiM_fL.js";
+export{yG as usePropertySchemas}from"../../chunks/app-DD3-vEDc.js";

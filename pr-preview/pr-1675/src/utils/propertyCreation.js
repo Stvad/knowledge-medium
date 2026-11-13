@@ -1,1 +1,1 @@
-export{ZL as canConvertEmptyChildBlockToProperty,QL as convertEmptyChildBlockToProperty}from"../../chunks/app-ZfxiM_fL.js";
+export{ZL as canConvertEmptyChildBlockToProperty,QL as convertEmptyChildBlockToProperty}from"../../chunks/app-DD3-vEDc.js";

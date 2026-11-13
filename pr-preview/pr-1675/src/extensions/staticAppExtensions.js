@@ -1,1 +1,1 @@
-export{Jt as staticAppExtensions}from"../../chunks/app-ZfxiM_fL.js";
+export{Jt as staticAppExtensions}from"../../chunks/app-DD3-vEDc.js";

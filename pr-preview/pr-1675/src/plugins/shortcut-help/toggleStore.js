@@ -1,1 +1,1 @@
-export{mj as shortcutHelpToggle}from"../../../chunks/app-ZfxiM_fL.js";
+export{mj as shortcutHelpToggle}from"../../../chunks/app-DD3-vEDc.js";
