@@ -1,1 +1,1 @@
-export{WP as extensionDisplayName,GP as extensionName,KP as userExtensionShellToggle,qP as userExtensionToggle}from"../../chunks/app-CNTFI4TN.js";
+export{nF as extensionDisplayName,rF as extensionName,iF as userExtensionShellToggle,aF as userExtensionToggle}from"../../chunks/app-CRyxdJj_.js";

@@ -1,1 +1,1 @@
-export{ru as AddTagDialog}from"../../../chunks/app-CNTFI4TN.js";
+export{hu as AddTagDialog}from"../../../chunks/app-CRyxdJj_.js";

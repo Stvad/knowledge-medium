@@ -1,1 +1,1 @@
-export{DI as trimIfEdited}from"../../chunks/app-CNTFI4TN.js";
+export{BI as trimIfEdited}from"../../chunks/app-CRyxdJj_.js";

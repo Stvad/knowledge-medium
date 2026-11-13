@@ -1,1 +1,1 @@
-export{SF as BlockLoadingPlaceholder}from"../../chunks/app-CNTFI4TN.js";
+export{PF as BlockLoadingPlaceholder}from"../../chunks/app-CRyxdJj_.js";

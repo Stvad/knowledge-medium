@@ -1,1 +1,1 @@
-export{NI as BulletDot,PI as DefaultBlockLayout,FI as DefaultBlockRenderer}from"../../../chunks/app-CNTFI4TN.js";
+export{KI as BlockFrame,qI as BulletDot,JI as DefaultBlockLayout,YI as DefaultBlockRenderer}from"../../../chunks/app-CRyxdJj_.js";

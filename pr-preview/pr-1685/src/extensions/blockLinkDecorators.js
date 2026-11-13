@@ -1,0 +1,1 @@
+export{UD as blockLinkDecoratorsFacet}from"../../chunks/app-CRyxdJj_.js";

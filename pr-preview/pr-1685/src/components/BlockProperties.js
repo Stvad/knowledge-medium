@@ -1,1 +1,1 @@
-export{DB as BlockProperties}from"../../chunks/app-CNTFI4TN.js";
+export{VB as BlockProperties}from"../../chunks/app-CRyxdJj_.js";
