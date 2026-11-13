@@ -27,6 +27,8 @@ import {
 import { applySyncInvalidation } from '@/data/internals/syncObserver/invalidate.js'
 import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness.js'
 import type { Repo } from '@/data/repo'
+import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
+import { referenceTargetLookupsVia } from '@/data/internals/referenceTargetLookups'
 import type { BlockCache } from '@/data/blockCache'
 
 const WS = '3f2b7c10-9d4e-4a61-8c2f-15b0e7a94d33'
@@ -48,7 +50,14 @@ interface Device {
   cursor: number
 }
 
-const materializeDeps = {getMaterializability: constMat('copy'), getCek: noKey}
+/** As production wires it (`repo.ts`): without the lookups an arrival is never
+ *  stamped `is_field_form`, so a device would not recognize a synced field row
+ *  and mint a second one. */
+const materializeDeps: MaterializeDeps = {
+  getMaterializability: constMat('copy'),
+  getCek: noKey,
+  referenceTargetLookups: tx => referenceTargetLookupsVia(tx),
+}
 
 const upload = async (device: Device, server: FakeSyncServer): Promise<void> => {
   const rejections: unknown[] = []
