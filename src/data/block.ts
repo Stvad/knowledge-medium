@@ -236,11 +236,11 @@ export class Block implements Handle<BlockData | null> {
    *  ones use `useChildIds(block)` (which subscribes to the same
    *  handle).
    *
-   *  Facade getters speak the visible/outline view (property field rows
+   *  Facade getters speak the mode-`none` view (every property field row
    *  excluded, §9); drop to `repo.query.*` / `tx.childrenOf` for the
    *  structural everything-view. */
   get childIds(): LoaderHandle<string[]> {
-    return this.repo.query.childIds({id: this.id, hidePropertyChildren: true})
+    return this.repo.query.childIds({id: this.id, propertyChildren: 'none'})
   }
 
   /** Reactive children-rows list. Same shape as `childIds` but loads
@@ -249,7 +249,7 @@ export class Block implements Handle<BlockData | null> {
    *  extra `repo.block(id).load()` per child. Callers wanting Block
    *  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
   get children(): LoaderHandle<BlockData[]> {
-    return this.repo.query.children({id: this.id, hidePropertyChildren: true})
+    return this.repo.query.children({id: this.id, propertyChildren: 'none'})
   }
 
   /** Parent as Block, or null only if this block has no parent

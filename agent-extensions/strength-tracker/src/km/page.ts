@@ -200,7 +200,7 @@ export const getOrCreateSettingsBlock = async (
     // and a blind mint in this branch breaks no test through the public path.
     // It covers the window where that query has not yet seen a mint of its
     // own, which is real but not reproducible from outside.
-    const minted = (await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
+    const minted = (await tx.childrenOf(pageId, undefined, {propertyChildren: 'none'}))
       .find(block => !block.deleted && block.id !== seat.id && hasBlockType(block, SETTINGS_TYPE))
     return minted !== undefined
       ? (await adoptTypedBlock(repo, tx, minted, [SETTINGS_TYPE], typeSnapshot)).id

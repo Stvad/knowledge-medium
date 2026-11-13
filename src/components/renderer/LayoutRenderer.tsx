@@ -211,7 +211,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // must not do. The synchronous media read is right on every render.
   useIsMobile()
   const isMobile = isMobileViewport()
-  const rows = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
+  const rows = useHandle(block.repo.query.subtree({id: block.id, propertyChildren: 'none'}), {
     selector: data => data ?? EMPTY_ROWS,
   })
   // From the ROWS snapshot, never a separate subscription — the effect below

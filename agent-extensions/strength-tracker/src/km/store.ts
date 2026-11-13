@@ -164,7 +164,7 @@ const findLegacyGapRecord = async (
   exclude: string,
 ): Promise<BlockData | null> => {
   const candidates = new Map<string, BlockData>()
-  for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+  for (const block of await tx.childrenOf(pageId, undefined, {propertyChildren: 'none'})) {
     candidates.set(block.id, block)
   }
   for (const id of knownLayoffIds) {
@@ -314,14 +314,14 @@ export const discardSession = async (
     // the whole thing went silently. Refused rather than reparented, because
     // where those blocks should go instead is the user's call, not ours.
     const nested = await nestedWorkouts(
-      id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+      id => tx.childrenOf(id, undefined, {propertyChildren: 'none'}),
       workoutId,
     )
     if (nested.length > 0) return 'holds-a-session' as const
 
     if (expected !== undefined) {
       const now = await discardTally(
-        id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+        id => tx.childrenOf(id, undefined, {propertyChildren: 'none'}),
         workoutId,
       )
       if (now.logged !== expected.logged || now.yours !== expected.yours) return 'changed' as const

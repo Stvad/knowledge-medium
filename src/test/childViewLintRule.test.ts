@@ -20,14 +20,14 @@ describe('child-view ESLint rule', () => {
     {
       valid: [
         // Query handles that opt into the visible view.
-        { code: `const rows = repo.query.subtree({id: block.id, hidePropertyChildren: true})` },
-        { code: `useHandle(repo.query.childIds({id, hydrate: true, hidePropertyChildren: true}))` },
-        { code: `repo.query.children({id, hidePropertyChildren: true})` },
+        { code: `const rows = repo.query.subtree({id: block.id, propertyChildren: 'none'})` },
+        { code: `useHandle(repo.query.childIds({id, hydrate: true, propertyChildren: 'none'}))` },
+        { code: `repo.query.children({id, propertyChildren: 'none'})` },
         // Explicit structural everything-view is also an explicit choice.
-        { code: `repo.query.subtree({id: block.id, hidePropertyChildren: false})` },
+        { code: `repo.query.subtree({id: block.id, propertyChildren: 'all'})` },
         // The named helper is the sanctioned visible spelling.
         { code: `const rows = await visibleChildrenOf(tx, parentId, workspaceId)` },
-        { code: `const kids = await tx.childrenOf(id, ws, {hidePropertyChildren: true})` },
+        { code: `const kids = await tx.childrenOf(id, ws, {propertyChildren: 'none'})` },
         // Not the query-handle shape — an ordinary object/array member access.
         { code: `const first = slot.children[0]` },
         { code: `walk(node.subtree)` },

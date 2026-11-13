@@ -20,6 +20,7 @@ export const dailyNoteDateProp = seedProperty({
   preset: 'date',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const dailyNoteType = seedType({

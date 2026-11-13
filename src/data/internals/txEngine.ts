@@ -33,6 +33,7 @@ import type {
   BlockReference,
   Mutator,
   NewBlockData,
+  PropertyChildrenView,
   PropertySchema,
   ResolvedPropertySchema,
   SameTxEmittedEvent,
@@ -68,7 +69,9 @@ import {
   normalizeReferences,
   scopePoliciesEquivalent,
 } from '@/data/api'
-import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { isValidSeededDefinition, seededDefinitionKey } from '@/data/definitionSeeds'
+import { isPropertySeedKey } from '@/data/propertySeeds'
+import { propertyHideInOutlineProp } from '@/data/properties'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
 import { chunk as chunksOf } from 'lodash-es'
 import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
@@ -101,9 +104,10 @@ import {
   readPropertyDefinitionBags,
 } from '@/data/internals/propertyKeyScan'
 import {
-  isPropertyFieldInstance,
+  isLeftOutOfChildrenView,
   propertyCellValueRejection,
   type IsPropertyFieldDefinition,
+  type PropertyRowClassifier,
 } from '@/data/propertyChildren'
 import {
   changedPropertyNames,
@@ -156,13 +160,17 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
   return false
 }
 
-/** v1 invariant (schema-unification §5.1): a materialized seed definition is
- *  wholly code-owned — its bag and lifecycle belong to materialization and
- *  the §13 revision-upgrade step (both `Automation` scope); synced-in
- *  changes never pass through this engine at all. The schema editor and
- *  property panel already render seed rows read-only; this is the
- *  data-layer backstop for the agent bridge, the importer, and the outline
- *  delete key.
+/** A property's outline visibility is user-owned; all other seed metadata
+ *  and type-definition metadata stay code-owned. Removing the override
+ *  restores the declaration's default. */
+const isEditableSeedPreference = (row: BlockData, name: string): boolean =>
+  isPropertySeedKey(seededDefinitionKey(row))
+  && name === propertyHideInOutlineProp.name
+  && (row.properties[name] === undefined || typeof row.properties[name] === 'boolean')
+
+/** A materialized seed definition's schema and lifecycle are code-owned.
+ *  Only its outline preference is user-editable. This commit-time check
+ *  also covers writes from the agent bridge, importer, and outline.
  *
  *  ONE commit-time check over the tx's snapshots map — the single
  *  convergence point for everything a tx wrote — rather than per-primitive
@@ -176,7 +184,7 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
  *
  *  Rules, under `BlockDefault` scope only:
  *   - a row may not BECOME a valid seeded definition (forgery);
- *   - a valid seeded definition's bag may not change (which also covers
+ *   - a valid seeded definition's code-owned metadata may not change (which also covers
  *     stripping its provenance) and it may not be tombstoned or
  *     hard-deleted. Content/references edits and plain restores stay
  *     allowed — they don't touch the code-owned fields, and
@@ -202,7 +210,7 @@ export const assertNoSeedDefinitionWrites = (
     }
     if (beforeSeed && (
       after === null
-      || !jsonValuesEqual(before.properties, after.properties)
+      || changedPropertyNames(before.properties, after.properties).some(name => !isEditableSeedPreference(after, name))
       || (!before.deleted && after.deleted)
     )) {
       throw new SeededDefinitionWriteError(id)
@@ -261,6 +269,10 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
+  /** The definition ids the workspace's `'non-hidden'` view skips (`outlineSkippedFieldIds` over the
+   *  same tx-start registry snapshot the resolver reads), for the
+   *  `'non-hidden'` child view. */
+  outlineSkippedFieldIdsFor: (workspaceId: string) => ReadonlySet<string>
   /** Tx-start write scope; null permits stage-0 or explicitly forced writes.
    *  A scope with workspaceId null has no open workspace and refuses writes. */
   writableWorkspace: {readonly workspaceId: string | null} | null
@@ -1314,7 +1326,7 @@ export class TxImpl implements Tx {
   async childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {propertyChildren?: PropertyChildrenView},
   ): Promise<BlockData[]> {
     let data: BlockData[]
     if (parentId === null) {
@@ -1338,7 +1350,7 @@ export class TxImpl implements Tx {
       const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
       data = rows.map(parseBlockRow)
     }
-    // Default is the structural view (EVERY child); `hidePropertyChildren`
+    // Default is the structural view (EVERY child); `propertyChildren: 'none'`
     // is the display view. Not flip-gated — it is the in-tx twin of
     // VISIBLE_CHILDREN_SQL and must answer the same question, and the
     // backfill mints field rows before the flip. Root listings are exempt:
@@ -1348,11 +1360,15 @@ export class TxImpl implements Tx {
     // `::` rows can classify, so a ref-typed VALUE pointing at a definition is
     // never misread, and a marked row inside a property subtree IS machinery
     // and filters like any other, at any depth.
-    if (parentId === null) return data
-    if (options?.hidePropertyChildren !== true || data.length === 0) return data
+    const view = options?.propertyChildren ?? 'all'
+    if (parentId === null || view === 'all' || data.length === 0) return data
     if (!data.some(row => row.isFieldForm === true)) return data
-    const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
-    return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))
+    const rowsWorkspaceId = data[0]!.workspaceId
+    const classifier: PropertyRowClassifier = {
+      isFieldDefinition: this.isFieldDefinitionCheckerFor(rowsWorkspaceId),
+      isOutlineSkipped: fieldId => this.ctx.outlineSkippedFieldIdsFor(rowsWorkspaceId).has(fieldId),
+    }
+    return data.filter(row => !isLeftOutOfChildrenView(row, view, classifier))
   }
 
   async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {

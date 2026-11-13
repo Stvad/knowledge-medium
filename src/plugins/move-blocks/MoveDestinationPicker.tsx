@@ -77,7 +77,7 @@ export function MoveDestinationPicker({
       // so a descendant hidden behind property-field machinery must be
       // excluded too, not just what the outline renders.
       const subtrees = await Promise.all(
-        blockIds.map(id => repo.query.subtree({id, hidePropertyChildren: false}).load()),
+        blockIds.map(id => repo.query.subtree({id, propertyChildren: 'all'}).load()),
       )
       if (cancelled) return
       const excludeBlockIds = new Set<string>(blockIds)

@@ -8,6 +8,7 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
+import { withLock } from '@/utils/webLock.js'
 import { encryptUploadColumns, snapshotCekPerCall, type GetCek, type UploadMode } from '@/sync/transform.js'
 
 // `§` references in this file cite docs/e2ee-design.html.
@@ -394,6 +395,15 @@ const orderedBlockUpserts = (rows: readonly BlockUploadPayload[]): BlockUploadPa
   return ordered
 }
 
+/** How long one upload request may run before it is aborted. A request that
+ *  never settles would hold the upload lock ({@link uploadLockName}) against
+ *  every later pass. Well above the server's statement timeout, so a request
+ *  still running at the deadline is one the server is no longer executing.
+ *  The abort surfaces as a codeless `status: 0` error, which classifies
+ *  transient: the pass throws and the queue is retried. */
+const UPLOAD_REQUEST_TIMEOUT_MS = 30_000
+const uploadRequestDeadline = (): AbortSignal => AbortSignal.timeout(UPLOAD_REQUEST_TIMEOUT_MS)
+
 /** Ships every PATCH in the compacted batch as a single
  *  `apply_block_patches` RPC call. The server-side function loops the
  *  patches array and runs one column-narrow UPDATE per element, with the
@@ -419,7 +429,9 @@ const applyBlockPatchesRpc = async (
   for (const batch of chunk(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] PATCH batch', batch.length)
     const payload = batch.map(patch => ({id: patch.id, ...patch.payload}))
-    const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
+    const {error, status} = await client
+      .rpc('apply_block_patches', {patches: payload})
+      .abortSignal(uploadRequestDeadline())
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -436,6 +448,7 @@ const applyBlockDelete = async (id: string) => {
     .from('blocks')
     .delete()
     .eq('id', id)
+    .abortSignal(uploadRequestDeadline())
 
   if (error) {
     throwWithHttpStatus(error, status)
@@ -467,7 +480,9 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   // DEFERRABLE within a tx but not across them.
   for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
-    const {error, status} = await client.rpc('apply_block_creates', {creates: batch})
+    const {error, status} = await client
+      .rpc('apply_block_creates', {creates: batch})
+      .abortSignal(uploadRequestDeadline())
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -828,12 +843,41 @@ const fetchCredentials = async () => {
   }
 }
 
-/** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
- *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
- *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
- *  throw classifies transient — so that tx would retry forever and jam the
- *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
+/** The Web Lock one upload pass holds, per database file. */
+export const uploadLockName = (dbFilename: string): string => `km-upload-${dbFilename}`
+
+/** The connector's `uploadData`, one pass at a time per database.
+ *
+ *  The SDK's own upload lock does not cover this. Whenever its shared worker
+ *  reconnects, which every other tab connecting causes, it stops WAITING on the
+ *  tab's `uploadData` and releases that lock while the pass and its request
+ *  still run. Unserialized, the pass it starts next re-sends the same queue,
+ *  and the server keeps whichever request it applies last. Behind this lock
+ *  the next pass reads the queue only after the earlier one has settled.
+ *
+ *  A Web Lock, not an in-tab chain: the worker hands the next pass to the
+ *  newest tab. */
+const serializedUploadData = (
+  dbFilename: string,
+  deps: UploadDeps,
+): PowerSyncBackendConnector['uploadData'] => {
+  // Per-connector so `ambiguous` retry counts persist across the repeated
+  // `uploadData` invocations PowerSync makes while a tx stays queued.
+  const ambiguousAttempts = new Map<number, number>()
+  return database => withLock(
+    uploadLockName(dbFilename),
+    () => runUploadLoop(database, deps, ambiguousAttempts),
+  )
+}
+
 export interface PowerSyncConnectorOptions {
+  /** The local database file this connector uploads from. */
+  readonly dbFilename: string
+  /** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
+   *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
+   *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
+   *  throw classifies transient — so that tx would retry forever and jam the
+   *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
   readonly encryption?: {
     readonly getWorkspaceMode: GetWorkspaceMode
     readonly getCek: GetCek
@@ -841,20 +885,14 @@ export interface PowerSyncConnectorOptions {
 }
 
 export const createPowerSyncConnector = (
-  options: PowerSyncConnectorOptions = {},
-): PowerSyncBackendConnector => {
-  const deps = makeUploadDeps(
+  options: PowerSyncConnectorOptions,
+): PowerSyncBackendConnector => ({
+  fetchCredentials,
+  uploadData: serializedUploadData(options.dbFilename, makeUploadDeps(
     options.encryption?.getWorkspaceMode ?? defaultGetWorkspaceMode,
     options.encryption?.getCek ?? defaultUploadGetCek,
-  )
-  // Per-connector so `ambiguous` retry counts persist across the repeated
-  // `uploadData` invocations PowerSync makes while a tx stays queued.
-  const ambiguousAttempts = new Map<number, number>()
-  return {
-    fetchCredentials,
-    uploadData: database => runUploadLoop(database, deps, ambiguousAttempts),
-  }
-}
+  )),
+})
 
 export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
