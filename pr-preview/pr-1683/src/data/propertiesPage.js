@@ -1,0 +1,1 @@
+export{git as getOrCreatePropertiesPage,_it as propertiesPageBlockId,vit as propertiesPageSpec}from"../../chunks/app-Dw1dzF6W.js";
