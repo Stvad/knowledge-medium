@@ -1,1 +1,1 @@
-export{WM as kernelPropertyUiExtension,GM as typesPropertyUi,KM as typesPropertyUiExtension}from"../../../chunks/app-C01whtES.js";
+export{WM as kernelPropertyUiExtension,GM as typesPropertyUi,KM as typesPropertyUiExtension}from"../../../chunks/app-CYdcblIm.js";

@@ -1,1 +1,1 @@
-export{CB as defineVariant,wB as defineVariantFacet}from"../../chunks/app-C01whtES.js";
+export{SB as defineVariant,CB as defineVariantFacet}from"../../chunks/app-CYdcblIm.js";

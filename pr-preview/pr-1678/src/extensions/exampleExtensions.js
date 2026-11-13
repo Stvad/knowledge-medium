@@ -1,1 +1,1 @@
-export{CN as exampleExtensions,wN as insertExampleExtensionsUnder}from"../../chunks/app-C01whtES.js";
+export{SN as exampleExtensions,CN as insertExampleExtensionsUnder}from"../../chunks/app-CYdcblIm.js";

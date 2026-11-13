@@ -1,1 +1,1 @@
-export{mut as CHANGE_SCOPE_POLICIES,hut as ChangeScope,gut as isChangeScope,_ut as policyForScope,vut as scopeAllowedInReadOnly,yut as scopeIsUndoable,but as scopePoliciesEquivalent,xut as scopeUploadsToServer,Sut as sourceForScope}from"../../../chunks/app-C01whtES.js";
+export{fut as CHANGE_SCOPE_POLICIES,put as ChangeScope,mut as isChangeScope,hut as policyForScope,gut as scopeAllowedInReadOnly,_ut as scopeIsUndoable,vut as scopePoliciesEquivalent,yut as scopeUploadsToServer,but as sourceForScope}from"../../../chunks/app-CYdcblIm.js";

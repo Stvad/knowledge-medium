@@ -1,1 +1,1 @@
-export{PI as BlockTypeBlockRenderer,FI as BlockTypeContentRenderer,II as writeBlockTypeLabel}from"../../../chunks/app-C01whtES.js";
+export{NI as BlockTypeBlockRenderer,PI as BlockTypeContentRenderer,FI as writeBlockTypeLabel}from"../../../chunks/app-CYdcblIm.js";
