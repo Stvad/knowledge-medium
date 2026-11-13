@@ -1,1 +1,0 @@
-export{Cc as appVersion}from"../chunks/app-DNWp6hQ7.js";

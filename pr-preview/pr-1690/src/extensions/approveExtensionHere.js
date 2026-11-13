@@ -1,1 +1,0 @@
-export{nP as approveExtensionHere}from"../../chunks/app-DNWp6hQ7.js";

@@ -1,1 +1,0 @@
-export{vR as BlockEditor}from"../../chunks/app-DNWp6hQ7.js";

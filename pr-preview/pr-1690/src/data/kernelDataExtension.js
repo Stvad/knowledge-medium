@@ -1,1 +1,0 @@
-export{K3 as kernelDataExtension}from"../../chunks/app-DNWp6hQ7.js";

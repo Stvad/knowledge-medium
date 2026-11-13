@@ -1,1 +1,0 @@
-export{_u as BlockTagsConfigEditor}from"../../../chunks/app-DNWp6hQ7.js";

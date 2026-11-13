@@ -1,1 +1,0 @@
-export{GK as referencesDataExtension}from"../../../chunks/app-DNWp6hQ7.js";
