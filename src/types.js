@@ -1,1 +1,1 @@
-export{Zat as isChildBackedPropertiesWorkspace}from"../chunks/app-965Q2DFR.js";
+export{tot as isChildBackedPropertiesWorkspace}from"../chunks/app-D7EDODv-.js";

@@ -1,1 +1,1 @@
-export{YX as annotationMarginOpenProp,XX as annotationMarginShareProp}from"../../../chunks/app-965Q2DFR.js";
+export{ZX as annotationMarginOpenProp,QX as annotationMarginShareProp}from"../../../chunks/app-D7EDODv-.js";

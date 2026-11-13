@@ -1,1 +1,1 @@
-export{hut as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-965Q2DFR.js";
+export{Cut as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-D7EDODv-.js";
