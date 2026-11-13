@@ -8,7 +8,7 @@
  * views read the SAME stamped columns for recognition conditions (1) and (2) —
  * `is_field_form` and `reference_target_id`, plus `parent_id IS NOT NULL` —
  * and split only on condition (3), "does the target name a definition":
- *  - JS: `visibleChildrenOf` → `tx.childrenOf(…, {hidePropertyChildren})` →
+ *  - JS: `visibleChildrenOf` → `tx.childrenOf(…, {propertyChildren})` →
  *    `isPropertyFieldInstance` with the tx's registry checker
  *    (`isResolvableFieldDefinition(resolver.resolveField(id))`), fed by the
  *    user-schemas projector's parse of definition rows plus the code seeds.

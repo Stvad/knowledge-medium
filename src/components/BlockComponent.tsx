@@ -1,12 +1,13 @@
 import { Block } from '../data/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.js'
+import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
 import { useRepo } from '@/context/repo.js'
 import { Suspense } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useChildIds } from '@/hooks/block.js'
+import { useChildIdsForMode, usePropertyDisplayMode } from '@/hooks/block.js'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
@@ -57,14 +58,15 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // shell decorator documents as the pitfall to avoid. Children render in this
   // context, so its scope is the one they will have.
   const {renderScopeId} = useBlockContext()
+  const mode = usePropertyDisplayMode(block)
 
-  return <>
-    {useChildIds(block).map((childId) => (
+  return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
+    {useChildIdsForMode(block, mode).map((childId) => (
       <LazyBlockComponent
         key={childId}
         blockId={childId}
         renderScopeId={renderScopeId}
       />
     ))}
-  </>
+  </PropertyRowListingContext>
 }

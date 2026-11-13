@@ -46,6 +46,7 @@ export const runConsistencyAuditNow = async (
   const result = await runConsistencyAudit(repo.db, workspaceId, Date.now(), {
     divergenceRecheckMs: DIVERGENCE_RECHECK_MS,
     sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    syncedThroughMs: () => repo.lastSyncedAt?.getTime(),
     // The observer's §6 resolver (real in production via repoProvider; undefined
     // in tests/plaintext Repos ⇒ the divergence spot-check runs cleartext-only).
     decrypt: repo.syncObserverDeps,

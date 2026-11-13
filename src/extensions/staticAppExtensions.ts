@@ -66,6 +66,7 @@ import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { dbMirrorPlugin } from '@/plugins/db-mirror'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
+import { propertyRowsPlugin } from '@/plugins/property-rows'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
 import { observeWorkspaceEffectContribution } from '@/plugins/interaction-metrics/sessionContext'
@@ -178,6 +179,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   dbMaintenancePlugin({repo}),
   dbMirrorPlugin,
   propertiesMigrationPlugin({repo}),
+  propertyRowsPlugin,
   startupMetricsPlugin,
   interactionMetricsPlugin,
   perfMonitorPlugin({repo}),

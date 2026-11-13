@@ -149,6 +149,7 @@ import {
 } from './internals/kernelQueries'
 import {
   KERNEL_FIELD_RECOGNITION_CHANNEL,
+  KERNEL_FIELD_OUTLINE_SKIP_KEY,
   KERNEL_FIELD_RECOGNITION_KEY,
   type InvalidationRule,
 } from './invalidation'
@@ -164,6 +165,7 @@ import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import {
   sameFieldRecognition,
+  sameOutlineSkips,
   type PropertyDefinitionRegistrySnapshot,
 } from './propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
@@ -1246,13 +1248,19 @@ export class Repo {
           !sameStringSet(this._typeDefinitionRegistry?.contestedSeedKeys, typeDefinitions?.contestedSeedKeys)
         const recognitionChanged =
           !sameFieldRecognition(this._propertyDefinitionRegistry, propertyDefinitions)
+        const outlineSkipsChanged =
+          !sameOutlineSkips(this._propertyDefinitionRegistry, propertyDefinitions)
         this._propertyDefinitionRegistry = propertyDefinitions
         this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
         // After the swap: a handle re-resolving on this reads the new snapshot.
-        if (recognitionChanged) {
+        const recognitionKeys = [
+          ...(recognitionChanged ? [KERNEL_FIELD_RECOGNITION_KEY] : []),
+          ...(outlineSkipsChanged ? [KERNEL_FIELD_OUTLINE_SKIP_KEY] : []),
+        ]
+        if (recognitionKeys.length > 0) {
           this.handleStore.invalidate({plugin: new Map([
-            [KERNEL_FIELD_RECOGNITION_CHANNEL, [KERNEL_FIELD_RECOGNITION_KEY]],
+            [KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys],
           ])})
         }
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {

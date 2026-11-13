@@ -76,6 +76,7 @@ for (const ws of workspaceIds) {
     // Debounce a transient mid-sync divergence pass (report the settled counts).
     divergenceRecheckMs: 4000,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    syncedThroughMs: () => repo.lastSyncedAt?.getTime(),
     decrypt,
     // Resolves property keys for the property-children checks. Its registry is
     // the active workspace's, so for any other workspace they report `error`.

@@ -990,7 +990,7 @@ export const reconcilePanelRows = async (
   // skipped as already applied, and that write's outbound projection would
   // then push its layout over the user's URL. Rows that differ reach the tx,
   // which re-reads under the lock.
-  const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load()
   const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
   if (preParent && !repo.hasWriteInFlight) {
     if (
@@ -1372,7 +1372,7 @@ export const applyCurrentLayoutUrl = async ({
     ? degradeSublayoutSlots(route.slots)
     : route.slots
 
-  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load()
   if (isCancelled?.()) return {kind: 'cancelled'}
   const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
@@ -1404,7 +1404,7 @@ export const applyCurrentLayoutUrl = async ({
   // re-attached (rows can't store either). Cannot loop: replaceState fires
   // no event, and a second pass over the replaced hash compares equal.
   const finalRows = changed
-    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load()
     : currentRows
   // Cancelled after the tx committed (during the final load): the committed
   // rows stand — they targeted our own session with the hash this apply
@@ -1483,7 +1483,7 @@ export class PanelLayoutProjection {
 
   async start(): Promise<void> {
     if (this.unsubscribeRows || this.unsubscribeUrl) return
-    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true})
+    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, propertyChildren: 'none'})
     const initialRows = await rowsHandle.load()
     this.lastSlots = layoutSlotsFromRows(this.layoutSessionBlock.id, initialRows)
     this.unsubscribeRows = rowsHandle.subscribe(rows => {
@@ -1557,7 +1557,7 @@ export class PanelLayoutProjection {
             // the generation check skips the pass when a live subscription
             // event was processed after drain (its rows are newer).
             const generationAtDrain = this.outboundGeneration
-            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true}).load()
+            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, propertyChildren: 'none'}).load()
             // Re-check after the await: a NEW inbound may have queued during
             // the load (and rows events suppressed under it re-set the flag),
             // or the projection may have been disposed mid-load. Bail WITHOUT

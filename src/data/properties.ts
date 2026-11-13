@@ -16,6 +16,7 @@ import {
 import { flushPendingEditorContent } from './pendingEditorContent'
 import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
+import { propertyDisplayDefaultProp, propertyDisplayProp } from './propertyDisplayMode'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -239,6 +240,7 @@ export const typesProp = seedProperty({
   name: 'types',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const rendererProp = seedProperty({
@@ -371,6 +373,19 @@ export const propertyHiddenProp = seedProperty({
   seedKey: 'system:kernel-data/property/property-schema-hidden',
   revision: 1,
   name: 'property-schema:hidden',
+  preset: 'boolean',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Keep this property's rows out of the outline's default property display —
+ *  because something else on the block already shows the value (a type chip,
+ *  a page title, a todo checkbox), or because the rows are just clutter there.
+ *  Unlike `hidden`, nothing else reads it: show-all, the panel, the pickers and
+ *  agent views still show the property. Absent means false. */
+export const propertyHideInOutlineProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-hide-in-outline',
+  revision: 1,
+  name: 'property-schema:hide-in-outline',
   preset: 'boolean',
   changeScope: ChangeScope.BlockDefault,
 })
@@ -541,6 +556,7 @@ export const aliasesProp = seedProperty({
   name: 'alias',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 }) as PropertySeedDeclaration<string[]>
 
 // ──── Helpers ────
@@ -778,6 +794,7 @@ export type { PropertySchema }
 export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   // UI-state schemas
   showPropertiesProp,
+  propertyDisplayProp,
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockLocationProp,
@@ -789,6 +806,8 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,
+  // UserPrefs schemas
+  propertyDisplayDefaultProp,
   // BlockDefault schemas
   isCollapsedProp,
   typesProp,
@@ -810,6 +829,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   propertyChangeScopeProp,
   propertyDefaultProp,
   propertyHiddenProp,
+  propertyHideInOutlineProp,
   seedKeyProp,
   seedRevisionProp,
   // block-type fields

@@ -405,7 +405,7 @@ export interface Tx {
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
    *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
-   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
+   *  `{propertyChildren: 'none'}`. Recognition is data-keyed, not
    *  flip-gated, so it prunes in every workspace: the cell→children backfill
    *  mints field rows while the workspace still reads cells.
    *
@@ -424,7 +424,7 @@ export interface Tx {
   childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {propertyChildren?: 'all' | 'none'},
   ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by
