@@ -1,1 +1,0 @@
-export{xb as attachmentsPlugin}from"../../../chunks/app-Tp0BfdRb.js";

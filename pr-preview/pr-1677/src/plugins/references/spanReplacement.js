@@ -1,1 +1,0 @@
-export{sq as preferredSpanReplacement}from"../../../chunks/app-Tp0BfdRb.js";

@@ -1,1 +1,0 @@
-export{VM as TypeChip}from"../../../chunks/app-Tp0BfdRb.js";

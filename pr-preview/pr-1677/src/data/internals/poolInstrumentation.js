@@ -1,1 +1,0 @@
-export{B1 as instrumentAdapter}from"../../../chunks/app-Tp0BfdRb.js";

@@ -1,1 +1,0 @@
-export{JN as approveExtensionHere}from"../../chunks/app-Tp0BfdRb.js";

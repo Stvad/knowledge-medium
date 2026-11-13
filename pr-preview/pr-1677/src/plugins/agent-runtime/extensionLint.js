@@ -1,1 +1,0 @@
-export{wh as lintExtensionSource}from"../../../chunks/app-Tp0BfdRb.js";

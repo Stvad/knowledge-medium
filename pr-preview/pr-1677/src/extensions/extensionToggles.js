@@ -1,1 +1,0 @@
-export{WP as extensionDisplayName,GP as extensionName,KP as userExtensionShellToggle,qP as userExtensionToggle}from"../../chunks/app-Tp0BfdRb.js";

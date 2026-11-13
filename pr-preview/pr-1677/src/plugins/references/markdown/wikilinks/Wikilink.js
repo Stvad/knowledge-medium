@@ -1,1 +1,0 @@
-export{oy as Wikilink}from"../../../../../chunks/app-Tp0BfdRb.js";

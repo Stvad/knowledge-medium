@@ -1,1 +1,0 @@
-export{DB as BlockProperties}from"../../chunks/app-Tp0BfdRb.js";

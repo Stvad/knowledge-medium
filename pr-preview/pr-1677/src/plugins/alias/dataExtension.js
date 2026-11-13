@@ -1,1 +1,0 @@
-export{IQ as aliasDataExtension}from"../../../chunks/app-Tp0BfdRb.js";
