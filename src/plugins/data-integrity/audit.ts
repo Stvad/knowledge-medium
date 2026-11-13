@@ -8,7 +8,9 @@
 //
 // All checks are READ-ONLY over the client SQLite (it runs on the decrypted
 // client, so unlike the server probe it covers the e2ee workspace). The lean
-// checks use SQL counts plus a BOUNDED e2ee decrypt spot-check. `full` mode
+// checks use SQL counts plus a BOUNDED e2ee decrypt spot-check, and on a
+// workspace at property children, two keyset-paged scans of the property cells
+// (coverage and cell-vs-children divergence: see propertyChildrenChecks.ts). `full` mode
 // adds the heavier inspections — precise property-ref projection, schema-aware at-rest,
 // content-link recompute, dangling refs, and an EXHAUSTIVE keyset-paginated
 // decrypt-compare — which need the app's own projection/parser + the active
@@ -33,22 +35,14 @@ import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
 import { hasSourceContent } from '@/data/blockTypes'
-
-/** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
- *  by design: a row whose JSON is unparseable is not source content (its
- *  `types` can't say so) — the same answer `hasSourceContent` gives for a
- *  wrong-shaped value. */
-const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
-  if (json === null) return {}
-  try {
-    const parsed: unknown = JSON.parse(json)
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
-}
+import type { Repo } from '@/data/repo'
+import { readWorkspacePropertiesMigration } from '@/data/workspaceSchema'
+import {
+  runPropertyCellCoverageCheck,
+  runPropertyCellDivergenceCheck,
+  runPropertyFieldRowDuplicatesCheck,
+} from './propertyChildrenChecks.js'
+import { parsePropertiesJson } from './rowJson.js'
 
 /** {@link hasSourceContent} for a raw row. */
 const rowHasSourceContent = (propertiesJson: string | null): boolean =>
@@ -185,6 +179,10 @@ export interface AuditOptions {
    *  and an EXHAUSTIVE e2ee content divergence) — the rich superset the bridge
    *  eval used to reimplement. Omit for the lean always-on cadence run. */
   full?: AuditFullDeps
+  /** The repo whose loaded property registry resolves the audited workspace's
+   *  keys — the coverage and divergence checks read through it. Omit and they
+   *  report `skipped`; the SQL-only duplicate check runs either way. */
+  repo?: Repo
 }
 
 /** Runtime context the deep `full`-mode checks need beyond the DB: the active
@@ -979,6 +977,35 @@ export const runConsistencyAudit = async (
       opts.full ? (opts.full.candidateCap ?? 60000) : (opts.decryptSampleSize ?? DECRYPT_SAMPLE_LIMIT),
     ),
   )
+
+  // Property children (#1011, read-only). Only a workspace at 'children' has
+  // both representations to compare: before it there are no field rows to
+  // trust, and past it the cell is no longer the read surface. All three run
+  // on the cadence: they page through owners, so no statement holds the
+  // connection for long, and the divergence count is the signal that gates
+  // stopping cell uploads.
+  let propertiesMigration: ReturnType<typeof readWorkspacePropertiesMigration> | undefined
+  const whenSwitched = async (
+    check: () => Promise<ConsistencyCheckResult>,
+  ): Promise<ConsistencyCheckResult> => {
+    propertiesMigration ??= readWorkspacePropertiesMigration(
+      { getOptional: async <T>(sql: string, params?: unknown[]) => (await db.getAll<T>(sql, params))[0] ?? null },
+      workspaceId,
+    )
+    const mode = await propertiesMigration
+    return mode === 'children'
+      ? check()
+      : { status: 'skipped', reason: `properties_migration is '${mode}', not 'children'` }
+  }
+  const noRepo: ConsistencyCheckResult = {
+    status: 'skipped', reason: 'no repo passed to resolve property keys against',
+  }
+  await run('property_field_row_duplicates', () => whenSwitched(() =>
+    runPropertyFieldRowDuplicatesCheck(db, workspaceId, SAMPLE_LIMIT)))
+  await run('property_cell_coverage', () => whenSwitched(async () =>
+    opts.repo ? runPropertyCellCoverageCheck(opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
+  await run('property_cell_divergence', () => whenSwitched(async () =>
+    opts.repo ? runPropertyCellDivergenceCheck(db, opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
 
   // Deep ON-DEMAND checks (full mode only) — the rich superset the bridge eval
   // used to reimplement, now run by the engine so the eval just invokes it.

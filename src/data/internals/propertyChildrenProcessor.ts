@@ -222,18 +222,31 @@ const projectedFieldValue = async (
   schema: AnyPropertySchema,
   fieldRows: readonly BlockData[],
 ): Promise<unknown | undefined> => {
-  // NO field row at all: the key is unset. That is the only thing that unsets a
-  // multi-valued property, and it is the precondition
-  // `childContentsToEncodedPropertyValue` is documented to be called under —
-  // it answers `[]` for a live field row with nothing parseable under it.
-  if (fieldRows.length === 0) return undefined
   // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
   // materialized under the field row is its own machinery, never a value
-  // candidate. `unionValuesAcrossFieldRows` owns what happens across the rows.
+  // candidate.
   const perFieldRow: BlockData[][] = []
   for (const fieldRow of fieldRows) {
     perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
   }
+  return projectFieldRowValues(schema, perFieldRow)
+}
+
+/** {@link projectedFieldValue} over values already read: each of one schema's
+ *  live field rows' value children, field rows and values both in
+ *  `(order_key, id)` order. The read-only consistency audit recomputes cells
+ *  through this, so it cannot disagree with the processor about what a cell
+ *  should hold. */
+export const projectFieldRowValues = (
+  schema: AnyPropertySchema,
+  perFieldRow: readonly (readonly Pick<BlockData, 'id' | 'content'>[])[],
+): unknown | undefined => {
+  // NO field row at all: the key is unset. That is the only thing that unsets a
+  // multi-valued property, and it is the precondition
+  // `childContentsToEncodedPropertyValue` is documented to be called under —
+  // it answers `[]` for a live field row with nothing parseable under it.
+  if (perFieldRow.length === 0) return undefined
+  // `unionValuesAcrossFieldRows` owns what happens across the rows.
   return childContentsToEncodedPropertyValue(
     schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
 }
