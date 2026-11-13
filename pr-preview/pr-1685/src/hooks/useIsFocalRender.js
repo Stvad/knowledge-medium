@@ -1,0 +1,1 @@
+export{mB as isFocalRender,hB as useIsFocalRender}from"../../chunks/app-CNTFI4TN.js";

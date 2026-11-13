@@ -1,0 +1,1 @@
+export{PD as openRecentsPage}from"../../../chunks/app-CNTFI4TN.js";

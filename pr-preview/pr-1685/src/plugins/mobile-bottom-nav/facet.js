@@ -1,0 +1,1 @@
+export{zw as mobileBottomNavItemsFacet}from"../../../chunks/app-CNTFI4TN.js";

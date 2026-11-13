@@ -1,0 +1,1 @@
+export{G8 as mergeProperties}from"../../chunks/app-CNTFI4TN.js";

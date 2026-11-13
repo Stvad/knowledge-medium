@@ -1,0 +1,1 @@
+export{B_ as BlockMetaCard}from"../../../chunks/app-CNTFI4TN.js";

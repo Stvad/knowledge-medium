@@ -1,0 +1,1 @@
+export{B1 as instrumentAdapter}from"../../../chunks/app-CNTFI4TN.js";

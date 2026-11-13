@@ -1,0 +1,1 @@
+export{oY as dailyNotesLocalSchema}from"../../../chunks/app-CNTFI4TN.js";

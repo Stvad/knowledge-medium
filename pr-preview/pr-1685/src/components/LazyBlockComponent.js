@@ -1,0 +1,1 @@
+export{yF as LazyBlockComponent}from"../../chunks/app-CNTFI4TN.js";

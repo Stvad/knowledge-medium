@@ -1,0 +1,1 @@
+export{bk as dailyDateWikilinkDecorator}from"../../../chunks/app-CNTFI4TN.js";

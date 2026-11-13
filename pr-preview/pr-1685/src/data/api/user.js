@@ -1,0 +1,1 @@
+export{wct as SYSTEM_AUTHOR_PREFIX,Tct as isSystemAuthor,Ect as systemAuthor}from"../../../chunks/app-CNTFI4TN.js";

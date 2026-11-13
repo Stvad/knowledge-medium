@@ -1,0 +1,1 @@
+export{yit as getOrCreatePropertiesPage,bit as propertiesPageBlockId,xit as propertiesPageSpec}from"../../chunks/app-CNTFI4TN.js";

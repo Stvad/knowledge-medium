@@ -1,0 +1,1 @@
+export{Xj as SWIPE_QUICK_ACTIONS_GESTURE_ID,gM as SWIPE_RIGHT_BLOCK_ACTION_ID,Yj as SwipeActionMenu,vM as quickActionItemsFacet,Wj as swipeQuickActionsPlugin}from"../../../chunks/app-CNTFI4TN.js";

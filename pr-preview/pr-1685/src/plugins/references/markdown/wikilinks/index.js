@@ -1,0 +1,1 @@
+export{ny as wikilinkMarkdownExtension}from"../../../../../chunks/app-CNTFI4TN.js";

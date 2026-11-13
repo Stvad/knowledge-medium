@@ -1,0 +1,1 @@
+export{mG as appRuntimeUpdateEvent,hG as refreshAppRuntime}from"../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{MD as useMinuteClock}from"../../chunks/app-CNTFI4TN.js";

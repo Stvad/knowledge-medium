@@ -1,0 +1,1 @@
+export{w3 as Block,T3 as requireLoadedBlock}from"../../chunks/app-CNTFI4TN.js";

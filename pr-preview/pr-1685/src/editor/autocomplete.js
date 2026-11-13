@@ -1,0 +1,1 @@
+export{IN as editorAutocompleteExtension}from"../../chunks/app-CNTFI4TN.js";

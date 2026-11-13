@@ -1,0 +1,1 @@
+export{JU as isIOS,YU as isMacPlatform}from"../../chunks/app-CNTFI4TN.js";

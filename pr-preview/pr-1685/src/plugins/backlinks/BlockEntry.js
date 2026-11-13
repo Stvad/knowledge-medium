@@ -1,0 +1,1 @@
+export{xv as LazyBlockEntry}from"../../../chunks/app-CNTFI4TN.js";

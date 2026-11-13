@@ -1,0 +1,1 @@
+export{jM as BlockEmbed}from"../../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{sG as usePropertySchemas}from"../../chunks/app-CNTFI4TN.js";

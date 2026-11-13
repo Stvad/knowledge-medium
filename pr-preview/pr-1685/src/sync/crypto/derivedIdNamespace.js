@@ -1,0 +1,1 @@
+export{$it as deriveWorkspaceIdNamespace}from"../../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{aG as floatingAnchorFromRect,oG as useAnchoredFloating}from"../../../chunks/app-CNTFI4TN.js";

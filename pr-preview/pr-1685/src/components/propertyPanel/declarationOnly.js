@@ -1,0 +1,1 @@
+export{$B as declarationOnlyDefinitionForName,eV as declarationOnlyStatusText}from"../../../chunks/app-CNTFI4TN.js";

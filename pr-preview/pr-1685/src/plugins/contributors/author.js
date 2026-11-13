@@ -1,0 +1,1 @@
+export{Rh as authorIdOf}from"../../../chunks/app-CNTFI4TN.js";

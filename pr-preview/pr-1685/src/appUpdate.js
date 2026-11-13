@@ -1,0 +1,1 @@
+export{uP as appUpdate,dP as useAppUpdateAvailable}from"../chunks/app-CNTFI4TN.js";

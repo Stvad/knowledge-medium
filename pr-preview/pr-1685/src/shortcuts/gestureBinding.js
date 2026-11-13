@@ -1,0 +1,1 @@
+export{xP as gestureBindingDescriptor,SP as matchesGestureEvent}from"../../chunks/app-CNTFI4TN.js";

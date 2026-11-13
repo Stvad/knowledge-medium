@@ -1,0 +1,1 @@
+export{X6 as agree,Z6 as pluralize}from"../../chunks/app-CNTFI4TN.js";

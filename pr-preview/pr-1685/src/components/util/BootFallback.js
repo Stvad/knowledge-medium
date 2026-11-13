@@ -1,0 +1,1 @@
+export{VG as BootFallback}from"../../../chunks/app-CNTFI4TN.js";

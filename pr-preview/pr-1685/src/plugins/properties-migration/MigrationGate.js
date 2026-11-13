@@ -1,0 +1,1 @@
+export{to as MigrationGate}from"../../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{h3 as applySyncInvalidation}from"../../../../chunks/app-CNTFI4TN.js";

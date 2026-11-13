@@ -1,0 +1,1 @@
+export{YA as adoptTypedBlock,XA as createTypedChild,Dat as derivedBlockId,ZA as getOrCreateTypedChild}from"../../chunks/app-CNTFI4TN.js";

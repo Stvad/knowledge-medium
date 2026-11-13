@@ -1,0 +1,1 @@
+export{IX as contributorsDataExtension}from"../../../chunks/app-CNTFI4TN.js";

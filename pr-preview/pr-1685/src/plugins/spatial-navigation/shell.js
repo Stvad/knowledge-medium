@@ -1,0 +1,1 @@
+export{wC as spatialNavigationShellDecorator}from"../../../chunks/app-CNTFI4TN.js";

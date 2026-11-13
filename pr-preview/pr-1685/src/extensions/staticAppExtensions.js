@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-CNTFI4TN.js";

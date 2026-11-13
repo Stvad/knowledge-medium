@@ -1,0 +1,1 @@
+export{MI as ConfirmBulkDeleteDialog}from"../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{IP as resolveAppRuntime,LP as resolveAppRuntimeSync}from"../../chunks/app-CNTFI4TN.js";

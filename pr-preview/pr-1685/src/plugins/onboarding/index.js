@@ -1,0 +1,1 @@
+export{wA as EXTENSIONS_PAGE_TITLE,TA as TUTORIAL_DEFAULT_TITLE,EA as TUTORIAL_VIM_TITLE,KS as onboardingPlugin,CA as seedTutorial}from"../../../chunks/app-CNTFI4TN.js";

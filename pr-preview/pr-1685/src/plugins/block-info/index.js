@@ -1,0 +1,1 @@
+export{z_ as blockInfoPlugin}from"../../../chunks/app-CNTFI4TN.js";

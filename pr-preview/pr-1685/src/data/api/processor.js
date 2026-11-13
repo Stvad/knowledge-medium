@@ -1,0 +1,1 @@
+export{Rct as definePostCommitProcessor}from"../../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{Tat as isChildBackedPropertiesWorkspace}from"../chunks/app-CNTFI4TN.js";

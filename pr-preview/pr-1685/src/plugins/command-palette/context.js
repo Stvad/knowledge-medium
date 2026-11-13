@@ -1,0 +1,1 @@
+export{yj as COMMAND_PALETTE_ACTION_ID,bj as COMMAND_PALETTE_CONTEXT,xj as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,Sj as commandPaletteActionContext}from"../../../chunks/app-CNTFI4TN.js";

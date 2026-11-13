@@ -1,0 +1,1 @@
+export{JN as approveExtensionHere}from"../../chunks/app-CNTFI4TN.js";

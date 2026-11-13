@@ -1,0 +1,1 @@
+export{oO as useAncestorCrumbs}from"../../chunks/app-CNTFI4TN.js";

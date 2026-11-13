@@ -1,0 +1,1 @@
+export{EN as BlockPasteShellDecorator,DN as blockPasteShellDecorator}from"../../chunks/app-CNTFI4TN.js";

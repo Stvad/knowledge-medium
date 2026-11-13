@@ -1,0 +1,1 @@
+export{nZ as characterCounterDataExtension}from"../../../chunks/app-CNTFI4TN.js";

@@ -1,0 +1,1 @@
+export{qnt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Jnt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Ynt as __resetLayoutSessionIdForTesting,Xnt as getLayoutSessionId,Znt as isInstalledAppDisplayMode,Qnt as readOrCreateLayoutSessionId}from"../../chunks/app-CNTFI4TN.js";

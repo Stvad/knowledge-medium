@@ -1,0 +1,1 @@
+export{Sk as isWikilinkDisplayParts,Ck as resolveWikilinkDisplay,wk as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-CNTFI4TN.js";

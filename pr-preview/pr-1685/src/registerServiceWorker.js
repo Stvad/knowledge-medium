@@ -1,0 +1,1 @@
+export{cP as checkForAppUpdate,lP as registerServiceWorker}from"../chunks/app-CNTFI4TN.js";

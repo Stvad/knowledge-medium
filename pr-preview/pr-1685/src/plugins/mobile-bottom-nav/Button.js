@@ -1,0 +1,1 @@
+export{Rw as MobileBottomNavButton}from"../../../chunks/app-CNTFI4TN.js";
