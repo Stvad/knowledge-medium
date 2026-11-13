@@ -1,12 +1,14 @@
 // @vitest-environment node
 /**
- * Two devices that set one property on one block before either has seen the
- * other end up with ONE field row once both have synced.
+ * Two devices that create one block at a deterministic id WITH its properties
+ * (an ingested chat message) end up with ONE set of property machinery rows
+ * once both have synced — and a write to a block that already existed is never
+ * dropped by meeting a peer's tombstone.
  *
- * No processor runs on sync apply, so whatever the two mints leave is final
- * until someone edits that property again — the case that matters is a block
- * nobody edits again (an ingested message). What makes it one row is that both
- * devices derive the same id; the server's insert-or-touch then keeps one.
+ * No processor runs on sync apply, so whatever the mints leave is final until
+ * someone edits that property again. Machinery ids are derived only under a
+ * parent created in the same transaction (`mintPropertyChildRow`), so the
+ * block and its rows share the server's insert-or-touch fate.
  *
  * Wiring as in `concurrentEditConvergence.test.ts`: the real upload pipeline
  * into `createFakeSyncServer`, delivered back through `blocks_synced` and the
@@ -106,9 +108,16 @@ const registerDefinition = (repo: Repo, fieldId: string, schema: AnyPropertySche
   }], {workspaceId: WS})
 }
 
-/** Two plaintext devices on one server, both switched to property blocks, with
- *  OWNER created on A and synced to both. */
-const setup = async () => {
+/** OWNER, created on `device` — with `properties`, in the same tx, when given:
+ *  the shape ingest writes. */
+const createOwner = (device: Device, properties?: Record<string, unknown>) => device.repo.tx(
+  tx => tx.create({id: OWNER, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'message', properties})
+    .then(() => undefined),
+  {scope: ChangeScope.BlockDefault})
+
+/** Two plaintext devices on one server, both switched to property blocks —
+ *  with OWNER created on A and synced to both when `ownerExists`. */
+const setup = async ({ownerExists}: {ownerExists: boolean}) => {
   let serverClock = 1_800_000_000_000
   const server = createFakeSyncServer({now: () => ++serverClock})
   const mkDevice = async (db: TestDb['db'], tag: 'a' | 'b', clockStart: number): Promise<Device> => {
@@ -136,11 +145,11 @@ const setup = async () => {
   const a = await mkDevice(dbA.db, 'a', 1_700_000_500_000)
   const b = await mkDevice(dbB.db, 'b', 1_700_000_000_000)
 
-  await a.repo.tx(tx => tx.create({
-    id: OWNER, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'message',
-  }).then(() => undefined), {scope: ChangeScope.BlockDefault})
-  await upload(a, server)
-  for (const device of [a, b]) await deliverAndDrain(device, server)
+  if (ownerExists) {
+    await createOwner(a)
+    await upload(a, server)
+    for (const device of [a, b]) await deliverAndDrain(device, server)
+  }
   return {a, b, server}
 }
 
@@ -156,76 +165,101 @@ const fieldRows = async (device: Device, fieldId: string): Promise<Row[]> =>
 const setOn = (device: Device, write: Parameters<Repo['tx']>[0]) =>
   device.repo.tx(write, {scope: ChangeScope.BlockDefault})
 
-describe('concurrent first writes of one property converge on one field row', () => {
-  it('a scalar written with one value on both devices', async () => {
-    const {a, b, server} = await setup()
+const cellOf = async (device: Device): Promise<unknown> => JSON.parse((await device.db.get<{properties_json: string}>(
+  'SELECT properties_json FROM blocks WHERE id = ?', [OWNER])).properties_json)
+
+/** What a device holds for the property: its cell and its live value rows. */
+const stateOf = async (device: Device, fieldId: string) => {
+  const fields = await fieldRows(device, fieldId)
+  const values: string[] = []
+  for (const field of fields) values.push(...(await liveChildren(device, field.id)).map(row => row.content))
+  return {cell: await cellOf(device), fieldRows: fields.length, values}
+}
+
+describe('two devices creating one block with its properties converge on one set of rows', () => {
+  it('a scalar with one value on both', async () => {
+    const {a, b, server} = await setup({ownerExists: false})
+    await createOwner(a, {status: 'done'})
+    await createOwner(b, {status: 'done'})
+
+    await quiesce([a, b], server)
+
+    expect(await stateOf(a, STATUS_FIELD)).toEqual({cell: {status: 'done'}, fieldRows: 1, values: ['done']})
+    expect(await fieldRows(b, STATUS_FIELD)).toEqual(await fieldRows(a, STATUS_FIELD))
+  })
+
+  it('a scalar with different values: the first create wins, cell and rows alike', async () => {
+    // The scalar's one slot: a divergent value does not survive as a peer.
+    // The block's create is first-wins too, so the cell agrees.
+    const {a, b, server} = await setup({ownerExists: false})
+    await createOwner(a, {status: 'from-a'})
+    await createOwner(b, {status: 'from-b'})
+
+    await upload(a, server)
+    await quiesce([a, b], server)
+
+    for (const device of [a, b]) {
+      expect(await stateOf(device, STATUS_FIELD)).toEqual({cell: {status: 'from-a'}, fieldRows: 1, values: ['from-a']})
+    }
+  })
+
+  it('a list with equal members keeps one row per member', async () => {
+    const {a, b, server} = await setup({ownerExists: false})
+    await createOwner(a, {tags: ['blue', 'blue']})
+    await createOwner(b, {tags: ['blue', 'blue']})
+
+    await quiesce([a, b], server)
+
+    for (const device of [a, b]) {
+      expect(await stateOf(device, TAGS_FIELD))
+        .toEqual({cell: {tags: ['blue', 'blue']}, fieldRows: 1, values: ['blue', 'blue']})
+    }
+  })
+})
+
+describe('a property set on a block that already existed', () => {
+  it('lands when a peer set and removed it while this device was offline', async () => {
+    // A derived id here would meet A's tombstone, which the server keeps over
+    // B's create — leaving B's value in the cell only.
+    const {a, b, server} = await setup({ownerExists: true})
+    await setOn(a, tx => tx.setProperty(OWNER, statusSchema, 'done'))
+    await setOn(a, tx => tx.unsetProperty(OWNER, statusSchema))
+    await upload(a, server)
+    await setOn(b, tx => tx.setProperty(OWNER, statusSchema, 'wip'))
+
+    await quiesce([a, b], server)
+
+    for (const device of [a, b]) {
+      expect(await stateOf(device, STATUS_FIELD)).toEqual({cell: {status: 'wip'}, fieldRows: 1, values: ['wip']})
+    }
+  })
+
+  it('a re-added list member lands when a peer added and removed it offline', async () => {
+    const {a, b, server} = await setup({ownerExists: true})
+    await setOn(a, tx => tx.setProperty(OWNER, tagsSchema, ['blue']))
+    await quiesce([a, b], server)
+    await setOn(a, tx => tx.setProperty(OWNER, tagsSchema, ['blue', 'red']))
+    await setOn(a, tx => tx.setProperty(OWNER, tagsSchema, ['blue']))
+    await upload(a, server)
+    await setOn(b, tx => tx.setProperty(OWNER, tagsSchema, ['blue', 'red']))
+
+    await quiesce([a, b], server)
+
+    for (const device of [a, b]) {
+      const state = await stateOf(device, TAGS_FIELD)
+      expect(state.cell).toEqual({tags: ['blue', 'red']})
+      expect(state.values.sort()).toEqual(['blue', 'red'])
+    }
+  })
+
+  it('RESIDUAL: two offline first writes still make two field rows until a local write folds them', async () => {
+    // Pinned so the residual is visible; ids are random here on purpose.
+    const {a, b, server} = await setup({ownerExists: true})
     await setOn(a, tx => tx.setProperty(OWNER, statusSchema, 'done'))
     await setOn(b, tx => tx.setProperty(OWNER, statusSchema, 'done'))
 
     await quiesce([a, b], server)
 
-    for (const device of [a, b]) {
-      const fields = await fieldRows(device, STATUS_FIELD)
-      expect(fields).toHaveLength(1)
-      expect((await liveChildren(device, fields[0]!.id)).map(row => row.content)).toEqual(['done'])
-    }
-    expect(await fieldRows(a, STATUS_FIELD)).toEqual(await fieldRows(b, STATUS_FIELD))
-  })
-
-  it('a scalar written with different values: one value row, which every device agrees on', async () => {
-    // The policy change: a divergent concurrent value no longer survives as a
-    // peer. The slot is ONE row, and the server keeps the FIRST create of it
-    // (insert-or-touch), while the owner's cell keeps the LAST patch. So the
-    // two settle on different writers until the next local write of the
-    // property on this block reconciles the children to the cell. ACCEPTED,
-    // and pinned so a change to either side is seen.
-    const {a, b, server} = await setup()
-    await setOn(a, tx => tx.setProperty(OWNER, statusSchema, 'from-a'))
-    await setOn(b, tx => tx.setProperty(OWNER, statusSchema, 'from-b'))
-
-    await upload(a, server)
-    await upload(b, server)
-    await quiesce([a, b], server)
-
-    const [fieldA] = await fieldRows(a, STATUS_FIELD)
-    expect(await fieldRows(a, STATUS_FIELD)).toHaveLength(1)
-    expect(await fieldRows(b, STATUS_FIELD)).toEqual([fieldA])
-    const valuesA = await liveChildren(a, fieldA!.id)
-    expect(valuesA.map(row => row.content)).toEqual(['from-a'])
-    expect(await liveChildren(b, fieldA!.id)).toEqual(valuesA)
-    for (const device of [a, b]) {
-      const owner = await device.db.get<{properties_json: string}>(
-        'SELECT properties_json FROM blocks WHERE id = ?', [OWNER])
-      expect(JSON.parse(owner.properties_json)).toEqual({status: 'from-b'})
-    }
-  })
-
-  it('a list with an equal member on both devices keeps one member row', async () => {
-    const {a, b, server} = await setup()
-    await setOn(a, tx => tx.setProperty(OWNER, tagsSchema, ['blue']))
-    await setOn(b, tx => tx.setProperty(OWNER, tagsSchema, ['blue']))
-
-    await quiesce([a, b], server)
-
-    for (const device of [a, b]) {
-      const fields = await fieldRows(device, TAGS_FIELD)
-      expect(fields).toHaveLength(1)
-      expect((await liveChildren(device, fields[0]!.id)).map(row => row.content)).toEqual(['blue'])
-    }
-  })
-
-  it('a list with different members on each device keeps both, under one field row', async () => {
-    const {a, b, server} = await setup()
-    await setOn(a, tx => tx.setProperty(OWNER, tagsSchema, ['blue']))
-    await setOn(b, tx => tx.setProperty(OWNER, tagsSchema, ['red']))
-
-    await quiesce([a, b], server)
-
-    for (const device of [a, b]) {
-      const fields = await fieldRows(device, TAGS_FIELD)
-      expect(fields).toHaveLength(1)
-      expect((await liveChildren(device, fields[0]!.id)).map(row => row.content).sort())
-        .toEqual(['blue', 'red'])
-    }
+    for (const device of [a, b]) expect(await fieldRows(device, STATUS_FIELD)).toHaveLength(2)
   })
 })

@@ -7,7 +7,6 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
@@ -48,8 +47,6 @@ const propertyValueToChildContent = <T>(
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
-/** The plaintext property-child namespace, spelled out (`derivedIds.test.ts`). */
-const PLAINTEXT_PROPERTY_CHILD_NS = '4ddc11ad-ce83-4be7-813e-660f882e676d'
 /** A synthetic block id for values that LOOK like references. All-2s, so it
  *  is plainly not a real graph id — it only has to be UUID-shaped. */
 const SAMPLE_UUID = '22222222-2222-4222-8222-222222222222'
@@ -2483,9 +2480,6 @@ describe('revival re-materializes property children (#778)', () => {
     await seedWorkspace('children')
     const repo = await seedMaterializedProperty()
     const [field] = await liveFieldRows('p')
-    // At its derived id — the id the caller's mint below derives too, so the
-    // refusal has to hold through the mint, not only in the revival.
-    expect(field!.id).toBe(uuidv5(`field|${WS}|p|${STATUS_FIELD_ID}`, PLAINTEXT_PROPERTY_CHILD_NS))
     const [ownValue] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
     await repo.tx(tx => tx.create({
       id: 'arrived', workspaceId: WS, parentId: field!.id, orderKey: 'zz', content: 'rival',
@@ -2515,58 +2509,21 @@ describe('revival re-materializes property children (#778)', () => {
       .filter(v => v.deleted === 0).map(v => v.content)).toEqual(['done'])
   })
 
-  it('does not restore a field row with a live value under it when the property is set again', async () => {
-    // The non-revival route to the same state: the property was unset here,
-    // a peer's edit of its value arrived live under the tombstone, and now the
-    // user sets it. Re-setting restores the field row at its derived id —
-    // except this one, whose value would be overwritten by the reconcile.
-    await seedWorkspace('children')
-    const repo = await seedMaterializedProperty()
-    const [field] = await liveFieldRows('p')
-    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
-    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault})
-    await sharedDb.db.execute(
-      "UPDATE blocks SET deleted = 0, content = 'peer edit' WHERE id = ?", [value!.id])
-
-    await repo.tx(tx => tx.setProperty('p', statusSchema, 'mine'), {scope: ChangeScope.BlockDefault})
-
-    expect(await sharedDb.db.get('SELECT deleted, content FROM blocks WHERE id = ?', [value!.id]))
-      .toEqual({deleted: 0, content: 'peer edit'})
-    expect(await sharedDb.db.get('SELECT deleted FROM blocks WHERE id = ?', [field!.id]))
-      .toEqual({deleted: 1})
-    const fields = await liveFieldRows('p')
-    expect(fields.map(f => f.id)).not.toContain(field!.id)
-    expect(await cellValue('p')).toBe('mine')
-  })
-
   it('mints instead of reviving when the tombstone is ambiguous', async () => {
     // Two tombstoned field rows for one definition — an unset/re-set cycle
     // before the owner was deleted. Picking one would need a rule that is
     // deterministic across replicas AND right about which was live last; there
     // is no such rule that does not resurrect a row the user deleted on
     // purpose. Keep the ambiguous case on the minting behaviour.
-    //
-    // A re-set restores the field row at its derived id, so the second row is
-    // written by hand: the shape a cycle left before ids were derived.
     await seedWorkspace('children')
     const repo = await seedMaterializedProperty()
     const [first] = await liveFieldRows('p')
     await repo.tx(tx => tx.unsetProperty('p', statusSchema),
       {scope: ChangeScope.BlockDefault})
-    await repo.tx(async tx => {
-      await tx.create({
-        id: 'second-field', workspaceId: WS, parentId: 'p', orderKey: keyAtStart(),
-        content: propertyFieldContent(STATUS_FIELD_ID),
-        referenceTargetId: STATUS_FIELD_ID, isFieldForm: true,
-      })
-      await tx.create({
-        id: 'second-value', workspaceId: WS, parentId: 'second-field', orderKey: keyAtStart(),
-        content: 'done',
-      })
-      await tx.update('p', {properties: {[statusSchema.name]: 'done'}})
-    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
     const [second] = await liveFieldRows('p')
-    expect(second!.id).toBe('second-field')
+    expect(second!.id).not.toBe(first!.id)
 
     await deleteAndRestore(repo)
 

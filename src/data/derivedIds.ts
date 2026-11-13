@@ -43,9 +43,9 @@
  *  - {@link getOrCreateKernelPage} (`@/data/kernelPage`) — restores a tombstone.
  *  - {@link createOrRestoreTargetBlock} (`@/data/targets`) — probes a SEQUENCE
  *    of ids rather than one identity.
- *  - `mintPropertyChildRow` (`@/data/internals/propertyChildMint`) — restores a
- *    tombstone, and takes a random id when a live row holds the slot; property
- *    machinery is born classified, which none of the three above can write.
+ *  - `mintPropertyChildRow` (`@/data/internals/propertyChildMint`) — derives
+ *    only under a parent the same transaction created, and takes a random id
+ *    whenever anything sits at the slot; it never restores.
  *
  * Reach for one of those before hand-rolling a fifth.
  *
@@ -185,14 +185,15 @@ export const classifyOccupant = (
 /**
  * Which property-machinery row a derived id names (§9 field and value rows).
  *
- * Two devices that write the first value of one property on one block, before
- * either has seen the other, mint the SAME field row and — for an equal value —
- * the same value rows, so sync folds them by id instead of leaving two field
- * rows nothing will ever fold (no processor runs on sync apply).
+ * Two devices that create one block at a deterministic id with its properties
+ * mint the SAME field row and — for an equal value — the same value rows, so
+ * sync folds them by id instead of leaving two field rows nothing will ever
+ * fold (no processor runs on sync apply). When an id is derived at all is
+ * `mintPropertyChildRow`'s rule.
  *
  *  - `field` — the owner's one field row for a definition.
- *  - `scalar-value` — a single-valued property's one value slot, so concurrent
- *    first values land on one row and settle by the server's write order.
+ *  - `scalar-value` — a single-valued property's one value slot, so two
+ *    devices' first values land on one row.
  *  - `member` — one occurrence of one member of a list: equal members converge,
  *    different ones coexist. `memberKey` is `MemberKeys.content`'s, the
  *    comparison the member reconciler matches rows by.

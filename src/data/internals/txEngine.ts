@@ -598,6 +598,11 @@ export class TxImpl implements Tx {
       .workspaceUnappliedCount(workspaceId)
   }
 
+  createdInThisTx(id: string): boolean {
+    const entry = this.ctx.snapshots.get(id)
+    return entry !== undefined && entry.before === null
+  }
+
   async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
     if (ids.length === 0) return []
     const out: BlockData[] = []
@@ -608,17 +613,6 @@ export class TxImpl implements Tx {
         [workspaceId, ...chunk],
       )
       out.push(...rows.map(parseBlockRow))
-    }
-    return out
-  }
-
-  async existingIds(ids: readonly string[]): Promise<Set<string>> {
-    const out = new Set<string>()
-    for (const chunk of chunksOf(ids, MAX_IDS_PER_IN_CLAUSE)) {
-      const rows = await this.ctx.txDb.getAll<{id: string}>(
-        `SELECT id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`, chunk,
-      )
-      for (const {id} of rows) out.add(id)
     }
     return out
   }

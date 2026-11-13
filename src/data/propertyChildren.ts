@@ -879,12 +879,10 @@ export const projectedValueCount = (
  * the user's list.
  *
  * Its cost is that two devices concurrently writing `[a, b]` and `[a, c]`
- * converge to `[a, b, c]`: the equal member is one row, because a member's id
- * derives from its value (`valueChildSlots`), and the divergent ones are a
- * conflict left VISIBLE for the user to resolve by deleting a row. A scalar
- * keeps no such peer — its one value slot settles on one writer. Properties
- * that are genuinely sets (`types`, `alias`) get that from their WRITERS, not
- * from storage.
+ * converge to `[a, b, a, c]`. That is a conflict left VISIBLE for the user to
+ * resolve by deleting a row, which is what the scalar rule does with a
+ * divergent peer instead of silently choosing. Properties that are genuinely
+ * sets (`types`, `alias`) get that from their WRITERS, not from storage.
  */
 export const encodedPropertyValueToChildContents = (
   schema: AnyPropertySchema,
@@ -1060,8 +1058,7 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
  * equal one under the survivor and moving a divergent one over as a peer — so
  * this is the UNION the collapse will produce, never a concatenation.
  * Concatenating predicts a list the collapse never builds: two field rows
- * carrying the same members (a merge, or two offline devices materializing one
- * value before field-row ids were derived)
+ * carrying the same members (two offline devices materializing one value)
  * double it, and the doubled cell is then what the reconciler is asked to
  * reproduce, minting a member to match. Every caller that aggregates a cell
  * from children comes through here for that reason — the projection, the
