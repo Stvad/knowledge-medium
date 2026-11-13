@@ -41,7 +41,7 @@
  */
 
 import type {
-  AnyPropertySchema, BlockData, NewBlockData, ResolvedPropertySchema,
+  AnyPropertySchema, BlockData, ResolvedPropertySchema,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { WorkspaceBackfill, WorkspaceBackfillContext } from '@/data/facets'
@@ -59,6 +59,7 @@ import {
   valueChildRowsFor,
   undecodableCellValueError,
 } from './propertyChildrenProcessor'
+import { withPropertyChildIds, type PlannedPropertyChild } from './propertyChildMint'
 import { requirePropertyRegistryFor } from './propertyKeyScan'
 import { MAX_IDS_PER_IN_CLAUSE } from './sqlBinds'
 import { propertyFieldRowsForParentsSql } from './treeQueries'
@@ -702,7 +703,8 @@ const sweep = async (
 
       const planned: {
         owner: BlockData
-        fieldRow: NewBlockData
+        schema: ResolvedPropertySchema<unknown>
+        fieldRow: PlannedPropertyChild
         /** Encoded by {@link decideCell}, so a value no codec will take costs
          *  its own key instead of aborting the batch. */
         contents: readonly string[]
@@ -753,6 +755,7 @@ const sweep = async (
           }
           planned.push({
             owner,
+            schema: decision.schema,
             fieldRow: plannedFieldRow(tx, owner, decision.schema.fieldId),
             contents: decision.contents,
           })
@@ -784,11 +787,13 @@ const sweep = async (
       // the minted ids to point at. Both calls go through `tx.createMany`, so
       // the rows are workspace- and parent-checked and `record`ed exactly as
       // one-at-a-time creates would be.
-      const fieldRowIds = await tx.createMany(planned.map(({fieldRow}) => fieldRow))
-      await tx.createMany(planned.flatMap(({owner, contents}, index) =>
-        valueChildRowsFor(
-          tx, {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, contents,
-        )))
+      const fieldRowIds = await tx.createMany(await withPropertyChildIds(
+        tx, ctx.workspaceId, planned.map(({fieldRow}) => fieldRow)))
+      await tx.createMany(await withPropertyChildIds(tx, ctx.workspaceId,
+        planned.flatMap(({owner, schema, contents}, index) =>
+          valueChildRowsFor(
+            tx, {id: fieldRowIds[index]!, workspaceId: owner.workspaceId}, schema, contents,
+          ))))
       commitCounts()
     }, {description: 'Migrate properties to child blocks'})
 

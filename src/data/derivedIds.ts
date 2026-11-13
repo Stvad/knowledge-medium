@@ -43,8 +43,11 @@
  *  - {@link getOrCreateKernelPage} (`@/data/kernelPage`) — restores a tombstone.
  *  - {@link createOrRestoreTargetBlock} (`@/data/targets`) — probes a SEQUENCE
  *    of ids rather than one identity.
+ *  - `mintPropertyChildRow` (`@/data/internals/propertyChildMint`) — restores a
+ *    tombstone, and takes a random id when a live row holds the slot; property
+ *    machinery is born classified, which none of the three above can write.
  *
- * Reach for one of those before hand-rolling a fourth.
+ * Reach for one of those before hand-rolling a fifth.
  *
  * `scripts/roam-ts-backfill/build_ts_map.mjs` re-declares `ROAM_IMPORT_NS`,
  * `DAILY_NOTE_NS` and both key shapes by hand because it must not import the
@@ -178,3 +181,45 @@ export const classifyOccupant = (
   if (policy.adoptable && !policy.adoptable(occupant)) return {verdict: 'rejected', block: occupant}
   return {verdict: 'ours', block: occupant}
 }
+
+/**
+ * Which property-machinery row a derived id names (§9 field and value rows).
+ *
+ * Two devices that write the first value of one property on one block, before
+ * either has seen the other, mint the SAME field row and — for an equal value —
+ * the same value rows, so sync folds them by id instead of leaving two field
+ * rows nothing will ever fold (no processor runs on sync apply).
+ *
+ *  - `field` — the owner's one field row for a definition.
+ *  - `scalar-value` — a single-valued property's one value slot, so concurrent
+ *    first values land on one row and settle by the server's write order.
+ *  - `member` — one occurrence of one member of a list: equal members converge,
+ *    different ones coexist. `memberKey` is `MemberKeys.content`'s, the
+ *    comparison the member reconciler matches rows by.
+ *
+ * The workspace is in every key; the `fieldRowId` would imply it, but stating
+ * it costs nothing. `memberKey` is the one part that is user text, so it goes
+ * LAST: every part before it is an id or a count, and none of those holds `|`.
+ *
+ * The namespace is a PARAMETER because a sealed workspace's is keyed by `K_id`
+ * (`resolvePropertyChildNamespace`); the formula is pinned in
+ * `derivedIds.test.ts` and the plaintext namespace beside it.
+ */
+export type PropertyChildSlot =
+  | {kind: 'field'; ownerId: string; fieldId: string}
+  | {kind: 'scalar-value'; fieldRowId: string}
+  | {kind: 'member'; fieldRowId: string; occurrence: number; memberKey: string}
+
+const propertyChildKey = (workspaceId: string, slot: PropertyChildSlot): string => {
+  switch (slot.kind) {
+    case 'field': return `field|${workspaceId}|${slot.ownerId}|${slot.fieldId}`
+    case 'scalar-value': return `value|${workspaceId}|${slot.fieldRowId}`
+    case 'member': return `member|${workspaceId}|${slot.fieldRowId}|${slot.occurrence}|${slot.memberKey}`
+  }
+}
+
+export const propertyChildBlockId = (
+  namespace: string,
+  workspaceId: string,
+  slot: PropertyChildSlot,
+): string => derivedBlockId({namespace, key: propertyChildKey(workspaceId, slot)})

@@ -11,6 +11,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope, seedProperty } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -814,7 +815,7 @@ describe('the pass and the live writer agree about a value\'s children', () => {
    *  `plannedValueChildRows`) precisely so they cannot decide differently —
    *  and this is what would notice if a future edit taught one of them
    *  something the other does not know. Asserted on the SHAPE, since the two
-   *  routes never share ids.
+   *  are different owners; the ids are the next test's.
    *
    *  Both grains, because the member split is the interesting half: a scalar
    *  is one value child, a list is one per member in order. */
@@ -843,6 +844,42 @@ describe('the pass and the live writer agree about a value\'s children', () => {
     // above is `'[]' === '[]'` and says nothing about the create-time prefill
     // — which is the whole reason the References plugin is in this runtime.
     expect(JSON.parse(migrated[0]!.references)).toHaveLength(1)
+  })
+})
+
+describe('the pass mints at the ids a live write would', () => {
+  /** The plaintext namespace and key shapes, spelled out (`derivedIds.test.ts`
+   *  pins the formula; this pins that the pass goes through it). */
+  const NS = '4ddc11ad-ce83-4be7-813e-660f882e676d'
+  const idsUnder = async (ownerId: string) => {
+    const [field] = await sharedDb.db.getAll<{id: string; reference_target_id: string}>(
+      'SELECT id, reference_target_id FROM blocks WHERE parent_id = ? AND deleted = 0', [ownerId])
+    const values = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [field!.id])
+    return {field: field!, values: values.map(v => v.id)}
+  }
+
+  it('a scalar', async () => {
+    await create('migrated', {[noteProp.name]: 'hello'})
+    await flip()
+    expect((await run()).outcome).toBe('ran')
+
+    const {field, values} = await idsUnder('migrated')
+    expect(field.id).toBe(uuidv5(`field|${WS}|migrated|${field.reference_target_id}`, NS))
+    expect(values).toEqual([uuidv5(`value|${WS}|${field.id}`, NS)])
+  })
+
+  it('a list', async () => {
+    await create('migrated', {[tagsProp.name]: ['alpha', 'beta', 'alpha']})
+    await flip()
+    expect((await run()).outcome).toBe('ran')
+
+    const {field, values} = await idsUnder('migrated')
+    expect(values).toEqual([
+      uuidv5(`member|${WS}|${field.id}|0|v["alpha"]`, NS),
+      uuidv5(`member|${WS}|${field.id}|0|v["beta"]`, NS),
+      uuidv5(`member|${WS}|${field.id}|1|v["alpha"]`, NS),
+    ])
   })
 })
 

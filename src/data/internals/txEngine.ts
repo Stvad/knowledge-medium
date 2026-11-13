@@ -612,6 +612,17 @@ export class TxImpl implements Tx {
     return out
   }
 
+  async existingIds(ids: readonly string[]): Promise<Set<string>> {
+    const out = new Set<string>()
+    for (const chunk of chunksOf(ids, MAX_IDS_PER_IN_CLAUSE)) {
+      const rows = await this.ctx.txDb.getAll<{id: string}>(
+        `SELECT id FROM blocks WHERE id IN (${buildInClause(chunk.length)})`, chunk,
+      )
+      for (const {id} of rows) out.add(id)
+    }
+    return out
+  }
+
   async propertyFieldRowsForParents(
     workspaceId: string,
     parentIds: readonly string[],

@@ -125,6 +125,10 @@ export interface Tx {
    *  caller is a pass that expects some of its candidates to have moved on. */
   liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
 
+  /** Which of `ids` any row already holds — live or tombstoned, in any
+   *  workspace: the ids `createMany` would refuse. Same shared `IN (…)` cap. */
+  existingIds(ids: readonly string[]): Promise<Set<string>>
+
   /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
    *  alike, batched through the same shared cap. The union is deliberate: "this owner
    *  already has a field row for this fieldId" and "this owner had one that was

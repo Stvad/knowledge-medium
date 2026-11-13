@@ -72,6 +72,8 @@ import {
 import { jsonValuesEqual } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import type { PropertyChildSlot } from '@/data/derivedIds'
+import { mintPropertyChildRow, type OnTombstone, type PlannedPropertyChild } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.projectPropertyChildren'
@@ -422,6 +424,20 @@ export interface MaterializeOptions {
   additive?: boolean
 }
 
+/** How one cell → children write may touch the rows it finds and mints. */
+export interface ChildWriteMode {
+  /** See {@link MaterializeOptions.additive}. */
+  additive?: boolean
+  /** The write runs under {@link MaterializeOptions.revive}. Revival alone
+   *  decides which tombstones come back — it declines the ambiguous ones on
+   *  purpose — so a row minted under it never restores the tombstone at its
+   *  derived id. */
+  reviving?: boolean
+}
+
+const onTombstoneFor = (mode: ChildWriteMode): OnTombstone =>
+  mode.reviving === true ? 'leave' : 'restore'
+
 /** Restore the one tombstoned field row among `candidates` (see
  *  {@link revivalCandidates}), together with its value
  *  children — so a revived property keeps its row identity instead of being
@@ -626,7 +642,7 @@ export const materializePropertyChildrenForExistingRow = async (
 
     // See `additive`: a live field row's values are the children's to decide.
     if (opts.additive && matchingChildren.length > 0) {
-      await upsertFieldRow(tx, row, schema.fieldId, matchingChildren, true)
+      await upsertFieldRow(tx, row, schema.fieldId, matchingChildren, {additive: true})
       continue
     }
 
@@ -656,10 +672,9 @@ export const materializePropertyChildrenForExistingRow = async (
       }
     }
 
-    const fieldRow = await upsertFieldRow(
-      tx, row, schema.fieldId, fieldRows, opts.additive,
-    )
-    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, opts.additive)
+    const mode: ChildWriteMode = {additive: opts.additive, reviving: opts.revive !== undefined}
+    const fieldRow = await upsertFieldRow(tx, row, schema.fieldId, fieldRows, mode)
+    await reconcileFieldValueChildren(tx, fieldRow, schema, encoded, mode)
   }
 }
 
@@ -766,24 +781,27 @@ export const plannedFieldRow = (
   tx: Tx,
   owner: Pick<BlockData, 'id' | 'workspaceId'>,
   fieldId: string,
-): NewBlockData => {
+): PlannedPropertyChild => {
   const content = propertyFieldContent(fieldId)
   return {
-    workspaceId: owner.workspaceId,
-    parentId: owner.id,
-    referenceTargetId: fieldId,
-    isFieldForm: true,
-    orderKey: keyAtStart(null),
-    content,
-    references: tx.derivedReferencesFor(content),
+    row: {
+      workspaceId: owner.workspaceId,
+      parentId: owner.id,
+      referenceTargetId: fieldId,
+      isFieldForm: true,
+      orderKey: keyAtStart(null),
+      content,
+      references: tx.derivedReferencesFor(content),
+    },
+    slot: {kind: 'field', ownerId: owner.id, fieldId},
   }
 }
 
 /** The value children a cell value implies under a field row that has NONE —
- *  the create-only case, as DATA.
+ *  the create-only case, as DATA, each with the slot its id derives from.
  *
  *  Emitted rather than written so the one-time pass can hand a whole batch to
- *  `tx.createMany`. The live writer does NOT come through here — it reconciles
+ *  `tx.createMany` (through `withPropertyChildIds`). The live writer does NOT come through here — it reconciles
  *  an existing value set row by row (`reconcileFieldValueChildren`) — but both
  *  routes decide a value's MEMBERS through the same
  *  `encodedPropertyValueToChildContents`, which is the part they must not be
@@ -797,8 +815,8 @@ export const plannedValueChildRows = (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   encoded: unknown,
-): NewBlockData[] =>
-  valueChildRowsFor(tx, fieldRow, encodedPropertyValueToChildContents(schema, encoded))
+): PlannedPropertyChild[] =>
+  valueChildRowsFor(tx, fieldRow, schema, encodedPropertyValueToChildContents(schema, encoded))
 
 /** The same rows, from contents a caller has ALREADY encoded.
  *
@@ -812,17 +830,59 @@ export const plannedValueChildRows = (
 export const valueChildRowsFor = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
   contents: readonly string[],
-): NewBlockData[] => {
+): PlannedPropertyChild[] => {
   const keys = keysBetween(null, null, contents.length)
+  const slots = valueChildSlots(schema, fieldRow.id, contents)
   return contents.map((content, index) => ({
-    workspaceId: fieldRow.workspaceId,
-    parentId: fieldRow.id,
-    orderKey: keys[index]!,
-    content,
-    references: tx.derivedReferencesFor(content),
+    row: plannedValueChild(tx, fieldRow, content, keys[index]!),
+    slot: slots[index]!,
   }))
 }
+
+/** The slot each of `contents` fills under `fieldRowId`, for its derived id.
+ *
+ *  A list member's slot is its MEMBER KEY — the reconciler's own comparison,
+ *  so two devices adding an equal member mint one row — and its occurrence
+ *  among equal members, so `[2, 2]` is two slots. A scalar has one slot
+ *  whatever its value, so concurrent first values land on ONE row and settle
+ *  by write order, as the cell does: a divergent concurrent value no longer
+ *  survives as a peer.
+ *
+ *  ACCEPTED: a member edited in place keeps the id its OLD value derived. A
+ *  later mint of that old value finds the slot taken and takes a random id
+ *  (`mintPropertyChildRow`), so all it costs is convergence for that row. */
+export const valueChildSlots = (
+  schema: AnyPropertySchema,
+  fieldRowId: string,
+  contents: readonly string[],
+): PropertyChildSlot[] => {
+  if (memberCodecOf(schema.codec) === undefined) {
+    return contents.map(() => ({kind: 'scalar-value', fieldRowId}))
+  }
+  const keys = memberKeysFor(schema)
+  const seen = new Map<string, number>()
+  return contents.map(content => {
+    const memberKey = keys.content(content)
+    const occurrence = seen.get(memberKey) ?? 0
+    seen.set(memberKey, occurrence + 1)
+    return {kind: 'member', fieldRowId, occurrence, memberKey}
+  })
+}
+
+const plannedValueChild = (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  content: string,
+  orderKey: string,
+): NewBlockData & {parentId: string} => ({
+  workspaceId: fieldRow.workspaceId,
+  parentId: fieldRow.id,
+  orderKey,
+  content,
+  references: tx.derivedReferencesFor(content),
+})
 
 /** Find-or-create the field row for `fieldId` under `owner`, keeping its
  *  content canonical and folding any duplicate field rows into the survivor.
@@ -842,9 +902,9 @@ export const upsertFieldRow = async (
   owner: Pick<BlockData, 'id' | 'workspaceId'>,
   fieldId: string,
   existingRows: readonly BlockData[],
-  /** See {@link MaterializeOptions.additive}. */
-  additive = false,
+  mode: ChildWriteMode = {},
 ): Promise<Pick<BlockData, 'id' | 'workspaceId'>> => {
+  const additive = mode.additive === true
   const content = propertyFieldContent(fieldId)
   const [primary, ...duplicates] = existingRows
   if (primary) {
@@ -862,7 +922,7 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await tx.create(plannedFieldRow(tx, owner, fieldId))
+  const id = await mintPropertyChildRow(tx, plannedFieldRow(tx, owner, fieldId), onTombstoneFor(mode))
   return {id, workspaceId: owner.workspaceId}
 }
 
@@ -880,9 +940,11 @@ export const upsertFieldRow = async (
  * named branches rather than one loop:
  *
  *   SINGLE-VALUED — the sibling set is a CONFLICT surface. One primary value
- *   child carries the value; a divergent peer is a merge's or a concurrent
- *   write's surfaced conflict and is KEPT (§9), with only exact duplicates of
- *   what we just wrote folded in.
+ *   child carries the value; a divergent peer is a merge's surfaced conflict,
+ *   or a concurrent write's from before value ids were derived, and is KEPT
+ *   (§9), with only exact duplicates of what we just wrote folded in. A
+ *   concurrent FIRST write no longer makes one: both land on the scalar's one
+ *   slot (`valueChildSlots`).
  *
  *   MULTI-VALUED — the siblings ARE the value, multiplicity included. An extra
  *   child is a member, so "the list is now [a]" has to be able to remove one:
@@ -896,8 +958,7 @@ export const reconcileFieldValueChildren = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   schema: AnyPropertySchema,
   encoded: unknown,
-  /** See {@link MaterializeOptions.additive}. */
-  additive = false,
+  mode: ChildWriteMode = {},
 ): Promise<void> => {
   // Takes the ENCODED VALUE, not the contents, so the grain cannot be decided
   // by a caller: a scalar has exactly one content here by construction, which
@@ -908,10 +969,10 @@ export const reconcileFieldValueChildren = async (
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!, additive)
+    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!, mode)
     return
   }
-  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
+  await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, mode)
 }
 
 const createValueChild = (
@@ -919,25 +980,22 @@ const createValueChild = (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   content: string,
   orderKey: string,
-): Promise<string> => tx.create({
-  workspaceId: fieldRow.workspaceId,
-  parentId: fieldRow.id,
-  orderKey,
-  content,
-  references: tx.derivedReferencesFor(content),
-})
+  slot: PropertyChildSlot,
+  mode: ChildWriteMode,
+): Promise<string> => mintPropertyChildRow(
+  tx, {row: plannedValueChild(tx, fieldRow, content, orderKey), slot}, onTombstoneFor(mode))
 
 const reconcileSingleValueChild = async (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   values: readonly BlockData[],
   content: string,
-  /** See {@link MaterializeOptions.additive}. */
-  additive: boolean,
+  mode: ChildWriteMode,
 ): Promise<void> => {
   const [primary, ...duplicates] = values
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(null))
+    await createValueChild(tx, fieldRow, content, keyAtStart(null),
+      {kind: 'scalar-value', fieldRowId: fieldRow.id}, mode)
     return
   }
   // An additive call may not touch the one slot a scalar has. Giving the value
@@ -945,12 +1003,12 @@ const reconcileSingleValueChild = async (
   // not empty — so nothing below applies, the fold included: every comparison
   // there is against `content`, the cell value the primary was just permitted
   // to disagree with, which would fold a row that is no duplicate of it (#1021).
-  if (additive) return
+  if (mode.additive === true) return
   if (primary.content !== content) await tx.update(primary.id, {content})
-  // Fold only EXACT duplicates of the projected cell value (concurrent
-  // dual-writes of the same value); DIVERGENT siblings are a surfaced
-  // conflict — from a merge or divergent concurrent write — and are kept as
-  // peer values, not silently collapsed onto the winner.
+  // Fold only EXACT duplicates of the projected cell value; DIVERGENT siblings
+  // are a surfaced conflict — from a merge, or rows minted before value ids
+  // were derived — and are kept as peer values, not silently collapsed onto
+  // the winner.
   for (const duplicate of duplicates) {
     if (duplicate.content === content) {
       await collapseDuplicateValueChild(tx, primary.id, duplicate)
@@ -978,8 +1036,9 @@ const reconcileMemberValueChildren = async (
   schema: AnyPropertySchema,
   values: readonly BlockData[],
   contents: readonly string[],
-  additive: boolean,
+  mode: ChildWriteMode,
 ): Promise<void> => {
+  const additive = mode.additive === true
   // By VALUE, not raw text: a member a person spelled ` 1 ` projects to exactly
   // what the canonical text projects to, and matching on text alone reaps that
   // row — with its comments, its own properties and its history — to mint a
@@ -1051,11 +1110,12 @@ const reconcileMemberValueChildren = async (
   const fresh = created > 0 ? freshSlots(values, created) : []
   const slots = [...freed, ...fresh].sort()
 
+  const idSlots = valueChildSlots(schema, fieldRow.id, contents)
   for (let i = 0; i < contents.length; i++) {
     const orderKey = slots[i]!
     const existing = kept[i]
     if (!existing) {
-      await createValueChild(tx, fieldRow, contents[i]!, orderKey)
+      await createValueChild(tx, fieldRow, contents[i]!, orderKey, idSlots[i]!, mode)
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row

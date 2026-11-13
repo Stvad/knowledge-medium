@@ -2515,15 +2515,28 @@ describe('revival re-materializes property children (#778)', () => {
     // deterministic across replicas AND right about which was live last; there
     // is no such rule that does not resurrect a row the user deleted on
     // purpose. Keep the ambiguous case on the minting behaviour.
+    //
+    // A re-set restores the field row at its derived id, so the second row is
+    // written by hand: the shape a cycle left before ids were derived.
     await seedWorkspace('children')
     const repo = await seedMaterializedProperty()
     const [first] = await liveFieldRows('p')
     await repo.tx(tx => tx.unsetProperty('p', statusSchema),
       {scope: ChangeScope.BlockDefault})
-    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
-      {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'second-field', workspaceId: WS, parentId: 'p', orderKey: keyAtStart(),
+        content: propertyFieldContent(STATUS_FIELD_ID),
+        referenceTargetId: STATUS_FIELD_ID, isFieldForm: true,
+      })
+      await tx.create({
+        id: 'second-value', workspaceId: WS, parentId: 'second-field', orderKey: keyAtStart(),
+        content: 'done',
+      })
+      await tx.update('p', {properties: {[statusSchema.name]: 'done'}})
+    }, {scope: ChangeScope.BlockDefault})
     const [second] = await liveFieldRows('p')
-    expect(second!.id).not.toBe(first!.id)
+    expect(second!.id).toBe('second-field')
 
     await deleteAndRestore(repo)
 

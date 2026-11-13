@@ -21,7 +21,7 @@
 import { describe, expect, it } from 'vitest'
 import { v5 as uuidv5 } from 'uuid'
 
-import { derivedBlockId } from './derivedIds'
+import { derivedBlockId, propertyChildBlockId } from './derivedIds'
 import { kernelPageBlockId } from './kernelPage'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -195,6 +195,37 @@ describe('the ids live rows are already at', () => {
     const parentId = '5e8b2c47-9f61-4a03-b7d2-3c1e6a9f8b50'
     expect(stateChildBlockId(parentId, 'user-prefs'))
       .toBe(uuidv5(`${parentId}:user-prefs`, '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'))
+  })
+})
+
+/**
+ * Property field rows and value children (§9). Pinned as hard-coded ids, not
+ * recomputed: a literal is the strongest pin, and the plaintext namespace is
+ * spelled out once more in `propertyChildMint.test.ts`, which also pins the
+ * sealed one. A change here re-points every machinery row minted since.
+ */
+describe('property machinery rows', () => {
+  const PLAINTEXT_PROPERTY_CHILD_NS = '4ddc11ad-ce83-4be7-813e-660f882e676d'
+  const OWNER = '0b9d2c41-6a3e-4f58-9c71-2d4e6f8a0b13'
+  const FIELD = '7e1f3a52-8c4d-4b69-a0e2-3f5a7c9e1d24'
+  const FIELD_ROW = '5c2e4a63-9d5f-4c7a-b1f3-4a6c8e0f2b35'
+
+  it('a field row, from (workspace, owner, definition)', () => {
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
+      {kind: 'field', ownerId: OWNER, fieldId: FIELD}))
+      .toBe('1f8652eb-7048-5e2a-9f8c-1d9065b1f2b9')
+  })
+
+  it('a scalar\'s one value slot, from (workspace, field row)', () => {
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
+      {kind: 'scalar-value', fieldRowId: FIELD_ROW}))
+      .toBe('dfad772c-0eba-54aa-b6bb-2d62811aa296')
+  })
+
+  it('a list member, from (workspace, field row, occurrence, member key)', () => {
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
+      {kind: 'member', fieldRowId: FIELD_ROW, occurrence: 1, memberKey: 'v"blue"'}))
+      .toBe('a4571377-ab01-5a6f-a34a-a4cfab61b84b')
   })
 })
 
