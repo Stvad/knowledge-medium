@@ -7,9 +7,9 @@
  *   - `non-hidden` property rows whose definition is not hidden;
  *   - `none`       no property rows — the outline before properties-as-blocks.
  *
- * The mode is set at three levels, most specific wins: workspace (a per-user
- * preference) > panel > block. {@link resolvePropertyDisplayMode} is the ONE
- * place they combine; every reader asks it rather than layering levels itself.
+ * The mode is set at three levels, most specific wins: block > panel >
+ * workspace (a per-user preference). {@link resolvePropertyDisplayMode} is the
+ * ONE place they combine; every reader asks it rather than layering levels itself.
  * A cell-backed workspace is always `none`: its property children (minted by
  * the backfill) are not the source of truth and must not be edited in place.
  */
@@ -125,13 +125,14 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
   return DEFAULT_PROPERTY_DISPLAY_MODE
 }
 
+const NEXT_PROPERTY_DISPLAY_MODE: Record<PropertyDisplayMode, PropertyDisplayMode> = {
+  none: 'non-hidden', 'non-hidden': 'all', all: 'none',
+}
+
 /** Cycle the effective mode, storing `inherit` when the scope already supplies
  *  the target so later workspace or panel changes still reach this block. */
 export const nextBlockPropertyDisplaySetting = (levels: PropertyDisplayLevels): PropertyDisplaySetting => {
-  const next: Record<PropertyDisplayMode, PropertyDisplayMode> = {
-    none: 'non-hidden', 'non-hidden': 'all', all: 'none',
-  }
-  const mode = next[resolvePropertyDisplayMode(levels)]
+  const mode = NEXT_PROPERTY_DISPLAY_MODE[resolvePropertyDisplayMode(levels)]
   return mode === resolvePropertyDisplayMode({...levels, block: 'inherit'}) ? 'inherit' : mode
 }
 

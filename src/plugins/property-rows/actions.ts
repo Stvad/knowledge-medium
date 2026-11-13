@@ -84,8 +84,10 @@ const cycle = defineBlocksAction({
   },
 })
 
-// Accept the static keybindings-editor warning: the cycle precedes the panel toggle and declines when ineligible.
-export const cyclePropertyDisplayActions = [cycle.block, cycle.blocks].map(action => ({
+// Accept the static conflict warning: precedence -100 tries the cycle before
+// the panel toggle, falling through when ineligible.
+// Explicit cycle overrides keep standard collision rules: an ineligible cycle leaves the key idle.
+export const cyclePropertyDisplayActions = [cycle.block, cycle.blocks].map<ActionConfig>(action => ({
   ...action,
   defaultBinding: {keys: 't'},
   canDispatch: canCyclePropertyDisplay,

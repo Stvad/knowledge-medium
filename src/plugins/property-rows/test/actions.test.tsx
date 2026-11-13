@@ -50,7 +50,7 @@ beforeEach(async () => {
 
 const scope = (childBacked = true): PropertyDisplayScopeLevels => ({childBacked, workspace: 'inherit', panel: 'inherit'})
 
-async function mount(propertyDisplay: PropertyDisplayScopeLevels | undefined, multi = false, overrides: KeybindingOverride[] = [], pluginFirst = false) {
+async function mount(propertyDisplay: PropertyDisplayScopeLevels | undefined, multi = false, overrides: KeybindingOverride[] = []) {
   const context = multi ? ActionContextTypes.MULTI_SELECT_MODE : ActionContextTypes.NORMAL_MODE
   const deps = {
     uiStateBlock: repo.block('panel'), propertyDisplay,
@@ -58,14 +58,15 @@ async function mount(propertyDisplay: PropertyDisplayScopeLevels | undefined, mu
   }
   const runtime = resolveFacetRuntimeSync([
     kernelDataExtension,
-    ...(pluginFirst ? [propertyRowsPlugin, defaultActionsExtension({repo})] : [defaultActionsExtension({repo}), propertyRowsPlugin]),
+    defaultActionsExtension({repo}),
+    propertyRowsPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config)),
     overrides.map(override => keybindingOverridesFacet.of(override)),
     cyclePropertyDisplayActions.map(({id}) => actionTransformsFacet.of({
       actionId: id,
       apply: action => ({...action, canDispatch: dependencies => {
         trace.push(`try ${id}`)
-        return action.canDispatch!(dependencies)
+        return action.canDispatch?.(dependencies) ?? true
       }}),
     })),
     actionDispatchVerb.before(({action}) => { dispatched.push(action.id); trace.push(action.id) }),
@@ -131,7 +132,7 @@ describe('property display keyboard actions', () => {
     },
   )
 
-  it.each(matrix)('$name: t dispatches exactly one eligible action (selection: $multi, child-backed: $childBacked)', async scenario => {
+  it.each(matrix)('$name: t follows saved override dispatch (selection: $multi, child-backed: $childBacked)', async scenario => {
     const {multi, childBacked, binding, target} = scenario
     if (!childBacked) await db.db.execute("UPDATE workspaces SET properties_migration = NULL WHERE id = 'ws'")
     const overrides: KeybindingOverride[] = binding ? [{
@@ -169,8 +170,6 @@ describe('property display keyboard actions', () => {
   it.each([false, true])('read-only child-backed t falls through to the panel (selection: %s)', async multi => {
     repo.setReadOnly(true)
     const {palette} = await mount(scope(), multi)
-    await vi.waitFor(() => expect(palette().map(action => action.id)).toContain(panelId(multi)))
-    expect(palette().map(action => action.id)).not.toContain(cycleId(multi))
     await press('t')
     await vi.waitFor(() => expect(dispatched).toEqual(panelDispatches(multi)))
     await vi.waitFor(() => expect(repo.block('first').peekProperty(showPropertiesProp)).toBe(true))
@@ -179,6 +178,8 @@ describe('property display keyboard actions', () => {
       await vi.waitFor(() => expect(repo.block('second').peekProperty(showPropertiesProp)).toBe(true))
       expect(setting('second')).toBeUndefined()
     }
+    await vi.waitFor(() => expect(palette().map(action => action.id)).toContain(panelId(multi)))
+    expect(palette().map(action => action.id)).not.toContain(cycleId(multi))
   })
 
   it.each([false, true])('the palette hides the cycle on a cell-backed workspace (selection: %s)', async multi => {
