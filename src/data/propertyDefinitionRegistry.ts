@@ -210,12 +210,6 @@ const sameKeys = (
   return true
 }
 
-/** The field ids the outline's default property display (`'non-hidden'`)
- *  skips: definitions that are `hidden` or `propertyHideInOutlineProp`. A materialized definition answers
- *  for itself (its row's bits); a seed whose row has not materialized yet
- *  answers with its declaration. Not memoized here: the query layer memoizes the params it
- *  binds per snapshot (`kernelQueries`), and the only other reader runs once
- *  per registry swap. */
 /** A definition's hide-in-outline answer: what its row STORES, else what its
  *  current seed declares. The fallback is what lets a built-in be marked in
  *  code with no write to any workspace — nothing stores the field until
@@ -227,6 +221,12 @@ export const effectiveHideInOutline = (
   definition.hideInOutline
   ?? (definition.seedKey !== undefined && seedsByKey.get(definition.seedKey)?.hideInOutline === true)
 
+/** The field ids the outline's default property display (`'non-hidden'`)
+ *  skips: definitions that are `hidden`, or hide-in-outline
+ *  ({@link effectiveHideInOutline}). A seed whose row has not materialized yet
+ *  answers with its declaration. Not memoized here: the query layer memoizes
+ *  the params it binds per snapshot (`kernelQueries`), and the only other
+ *  reader runs once per registry swap. */
 export const outlineSkippedFieldIds = (
   snapshot: PropertyDefinitionRegistrySnapshot,
 ): ReadonlySet<string> => {
