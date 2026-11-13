@@ -424,10 +424,9 @@ describe('a field row\'s own properties', () => {
 })
 
 describe('a scalar whose first value child its codec cannot read', () => {
-  // The cell projects from the first child that decodes, but a write lands on
-  // the FIRST value child whatever it holds. An editor on the decoding child
-  // would write over the other one's text.
-  it('offers no editor, so no edit can overwrite the unreadable row', async () => {
+  // The cell reads the first child that decodes, and a write lands on that same
+  // child, so its editor sits there and an edit leaves the unreadable row alone.
+  it('edits the value the cell reads, leaving the unreadable row\'s text alone', async () => {
     await repo.block(OWNER).set(ratingProp, 5)
     const fieldRow = await sharedDb.db.getOptional<{id: string}>(
       `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
@@ -446,9 +445,14 @@ describe('a scalar whose first value child its codec cannot read', () => {
     await waitFor(() => expect(shownRows()).toContain('rows:rating'))
     await screen.findByText('call Bob about this')
     await waitFor(() => expect(document.querySelector('[data-block-id="unreadable"]')).not.toBeNull())
-    // The scalar beside it still has its editor, so the outline has settled.
-    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
-    expect(screen.queryByDisplayValue('5')).toBeNull()
+    const input = await screen.findByDisplayValue('5') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(input, {target: {value: '7'}})
+      fireEvent.blur(input)
+    })
+    await waitFor(() => expect(repo.block(OWNER).peekProperty(ratingProp)).toBe(7))
+    const unreadable = await sharedDb.db.get<{content: string}>("SELECT content FROM blocks WHERE id = 'unreadable'")
+    expect(unreadable.content).toBe('call Bob about this')
   })
 })
 
