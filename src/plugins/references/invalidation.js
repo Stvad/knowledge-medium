@@ -1,1 +1,1 @@
-export{YK as REFERENCES_TARGET_INVALIDATION_CHANNEL,XK as referencesInvalidationRule}from"../../../chunks/app-YTjlnKPG.js";
+export{YK as REFERENCES_TARGET_INVALIDATION_CHANNEL,XK as referencesInvalidationRule}from"../../../chunks/app-BlxTdjlq.js";

@@ -1,1 +1,1 @@
-export{yJ as PLACES_UNDER_BLOCK_QUERY,bJ as placesUnderBlockQuery}from"../../../chunks/app-YTjlnKPG.js";
+export{yJ as PLACES_UNDER_BLOCK_QUERY,bJ as placesUnderBlockQuery}from"../../../chunks/app-BlxTdjlq.js";

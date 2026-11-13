@@ -1,1 +1,1 @@
-export{A_ as DATA_MODEL_GUIDE,j_ as dataModelGuide}from"../../../chunks/app-YTjlnKPG.js";
+export{A_ as DATA_MODEL_GUIDE,j_ as dataModelGuide}from"../../../chunks/app-BlxTdjlq.js";

@@ -1,1 +1,1 @@
-export{tv as updateIndicatorPlugin}from"../../../chunks/app-YTjlnKPG.js";
+export{tv as updateIndicatorPlugin}from"../../../chunks/app-BlxTdjlq.js";

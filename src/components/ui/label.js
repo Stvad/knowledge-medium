@@ -1,1 +1,1 @@
-export{JO as Label}from"../../../chunks/app-YTjlnKPG.js";
+export{JO as Label}from"../../../chunks/app-BlxTdjlq.js";

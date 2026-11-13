@@ -1,1 +1,1 @@
-export{Ng as buildBlockView,Pg as renderBlockView}from"../../../../chunks/app-YTjlnKPG.js";
+export{Ng as buildBlockView,Pg as renderBlockView}from"../../../../chunks/app-BlxTdjlq.js";

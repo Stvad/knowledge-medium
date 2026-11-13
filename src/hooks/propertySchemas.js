@@ -1,1 +1,1 @@
-export{TG as usePropertySchemas}from"../../chunks/app-YTjlnKPG.js";
+export{TG as usePropertySchemas}from"../../chunks/app-BlxTdjlq.js";

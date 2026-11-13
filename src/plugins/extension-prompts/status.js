@@ -1,1 +1,1 @@
-export{ZN as extensionPromptDiagnosticContribution,QN as extensionPromptDiagnosticSource}from"../../../chunks/app-YTjlnKPG.js";
+export{ZN as extensionPromptDiagnosticContribution,QN as extensionPromptDiagnosticSource}from"../../../chunks/app-BlxTdjlq.js";

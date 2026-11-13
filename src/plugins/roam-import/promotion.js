@@ -1,1 +1,1 @@
-export{Yu as computePromotedFromChildren,Xu as detectInlineAttribute}from"../../../chunks/app-YTjlnKPG.js";
+export{Yu as computePromotedFromChildren,Xu as detectInlineAttribute}from"../../../chunks/app-BlxTdjlq.js";

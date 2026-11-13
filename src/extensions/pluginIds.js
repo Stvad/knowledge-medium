@@ -1,2 +1,2 @@
-import{iot as e}from"../../chunks/app-YTjlnKPG.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
+import{iot as e}from"../../chunks/app-BlxTdjlq.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
 //# sourceMappingURL=pluginIds.js.map

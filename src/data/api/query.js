@@ -1,1 +1,1 @@
-export{Clt as defineQuery}from"../../../chunks/app-YTjlnKPG.js";
+export{Clt as defineQuery}from"../../../chunks/app-BlxTdjlq.js";
