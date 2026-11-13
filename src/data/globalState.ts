@@ -237,6 +237,24 @@ export const useInFocus = (blockId: string, explicitRenderScopeId?: string): boo
   })
 }
 
+/** The child of `parent` focused in this panel, or null. Per-parent, same
+ *  selector pattern as `useInFocus`: a focus move re-renders only the parents
+ *  it enters or leaves. The focused row's own parent is read reactively too,
+ *  so moving it while focused (an indent) drops it from the parent it left. */
+export const useFocusedChildId = (parent: Block): string | null => {
+  const candidate = useHandle(useUIStateBlock(), {
+    selector: doc => {
+      const location = focusedBlockLocationFromProperties(doc?.properties)
+      if (!location) return null
+      return parent.repo.block(location.blockId).peek()?.parentId === parent.id ? location.blockId : null
+    },
+  })
+  const candidateParentId = useHandle(parent.repo.block(candidate ?? parent.id), {selector: data => data?.parentId})
+  // Defence in depth: the selector above re-checks the parent whenever this
+  // re-renders too, as its closure is new each render.
+  return candidate !== null && candidateParentId === parent.id ? candidate : null
+}
+
 export const useIsSelected = (blockId: string): boolean =>
   useHandle(useUIStateBlock(), {
     selector: doc =>

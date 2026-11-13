@@ -11,6 +11,7 @@ import {
 } from '@/data/properties'
 import { ChangeScope, type BlockData } from '@/data/api'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
+import { siblingPrecedes } from '@/data/orderKey'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -242,7 +243,7 @@ const precedesInTree = (a: readonly BlockData[], b: readonly BlockData[]): boole
   for (let depth = 1; depth < Math.min(a.length, b.length); depth++) {
     const [x, y] = [a[depth], b[depth]]
     if (x.id === y.id) continue
-    return x.orderKey < y.orderKey || (x.orderKey === y.orderKey && x.id < y.id)
+    return siblingPrecedes(x, y)
   }
   return a.length < b.length
 }

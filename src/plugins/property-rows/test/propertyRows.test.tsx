@@ -10,7 +10,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import type { Block } from '@/data/block'
-import { showPropertiesProp } from '@/data/properties'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { Repo } from '@/data/repo'
@@ -32,6 +31,10 @@ import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountR
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { propertyRowsPlugin } from '../index'
+import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { EditorView } from '@codemirror/view'
+import { flushEditorContent } from '@/editor/contentFlush'
+import { focusBlock, showPropertiesProp } from '@/data/properties'
 import { setBlockPropertyDisplay } from '../actions'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -97,6 +100,7 @@ beforeEach(async () => {
     kernelValuePresetsExtension,
     defaultRenderersExtension,
     propertyRowsPlugin,
+    plainOutlinerPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
     [statusProp, secretProp, tagsProp, ratingProp, sourceProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
   ])
@@ -466,5 +470,94 @@ describe('a definition renamed while its row is shown', () => {
     await repo.tx(tx => tx.update(DEF, {properties: bag('rows:after')}), {scope: ChangeScope.BlockDefault})
     await waitFor(() => expect(shownRows()).toContain('rows:after'))
     expect(shownRows()).not.toContain('rows:before')
+  })
+})
+
+describe('a child the user turns into a field row', () => {
+  // Typing `::((id))` into a child makes it a field row in the same write that
+  // commits the text, and a mode that hides that row's tier would unmount it
+  // under the user's caret.
+  const TYPED = 'typed'
+  const typedRow = () => document.querySelector<HTMLElement>(`[data-block-id="${TYPED}"]`)
+  const typedEditor = () => typedRow()?.querySelector<HTMLElement>('.cm-editor') ?? null
+  const definition = (name: string, flags: Record<string, unknown> = {}) =>
+    ({types: ['property-schema'], 'property-schema:name': name, 'property-schema:preset': 'string', ...flags})
+
+  /** happy-dom fires selectionchange synchronously from the DOM selection
+   *  CodeMirror writes mid-update, which re-enters that update. */
+  const swallowSelectionChange = (event: Event) => event.stopImmediatePropagation()
+  beforeEach(async () => {
+    window.addEventListener('selectionchange', swallowSelectionChange, true)
+    await repo.tx(async tx => {
+      await tx.create({id: 'def-plain', workspaceId: WS, parentId: null, orderKey: 'z0', content: '',
+        properties: definition('rows:plain')})
+      await tx.create({id: 'def-hidden', workspaceId: WS, parentId: null, orderKey: 'z1', content: '',
+        properties: definition('rows:hid', {'property-schema:hidden': true})})
+      await tx.create({id: 'def-outline-skip', workspaceId: WS, parentId: null, orderKey: 'z2', content: '',
+        properties: definition('rows:skip', {'property-schema:hide-in-outline': true})})
+      // Before the note, so its position is not just "appended".
+      await tx.create({id: TYPED, workspaceId: WS, parentId: OWNER, orderKey: 'Z', content: ''})
+    }, {scope: ChangeScope.BlockDefault})
+  })
+  afterEach(() => { window.removeEventListener('selectionchange', swallowSelectionChange, true) })
+
+  /** Edit the child in place and commit `text`, as the editor does. */
+  const typeIntoChild = async (workspace: PropertyDisplaySetting, text: string) => {
+    await focusBlock(repo.block(PANEL), TYPED, {edit: true})
+    mount({workspace})
+    await waitFor(() => expect(typedEditor()).not.toBeNull())
+    const view = EditorView.findFromDOM(typedEditor()!)!
+    act(() => {
+      view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: text}, selection: {anchor: text.length}})
+      flushEditorContent(view)
+    })
+    // Fence on the mode's own listing having dropped the row, then let React
+    // commit what it notified: an unmount would have happened by now.
+    const listing = repo.query.childIds({id: OWNER, hydrate: true, propertyChildren: workspace === 'inherit' ? 'none' : workspace})
+    await waitFor(async () => expect(await listing.load()).not.toContain(TYPED))
+    await act(async () => {})
+  }
+
+  const precedesTheNote = (row: HTMLElement) =>
+    Boolean(row.compareDocumentPosition(screen.getByText('a note')) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+  it('keeps the row and its editor while the user is on it, where the mode hides every property row', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await outlineSettled()
+    expect(typedRow()).not.toBeNull()
+    expect(typedRow()!.querySelector('.cm-content')?.textContent).toBe('::((def-plain))')
+    expect(precedesTheNote(typedRow()!)).toBe(true)
+  })
+
+  it.each([
+    {tier: 'hidden', id: 'def-hidden', name: 'rows:hid'},
+    {tier: 'hidden in the outline', id: 'def-outline-skip', name: 'rows:skip'},
+  ])('keeps the row while the user is on it, where the mode hides a $tier definition', async ({id, name}) => {
+    await typeIntoChild('non-hidden', `::((${id}))`)
+    await waitFor(() => expect(shownRows()).toEqual([name, 'rows:status']))
+    expect(precedesTheNote(typedRow()!)).toBe(true)
+  })
+
+  it('lets the mode hide the row once the user moves on', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await outlineSettled()
+    expect(typedRow()).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
+    await waitFor(() => expect(typedRow()).toBeNull())
+    // A focused child the mode shows anyway is listed once, not twice.
+    expect(document.querySelectorAll(`[data-block-id="${NOTE}"]`)).toHaveLength(1)
+  })
+
+  it('stops showing the row under its old parent once it moves', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await outlineSettled()
+    const listedUnder = () => typedRow()?.parentElement?.closest('[data-block-id]')?.getAttribute('data-block-id')
+    expect(listedUnder()).toBe(OWNER)
+    // Indenting moves it with focus unchanged, and the owner's own view of its
+    // children does not change.
+    await act(async () => {
+      await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+    })
+    await waitFor(() => expect(listedUnder()).not.toBe(OWNER))
   })
 })

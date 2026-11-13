@@ -8,6 +8,9 @@ import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useChildIdsForMode, usePropertyDisplayMode } from '@/hooks/block.js'
+import { useFocusedChildId } from '@/data/globalState.js'
+import { siblingPrecedes } from '@/data/orderKey.js'
+import type { Repo } from '@/data/repo.js'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
@@ -59,9 +62,10 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // context, so its scope is the one they will have.
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
+  const childIds = withFocusedChild(block.repo, useChildIdsForMode(block, mode), useFocusedChildId(block))
 
   return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
-    {useChildIdsForMode(block, mode).map((childId) => (
+    {childIds.map((childId) => (
       <LazyBlockComponent
         key={childId}
         blockId={childId}
@@ -69,4 +73,22 @@ export const BlockChildren = ({block}: { block: Block }) => {
       />
     ))}
   </PropertyRowListingContext>
+}
+
+/** `childIds` with the focused child back at its sibling position when the
+ *  property display mode left it out. The row the user is on stays where it is
+ *  until they move on: typing `::((id))` makes a child a field row in the write
+ *  that commits the text, and a mode hiding that row's tier would otherwise
+ *  unmount it, editor and all, under the caret. */
+const withFocusedChild = (repo: Repo, childIds: string[], focusedId: string | null): string[] => {
+  if (focusedId === null || childIds.includes(focusedId)) return childIds
+  const focused = repo.block(focusedId).peek()
+  if (!focused) return childIds
+  const before = childIds.findIndex(id => {
+    const sibling = repo.block(id).peek()
+    return !!sibling && siblingPrecedes(focused, sibling)
+  })
+  return before === -1
+    ? [...childIds, focusedId]
+    : [...childIds.slice(0, before), focusedId, ...childIds.slice(before)]
 }
