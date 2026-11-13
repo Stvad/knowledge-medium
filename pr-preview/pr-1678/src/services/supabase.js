@@ -1,1 +1,1 @@
-export{Rit as hasSupabaseAuthConfig,zit as isAuthCallbackUrl,Bit as readPersistedSession,Vit as sessionUserToAppUser,Hit as supabase}from"../../chunks/app-DnUsVE__.js";
+export{Hit as hasSupabaseAuthConfig,Uit as isAuthCallbackUrl,Wit as readPersistedSession,Git as sessionUserToAppUser,Kit as supabase}from"../../chunks/app-BS5E6ggL.js";

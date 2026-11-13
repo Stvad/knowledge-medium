@@ -1,1 +1,1 @@
-export{YM as chipStyle}from"../../../chunks/app-DnUsVE__.js";
+export{XM as chipStyle}from"../../../chunks/app-BS5E6ggL.js";

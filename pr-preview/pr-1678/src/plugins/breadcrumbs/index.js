@@ -1,1 +1,1 @@
-export{oT as BreadcrumbList,rT as BreadcrumbRenderer,aT as Breadcrumbs,nT as PromotableBreadcrumbList,$w as breadcrumbRendererContribution,eT as breadcrumbsPlugin,iT as getBreadcrumbContentPreview,tT as usePromotableBreadcrumb}from"../../../chunks/app-DnUsVE__.js";
+export{sT as BreadcrumbList,iT as BreadcrumbRenderer,oT as Breadcrumbs,rT as PromotableBreadcrumbList,eT as breadcrumbRendererContribution,tT as breadcrumbsPlugin,aT as getBreadcrumbContentPreview,nT as usePromotableBreadcrumb}from"../../../chunks/app-BS5E6ggL.js";

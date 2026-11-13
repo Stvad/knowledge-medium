@@ -1,1 +1,1 @@
-export{MS as hmsToSeconds}from"../../chunks/app-DnUsVE__.js";
+export{NS as hmsToSeconds}from"../../chunks/app-BS5E6ggL.js";

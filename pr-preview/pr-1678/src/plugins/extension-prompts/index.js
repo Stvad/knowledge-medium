@@ -1,1 +1,1 @@
-export{KN as ExtensionPromptSurface,qN as extensionPromptsExtension}from"../../../chunks/app-DnUsVE__.js";
+export{JN as ExtensionPromptSurface,YN as extensionPromptsExtension}from"../../../chunks/app-BS5E6ggL.js";

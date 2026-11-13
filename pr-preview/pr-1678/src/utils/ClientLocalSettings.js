@@ -1,1 +1,1 @@
-export{VP as ClientLocalSettings,HP as clientLocalSettings}from"../../chunks/app-DnUsVE__.js";
+export{UP as ClientLocalSettings,WP as clientLocalSettings}from"../../chunks/app-BS5E6ggL.js";

@@ -1,1 +1,1 @@
-export{Gk as CALENDAR_CELL_COUNT,Kk as CALENDAR_WEEKDAY_LABELS,qk as addMonths,Jk as buildCalendarCells,Yk as firstOfMonth,Xk as formatDayLabel,Zk as fromIso,Qk as initialDateFromIso,$k as monthLabel}from"../../../chunks/app-DnUsVE__.js";
+export{Kk as CALENDAR_CELL_COUNT,qk as CALENDAR_WEEKDAY_LABELS,Jk as addMonths,Yk as buildCalendarCells,Xk as firstOfMonth,Zk as formatDayLabel,Qk as fromIso,$k as initialDateFromIso,eA as monthLabel}from"../../../chunks/app-BS5E6ggL.js";
