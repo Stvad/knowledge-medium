@@ -1,1 +1,1 @@
-export{UO as todayDailyNoteLanding}from"../../../chunks/app-DgXUPDTo.js";
+export{Vk as todayDailyNoteLanding}from"../../../chunks/app-C_SF6UCd.js";

@@ -1,1 +1,1 @@
-export{sP as LazyBlockComponent}from"../../chunks/app-DgXUPDTo.js";
+export{OF as LazyBlockComponent}from"../../chunks/app-C_SF6UCd.js";

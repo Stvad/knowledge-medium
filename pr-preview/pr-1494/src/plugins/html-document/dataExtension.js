@@ -1,0 +1,1 @@
+export{Hq as htmlDocumentDataExtension}from"../../../chunks/app-C_SF6UCd.js";

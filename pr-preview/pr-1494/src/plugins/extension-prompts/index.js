@@ -1,1 +1,1 @@
-export{DM as ExtensionPromptSurface,OM as extensionPromptsExtension}from"../../../chunks/app-DgXUPDTo.js";
+export{JN as ExtensionPromptSurface,YN as extensionPromptsExtension}from"../../../chunks/app-C_SF6UCd.js";
