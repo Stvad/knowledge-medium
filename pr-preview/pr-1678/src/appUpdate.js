@@ -1,1 +1,0 @@
-export{vP as appUpdate,yP as useAppUpdateAvailable}from"../chunks/app-vIOTcEtg.js";

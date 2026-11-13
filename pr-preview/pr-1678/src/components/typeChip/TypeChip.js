@@ -1,1 +1,0 @@
-export{YM as TypeChip}from"../../../chunks/app-vIOTcEtg.js";

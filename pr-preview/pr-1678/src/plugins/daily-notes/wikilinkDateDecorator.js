@@ -1,1 +1,0 @@
-export{kk as dailyDateWikilinkDecorator}from"../../../chunks/app-vIOTcEtg.js";

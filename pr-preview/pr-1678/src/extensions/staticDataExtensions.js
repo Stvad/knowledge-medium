@@ -1,1 +1,0 @@
-export{jK as staticDataExtensions}from"../../chunks/app-vIOTcEtg.js";

@@ -1,1 +1,0 @@
-export{IC as spatialNavigationShellDecorator}from"../../../chunks/app-vIOTcEtg.js";

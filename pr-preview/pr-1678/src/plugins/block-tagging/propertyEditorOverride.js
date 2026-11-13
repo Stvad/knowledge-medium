@@ -1,1 +1,0 @@
-export{gu as blockTagsConfigUi}from"../../../chunks/app-vIOTcEtg.js";
