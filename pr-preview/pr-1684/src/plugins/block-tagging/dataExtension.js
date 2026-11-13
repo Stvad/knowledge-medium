@@ -1,0 +1,1 @@
+export{su as blockTaggingDataExtension}from"../../../chunks/app-0AJXS_3T.js";

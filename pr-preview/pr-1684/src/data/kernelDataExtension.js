@@ -1,0 +1,1 @@
+export{C3 as kernelDataExtension}from"../../chunks/app-0AJXS_3T.js";

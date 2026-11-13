@@ -1,0 +1,1 @@
+export{g6 as KERNEL_PROCESSORS}from"../../../chunks/app-0AJXS_3T.js";

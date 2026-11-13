@@ -1,0 +1,1 @@
+export{Zm as extensionsOverridesPresetCore,Qm as extensionsOverridesProp,$m as extensionsPrefsType,eh as overridesCodec}from"../../../chunks/app-0AJXS_3T.js";

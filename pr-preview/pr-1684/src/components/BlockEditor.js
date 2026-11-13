@@ -1,0 +1,1 @@
+export{iR as BlockEditor}from"../../chunks/app-0AJXS_3T.js";

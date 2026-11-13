@@ -1,0 +1,1 @@
+export{Xw as plainOutlinerPlugin}from"../../../chunks/app-0AJXS_3T.js";

@@ -1,0 +1,1 @@
+export{hit as getOrCreatePropertiesPage,git as propertiesPageBlockId,_it as propertiesPageSpec}from"../../chunks/app-0AJXS_3T.js";

@@ -1,0 +1,1 @@
+export{Kq as geoDataExtension}from"../../../chunks/app-0AJXS_3T.js";

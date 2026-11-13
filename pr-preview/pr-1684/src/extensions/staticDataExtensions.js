@@ -1,0 +1,1 @@
+export{oK as staticDataExtensions}from"../../chunks/app-0AJXS_3T.js";
