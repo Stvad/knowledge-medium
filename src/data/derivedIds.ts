@@ -192,9 +192,9 @@ export const classifyOccupant = (
  *    `valueKey` is `MemberKeys.content`'s, the comparison the reconcilers
  *    match rows by; a scalar's occurrence is always 0.
  *
- * A value is keyed by WHAT it is, never by a fixed slot: a fixed slot would
- * let the server keep one device's value row beside the other's block when an
- * upload splits the two across create batches, dropping a value from both.
+ * A value is keyed by WHAT it is, never by a fixed slot: where the server
+ * keeps a block from one device and its value rows from another (a subtree
+ * bigger than one create batch), a fixed slot would drop a value from both.
  *
  * The PARENT is the row's own `parentId` — the owner for a field row, the
  * field row for a value — passed beside the slot rather than restated in it.

@@ -18,8 +18,10 @@
  * them at the next local write).
  *
  * What converges is only what COLLIDES: each id both devices minted keeps the
- * first create OF THAT ID — usually the one that also won the block, but an
- * upload split across create batches can make it the peer's. An id only one
+ * first create OF THAT ID, which is the device that won the block, since an
+ * upload keeps a block and the rows created under it in one server
+ * transaction (`chunkBlockUpserts`) — unless that subtree alone is bigger than
+ * one, where the server may keep them from different devices. An id only one
  * device minted lands on its own under the server's block, whose cell is the
  * FIRST create's:
  *  - a list member or a property the other did not have — the next edit of it

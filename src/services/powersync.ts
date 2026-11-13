@@ -373,26 +373,91 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
   return operations.sort((left, right) => left.order - right.order)
 }
 
-const orderedBlockUpserts = (rows: readonly BlockUploadPayload[]): BlockUploadPayload[] => {
+/**
+ * The creates as RPC-sized chunks, each a separate server transaction.
+ *
+ * Two rules, both load-bearing:
+ *  - A parent is never in a LATER chunk than its child: the parent self-FK is
+ *    DEFERRABLE within one transaction, not across them.
+ *  - A row and the rows created under it share a chunk whenever that subtree
+ *    fits in one. The server keeps the first create of an id, so a block two
+ *    devices both create (at a deterministic id) must win or lose together
+ *    with its own rows; split across two RPCs, a peer's upload landing between
+ *    them would take the block from one device and its property machinery
+ *    from the other. A subtree bigger than `cap` is split at its root: the
+ *    root first, then its child subtrees, each kept whole where it fits.
+ */
+const chunkBlockUpserts = (
+  rows: readonly BlockUploadPayload[],
+  cap: number,
+): BlockUploadPayload[][] => {
   const byId = new Map(rows.map(row => [row.id, row]))
-  const state = new Map<string, 'visiting' | 'visited'>()
-  const ordered: BlockUploadPayload[] = []
-
-  const visit = (row: BlockUploadPayload) => {
-    const current = state.get(row.id)
-    if (current === 'visited') return
-    if (current === 'visiting') return
-
-    state.set(row.id, 'visiting')
-    const parentId = typeof row.parent_id === 'string' ? row.parent_id : null
-    const parent = parentId ? byId.get(parentId) : undefined
-    if (parent) visit(parent)
-    state.set(row.id, 'visited')
-    ordered.push(row)
+  const parentOf = (row: BlockUploadPayload): BlockUploadPayload | undefined =>
+    typeof row.parent_id === 'string' && row.parent_id !== row.id ? byId.get(row.parent_id) : undefined
+  const children = new Map<string, BlockUploadPayload[]>()
+  for (const row of rows) {
+    const parent = parentOf(row)
+    if (parent === undefined) continue
+    const siblings = children.get(parent.id)
+    if (siblings) siblings.push(row)
+    else children.set(parent.id, [row])
   }
 
-  for (const row of rows) visit(row)
-  return ordered
+  // Preorder, so every parent precedes its children.
+  const placed = new Set<string>()
+  const subtree = (root: BlockUploadPayload): BlockUploadPayload[] => {
+    const out: BlockUploadPayload[] = []
+    const stack = [root]
+    while (stack.length > 0) {
+      const row = stack.pop()!
+      if (placed.has(row.id)) continue
+      placed.add(row.id)
+      out.push(row)
+      stack.push(...[...(children.get(row.id) ?? [])].reverse())
+    }
+    return out
+  }
+
+  const chunks: BlockUploadPayload[][] = []
+  let current: BlockUploadPayload[] = []
+  const add = (unit: BlockUploadPayload[]) => {
+    if (current.length + unit.length > cap) {
+      if (current.length > 0) chunks.push(current)
+      current = []
+    }
+    current.push(...unit)
+  }
+  const place = (root: BlockUploadPayload) => {
+    const whole = subtree(root)
+    if (whole.length <= cap) {
+      add(whole)
+      return
+    }
+    // Too big for one transaction: un-place it and lay it out root first.
+    for (const row of whole) placed.delete(row.id)
+    placed.add(root.id)
+    add([root])
+    for (const child of children.get(root.id) ?? []) place(child)
+  }
+
+  for (const row of rows) {
+    if (parentOf(row) === undefined && !placed.has(row.id)) place(row)
+  }
+  // What no root reaches hangs off a parent cycle: enter each cycle at the
+  // member found by walking up from the first unplaced row, so one of its edges
+  // is reversed and every row below it still follows its parent.
+  for (const row of rows) {
+    if (placed.has(row.id)) continue
+    const walked = new Set<string>()
+    let entry = row
+    while (!walked.has(entry.id)) {
+      walked.add(entry.id)
+      entry = parentOf(entry)!
+    }
+    place(entry)
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
 }
 
 /** How long one upload request may run before it is aborted. A request that
@@ -475,10 +540,8 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 
   // Chunk for the same reason apply_block_patches does (see
   // MAX_CREATES_PER_SUPABASE_RPC): keep each RPC's per-row INSERT count under the
-  // statement timeout. orderedBlockUpserts keeps a child out of an earlier chunk
-  // (separate RPC = separate tx) than its parent — the parent self-FK is
-  // DEFERRABLE within a tx but not across them.
-  for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
+  // statement timeout. How the chunks are cut is `chunkBlockUpserts`'s.
+  for (const batch of chunkBlockUpserts(rows, MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
     const {error, status} = await client
       .rpc('apply_block_creates', {creates: batch})
@@ -896,7 +959,7 @@ export const createPowerSyncConnector = (
 
 export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
-export const __orderedBlockUpsertsForTest = orderedBlockUpserts
+export const __chunkBlockUpsertsForTest = chunkBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
 export const __runUploadLoopForTest = runUploadLoop
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations

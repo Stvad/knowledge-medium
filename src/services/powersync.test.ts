@@ -37,7 +37,7 @@ import {
   __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
   __encryptUploadOpsForTest,
-  __orderedBlockUpsertsForTest,
+  __chunkBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
   createPowerSyncConnector,
   uploadLockName,
@@ -299,13 +299,13 @@ describe('PowerSync upload compaction', () => {
   })
 
   it('orders parent upserts before child upserts within a bulk request', () => {
-    const ordered = __orderedBlockUpsertsForTest([
+    const chunks = __chunkBlockUpsertsForTest([
       {id: 'child', parent_id: 'parent', content: 'child'},
       {id: 'parent', parent_id: null, content: 'parent'},
       {id: 'sibling', parent_id: 'parent', content: 'sibling'},
-    ])
+    ], 500)
 
-    expect(ordered.map(row => row.id)).toEqual(['parent', 'child', 'sibling'])
+    expect(chunks.map(chunk => chunk.map(row => row.id))).toEqual([['parent', 'child', 'sibling']])
   })
 })
 
@@ -1069,9 +1069,9 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
   })
 
   it('chunks an oversized create batch into capped RPC calls, order preserved across chunks', async () => {
-    // orderedBlockUpserts runs before chunk(), so a parent never lands in a later
-    // chunk than its child — each chunk is a separate RPC = separate transaction,
-    // and the parent self-FK is only DEFERRABLE within one transaction.
+    // A parent never lands in a later chunk than its child — each chunk is a
+    // separate RPC = separate transaction, and the parent self-FK is only
+    // DEFERRABLE within one transaction.
     supabaseRef.rpc.mockResolvedValue({data: null, error: null})
     const total = MAX_CREATES_PER_SUPABASE_RPC * 2 + 1
     const rows = Array.from({length: total}, (_, i) => ({
@@ -1097,6 +1097,58 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
   it('is a no-op when given an empty create array', async () => {
     await __applyBlockCreatesForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
+  })
+
+  // Each RPC is one server transaction, and the server keeps the FIRST create of
+  // an id. A block and the rows created under it must land in the same one, or
+  // a peer's upload between two RPCs can win the block while this device wins
+  // its children (or the reverse) — the property machinery under a block two
+  // devices both created is what that splits apart.
+  it('keeps a new block and the rows created under it in one RPC', async () => {
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const singles = Array.from({length: MAX_CREATES_PER_SUPABASE_RPC - 1}, (_, i) => ({
+      id: `single-${i}`, workspace_id: 'w', parent_id: null, content: `s${i}`,
+    }))
+    const family = [
+      {id: 'owner', workspace_id: 'w', parent_id: null, content: 'owner'},
+      {id: 'field', workspace_id: 'w', parent_id: 'owner', content: 'field'},
+      {id: 'value', workspace_id: 'w', parent_id: 'field', content: 'value'},
+    ]
+
+    await __applyBlockCreatesForTest([...singles, ...family])
+
+    const calls = supabaseRef.rpc.mock.calls.map(
+      call => (call[1] as {creates: Array<{id: string}>}).creates.map(row => row.id))
+    expect(calls).toHaveLength(2)
+    expect(calls.find(ids => ids.includes('owner'))).toEqual(['owner', 'field', 'value'])
+  })
+
+  it('splits a subtree bigger than one RPC only between whole child subtrees, parents first', async () => {
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const messages = Math.ceil(MAX_CREATES_PER_SUPABASE_RPC / 3) + 10
+    const rows: Array<{id: string; workspace_id: string; parent_id: string | null; content: string}> =
+      [{id: 'day', workspace_id: 'w', parent_id: null, content: 'day'}]
+    for (let i = 0; i < messages; i++) {
+      rows.push(
+        {id: `m${i}`, workspace_id: 'w', parent_id: 'day', content: 'message'},
+        {id: `m${i}-field`, workspace_id: 'w', parent_id: `m${i}`, content: 'field'},
+        {id: `m${i}-value`, workspace_id: 'w', parent_id: `m${i}-field`, content: 'value'},
+      )
+    }
+
+    await __applyBlockCreatesForTest(rows)
+
+    const calls = supabaseRef.rpc.mock.calls.map(
+      call => (call[1] as {creates: Array<{id: string}>}).creates.map(row => row.id))
+    expect(calls.length).toBeGreaterThan(1)
+    const chunkOf = new Map(calls.flatMap((ids, chunk) => ids.map(id => [id, chunk] as const)))
+    expect(chunkOf.size).toBe(rows.length)
+    for (let i = 0; i < messages; i++) {
+      expect(chunkOf.get(`m${i}-field`)).toBe(chunkOf.get(`m${i}`))
+      expect(chunkOf.get(`m${i}-value`)).toBe(chunkOf.get(`m${i}`))
+      expect(chunkOf.get('day')!).toBeLessThanOrEqual(chunkOf.get(`m${i}`)!)
+    }
+    for (const ids of calls) expect(ids.length).toBeLessThanOrEqual(MAX_CREATES_PER_SUPABASE_RPC)
   })
 })
 
