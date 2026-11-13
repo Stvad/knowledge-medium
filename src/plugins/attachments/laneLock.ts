@@ -5,11 +5,7 @@
  * store's writes take one per object.
  */
 
-/** The up-lane drain's lock: a concurrent caller QUEUES behind the holder, and
- *  its queued duplicate is cheap + idempotent. */
-export { withLock } from '@/utils/webLock.js'
-
-/** Like {@link withLock} but NON-BLOCKING (`ifAvailable`): if another tab already
+/** Like `withLock` (`@/utils/webLock`) but NON-BLOCKING (`ifAvailable`): if another tab already
  *  holds the lane, SKIP this pass instead of queuing behind it. The right call for an
  *  idempotent, periodically-re-armed lane (the down-lane) where a queued duplicate
  *  would only re-walk a workspace the owner already replicated — wasted work, not
