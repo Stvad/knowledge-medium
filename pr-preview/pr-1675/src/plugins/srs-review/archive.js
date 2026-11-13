@@ -1,1 +1,0 @@
-export{qc as archiveSrsCard}from"../../../chunks/app-CwjMImwm.js";

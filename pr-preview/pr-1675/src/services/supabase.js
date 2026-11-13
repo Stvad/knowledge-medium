@@ -1,1 +1,0 @@
-export{Fit as hasSupabaseAuthConfig,Iit as isAuthCallbackUrl,Lit as readPersistedSession,Rit as sessionUserToAppUser,zit as supabase}from"../../chunks/app-CwjMImwm.js";

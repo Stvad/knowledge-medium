@@ -1,1 +1,0 @@
-export{LC as SpatialNavigationShellDecorator}from"../../../chunks/app-CwjMImwm.js";

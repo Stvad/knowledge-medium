@@ -1,1 +1,0 @@
-export{vrt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,yrt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,brt as __resetLayoutSessionIdForTesting,xrt as getLayoutSessionId,Srt as isInstalledAppDisplayMode,Crt as readOrCreateLayoutSessionId}from"../../chunks/app-CwjMImwm.js";

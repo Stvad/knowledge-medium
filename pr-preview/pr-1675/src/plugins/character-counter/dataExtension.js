@@ -1,1 +1,0 @@
-export{bZ as characterCounterDataExtension}from"../../../chunks/app-CwjMImwm.js";

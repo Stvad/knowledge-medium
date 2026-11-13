@@ -1,1 +1,0 @@
-export{BM as BlockEmbed}from"../../../chunks/app-CwjMImwm.js";

@@ -1,1 +1,0 @@
-export{EZ as RAW_CHARACTER_COUNT_PROFILE_ID,DZ as WORDS_COUNT_PROFILE_ID,OZ as charLimitProp,kZ as charProfileProp,AZ as charScopeProp}from"../../../chunks/app-CwjMImwm.js";

@@ -1,1 +1,0 @@
-export{SB as defineVariant,CB as defineVariantFacet}from"../../chunks/app-CwjMImwm.js";

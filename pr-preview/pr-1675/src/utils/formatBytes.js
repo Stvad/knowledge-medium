@@ -1,1 +1,0 @@
-export{S2 as formatBytes}from"../../chunks/app-CwjMImwm.js";

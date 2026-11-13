@@ -1,1 +1,0 @@
-export{iut as CHANGE_SCOPE_POLICIES,aut as ChangeScope,out as isChangeScope,sut as policyForScope,cut as scopeAllowedInReadOnly,lut as scopeIsUndoable,uut as scopePoliciesEquivalent,dut as scopeUploadsToServer,fut as sourceForScope}from"../../../chunks/app-CwjMImwm.js";
