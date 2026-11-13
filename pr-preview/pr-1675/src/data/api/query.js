@@ -1,1 +1,1 @@
-export{dlt as defineQuery}from"../../../chunks/app-DD3-vEDc.js";
+export{dlt as defineQuery}from"../../../chunks/app-BiaCrnSj.js";

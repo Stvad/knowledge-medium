@@ -1,1 +1,1 @@
-export{fo as propertiesMigrationPlugin}from"../../../chunks/app-DD3-vEDc.js";
+export{fo as propertiesMigrationPlugin}from"../../../chunks/app-BiaCrnSj.js";

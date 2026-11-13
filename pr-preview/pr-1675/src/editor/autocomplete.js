@@ -1,1 +1,1 @@
-export{WN as editorAutocompleteExtension}from"../../chunks/app-DD3-vEDc.js";
+export{WN as editorAutocompleteExtension}from"../../chunks/app-BiaCrnSj.js";

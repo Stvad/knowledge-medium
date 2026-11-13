@@ -1,1 +1,1 @@
-export{AF as BlockLoadingPlaceholder}from"../../chunks/app-DD3-vEDc.js";
+export{AF as BlockLoadingPlaceholder}from"../../chunks/app-BiaCrnSj.js";

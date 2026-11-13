@@ -1,1 +1,1 @@
-export{eZ as contributorsDataExtension}from"../../../chunks/app-DD3-vEDc.js";
+export{eZ as contributorsDataExtension}from"../../../chunks/app-BiaCrnSj.js";

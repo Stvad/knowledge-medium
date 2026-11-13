@@ -1,1 +1,1 @@
-export{OS as videoPlayerPlugin}from"../../../chunks/app-DD3-vEDc.js";
+export{OS as videoPlayerPlugin}from"../../../chunks/app-BiaCrnSj.js";

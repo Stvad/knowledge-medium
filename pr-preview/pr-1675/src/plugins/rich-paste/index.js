@@ -1,1 +1,1 @@
-export{Eb as richPastePlugin}from"../../../chunks/app-DD3-vEDc.js";
+export{Eb as richPastePlugin}from"../../../chunks/app-BiaCrnSj.js";

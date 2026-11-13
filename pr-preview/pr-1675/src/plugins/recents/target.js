@@ -1,1 +1,1 @@
-export{UD as openRecentsPage}from"../../../chunks/app-DD3-vEDc.js";
+export{UD as openRecentsPage}from"../../../chunks/app-BiaCrnSj.js";

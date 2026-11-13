@@ -1,1 +1,1 @@
-export{Sf as ANCHOR_BADGES,Cf as useAnchorState}from"../../../chunks/app-DD3-vEDc.js";
+export{Sf as ANCHOR_BADGES,Cf as useAnchorState}from"../../../chunks/app-BiaCrnSj.js";

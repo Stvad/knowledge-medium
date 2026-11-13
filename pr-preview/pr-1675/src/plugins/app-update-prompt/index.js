@@ -1,1 +1,1 @@
-export{sP as appUpdatePromptExtension}from"../../../chunks/app-DD3-vEDc.js";
+export{sP as appUpdatePromptExtension}from"../../../chunks/app-BiaCrnSj.js";

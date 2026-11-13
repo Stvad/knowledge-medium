@@ -1,1 +1,1 @@
-export{OK as staticDataExtensions}from"../../chunks/app-DD3-vEDc.js";
+export{OK as staticDataExtensions}from"../../chunks/app-BiaCrnSj.js";

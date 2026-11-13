@@ -1,1 +1,1 @@
-export{DF as LazyBlockComponent}from"../../chunks/app-DD3-vEDc.js";
+export{DF as LazyBlockComponent}from"../../chunks/app-BiaCrnSj.js";

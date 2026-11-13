@@ -1,1 +1,1 @@
-export{pj as ShortcutHelpHeaderItem}from"../../../chunks/app-DD3-vEDc.js";
+export{pj as ShortcutHelpHeaderItem}from"../../../chunks/app-BiaCrnSj.js";

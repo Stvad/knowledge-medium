@@ -1,1 +1,1 @@
-export{po as MigrationGate}from"../../../chunks/app-DD3-vEDc.js";
+export{po as MigrationGate}from"../../../chunks/app-BiaCrnSj.js";

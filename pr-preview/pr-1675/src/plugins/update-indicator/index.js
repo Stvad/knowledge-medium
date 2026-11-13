@@ -1,1 +1,1 @@
-export{$_ as updateIndicatorPlugin}from"../../../chunks/app-DD3-vEDc.js";
+export{$_ as updateIndicatorPlugin}from"../../../chunks/app-BiaCrnSj.js";
