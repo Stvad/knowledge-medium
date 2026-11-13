@@ -73,6 +73,7 @@ for (const ws of workspaceIds) {
     // Debounce a transient mid-sync divergence pass (report the settled counts).
     divergenceRecheckMs: 4000,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    syncedThroughMs: () => repo.lastSyncedAt?.getTime(),
     decrypt,
     full: {
       // Precise projection is sound only for the ACTIVE workspace (repo.propertySchemas
