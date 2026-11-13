@@ -621,6 +621,19 @@ describe('a child the user turns into a field row', () => {
     })
     await waitFor(() => expect(precedesTheNote(typedRow()!)).toBe(false))
   })
+
+  it('re-places the row when a sibling moves across it', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await outlineSettled()
+    expect(precedesTheNote(typedRow()!)).toBe(true)
+    // The note moves from after the row to before it; the mode's own list
+    // (first, note) keeps its order.
+    await act(async () => {
+      await repo.tx(tx => tx.move(NOTE, {parentId: OWNER, orderKey: 'B'}), {scope: ChangeScope.BlockDefault})
+    })
+    await waitFor(() => expect(precedesTheNote(typedRow()!)).toBe(false))
+    expect(followsTheFirst(typedRow()!)).toBe(true)
+  })
 })
 
 describe('moving the caret off a row the listing leaves out', () => {

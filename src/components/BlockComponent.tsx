@@ -7,7 +7,7 @@ import { Suspense, useCallback, useSyncExternalStore } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useChildIdsForMode, usePropertyDisplayMode } from '@/hooks/block.js'
+import { useChildIdsForMode, useHandle, usePropertyDisplayMode } from '@/hooks/block.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { focusedBlockLocationFromProperties } from '@/data/properties.js'
 import type { BlockData } from '@/data/api'
@@ -65,7 +65,14 @@ export const BlockChildren = ({block}: { block: Block }) => {
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
   const focusedChild = useFocusedChild(block, renderScopeId)
-  const childIds = withFocusedChild(block.repo, useChildIdsForMode(block, mode), focusedChild)
+  const listed = useChildIdsForMode(block, mode)
+  const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
+  // A row placed outside the listing sits by every sibling's order, which a
+  // move can change without changing the listing: watch the full child list
+  // while there is one (otherwise this is the listing's own handle again).
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: placesUnlistedChild ? 'all' : mode}),
+    {selector: ids => ids})
+  const childIds = withFocusedChild(block.repo, listed, focusedChild)
 
   return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
     {childIds.map((childId) => (
