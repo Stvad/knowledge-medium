@@ -1134,6 +1134,10 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
  *  delete would orphan them live under a tombstone. The loser may also be a
  *  block others link to (any block can be moved into a value list): it is
  *  announced as merged into the survivor, so its links follow as a merge's do.
+ *  ACCEPTED: a fold made BY the merge-retarget processor (rewriting a ref-list
+ *  that names both rows) is announced after it took its events, so links to
+ *  that ref-list's folded row stay on the tombstone; closing it needs event
+ *  re-dispatch in the commit pipeline.
  *
  *  WHETHER to fold is the caller's call, and it differs by grain: an
  *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
