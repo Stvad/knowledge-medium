@@ -1,5 +1,5 @@
 import { BlockRendererProps } from '@/types.js'
-import { useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
+import { useCallback, useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
@@ -14,15 +14,15 @@ import {
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { readClipboardContent } from '@/paste/clipboard.js'
+import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
-import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
+import { useGutterText } from './BlockGutter.js'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -35,6 +35,13 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   // `fontSize: 'inherit'`, so the class on the wrapper reaches the editor.
   const titleClass = useBlockTitleTextClass(block)
   const editorRef = useRef<ReactCodeMirrorRef>(null)
+  // The editor's wrapper is the text element the gutter measures and keeps the
+  // first line of clear, as the read renderer's container is in read mode.
+  const gutterText = useGutterText(block)
+  const handleEditorRef = useCallback((value: ReactCodeMirrorRef | null) => {
+    editorRef.current = value
+    gutterText?.(value?.editor ?? null)
+  }, [gutterText])
   // The paste ClipboardEvent carries no modifier state, so we latch the
   // most recent paste chord's intent on keydown and read it back in
   // handlePaste. Cmd/Ctrl+Shift+V ('single-block') drops text into the
@@ -90,8 +97,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
+    const request = editorPasteRequest(content, block, intent, caret)
 
-    // ⌘V of a cut moves the cut blocks; ⌘⇧V still asks for its plain text.
+    // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
+    // its target's content; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
       // The stored row lags the view by the content debounce. The move reads
       // the stored row (a blank target is replaced), so persist the live text
@@ -115,7 +124,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const request: PasteRequest = {...content, intent, surface: 'editor', caret}
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
     // embed text is spliced into the paste below, so the attachment lands at the caret
     // per the text policy (NOT a forced child block). The capture verb is the
@@ -168,7 +176,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   return (
     <BlockEditor
-      ref={editorRef}
+      ref={handleEditorRef}
       block={block}
       extensions={extensions}
       className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}

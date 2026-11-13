@@ -12,9 +12,14 @@ import type { Repo } from '@/data/repo'
  *  processors open for an agent write. */
 export const AGENT_TX_DESCRIPTION_PREFIX = 'agent runtime '
 
-export const agentTxOptions = (verb: string) => ({
+/** `undoable: false` keeps the write off the user's undo stack (`skipUndo`):
+ *  the caller's write is not the user's action. It stays a `BlockDefault`
+ *  document edit otherwise — read-only-gated and attributed to its
+ *  contributor; a non-undoable scope would drop both. */
+export const agentTxOptions = (verb: string, {undoable = true}: {undoable?: boolean} = {}) => ({
   scope: ChangeScope.BlockDefault,
   description: `${AGENT_TX_DESCRIPTION_PREFIX}${verb}`,
+  ...(undoable ? {} : {skipUndo: true}),
 })
 
 /** `repo.mutate[name](args)`, but described as an agent write — a mutator

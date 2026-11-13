@@ -8,8 +8,8 @@ import type { BlockRenderer } from '@/types.js'
 // Dispatch between primary (display) and secondary (editor) renderer at
 // render time rather than resolve time. Reading `inEditMode` here keeps
 // the resolved content-renderer identity stable per (block, registry),
-// which in turn keeps the surrounding decorator chain — UpdateIndicator
-// and friends — mounted across edit-mode toggles.
+// which in turn keeps the surrounding decorator chain mounted across
+// edit-mode toggles.
 //
 // Registered as a variant on `blockContentRendererFacet`. The
 // DefaultBlockRenderer picks `last`, so this single variant wins

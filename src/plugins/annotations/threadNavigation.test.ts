@@ -13,10 +13,11 @@ import {navigate} from '@/utils/navigation'
 import {lazyBlockCacheKey, registerPendingLazyMount} from '@/components/util/lazyMountRegistry'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
 import {panelRenderScopeId} from '@/utils/renderScope'
+import {__resetSurfaceZoomsForTesting, peekSurfaceZoom, registerZoomableSurface} from '@/utils/surfaceZoom'
 import {captureAnchor} from './anchor'
 import {annotationsPlugin} from './index'
 import {annotationTargetProp} from './schema'
-import {landingFocusScope} from './threadNavigation'
+import {landingCardScopes} from './threadNavigation'
 import {createThread, setThreadStatus} from './threads'
 import {cardRenderScopeId, peekActiveThread} from './uiStore'
 
@@ -32,6 +33,7 @@ afterAll(async () => { await db.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
+  __resetSurfaceZoomsForTesting()
   await resetTestDb(db.db)
   repo = createTestRepo({db: db.db, user: USER, extensions: [referencesDataExtension, annotationsPlugin]}).repo
   repo.setActiveWorkspaceId(WS)
@@ -205,11 +207,65 @@ describe('navigating into a thread', () => {
   })
 })
 
-describe('landingFocusScope', () => {
+describe('zooming inside a card', () => {
+  /** A thread on `B` with a comment and a reply, its card mounted in a panel
+   *  on `page` (a mounted card is a zoomable surface). */
+  const shownThread = async () => {
+    const {threadId, commentId} = await createThread(repo, {targetId: 'B', anchor: null, comment: 'Is it confirmed?'})
+    const reply = await repo.mutate.createChild({parentId: commentId!, content: 'Yes, as of today.'})
+    await navigate(repo, {blockId: 'page', target: 'main'})
+    const {panelId} = await shownPanel()
+    const mount = (parent: string) => {
+      const scope = cardScope(panelId, threadId, parent)
+      registerZoomableSurface(scope, {rootId: threadId, parentRenderScopeId: parent})
+      return scope
+    }
+    const zoom = (blockId: string, sourceRenderScopeId: string) =>
+      navigate(repo, {blockId, target: 'panel', panelId, origin: 'zoom', sourceRenderScopeId})
+    return {threadId, commentId: commentId!, reply, panelId, mount, zoom}
+  }
+
+  it('a zoom made in a card zooms the card, and leaves the panel where it is', async () => {
+    const {reply, panelId, mount, zoom} = await shownThread()
+    const scope = mount(panelRenderScopeId(panelId, 'page'))
+
+    await zoom(reply, scope)
+
+    expect((await shownPanel()).blockIds).toEqual(['page'])
+    expect(peekSurfaceZoom(scope)).toBe(reply)
+    expect(await focused(panelId)).toEqual({blockId: reply, renderScopeId: scope})
+  })
+
+  it('a zoom made outside a card lands on the target, as any navigation to a comment does', async () => {
+    const {reply, panelId, mount, zoom} = await shownThread()
+    const scope = mount(panelRenderScopeId(panelId, 'page'))
+
+    await zoom(reply, panelRenderScopeId(panelId, 'page'))
+
+    expect((await shownPanel()).blockIds).toEqual(['B'])
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
+  })
+
+  it('a landing on a comment the card’s zoom hides shows the whole thread; one inside the zoom keeps it', async () => {
+    const {commentId, reply, panelId, mount, zoom} = await shownThread()
+    const nested = await repo.mutate.createChild({parentId: reply, content: 'By whom?'})
+    await navigate(repo, {blockId: 'B', target: 'main'})
+    const scope = mount(panelRenderScopeId(panelId, 'B'))
+    await zoom(reply, scope)
+
+    await navigate(repo, {blockId: nested, target: 'main'})
+    expect(peekSurfaceZoom(scope)).toBe(reply)
+
+    await navigate(repo, {blockId: commentId, target: 'main'})
+    expect(peekSurfaceZoom(scope)).toBeUndefined()
+  })
+})
+
+describe('landingCardScopes', () => {
   it('puts the outermost card in the margin where the margin is drawn, and the cards inside it inline', () => {
     const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: [], rows: []}
     const margin = cardRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
 
-    expect(landingFocusScope('p', landing, true)).toBe(cardRenderScopeId('comments', margin, 'T2'))
+    expect(landingCardScopes('p', landing, true)).toEqual([margin, cardRenderScopeId('comments', margin, 'T2')])
   })
 })

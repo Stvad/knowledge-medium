@@ -118,6 +118,11 @@ const contributorField = {contributorId: z.string().nullable().optional()}
  *  the one lossless way to name an odd stored id. */
 const exactIdsField = {exactIds: z.boolean().optional()}
 
+/** `false` keeps the write off the user's undo stack: for a caller whose
+ *  writes are not the user's action, such as the dispatch daemon's task
+ *  bookkeeping and replies. Default: undoable, like the user's own edit. */
+const undoableField = {undoable: z.boolean().optional()}
+
 // Variants are `looseObject` so the kernel's field-access fallbacks (e.g.
 // `command.id ?? command.actionId`) keep working through the narrowing:
 // declared fields are still type-checked, extras flow through as `unknown`.
@@ -245,6 +250,7 @@ export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
   key: z.string(),
   shape: z.enum(['outline', 'block']).optional(),
   final: z.boolean().optional(),
+  ...undoableField,
   ...contributorField,
   ...commandIdField,
 })
@@ -259,6 +265,7 @@ export const updateBlockCommandSchema = z.looseObject({
    *  still exactly this — what the caller read before deciding to write. */
   expectedContent: z.string().optional(),
   // properties forwarded verbatim (looseObject).
+  ...undoableField,
   ...exactIdsField,
   ...contributorField,
   ...commandIdField,
@@ -900,6 +907,22 @@ export const isReadOnlySql = (sql: string): boolean => {
 
 // ----- watch-events (push detection) ----------------------------------
 
+/** The blocks open in an editor on ANY client: edit state lives on each
+ *  panel's ui-state row, which syncs, so this also sees other devices. Beside
+ *  each id, `active_at` is that row's latest write; focus and caret moves keep
+ *  it fresh while someone works in the editor. A flag outlives a device that
+ *  vanished mid-edit, so a reader must bound how long it believes one.
+ *  Must keep the predicate of `idx_blocks_being_edited` literally, or SQLite
+ *  stops using that index. */
+export const BEING_EDITED_BLOCKS_SQL = `
+  SELECT json_extract(properties_json, '$.focusedBlockLocation.blockId') AS id,
+         max(updated_at) AS active_at
+    FROM blocks
+   WHERE deleted = 0
+     AND json_extract(properties_json, '$.isEditing') = 1
+     AND json_extract(properties_json, '$.focusedBlockLocation.blockId') IS NOT NULL
+   GROUP BY 1`
+
 /** Schema bounds, exported so consumers building registrations (e.g.
  *  the agent-dispatch daemon's config) can validate against the SAME
  *  limits — an over-cap value fails the tab's schema at registration
@@ -949,8 +972,7 @@ export const watchEventsCommandSchema = z.looseObject({
   type: z.literal('watch-events'),
   consumer: z.string().min(1),
   watchers: z.array(watchEventsWatcherSchema).max(64)
-    // Names key the consumer's exemption pools — duplicates would merge
-    // two watchers' settle semantics under one name.
+    // Each event names its watcher, so duplicate names make it ambiguous.
     .refine(
       watchers => new Set(watchers.map(watcher => watcher.name)).size === watchers.length,
       {message: 'watcher names must be unique within a registration'},

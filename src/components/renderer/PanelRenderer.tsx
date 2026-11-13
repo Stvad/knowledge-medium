@@ -1,6 +1,7 @@
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { PropertyDisplayScope } from '@/components/propertyDisplay/PropertyDisplayScope'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
@@ -72,8 +73,8 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 }
 
 /** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
- *  `max-w-3xl` frame. */
-const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-var(--container-3xl))))]'
+ *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. */
+const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -332,7 +333,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
         panelViewMode,
       }}
     >
-      <BlockComponent blockId={topLevelBlockId}/>
+      <PropertyDisplayScope>
+        <BlockComponent blockId={topLevelBlockId}/>
+      </PropertyDisplayScope>
     </NestedBlockContextProvider>
   )
 
@@ -348,14 +351,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {/* Keeps this panel's focused row mounted even when it's still a lazy
           placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
-      <div
-        className={`pointer-events-none absolute inset-x-0 top-1 z-10 ${FRAME_RIGHT_CLEARANCE_CLASS}`}
-      >
-        <div
-          className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
-        >
-          {actionButtons}
-        </div>
+      {/* `.panel-actions` ends the buttons where the content ends (`index.css`). */}
+      <div className="panel-actions pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-end gap-0.5">
+        {actionButtons}
       </div>
       <div
         ref={scrollRef}

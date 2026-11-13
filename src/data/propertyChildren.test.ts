@@ -16,6 +16,7 @@ import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameT
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { exactBlockRefPrefill } from '@/plugins/references/contentPrefill'
+import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
@@ -221,6 +222,19 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await liveFieldRows('p')).toEqual([])
   })
 
+
+  it('an undo of a value edit, after an unset made off the stack, leaves cell and children agreeing', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'v1'), {scope: ChangeScope.BlockDefault})
+    repo.undoManager.clear()
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'v2'), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema), {scope: ChangeScope.BlockDefault, skipUndo: true})
+
+    await repo.undo().catch(() => false)
+    expect({cell: await cellValue('p'), fields: (await liveFieldRows('p')).length}).toEqual({cell: undefined, fields: 0})
+  })
 
   it('rejects a raw cell write whose value does not decode (no silent cell/child divergence)', async () => {
     await seedWorkspace('children')
@@ -1019,7 +1033,7 @@ describe('childrenOf visible-children exclusion (§9)', () => {
   }
 
   it('excludes them in an UN-flipped workspace too, matching the SQL view', async () => {
-    // `tx.childrenOf(..., hidePropertyChildren)` is the in-transaction twin of
+    // `tx.childrenOf(..., propertyChildren)` is the in-transaction twin of
     // VISIBLE_CHILDREN_SQL and must answer the same question. The backfill
     // mints field rows before the flip; while this was gated and the SQL was
     // not, the two disagreed — and `agent-runtime`'s delete path uses THIS one
@@ -1042,7 +1056,7 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      const visible = await tx.childrenOf('p', undefined, {propertyChildren: 'none'})
       expect(visible.map(c => c.id)).toEqual(['content-child'])
       expect(await tx.childrenOf('p')).toHaveLength(2)
     }, {scope: ChangeScope.BlockDefault})
@@ -1051,7 +1065,7 @@ describe('childrenOf visible-children exclusion (§9)', () => {
   it('default excludes recognized field rows; machinery opts in', async () => {
     const repo = await setupFlipped()
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      const visible = await tx.childrenOf('p', undefined, {propertyChildren: 'none'})
       expect(visible.map(c => c.id)).toEqual(['content-child'])
       const all = await tx.childrenOf('p')
       expect(all).toHaveLength(2)
@@ -1096,12 +1110,12 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     await repo.tx(async tx => {
-      const before = await tx.childrenOf('x', undefined, {hidePropertyChildren: true})
+      const before = await tx.childrenOf('x', undefined, {propertyChildren: 'none'})
       expect(before.map(c => c.id)).toEqual(['x-kid'])
 
       await tx.move('x', {parentId: field!.id, orderKey: 'zz'})
 
-      const after = await tx.childrenOf('x', undefined, {hidePropertyChildren: true})
+      const after = await tx.childrenOf('x', undefined, {propertyChildren: 'none'})
       expect(after.map(c => c.id)).toEqual(['x-kid'])
     }, {scope: ChangeScope.BlockDefault})
   })
@@ -1123,9 +1137,9 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     await repo.tx(async tx => {
       // Ask for the visible view explicitly — recognition is flip-gated, so an
       // un-flipped workspace must return the field-row-shaped child UNFILTERED
-      // even under hidePropertyChildren. (Without the option this asserts
+      // even under propertyChildren. (Without the option this asserts
       // nothing about the flip gate — childrenOf short-circuits before it.)
-      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      const visible = await tx.childrenOf('p', undefined, {propertyChildren: 'none'})
       expect(visible.map(c => c.id)).toEqual(['ref-child'])
     }, {scope: ChangeScope.BlockDefault})
   })
@@ -1306,7 +1320,7 @@ describe('merge integration (§9, slice B3)', () => {
     // value row hosts its own field rows like any other block, and only the
     // `::` bit separates them. Its `reference_target_id` alone is
     // indistinguishable from a real field row's, so the answer has to come
-    // from the visible-children exclusion (`hidePropertyChildren`) — which
+    // from the visible-children exclusion (`propertyChildren`) — which
     // is exactly what `intoFieldByFieldId` must do.
     await seedWorkspace('children')
     const repo = setup()
@@ -1827,7 +1841,7 @@ describe('movement gestures anchor on the visible sibling list (§9/§10)', () =
     expect(await repo.mutate.moveVertical({id: 'c2', direction: -1})).toBe(true)
 
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      const visible = await tx.childrenOf('p', undefined, {propertyChildren: 'none'})
       expect(visible.map(c => c.id)).toEqual(['c2', 'c1'])
     }, {scope: ChangeScope.BlockDefault})
   })
@@ -3085,7 +3099,7 @@ describe('merge keeps a ref-typed losing value interior, stamp intact (#19)', ()
     expect(survivor.reference_target_id).toBe(STATUS_FIELD_ID)
     // NOT a visible ordinary child of into (it's interior machinery)…
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('into', undefined, {hidePropertyChildren: true})
+      const visible = await tx.childrenOf('into', undefined, {propertyChildren: 'none'})
       expect(visible.map(c => c.id)).not.toContain(fromValue!.id)
     }, {scope: ChangeScope.BlockDefault})
   })
@@ -3107,10 +3121,10 @@ describe('query-layer twin (core.childIds / core.children)', () => {
 
     const allIds = await repo.runQuery('core.childIds', {id: 'p'})
     expect(allIds).toHaveLength(2)
-    const visibleIds = await repo.runQuery('core.childIds', {id: 'p', hidePropertyChildren: true})
+    const visibleIds = await repo.runQuery('core.childIds', {id: 'p', propertyChildren: 'none'})
     expect(visibleIds).toEqual(['content-child'])
 
-    const visible = await repo.runQuery('core.children', {id: 'p', hidePropertyChildren: true}) as BlockData[]
+    const visible = await repo.runQuery('core.children', {id: 'p', propertyChildren: 'none'}) as BlockData[]
     expect(visible.map(c => c.id)).toEqual(['content-child'])
   })
 
@@ -3130,7 +3144,7 @@ describe('query-layer twin (core.childIds / core.children)', () => {
     // `is_field_form` is not stamped and it is an ordinary reference block.
     // Only marked rows classify — which is the whole reason recognition no
     // longer needs to ask whether the workspace is flipped.
-    const ids = await repo.runQuery('core.childIds', {id: 'p', hidePropertyChildren: true})
+    const ids = await repo.runQuery('core.childIds', {id: 'p', propertyChildren: 'none'})
     expect(ids).toEqual(['ref-child'])
   })
 })
@@ -3156,7 +3170,7 @@ describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)',
     const [field] = await liveFieldRows('p')
     const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
 
-    const visible = await repo.query.subtree({id: 'p', hidePropertyChildren: true}).load()
+    const visible = await repo.query.subtree({id: 'p', propertyChildren: 'none'}).load()
     expect(visible.map(r => r.id).sort()).toEqual(['content-child', 'p'])
 
     const all = await repo.query.subtree({id: 'p'}).load()
@@ -3565,6 +3579,56 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
     expect(valueChildContentToEncoded(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('content <-> value codecs: a JSON-spelled value child carries no span (#1061, #749)', () => {
+  // Asserted on the real parsers, not on a spelling.
+  const jsonSchema = defineProperty<unknown>('blob', {
+    codec: codecs.unsafeIdentity<unknown>(),
+    defaultValue: null,
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const listSchema = defineProperty<unknown[]>('generic-list', {
+    codec: codecs.list(codecs.unsafeIdentity<unknown>()),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const UUID = SAMPLE_UUID
+  const VALUES: unknown[] = [
+    `((${UUID}))`,
+    `see !((${UUID})) and [Mary](((${UUID})))`,
+    '[[Some Page]]',
+    [[1]],
+    [[['nested']]],
+    {'[[key]]': [`((${UUID}))`], 'q"[[': 'back\\[[slash'},
+  ]
+
+  it.for(VALUES.map(value => [JSON.stringify(value), value] as const))(
+    'stores %s as JSON no reference reader reads a span in', ([, value]) => {
+    const contents = [
+      encodedToValueChildContent(jsonSchema, value),
+      ...encodedPropertyValueToChildContents(listSchema, [value]),
+    ]
+    for (const content of contents) {
+      expect(parseReferences(content), content).toEqual([])
+      expect(parseBlockRefs(content), content).toEqual([])
+      expect(valueChildContentToEncoded(jsonSchema, content)).toEqual(value)
+    }
+  })
+
+  it('reads content stored before the escape exactly as it always did', () => {
+    for (const value of VALUES) {
+      const legacy = JSON.stringify(value)
+      expect(valueChildContentToEncoded(jsonSchema, legacy)).toEqual(value)
+      expect(childContentsToEncodedPropertyValue(listSchema, [legacy])).toEqual([value])
+    }
+  })
+
+  it('keeps a lone opener as written, so the stored text stays readable', () => {
+    for (const value of ['Book (2019)', {'a[0]': 'f(x)'}, ['x [1]', [2]], [1, [2]]]) {
+      expect(encodedToValueChildContent(jsonSchema, value)).toBe(JSON.stringify(value))
+    }
   })
 })
 

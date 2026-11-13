@@ -119,11 +119,12 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'block-interaction',
     importPath: '@/extensions/blockInteraction.js',
-    description: 'Block-interaction facets — click handlers, content/layout renderers, shortcut activations.',
+    description: 'Block-interaction facets — click handlers, content/layout renderers, gutter items, shortcut activations.',
     exports: [
       'blockBelowContentFacet', 'blockBulletClassFacet', 'blockBulletHoverFacet', 'blockChildrenFooterFacet',
       'blockClickHandlersFacet',
       'blockContentDecoratorsFacet', 'blockContentRendererFacet', 'blockContentSurfacePropsFacet',
+      'blockGutterItemsFacet',
       'blockTextClassFacet',
       'blockHeaderFacet', 'blockLayoutFacet', 'shortcutSurfaceActivationsFacet', 'enterBlockEditMode',
       'getBlockContentRendererSlot', 'isSelectionClick',
@@ -133,7 +134,8 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'BlockBulletHoverContribution', 'BlockChildrenFooterContribution', 'BlockClickContribution',
       'BlockHeaderContribution', 'BlockContentDecorator', 'BlockContentDecoratorContribution',
       'BlockContentRendererContribution', 'BlockContentRendererSlot', 'BlockContentSurfaceContribution',
-      'BlockContentSurfaceProps', 'BlockInteractionContext', 'BlockResolveContext', 'BlockLayout',
+      'BlockContentSurfaceProps', 'BlockGutterCorner', 'BlockGutterItem', 'BlockGutterItemContribution',
+      'BlockInteractionContext', 'BlockResolveContext', 'BlockLayout',
       'BlockLayoutContribution', 'BlockLayoutSlots', 'BlockShellProps', 'ShortcutActivationContribution',
       'ShortcutSurfaceContext',
     ],
@@ -173,13 +175,27 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'navigationVerb', 'navigationIntentVerb', 'defaultNavigationIntent', 'goTo', 'PASSTHROUGH',
       'SUPPRESS', 'mapNavigate', 'navigate', 'useNavigate', 'navigateFromGesture',
       'navigateFromGlobalCommand', 'useNavigateFromGlobalCommand', 'useOpenBlock', 'useBlockOpener',
-      'applyNavigationDecision',
+      'applyNavigationDecision', 'ZOOM_ORIGIN', 'ZOOM_OUT_ORIGIN',
     ],
     types: [
       'NavigateInput', 'NavigationDecision', 'ResolvedNavigateInput', 'GlobalCommandNavigateInput',
       'NavigationRequest', 'NavigationResult', 'NavigationGesture', 'NavigationRole',
       'NavigationViewport', 'BlockOpenerPlainClick', 'BlockOpenerOptions', 'OpenBlockContext',
     ],
+  },
+  {
+    category: 'navigation',
+    importPath: '@/components/ZoomableSurface.js',
+    description: 'A subtree rendered nested in a panel that zooms on its own: a zoom made inside it re-roots it, under crumbs that lead back out.',
+    exports: ['ZoomableSurface', 'SurfaceZoomCrumbs'],
+    types: ['SurfaceZoom', 'ZoomCrumb'],
+  },
+  {
+    category: 'navigation',
+    importPath: '@/utils/surfaceZoom.js',
+    description: 'A zoomable surface\'s zoom, as view state keyed by its render scope.',
+    exports: ['setSurfaceZoom', 'peekSurfaceZoom', 'useSurfaceZoom'],
+    types: [],
   },
 
   // --- Actions / shortcuts --------------------------------------------------

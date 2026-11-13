@@ -16,6 +16,7 @@ import {
 import { flushPendingEditorContent } from './pendingEditorContent'
 import { decodeRowProperty, safeDecodeRowProperty } from './rowProperty'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
+import { propertyDisplayDefaultProp, propertyDisplayProp } from './propertyDisplayMode'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -139,6 +140,28 @@ export const panelMaximizedProp = seedProperty({
 export const isPanelRowMaximized = (row: Pick<BlockData, 'properties'>): boolean =>
   safeDecodeRowProperty(row, panelMaximizedProp)
 
+/** A layout column's share of the layout's width, as a grid `fr` weight, on
+ *  a PANEL row, never a stack's: a stack's column takes it from its panels
+ *  (`columnWeightHolder`), so the width outlives stack rows being made and
+ *  rebuilt around them. Absent ≡ 1, an equal share. Not in the layout URL:
+ *  the URL says what is open, and this is how it is arranged on this
+ *  device. */
+export const layoutColumnWeightProp = seedProperty({
+  seedKey: 'system:kernel-data/property/layout-column-weight',
+  revision: 1,
+  name: 'layoutColumnWeight',
+  preset: 'optional-number',
+  changeScope: ChangeScope.UiState,
+})
+
+/** The stored weight, or undefined for none. Lenient, like
+ *  `isPanelRowMaximized`: a malformed weight costs the column its width, not
+ *  the layout its render. */
+export const layoutColumnWeight = (row: Pick<BlockData, 'properties'>): number | undefined => {
+  const weight = safeDecodeRowProperty(row, layoutColumnWeightProp)
+  return weight !== undefined && Number.isFinite(weight) && weight > 0 ? weight : undefined
+}
+
 /** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
  *  so every reader/writer of a panel view mode folds '' to undefined through
  *  this ONE helper — a stray empty-string write must never make two
@@ -217,6 +240,7 @@ export const typesProp = seedProperty({
   name: 'types',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const rendererProp = seedProperty({
@@ -349,6 +373,19 @@ export const propertyHiddenProp = seedProperty({
   seedKey: 'system:kernel-data/property/property-schema-hidden',
   revision: 1,
   name: 'property-schema:hidden',
+  preset: 'boolean',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Keep this property's rows out of the outline's default property display —
+ *  because something else on the block already shows the value (a type chip,
+ *  a page title, a todo checkbox), or because the rows are just clutter there.
+ *  Unlike `hidden`, nothing else reads it: show-all, the panel, the pickers and
+ *  agent views still show the property. Absent means false. */
+export const propertyHideInOutlineProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-hide-in-outline',
+  revision: 1,
+  name: 'property-schema:hide-in-outline',
   preset: 'boolean',
   changeScope: ChangeScope.BlockDefault,
 })
@@ -519,6 +556,7 @@ export const aliasesProp = seedProperty({
   name: 'alias',
   preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 }) as PropertySeedDeclaration<string[]>
 
 // ──── Helpers ────
@@ -756,6 +794,7 @@ export type { PropertySchema }
 export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   // UI-state schemas
   showPropertiesProp,
+  propertyDisplayProp,
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockLocationProp,
@@ -763,9 +802,12 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   scrollTopProp,
   panelViewModeProp,
   panelMaximizedProp,
+  layoutColumnWeightProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,
+  // UserPrefs schemas
+  propertyDisplayDefaultProp,
   // BlockDefault schemas
   isCollapsedProp,
   typesProp,
@@ -787,6 +829,7 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   propertyChangeScopeProp,
   propertyDefaultProp,
   propertyHiddenProp,
+  propertyHideInOutlineProp,
   seedKeyProp,
   seedRevisionProp,
   // block-type fields

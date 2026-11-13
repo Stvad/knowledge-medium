@@ -1,7 +1,7 @@
 /** Thin wrapper around the Google Places API (New) for the geo plugin.
  *  Exposes three operations:
  *
- *    - `autocomplete(input, ctx)`  — text-search suggestions for the `@`
+ *    - `autocomplete(input, ctx)`  — text-search suggestions for the `@@`
  *      and property-editor pickers.
  *    - `getDetails(placeId, ctx)`  — full POI details for the user's
  *      selection. Reuses the same `sessionToken` as the prior
@@ -11,7 +11,7 @@
  *
  *  The client is stateless w.r.t. session tokens — callers create one
  *  via `newSessionToken()` at the start of a picker session and pass it
- *  through. That keeps the `@` autocomplete (one session per `@` press)
+ *  through. That keeps the `@@` autocomplete (one session per `@@` press)
  *  and the property editor (one session per editor open) independently
  *  governed without coupling them through hidden client state.
  *

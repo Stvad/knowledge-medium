@@ -66,6 +66,7 @@ import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { dbMirrorPlugin } from '@/plugins/db-mirror'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
+import { propertyRowsPlugin } from '@/plugins/property-rows'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
 import { observeWorkspaceEffectContribution } from '@/plugins/interaction-metrics/sessionContext'
@@ -75,6 +76,7 @@ import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
+import { htmlDocumentPlugin } from '@/plugins/html-document'
 import { supertagsPlugin } from '@/plugins/supertags'
 import type { AppExtension } from '@/facets/facet.js'
 
@@ -150,6 +152,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
+  htmlDocumentPlugin,
   supertagsPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
@@ -176,6 +179,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   dbMaintenancePlugin({repo}),
   dbMirrorPlugin,
   propertiesMigrationPlugin({repo}),
+  propertyRowsPlugin,
   startupMetricsPlugin,
   interactionMetricsPlugin,
   perfMonitorPlugin({repo}),

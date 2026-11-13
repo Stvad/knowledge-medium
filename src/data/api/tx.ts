@@ -405,7 +405,7 @@ export interface Tx {
    *  traversal can never silently miss machinery it needs to carry (delete
    *  cascade, copy, merge). The display-visible view — which excludes
    *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
-   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
+   *  `{propertyChildren: 'none'}`. Recognition is data-keyed, not
    *  flip-gated, so it prunes in every workspace: the cell→children backfill
    *  mints field rows while the workspace still reads cells.
    *
@@ -424,7 +424,7 @@ export interface Tx {
   childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {propertyChildren?: 'all' | 'none'},
   ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by
@@ -581,6 +581,10 @@ export interface RepoTxOptions {
    *  Prefer a non-undoable SCOPE when the write genuinely is not a document
    *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
    *  where the scope must stay `BlockDefault` for gating reasons but the entry
-   *  would be a trap. Default false (entries are recorded as usual). */
+   *  would be a trap. Default false (entries are recorded as usual).
+   *
+   *  A skipped tx does not clear the redo stack, so a redo can find its rows
+   *  moved since and refuse (as after a synced edit) — accepted: it writes
+   *  nothing. */
   skipUndo?: boolean
 }

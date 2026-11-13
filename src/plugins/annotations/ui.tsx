@@ -7,16 +7,18 @@
  *   block's comments). It also hands the block's threads to the read-mode
  *   highlights (`readHighlights.ts`);
  * - its inline expansion under the block, holding an edit suggestion's
- *   composer and a card per thread;
+ *   composer and a card per thread, and the switch that opens the panel's
+ *   margin;
  * - each card renders the thread root through `BlockComponent` in a nested
  *   surface, so comments are ordinary editable blocks. The root's own line is
  *   the card header (`ThreadRootContent`), and each comment gets Reply and
- *   Delete (`CommentActions`).
+ *   Delete (`CommentActions`). A card zoomed into a comment renders that
+ *   comment in the root's place (`ZoomableSurface`).
  */
 
 import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
 import type {ReactCodeMirrorRef} from '@uiw/react-codemirror'
-import {MessageSquare} from 'lucide-react'
+import {MessageSquare, PanelRight} from 'lucide-react'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
@@ -27,27 +29,34 @@ import {DraftEditor} from '@/components/DraftEditor.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
 import {MarkdownInputProvider} from '@/markdown/context.js'
 import {useRepo} from '@/context/repo.js'
-import {useHandle, useWorkspaceId} from '@/hooks/block.js'
+import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import {
   cachedContentDecorator,
   enterEditModeForBlock,
   type BlockBelowContentContribution,
   type BlockContentDecoratorContribution,
   type BlockContextMenuItemsContribution,
+  type BlockGutterItem,
+  type BlockGutterItemContribution,
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
-import {CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
+import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
 import type {BlockRenderer} from '@/types.js'
 import {GutterPill} from '@/components/GutterPill.js'
+import {SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
 import {ReferenceLink} from '@/components/references/ReferenceLink.js'
 import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
+import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
 import type {RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
-import {composerReady, reportFailure, submitComposer} from './actions.ts'
+import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
+import {highlightRanges} from './highlights.ts'
+import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
 import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
@@ -152,14 +161,38 @@ export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean):
     : {kind: 'expand-inline'}
 }
 
-const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+/** Whether the panel's margin shows this row's threads: it is drawn, and the
+ *  row is in the panel's own outline, the rows the margin lays out, not in an
+ *  embed or a backlink inside the panel. */
+const useInMargin = ({panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}): boolean =>
+  useMarginShowing(panelId) && isPanelRenderScopeId(renderScopeId ?? '')
+
+/** The surface an outline block's text sits in: its read-mode selection menu
+ *  and the highlights of the threads anchored in it. */
+const CommentSurface = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const highlights = useHighlightFeed(block)
+  const surface = useAnnotationSurfaceFor(block, highlights)
+  return (
+    <ReadSelectionMenu block={block}>
+      <div>
+        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+          <AnnotationSurfaceContext value={surface}>
+            <Inner block={block}/>
+          </AnnotationSurfaceContext>
+        </MarkdownInputProvider>
+      </div>
+    </ReadSelectionMenu>
+  )
+}
+
+const CommentPill: BlockRenderer = ({block}) => {
   const threads = useThreadSummaries(block)
   const blockContext = useBlockContext()
   const key = viewKey(blockContext.renderScopeId, block.id)
   const panelId = blockContext.panelId
   // With the margin drawn, the threads are already beside the block: the pill
   // pins its first card instead of expanding them a second time inline.
-  const inMargin = useMarginShowing(panelId)
+  const inMargin = useInMargin(blockContext)
   const activeThread = useActiveThread(panelId ?? '')
   const inlineExpanded = useThreadsExpanded(key)
   const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
@@ -173,35 +206,49 @@ const CommentPill = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
     activateThread(panelId!, click.threadId)
   }
   const count = pillCount(threads)
+  if (count === null && !expanded) return null
   const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
-  const highlights = useHighlightFeed(block)
   return (
-    <div className="flex w-full items-start gap-1">
-      <ReadSelectionMenu block={block}>
-        <div className="min-w-0 flex-1">
-          <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
-            <Inner block={block}/>
-          </MarkdownInputProvider>
-        </div>
-      </ReadSelectionMenu>
-      {(count !== null || expanded) && (
-        <GutterPill
-          count={count}
-          expanded={expanded}
-          onClick={event => { event.stopPropagation(); onPill() }}
-          label={label}
-          icon={MessageSquare}
-          tone="amber"
-        />
-      )}
-    </div>
+    <GutterPill
+      count={count}
+      expanded={expanded}
+      onClick={event => { event.stopPropagation(); onPill() }}
+      label={label}
+      icon={MessageSquare}
+      tone="amber"
+    />
   )
 }
 
-const decoratePill = cachedContentDecorator(CommentPill, 'WithCommentPill')
+/** The read-mode gestures and highlights, for a renderer that draws the text
+ *  itself (`surface.ts`). Same feed as the markdown's, so the two agree. */
+const useAnnotationSurfaceFor = (block: Block, feed: ThreadHighlightsFeed): AnnotationSurface => {
+  const {renderScopeId} = feed
+  return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
+    highlightsIn: content => highlightRanges(content, feed.threads),
+    gestures: readSelectionGesturesIn(renderScopeId).map(gesture => ({
+      id: gesture.actionId,
+      label: gesture.label,
+      icon: gesture.icon,
+      run: range => gesture.step({block, renderScopeId, range}).catch(error => {
+        reportFailure(error)
+        return false
+      }),
+    })),
+  }), [block, renderScopeId, feed.threads])
+}
 
-export const commentPillContribution: BlockContentDecoratorContribution = ctx =>
-  appliesToOutlineBlock(ctx) ? decoratePill : null
+const decorateSurface = cachedContentDecorator(CommentSurface, 'WithCommentSurface')
+
+export const commentSurfaceContribution: BlockContentDecoratorContribution = ctx =>
+  appliesToOutlineBlock(ctx) ? decorateSurface : null
+
+const commentPillItem: BlockGutterItem = {corner: 'top-right', component: CommentPill}
+
+export const commentPillContribution: BlockGutterItemContribution = ctx =>
+  appliesToOutlineBlock(ctx) ? commentPillItem : null
 
 // ──── Inline expansion ────
 
@@ -298,7 +345,7 @@ const Composer = ({block, composerKey, composer}: {block: Block; composerKey: st
 const CARD_CHAIN_KEY = 'annotations.cardChain'
 
 const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =>
-  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : []
+  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : NO_IDS
 
 /** One thread, its root rendered through `BlockComponent` in a nested surface.
  *  `surface` keeps an inline card and a margin card of the same thread in
@@ -307,17 +354,45 @@ export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummar
   const parent = useBlockContext()
   const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
   return (
+    <ZoomableSurface renderScopeId={renderScopeId} rootId={thread.id}>
+      {zoom => <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={zoom}/>}
+    </ZoomableSurface>
+  )
+}
+
+const rootCrumbLabel = (anchor: ThreadAnchor): string =>
+  anchor.kind === 'block' ? 'Thread' : `“${truncate(firstLine(anchor.quote), 32)}”`
+
+/** A zoomed card shows a comment in the root's place, so the thread's header
+ *  and the comments outside the zoom are hidden until it is zoomed out. */
+const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: SurfaceZoom | null}) => {
+  const parent = useBlockContext()
+  const shownId = zoom?.blockId ?? thread.id
+  // Stable across the card's own re-renders (a zoom), which would otherwise
+  // hand every block in it a new context.
+  const outerChain = cardChainOf(parent)
+  const chain = useMemo(() => [...outerChain, thread.id], [outerChain, thread.id])
+  return (
     <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
+      {zoom && (
+        <SurfaceZoomCrumbs
+          renderScopeId={renderScopeId}
+          zoom={zoom}
+          rootLabel={rootCrumbLabel(thread.anchor)}
+          label="Zoomed in comment thread"
+        />
+      )}
       <NestedBlockContextProvider overrides={{
         isNestedSurface: true,
         layoutBoundary: false,
         renderScopeId,
-        scopeRootId: thread.id,
+        scopeRootId: shownId,
         [COMMENT_CARD_KEY]: renderScopeId,
-        [CONTRIBUTOR_CARD_MODE_KEY]: thread.id,
-        [CARD_CHAIN_KEY]: [...cardChainOf(parent), thread.id],
+        [CONTRIBUTOR_CARD_MODE_KEY]: shownId,
+        [CONTRIBUTOR_CARD_HEADER_KEY]: thread.id,
+        [CARD_CHAIN_KEY]: chain,
       }}>
-        <BlockComponent blockId={thread.id}/>
+        <BlockComponent blockId={shownId}/>
       </NestedBlockContextProvider>
     </div>
   )
@@ -329,7 +404,7 @@ const ThreadsSection = ({block}: {block: Block}) => {
   const key = viewKey(blockContext.renderScopeId, block.id)
   const composer = useComposer(key)
   const showResolved = useShowResolved(key)
-  const inMargin = useMarginShowing(blockContext.panelId)
+  const inMargin = useInMargin(blockContext)
   // The margin shows the threads; only a composer opened here stays inline.
   if (inMargin) {
     return composer
@@ -345,13 +420,37 @@ const ThreadsSection = ({block}: {block: Block}) => {
       {!composer && open.length === 0 && closed.length === 0 && (
         <p className="px-1 text-xs text-muted-foreground">No comments.</p>
       )}
-      {closed.length > 0 && (
-        <button type="button" onClick={() => toggleShowResolved(key)} className="px-1 text-xs text-muted-foreground hover:text-foreground">
-          {showResolved ? 'Hide' : 'Show'} {closed.length} closed
-        </button>
-      )}
+      <div className="flex items-center gap-3 px-1">
+        {closed.length > 0 && (
+          <button type="button" onClick={() => toggleShowResolved(key)} className="text-xs text-muted-foreground hover:text-foreground">
+            {showResolved ? 'Hide' : 'Show'} {closed.length} closed
+          </button>
+        )}
+        {blockContext.panelId && isPanelRenderScopeId(blockContext.renderScopeId ?? '') && (
+          <MarginSwitch panelId={blockContext.panelId}/>
+        )}
+      </div>
       {showResolved && closed.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
     </section>
+  )
+}
+
+/** Opens the panel's margin. Absent once it is open: an open margin that
+ *  isn't drawn is waiting for a pane wide enough. Not offered below md, where
+ *  no pane is wide enough. */
+const MarginSwitch = ({panelId}: {panelId: string}) => {
+  const panel = useRepo().block(panelId)
+  const [open] = usePropertyValue(panel, annotationMarginOpenProp)
+  if (open) return null
+  return (
+    <button
+      type="button"
+      onClick={() => void panel.set(annotationMarginOpenProp, true)}
+      className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground max-md:hidden"
+    >
+      <PanelRight className="h-3 w-3" aria-hidden/>
+      Show in margin
+    </button>
   )
 }
 

@@ -32,16 +32,15 @@
   <key>ThrottleInterval</key>
   <integer>30</integer>
 
-  <!-- On stop/reboot the daemon drains in-flight runs before exiting; a
-       run can legitimately take minutes (watcher timeoutMs, capped at
-       25m in config.ts). Cover the full cap plus grace so launchd never
-       SIGKILLs a live drain (default is ~20s, which would orphan the
-       child agent process and lose its reply). This costs nothing when idle —
-       launchd only waits while the process is actually still running;
-       system shutdown applies its own shorter global limit, where long
-       runs degrade to the requeue-after-stale-sweep path. -->
+  <!-- On stop/reboot the daemon drains in-flight runs before exiting.
+       launchd caps a user agent's ExitTimeOut at 60s (a larger value is
+       reported as 60 by `launchctl print`), so this is the longest drain
+       available, not one that covers a full run (watcher timeoutMs, up to
+       60m). A run still going when it expires is SIGKILLed with the
+       daemon: its child is orphaned, its reply lost, and the task
+       re-queues after the stale-running sweep. -->
   <key>ExitTimeOut</key>
-  <integer>1560</integer>
+  <integer>60</integer>
 
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/km-agent-dispatch.log</string>

@@ -2,7 +2,7 @@
 // `tx.childrenOf` / `repo.query.{children,subtree,childIds}` default to the
 // STRUCTURAL everything-view (every child, including hidden property field-row
 // machinery). The VISIBLE / outline view (machinery excluded, §9) is opt-in via
-// `hidePropertyChildren: true` (or the `visibleChildrenOf` helper).
+// `propertyChildren: 'none'` (or the `visibleChildrenOf` helper).
 //
 // In pure outline/display modules the visible view is nearly always what's
 // wanted, and a forgotten opt-in silently leaks machinery into a user-facing
@@ -59,8 +59,8 @@ const requireExplicitChildView = {
     messages: {
       explicitChildView:
         'Choose the child view explicitly: use `visibleChildrenOf(tx, …)` or pass '
-        + '`hidePropertyChildren` (true = visible outline view, false = structural '
-        + 'everything-view). The bare call returns ALL children, including hidden '
+        + '`propertyChildren` (`\'none\'` = visible outline view, `\'all\'` = structural '
+        + 'everything-view, `\'non-hidden\'` = non-hidden property rows only). The bare call returns ALL children, including hidden '
         + 'property field-row machinery (PR #288/#386).',
     },
   },
@@ -78,7 +78,7 @@ const requireExplicitChildView = {
           if (check !== 'all') return
           // Options is the trailing arg; scan every arg for the flag object so
           // the 2-arg and 3-arg spellings are both covered.
-          if (!node.arguments.some(arg => objHasKey(arg, 'hidePropertyChildren'))) {
+          if (!node.arguments.some(arg => objHasKey(arg, 'propertyChildren'))) {
             context.report({node, messageId: 'explicitChildView'})
           }
           return
@@ -89,7 +89,7 @@ const requireExplicitChildView = {
           // Match only the query-handle shape `…query.<m>({id: …})`; array
           // `.children`, `slot.subtree`, etc. never take an `{id}` options arg.
           if (!objHasKey(first, 'id')) return
-          if (!objHasKey(first, 'hidePropertyChildren')) {
+          if (!objHasKey(first, 'propertyChildren')) {
             context.report({node, messageId: 'explicitChildView'})
           }
         }

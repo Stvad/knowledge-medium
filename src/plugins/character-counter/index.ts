@@ -3,17 +3,18 @@
  *  live character or word count below its content, below each direct child,
  *  or as one total for its subtree, with an optional per-block limit and
  *  pluggable counting profiles.
- *  The count is purely additive (a decorator over the existing renderer)
- *  and the limit is visual-only; neither ever blocks editing. */
+ *  The count is purely additive (a bottom-right gutter item beside the
+ *  existing renderer) and the limit is visual-only; neither ever blocks
+ *  editing. */
 
-import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { blockGutterItemsFacet } from '@/extensions/blockInteraction.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
 import { counterActions } from './actions'
 import { characterCounterDataExtension } from './dataExtension'
-import { characterCountDecoratorContribution } from './CharacterCountDecorator'
+import { characterCountItemContribution } from './CharacterCountItem'
 import { builtinCountProfiles } from './profiles'
 import { charProfileEditorOverride } from './ProfilePropertyEditor'
 
@@ -41,6 +42,6 @@ export const characterCounterPlugin: AppExtension = systemToggle({
   characterCounterDataExtension,
   builtinCountProfiles,
   propertyEditorOverridesFacet.of(charProfileEditorOverride, {source: 'character-counter'}),
-  blockContentDecoratorsFacet.of(characterCountDecoratorContribution, {source: 'character-counter'}),
+  blockGutterItemsFacet.of(characterCountItemContribution, {source: 'character-counter'}),
   counterActions.map(action => actionsFacet.of(action, {source: 'character-counter'})),
 ])

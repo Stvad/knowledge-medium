@@ -1,4 +1,4 @@
-import { Check, KeyboardOff, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { Check, KeyboardOff, Link, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -14,7 +14,7 @@ import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
-import { hasSourceContent } from '@/data/blockTypes'
+import { holdsSource } from '@/data/blockTypes'
 import {
   nextVisibleBlock,
   previousVisibleBlock,
@@ -46,12 +46,15 @@ import {
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
+import { language } from '@codemirror/language'
+import { markdownLanguage } from '@codemirror/lang-markdown'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
   getCaretRect,
   cursorIsAtEnd,
   cursorIsAtStart,
+  wrapRangeWithPair,
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
@@ -71,6 +74,8 @@ import {
   navigate,
   navigateFromGlobalCommand,
   resolveActivePanelRow,
+  ZOOM_ORIGIN,
+  ZOOM_OUT_ORIGIN,
 } from '@/utils/navigation.js'
 import {
   deletePanelRow,
@@ -95,6 +100,9 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
+
+const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
+  editorView.state.facet(language)?.name === markdownLanguage.name
 
 /** Drop `remove` characters from one end of the editor's text and put `insert` there. */
 interface EditorEndEdit {
@@ -175,13 +183,6 @@ const splitAtCursor = async (
     keepsBefore ? {end: 'end', remove: after.length, insert: ''} : {end: 'start', remove: before.length, insert: ''},
     () => block.repo.mutate.split({id: block.id, before, after, placement}))
   return keepsBefore ? newId : block.id
-}
-
-/** Source code isn't text to join: one side would absorb the other's source and
- *  its type. Refusing costs nothing, since the blocks stay side by side. */
-const holdsSource = (block: Block): boolean => {
-  const data = block.peek()
-  return data != null && hasSourceContent(data)
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
@@ -273,13 +274,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     id: 'zoom_in',
     description: 'Zoom into focused block',
     icon: ZoomIn,
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       // Through navigate() so zoom is observable/interceptable via
-      // navigationVerb; target 'panel' swaps this panel's content (the swap
-      // still wraps in withMoveTransition inside navigateInPanel) and marks this
-      // panel active (it's the one being interacted with) — a benign addition
-      // over the old direct navigateInPanel.
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
+      // navigationVerb; target 'panel' swaps this panel's content and marks
+      // it active.
+      await navigate(repo, {
+        target: 'panel', panelId: uiStateBlock.id, blockId: block.id,
+        origin: ZOOM_ORIGIN, sourceRenderScopeId: renderScopeId,
+      })
     },
     defaultBinding: {
       keys: '$mod+.',
@@ -289,15 +291,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const zoomOutBlock: BlockAction = {
     id: 'zoom_out',
     description: 'Zoom out to parent of current view',
-    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
       await repo.load(topLevelBlockId, {ancestors: true})
       const parent = repo.block(topLevelBlockId).parent
-      if (!parent) return
 
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id, origin: 'zoom'})
+      // Sent from a root too, where the panel stays as it is: a view nested in
+      // the panel may be zoomed in on its own, and claims the zoom out by
+      // `sourceRenderScopeId`.
+      await navigate(repo, {
+        target: 'panel', panelId: uiStateBlock.id, blockId: parent?.id ?? topLevelBlockId,
+        origin: ZOOM_OUT_ORIGIN, sourceRenderScopeId: renderScopeId,
+      })
     },
     defaultBinding: {
       keys: '$mod+,',
@@ -489,7 +496,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // per-workspace representation of the cell, and `importState` replays
         // only content/structure — so exported machinery would land in the
         // target as ordinary `((fieldId))` rows rather than as properties.
-        const blocks = await repo.query.subtree({id: root.id, hidePropertyChildren: true}).load()
+        const blocks = await repo.query.subtree({id: root.id, propertyChildren: 'none'}).load()
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')
@@ -708,6 +715,30 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // CodeMirror-specific edit mode actions
   const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
     {
+      id: 'edit.cm.create_link',
+      description: 'Create link',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      icon: Link,
+      isVisible: isMarkdownEditor,
+      handler: deps => {
+        if (!isMarkdownEditor(deps)) return false
+        const {editorView} = deps
+        const {state} = editorView
+        editorView.dispatch(state.changeByRange(range => {
+          const wrapped = wrapRangeWithPair(state, range, '[', ']()')
+          return range.empty ? wrapped : {
+            changes: wrapped.changes,
+            range: EditorSelection.cursor(wrapped.range.to + ']('.length),
+          }
+        }))
+        editorView.focus()
+      },
+      defaultBinding: {
+        keys: '$mod+Shift+l',
+        eventOptions: {preventDefault: true},
+      },
+    },
+    {
       id: 'exit_edit_mode_cm',
       description: 'Exit edit mode',
       context: ActionContextTypes.EDIT_MODE_CM,
@@ -776,6 +807,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
+          if (holdsSource(block)) return
           const focusId = await splitAtCursor(block, editorView, policy.isScopeRoot ? 'firstChild' : 'siblingBefore')
           await uiStateBlock.set(editorSelection, {blockId: focusId, start: 0})
           await focusBlock(uiStateBlock, focusId, {edit: true, renderScopeId: deps.renderScopeId})
@@ -1349,9 +1381,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     groupGestureAction(indentBlockAction, 'indent'),
     groupGestureAction(outdentBlockAction, 'outdent'),
     // Not a per-block fan-out: one guarded, confirmed batch delete.
+    // Backspace too: it is the key a Mac laptop labels delete.
     {
       ...makeMultiSelect(deleteBlockAction),
       handler: deleteSelectedBlocks,
+      defaultBinding: {keys: ['Delete', 'Backspace']},
     },
     groupGestureAction(moveBlockUpAction, 'moveUp', {slide: true}),
     groupGestureAction(moveBlockDownAction, 'moveDown', {slide: true}),

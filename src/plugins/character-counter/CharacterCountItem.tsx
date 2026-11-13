@@ -1,20 +1,17 @@
-/** Block content decorator that overlays live counts. A tagged block can count
- *  itself (`char:scope=self`), configure counters for its direct children
- *  (`char:scope=children`), or show one total for its whole subtree
- *  (`char:scope=subtree`). The decorator stays generic by resolving count
- *  behavior through `characterCountProfilesFacet`; plugins persist only the
- *  profile id in `char:profile`.
+/** Gutter item that shows live counts in a block's bottom-right corner. A
+ *  tagged block can count itself (`char:scope=self`), configure counters for
+ *  its direct children (`char:scope=children`), or show one total for its
+ *  whole subtree (`char:scope=subtree`). The item stays generic by resolving
+ *  count behavior through `characterCountProfilesFacet`; plugins persist only
+ *  the profile id in `char:profile`.
  *
- *  A decorator (not a renderer override) so it composes with whatever content
- *  renderer the block already uses. Counts are absolutely positioned at the
- *  content's bottom-right corner and `pointer-events-none` keeps the overlay
- *  from stealing clicks / text selection from the editor underneath.
+ *  A gutter item (not a renderer override) so it composes with whatever
+ *  content renderer the block already uses, and the host reserves the row
+ *  under the content, so the count never covers text.
  *
  *  The contribution applies globally so children can inspect their parent
- *  config, but the rendered component returns the inner renderer unchanged
- *  when neither self nor inherited config applies. Cached per inner renderer
- *  so React keeps a stable component identity and never unmounts the inner
- *  subtree on a parent re-render (same invariant as geoContentDecorator). */
+ *  config; the component renders null when neither self nor inherited config
+ *  applies. */
 
 import { useCallback } from 'react'
 import type { Block } from '@/data/block.js'
@@ -22,9 +19,9 @@ import { typesProp } from '@/data/properties.js'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useHandle, useProperty } from '@/hooks/block.js'
-import {
-  type BlockContentDecorator,
-  type BlockContentDecoratorContribution,
+import type {
+  BlockGutterItem,
+  BlockGutterItemContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
 import { COUNTER_TYPES } from './blockType'
@@ -42,11 +39,6 @@ interface CounterConfig {
   profileId: string | undefined
   /** Sum over the block's subtree instead of counting the block alone. */
   subtreeTotal: boolean
-}
-
-interface CharacterCountDecoratorProps {
-  block: Block
-  Inner: BlockRenderer
 }
 
 const isCounter = (types: readonly string[]): boolean =>
@@ -67,7 +59,7 @@ const BadgeText = ({
   over?: boolean
 }) => (
   <span
-    className={`pointer-events-none absolute bottom-0 right-0 select-none text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
+    className={`select-none text-xs tabular-nums ${over ? 'text-destructive' : 'text-muted-foreground'}`}
     aria-label={`${profileLabel(profile)} count`}
   >
     {text}
@@ -97,7 +89,7 @@ const SubtreeCountBadge = ({
     [countText],
   )
   const total = useHandle(
-    block.repo.query.subtree({id: block.id, hidePropertyChildren: true}),
+    block.repo.query.subtree({id: block.id, propertyChildren: 'none'}),
     {selector: sumRows},
   )
   // Nothing until the subtree has loaded: an empty sum would read as a real 0.
@@ -129,26 +121,7 @@ const CountBadge = ({block, config}: {block: Block, config: CounterConfig}) => {
   )
 }
 
-const CounterFrame = ({
-  block,
-  Inner,
-  config,
-}: CharacterCountDecoratorProps & {config: CounterConfig}) => (
-  <div className="relative w-full">
-    <Inner block={block}/>
-    <CountBadge block={block} config={config}/>
-  </div>
-)
-
-interface InheritedCharacterCountDecoratorProps extends CharacterCountDecoratorProps {
-  parentId: string
-}
-
-const InheritedCharacterCountDecorator = ({
-  block,
-  parentId,
-  Inner,
-}: InheritedCharacterCountDecoratorProps) => {
+const InheritedCountBadge = ({block, parentId}: {block: Block, parentId: string}) => {
   const parent = block.repo.block(parentId)
   const parentTypes = useHandle(parent, {
     selector: data => data ? safeDecodeRowProperty(data, typesProp) : [],
@@ -160,18 +133,17 @@ const InheritedCharacterCountDecorator = ({
     isCounter(parentTypes) &&
     parentScope === 'children'
 
-  if (!applies) return <Inner block={block}/>
+  if (!applies) return null
 
   return (
-    <CounterFrame
+    <CountBadge
       block={block}
-      Inner={Inner}
       config={{limit: parentLimit, profileId: parentProfileId, subtreeTotal: false}}
     />
   )
 }
 
-const CharacterCountDecorator = ({block, Inner}: CharacterCountDecoratorProps) => {
+const CharacterCountItem: BlockRenderer = ({block}) => {
   const info = useHandle(block, {selector: blockInfoSelector})
   const [scope] = useProperty(block, charScopeProp)
   const [limit] = useProperty(block, charLimitProp)
@@ -182,39 +154,20 @@ const CharacterCountDecorator = ({block, Inner}: CharacterCountDecoratorProps) =
 
   if (selfApplies) {
     return (
-      <CounterFrame
+      <CountBadge
         block={block}
-        Inner={Inner}
         config={{limit, profileId, subtreeTotal: scope === 'subtree'}}
       />
     )
   }
 
   if (info.parentId) {
-    return (
-      <InheritedCharacterCountDecorator
-        block={block}
-        parentId={info.parentId}
-        Inner={Inner}
-      />
-    )
+    return <InheritedCountBadge block={block} parentId={info.parentId}/>
   }
 
-  return <Inner block={block}/>
+  return null
 }
 
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
+const countItem: BlockGutterItem = {corner: 'bottom-right', component: CharacterCountItem}
 
-const decorate: BlockContentDecorator = inner => {
-  const existing = cache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({block}) => (
-    <CharacterCountDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithCharacterCount'
-  cache.set(inner, Decorated)
-  return Decorated
-}
-
-export const characterCountDecoratorContribution: BlockContentDecoratorContribution = () =>
-  decorate
+export const characterCountItemContribution: BlockGutterItemContribution = () => countItem

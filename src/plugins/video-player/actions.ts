@@ -1,6 +1,7 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '../../data/block'
+import { hasSourceContent } from '@/data/blockTypes'
 import { focusBlock, panelViewModeProp } from '@/data/properties.js'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
@@ -81,7 +82,7 @@ const insertIntoEditor = (editorView: EditorView, text: string): void => {
 
 const appendToBlock = async (block: Block, text: string): Promise<void> => {
   const data = block.peek() ?? await block.load()
-  if (!data) return
+  if (!data || hasSourceContent(data)) return
 
   const separator = data.content.trim().length > 0 ? ' ' : ''
   await block.setContent(`${data.content}${separator}${text.trim()}`)
@@ -113,6 +114,7 @@ const insertVideoTimestamp: ActionConfig = {
     if (currentTime === undefined) return
 
     const timestamp = `${formatVideoTimestamp(currentTime)} `
+    // Into source too: it lands at the caret the viewer placed, as typing it would.
     if (deps.editorView) {
       insertIntoEditor(deps.editorView, timestamp)
       return

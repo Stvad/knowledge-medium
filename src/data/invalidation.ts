@@ -126,6 +126,10 @@ export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
  *  snapshot rule can see it. One key: there is one active registry. */
 export const KERNEL_FIELD_RECOGNITION_CHANNEL = 'kernel.fieldRecognition'
 export const KERNEL_FIELD_RECOGNITION_KEY = 'active-registry'
+/** Same channel, the outline-skip half: fired when the active registry changes
+ *  which definitions the outline's default view skips — what that child
+ *  view binds. */
+export const KERNEL_FIELD_OUTLINE_SKIP_KEY = 'active-registry-outline-skips'
 
 const SEP = '\u0000'
 
