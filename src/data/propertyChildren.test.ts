@@ -16,6 +16,7 @@ import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameT
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { exactBlockRefPrefill } from '@/plugins/references/contentPrefill'
+import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser'
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
@@ -3626,6 +3627,56 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
     expect(valueChildContentToEncoded(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('content <-> value codecs: a JSON-spelled value child carries no span (#1061, #749)', () => {
+  // Asserted on the real parsers, not on a spelling.
+  const jsonSchema = defineProperty<unknown>('blob', {
+    codec: codecs.unsafeIdentity<unknown>(),
+    defaultValue: null,
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const listSchema = defineProperty<unknown[]>('generic-list', {
+    codec: codecs.list(codecs.unsafeIdentity<unknown>()),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const UUID = SAMPLE_UUID
+  const VALUES: unknown[] = [
+    `((${UUID}))`,
+    `see !((${UUID})) and [Mary](((${UUID})))`,
+    '[[Some Page]]',
+    [[1]],
+    [[['nested']]],
+    {'[[key]]': [`((${UUID}))`], 'q"[[': 'back\\[[slash'},
+  ]
+
+  it.for(VALUES.map(value => [JSON.stringify(value), value] as const))(
+    'stores %s as JSON no reference reader reads a span in', ([, value]) => {
+    const contents = [
+      encodedToValueChildContent(jsonSchema, value),
+      ...encodedPropertyValueToChildContents(listSchema, [value]),
+    ]
+    for (const content of contents) {
+      expect(parseReferences(content), content).toEqual([])
+      expect(parseBlockRefs(content), content).toEqual([])
+      expect(valueChildContentToEncoded(jsonSchema, content)).toEqual(value)
+    }
+  })
+
+  it('reads content stored before the escape exactly as it always did', () => {
+    for (const value of VALUES) {
+      const legacy = JSON.stringify(value)
+      expect(valueChildContentToEncoded(jsonSchema, legacy)).toEqual(value)
+      expect(childContentsToEncodedPropertyValue(listSchema, [legacy])).toEqual([value])
+    }
+  })
+
+  it('keeps a lone opener as written, so the stored text stays readable', () => {
+    for (const value of ['Book (2019)', {'a[0]': 'f(x)'}, ['x [1]', [2]], [1, [2]]]) {
+      expect(encodedToValueChildContent(jsonSchema, value)).toBe(JSON.stringify(value))
+    }
   })
 })
 

@@ -36,6 +36,8 @@ export const setBlockPropertyDisplay = async (
   setting: PropertyDisplaySetting,
 ): Promise<void> => {
   const repo = blocks[0]?.repo
+  // Refused read-only though UiState would admit it: this is shared state on the
+  // document's own block, not the viewer's; their switch is the workspace level.
   if (!repo || repo.isReadOnly) return
   await repo.tx(async tx => {
     for (const block of blocks) await tx.setProperty(block.id, propertyDisplayProp, setting)

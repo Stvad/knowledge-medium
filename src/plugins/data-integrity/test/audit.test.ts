@@ -357,6 +357,39 @@ describe('runConsistencyAudit — pending-upload divergence', () => {
     if (resultKey !== 'serverAheadUndrained') expect(divergence.samples).toContain(sample)
   })
 
+  it('judges upload-path rows only when stamped before the last applied checkpoint', async () => {
+    await seedLocal(block('stranded-due', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedLocal(block('stranded-in-flight', { updatedAt: STAMP + 50, userUpdatedAt: STAMP + 50 }))
+    await seedLocal(block('richer-due', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer-due', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+    await seedLocal(block('richer-in-flight', { updatedAt: STAMP + 50, userUpdatedAt: STAMP + 50 }))
+    await seedSynced(block('richer-in-flight', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      syncedThroughMs: () => STAMP + 40,
+    })
+    const divergence = result.checks.local_server_divergence
+
+    expect(divergence.strandedLocalOnly).toBe(1)
+    expect(divergence.localRicherNoPending).toBe(1)
+    expect([...(divergence.samples as string[])].sort()).toEqual(['richer-due', 'stranded-due'])
+  })
+
+  it('judges no upload-path row before any checkpoint has applied', async () => {
+    await seedLocal(block('stranded'))
+    await seedLocal(block('richer', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      syncedThroughMs: () => undefined,
+    })
+    const divergence = result.checks.local_server_divergence
+
+    expect(divergence.status).toBe('ok')
+    expect(divergence.strandedLocalOnly).toBe(0)
+    expect(divergence.localRicherNoPending).toBe(0)
+  })
+
   it.each([
     ['strandedLocalOnly'],
     ['localRicherNoPending'],

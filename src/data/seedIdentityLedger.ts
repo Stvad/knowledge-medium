@@ -173,6 +173,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:kernel-data/property/property-schema-config', 'property-schema:config', 'json', 'object'],
   ['system:kernel-data/property/property-schema-default', 'property-schema:default', 'raw-json', 'object'],
   ['system:kernel-data/property/property-schema-hidden', 'property-schema:hidden', 'boolean', 'boolean'],
+  ['system:kernel-data/property/property-schema-hide-in-outline', 'property-schema:hide-in-outline', 'boolean', 'boolean'],
   ['system:kernel-data/property/property-schema-name', 'property-schema:name', 'string', 'string'],
   ['system:kernel-data/property/property-schema-preset', 'property-schema:preset', 'string', 'string'],
   ['system:kernel-data/property/property-display', 'system:propertyDisplay', 'strict-enum', 'enum'],

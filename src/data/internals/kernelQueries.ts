@@ -35,7 +35,7 @@ import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } 
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
-import { hiddenTierFieldIds } from '@/data/propertyDefinitionRegistry'
+import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
 import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
 import { refCodecKind } from './refProjection'
@@ -43,7 +43,7 @@ import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
   CHILDREN_IDS_SQL,
   CHILDREN_SQL,
-  NO_REGISTRY_HIDDEN_TIER_PARAMS,
+  NO_REGISTRY_OUTLINE_SKIP_PARAMS,
   NO_REGISTRY_RECOGNITION_PARAMS,
   NON_HIDDEN_CHILDREN_IDS_SQL,
   NON_HIDDEN_CHILDREN_SQL,
@@ -51,7 +51,7 @@ import {
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
   VISIBLE_SUBTREE_SQL,
-  type HiddenTierParams,
+  type OutlineSkipParams,
   type RecognitionParams,
 } from './treeQueries'
 import {
@@ -66,7 +66,7 @@ import {
 import {
   KERNEL_ALIASES_CHANNEL,
   KERNEL_CONTENT_CHANNEL,
-  KERNEL_FIELD_HIDDEN_TIER_KEY,
+  KERNEL_FIELD_OUTLINE_SKIP_KEY,
   KERNEL_FIELD_RECOGNITION_CHANNEL,
   KERNEL_FIELD_RECOGNITION_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
@@ -722,7 +722,7 @@ export const subtreeQuery = defineQuery<
   argsSchema: z.object({id: z.string(), propertyChildren: propertyChildrenViewSchema.optional()}).strict(),
   resultSchema: subtreeRowArraySchema,
   resolve: async ({id, propertyChildren = 'all'}, ctx) => {
-    // No subtree SQL exists for the hidden-tier view.
+    // No subtree SQL exists for the outline's default (non-hidden) view.
     if (propertyChildren === 'non-hidden') {
       throw new Error("core.subtree supports propertyChildren 'all' and 'none' only")
     }
@@ -903,26 +903,26 @@ export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
   return params
 }
 
-const hiddenTierParamsBySnapshot = new WeakMap<object, HiddenTierParams>()
+const outlineSkipParamsBySnapshot = new WeakMap<object, OutlineSkipParams>()
 
-/** The bound half of the hidden-tier child view, with the dependency that
+/** The bound half of the non-hidden child view, with the dependency that
  *  re-runs a query binding it when a definition's hidden bit moves — the same
  *  contract as {@link dependOnRecognitionParams}. */
-const dependOnHiddenTierParams = (ctx: QueryCtx): HiddenTierParams => {
+const dependOnOutlineSkipParams = (ctx: QueryCtx): OutlineSkipParams => {
   ctx.depend({
     kind: 'plugin',
     channel: KERNEL_FIELD_RECOGNITION_CHANNEL,
-    key: KERNEL_FIELD_HIDDEN_TIER_KEY,
+    key: KERNEL_FIELD_OUTLINE_SKIP_KEY,
   })
   const registry = ctx.repo.propertyDefinitions
-  if (!registry) return NO_REGISTRY_HIDDEN_TIER_PARAMS
-  const cached = hiddenTierParamsBySnapshot.get(registry)
+  if (!registry) return NO_REGISTRY_OUTLINE_SKIP_PARAMS
+  const cached = outlineSkipParamsBySnapshot.get(registry)
   if (cached) return cached
-  const params: HiddenTierParams = [
-    JSON.stringify([...hiddenTierFieldIds(registry)]),
+  const params: OutlineSkipParams = [
+    JSON.stringify([...outlineSkippedFieldIds(registry)]),
     registry.workspaceId,
   ]
-  hiddenTierParamsBySnapshot.set(registry, params)
+  outlineSkipParamsBySnapshot.set(registry, params)
   return params
 }
 
@@ -936,7 +936,7 @@ const childrenStatement = (
 ): [string, unknown[]] => {
   if (view === 'non-hidden') {
     return [shape === 'rows' ? NON_HIDDEN_CHILDREN_SQL : NON_HIDDEN_CHILDREN_IDS_SQL,
-      [id, ...dependOnHiddenTierParams(ctx)]]
+      [id, ...dependOnOutlineSkipParams(ctx)]]
   }
   if (view === 'none') {
     return [shape === 'rows' ? VISIBLE_CHILDREN_SQL : VISIBLE_CHILDREN_IDS_SQL,
@@ -950,7 +950,8 @@ const childrenStatement = (
  *  display-visible view — excluding recognized field rows
  *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
  *  `propertyChildren: 'none'`, the option `tx.childrenOf` also takes;
- *  `'non-hidden'` drops only hidden-tier field rows. The outline hooks pass
+ *  `'non-hidden'` drops only the field rows the outline's default view skips
+ *  (`outlineSkippedFieldIds`). The outline hooks pass
  *  whichever their property display mode resolves to. */
 export const childrenQuery = defineQuery<
   {id: string; propertyChildren?: PropertyChildrenView},

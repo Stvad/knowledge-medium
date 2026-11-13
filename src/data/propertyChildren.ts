@@ -228,8 +228,7 @@ const SPAN_OPENER_RE = /[[(]/
  *  envelope. One owner because the sites must agree: disagree on the
  *  write/read pair and a value is escaped and never unwrapped; disagree in
  *  {@link contentLosesPropertyValue} and find-replace writes a
- *  value-destroying content instead of refusing it. (A JSON-spelled value can
- *  be destroyed the same way and is NOT escaped — km-24hg.)
+ *  value-destroying content instead of refusing it.
  *
  *  `enum` is in the set but reads through its OWN unwrap
  *  ({@link enumValueFromContent}), which claims the whole quoted form rather
@@ -404,14 +403,37 @@ export const contentLosesPropertyValue = (
     || hasLoneSurrogate(content)
 }
 
+const unicodeEscape = (c: string): string =>
+  `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
+
 /** Store `s` as content that reads back as exactly `s` and as nothing else.
  *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
  *  escapes); the extra opener escaping neutralizes the reference grammar.
  *  `JSON.parse` undoes both, so the decode needs no counterpart — only
  *  {@link isEscapedEnvelope} to know it is looking at one. */
 const escapeContent = (s: string): string =>
-  JSON.stringify(s).replace(SPAN_OPENERS_RE,
-    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  JSON.stringify(s).replace(SPAN_OPENERS_RE, unicodeEscape)
+
+/** A whole JSON string literal, or an array bracket that directly opens another. */
+const JSON_STRING_OR_NESTED_BRACKET_RE = /"(?:[^"\\]|\\.)*"|\[(?=\[)/g
+/** A span opener directly followed by the same opener. */
+const DOUBLED_OPENER_RE = /([[(])(?=\1)/g
+
+/** Respell JSON text so that neither reference reader finds a span in it,
+ *  while `JSON.parse` reads back the same value — for every JSON-spelled
+ *  value child, where any span is an accident of serialization that a rename
+ *  or merge would rewrite.
+ *
+ *  Every span form in either reader needs a doubled opener (`[[` or `((`;
+ *  `!((` and `[label](((` included), so breaking each pair is enough: inside a
+ *  string literal the first of the pair is `\u`-escaped, and outside one —
+ *  where JSON has no `(` and `[` only opens an array — a space separates the
+ *  brackets. A lone opener stays as written, so the text stays readable and
+ *  searchable. Narrower than {@link escapeContent}, which must escape every
+ *  opener so an envelope identifies itself. */
+const grammarInertJson = (serialized: string): string =>
+  serialized.replace(JSON_STRING_OR_NESTED_BRACKET_RE, match =>
+    match === '[' ? '[ ' : match.replace(DOUBLED_OPENER_RE, unicodeEscape))
 
 /** Could `trimmed` have come out of {@link escapeContent}? A JSON string
  *  literal carrying no literal span opener — the two properties escapeContent
@@ -457,7 +479,7 @@ const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
     return String(encoded)
   }
   const serialized = JSON.stringify(encoded)
-  return serialized === undefined ? '' : serialized
+  return serialized === undefined ? '' : grammarInertJson(serialized)
 }
 
 const contentToEncodedValue = (

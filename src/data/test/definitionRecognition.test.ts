@@ -16,6 +16,9 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import type { Repo } from '@/data/repo'
+import { materializePropertySeeds } from '@/data/definitionSeeds'
+import { typesProp } from '@/data/properties'
+import { isPropertyPanelHiddenProperty } from '@/components/propertyPanel/visibility'
 
 const WS = 'ws-definition-recognition'
 const DEF = 'd0000000-0000-4000-8000-000000000001'
@@ -133,6 +136,16 @@ describe('the hidden-tier child view (`propertyChildren: \'non-hidden\'`)', () =
     await vi.waitFor(async () => expect(await tierView(repo)).toEqual([NOTE]))
   })
 
+  it('drops a field row whose definition is hide-in-outline, which the panel still shows', async () => {
+    const repo = await openRepo()
+    await seed(repo, definitionBag({'property-schema:hide-in-outline': true}))
+    await vi.waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.get(DEF)?.hideInOutline).toBe(true))
+    expect(await tierView(repo)).toEqual([NOTE])
+    expect(await repo.runQuery('core.childIds', {id: OWNER, propertyChildren: 'all'})).toEqual([NOTE, FIELD])
+    // Only the outline's default view reads it: not hidden anywhere else.
+    expect(isPropertyPanelHiddenProperty('status', repo.propertySchemas, new Map(), repo.propertyDefinitions)).toBe(false)
+  })
+
   it('re-resolves a mounted handle when the hidden bit moves, though recognition does not', async () => {
     const repo = await openRepo()
     await seed(repo, definitionBag({'property-schema:hidden': true}))
@@ -164,6 +177,40 @@ describe('the hidden-tier child view (`propertyChildren: \'non-hidden\'`)', () =
       expect(row).toEqual({is_field_form: 1, reference_target_id: null})
     })
     expect(await tierView(repo)).toEqual([FIELD])
+  })
+
+  // A built-in marked hide-in-outline in code, whose definition row was
+  // materialized before the field existed — every existing workspace's shape.
+  it('takes a built-in\'s hide-in-outline from its declaration until its row stores one', async () => {
+    const repo = await openRepo()
+    await vi.waitFor(() => expect(repo.propertyDefinitions).not.toBeNull())
+    const types = repo.propertySchemaResolverFor(WS).resolve('types')
+    expect(types.status).toBe('resolved')
+    const fieldId = types.status === 'resolved' ? types.schema.fieldId : ''
+    // Materialize the seed's row, then give it the old shape: no stored key.
+    await repo.ensureSystemPages(WS)
+    await materializePropertySeeds(repo, WS, [typesProp])
+    const row = (await repo.load(fieldId))!
+    expect(row.properties['property-schema:hide-in-outline']).toBe(true)
+    const withoutKey = {...row.properties}
+    delete withoutKey['property-schema:hide-in-outline']
+    await repo.tx(tx => tx.update(fieldId, {properties: withoutKey}), {scope: ChangeScope.Automation})
+    await vi.waitFor(() => {
+      const definition = repo.propertyDefinitions?.definitionsByFieldId.get(fieldId)
+      expect(definition).toBeDefined()
+      expect(definition!.hideInOutline).toBeUndefined()
+    })
+    await repo.tx(async tx => {
+      await tx.create({id: OWNER, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'owner'})
+      await tx.create({id: NOTE, workspaceId: WS, parentId: OWNER, orderKey: 'a0', content: 'note'})
+      await tx.create({id: FIELD, workspaceId: WS, parentId: OWNER, orderKey: 'a1', content: `::((${fieldId}))`})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await tierView(repo)).toEqual([NOTE])
+
+    // A stored value wins over the declaration, false included.
+    await repo.tx(tx => tx.update(fieldId, {properties: {...withoutKey, 'property-schema:hide-in-outline': false}}),
+      {scope: ChangeScope.Automation})
+    await vi.waitFor(async () => expect(await tierView(repo)).toEqual([NOTE, FIELD]))
   })
 
   it('drops the field row of a hidden kernel seed', async () => {

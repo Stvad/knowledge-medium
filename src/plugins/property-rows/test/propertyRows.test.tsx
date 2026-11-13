@@ -61,6 +61,11 @@ const ratingProp = seedProperty({
   preset: 'optional-number', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
 })
 
+const sourceProp = seedProperty({
+  seedKey: 'test/property/rows-source', revision: 1, name: 'rows:source',
+  preset: 'optional-ref', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
+})
+
 let sharedDb: TestDb
 let repo: Repo
 let runtime: FacetRuntime
@@ -93,7 +98,7 @@ beforeEach(async () => {
     defaultRenderersExtension,
     propertyRowsPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [statusProp, secretProp, tagsProp, ratingProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    [statusProp, secretProp, tagsProp, ratingProp, sourceProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
   ])
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -382,6 +387,21 @@ describe('a list property', () => {
 })
 
 describe('a read-only workspace', () => {
+  it('still shows a reference value as the referenced block, not its id', async () => {
+    await repo.tx(tx => tx.create({id: 'cited', workspaceId: WS, parentId: null, orderKey: 'a5', content: 'the cited block'}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.block(OWNER).set(sourceProp, 'cited')
+    repo.setReadOnly(true)
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain('rows:source'))
+    const cell = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-property-value-row="true"][data-property-name="rows:source"]')
+      expect(found?.textContent).toContain('the cited block')
+      return found!
+    })
+    expect(cell.textContent).not.toContain('"cited"')
+  })
+
   it('shows values without editors', async () => {
     repo.setReadOnly(true)
     mount({workspace: 'non-hidden'})

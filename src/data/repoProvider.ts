@@ -455,6 +455,7 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
       // Same per-user resolver the observer deps draw from (`syncObserverDepsFor`).
       const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
+        dbFilename: dbFilenameForUser(userId),
         encryption: {
           getWorkspaceMode: resolver.getUploadMode,
           getCek: resolver.getCek,

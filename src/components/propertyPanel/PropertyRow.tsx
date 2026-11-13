@@ -147,6 +147,12 @@ export function PropertyRow({
   )
 }
 
+/** Editors that render a read-only repo themselves — the reference editors
+ *  keep the referenced block's embed and drop their edit controls. Every other
+ *  editor would stay live there, so a read-only repo shows its raw value. */
+const rendersReadOnly = (schema: PropertyPanelModelRow['schema']): boolean =>
+  isRefCodec(schema.codec) || isRefListCodec(schema.codec)
+
 /** A property's VALUE: its editor, or the raw value when it has none. The
  *  panel row's value cell, shared with the outline's in-place property rows so
  *  the two edit through one component. */
@@ -173,7 +179,8 @@ export function PropertyValueCell({
       onFocus={valueFocusHandlers.onFocus}
       onBlur={valueFocusHandlers.onBlur}
     >
-      {Editor !== undefined && !row.decodeFailed && !row.readOnly && !isReadOnlyBlock(block) ? (
+      {Editor !== undefined && !row.decodeFailed && !row.readOnly
+        && (!isReadOnlyBlock(block) || rendersReadOnly(row.schema)) ? (
         <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
       ) : row.decodeFailed ? (
         <RawJsonValue value={row.encodedValue} reason="Decode failed" />
