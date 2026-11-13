@@ -1,1 +1,1 @@
-export{zq as parseLiteralDailyPageTitle,Bq as parseRelativeDate,Vq as relativeDateCandidates}from"../../chunks/app-B04zygdV.js";
+export{zq as parseLiteralDailyPageTitle,Bq as parseRelativeDate,Vq as relativeDateCandidates}from"../../chunks/app-C4pXM2qZ.js";
