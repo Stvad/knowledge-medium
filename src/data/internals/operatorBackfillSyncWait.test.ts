@@ -90,7 +90,7 @@ const settle = async <T>(running: Promise<T>, stepMs = 100): Promise<T> => {
   void running.then(() => { settled = true }, () => { settled = true })
   await waitFor(async () => {
     if (!settled) await vi.advanceTimersByTimeAsync(stepMs)
-    expect(settled).toBe(true)
+    expect(settled, 'the run has not settled').toBe(true)
   })
   return running
 }
