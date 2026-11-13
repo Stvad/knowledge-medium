@@ -1,1 +1,1 @@
-export{Zv as wikilinkMarkdownExtension}from"../../../../../chunks/app-ByWe06l-.js";
+export{my as wikilinkMarkdownExtension}from"../../../../../chunks/app-D33eIZeu.js";
