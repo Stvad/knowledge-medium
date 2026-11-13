@@ -17,15 +17,19 @@
  * existing block still make two field rows (`collapseDuplicateFieldRow` folds
  * them at the next local write).
  *
- * What converges is only what COLLIDES: a slot both devices filled resolves to
- * the first create, alongside the parent's. A slot only one device filled — a
- * member or a property the other did not have — lands on its own, as a
- * random-id row would, under the server's block, whose cell is the FIRST
- * create's; the next edit of that value in the tree projects it into the cell,
- * and the next write of the property reaps it. A later edit of a row that turns
- * out to be a peer's tombstone follows the ordinary delete-vs-edit rule: the
- * delete holds in the children while the cell takes the edit, exactly as for
- * any row two devices share.
+ * What converges is only what COLLIDES: each id both devices minted keeps the
+ * first create OF THAT ID — usually the one that also won the block, but an
+ * upload split across create batches can make it the peer's. An id only one
+ * device minted lands on its own under the server's block, whose cell is the
+ * FIRST create's:
+ *  - a list member or a property the other did not have — the next edit of it
+ *    in the tree projects it into the cell, the next write of the property
+ *    reaps it;
+ *  - a divergent scalar value — a peer of the other (§9), which later writes
+ *    keep.
+ * A later edit of a row that turns out to be a peer's tombstone follows the
+ * ordinary delete-vs-edit rule: the delete holds in the children while the
+ * cell takes the edit, exactly as for any row two devices share.
  *
  * A row already at the derived id (this transaction removed the property and
  * set it again) means a random id. ACCEPTED: that row converges with nothing.
@@ -37,6 +41,9 @@
  * carry which property. A sealed workspace whose namespace was not resolved
  * before the write lock mints a RANDOM id — never one under the public
  * namespace — so the property write still lands and only convergence is lost.
+ * ACCEPTED, the price of converging by id: when two devices create one block,
+ * which of their creates collide tells the server which properties and values
+ * the two creates had in common, though not what they were.
  */
 
 import type { NewBlockData, Tx } from '@/data/api'
