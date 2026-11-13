@@ -1,1 +1,1 @@
-export{jd as annotationsPlugin}from"../../../chunks/app-Cbu_PjBh.js";
+export{Ud as annotationsPlugin}from"../../../chunks/app-s5pmzoHj.js";
