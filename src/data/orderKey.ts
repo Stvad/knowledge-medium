@@ -61,3 +61,14 @@ export const siblingPrecedes = (
   a: {readonly orderKey: string; readonly id: string},
   b: {readonly orderKey: string; readonly id: string},
 ): boolean => a.orderKey < b.orderKey || (a.orderKey === b.orderKey && a.id < b.id)
+
+/** Where `row`, which `siblings` (in order) leaves out, sits among them: the
+ *  index of the first sibling it sorts before, else `siblings.length`. A
+ *  sibling not known (`null`) is passed over. */
+export const unlistedIndexAmong = (
+  siblings: readonly ({readonly orderKey: string; readonly id: string} | null | undefined)[],
+  row: {readonly orderKey: string; readonly id: string},
+): number => {
+  const at = siblings.findIndex(sibling => !!sibling && siblingPrecedes(row, sibling))
+  return at === -1 ? siblings.length : at
+}

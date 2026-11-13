@@ -28,6 +28,8 @@ import {MessageSquare, X} from 'lucide-react'
 import type {Block} from '@/data/block'
 import {focusedBlockLocationProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
+import {PropertyDisplayScopeContext} from '@/context/propertyDisplay.js'
+import {NO_PROPERTY_DISPLAY_SCOPE} from '@/data/propertyDisplayMode.js'
 import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
 import {useRepo} from '@/context/repo.js'
 import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
@@ -378,14 +380,17 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           style={frameStyle(frame)}
         >
           <MarginRegistryContext value={registry}>
-            <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
-              {loadedThreads?.length === 0 && (
-                <p className="px-1 pt-1 text-xs text-muted-foreground">No comments here.</p>
-              )}
-              <MarginFooter panelBlock={panelBlock} hasThreads={scopeThreads.length > 0}/>
-              {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId}/>)}
-              {[...hosts.stubs].map(([blockId, count]) => <HiddenThreadsStub key={blockId} blockId={blockId} count={count}/>)}
-            </NestedBlockContextProvider>
+            {/* Comment threads are their own surface: no property rows, whatever the panel's mode. */}
+            <PropertyDisplayScopeContext value={NO_PROPERTY_DISPLAY_SCOPE}>
+              <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
+                {loadedThreads?.length === 0 && (
+                  <p className="px-1 pt-1 text-xs text-muted-foreground">No comments here.</p>
+                )}
+                <MarginFooter panelBlock={panelBlock} hasThreads={scopeThreads.length > 0}/>
+                {hosts.cardRows.map(blockId => <MarginRow key={blockId} blockId={blockId}/>)}
+                {[...hosts.stubs].map(([blockId, count]) => <HiddenThreadsStub key={blockId} blockId={blockId} count={count}/>)}
+              </NestedBlockContextProvider>
+            </PropertyDisplayScopeContext>
           </MarginRegistryContext>
         </div>
       )}

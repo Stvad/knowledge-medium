@@ -12,7 +12,7 @@ import {
 import { ChangeScope, type BlockData } from '@/data/api'
 import { precedesInTree } from '@/data/treeOrder.js'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
-import { siblingPrecedes } from '@/data/orderKey'
+import { unlistedIndexAmong } from '@/data/orderKey'
 
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
@@ -35,13 +35,7 @@ export const unlistedSiblingIndex = (
   repo: Repo,
   listedIds: readonly string[],
   row: BlockData,
-): number => {
-  const at = listedIds.findIndex(id => {
-    const sibling = repo.block(id).peek()
-    return !!sibling && siblingPrecedes(row, sibling)
-  })
-  return at === -1 ? listedIds.length : at
-}
+): number => unlistedIndexAmong(listedIds.map(id => repo.block(id).peek()), row)
 
 /** Returns the next visible block in document order under
  *  `scopeRootId` (the surface's visible-subtree root — the panel's zoom

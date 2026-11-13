@@ -144,7 +144,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks: blocks, uiStateBlock, scopeRootId} = multiSelectDeps
+    const {selectedBlocks: blocks, uiStateBlock, scopeRootId, propertyDisplay} = multiSelectDeps
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
     // todo Wrap all per-block actions into a single repo.tx so undo
@@ -165,6 +165,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           block,
           uiStateBlock,
           scopeRootId,
+          propertyDisplay,
         } as ShortcutDependenciesMap[T]
 
         await (runtime
