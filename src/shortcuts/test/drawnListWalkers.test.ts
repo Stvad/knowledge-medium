@@ -150,6 +150,11 @@ describe('range selection and the data walker step onto drawn property rows', ()
     expect((await previousVisibleBlock(repo.block(statusRow), DRAWN))?.id).toBe('a')
   })
 
+  it('next steps into a first child that is a drawn row', async () => {
+    expect((await nextVisibleBlock(repo.block('solo'), DRAWN))?.id).toBe(soloStatusRow)
+    expect((await nextVisibleBlock(repo.block('solo'), HIDDEN))?.id).toBe('after')
+  })
+
   it('mode none passes the row by in both directions', async () => {
     expect((await nextVisibleBlock(repo.block('a'), HIDDEN))?.id).toBe('b')
     expect((await previousVisibleBlock(repo.block('b'), HIDDEN))?.id).toBe('a')
@@ -174,8 +179,10 @@ describe('range selection and the data walker step onto drawn property rows', ()
     expect(ui.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['a', statusRow])
   })
 
-  it('focus after deleting a drawn row goes to its drawn neighbour', async () => {
+  it('focus after a delete goes to the drawn neighbour', async () => {
     expect((await blockAfterSubtreeRemoval(repo.block(statusRow), DRAWN))?.id).toBe('b')
+    expect((await blockAfterSubtreeRemoval(repo.block('a'), DRAWN))?.id).toBe(statusRow)
+    expect((await blockAfterSubtreeRemoval(repo.block('a'), HIDDEN))?.id).toBe('b')
   })
 
   it('a row its listing leaves out counts from where the outline draws it', async () => {
