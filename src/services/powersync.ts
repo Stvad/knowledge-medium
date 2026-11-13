@@ -8,6 +8,7 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
+import { withLock } from '@/utils/webLock.js'
 import { encryptUploadColumns, snapshotCekPerCall, type GetCek, type UploadMode } from '@/sync/transform.js'
 
 // `§` references in this file cite docs/e2ee-design.html.
@@ -828,12 +829,42 @@ const fetchCredentials = async () => {
   }
 }
 
-/** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
- *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
- *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
- *  throw classifies transient — so that tx would retry forever and jam the
- *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
+/** The Web Lock one upload pass holds, per database file. */
+export const uploadLockName = (dbFilename: string): string => `km-upload-${dbFilename}`
+
+/** The connector's `uploadData`, one pass at a time per database.
+ *
+ *  The SDK's own upload lock does not cover this: when its sync stream is torn
+ *  down, the shared worker stops WAITING on the tab's `uploadData` and releases
+ *  that lock while the pass and its request are still running. The pass it
+ *  starts after reconnecting would read the same queue and send the same edits
+ *  again, merged with later ones, and whichever request the server applies last
+ *  wins — the earlier text over the later. Queued behind the lock, the next
+ *  pass reads the queue only after the first has completed what it sent.
+ *
+ *  A Web Lock rather than an in-tab chain because the worker may hand the next
+ *  pass to another tab. */
+const serializedUploadData = (
+  dbFilename: string,
+  deps: UploadDeps,
+): PowerSyncBackendConnector['uploadData'] => {
+  // Per-connector so `ambiguous` retry counts persist across the repeated
+  // `uploadData` invocations PowerSync makes while a tx stays queued.
+  const ambiguousAttempts = new Map<number, number>()
+  return database => withLock(
+    uploadLockName(dbFilename),
+    () => runUploadLoop(database, deps, ambiguousAttempts),
+  )
+}
+
 export interface PowerSyncConnectorOptions {
+  /** The local database file this connector uploads from. */
+  readonly dbFilename: string
+  /** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
+   *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
+   *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
+   *  throw classifies transient — so that tx would retry forever and jam the
+   *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
   readonly encryption?: {
     readonly getWorkspaceMode: GetWorkspaceMode
     readonly getCek: GetCek
@@ -841,21 +872,16 @@ export interface PowerSyncConnectorOptions {
 }
 
 export const createPowerSyncConnector = (
-  options: PowerSyncConnectorOptions = {},
-): PowerSyncBackendConnector => {
-  const deps = makeUploadDeps(
+  options: PowerSyncConnectorOptions,
+): PowerSyncBackendConnector => ({
+  fetchCredentials,
+  uploadData: serializedUploadData(options.dbFilename, makeUploadDeps(
     options.encryption?.getWorkspaceMode ?? defaultGetWorkspaceMode,
     options.encryption?.getCek ?? defaultUploadGetCek,
-  )
-  // Per-connector so `ambiguous` retry counts persist across the repeated
-  // `uploadData` invocations PowerSync makes while a tx stays queued.
-  const ambiguousAttempts = new Map<number, number>()
-  return {
-    fetchCredentials,
-    uploadData: database => runUploadLoop(database, deps, ambiguousAttempts),
-  }
-}
+  )),
+})
 
+export const __uploadDataForTest = serializedUploadData
 export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts

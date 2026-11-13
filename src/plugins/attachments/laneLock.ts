@@ -5,14 +5,9 @@
  * store's writes take one per object.
  */
 
-/** Run `work` holding a named Web Lock — the lane is single-owner across tabs. A
- *  concurrent caller QUEUES behind the holder (runs after it releases). Falls back to
- *  running directly where `navigator.locks` is absent (tests / older browsers). Used
- *  by the up-lane drain, whose queued duplicate is cheap + idempotent. */
-export const withLock = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
-  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  return locks?.request ? locks.request(name, work) : work()
-}
+/** The up-lane drain's lock: a concurrent caller QUEUES behind the holder, and
+ *  its queued duplicate is cheap + idempotent. */
+export { withLock } from '@/utils/webLock.js'
 
 /** Like {@link withLock} but NON-BLOCKING (`ifAvailable`): if another tab already
  *  holds the lane, SKIP this pass instead of queuing behind it. The right call for an

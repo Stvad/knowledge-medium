@@ -24,6 +24,8 @@ import {
   __encryptUploadOpsForTest,
   __orderedBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
+  __uploadDataForTest,
+  uploadLockName,
   type BlockUploadSink,
   type CompactedBlockOperation,
   type GetWorkspaceMode,
@@ -1188,5 +1190,66 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     expect(inserts.every(c => /INSERT INTO ps_crud_rejected/.test(c.sql))).toBe(true)
     expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
     expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
+  })
+})
+
+describe('uploadData — one pass per database at a time', () => {
+  /** The upload queue as the connector reads it: completing a transaction
+   *  drains it and everything queued before it. */
+  const uploadQueue = () => {
+    const queued: CrudTransaction[] = []
+    const enqueue = (transactionId: number, entries: CrudEntry[]) => {
+      const tx = {
+        transactionId,
+        crud: entries,
+        complete: async () => { queued.splice(0, queued.indexOf(tx) + 1) },
+      } as unknown as CrudTransaction
+      queued.push(tx)
+    }
+    const database = {
+      getCrudTransactions: () => ({
+        [Symbol.asyncIterator]: () => {
+          const snapshot = [...queued]
+          return {next: async () => snapshot.length > 0
+            ? {done: false as const, value: snapshot.shift()!}
+            : {done: true as const, value: undefined}}
+        },
+      }),
+    } as unknown as CommonPowerSyncDatabase
+    return {database, enqueue}
+  }
+
+  it('holds a second pass until the request already in flight has landed', async () => {
+    const dbFilename = `upload-lock-${crypto.randomUUID()}`
+    const {database, enqueue} = uploadQueue()
+    const sent: Array<readonly CompactedBlockOperation[]> = []
+    let landFirst!: () => void
+    const firstLanded = new Promise<void>(resolve => { landFirst = resolve })
+    const applyOperations = vi.fn<UploadDeps['applyOperations']>(async (_db, ops) => {
+      sent.push(ops)
+      if (sent.length === 1) await firstLanded
+    })
+    const uploadData = __uploadDataForTest(dbFilename, {applyOperations, recordRejection: vi.fn()})
+
+    enqueue(1, [patch(1, 'block-a', {content: 'it ', base_updated_at: 100}, 1)])
+    const abandonedPass = uploadData(database)
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+
+    // The SDK stopped waiting on that pass (its sync stream was torn down) and
+    // starts another, with a later edit queued behind the one still in flight.
+    enqueue(2, [patch(2, 'block-a', {content: 'it m', base_updated_at: 200}, 2)])
+    const nextPass = uploadData(database)
+    await vi.waitFor(async () => {
+      const {pending = []} = await navigator.locks.query()
+      expect(sent.length > 1 || pending.some(lock => lock.name === uploadLockName(dbFilename))).toBe(true)
+    })
+    expect(sent).toHaveLength(1)
+
+    landFirst()
+    await Promise.all([abandonedPass, nextPass])
+    expect(sent.map(ops => ops.map(op => op.kind === 'patch' && op.payload))).toEqual([
+      [{content: 'it ', base_updated_at: 100}],
+      [{content: 'it m', base_updated_at: 200}],
+    ])
   })
 })
