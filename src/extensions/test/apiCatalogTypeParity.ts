@@ -92,6 +92,13 @@ export type {
 } from '@/extensions/blockInteraction.js'
 
 export type {
+  BlockLinkAnchorProps,
+  BlockLinkDecorator,
+  BlockLinkDecoratorProps,
+  BlockLinkTarget,
+} from '@/extensions/blockLinkDecorators.js'
+
+export type {
   MarkdownSource,
 } from '@/markdown/context.js'
 

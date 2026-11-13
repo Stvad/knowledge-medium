@@ -43,6 +43,7 @@ import { moveBlocksPlugin } from '@/plugins/move-blocks'
 import { blockDragPlugin } from '@/plugins/block-drag'
 import { touchSelectionPlugin } from '@/plugins/touch-selection'
 import { referencesPlugin } from '@/plugins/references'
+import { linkPreviewPlugin } from '@/plugins/link-preview'
 import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
@@ -149,6 +150,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   attachmentsPlugin,
   richPastePlugin,
   referencesPlugin,
+  linkPreviewPlugin,
   geoPlugin,
   characterCounterPlugin,
   htmlDocumentPlugin,

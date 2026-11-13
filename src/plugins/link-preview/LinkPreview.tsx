@@ -1,7 +1,7 @@
 /**
  * Alt+hover preview for internal links: holding Alt over a link (or pressing it
  * while over one) floats the target block, with its children, beside the link.
- * `BlockLink` owns this, so every internal link — block refs, aliased refs,
+ * It decorates `BlockLink`, so every internal link — block refs, aliased refs,
  * page links — gets the same preview.
  */
 import { createPortal } from 'react-dom'
@@ -13,32 +13,30 @@ import {
 } from 'react'
 import { useAnchoredFloating, type FloatingSizing } from '@/components/ui/anchored-floating.js'
 import { useBlockContext } from '@/context/block'
-import { BlockEmbed } from './BlockEmbed'
-import { BlockRefAncestorsRoot } from './cycleGuard'
+import type { BlockLinkDecoratorProps } from '@/extensions/blockLinkDecorators.js'
+import { BlockEmbed } from '@/components/references/BlockEmbed'
+import { BlockRefAncestorsRoot } from '@/components/references/cycleGuard'
 
 const PREVIEW_KEY = 'Alt'
 // Bridges the gap between the link and the (offset) card as the pointer crosses.
 const CLOSE_DELAY_MS = 140
 const CARD_SIZING: FloatingSizing = {maxHeight: 420}
 
-export const LINK_PREVIEW_ATTRIBUTE = 'data-link-preview'
-
 interface HoverHandlers {
   onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => void
   onMouseLeave: (event: ReactMouseEvent<HTMLElement>) => void
 }
 
-export interface LinkPreviewController {
+interface LinkPreviewController {
   open: boolean
   anchorEl: HTMLElement | null
-  /** Spread onto the link. */
   linkHoverProps: HoverHandlers
   /** Spread onto the card, so hovering it keeps it open. */
   cardHoverProps: HoverHandlers
   close: () => void
 }
 
-export function useLinkPreview(): LinkPreviewController {
+function useLinkPreview(): LinkPreviewController {
   const [open, setOpen] = useState(false)
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
   // The link while the pointer is over it: only then does pressing Alt open.
@@ -113,7 +111,7 @@ export function useLinkPreview(): LinkPreviewController {
 }
 
 /** The floating card: the target rendered as an embed, read-only. */
-export function LinkPreviewCard({blockId, controller}: {
+function LinkPreviewCard({blockId, controller}: {
   blockId: string
   controller: LinkPreviewController
 }) {
@@ -140,7 +138,7 @@ export function LinkPreviewCard({blockId, controller}: {
       // read-only. Pointer/click propagation stops here because React bubbles
       // portal events through the React tree, to the link and the source block.
       data-block-interaction="ignore"
-      {...{[LINK_PREVIEW_ATTRIBUTE]: blockId}}
+      data-link-preview={blockId}
       style={floatingStyle}
       onMouseEnter={cardHoverProps.onMouseEnter}
       onMouseLeave={cardHoverProps.onMouseLeave}
@@ -156,5 +154,26 @@ export function LinkPreviewCard({blockId, controller}: {
       </BlockRefAncestorsRoot>
     </div>,
     document.body,
+  )
+}
+
+const chain = <E,>(first?: (event: E) => void, second?: (event: E) => void) =>
+  (event: E) => {
+    first?.(event)
+    second?.(event)
+  }
+
+export function LinkPreviewDecorator({link, anchorProps, children}: BlockLinkDecoratorProps) {
+  const preview = useLinkPreview()
+  return (
+    <>
+      {children({
+        ...anchorProps,
+        onMouseEnter: chain(anchorProps.onMouseEnter, preview.linkHoverProps.onMouseEnter),
+        onMouseLeave: chain(anchorProps.onMouseLeave, preview.linkHoverProps.onMouseLeave),
+        onClick: chain(preview.close, anchorProps.onClick),
+      })}
+      <LinkPreviewCard blockId={link.blockId} controller={preview}/>
+    </>
   )
 }

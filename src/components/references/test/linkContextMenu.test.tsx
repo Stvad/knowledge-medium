@@ -16,6 +16,7 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core'
 import { ActiveContextsProvider, useActiveContextsDispatch } from '@/shortcuts/ActiveContexts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { ActionContextTypes, type BaseShortcutDependencies } from '@/shortcuts/types'
+import { linkPreviewPlugin } from '@/plugins/link-preview'
 
 const {navigate, openBlock, outerClick, outerPointerDown, repo} = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -26,7 +27,7 @@ const {navigate, openBlock, outerClick, outerPointerDown, repo} = vi.hoisted(() 
 }))
 vi.mock('@/context/repo', () => ({useRepo: () => repo}))
 vi.mock('@/hooks/block', () => ({useWorkspaceId: () => 'link-workspace'}))
-vi.mock('../BlockEmbed', () => ({
+vi.mock('@/components/references/BlockEmbed', () => ({
   BlockEmbed: ({blockId}: {blockId: string}) => <span>Preview of {blockId}</span>,
 }))
 vi.mock('@/utils/navigation', async importOriginal => ({
@@ -35,7 +36,7 @@ vi.mock('@/utils/navigation', async importOriginal => ({
   useOpenBlock: () => openBlock,
 }))
 
-const runtime = resolveFacetRuntimeSync([])
+const runtime = resolveFacetRuntimeSync([linkPreviewPlugin])
 const holdContext = {
   block: {id: 'holding-block'},
   uiStateBlock: {
@@ -60,8 +61,8 @@ const BackgroundShortcuts = () => {
   return <HotkeyReconciler/>
 }
 
-const renderLinks = (children?: ReactNode) => render(
-  <AppRuntimeContextProvider value={runtime}>
+const renderLinks = (children?: ReactNode, linkRuntime = runtime) => render(
+  <AppRuntimeContextProvider value={linkRuntime}>
     <BlockContextProvider initialValue={{panelId: 'source-panel'}}>
       <div onPointerDown={outerPointerDown} onClick={outerClick}>
         <Wikilink alias="Page" blockId="page-target" workspaceId="link-workspace">Page link</Wikilink>
@@ -159,6 +160,16 @@ describe('link context menus', () => {
     fireEvent.mouseEnter(body.closest('[data-link-preview]')!)
     act(() => vi.advanceTimersByTime(1000))
     expect(body.isConnected).toBe(true)
+  })
+
+  it('shows no Alt-hover preview, and still navigates, without the link-preview plugin', () => {
+    renderLinks(undefined, resolveFacetRuntimeSync([]))
+    const link = screen.getByText('Page link')
+    fireEvent.mouseEnter(link, {altKey: true})
+    fireEvent.keyDown(window, {key: 'Alt'})
+    expect(document.querySelector('[data-link-preview]')).toBeNull()
+    fireEvent.click(link)
+    expect(openBlock).toHaveBeenCalledOnce()
   })
 
   it('closes the Alt-hover preview when the link is clicked', async () => {

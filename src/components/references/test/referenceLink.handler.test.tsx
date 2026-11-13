@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, createEvent, fireEvent, render } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render as rtlRender } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import type { Block } from '@/data/block'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 // Direct coverage of the ReferenceLink onClick WIRING (not just the pure
 // classifier). Both prior click bugs lived in this handler, and the classifier
@@ -13,6 +16,11 @@ vi.mock('@/hooks/block', () => ({ useWorkspaceId: () => 'ws' }))
 vi.mock('@/utils/navigation', () => ({ useOpenBlock: () => openBlock }))
 
 const { ReferenceLink } = await import('../ReferenceLink')
+
+const runtime = resolveFacetRuntimeSync([])
+const render = (ui: ReactNode) => rtlRender(ui, {
+  wrapper: ({children}) => <AppRuntimeContextProvider value={runtime}>{children}</AppRuntimeContextProvider>,
+})
 
 const block = { id: 'target' } as Block
 const clickAndGetEvent = (el: Element, init: MouseEventInit = {}) => {

@@ -46,6 +46,7 @@ import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRe
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { referencesMarkdownExtension } from '@/plugins/references/markdown/index.ts'
 import { Wikilink } from '@/plugins/references/markdown/wikilinks/Wikilink'
+import { linkPreviewPlugin } from '@/plugins/link-preview'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -126,6 +127,7 @@ const extensions = [
   }, {source: 'test-spy'}),
   blockRenderersFacet.of({id: 'marker', renderer: MarkerRenderer}, {source: 'test-spy'}),
   markdownExtensionsFacet.of(referencesMarkdownExtension, {source: 'references'}),
+  linkPreviewPlugin,
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {
