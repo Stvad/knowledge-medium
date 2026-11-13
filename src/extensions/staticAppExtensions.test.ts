@@ -52,12 +52,23 @@ describe('app boot composition', () => {
   describe('default keybindings', () => {
     afterEach(() => { vi.restoreAllMocks() })
 
-    it.each([true, false])('do not conflict (mac: %s)', mac => {
+    it.each([true, false])('overlap only for mutually exclusive property-display defaults (mac: %s)', mac => {
       vi.spyOn(platform, 'isMacPlatform').mockReturnValue(mac)
       const { repo } = createTestRepo({ db: shared.db })
       const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
-      const conflicts = findKeybindingConflicts(runtime.read(actionsFacet))
-      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([])
+      const actions = runtime.read(actionsFacet)
+      const conflicts = findKeybindingConflicts(actions)
+      const alternatives = ['property-rows.block.cycle', 'toggle_properties_default']
+      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([['t', alternatives]])
+      // The static detector cannot evaluate dispatch predicates. This one
+      // shared default must have exactly one eligible action in either scope.
+      for (const childBacked of [true, false]) {
+        const eligible = actions.filter(action => alternatives.includes(action.id) && action.canDispatch?.({
+          uiStateBlock: repo.block('panel'),
+          propertyDisplay: {childBacked, workspace: 'inherit', panel: 'inherit'},
+        }))
+        expect(eligible.map(action => action.id)).toEqual([childBacked ? alternatives[0] : alternatives[1]])
+      }
     })
   })
 

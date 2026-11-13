@@ -9,12 +9,15 @@ import type { Repo } from '@/data/repo'
 import { getPluginPrefsBlock, requireWorkspaceId } from '@/data/stateBlocks'
 import {
   blockPropertyDisplaySetting,
+  nextBlockPropertyDisplaySetting,
+  NO_PROPERTY_DISPLAY_SCOPE,
   PROPERTY_DISPLAY_MODE_LABELS,
   PROPERTY_DISPLAY_MODES,
   propertyDisplayDefaultProp,
   propertyDisplayPrefsType,
   propertyDisplayProp,
   type PropertyDisplaySetting,
+  type PropertyDisplayScopeLevels,
 } from '@/data/propertyDisplayMode'
 import type { ActionConfig } from '@/shortcuts/types'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -64,6 +67,25 @@ const blockActions = SETTINGS.flatMap(setting => {
   return [pair.block, pair.blocks]
 })
 
+const cycle = defineBlocksAction({
+  id: 'property-rows.block.cycle',
+  blockDescription: 'Cycle properties in outline, this block',
+  blocksDescription: 'Cycle properties in outline, selected blocks',
+  flow: (blocks, {propertyDisplay = NO_PROPERTY_DISPLAY_SCOPE}) => {
+    const first = blocks[0]
+    if (!first) return
+    const setting = nextBlockPropertyDisplaySetting({...propertyDisplay, block: blockSetting(first)})
+    return setBlockPropertyDisplay(blocks, setting)
+  },
+})
+
+const cycleActions = [cycle.block, cycle.blocks].map(action => ({
+  ...action,
+  defaultBinding: {keys: 't'},
+  canDispatch: ({propertyDisplay}: {propertyDisplay?: PropertyDisplayScopeLevels}) =>
+    propertyDisplay?.childBacked === true,
+}))
+
 const workspaceActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = SETTINGS.map(setting => ({
   id: `property-rows.workspace.${setting}`,
   description: `Properties in outline, my default for this workspace: ${settingLabel(setting)}`,
@@ -71,4 +93,4 @@ const workspaceActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = SETTI
   handler: ({uiStateBlock}) => setWorkspacePropertyDisplay(uiStateBlock.repo, setting),
 }))
 
-export const propertyDisplayActions = [...blockActions, ...workspaceActions]
+export const propertyDisplayActions = [...blockActions, ...cycleActions, ...workspaceActions]

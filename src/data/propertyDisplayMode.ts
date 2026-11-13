@@ -125,6 +125,16 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
   return DEFAULT_PROPERTY_DISPLAY_MODE
 }
 
+/** Cycle the effective mode, storing `inherit` when the scope already supplies
+ *  the target so later workspace or panel changes still reach this block. */
+export const nextBlockPropertyDisplaySetting = (levels: PropertyDisplayLevels): PropertyDisplaySetting => {
+  const next: Record<PropertyDisplayMode, PropertyDisplayMode> = {
+    none: 'non-hidden', 'non-hidden': 'all', all: 'none',
+  }
+  const mode = next[resolvePropertyDisplayMode(levels)]
+  return mode === resolvePropertyDisplayMode({...levels, block: 'inherit'}) ? 'inherit' : mode
+}
+
 /** The child listing of `parent` that a surface with `scope` draws: the
  *  parent's own block setting over the scope. `parent` is null for a
  *  workspace-root listing, which has no block setting. */
