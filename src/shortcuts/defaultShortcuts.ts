@@ -786,7 +786,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Split block at cursor',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => {
-        const {block, editorView, uiStateBlock, scopeRootId} = deps
+        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
         if (!block || !editorView || !uiStateBlock) return
 
         // NOTE: Enter-accepts-an-open-completion is handled INSIDE the editor
@@ -833,7 +833,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // root-level crossfade ghosts the shifting siblings, which
         // reads as blur. The unwrapped shift is cleaner.
         else if (editorView.state.doc.length === 0) {
-          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay: deps.propertyDisplay})
+          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed

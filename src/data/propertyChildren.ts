@@ -104,12 +104,8 @@ export const isLeftOutOfChildrenView = (
   classifier: PropertyRowClassifier,
 ): boolean => {
   if (view === 'all') return false
-  if (view === 'non-hidden') {
-    const fieldId = getPropertyFieldTargetId(row)
-    return row.isFieldForm === true && row.parentId !== null
-      && fieldId !== undefined && classifier.isOutlineSkipped(fieldId)
-  }
-  return isPropertyFieldInstance(row, classifier.isFieldDefinition)
+  return isPropertyFieldInstance(row,
+    view === 'non-hidden' ? classifier.isOutlineSkipped : classifier.isFieldDefinition)
 }
 
 /** The value-set half of §9's binding selection discipline: a field row's
@@ -1019,17 +1015,16 @@ export const childContentsToEncodedPropertyValue = (
 }
 
 /** A single-valued property's value: the first of its value children's
- *  contents that decodes, with its index. The cell reads this one. */
-export const firstDecodingValue = (
+ *  contents that decodes. The cell reads this one. */
+const firstDecodingValue = (
   schema: AnyPropertySchema,
   contents: Iterable<string>,
-): {readonly index: number; readonly value: unknown} | undefined => {
-  let index = 0
+): {readonly value: unknown} | undefined => {
   for (const content of contents) {
     try {
-      return {index, value: valueChildContentToEncoded(schema, content)}
+      return {value: valueChildContentToEncoded(schema, content)}
     } catch {
-      index++
+      // Not this one.
     }
   }
   return undefined
@@ -1041,7 +1036,11 @@ export const firstDecodingValue = (
  *  place. `undefined` when neither holds: no child can be told apart as the
  *  value, so a write must add one rather than overwrite any. The writer and
  *  the outline's value editor both bind here, so the editor sits on the row a
- *  write lands on. */
+ *  write lands on — except for a write whose content does not decode (a
+ *  cleared ref) when an earlier row already holds that content: it lands
+ *  there, the value row keeps its text and the cell reads stale until the
+ *  rows change. Accepted: every other order lets the second pass overwrite a
+ *  divergent peer. */
 export const scalarValueRow = <T extends {readonly content: string}>(
   schema: AnyPropertySchema,
   values: readonly T[],
@@ -1051,10 +1050,9 @@ export const scalarValueRow = <T extends {readonly content: string}>(
    *  content does not decode, as a cleared ref's does. */
   writing?: string,
 ): T | undefined => {
-  const read = values.findIndex(value => value.content === writing
+  return values.find(value => value.content === writing
     || firstDecodingValue(schema, [value.content]) !== undefined)
-  if (read >= 0) return values[read]
-  return values.length === 1 ? values[0] : undefined
+    ?? (values.length === 1 ? values[0] : undefined)
 }
 
 /** What a value row is, for comparison. `denotesValue` is false when the row's

@@ -120,6 +120,17 @@ describe('move up / down', () => {
     expect(order.indexOf(ids.tags)).toBeLessThan(order.indexOf(ids.status))
   })
 
+  it('treats a block that only links a skipped definition as an ordinary row', async () => {
+    // Unmarked, so not a field row, though its target is a skipped definition.
+    const secretDefinition = (await repo.load(ids.secret))!.referenceTargetId!
+    await repo.tx(async tx => {
+      await tx.create({id: 'link', workspaceId: WS, parentId: 'owner', orderKey: 'a0', content: `((${secretDefinition}))`})
+    }, {scope: ChangeScope.BlockDefault})
+    await arrange('owner', [ids.a, 'link', ids.b, ids.status, ids.secret, ids.tags])
+    expect(await repo.mutate.moveVertical({id: ids.b, direction: -1, propertyDisplay: NON_HIDDEN})).toBe(true)
+    expect((await childIds('owner')).slice(0, 3)).toEqual([ids.a, ids.b, 'link'])
+  })
+
   it('reads the parent\'s own display setting over the scope', async () => {
     // The owner shows all of its properties, so secret is drawn there.
     await repo.block('owner').set(propertyDisplayProp, 'all')
