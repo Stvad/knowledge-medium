@@ -1,0 +1,1 @@
+export{kS as videoPlayerMarkdownExtension}from"../../../chunks/app-Ds5qnIib.js";

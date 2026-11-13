@@ -1,0 +1,1 @@
+export{C2 as UndoManager}from"../../../chunks/app-Ds5qnIib.js";

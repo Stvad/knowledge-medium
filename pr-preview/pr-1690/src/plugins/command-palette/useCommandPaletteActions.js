@@ -1,0 +1,1 @@
+export{Sj as useCommandPaletteActions}from"../../../chunks/app-Ds5qnIib.js";

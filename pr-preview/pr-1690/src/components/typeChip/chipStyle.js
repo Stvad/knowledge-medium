@@ -1,0 +1,1 @@
+export{XM as chipStyle}from"../../../chunks/app-Ds5qnIib.js";

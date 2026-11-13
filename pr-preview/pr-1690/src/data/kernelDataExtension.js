@@ -1,0 +1,1 @@
+export{G3 as kernelDataExtension}from"../../chunks/app-Ds5qnIib.js";

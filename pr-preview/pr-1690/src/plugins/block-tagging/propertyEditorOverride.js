@@ -1,0 +1,1 @@
+export{gu as blockTagsConfigUi}from"../../../chunks/app-Ds5qnIib.js";

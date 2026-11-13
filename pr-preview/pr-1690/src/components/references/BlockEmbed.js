@@ -1,0 +1,1 @@
+export{BM as BlockEmbed}from"../../../chunks/app-Ds5qnIib.js";

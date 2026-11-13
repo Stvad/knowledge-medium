@@ -1,0 +1,1 @@
+export{iM as SwipeActionMenu}from"../../../chunks/app-Ds5qnIib.js";

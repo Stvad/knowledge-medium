@@ -1,0 +1,1 @@
+export{VD as useMinuteClock}from"../../chunks/app-Ds5qnIib.js";

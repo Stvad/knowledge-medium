@@ -1,0 +1,1 @@
+export{yG as usePropertySchemas}from"../../chunks/app-Ds5qnIib.js";
