@@ -897,7 +897,8 @@ export const reconcileFieldValueChildren = async (
   // row under the field row is its own machinery, never a value candidate.
   const values = await fieldValueChildren(tx, fieldRow.id)
   if (memberCodecOf(schema.codec) === undefined) {
-    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!, additive)
+    await reconcileSingleValueChild(tx, fieldRow, values, contents[0]!,
+      memberKeysFor(schema).content(contents[0]!), additive)
     return
   }
   await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
@@ -922,13 +923,15 @@ const reconcileSingleValueChild = async (
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   values: readonly BlockData[],
   content: string,
+  /** `content`'s `MemberKeys.content`, for its derived id. */
+  valueKey: string,
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
   const [primary, ...duplicates] = values
   if (!primary) {
     await createValueChild(tx, fieldRow, content, keyAtStart(null),
-      {kind: 'scalar-value', fieldRowId: fieldRow.id})
+      {kind: 'value', fieldRowId: fieldRow.id, occurrence: 0, valueKey})
     return
   }
   // An additive call may not touch the one slot a scalar has. Giving the value
@@ -1055,7 +1058,7 @@ const reconcileMemberValueChildren = async (
     occurrences.set(memberKey, occurrence + 1)
     if (!existing) {
       await createValueChild(tx, fieldRow, contents[i]!, orderKey,
-        {kind: 'member', fieldRowId: fieldRow.id, occurrence, memberKey})
+        {kind: 'value', fieldRowId: fieldRow.id, occurrence, valueKey: memberKey})
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row

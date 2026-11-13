@@ -43,9 +43,9 @@ const tagsSchema = defineProperty('tags', {
 })
 
 const fieldKey = (ws: string, owner: string, field: string) => `field|${ws}|${owner}|${field}`
-const scalarKey = (ws: string, fieldRow: string) => `value|${ws}|${fieldRow}`
+const scalarKey = (ws: string, fieldRow: string, value: string) => `value|${ws}|${fieldRow}|0|c${value}`
 const memberKey = (ws: string, fieldRow: string, occurrence: number, value: string) =>
-  `member|${ws}|${fieldRow}|${occurrence}|v["${value}"]`
+  `value|${ws}|${fieldRow}|${occurrence}|v["${value}"]`
 
 let sharedDb: TestDb
 let repo: Repo
@@ -116,7 +116,7 @@ describe('a plaintext workspace', () => {
     const fieldRowId = derivedFieldRow(PLAINTEXT_NS)
     expect((await liveChildrenOf(OWNER)).map(row => row.id)).toEqual([fieldRowId])
     expect(await liveChildrenOf(fieldRowId)).toEqual([expect.objectContaining({
-      id: uuidv5(scalarKey(WS, fieldRowId), PLAINTEXT_NS), content: 'done',
+      id: uuidv5(scalarKey(WS, fieldRowId, 'done'), PLAINTEXT_NS), content: 'done',
     })])
   })
 
@@ -152,7 +152,7 @@ describe('a plaintext workspace', () => {
     const [field] = await liveChildrenOf(OWNER)
     expect(field!.id).not.toBe(derivedFieldRow(PLAINTEXT_NS))
     expect((await liveChildrenOf(field!.id)).map(row => row.id))
-      .toEqual([uuidv5(scalarKey(WS, field!.id), PLAINTEXT_NS)])
+      .toEqual([uuidv5(scalarKey(WS, field!.id, 'done'), PLAINTEXT_NS)])
   })
 
   it('takes a random id for a member added later under an existing field row', async () => {

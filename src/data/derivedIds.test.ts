@@ -216,16 +216,16 @@ describe('property machinery rows', () => {
       .toBe('1f8652eb-7048-5e2a-9f8c-1d9065b1f2b9')
   })
 
-  it('a scalar\'s one value slot, from (workspace, field row)', () => {
+  it('a scalar value, from (workspace, field row, occurrence 0, value key)', () => {
     expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
-      {kind: 'scalar-value', fieldRowId: FIELD_ROW}))
-      .toBe('dfad772c-0eba-54aa-b6bb-2d62811aa296')
+      {kind: 'value', fieldRowId: FIELD_ROW, occurrence: 0, valueKey: 'cdone'}))
+      .toBe('ee995d10-bc86-54ac-be63-54ea30e0ab2b')
   })
 
-  it('a list member, from (workspace, field row, occurrence, member key)', () => {
+  it('a list member, from (workspace, field row, occurrence, value key)', () => {
     expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
-      {kind: 'member', fieldRowId: FIELD_ROW, occurrence: 1, memberKey: 'v"blue"'}))
-      .toBe('a4571377-ab01-5a6f-a34a-a4cfab61b84b')
+      {kind: 'value', fieldRowId: FIELD_ROW, occurrence: 1, valueKey: 'v"blue"'}))
+      .toBe('f78f97bc-8613-5694-b4e6-a355a9bde35d')
   })
 })
 

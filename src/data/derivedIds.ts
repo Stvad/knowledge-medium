@@ -187,14 +187,17 @@ export const classifyOccupant = (
  * When an id is derived at all, and why, is `mintPropertyChildRow`'s.
  *
  *  - `field` — the owner's one field row for a definition.
- *  - `scalar-value` — a single-valued property's one value slot, so two
- *    devices' first values land on one row.
- *  - `member` — one occurrence of one member of a list: equal members converge,
- *    different ones coexist. `memberKey` is `MemberKeys.content`'s, the
- *    comparison the member reconciler matches rows by.
+ *  - `value` — one occurrence of one value under a field row, a scalar's or a
+ *    list member's: equal values converge, different ones coexist as peers.
+ *    `valueKey` is `MemberKeys.content`'s, the comparison the reconcilers
+ *    match rows by; a scalar's occurrence is always 0.
+ *
+ * A value is keyed by WHAT it is, never by a fixed slot: a fixed slot would
+ * let the server keep one device's value row beside the other's block when an
+ * upload splits the two across create batches, dropping a value from both.
  *
  * The workspace is in every key; the `fieldRowId` would imply it, but stating
- * it costs nothing. `memberKey` is the one part that is user text, so it goes
+ * it costs nothing. `valueKey` is the one part that is user text, so it goes
  * LAST: every part before it is an id or a count, and none of those holds `|`.
  *
  * The namespace is a PARAMETER because a sealed workspace's is keyed by `K_id`
@@ -203,14 +206,12 @@ export const classifyOccupant = (
  */
 export type PropertyChildSlot =
   | {kind: 'field'; ownerId: string; fieldId: string}
-  | {kind: 'scalar-value'; fieldRowId: string}
-  | {kind: 'member'; fieldRowId: string; occurrence: number; memberKey: string}
+  | {kind: 'value'; fieldRowId: string; occurrence: number; valueKey: string}
 
 const propertyChildKey = (workspaceId: string, slot: PropertyChildSlot): string => {
   switch (slot.kind) {
     case 'field': return `field|${workspaceId}|${slot.ownerId}|${slot.fieldId}`
-    case 'scalar-value': return `value|${workspaceId}|${slot.fieldRowId}`
-    case 'member': return `member|${workspaceId}|${slot.fieldRowId}|${slot.occurrence}|${slot.memberKey}`
+    case 'value': return `value|${workspaceId}|${slot.fieldRowId}|${slot.occurrence}|${slot.valueKey}`
   }
 }
 

@@ -189,9 +189,9 @@ describe('two devices creating one block with its properties converge on one set
     expect(await fieldRows(b, STATUS_FIELD)).toEqual(await fieldRows(a, STATUS_FIELD))
   })
 
-  it('a scalar with different values: the first create wins, cell and rows alike', async () => {
-    // The scalar's one slot: a divergent value does not survive as a peer.
-    // The block's create is first-wins too, so the cell agrees.
+  it('a scalar with different values keeps both as peers under one field row', async () => {
+    // A value is keyed by what it is, so neither device's value can be the one
+    // the server drops; the cell is the first create's.
     const {a, b, server} = await setup({ownerExists: false})
     await createOwner(a, {status: 'from-a'})
     await createOwner(b, {status: 'from-b'})
@@ -200,7 +200,9 @@ describe('two devices creating one block with its properties converge on one set
     await quiesce([a, b], server)
 
     for (const device of [a, b]) {
-      expect(await stateOf(device, STATUS_FIELD)).toEqual({cell: {status: 'from-a'}, fieldRows: 1, values: ['from-a']})
+      const state = await stateOf(device, STATUS_FIELD)
+      expect({...state, values: state.values.sort()})
+        .toEqual({cell: {status: 'from-a'}, fieldRows: 1, values: ['from-a', 'from-b']})
     }
   })
 
