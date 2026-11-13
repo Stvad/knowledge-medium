@@ -165,8 +165,8 @@ export interface DecryptSpotCheckResult {
 
 export interface AuditOptions {
   /** When set (with `sleep`), the divergence check that finds anomalies on its
-   *  first pass re-measures after this delay and reports the SETTLED counts —
-   *  debouncing transient mid-sync divergence (an own write uploaded but its
+   *  first pass re-measures after this delay and reports only rows divergent
+   *  in the same state on both passes — debouncing transient mid-sync divergence (an own write uploaded but its
    *  server echo not yet streamed back; a mid-resync window). The point-in-time
    *  snapshot can't otherwise tell a transient from a persistent divergence
    *  (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
@@ -864,7 +864,8 @@ export const runConsistencyAudit = async (
   // L4 — blocks <-> blocks_synced divergence (ps_crud-aware). Per-client scans
   // miss divergence (#3, #5); this is the cross-view detector. Divergence is
   // frequently a TRANSIENT mid-sync state, so a dirty first pass is re-measured
-  // after a delay (opts.divergenceRecheckMs) and the SETTLED counts are reported.
+  // after a delay (opts.divergenceRecheckMs) and only rows divergent on both
+  // passes are reported.
   await run('local_server_divergence', async () => {
     const pendingClause = `b.id NOT IN (${PENDING_UPLOAD_IDS_SQL})`
     const strandedWhere = `b.workspace_id=? AND b.deleted=0
@@ -903,34 +904,60 @@ export const runConsistencyAudit = async (
     const serverAheadWhere = `b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
       AND ${contentDiffers}`
 
-    const measure = async () => ({
-      strandedLocalOnly: await count(db, `SELECT count(*) AS n FROM blocks b WHERE ${strandedWhere}`, [workspaceId]),
-      equalStampStandoff: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`, [workspaceId]),
-      localRicherNoPending: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`, [workspaceId]),
-      serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
-    })
     // stranded + standoff + local-richer are real anomalies; server-ahead is info.
-    const anomalyTotal = (m: Awaited<ReturnType<typeof measure>>) =>
-      m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
+    const anomalyFrom = {
+      strandedLocalOnly: `FROM blocks b WHERE ${strandedWhere}`,
+      equalStampStandoff: `FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`,
+      localRicherNoPending: `FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`,
+    }
+    type Category = keyof typeof anomalyFrom
+    const categories = Object.keys(anomalyFrom) as Category[]
+    // A row's divergent STATE is its id plus local stamp: a re-edit is a new state.
+    type RowState = { id: string; updated_at: number }
+    const stateKey = (r: RowState) => `${r.id}@${r.updated_at}`
+    const divergentRows = async () => {
+      const rows = {} as Record<Category, RowState[]>
+      for (const c of categories) {
+        rows[c] = await db.getAll<RowState>(
+          `SELECT b.id AS id, b.updated_at AS updated_at ${anomalyFrom[c]}`, [workspaceId],
+        )
+      }
+      return rows
+    }
 
-    let m = await measure()
+    // A divergence is an anomaly only when the SAME row is in the SAME state on
+    // both passes. Comparing totals is wrong: under a sustained write burst each
+    // pass catches different rows between upload ack and server echo.
+    let dirty = false
+    for (const c of categories) {
+      if (await count(db, `SELECT count(*) AS n ${anomalyFrom[c]}`, [workspaceId]) > 0) dirty = true
+    }
+    let settled = dirty
+      ? await divergentRows()
+      : { strandedLocalOnly: [], equalStampStandoff: [], localRicherNoPending: [] }
     let rechecked = false
-    if (anomalyTotal(m) > 0 && opts.divergenceRecheckMs && opts.sleep) {
+    if (dirty && opts.divergenceRecheckMs && opts.sleep) {
+      const first = settled
       await opts.sleep(opts.divergenceRecheckMs)
-      m = await measure() // settled counts — a transient will have cleared
+      const second = await divergentRows()
+      settled = {} as Record<Category, RowState[]>
+      for (const c of categories) {
+        const seen = new Set(first[c].map(stateKey))
+        settled[c] = second[c].filter((r) => seen.has(stateKey(r)))
+      }
       rechecked = true
     }
 
+    const m = {
+      strandedLocalOnly: settled.strandedLocalOnly.length,
+      equalStampStandoff: settled.equalStampStandoff.length,
+      localRicherNoPending: settled.localRicherNoPending.length,
+      serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
+    }
+    const anomalyTotal = m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
+
     const samples: string[] = []
-    if (m.strandedLocalOnly > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b WHERE ${strandedWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
-    }
-    if (m.equalStampStandoff > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
-    }
-    if (m.localRicherNoPending > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
-    }
+    for (const c of categories) addSamples(samples, settled[c].map((r) => String(r.id)))
 
     // e2ee content divergence: the cleartext-only diff above can't see through
     // ciphertext, so decrypt a bounded sample of equal-stamp e2ee rows and
@@ -953,7 +980,7 @@ export const runConsistencyAudit = async (
     }
 
     return {
-      status: anomalyTotal(m) > 0 || decryptSpotCheck?.status === 'anomaly' ? 'anomaly' : 'ok',
+      status: anomalyTotal > 0 || decryptSpotCheck?.status === 'anomaly' ? 'anomaly' : 'ok',
       strandedLocalOnly: m.strandedLocalOnly,
       equalStampStandoff: m.equalStampStandoff,
       localRicherNoPending: m.localRicherNoPending,
