@@ -134,7 +134,9 @@ const twoBatchWriter = (
   }
 }
 
-describe('operator backfill transient sync waits', () => {
+// A test can spend two 3 s budgets in sequence (a gap fence, then `settle`), so
+// the default 5 s would cut the second one off; measured: ≤ 263 ms under load 40.
+describe('operator backfill transient sync waits', {timeout: 10_000}, () => {
   it('resumes after a staged-rows gap between committed batches and writes each batch once', async () => {
     const events: string[] = []
     const batches: number[] = []
@@ -537,9 +539,12 @@ describe('operator backfill transient sync waits', () => {
 
     const running = repo.runWorkspaceBackfillNow(WS, BACKFILL_ID)
     await waitFor(() => expect(gap.seen).toBeGreaterThan(0))
+    const changedAt = performance.now()
     changeSession(repo)
 
     const result = await settle(running)
+    // Fake time: well past one poll, and short of the slow poll after 30 s.
+    expect(performance.now() - changedAt).toBeLessThan(30_000)
     expect(result.outcome).toBe('deferred')
     expect(result.reason).toContain(_label === 'write access revocation'
       ? 'lost write access'
