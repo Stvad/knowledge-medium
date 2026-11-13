@@ -1363,10 +1363,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => ({
     ...makeMultiSelect(action),
     description: `${action.description} (Multiple Blocks)`,
-    handler: async ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) => {
+    handler: async ({selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay}: MultiSelectModeDependencies) => {
       const ids = selectedBlocks.map(block => block.id)
       const run = () => repo.tx(
-        tx => applyOutlineGestureToGroupInTx(tx, gesture, ids, scopeRootId),
+        tx => applyOutlineGestureToGroupInTx(tx, gesture, ids, {panelRootId: scopeRootId, propertyDisplay}),
         {
           scope: ChangeScope.BlockDefault,
           description: `${action.description} (${pluralize(ids.length, 'block')})`,

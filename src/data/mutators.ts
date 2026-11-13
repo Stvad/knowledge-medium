@@ -22,7 +22,6 @@ import {
   keyAtEnd,
   keyBetween,
   keysBetween,
-  unlistedIndexAmong,
 } from './orderKey'
 import {
   keyImmediatelyAfter,
@@ -31,7 +30,7 @@ import {
   keysImmediatelyBefore,
 } from './orderKeyPlacement'
 import { isCollapsedProp } from '@/data/properties'
-import { visibleChildrenOf } from '@/data/visibleChildren'
+import { visibleChildrenOf, visibleSiblingsOf } from '@/data/visibleChildren'
 import {
   propertyDisplayScopeSchema,
   type PropertyDisplayScopeLevels,
@@ -557,7 +556,7 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  *
  * The SUBJECT is always on the list: one the mode leaves out — the focused row
  * the outline keeps showing (`BlockChildren`) — sits where the outline draws
- * it ({@link withSubject}). An ANCHOR absent from the list makes the gesture a
+ * it ({@link visibleSiblingsOf}). An ANCHOR absent from the list makes the gesture a
  * clean **no-op** rather than a surprising relocation.
  *
  * Deliberate machinery movement is not blocked, it just doesn't go through an
@@ -566,19 +565,6 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  */
 
 const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
-
-/** `siblings` with the gesture's subject on it, and its index: a subject the
- *  drawn list leaves out goes where the outline draws it (`unlistedIndexAmong`,
- *  the rule `BlockChildren` and the selection walkers use). */
-const withSubject = (
-  siblings: readonly BlockData[],
-  self: BlockData,
-): {siblings: BlockData[]; index: number} => {
-  const listed = siblings.findIndex(s => s.id === self.id)
-  if (listed >= 0) return {siblings: [...siblings], index: listed}
-  const index = unlistedIndexAmong(siblings, self)
-  return {siblings: [...siblings.slice(0, index), self, ...siblings.slice(index)], index}
-}
 
 // ──── indent ────
 
@@ -601,8 +587,7 @@ export const indent = defineMutator<IndentArgs, boolean>({
       // No parent — can't indent the root. Legacy was a no-op here.
       return false
     }
-    const {siblings, index: ix} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
+    const {siblings, index: ix} = await visibleSiblingsOf(tx, self, propertyDisplay)
     if (ix <= 0) return false  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
@@ -732,8 +717,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // The scope root anchors the view; it can't move within itself.
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
-    const {siblings, index: idx} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
+    const {siblings, index: idx} = await visibleSiblingsOf(tx, self, propertyDisplay)
 
     const up = direction === -1
     const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1

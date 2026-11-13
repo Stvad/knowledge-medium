@@ -1,7 +1,15 @@
-import type { BlockData, Tx } from '@/data/api'
+import { BlockNotFoundError, type BlockData, type Tx } from '@/data/api'
 import { indent, moveVertical, outdent } from '@/data/mutators'
-import { visibleChildrenOf } from '@/data/visibleChildren'
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { visibleSiblingsOf } from '@/data/visibleChildren'
 import { precedesInTree } from '@/data/treeOrder'
+
+/** Where a member moves: its scope root (see `scopedPath`) and the display
+ *  scope of the surface the selection is on. */
+interface MemberSurface {
+  scopeRootId: string
+  propertyDisplay?: PropertyDisplayScopeLevels
+}
 
 interface GroupGesture {
   /** Run bottom-up. Move-down travels toward the next sibling, and outdent
@@ -9,20 +17,17 @@ interface GroupGesture {
    *  run in reverse. */
   bottomUp: boolean
   /** Apply the single-block gesture; resolves whether the block moved. */
-  apply: (tx: Tx, id: string, scopeRootId: string) => Promise<boolean>
+  apply: (tx: Tx, id: string, surface: MemberSurface) => Promise<boolean>
 }
 
 const GROUP_GESTURES = {
-  indent: {bottomUp: false, apply: (tx, id) => tx.run(indent, {id})},
-  outdent: {bottomUp: true, apply: (tx, id, scopeRootId) => tx.run(outdent, {id, scopeRootId})},
-  moveUp: {
+  indent: {
     bottomUp: false,
-    apply: (tx, id, scopeRootId) => tx.run(moveVertical, {id, direction: -1, scopeRootId}),
+    apply: (tx, id, {propertyDisplay}) => tx.run(indent, {id, propertyDisplay}),
   },
-  moveDown: {
-    bottomUp: true,
-    apply: (tx, id, scopeRootId) => tx.run(moveVertical, {id, direction: 1, scopeRootId}),
-  },
+  outdent: {bottomUp: true, apply: (tx, id, surface) => tx.run(outdent, {id, ...surface})},
+  moveUp: {bottomUp: false, apply: (tx, id, surface) => tx.run(moveVertical, {id, direction: -1, ...surface})},
+  moveDown: {bottomUp: true, apply: (tx, id, surface) => tx.run(moveVertical, {id, direction: 1, ...surface})},
 } satisfies Record<string, GroupGesture>
 
 export type OutlineGroupGesture = keyof typeof GROUP_GESTURES
@@ -84,24 +89,29 @@ const scopeGroups = async (
   })
 }
 
-/** Whether `member`'s sibling on the side processed just before it is in
- *  `group`. That sibling ran first, and had it moved it would no longer be
- *  beside `member`; so it stayed, and moving `member` would split the group. */
+/** Whether `id`'s sibling on the side processed just before it, on the list
+ *  the surface draws, is in `group`. That sibling ran first, and had it moved
+ *  it would no longer be beside `id`; so it stayed, and moving `id` would
+ *  split the group. */
 const heldByGroup = async (
   tx: Tx,
-  member: BlockData,
+  id: string,
   group: ReadonlySet<string>,
-  bottomUp: boolean,
+  {bottomUp, propertyDisplay}: {bottomUp: boolean; propertyDisplay?: PropertyDisplayScopeLevels},
 ): Promise<boolean> => {
-  const siblings = await visibleChildrenOf(tx, member.parentId, member.workspaceId)
-  const at = siblings.findIndex(sibling => sibling.id === member.id)
-  const neighbour = siblings[bottomUp ? at + 1 : at - 1]
+  // Read live: an earlier member's gesture can re-key a tie this one is in.
+  const member = await tx.get(id)
+  if (member === null) throw new BlockNotFoundError(id)
+  const {siblings, index} = await visibleSiblingsOf(tx, member, propertyDisplay)
+  const neighbour = siblings[bottomUp ? index + 1 : index - 1]
   return neighbour !== undefined && group.has(neighbour.id)
 }
 
 /**
  * Apply an outline gesture to the selected blocks `ids` as one group per scope
  * root (see `scopedPath`), inside `tx`, and resolve whether any block moved.
+ * `panelRootId` and `propertyDisplay` describe the surface the selection is
+ * on: its zoom root, and the display scope whose list every gesture acts on.
  *
  * Each group applies in tree order, whatever order `ids` lists them in. A
  * block held by its group keeps its place, so a run of selected siblings moves
@@ -113,21 +123,17 @@ export const applyOutlineGestureToGroupInTx = async (
   tx: Tx,
   gesture: OutlineGroupGesture,
   ids: readonly string[],
-  panelRootId: string | undefined,
+  {panelRootId, propertyDisplay}: {panelRootId?: string; propertyDisplay?: PropertyDisplayScopeLevels},
 ): Promise<boolean> => {
   const {bottomUp, apply} = GROUP_GESTURES[gesture]
   let moved = false
   for (const {scopeRootId, paths} of await scopeGroups(tx, ids, panelRootId)) {
-    if (bottomUp) paths.reverse()
-    // `heldByGroup` reads only a member's parent from these rows, and that
-    // can't change before the member's own turn: members are distinct roots,
-    // each gesture moves only its own block, and re-keying a tie rewrites
-    // order keys, never parents.
-    const members = paths.map(path => path[path.length - 1])
-    const group = new Set(members.map(member => member.id))
-    for (const member of members) {
-      if (await heldByGroup(tx, member, group, bottomUp)) continue
-      if (await apply(tx, member.id, scopeRootId)) moved = true
+    const members = paths.map(path => path[path.length - 1].id)
+    if (bottomUp) members.reverse()
+    const group = new Set(members)
+    for (const id of members) {
+      if (await heldByGroup(tx, id, group, {bottomUp, propertyDisplay})) continue
+      if (await apply(tx, id, {scopeRootId, propertyDisplay})) moved = true
     }
   }
   return moved
