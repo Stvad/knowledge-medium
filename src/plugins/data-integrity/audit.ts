@@ -165,13 +165,17 @@ export interface DecryptSpotCheckResult {
 
 export interface AuditOptions {
   /** When set (with `sleep`), the divergence check that finds anomalies on its
-   *  first pass re-measures after this delay and reports only rows divergent
-   *  in the same state on both passes — debouncing transient mid-sync divergence (an own write uploaded but its
-   *  server echo not yet streamed back; a mid-resync window). The point-in-time
-   *  snapshot can't otherwise tell a transient from a persistent divergence
-   *  (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
+   *  first pass re-measures after this delay and reports the SETTLED counts —
+   *  debouncing transient mid-sync divergence (a mid-resync window). The
+   *  point-in-time snapshot can't otherwise tell a transient from a persistent
+   *  divergence (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
   divergenceRecheckMs?: number
   sleep?: (ms: number) => Promise<void>
+  /** Epoch ms of the last checkpoint the sync client APPLIED (PowerSync's
+   *  `lastSyncedAt`), or undefined before the first. When set, the divergence
+   *  check judges stranded / local-richer rows only if stamped before it. Omit
+   *  to judge every row (tests). */
+  syncedThroughMs?: () => number | undefined
   /** When set, the divergence check decrypts a bounded sample of equal-stamp
    *  e2ee staging rows and compares plaintext-to-plaintext — recovering the
    *  content-divergence detection the cleartext-only SQL diff gives up on an
@@ -864,13 +868,17 @@ export const runConsistencyAudit = async (
   // L4 — blocks <-> blocks_synced divergence (ps_crud-aware). Per-client scans
   // miss divergence (#3, #5); this is the cross-view detector. Divergence is
   // frequently a TRANSIENT mid-sync state, so a dirty first pass is re-measured
-  // after a delay (opts.divergenceRecheckMs) and only rows divergent on both
-  // passes are reported.
+  // after a delay (opts.divergenceRecheckMs) and the SETTLED counts are reported.
   await run('local_server_divergence', async () => {
     const pendingClause = `b.id NOT IN (${PENDING_UPLOAD_IDS_SQL})`
+    // An upload-path divergence is due only on a row stamped before the last
+    // APPLIED checkpoint: PowerSync applies one only with an empty upload queue,
+    // so every earlier write's echo has landed (a stamp is max(now, prev+1),
+    // never earlier than its write). A later row's echo may still be in flight.
+    const echoDueClause = `b.updated_at<?`
     const strandedWhere = `b.workspace_id=? AND b.deleted=0
       AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
-      AND ${pendingClause}`
+      AND ${pendingClause} AND ${echoDueClause}`
     // Cross-view content diff. An e2ee staging row holds `enc:v1:` ciphertext
     // while `blocks` holds decrypted plaintext, so they're never byte-equal —
     // comparing them flags every e2ee row. The prefix ALONE can't tell real
@@ -900,64 +908,47 @@ export const runConsistencyAudit = async (
     const contentDiffers = `(b.deleted!=bs.deleted OR ${sealedDiffers})`
     const standoffWhere = `b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
       AND ${contentDiffers}`
-    const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`
+    const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}
+      AND ${echoDueClause}`
     const serverAheadWhere = `b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
       AND ${contentDiffers}`
 
+    // Re-read per pass: a checkpoint applied during the recheck delay makes more
+    // rows due. Before the first checkpoint nothing is due; `?? 0` is defence in
+    // depth so no driver is handed an undefined binding.
+    let uploadPathParams: unknown[] = []
+    const measure = async () => {
+      const dueBefore = opts.syncedThroughMs ? (opts.syncedThroughMs() ?? 0) : Number.MAX_SAFE_INTEGER
+      uploadPathParams = [workspaceId, dueBefore]
+      return {
+        strandedLocalOnly: await count(db, `SELECT count(*) AS n FROM blocks b WHERE ${strandedWhere}`, uploadPathParams),
+        equalStampStandoff: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`, [workspaceId]),
+        localRicherNoPending: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`, uploadPathParams),
+        serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
+      }
+    }
     // stranded + standoff + local-richer are real anomalies; server-ahead is info.
-    const anomalyFrom = {
-      strandedLocalOnly: `FROM blocks b WHERE ${strandedWhere}`,
-      equalStampStandoff: `FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`,
-      localRicherNoPending: `FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`,
-    }
-    type Category = keyof typeof anomalyFrom
-    const categories = Object.keys(anomalyFrom) as Category[]
-    // A row's divergent STATE is its id plus local stamp: a re-edit is a new state.
-    type RowState = { id: string; updated_at: number }
-    const stateKey = (r: RowState) => `${r.id}@${r.updated_at}`
-    const divergentRows = async () => {
-      const rows = {} as Record<Category, RowState[]>
-      for (const c of categories) {
-        rows[c] = await db.getAll<RowState>(
-          `SELECT b.id AS id, b.updated_at AS updated_at ${anomalyFrom[c]}`, [workspaceId],
-        )
-      }
-      return rows
-    }
+    const anomalyTotal = (m: Awaited<ReturnType<typeof measure>>) =>
+      m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
 
-    // A divergence is an anomaly only when the SAME row is in the SAME state on
-    // both passes. Comparing totals is wrong: under a sustained write burst each
-    // pass catches different rows between upload ack and server echo.
-    let dirty = false
-    for (const c of categories) {
-      if (await count(db, `SELECT count(*) AS n ${anomalyFrom[c]}`, [workspaceId]) > 0) dirty = true
-    }
-    let settled = dirty
-      ? await divergentRows()
-      : { strandedLocalOnly: [], equalStampStandoff: [], localRicherNoPending: [] }
+    let m = await measure()
     let rechecked = false
-    if (dirty && opts.divergenceRecheckMs && opts.sleep) {
-      const first = settled
+    if (anomalyTotal(m) > 0 && opts.divergenceRecheckMs && opts.sleep) {
       await opts.sleep(opts.divergenceRecheckMs)
-      const second = await divergentRows()
-      settled = {} as Record<Category, RowState[]>
-      for (const c of categories) {
-        const seen = new Set(first[c].map(stateKey))
-        settled[c] = second[c].filter((r) => seen.has(stateKey(r)))
-      }
+      m = await measure() // settled counts — a transient will have cleared
       rechecked = true
     }
 
-    const m = {
-      strandedLocalOnly: settled.strandedLocalOnly.length,
-      equalStampStandoff: settled.equalStampStandoff.length,
-      localRicherNoPending: settled.localRicherNoPending.length,
-      serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
-    }
-    const anomalyTotal = m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
-
     const samples: string[] = []
-    for (const c of categories) addSamples(samples, settled[c].map((r) => String(r.id)))
+    if (m.strandedLocalOnly > 0) {
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b WHERE ${strandedWhere} LIMIT ${SAMPLE_LIMIT}`, uploadPathParams))
+    }
+    if (m.equalStampStandoff > 0) {
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
+    }
+    if (m.localRicherNoPending > 0) {
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere} LIMIT ${SAMPLE_LIMIT}`, uploadPathParams))
+    }
 
     // e2ee content divergence: the cleartext-only diff above can't see through
     // ciphertext, so decrypt a bounded sample of equal-stamp e2ee rows and
@@ -980,7 +971,7 @@ export const runConsistencyAudit = async (
     }
 
     return {
-      status: anomalyTotal > 0 || decryptSpotCheck?.status === 'anomaly' ? 'anomaly' : 'ok',
+      status: anomalyTotal(m) > 0 || decryptSpotCheck?.status === 'anomaly' ? 'anomaly' : 'ok',
       strandedLocalOnly: m.strandedLocalOnly,
       equalStampStandoff: m.equalStampStandoff,
       localRicherNoPending: m.localRicherNoPending,

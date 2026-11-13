@@ -204,6 +204,36 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     expect(sampleQueries).toBe(1) // ran once, because the count was > 0
   })
 
+  it('debounces transient divergence — a dirty pass that clears on recheck reports ok', async () => {
+    let strandedCountCalls = 0
+    let slept = 0
+    // The stranded COUNT query is dirty (5) on the first measure, clean (0) on
+    // the recheck; every other count is 0. Sample queries (SELECT b.id) only run
+    // for the settled state, which is clean → none.
+    const db: AuditDb = {
+      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+        // The stranded query is the only one with a `NOT EXISTS (… blocks_synced)`
+        // subquery (the others JOIN blocks_synced); its count is dirty then clean.
+        if (sql.includes('count(*)') && sql.includes('NOT EXISTS (SELECT 1 FROM blocks_synced')) {
+          strandedCountCalls += 1
+          return [{ n: strandedCountCalls === 1 ? 5 : 0 }] as unknown as T[]
+        }
+        return [{ n: 0 }] as unknown as T[]
+      },
+    }
+    const result = await runConsistencyAudit(db, 'ws', 0, {
+      divergenceRecheckMs: 1,
+      sleep: async () => { slept += 1 },
+    })
+    const div = result.checks.local_server_divergence
+    expect(div.status).toBe('ok') // transient cleared on recheck
+    expect(div.rechecked).toBe(true)
+    expect(div.strandedLocalOnly).toBe(0)
+    expect(slept).toBe(1)
+    expect(strandedCountCalls).toBe(2) // measured twice
+    expect(result.anomalies).toBe(0)
+  })
+
   it('does not run sample queries when a check is clean', async () => {
     let sampleQueries = 0
     const db: AuditDb = {
@@ -327,60 +357,37 @@ describe('runConsistencyAudit — pending-upload divergence', () => {
     if (resultKey !== 'serverAheadUndrained') expect(divergence.samples).toContain(sample)
   })
 
-  // A sustained write burst keeps SOME rows in the acked-but-not-echoed window
-  // on every pass; only the same row in the same state on both passes is stuck.
-  it('reports only rows divergent in the same state on both passes', async () => {
-    const richer = (id: string, local: number, synced: number) => Promise.all([
-      seedLocal(block(id, { updatedAt: STAMP + local, userUpdatedAt: STAMP + local })),
-      seedSynced(block(id, { updatedAt: STAMP + synced, userUpdatedAt: STAMP + synced })),
-    ])
-    const restamp = (id: string, at: number) =>
-      sharedDb.db.execute(`UPDATE blocks SET updated_at=? WHERE id=?`, [STAMP + at, id])
-
-    await seedLocal(block('stranded-stuck'))
-    await richer('richer-stuck', 30, 20)
-    await richer('richer-echoed', 30, 20)
-    await richer('richer-reedited', 30, 20)
-    await richer('richer-new', 20, 20)
+  it('judges upload-path rows only when stamped before the last applied checkpoint', async () => {
+    await seedLocal(block('stranded-due', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedLocal(block('stranded-in-flight', { updatedAt: STAMP + 50, userUpdatedAt: STAMP + 50 }))
+    await seedLocal(block('richer-due', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer-due', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+    await seedLocal(block('richer-in-flight', { updatedAt: STAMP + 50, userUpdatedAt: STAMP + 50 }))
+    await seedSynced(block('richer-in-flight', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
 
     const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
-      divergenceRecheckMs: 1,
-      sleep: async () => {
-        await seedLocal(block('stranded-new'))
-        await seedSynced(block('richer-echoed', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
-        await restamp('richer-reedited', 40)
-        await restamp('richer-new', 40)
-      },
+      syncedThroughMs: () => STAMP + 40,
     })
     const divergence = result.checks.local_server_divergence
 
-    expect(divergence.rechecked).toBe(true)
-    expect(divergence.status).toBe('anomaly')
     expect(divergence.strandedLocalOnly).toBe(1)
     expect(divergence.localRicherNoPending).toBe(1)
-    expect([...(divergence.samples as string[])].sort()).toEqual(['richer-stuck', 'stranded-stuck'])
+    expect([...(divergence.samples as string[])].sort()).toEqual(['richer-due', 'stranded-due'])
   })
 
-  it('reports ok when every first-pass divergence has cleared by the recheck', async () => {
-    await seedLocal(block('richer-echoed', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
-    await seedSynced(block('richer-echoed', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
-    let slept = 0
+  it('judges no upload-path row before any checkpoint has applied', async () => {
+    await seedLocal(block('stranded'))
+    await seedLocal(block('richer', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
 
     const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
-      divergenceRecheckMs: 1,
-      sleep: async () => {
-        slept += 1
-        await seedSynced(block('richer-echoed', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
-      },
+      syncedThroughMs: () => undefined,
     })
     const divergence = result.checks.local_server_divergence
 
-    expect(slept).toBe(1)
-    expect(divergence.rechecked).toBe(true)
     expect(divergence.status).toBe('ok')
+    expect(divergence.strandedLocalOnly).toBe(0)
     expect(divergence.localRicherNoPending).toBe(0)
-    expect(divergence.samples).toEqual([])
-    expect(result.anomalies).toBe(0)
   })
 
   it.each([
