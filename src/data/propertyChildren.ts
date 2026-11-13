@@ -21,9 +21,10 @@
  * Recognizing a row is not the same as HIDING it, and this file owns only the
  * first. Property children are ordinary blocks — that is the point of the
  * model, not a leak — so listing them is the default and exclusion is opt-IN
- * (`hidePropertyChildren`), which most queries do not even offer. The one
- * surface that hides ALL recognized rows today does so as an accepted interim
- * pending §10's tier-aware predicate; see `visibleChildren.ts`.
+ * (`propertyChildren`), which most queries do not even offer. Which rows a
+ * listing leaves out is its view ({@link isLeftOutOfChildrenView}); the
+ * outline's comes from its property display mode (`usePropertyDisplayMode`),
+ * and the gestures' from the same mode (`visibleChildren.ts`).
  * Content-intrinsic and
  * identical at every depth: a `::` child of ANY block — value rows included —
  * is that block's field row, and an unmarked ref targeting a definition is a
@@ -45,6 +46,7 @@ import {
   type AnyCodec,
   type AnyPropertySchema,
   type BlockData,
+  type PropertyChildrenView,
   type Tx,
 } from '@/data/api'
 import {
@@ -84,6 +86,27 @@ export const isPropertyFieldInstance = (
   if (data.parentId === null) return false
   const fieldId = getPropertyFieldTargetId(data)
   return fieldId !== undefined && isFieldDefinition(fieldId)
+}
+
+/** The definition facts a child view needs, bound to one workspace. */
+export interface PropertyRowClassifier {
+  readonly isFieldDefinition: IsPropertyFieldDefinition
+  /** Does the outline's `'non-hidden'` view skip this definition (`outlineSkippedFieldIds`)? */
+  readonly isOutlineSkipped: (fieldId: string) => boolean
+}
+
+/** Does a child listing under `view` leave `row` out? The JS twin of the SQL
+ *  child views (`VISIBLE_CHILDREN_SQL`, `NON_HIDDEN_CHILDREN_SQL`), shared by
+ *  `tx.childrenOf` and the copy serializer's prune. A skipped id is a
+ *  definition the registry resolved, so that view needs no recognition leg. */
+export const isLeftOutOfChildrenView = (
+  row: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm'>,
+  view: PropertyChildrenView,
+  classifier: PropertyRowClassifier,
+): boolean => {
+  if (view === 'all') return false
+  return isPropertyFieldInstance(row,
+    view === 'non-hidden' ? classifier.isOutlineSkipped : classifier.isFieldDefinition)
 }
 
 /** The value-set half of §9's binding selection discipline: a field row's
@@ -202,8 +225,7 @@ const SPAN_OPENER_RE = /[[(]/
  *  envelope. One owner because the sites must agree: disagree on the
  *  write/read pair and a value is escaped and never unwrapped; disagree in
  *  {@link contentLosesPropertyValue} and find-replace writes a
- *  value-destroying content instead of refusing it. (A JSON-spelled value can
- *  be destroyed the same way and is NOT escaped — km-24hg.)
+ *  value-destroying content instead of refusing it.
  *
  *  `enum` is in the set but reads through its OWN unwrap
  *  ({@link enumValueFromContent}), which claims the whole quoted form rather
@@ -378,14 +400,37 @@ export const contentLosesPropertyValue = (
     || hasLoneSurrogate(content)
 }
 
+const unicodeEscape = (c: string): string =>
+  `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
+
 /** Store `s` as content that reads back as exactly `s` and as nothing else.
  *  `JSON.stringify` carries the value (and spells lone surrogates as ASCII
  *  escapes); the extra opener escaping neutralizes the reference grammar.
  *  `JSON.parse` undoes both, so the decode needs no counterpart — only
  *  {@link isEscapedEnvelope} to know it is looking at one. */
 const escapeContent = (s: string): string =>
-  JSON.stringify(s).replace(SPAN_OPENERS_RE,
-    c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  JSON.stringify(s).replace(SPAN_OPENERS_RE, unicodeEscape)
+
+/** A whole JSON string literal, or an array bracket that directly opens another. */
+const JSON_STRING_OR_NESTED_BRACKET_RE = /"(?:[^"\\]|\\.)*"|\[(?=\[)/g
+/** A span opener directly followed by the same opener. */
+const DOUBLED_OPENER_RE = /([[(])(?=\1)/g
+
+/** Respell JSON text so that neither reference reader finds a span in it,
+ *  while `JSON.parse` reads back the same value — for every JSON-spelled
+ *  value child, where any span is an accident of serialization that a rename
+ *  or merge would rewrite.
+ *
+ *  Every span form in either reader needs a doubled opener (`[[` or `((`;
+ *  `!((` and `[label](((` included), so breaking each pair is enough: inside a
+ *  string literal the first of the pair is `\u`-escaped, and outside one —
+ *  where JSON has no `(` and `[` only opens an array — a space separates the
+ *  brackets. A lone opener stays as written, so the text stays readable and
+ *  searchable. Narrower than {@link escapeContent}, which must escape every
+ *  opener so an envelope identifies itself. */
+const grammarInertJson = (serialized: string): string =>
+  serialized.replace(JSON_STRING_OR_NESTED_BRACKET_RE, match =>
+    match === '[' ? '[ ' : match.replace(DOUBLED_OPENER_RE, unicodeEscape))
 
 /** Could `trimmed` have come out of {@link escapeContent}? A JSON string
  *  literal carrying no literal span opener — the two properties escapeContent
@@ -431,7 +476,7 @@ const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
     return String(encoded)
   }
   const serialized = JSON.stringify(encoded)
-  return serialized === undefined ? '' : serialized
+  return serialized === undefined ? '' : grammarInertJson(serialized)
 }
 
 const contentToEncodedValue = (
@@ -955,15 +1000,9 @@ export const childContentsToEncodedPropertyValue = (
   contents: Iterable<string>,
 ): unknown | undefined => {
   if (memberCodecOf(schema.codec) === undefined) {
-    for (const content of contents) {
-      try {
-        return valueChildContentToEncoded(schema, content)
-      } catch {
-        // Invalid child text should not preserve a stale parent cell
-        // projection. Skip it; if none parse the key is left unset.
-      }
-    }
-    return undefined
+    // Invalid child text should not preserve a stale parent cell projection:
+    // skip it; if none parse the key is left unset.
+    return firstDecodingValue(schema, contents)?.value
   }
   const members: unknown[] = []
   for (const content of contents) {
@@ -974,6 +1013,47 @@ export const childContentsToEncodedPropertyValue = (
     }
   }
   return members
+}
+
+/** A single-valued property's value: the first of its value children's
+ *  contents that decodes. The cell reads this one. */
+const firstDecodingValue = (
+  schema: AnyPropertySchema,
+  contents: Iterable<string>,
+): {readonly value: unknown} | undefined => {
+  for (const content of contents) {
+    try {
+      return {value: valueChildContentToEncoded(schema, content)}
+    } catch {
+      // Not this one.
+    }
+  }
+  return undefined
+}
+
+/** The value child a single-valued property's value lives in, of `values` in
+ *  sibling order: the one the cell reads ({@link firstDecodingValue}), else
+ *  the ONLY child — a value its user made unreadable, which a write repairs in
+ *  place. `undefined` when neither holds: no child can be told apart as the
+ *  value, so a write must add one rather than overwrite any. The writer and
+ *  the outline's value editor both bind here, so the editor sits on the row a
+ *  write lands on — except for a write whose content does not decode (a
+ *  cleared ref) when an earlier row already holds that content: it lands
+ *  there, the value row keeps its text and the cell reads stale until the
+ *  rows change. Accepted: every other order lets the second pass overwrite a
+ *  divergent peer. */
+export const scalarValueRow = <T extends {readonly content: string}>(
+  schema: AnyPropertySchema,
+  values: readonly T[],
+  /** A write's own content: a row already holding it counts as readable, so
+   *  a write that reconciles twice in one tx (the eager dual-write, then the
+   *  deferred materializer) lands on the same row both times even when that
+   *  content does not decode, as a cleared ref's does. */
+  writing?: string,
+): T | undefined => {
+  return values.find(value => value.content === writing
+    || firstDecodingValue(schema, [value.content]) !== undefined)
+    ?? (values.length === 1 ? values[0] : undefined)
 }
 
 /** What a value row is, for comparison. `denotesValue` is false when the row's

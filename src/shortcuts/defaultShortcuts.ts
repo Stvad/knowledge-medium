@@ -71,6 +71,8 @@ import {
   navigate,
   navigateFromGlobalCommand,
   resolveActivePanelRow,
+  ZOOM_ORIGIN,
+  ZOOM_OUT_ORIGIN,
 } from '@/utils/navigation.js'
 import {
   deletePanelRow,
@@ -228,6 +230,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     extendSelectionUp: extendSelectionUpBlock,
     extendSelectionDown: extendSelectionDownBlock,
     copyBlock,
+    copyBlockWithHiddenProperties,
     copyBlockRef,
     copyBlockEmbed,
     copyBlockContent,
@@ -256,6 +259,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
   const copyBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlock)
+  const copyBlockWithHiddenPropertiesAction =
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockWithHiddenProperties)
   const copyBlockRefAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockRef)
   const copyBlockEmbedAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockEmbed)
   const copyBlockContentAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockContent)
@@ -269,13 +274,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     id: 'zoom_in',
     description: 'Zoom into focused block',
     icon: ZoomIn,
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({block, uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       // Through navigate() so zoom is observable/interceptable via
-      // navigationVerb; target 'panel' swaps this panel's content (the swap
-      // still wraps in withMoveTransition inside navigateInPanel) and marks this
-      // panel active (it's the one being interacted with) — a benign addition
-      // over the old direct navigateInPanel.
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
+      // navigationVerb; target 'panel' swaps this panel's content and marks
+      // it active.
+      await navigate(repo, {
+        target: 'panel', panelId: uiStateBlock.id, blockId: block.id,
+        origin: ZOOM_ORIGIN, sourceRenderScopeId: renderScopeId,
+      })
     },
     defaultBinding: {
       keys: '$mod+.',
@@ -285,15 +291,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const zoomOutBlock: BlockAction = {
     id: 'zoom_out',
     description: 'Zoom out to parent of current view',
-    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+    handler: async ({uiStateBlock, renderScopeId}: BlockShortcutDependencies) => {
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
       await repo.load(topLevelBlockId, {ancestors: true})
       const parent = repo.block(topLevelBlockId).parent
-      if (!parent) return
 
-      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id, origin: 'zoom'})
+      // Sent from a root too, where the panel stays as it is: a view nested in
+      // the panel may be zoomed in on its own, and claims the zoom out by
+      // `sourceRenderScopeId`.
+      await navigate(repo, {
+        target: 'panel', panelId: uiStateBlock.id, blockId: parent?.id ?? topLevelBlockId,
+        origin: ZOOM_OUT_ORIGIN, sourceRenderScopeId: renderScopeId,
+      })
     },
     defaultBinding: {
       keys: '$mod+,',
@@ -364,6 +375,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleMaximizePanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
     copyBlockAction,
+    copyBlockWithHiddenPropertiesAction,
     copyBlockRefAction,
     copyBlockEmbedAction,
     copyBlockContentAction,
@@ -372,8 +384,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_block',
       description: 'Cut focused block to move it',
       context: ActionContextTypes.NORMAL_MODE,
-      handler: ({uiStateBlock, block, scopeRootId, renderScopeId}: BlockShortcutDependencies) =>
-        cutBlocks({uiStateBlock, selectedBlocks: [block], scopeRootId, renderScopeId}),
+      handler: ({uiStateBlock, block, scopeRootId, renderScopeId, propertyDisplay}: BlockShortcutDependencies) =>
+        cutBlocks({uiStateBlock, selectedBlocks: [block], scopeRootId, renderScopeId, propertyDisplay}),
       defaultBinding: {
         keys: '$mod+x',
         eventOptions: {preventDefault: true},
@@ -485,7 +497,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // per-workspace representation of the cell, and `importState` replays
         // only content/structure — so exported machinery would land in the
         // target as ordinary `((fieldId))` rows rather than as properties.
-        const blocks = await repo.query.subtree({id: root.id, hidePropertyChildren: true}).load()
+        const blocks = await repo.query.subtree({id: root.id, propertyChildren: 'none'}).load()
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')
@@ -774,7 +786,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Split block at cursor',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => {
-        const {block, editorView, uiStateBlock, scopeRootId} = deps
+        const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
         if (!block || !editorView || !uiStateBlock) return
 
         // NOTE: Enter-accepts-an-open-completion is handled INSIDE the editor
@@ -821,7 +833,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // root-level crossfade ghosts the shifting siblings, which
         // reads as blur. The unwrapped shift is cleaner.
         else if (editorView.state.doc.length === 0) {
-          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId})
+          const moved = policy.canOutdent && await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed
@@ -1305,12 +1317,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * Cuts exactly `selectedBlocks` rather than re-reading the ui-state
    * selection: with supplied deps the two can differ.
    */
-  const cutBlocks = async (deps: Pick<BlockShortcutDependencies, 'uiStateBlock' | 'scopeRootId' | 'renderScopeId'> & {selectedBlocks: Block[]}): Promise<void> => {
-    const {uiStateBlock, selectedBlocks, scopeRootId, renderScopeId} = deps
+  const cutBlocks = async (deps: Pick<BlockShortcutDependencies, 'uiStateBlock' | 'scopeRootId' | 'renderScopeId' | 'propertyDisplay'> & {selectedBlocks: Block[]}): Promise<void> => {
+    const {uiStateBlock, selectedBlocks, scopeRootId, renderScopeId, propertyDisplay} = deps
     if (!selectedBlocks.length) return
     let outcome: 'cut' | 'empty'
     try {
-      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo, propertyDisplay)
     } catch (error) {
       // A refused clipboard write armed nothing; keep the selection to retry.
       console.error('[cut] clipboard write failed', error)
@@ -1367,13 +1379,19 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'copy_selected_blocks',
       description: 'Copy selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: ({uiStateBlock}) => copySelectedBlocksToClipboard(uiStateBlock, repo),
+      handler: ({uiStateBlock, propertyDisplay}) => copySelectedBlocksToClipboard(uiStateBlock, repo, propertyDisplay),
       defaultBinding: {
         keys: ['$mod+c', 'y'],
         eventOptions: {
           preventDefault: true,
         },
       },
+    },
+    {
+      id: 'copy_selected_blocks_with_hidden_properties',
+      description: 'Copy selected blocks with hidden properties',
+      context: ActionContextTypes.MULTI_SELECT_MODE,
+      handler: ({uiStateBlock}) => copySelectedBlocksToClipboard(uiStateBlock, repo, 'all'),
     },
     {
       id: 'cut_selected_blocks',

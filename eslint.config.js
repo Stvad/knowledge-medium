@@ -250,7 +250,7 @@ export default tseslint.config(
     // Child-visibility guardrail. `tx.childrenOf` /
     // `repo.query.{children,subtree,childIds}` default to the structural
     // everything-view (hidden property field-row machinery included); the
-    // visible/outline view is opt-in (`hidePropertyChildren` / the
+    // visible/outline view is opt-in (`propertyChildren` / the
     // `visibleChildrenOf` helper).
     //
     // Split by ALTITUDE, not by directory (the first cut scoped this to a

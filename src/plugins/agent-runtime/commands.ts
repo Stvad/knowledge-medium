@@ -1135,7 +1135,7 @@ const reconcileMarkdownSubtree = async (
         // Visible view: a property field row is machinery OWNED by `doomed`
         // (not foreign content), so it must not be rescued/reparented — it
         // goes with `doomed` in the subtree-delete below.
-        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {hidePropertyChildren: true}))
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {propertyChildren: 'none'}))
           .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
         if (foreign.length > 0) {
           // Land the rescued children in the doomed node's OWN slot (between
@@ -1163,7 +1163,7 @@ const reconcileMarkdownSubtree = async (
         // field/value machinery, which must be tombstoned with it rather
         // than stranded live under the tombstone (§9). True pre-flip too:
         // the backfill mints that machinery before the workspace reads it,
-        // and `hidePropertyChildren` recognizes it on the bit.
+        // and `propertyChildren` recognizes it on the bit.
         // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
         await deleteSubtreeInTx(tx, doomed.id)
       }
@@ -1670,6 +1670,18 @@ const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
 
 const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
   context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+
+/** The attribution processor's refusal, asked BEFORE a command's expensive or
+ *  unattributed first step — the one its own transaction-time check comes too
+ *  late for. */
+const refuseUnchosenContributor = (
+  context: AgentRuntimeContext,
+  command: {contributorId?: string | null},
+): void => {
+  if (contributorsEnabled(context) && command.contributorId === undefined) {
+    throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
+  }
+}
 
 const requireComments = (context: AgentRuntimeContext): void => {
   if (!context.runtime.read(queriesFacet).has(THREAD_IDS_FOR_BLOCK_QUERY)) {
@@ -2251,7 +2263,7 @@ export const createAgentRuntimeContext = ({
     // time as `((fieldId))` blocks pretending to be user content. Agents that
     // genuinely want raw storage have `sql`.
     getSubtree: async rootId =>
-      await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
+      await repo.query.subtree({id: rootId, propertyChildren: 'none'}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
@@ -2388,9 +2400,7 @@ const executeAttributedCommand = async (
       }
       // Refused here, not left to the attribution check inside the capture's tx: by
       // then the bytes are stored, and nothing reclaims them.
-      if (contributorsEnabled(context) && command.contributorId === undefined) {
-        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
-      }
+      refuseUnchosenContributor(context, command)
       return addMedia(context.repo, workspaceId, {
         base64: requireString(command.base64, 'base64'),
         filename: command.filename,
@@ -2598,6 +2608,9 @@ const executeAttributedCommand = async (
       })
 
     case 'run-backfill':
+      // Refused here, not left to the pass's first batch: by then the claim is
+      // taken, over the workspace's record of an earlier completed run.
+      refuseUnchosenContributor(context, command)
       return context.runBackfill({
         backfillId: requireString(command.backfillId, 'backfillId'),
         workspaceId: command.workspaceId === undefined

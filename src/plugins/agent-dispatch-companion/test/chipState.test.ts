@@ -70,6 +70,12 @@ describe('chipTitle', () => {
     expect(withoutActivity).not.toContain('—')
   })
 
+  it('says why a queued chip is waiting when the daemon gave a reason', () => {
+    expect(chipTitle(chipStateFor({'agent:status': 'queued', 'agent:activity': 'waiting for the run already going in this thread'})!))
+      .toBe('Queued for Claude — waiting for the run already going in this thread')
+    expect(chipTitle(chipStateFor({'agent:status': 'queued'})!)).toBe('Queued for Claude')
+  })
+
   it('says a running chip is being cancelled, since the pill has no room for the executor then', () => {
     expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:cancel': 1})!))
       .toBe('Cancelling the Claude run')

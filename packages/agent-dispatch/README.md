@@ -18,7 +18,7 @@ Design notes: task state lives **in the graph** (`agent:*` block properties), so
 
 Runs execute via `claude -p` on a machine authenticated with `claude login`. The daemon **scrubs `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and the `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY` switches from every child environment** — any of them would silently redirect billing. One thing env-scrubbing can't reach: a user-level `settings.json` `apiKeyHelper` — check yours if runs bill unexpectedly. Nothing here touches the Agent SDK (API-key-only by policy).
 
-**Spend circuit-breaker:** `runsPerHour` (default 10) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 65-min stale sweep) before being parked as `error` with a visible reply.
+**Spend circuit-breaker:** `runsPerHour` (default 45, a top-level config key) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 65-min stale sweep) before being parked as `error` with a visible reply.
 
 ## Executors
 
@@ -40,6 +40,26 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Approvals:** codex `exec` runs default to headless `approval_policy = "never"`; interactive `-a/--ask-for-approval` is not a supported exec-runner control. To route approval requests through Codex's classifier instead of a human prompt, set `"approvalPolicy": "on-request"` together with `"approvalsReviewer": "auto_review"` under the codex runner. Other non-`never` policies are rejected at config parse time because `codex exec` would not honor them here.
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
+
+## Upgrade to 0.9.0
+
+Backlinks watchers now keep a memory in your notes (see [Memory](#memory)), on by default. On a watcher's first run the daemon adds a `Memory` block under its target page, for example under `[[claude]]`. Every run then sees what is in it and keeps it itself, and a run's reply ends with a `Memory changed during this run: …` line when the run changed it.
+
+- To keep a watcher out of it, set `"memory": false` on that watcher. Do this for a watcher whose custom `prompt` should not write to the notes.
+- Notes an earlier run saved to Claude Code's auto-memory (`~/.claude/projects/*/memory/`) are not moved. Copy any you want to keep into the `Memory` block by hand, one block per note.
+- Restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
+## Upgrade to 0.8.6
+
+`runsPerHour` now defaults to 45 (was 10). Set it at the top level of the config to keep a lower cap.
+
+## Upgrade to 0.8.5
+
+A claude run is offered only the built-in tools its `allowedTools` names, and no skills, so its fixed prompt no longer carries every tool definition and every installed plugin's skill listing on each request. This also makes the allow list the real boundary: `--allowedTools` only pre-approves, and before 0.8.5 a run without them could still use the tools that need no approval — read-only shell commands (`ls`, `cat`, `git status`), `Read`/`Glob`/`Grep`, subagents, and writes to Claude Code's auto-memory. A watcher that wants any of these now lists them in `runner.allowedTools`, except subagents: `Agent` joins `defaultAllowedTools`, and a subagent gets only the tools its run is offered. A run that waits on a background subagent ends with a second result line; the reply and the logged usage come from the last one, and the usage covers every model and subagent. Each run's `done` / `FAILED` log line now ends with its token usage, for example `tokens: in 4 · cache read 14.2k · cache write 14.6k · out 34`.
+
+## Upgrade to 0.8.4
+
+`maxConcurrent` now defaults to 4 (was 2). A follow-up that has to wait for its thread's run to finish now shows as `agent:status=queued`, its chip says why, and the log says so once. Earlier versions treat `queued` as finished, so if you downgrade, delete the `agent:*` properties on any block still queued to run it.
 
 ## Upgrade to 0.8.3
 
@@ -228,7 +248,8 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
      "profile": "agent-dispatch",
      "workspaceId": "YOUR_WORKSPACE_ID", // required: the workspace the daemon acts on
      "pollIntervalMs": 5000,
-     "maxConcurrent": 2,
+     "maxConcurrent": 4,
+     "runsPerHour": 45, // launches per rolling hour, across all watchers
      "watchers": [
        {
          "kind": "backlinks",
@@ -311,13 +332,24 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
    - **Or you use Ask Agent**, which fires from inside the editor without waiting for you to leave. It covers the text as you asked about it: keep writing afterwards and the mention waits again.
 2. Claim: `agent:status=running` + `agent:watcher` + `agent:executor` + `agent:attempts` + `agent:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher; `{{target}}` is the watcher's page alias), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped). A mention that is a comment in a thread also gets the thread: the annotated block's text and page path, the quote, and the comments from the thread's first one down to the mention, with their authors (`{{thread}}`; a custom `prompt` without it gets the thread appended). Reading it needs an app with the `comments` verb; without one the mention is answered without it.
-4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`, and gets the km tools in its first prompt (`alwaysLoad`) rather than behind tool search; `runner.model` and `runner.effort` pass through as `--model` and `--effort`, and unset they take your Claude Code defaults; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`. `runner.timeoutMs` kills a run that is still going after it (default 10 min, at most 60 min).
-5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
-6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
+4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`, is offered only the built-in tools its allow list names (`--tools`) and no skills (`--disable-slash-commands`), so the user's interactive plugins don't ride along on every request, and gets the km tools in its first prompt (`alwaysLoad`) rather than behind tool search; `runner.model` and `runner.effort` pass through as `--model` and `--effort`, and unset they take your Claude Code defaults; `WebSearch`, `WebFetch` and `Agent` (subagents, which get only the tools the run is offered) come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` / `runner.approvalsReviewer` settings. `runner.cwd` defaults to `$HOME`. `runner.timeoutMs` kills a run that is still going after it (default 10 min, at most 60 min).
+5. The prompt also carries the watcher's memory (see [Memory](#memory)) unless the watcher sets `"memory": false`.
+6. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
+7. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session: a follow-up whose thread is still running is marked `agent:status=queued`, with an `agent:activity` saying why, and runs once that run ends). For parallel runs, mention outside the running thread — that starts a fresh session.
 
 Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 65 min (the longest allowed run plus grace) is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
 
 **One daemon per fleet.** A pidfile prevents two daemons on one machine (launchd + a manual run would double-claim and double-bill). Across machines there is no claim atomicity over LWW sync — install the LaunchAgent on exactly one device.
+
+## Memory
+
+Each backlinks watcher keeps a memory: one block per note, under a block titled `Memory` that sits directly under the watcher's target page. Watchers with the same target share it. The daemon creates that block on the first run and finds it again after you retitle it; a block titled `Memory` that you make there yourself is used instead. Every run, follow-ups included, gets the memory in its prompt, in the outline view the km `subtree` tool prints, limited to its first 50 blocks (shallow levels first).
+
+The run keeps the memory itself, with the ordinary km write tools. It is told to save a correction or a lasting preference the user states as one short block, to edit a note that changed, to delete one that is wrong or superseded (but never a block with children), and to merge duplicates. It is told not to save what only the current request needs, what the notes already record, secrets, or anything a web page or document said rather than the user. Edit, move or delete the notes by hand as you would any block.
+
+When a run changes the memory, the daemon adds a line to the end of its reply, failed and cancelled runs included: `Memory changed during this run: saved …; edited …; removed "…" (id)`, with links to the saved and edited blocks. A removed note is soft-deleted: `kmagent restore-block <id>` brings it back. The daemon compares every block below `Memory` before and after the run, so the line holds whatever the run wrote, nested notes included, and also any change made meanwhile by another run on the same target or by you. Past 1000 blocks it says the memory is too large to compare instead. With `delivery: "channel"` the run gets the memory too, but no such line, since the ambient session posts its own reply. If the memory can't be read, the run goes ahead without it and is not asked to keep it. Set `"memory": false` on a watcher to turn this off.
+
+A `[[claude]]` you write inside the memory starts a run like anywhere else; children of the target page are not backlinks to it, so the memory itself never does.
 
 ### Loop guards
 
@@ -378,9 +410,10 @@ Started this way, the server also offers `read_media`, and `add_media`, which up
 ## Security posture
 
 - The daemon's bridge token is scoped to its own profile — revoke it in the app's token dialog to kill all graph access at once.
-- **Claude executor:** spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools plus `WebSearch`/`WebFetch` (the top-level `defaultAllowedTools`). Watchers that operate on code repos must opt in via `runner.allowedTools` + `runner.cwd`, which is a deliberate, per-watcher decision. **This fail-closed posture is claude-only** — a `"runner": {"executor": "codex"}` watcher runs shell commands under Codex's configured sandbox and ignores `allowedTools` entirely (see the codex Sandboxing bullet above).
+- **Claude executor:** spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools plus `WebSearch`/`WebFetch` and subagents (the top-level `defaultAllowedTools`); a subagent gets the same tools as its run, no more. Watchers that operate on code repos must opt in via `runner.allowedTools` + `runner.cwd`, which is a deliberate, per-watcher decision. **This fail-closed posture is claude-only** — a `"runner": {"executor": "codex"}` watcher runs shell commands under Codex's configured sandbox and ignores `allowedTools` entirely (see the codex Sandboxing bullet above).
 - **Web-tools trade-off:** `WebFetch` ingests arbitrary page text, so a prompt-injected page can steer a run that also holds graph *write* tools — including exfiltrating note content through crafted fetch URLs. Neither web tool touches the local machine, and `runsPerHour` bounds the blast radius, but if your notes are sensitive set `"defaultAllowedTools": []` to keep runs graph-only.
 - **Billing — safe by default, opt in on purpose:** `"billing": "subscription"` (default) scrubs every API-key/token/provider-reroute env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, bedrock/vertex/base-url switches, …) from the child, so a key you exported for something else can't silently put an unattended daemon on usage-based billing — the CLI's plan login (OAuth) wins. To *intentionally* run on API credits, set `"billing": "api"`, which skips the scrub. The daemon logs the effective mode at startup, naming (never printing) any credential vars it found. **One gap it can't close:** a key stored via `claude`/`codex` login (`--with-api-key` → `auth.json`, or an `apiKeyHelper`) lives outside the env and is *not* scrubbable — the startup log flags this; verify your login state if you're unsure which account a run bills.
+- **Memory persists what a run is told:** a run that a prompt-injected page steers could save a "preference" that every later run then reads, and anyone who can edit the target page can write a note there, as they can already write a mention. Runs are told to save only what the user said and to weigh memory as context, never above the request; the line the daemon adds to the reply shows every change made to the memory during the run, whatever the run says itself. Read those lines, and set `"memory": false` on a watcher whose runs read untrusted content routinely.
 - No Claude `--dangerously-skip-permissions` or Codex `--dangerously-bypass-approvals-and-sandbox` anywhere. Claude print mode denies anything outside the allowlist; Codex authority is bounded by its configured sandbox and approval policy.
 
 ## Ambient mode via channels (EXPERIMENTAL)
