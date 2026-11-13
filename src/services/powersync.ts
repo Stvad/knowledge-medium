@@ -395,6 +395,15 @@ const orderedBlockUpserts = (rows: readonly BlockUploadPayload[]): BlockUploadPa
   return ordered
 }
 
+/** How long one upload request may run before it is aborted. A request that
+ *  never settles would hold the upload lock ({@link uploadLockName}) against
+ *  every later pass. Well above the server's statement timeout, so a request
+ *  still running at the deadline is one the server is no longer executing.
+ *  The abort surfaces as a codeless `status: 0` error, which classifies
+ *  transient: the pass throws and the queue is retried. */
+const UPLOAD_REQUEST_TIMEOUT_MS = 30_000
+const uploadRequestDeadline = (): AbortSignal => AbortSignal.timeout(UPLOAD_REQUEST_TIMEOUT_MS)
+
 /** Ships every PATCH in the compacted batch as a single
  *  `apply_block_patches` RPC call. The server-side function loops the
  *  patches array and runs one column-narrow UPDATE per element, with the
@@ -420,7 +429,9 @@ const applyBlockPatchesRpc = async (
   for (const batch of chunk(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] PATCH batch', batch.length)
     const payload = batch.map(patch => ({id: patch.id, ...patch.payload}))
-    const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
+    const {error, status} = await client
+      .rpc('apply_block_patches', {patches: payload})
+      .abortSignal(uploadRequestDeadline())
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -437,6 +448,7 @@ const applyBlockDelete = async (id: string) => {
     .from('blocks')
     .delete()
     .eq('id', id)
+    .abortSignal(uploadRequestDeadline())
 
   if (error) {
     throwWithHttpStatus(error, status)
@@ -468,7 +480,9 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   // DEFERRABLE within a tx but not across them.
   for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
-    const {error, status} = await client.rpc('apply_block_creates', {creates: batch})
+    const {error, status} = await client
+      .rpc('apply_block_creates', {creates: batch})
+      .abortSignal(uploadRequestDeadline())
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -834,16 +848,15 @@ export const uploadLockName = (dbFilename: string): string => `km-upload-${dbFil
 
 /** The connector's `uploadData`, one pass at a time per database.
  *
- *  The SDK's own upload lock does not cover this: when its sync stream is torn
- *  down, the shared worker stops WAITING on the tab's `uploadData` and releases
- *  that lock while the pass and its request are still running. The pass it
- *  starts after reconnecting would read the same queue and send the same edits
- *  again, merged with later ones, and whichever request the server applies last
- *  wins — the earlier text over the later. Queued behind the lock, the next
- *  pass reads the queue only after the first has completed what it sent.
+ *  The SDK's own upload lock does not cover this. Whenever its shared worker
+ *  reconnects, which every other tab connecting causes, it stops WAITING on the
+ *  tab's `uploadData` and releases that lock while the pass and its request
+ *  still run. Unserialized, the pass it starts next re-sends the same queue,
+ *  and the server keeps whichever request it applies last. Behind this lock
+ *  the next pass reads the queue only after the earlier one has settled.
  *
- *  A Web Lock rather than an in-tab chain because the worker may hand the next
- *  pass to another tab. */
+ *  A Web Lock, not an in-tab chain: the worker hands the next pass to the
+ *  newest tab. */
 const serializedUploadData = (
   dbFilename: string,
   deps: UploadDeps,
@@ -881,7 +894,6 @@ export const createPowerSyncConnector = (
   )),
 })
 
-export const __uploadDataForTest = serializedUploadData
 export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts

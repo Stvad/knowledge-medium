@@ -5,10 +5,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
   from: vi.fn(),
+  /** The signal each request was bounded with, in order. */
+  deadlines: [] as AbortSignal[],
 }))
 
+/** A PostgREST request as the upload path uses one: awaitable, and able to
+ *  take the signal that bounds it. */
+const request = vi.hoisted(() => <T>(result: T) =>
+  Object.assign(Promise.resolve(result), {
+    abortSignal(signal: AbortSignal) {
+      supabaseRef.deadlines.push(signal)
+      return this
+    },
+  }))
+
 vi.mock('@/services/supabase.js', () => ({
-  supabase: supabaseRef,
+  supabase: {
+    rpc: (...args: unknown[]) => request(supabaseRef.rpc(...args)),
+    from: (...args: unknown[]) => supabaseRef.from(...args),
+  },
   hasSupabaseAuthConfig: true,
 }))
 
@@ -24,7 +39,7 @@ import {
   __encryptUploadOpsForTest,
   __orderedBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
-  __uploadDataForTest,
+  createPowerSyncConnector,
   uploadLockName,
   type BlockUploadSink,
   type CompactedBlockOperation,
@@ -1120,7 +1135,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
     // Fixing commit: 71bd72efe (issue #459).
-    const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const eq = vi.fn(() => request({data: null, error: {message: 'Bad Request'}, status: 400}))
     const del = vi.fn().mockReturnValue({eq})
     supabaseRef.from.mockReturnValue({delete: del})
 
@@ -1219,37 +1234,69 @@ describe('uploadData — one pass per database at a time', () => {
     return {database, enqueue}
   }
 
+  /** The patches each `apply_block_patches` request carried, in send order. */
+  const sentPatches = () => supabaseRef.rpc.mock.calls.map(([, body]) => body.patches)
+  const landed = {data: null, error: null}
+
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+    supabaseRef.deadlines.length = 0
+  })
+
   it('holds a second pass until the request already in flight has landed', async () => {
     const dbFilename = `upload-lock-${crypto.randomUUID()}`
     const {database, enqueue} = uploadQueue()
-    const sent: Array<readonly CompactedBlockOperation[]> = []
     let landFirst!: () => void
-    const firstLanded = new Promise<void>(resolve => { landFirst = resolve })
-    const applyOperations = vi.fn<UploadDeps['applyOperations']>(async (_db, ops) => {
-      sent.push(ops)
-      if (sent.length === 1) await firstLanded
-    })
-    const uploadData = __uploadDataForTest(dbFilename, {applyOperations, recordRejection: vi.fn()})
+    supabaseRef.rpc
+      .mockReturnValueOnce(new Promise(resolve => { landFirst = () => resolve(landed) }))
+      .mockResolvedValue(landed)
+    const {uploadData} = createPowerSyncConnector({dbFilename})
 
     enqueue(1, [patch(1, 'block-a', {content: 'it ', base_updated_at: 100}, 1)])
     const abandonedPass = uploadData(database)
-    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sentPatches()).toHaveLength(1))
 
-    // The SDK stopped waiting on that pass (its sync stream was torn down) and
-    // starts another, with a later edit queued behind the one still in flight.
+    // The SDK stopped waiting on that pass and starts another, with a later
+    // edit queued behind the one still in flight.
     enqueue(2, [patch(2, 'block-a', {content: 'it m', base_updated_at: 200}, 2)])
     const nextPass = uploadData(database)
     await vi.waitFor(async () => {
       const {pending = []} = await navigator.locks.query()
-      expect(sent.length > 1 || pending.some(lock => lock.name === uploadLockName(dbFilename))).toBe(true)
+      expect(sentPatches().length > 1 || pending.some(lock => lock.name === uploadLockName(dbFilename))).toBe(true)
     })
-    expect(sent).toHaveLength(1)
+    expect(sentPatches()).toHaveLength(1)
+
+    // Another database's uploads are not behind it.
+    const other = uploadQueue()
+    other.enqueue(3, [patch(3, 'block-b', {content: 'elsewhere'}, 3)])
+    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`}).uploadData(other.database)
 
     landFirst()
     await Promise.all([abandonedPass, nextPass])
-    expect(sent.map(ops => ops.map(op => op.kind === 'patch' && op.payload))).toEqual([
-      [{content: 'it ', base_updated_at: 100}],
-      [{content: 'it m', base_updated_at: 200}],
+    expect(sentPatches()).toEqual([
+      [{id: 'block-a', content: 'it ', base_updated_at: 100}],
+      [{id: 'block-b', content: 'elsewhere'}],
+      [{id: 'block-a', content: 'it m', base_updated_at: 200}],
     ])
+  })
+
+  it('bounds every upload request, and one that hit the bound is retried rather than quarantined', async () => {
+    // What postgrest-js resolves with when the signal aborts the request.
+    const aborted = {data: null, error: {message: 'TimeoutError: signal timed out', code: ''}, status: 0}
+    supabaseRef.rpc.mockResolvedValue(aborted)
+    const eq = vi.fn(() => request(aborted))
+    supabaseRef.from.mockReturnValue({delete: () => ({eq})})
+
+    const errors: unknown[] = []
+    for (const op of [
+      {kind: 'create', id: 'block-a', payload: {id: 'block-a'}, order: 0},
+      {kind: 'patch', id: 'block-a', payload: {content: 'A'}, order: 0},
+      {kind: 'delete', id: 'block-a', order: 0},
+    ] satisfies CompactedBlockOperation[]) {
+      errors.push(await __applyCompactedBlockOperationsForTest(fakeDatabase, [op]).catch((err: unknown) => err))
+    }
+
+    expect(supabaseRef.deadlines).toHaveLength(3)
+    expect(errors.map(classifyUploadError)).toEqual(['transient', 'transient', 'transient'])
   })
 })
