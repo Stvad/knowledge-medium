@@ -5,7 +5,7 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
-import type { ComponentType, FunctionComponent, RefObject } from 'react'
+import type { ComponentType, FunctionComponent, ReactNode, RefObject } from 'react'
 import {
   showPropertiesProp,
   isCollapsedProp,
@@ -15,9 +15,10 @@ import {
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
+import { BlockGutterHost, createGutterControls, useGutterControlsItem, type HostGutterItem } from '@/components/renderer/BlockGutter.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useMemo, useEffect, useState } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -27,7 +28,7 @@ import {
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useAppHashInContext } from '@/context/layoutWsContext.js'
-import { navigate, useOpenBlock } from '@/utils/navigation.js'
+import { navigate, useOpenBlock, ZOOM_ORIGIN } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -82,6 +83,10 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
    *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
    *  thing for a renderer that arrives through the facet instead. */
   contentShowsOtherBlocks?: boolean;
+  /** The layout for the block this renderer composes, in place of the
+   *  `blockLayoutFacet` resolution — for a renderer whose block has a shape of
+   *  its own (a property row's two-column grid). */
+  Layout?: BlockLayout;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -108,11 +113,10 @@ const copyBlockEmbed = (block: Block) => {
   void writeTextToClipboard(`!((${block.id}))`)
 }
 
-const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {
+const zoomIn = (block: Block, workspaceId: string, {panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}) => {
   if (typeof window !== 'undefined') {
-    navigate(block.repo, panelId
-      ? {blockId: block.id, workspaceId, target: 'panel', panelId}
-      : {blockId: block.id, workspaceId, target: 'active'})
+    const input = {blockId: block.id, workspaceId, origin: ZOOM_ORIGIN, sourceRenderScopeId: renderScopeId}
+    void navigate(block.repo, panelId ? {...input, target: 'panel', panelId} : {...input, target: 'active'})
   }
 }
 
@@ -137,7 +141,7 @@ export function BulletDot({withChildrenIndicator = false, className = ''}: {
 const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: BlockResolveContext }) => {
   const repo = useRepo()
   const runtime = useAppRuntime()
-  const {panelId} = useBlockContext()
+  const {panelId, renderScopeId} = useBlockContext()
   const isMobile = useIsMobile()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
@@ -184,7 +188,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
   const workspaceId = repo.activeWorkspaceId!
-  const onClick = useOpenBlock({blockId: block.id, workspaceId})
+  const onClick = useOpenBlock({blockId: block.id, workspaceId}, {origin: ZOOM_ORIGIN})
   const bulletHref = useAppHashInContext(workspaceId, block.id)
 
   return (
@@ -243,7 +247,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
             </ContextMenuItem>
             <ContextMenuItem
               className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={() => zoomIn(block, workspaceId, panelId)}
+              onSelect={() => zoomIn(block, workspaceId, {panelId, renderScopeId})}
             >
               Zoom In
             </ContextMenuItem>
@@ -334,6 +338,15 @@ const ExpandButton = ({block}: { block: Block }) => {
     })
   }
 
+  // On mobile the button sits in the gutter, beside pills. The glyph keeps to
+  // the box's left edge, so the gap before it matches the gap between pills;
+  // the box's empty right part and the strips above and below it keep the tap
+  // target near 32px without reaching left over the pill. It cannot reach
+  // right instead: `.block-content` clips horizontal overflow, hits included.
+  const sizeClass = isMobile
+    ? 'relative h-6 w-6 justify-start before:absolute before:inset-x-0 before:-inset-y-1'
+    : 'h-6 w-3'
+
   return (
     <Button
       variant="ghost"
@@ -345,7 +358,7 @@ const ExpandButton = ({block}: { block: Block }) => {
         e.stopPropagation()
         toggle()
       }}
-      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, isMobile ? 'h-8 w-8' : 'h-6 w-3')}
+      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, sizeClass)}
     >
       <span className="text-lg text-muted-foreground">
         {isCollapsed ? '▸' : '▾'}
@@ -353,6 +366,10 @@ const ExpandButton = ({block}: { block: Block }) => {
     </Button>
   )
 }
+
+/** On mobile the expand button sits in the gutter: the only item that may draw
+ *  over non-text content, where a row reserved for it alone would read oddly. */
+const MOBILE_EXPAND_GUTTER_ITEM: HostGutterItem = {corner: 'top-right', component: ExpandButton, overlay: true}
 
 
 
@@ -371,6 +388,38 @@ export const DefaultBlockLayout: BlockLayout = ({
   Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
+}) => (
+  <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}>
+    <div className="block-body flex-grow relative flex flex-col">
+      <div className="flex flex-col rounded-sm">
+        <Content/>
+        {Properties && <Properties/>}
+      </div>
+
+      <BelowContent/>
+
+      <CollapsibleContent>
+        <Children/>
+      </CollapsibleContent>
+
+      <Footer/>
+    </div>
+  </BlockFrame>
+)
+
+/**
+ * A block's interactive frame — the focusable, collapsible shell with its
+ * controls, selection and top-level marks — around a layout's own body. One
+ * owner for that chrome, so a layout that draws a different body (a property
+ * row) keeps every change made to it. The body sits inside the Collapsible, so
+ * a `CollapsibleContent` in it follows the block's collapse.
+ */
+export const BlockFrame = ({
+  block, Header, Shell, Controls, className = '', frameProps, children,
+}: Pick<BlockLayoutSlots, 'block' | 'Header' | 'Shell' | 'Controls'> & {
+  className?: string
+  frameProps?: Record<`data-${string}`, string>
+  children: ReactNode
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
@@ -403,25 +452,12 @@ export const DefaultBlockLayout: BlockLayout = ({
           return (
             <Collapsible
               {...collapsibleProps}
+              {...frameProps}
               open={!isCollapsed || isTopLevel}
-              className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+              className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
-
-              <div className="block-body flex-grow relative flex flex-col">
-                <div className="flex flex-col rounded-sm">
-                  <Content/>
-                  {Properties && <Properties/>}
-                </div>
-
-                <BelowContent/>
-
-                <CollapsibleContent>
-                  <Children/>
-                </CollapsibleContent>
-
-                <Footer/>
-              </div>
+              {children}
             </Collapsible>
           )
         }}
@@ -611,6 +647,7 @@ export function DefaultBlockRenderer(
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
     contentShowsOtherBlocks,
+    Layout: ComposedLayout,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -623,6 +660,7 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
+  const [gutterControls] = useState(createGutterControls)
   const isTopLevel = useIsFocalRender(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
@@ -651,8 +689,8 @@ export function DefaultBlockRenderer(
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
-  // produce keep stable identity. This is what stops UpdateIndicator
-  // (and any other content decorator) from remounting on every click,
+  // produce keep stable identity. This is what stops the content
+  // decorators and gutter items from remounting on every click,
   // and — because every slot below is a `useMemo` over this object, i.e.
   // a React element TYPE — what stops the live editor being torn down and
   // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
@@ -705,8 +743,8 @@ export function DefaultBlockRenderer(
   // Last-wins on the variant facet. `DefaultBlockLayout` is the no-contribution
   // fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
-    [resolveContext, resolveBlockLayout],
+    () => ComposedLayout ?? resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
+    [ComposedLayout, resolveContext, resolveBlockLayout],
   )
 
   // Content slot: the editable content surface — gesture ref + surface props +
@@ -772,15 +810,17 @@ export function DefaultBlockRenderer(
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
-          <ErrorBoundary FallbackComponent={FallbackComponent}>
-            <ContentRenderer block={block}/>
-          </ErrorBoundary>
+          <BlockGutterHost resolveContext={resolveContext} controls={gutterControls}>
+            <ErrorBoundary FallbackComponent={FallbackComponent}>
+              <ContentRenderer block={block}/>
+            </ErrorBoundary>
+          </BlockGutterHost>
         </div>
       )
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef,
+    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef, gutterControls,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
@@ -801,32 +841,28 @@ export function DefaultBlockRenderer(
   const HeaderSlot = useSectionsSlot(blockHeaderFacet, block, resolveContext)
 
   // Controls slot: bullet + expand affordances. Self-aware of top-level
-  // (returns null since top-level blocks have no bullet) and of mobile
-  // (renders the expand button as a top-right floater rather than inline
-  // because mobile screens don't have desktop's horizontal real estate).
+  // (returns null since top-level blocks have no bullet) and of mobile, where
+  // there is no room for the expand button beside the bullet: it goes to the
+  // gutter instead. Handing it over from HERE, not contributing it to the
+  // gutter facet, is what keeps it off layouts that render Content but never
+  // collapse (a review card).
   const ControlsSlot = useMemo<ComponentType>(() => {
     return function BlockControlsSlot() {
       const isFocal = useIsFocalRender(block)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
+      useGutterControlsItem(gutterControls, !isFocal && isMobile && hasChildren ? MOBILE_EXPAND_GUTTER_ITEM : null)
 
       if (isFocal) return null
 
       return (
-        <>
-          <div className="block-controls flex items-center">
-            {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block} resolveContext={resolveContext}/>
-          </div>
-          {isMobile && hasChildren && (
-            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
-              <ExpandButton block={block}/>
-            </div>
-          )}
-        </>
+        <div className="block-controls flex items-center">
+          {!isMobile && <ExpandButton block={block}/>}
+          <BlockBullet block={block} resolveContext={resolveContext}/>
+        </div>
       )
     }
-  }, [block, resolveContext])
+  }, [block, resolveContext, gutterControls])
 
   // The opt-in interactive shell. Layouts render `<Shell>{shellProps => …}</Shell>`
   // to become focusable/editable; the shell's machinery (paste/click, shell

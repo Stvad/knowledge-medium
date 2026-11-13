@@ -1,11 +1,12 @@
 import {describe, expect, it, vi} from 'vitest'
-import {createEngine, type EngineDeps} from '../src/engine'
+import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine'
 import {parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import type {AgentRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
-import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
+import type {MemoryEntry} from '../src/memory'
+import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
 
@@ -16,6 +17,8 @@ interface FakeGraphSeed {
   blocks?: Record<string, Partial<BlockData>>
   /** What `comments({thread})` answers, by root id. */
   threads?: Record<string, CommentThreadView>
+  /** The memory block's entries; a run edits this array to write memory. */
+  memory?: MemoryEntry[]
 }
 
 /** Minimal in-memory graph double tracking writes. One object stands in for
@@ -27,14 +30,17 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     // lifecycle, where a candidate block was just edited.
     Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
-  const replies: Array<{parentId: string, content: string}> = []
   const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
   const cancelClears: string[] = []
 
+  const memory = seed.memory ?? []
   const graph: Graph & ReplyWriter = {
+    ensureMemoryBlock: vi.fn(async () => 'mem-1'),
+    memoryOutline: vi.fn(async () => ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n')),
+    memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
       (seed.backlinks ?? []).map(({id, deepLink, sourceFields}) => ({
@@ -72,12 +78,6 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       }
       blocks.set(id, target)
       propWrites.push({id, status: args.status, activity: args.activity})
-    },
-    createReply: async (parentId, content) => {
-      replies.push({parentId, content})
-      const reply: BlockData = {id: `reply-${replies.length}`, parentId, content, properties: {[PROPS.reply]: true}}
-      blocks.set(reply.id, reply)
-      return reply
     },
     reconcileReplyTree: async (parentId, markdown, {replyKey, shape, final}) => {
       reconciles.push({parentId, markdown, replyKey, shape, final: final ?? false})
@@ -119,7 +119,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, cancelClears}
+  return {graph, blocks, reconciles, propWrites, activityWrites, sessionWrites, cancelClears, memory}
 }
 
 const memoryState = (
@@ -146,7 +146,7 @@ const memoryState = (
 }
 
 const okRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => ({
-  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {},
+  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {}, usage: null,
   ...overrides,
 })
 
@@ -169,6 +169,124 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
     ...deps,
   })
+
+describe('watcher memory', () => {
+  const seed = (memory: MemoryEntry[] = [{id: 'n-1', content: 'replies short'}]): FakeGraphSeed => ({
+    pageId: 'page-claude', backlinks: [{id: 'b1'}], blocks: {b1: {content: '[[claude]] hi'}}, memory,
+  })
+  const promptOf = (runTask: ReturnType<typeof vi.fn>) => (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  const finalReply = (reconciles: ReturnType<typeof fakeGraph>['reconciles']) => reconciles.filter(write => write.final).at(-1)!.markdown
+
+  it('shows the run the memory under its target page', async () => {
+    const fake = fakeGraph(seed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph: fake.graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.graph.ensureMemoryBlock).toHaveBeenCalledWith('page-claude')
+    expect(promptOf(runTask)).toContain('- replies short  ^n-1')
+    expect(promptOf(runTask)).toContain('append_markdown with target mem-1')
+    // Nothing written: the reply says nothing about memory.
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+  })
+
+  it('says in the reply what the run changed in its memory', async () => {
+    const fake = fakeGraph(seed())
+    const engine = engineWith({graph: fake.graph, runTask: vi.fn(async () => {
+      fake.memory.push({id: 'n-2', content: 'prefers suggestions'})
+      return okRun()
+    })})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toBe('Reply text\n\nMemory changed during this run: saved [prefers suggestions](((n-2)))')
+  })
+
+  it('says it on a failed run too, which may have written memory before it ended', async () => {
+    const fake = fakeGraph(seed())
+    const engine = engineWith({graph: fake.graph, runTask: vi.fn(async () => {
+      fake.memory.splice(0, 1)
+      return okRun({ok: false, exitCode: 1, stderr: 'boom'})
+    })})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toMatch(/run failed — exit 1: boom\n\nMemory changed during this run: removed "replies short" \(`n-1`\)$/)
+  })
+
+  it('keeps a streamed answer when the memory cannot be read after the run', async () => {
+    const fake = fakeGraph(seed())
+    const entries = fake.graph.memoryEntries
+    fake.graph.memoryEntries = vi.fn(async (id: string) => {
+      if (vi.mocked(fake.graph.memoryEntries).mock.calls.length > 1) throw new Error('bridge blipped')
+      return entries(id)
+    })
+    const engine = engineWith({
+      graph: fake.graph,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
+      runTask: vi.fn(async options => {
+        options.onEvent?.({kind: 'text', text: 'Reply'})
+        return okRun()
+      }),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+    expect(fake.blocks.get('b1')?.properties?.[PROPS.status]).toBe('done')
+  })
+
+  it('says when the memory is too large to compare', async () => {
+    const fake = fakeGraph(seed())
+    fake.graph.memoryEntries = vi.fn(async () => null)
+    const engine = engineWith({graph: fake.graph})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toMatch(/Reply text\n\nMemory has more than \d+ blocks/)
+  })
+
+  it('reads and shows no memory for a watcher that turns it off', async () => {
+    const fake = fakeGraph(seed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph: fake.graph, runTask,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, memory: false}]}),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.graph.ensureMemoryBlock).not.toHaveBeenCalled()
+    expect(promptOf(runTask)).not.toMatch(/memory/i)
+  })
+
+  it('runs without memory when it cannot be read, and never asks the run to keep it', async () => {
+    const fake = fakeGraph(seed())
+    fake.graph.memoryOutline = vi.fn(async () => { throw new Error('bridge blipped') })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph: fake.graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.blocks.get('b1')?.properties?.[PROPS.status]).toBe('done')
+    expect(promptOf(runTask)).not.toMatch(/memory/i)
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+  })
+
+  it('delivers the memory to a channel session', async () => {
+    const fake = fakeGraph(seed())
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph: fake.graph, deliverToChannel,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}]}),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect((deliverToChannel.mock.calls[0] as unknown as [{content: string}])[0].content).toContain('- replies short  ^n-1')
+  })
+})
 
 describe('mention inside a comment thread', () => {
   const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})
@@ -301,7 +419,7 @@ describe('channel delivery', () => {
 
 describe('mention lifecycle', () => {
   it('claims, runs, replies, and marks done with the session id', async () => {
-    const {graph, blocks, replies, reconciles, propWrites} = fakeGraph({
+    const {graph, blocks, reconciles, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
     })
@@ -317,7 +435,6 @@ describe('mention lifecycle', () => {
     expect(reconciles).toEqual([
       {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1', shape: 'outline', final: true},
     ])
-    expect(replies).toEqual([])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
     expect(blocks.get('b-1')?.properties?.[PROPS.executor]).toBe('claude')
     expect(blocks.get('b-1')?.properties?.[PROPS.attempts]).toBe(1)
@@ -343,6 +460,21 @@ describe('mention lifecycle', () => {
     const claimLog = logs.find(line => line.includes('claiming b-1'))
     // Whitespace-collapsed onto one line, and the text is present.
     expect(claimLog).toContain('"[[browser emacs]] investigate the flaky test"')
+  })
+
+  it('logs a finished run\'s token usage beside its done line', async () => {
+    const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[browser emacs]] hi'}}})
+    const logs: string[] = []
+    const runTask = vi.fn(async () => okRun({
+      usage: {inputTokens: 4, cacheReadTokens: 14_244, cacheWriteTokens: 14_625, outputTokens: 34},
+    }))
+    const engine = engineWith({graph, runTask, log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(logs.find(line => line.includes('done b-1')))
+      .toContain('tokens: in 4 · cache read 14.2k · cache write 14.6k · out 34')
   })
 
   it('strips control bytes from the claim-log preview so synced block text cannot spoof the terminal', async () => {
@@ -426,12 +558,63 @@ describe('mention lifecycle', () => {
     await engine.tick()
     for (let i = 0; i < 50; i += 1) await Promise.resolve()
 
-    expect(blocks.get('child')?.properties?.[PROPS.status]).toBeUndefined()
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('queued')
     expect(runTask).toHaveBeenCalledTimes(1) // only the parent
 
     releaseParent()
     await parentTick
     await engine.drain()
+  })
+
+  it('marks a follow-up waiting on its thread as queued, logs it once, and runs it when the thread frees', async () => {
+    const backlinks: Array<{id: string}> = [{id: 'parent'}]
+    const {graph, blocks} = fakeGraph({
+      backlinks,
+      blocks: {parent: {content: '[[claude]] long parent task'}},
+    })
+    let releaseParent = () => {}
+    const parentGate = new Promise<void>(resolve => { releaseParent = resolve })
+    const runTask = vi.fn(async (opts: {prompt: string, onEvent?: (e: {kind: 'session', sessionId: string}) => void}) => {
+      if (!opts.prompt.includes('quick follow-up')) {
+        opts.onEvent?.({kind: 'session', sessionId: 'sess-parent'})
+        await parentGate
+        return okRun({sessionId: 'sess-parent'})
+      }
+      childActivityAtRun = blocks.get('child')?.properties?.[PROPS.activity]
+      return okRun({resultText: 'child reply', sessionId: 'sess-parent'})
+    })
+    let childActivityAtRun: unknown = 'not run'
+    const logs: string[] = []
+    const engine = engineWith({graph, runTask, log: line => logs.push(line), config: mentionConfig({maxConcurrent: 5})})
+
+    const parentTick = engine.tick()
+    await vi.waitFor(() => expect(blocks.get('parent')?.properties?.[PROPS.session]).toBe('sess-parent'))
+    blocks.set('child', {id: 'child', parentId: 'parent', content: '[[claude]] quick follow-up', properties: {}, editedAtMs: NOW})
+    backlinks.push({id: 'child'})
+
+    await engine.tick()
+    await vi.waitFor(() => expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('queued'))
+    const queuedProps = blocks.get('child')?.properties ?? {}
+    expect(queuedProps[PROPS.executor]).toBe('claude')
+    expect(queuedProps[PROPS.activity]).toBe(THREAD_BUSY_ACTIVITY)
+
+    // A second sweep while still blocked neither re-logs nor re-writes.
+    const queuedStamp = queuedProps[PROPS.updatedAt]
+    await engine.tick()
+    for (let i = 0; i < 50; i += 1) await Promise.resolve()
+    expect(logs.filter(line => line.includes('child') && line.includes('waiting'))).toHaveLength(1)
+    expect(blocks.get('child')?.properties?.[PROPS.updatedAt]).toBe(queuedStamp)
+
+    releaseParent()
+    await parentTick
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(2)
+    // The claim drops the waiting label; the run's own activity replaces it.
+    expect(childActivityAtRun).toBe('')
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('done')
   })
 
   it('cancels a running task: aborts the run, parks it error:cancelled, and clears the flag', async () => {
@@ -781,13 +964,13 @@ describe('mention lifecycle', () => {
   })
 
   it('parks a task after MAX_ATTEMPTS with a terminal error write', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
         properties: {
           [PROPS.status]: 'running',
-          [PROPS.updatedAt]: NOW - 60 * 60_000,
+          [PROPS.updatedAt]: NOW - STALE_RUNNING_MS,
           [PROPS.attempts]: MAX_ATTEMPTS,
         },
       }},
@@ -800,25 +983,27 @@ describe('mention lifecycle', () => {
 
     expect(runTask).not.toHaveBeenCalled()
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-    expect(replies[0].content).toContain('gave up after')
+    expect(reconciles).toEqual([{
+      parentId: 'b-1', markdown: expect.stringContaining('gave up after'), replyKey: 'park:b-1', shape: 'block', final: true,
+    }])
 
     // Terminal: later ticks skip it entirely.
     await engine.tick()
     await engine.drain()
-    expect(replies).toHaveLength(1)
+    expect(reconciles).toHaveLength(1)
   })
 
   it('parks props-FIRST so a failed reply write cannot spam ⚠️ blocks', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
-        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS, [PROPS.attempts]: MAX_ATTEMPTS},
       }},
     })
     // Reply write is broken; the terminal status must still land so the
     // block isn't re-parked (and re-replied) every tick.
-    graph.createReply = vi.fn(async () => { throw new Error('reply write failed') })
+    graph.reconcileReplyTree = vi.fn(async () => { throw new Error('reply write failed') })
     const engine = engineWith({graph})
 
     await engine.tick()
@@ -827,16 +1012,15 @@ describe('mention lifecycle', () => {
 
     await engine.tick()
     await engine.drain()
-    expect((graph.createReply as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
-    expect(replies).toHaveLength(0)
+    expect((graph.reconcileReplyTree as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
   })
 
   it('does not re-park a task the channel session already closed (fresh re-read)', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
-        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS, [PROPS.attempts]: MAX_ATTEMPTS},
       }},
     })
     // Between the tick snapshot and the park, the ambient session marks it done.
@@ -850,7 +1034,7 @@ describe('mention lifecycle', () => {
 
     await engine.tick()
     await engine.drain()
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('does not count a resumed-thread placeholder against maxConcurrent', async () => {
@@ -908,7 +1092,7 @@ describe('mention lifecycle', () => {
   })
 
   it('backs off when another daemon wins the claim race', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] contested'}},
     })
@@ -928,7 +1112,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).not.toHaveBeenCalled()
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('resumes the nearest ancestor session for follow-up mentions', async () => {
@@ -1708,7 +1892,7 @@ describe('channel delivery (experimental)', () => {
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] ambient task'}},
     })
@@ -1726,7 +1910,7 @@ describe('channel delivery (experimental)', () => {
     expect(event.content).toContain('close the task out yourself')
     // Daemon only claims; the ambient session finishes the lifecycle.
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('marks the task error when the channel listener is unreachable', async () => {

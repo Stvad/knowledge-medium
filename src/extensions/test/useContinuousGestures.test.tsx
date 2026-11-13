@@ -187,4 +187,18 @@ describe('suppressNextClick', () => {
 
     el.remove()
   })
+
+  it('lets a fresh tap through when the gesture produced no click', () => {
+    const surface = document.createElement('div')
+    const button = document.createElement('button')
+    surface.appendChild(button)
+    const onClick = vi.fn()
+    button.addEventListener('click', onClick)
+
+    suppressNextClick(surface)
+    firePointerDown(button)
+    button.click()
+
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
 })

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent, type TouchEvent } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent, type TouchEvent } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { clamp } from 'lodash-es'
 import { createPortal } from 'react-dom'
 import { MoreHorizontal } from 'lucide-react'
@@ -233,6 +234,7 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
 export const SwipeActionMenu = () => {
   const isMobile = useIsMobile()
   const uiStateBlock = useUIStateBlock()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const repo = uiStateBlock.repo
   const runtime = useAppRuntime()
   const [topLevelBlockId] = usePropertyValue(uiStateBlock, topLevelBlockIdProp)
@@ -366,9 +368,10 @@ export const SwipeActionMenu = () => {
       scopeRootId: topLevelBlockId,
       scopeRootForcesOpen: true,
       renderScopeId,
+      propertyDisplay,
     }
     return dispatchActionWithDeps(actionId, deps, trigger)
-  }, [repo, uiStateBlock, topLevelBlockId])
+  }, [repo, uiStateBlock, topLevelBlockId, propertyDisplay])
   const actionItems = runtime.read(quickActionItemsFacet)
   // Filter via the referenced action's `isVisible` (the swipe surface is
   // presentational — semantic availability lives on the action). The

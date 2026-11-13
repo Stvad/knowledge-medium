@@ -203,9 +203,13 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
 
     await runDaemon()
 
-    const replies = commands.filter(command => command.type === 'reconcile-markdown-subtree')
+    const reconciles = commands.filter(command => command.type === 'reconcile-markdown-subtree')
+    const isMemoryBlock = (command: {key?: unknown}) => command.key === 'agent-dispatch:memory'
+    const replies = reconciles.filter(command => !isMemoryBlock(command))
     expect(replies.length).toBeGreaterThan(0)
     for (const reply of replies) expect(reply).toMatchObject({parentId: 'source-1', contributorId: selected})
+    // The memory block under the watched page is the daemon's, like its bookkeeping.
+    for (const memory of reconciles.filter(isMemoryBlock)) expect(memory).toMatchObject({contributorId: null})
     const bookkeeping = commands.filter(command => command.type === 'update-block')
     expect(bookkeeping.map(command => (command.properties as Record<string, unknown>)['agent:status']))
       .toEqual(['running', 'error'])

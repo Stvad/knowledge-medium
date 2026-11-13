@@ -1,7 +1,7 @@
 /** Char-generic matcher cases, exercised through `@` (no options) —
- *  both production wrappers (`matchAtTrigger`, `matchHashTrigger`) are
- *  thin parameterizations of this one implementation; their suites
- *  keep only wrapper-specific guards (stacked `##`, etc.). */
+ *  the production wrappers (the `@` family in `atTrigger.ts`,
+ *  `matchHashTrigger`) are thin parameterizations of this one
+ *  implementation; their suites keep only wiring checks. */
 import { describe, expect, it } from 'vitest'
 import { matchCharTrigger } from '../triggerMatch'
 
@@ -54,7 +54,7 @@ describe('matchCharTrigger', () => {
     // Now that `#todo` can glue onto `word`, the `#` source owns it, so
     // the `@` walk must yield; otherwise `@` swallows `cafe word#todo`
     // into a place query while `#` also fires into the same dropdown.
-    const hashOpts = {rejectDoubledTrigger: true, allowWordCharBefore: true}
+    const hashOpts = {doubled: 'reject', allowWordCharBefore: true} as const
     expect(matchCharTrigger('meet @cafe word#todo', 20, '#', hashOpts))
       .toEqual({from: 15, query: 'todo'})
     expect(at('meet @cafe word#todo', 20)).toBeNull()
@@ -65,7 +65,7 @@ describe('matchCharTrigger', () => {
     // yield to it — otherwise neither source opens and the `@`
     // place-autocomplete silently dies whenever a slash-token with a `#`
     // appears later on the line.
-    const hashOpts = {rejectDoubledTrigger: true, allowWordCharBefore: true}
+    const hashOpts = {doubled: 'reject', allowWordCharBefore: true} as const
     expect(matchCharTrigger('@a/b#c', 6, '#', hashOpts)).toBeNull()
     expect(at('@a/b#c', 6)).toEqual({from: 0, query: 'a/b#c'})
   })
@@ -84,7 +84,7 @@ describe('matchCharTrigger', () => {
   })
 
   it('the URL-path guard fires even when the slash sits immediately before the # (/#)', () => {
-    const hashOpts = {rejectDoubledTrigger: true, allowWordCharBefore: true}
+    const hashOpts = {doubled: 'reject', allowWordCharBefore: true} as const
     expect(matchCharTrigger('foo/#bar', 8, '#', hashOpts)).toBeNull()
     expect(matchCharTrigger('see docs/#install', 17, '#', hashOpts)).toBeNull()
   })
@@ -118,9 +118,39 @@ describe('matchCharTrigger', () => {
     expect(at(long, long.length)).toBeNull()
   })
 
-  it('rejectDoubledTrigger rejects a doubled trigger char; off by default', () => {
-    expect(matchCharTrigger('##task', 6, '#', {rejectDoubledTrigger: true})).toBeNull()
+  it("doubled: 'reject' rejects a doubled trigger char; no check by default", () => {
+    expect(matchCharTrigger('##task', 6, '#', {doubled: 'reject'})).toBeNull()
+    expect(matchCharTrigger('@@name', 6, '@', {doubled: 'reject'})).toBeNull()
+    expect(matchCharTrigger('@name', 5, '@', {doubled: 'reject'})).toEqual({from: 0, query: 'name'})
     expect(matchCharTrigger('@@name', 6, '@')).toEqual({from: 1, query: 'name'})
+  })
+
+  describe("doubled: 'require'", () => {
+    const atAt = (text: string, pos: number) => matchCharTrigger(text, pos, '@', {doubled: 'require'})
+
+    it('matches a doubled trigger and reports the FIRST char as `from`, so the whole `@@query` is replaced', () => {
+      expect(atAt('@@cafe', 6)).toEqual({from: 0, query: 'cafe'})
+      expect(atAt('met at @@blue bottle', 20)).toEqual({from: 7, query: 'blue bottle'})
+      expect(atAt('met at @@', 9)).toEqual({from: 7, query: ''})
+    })
+
+    it('does NOT match a single trigger', () => {
+      expect(atAt('@cafe', 5)).toBeNull()
+      expect(atAt('met @', 5)).toBeNull()
+    })
+
+    it('applies the prefix guards to the first char of the pair, not the second', () => {
+      expect(atAt('a@@b', 4)).toBeNull()
+      expect(atAt('#tag@@foo', 9)).toBeNull()
+      expect(atAt('[@@foo', 6)).toBeNull()
+      expect(atAt('[[@@foo', 7)).toBeNull()
+      expect(atAt('((@@foo', 7)).toBeNull()
+    })
+
+    it('rejects a tripled trigger instead of leaving a stray char behind', () => {
+      expect(atAt('@@@foo', 6)).toBeNull()
+      expect(matchCharTrigger('@@@foo', 6, '@', {doubled: 'reject'})).toBeNull()
+    })
   })
 
   it('the nearest trigger owns the input — a viable sibling trigger breaks the walk', () => {

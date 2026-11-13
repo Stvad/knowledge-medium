@@ -4,6 +4,7 @@ import { selectionStateProp } from '@/data/properties.js'
 import { ChangeScope, type SubtreeRow } from '@/data/api'
 import { armCut, disarmCut } from '@/paste/armedCut.js'
 import { clipboardHtmlFor, clipboardTextFor } from '@/paste/clipboardOutline.js'
+import { copiedSubtree, type PropertyCopy } from '@/data/drawnSubtree.js'
 
 export interface ClipboardData {
   markdown: string
@@ -12,24 +13,15 @@ export interface ClipboardData {
 
 const clipboardDataFor = (blocks: SubtreeRow[]): ClipboardData => ({markdown: clipboardTextFor(blocks), blocks})
 
-const subtreeRows = async (block: Block): Promise<SubtreeRow[]> => {
-  // One SQL query hydrates the entire subtree in document order
-  // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
-  // the root (0 for the root). No per-parent handle creation, no recursive
-  // cache reads, and no re-deriving depth here.
-  //
-  // `hidePropertyChildren` prunes EVERY recognized field row today, which is
-  // correct only while all workspaces read 'cell' (nothing is child-backed,
-  // so nothing is pruned). Copy is WYSIWYG per §10 — default copy serializes
-  // exactly the visible view, so once slice D's tier-aware predicate lands a
-  // NON-hidden property row travels with its subtree and only hidden-tier
-  // subtrees prune whole. That switch also closes #404's copy gap by
-  // construction: user content nested under a visible property's value stops
-  // being dropped along with the machinery. Content under a HIDDEN property's
-  // value still won't travel on default copy — an accepted WYSIWYG
-  // consequence, covered by the explicit "copy with hidden properties"
-  // command rather than by widening this call.
-  const blocks = await block.repo.query.subtree({id: block.id, hidePropertyChildren: true}).load()
+/** The rows under `block` that a copy carries. WYSIWYG: by default exactly
+ *  what the copying surface draws (`properties` is its display scope), so a
+ *  drawn property row travels with its whole subtree, content nested under
+ *  its values included, and a row the surface leaves out prunes whole —
+ *  content under it too, as the outline shows none of it. `'all'` is the
+ *  explicit "with hidden properties" copy. Rows come in document order with
+ *  root-relative depths. */
+const subtreeRows = async (block: Block, properties?: PropertyCopy): Promise<SubtreeRow[]> => {
+  const blocks = await copiedSubtree(block.repo, block.id, properties)
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
@@ -37,8 +29,8 @@ const subtreeRows = async (block: Block): Promise<SubtreeRow[]> => {
   return blocks
 }
 
-export const serializeBlock = async (block: Block): Promise<ClipboardData> =>
-  clipboardDataFor(await subtreeRows(block))
+export const serializeBlock = async (block: Block, properties?: PropertyCopy): Promise<ClipboardData> =>
+  clipboardDataFor(await subtreeRows(block, properties))
 
 const createClipboardItem = ({markdown, blocks}: ClipboardData): ClipboardItem => {
   const html = clipboardHtmlFor(blocks, markdown)
@@ -80,8 +72,8 @@ export const writeTextToClipboard = async (text: string | Promise<string>): Prom
   disarmCut()
 }
 
-export const copyBlockToClipboard = async (block: Block): Promise<void> =>
-  copyToClipboard(await serializeBlock(block))
+export const copyBlockToClipboard = async (block: Block, properties?: PropertyCopy): Promise<void> =>
+  copyToClipboard(await serializeBlock(block, properties))
 
 const getSelectionState = (uiStateBlock: Block) =>
   uiStateBlock.peekProperty(selectionStateProp)
@@ -89,13 +81,14 @@ const getSelectionState = (uiStateBlock: Block) =>
 export const serializeSelectedBlocks = async (
   blockIds: string[],
   repo: Repo,
+  properties?: PropertyCopy,
 ): Promise<ClipboardData> => {
   const rowsPerBlock = await Promise.all(
     blockIds
       .map(id => repo.block(id))
       .map(async block => {
         try {
-          return await subtreeRows(block)
+          return await subtreeRows(block, properties)
         } catch (error) {
           console.error(`Failed to serialize block ${block.id}:`, error)
           return null
@@ -115,6 +108,7 @@ export const serializeSelectedBlocks = async (
 export const copySelectedBlocksToClipboard = async (
   uiStateBlock: Block,
   repo: Repo,
+  properties?: PropertyCopy,
 ): Promise<void> => {
   if (!uiStateBlock || !repo) return
 
@@ -124,7 +118,7 @@ export const copySelectedBlocksToClipboard = async (
     return
   }
 
-  await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo)
+  await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo, properties)
 }
 
 /** Copy an explicit set of blocks, for callers whose deps name them rather
@@ -132,12 +126,13 @@ export const copySelectedBlocksToClipboard = async (
 export const copyBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
+  properties?: PropertyCopy,
 ): Promise<void> => {
   if (!blockIds.length) {
     console.log('No blocks selected to copy')
     return
   }
-  await copyToClipboard(await serializeSelectedBlocks([...blockIds], repo))
+  await copyToClipboard(await serializeSelectedBlocks([...blockIds], repo, properties))
 }
 
 /** Cut `blockIds` (roots, in document order): put them on the clipboard and
@@ -154,12 +149,13 @@ export const copyBlockIdsToClipboard = async (
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
+  properties?: PropertyCopy,
 ): Promise<'cut' | 'empty'> => {
   if (!blockIds.length) return 'empty'
   const first = repo.block(blockIds[0])
   const workspaceId = (first.peek() ?? await first.load())?.workspaceId
   if (!workspaceId) throw new Error(`Cannot cut: block ${blockIds[0]} not found`)
-  const data = await serializeSelectedBlocks([...blockIds], repo)
+  const data = await serializeSelectedBlocks([...blockIds], repo, properties)
   if (data.markdown === '') return 'empty'
   await writeToClipboard(data)
   await armCut(data.markdown, {

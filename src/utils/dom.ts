@@ -32,8 +32,11 @@ export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | n
   return null
 }
 
-/** Where `element` can actually be seen: the window, clipped by EVERY scrollport
- *  between it and the root.
+const CLIPPING_OVERFLOW: ReadonlySet<string> = new Set(['auto', 'scroll', 'overlay', 'hidden', 'clip'])
+
+/** Where `element` can actually be seen: the window, clipped by EVERY ancestor
+ *  between it and the root that clips its overflow, a scrollport or a box that
+ *  clips without scrolling (the comments margin's column).
  *
  *  All of them, not just the nearest: panes nest. A note row inside the
  *  video-notes aside sits in that aside's scrollport, and the whole pane is
@@ -46,7 +49,7 @@ export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibi
   let ancestor = element.parentElement
   while (ancestor) {
     const {overflowY} = window.getComputedStyle(ancestor)
-    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+    if (CLIPPING_OVERFLOW.has(overflowY)) {
       const rect = ancestor.getBoundingClientRect()
       bounds = {
         top: Math.max(bounds.top, rect.top),
@@ -64,24 +67,24 @@ export const isElementProperlyVisible = (
 ): boolean => {
   const rect = element.getBoundingClientRect()
   const viewportHeight = Math.max(0, visibilityBounds.bottom - visibilityBounds.top)
-  if (viewportHeight <= 0) return false
-
   const elementHeight = rect.height
+  if (viewportHeight <= 0 || elementHeight <= 0) return false
 
   // Get computed line height for this element
   const computedStyle = window.getComputedStyle(element)
   const lineHeight = parseFloat(computedStyle.lineHeight) ||
     parseFloat(computedStyle.fontSize) * 1.2 // Fallback to 1.2 * fontSize
 
-  // Use line height as minimum visibility threshold
-  const minVisibleHeight = lineHeight
+  // A line must be in view, or the whole element when it is shorter than one
+  // (a row in a smaller font than the line height it inherits).
+  const minVisibleHeight = Math.min(lineHeight, elementHeight)
 
   // Calculate how much of the element is visible vertically
   const visibleTop = Math.max(visibilityBounds.top, rect.top)
   const visibleBottom = Math.min(visibilityBounds.bottom, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
 
-  // For small elements (shorter than viewport): require at least one line height to be visible
+  // For small elements (shorter than viewport): require that line in view
   if (elementHeight <= viewportHeight) {
     return visibleHeight >= minVisibleHeight
   }

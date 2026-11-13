@@ -17,7 +17,8 @@ import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
 export const PROPS = {
-  /** queued | running | done | error — presence means "seen". */
+  /** queued | running | done | error — presence means "seen"; `queued` is
+   *  seen but not yet claimed, so it stays pending. */
   status: 'agent:status',
   /** Executor session/thread id (enables resume where supported). */
   session: 'agent:session',
@@ -54,14 +55,17 @@ export const PROPS = {
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
 export type Executor = 'claude' | 'codex'
 
+/** The longest `runner.timeoutMs` a watcher may set. The stale-running
+ *  sweep window (STALE_RUNNING_MS, watchers.ts) is derived from it, so a
+ *  live slow run is never concurrently re-claimed as crashed. */
+export const MAX_RUN_TIMEOUT_MS = 60 * 60_000
+
 const runnerBase = {
   /** Working directory for the spawned agent process. */
   cwd: z.string().optional(),
   model: z.string().optional(),
-  /** Kill the agent run after this long. Capped WELL below the
-   *  30-minute stale-running sweep (watchers.ts) so a live slow run is
-   *  never concurrently re-claimed as crashed. */
-  timeoutMs: z.number().int().positive().max(25 * 60_000).default(10 * 60_000),
+  /** Kill the agent run after this long. */
+  timeoutMs: z.number().int().positive().max(MAX_RUN_TIMEOUT_MS).default(10 * 60_000),
 }
 
 const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
@@ -198,6 +202,10 @@ const backlinksWatcherSchema = z.strictObject({
    *  nested outline so the split threads naturally. Ignored for
    *  `delivery: 'channel'` (the ambient session posts its own reply). */
   splitReply: z.boolean().default(true),
+  /** Keep a memory under the target page (memory.ts), injected into every
+   *  run and kept by the run itself. Off for a watcher whose custom `prompt`
+   *  should not write to the notes. */
+  memory: z.boolean().default(true),
 })
 
 const queryWatcherSchema = z.strictObject({
@@ -283,19 +291,21 @@ const rawConfigSchema = z.strictObject({
   /** Tools EVERY spawned Claude run may use, beyond the km MCP graph
    *  tools; per-watcher `runner.allowedTools` adds on top. Defaults to
    *  web research (WebSearch + WebFetch) — the common "look this up for
-   *  me" mention needs it, and neither tool touches the local machine.
+   *  me" mention needs it, and neither tool touches the local machine —
+   *  and subagents (Agent), which get only the tools the run itself is
+   *  offered.
    *  TRADE-OFF: WebFetch ingests arbitrary page text, so a
    *  prompt-injected page can steer a run that also holds graph WRITE
    *  tools — including exfiltrating note content through crafted fetch
    *  URLs. Accepted default here; set `defaultAllowedTools: []` to run
    *  Claude graph-only. */
-  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
-  maxConcurrent: z.number().int().positive().default(2),
+  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch', 'Agent']),
+  maxConcurrent: z.number().int().positive().default(4),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all
    *  watchers. Converts any trigger-loop bug from an unbounded bill
    *  into a bounded one. */
-  runsPerHour: z.number().int().positive().default(10),
+  runsPerHour: z.number().int().positive().default(45),
   /** Loopback port the dispatch channel MCP listener binds when the
    *  ambient session runs (watchers with delivery: 'channel' post here). */
   channelPort: z.number().int().positive().default(8790),

@@ -834,6 +834,11 @@ export const runPropertyCellBackfill = async (
     progress.failureCount = 0
     progress.unresolvedNames = []
     progress.unresolvedCount = 0
+    // The first sweep is preceded by the runner's own full check. Every later
+    // one waits for the full check first, so the sweep that decides
+    // convergence starts from a caught-up graph; sync it sees after that
+    // moves `syncWaitCount` and costs another sweep.
+    if (progress.sweeps > 1) await ctx.awaitCaughtUp()
     const syncWaitCount = ctx.syncWaitCount
     await sweep(ctx, progress, changedOwners, async () => { await onProgress?.(progress) })
     if (progress.valuesMaterialized === 0 && ctx.syncWaitCount === syncWaitCount) {

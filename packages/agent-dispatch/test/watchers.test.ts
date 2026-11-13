@@ -26,9 +26,17 @@ describe('decidePending', () => {
       .toEqual({pending: true, reason: 'pending'})
   })
 
-  it.each(['queued', 'done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
+  it.each(['done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
     const source = block({properties: {[PROPS.status]: status}})
     expect(decidePending({source, nowMs: NOW}).pending).toBe(false)
+  })
+
+  it('keeps a queued block pending, behind the same edit gates as an unclaimed one', () => {
+    const queued = block({properties: {[PROPS.status]: 'queued'}})
+    expect(decidePending({source: queued, nowMs: NOW})).toEqual({pending: true, reason: 'pending'})
+
+    const typing = block({properties: {[PROPS.status]: 'queued'}, editedAtMs: NOW - 100})
+    expect(decidePending({source: typing, nowMs: NOW, settleMs: 5_000}).reason).toBe('still-typing')
   })
 
   it('skips a fresh running block but re-queues a stale one (crashed run)', () => {
