@@ -131,6 +131,12 @@ export interface Tx {
    *  caller is a pass that expects some of its candidates to have moved on. */
   liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
 
+  /** Whether row `id` did not exist at all — not even as a tombstone — when
+   *  this transaction began, and the transaction has written it since: true
+   *  for a row created here, even if deleted again; false for a pre-existing
+   *  row, a restored tombstone included. Synchronous, from the tx's snapshots. */
+  createdInThisTx(id: string): boolean
+
   /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
    *  alike, batched through the same shared cap. The union is deliberate: "this owner
    *  already has a field row for this fieldId" and "this owner had one that was

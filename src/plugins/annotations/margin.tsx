@@ -25,6 +25,7 @@
 import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type RefObject, type WheelEvent} from 'react'
 import {isEqual} from 'lodash-es'
 import {MessageSquare, X} from 'lucide-react'
+import {EditorView, repositionTooltips} from '@codemirror/view'
 import type {Block} from '@/data/block'
 import {focusedBlockLocationProp, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties.js'
 import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
@@ -230,7 +231,9 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       }
       // Ahead of React's commit of `frame`, which lands after this frame's
       // paint: the text has already moved.
-      Object.assign(column.style, frameStyle(nextFrame))
+      const style = frameStyle(nextFrame)
+      const columnMoved = column.style.left !== style.left || column.style.top !== style.top
+      Object.assign(column.style, style)
       const columnTop = column.getBoundingClientRect().top
       const anchorTop = (entry: CardEntry, row: Element): number => {
         const rowTop = row.getBoundingClientRect().top
@@ -255,9 +258,18 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const active = peekActiveThread(panelId)
       const tops = placeCards(boxes, placed.findIndex(card => card.key === active), CARD_GAP_PX, nextFrame.height)
       for (const [i, {entry}] of placed.entries()) {
-        entry.el.style.transform = `translateY(${Math.round(tops[i])}px)`
+        const transform = `translateY(${Math.round(tops[i])}px)`
+        const cardMoved = entry.el.style.transform !== transform
+        entry.el.style.transform = transform
         entry.el.style.visibility = 'visible'
         entry.el.style.opacity = ''
+        if (cardMoved || columnMoved) {
+          // The cards move with the outline, but live outside its scrollport.
+          for (const editor of entry.el.querySelectorAll<HTMLElement>('.cm-editor')) {
+            const view = EditorView.findFromDOM(editor)
+            if (view) repositionTooltips(view)
+          }
+        }
       }
       for (const [, entry] of cards.current) {
         if (!rowIndex.has(entry.blockId)) entry.el.style.visibility = 'hidden'
@@ -382,7 +394,12 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           <MarginRegistryContext value={registry}>
             {/* Comment threads are their own surface: no property rows, whatever the panel's mode. */}
             <PropertyDisplayScopeContext value={NO_PROPERTY_DISPLAY_SCOPE}>
-              <NestedBlockContextProvider overrides={{layoutBoundary: false, renderScopeId: scope, scopeRootId: topLevelBlockId}}>
+              <NestedBlockContextProvider overrides={{
+                layoutBoundary: false,
+                renderScopeId: scope,
+                scopeRootId: topLevelBlockId,
+                editorTooltipParent: document.body,
+              }}>
                 {loadedThreads?.length === 0 && (
                   <p className="px-1 pt-1 text-xs text-muted-foreground">No comments here.</p>
                 )}
