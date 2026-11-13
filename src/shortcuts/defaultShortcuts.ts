@@ -493,7 +493,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // per-workspace representation of the cell, and `importState` replays
         // only content/structure — so exported machinery would land in the
         // target as ordinary `((fieldId))` rows rather than as properties.
-        const blocks = await repo.query.subtree({id: root.id, hidePropertyChildren: true}).load()
+        const blocks = await repo.query.subtree({id: root.id, propertyChildren: 'none'}).load()
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')

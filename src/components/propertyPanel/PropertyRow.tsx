@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Block } from '@/data/block'
-import { isRefCodec, isRefListCodec } from '@/data/api'
+import { isReadOnlyBlock, isRefCodec, isRefListCodec } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { propertyShapeLabel } from './shapes'
 import { PropertyShapeButton } from './shapeUi'
@@ -63,14 +63,7 @@ export function PropertyRow({
   onChange: (next: unknown) => void
   onDelete: () => void
 }) {
-  const Editor = row.Editor
   const rowReadOnly = readOnly || row.readOnly
-  // Activation for the VALUE cell lives here rather than in each editor: the
-  // row renders whatever editor a value preset resolved to, including one a
-  // plugin registered, and Escape has to exit those too. Focus events carry
-  // focusin semantics, so this catches the focused descendant whatever shape
-  // it is. Inner handlers still run first and can consume Escape themselves.
-  const valueFocusHandlers = usePropertyEditingActivation(block)
   const rowAlignment = isRefCodec(row.schema.codec) || isRefListCodec(row.schema.codec)
     ? 'items-start'
     : 'items-center'
@@ -136,23 +129,7 @@ export function PropertyRow({
           </span>
         )}
       </div>
-      <div
-        className="min-w-0"
-        data-property-value="true"
-        onFocus={valueFocusHandlers.onFocus}
-        onBlur={valueFocusHandlers.onBlur}
-      >
-        {Editor !== undefined && !row.decodeFailed && !row.readOnly ? (
-          <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
-        ) : row.decodeFailed ? (
-          <RawJsonValue value={row.encodedValue} reason="Decode failed" />
-        ) : (
-          <RawJsonValue
-            value={row.readOnly ? row.encodedValue : row.value}
-            reason={row.statusText ?? (row.schemaUnknown ? 'Schema not registered' : 'No editor registered')}
-          />
-        )}
-      </div>
+      <PropertyValueCell row={row} block={block} onChange={onChange}/>
       <div className="flex h-7 items-center justify-center" data-property-row-control="true">
         {!rowReadOnly && row.canDelete && (
           <Button
@@ -166,6 +143,53 @@ export function PropertyRow({
           </Button>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Editors that render a read-only repo themselves — the reference editors
+ *  keep the referenced block's embed and drop their edit controls. Every other
+ *  editor would stay live there, so a read-only repo shows its raw value. */
+const rendersReadOnly = (schema: PropertyPanelModelRow['schema']): boolean =>
+  isRefCodec(schema.codec) || isRefListCodec(schema.codec)
+
+/** A property's VALUE: its editor, or the raw value when it has none. The
+ *  panel row's value cell, shared with the outline's in-place property rows so
+ *  the two edit through one component. */
+export function PropertyValueCell({
+  row,
+  block,
+  onChange,
+}: {
+  row: PropertyPanelModelRow
+  block: Block
+  onChange: (next: unknown) => void
+}) {
+  const Editor = row.Editor
+  // Activation for the VALUE cell lives here rather than in each editor: the
+  // cell renders whatever editor a value preset resolved to, including one a
+  // plugin registered, and Escape has to exit those too. Focus events carry
+  // focusin semantics, so this catches the focused descendant whatever shape
+  // it is. Inner handlers still run first and can consume Escape themselves.
+  const valueFocusHandlers = usePropertyEditingActivation(block)
+  return (
+    <div
+      className="min-w-0"
+      data-property-value="true"
+      onFocus={valueFocusHandlers.onFocus}
+      onBlur={valueFocusHandlers.onBlur}
+    >
+      {Editor !== undefined && !row.decodeFailed && !row.readOnly
+        && (!isReadOnlyBlock(block) || rendersReadOnly(row.schema)) ? (
+        <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
+      ) : row.decodeFailed ? (
+        <RawJsonValue value={row.encodedValue} reason="Decode failed" />
+      ) : (
+        <RawJsonValue
+          value={row.readOnly ? row.encodedValue : row.value}
+          reason={row.statusText ?? (row.schemaUnknown ? 'Schema not registered' : 'No editor registered')}
+        />
+      )}
     </div>
   )
 }

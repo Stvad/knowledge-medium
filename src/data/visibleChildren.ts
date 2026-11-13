@@ -26,4 +26,4 @@ export const visibleChildrenOf = (
   parentId: string | null,
   workspaceId?: string,
 ): Promise<BlockData[]> =>
-  tx.childrenOf(parentId, workspaceId, {hidePropertyChildren: true})
+  tx.childrenOf(parentId, workspaceId, {propertyChildren: 'none'})

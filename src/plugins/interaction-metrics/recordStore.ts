@@ -335,7 +335,7 @@ const pruneGroup = async (
       // level, deliberately: descending treats a field row's own value
       // children as foreign, so no record is ever prunable in a
       // child-backed workspace — worse than the case it would catch.
-      const foreign = await tx.childrenOf(row.id, undefined, { hidePropertyChildren: true })
+      const foreign = await tx.childrenOf(row.id, undefined, { propertyChildren: 'none' })
       if (foreign.length > 0) continue
       // The SUBTREE, not the row: the record property can materialize
       // field/value rows that a bare delete would leave live under a tombstone.

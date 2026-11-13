@@ -210,6 +210,51 @@ const sameKeys = (
   return true
 }
 
+/** A definition's hide-in-outline answer: what its row STORES, else what its
+ *  current seed declares. The fallback is what lets a built-in be marked in
+ *  code with no write to any workspace — nothing stores the field until
+ *  someone sets it — and a stored value, false included, still wins. */
+export const effectiveHideInOutline = (
+  definition: Pick<PropertyDefinitionMetadata, 'hideInOutline' | 'seedKey'>,
+  seedsByKey: ReadonlyMap<string, Pick<AnyPropertySeedDeclaration, 'hideInOutline'>>,
+): boolean =>
+  definition.hideInOutline
+  ?? (definition.seedKey !== undefined && seedsByKey.get(definition.seedKey)?.hideInOutline === true)
+
+/** The field ids the outline's default property display (`'non-hidden'`)
+ *  skips: definitions that are `hidden`, or hide-in-outline
+ *  ({@link effectiveHideInOutline}). A seed whose row has not materialized yet
+ *  answers with its declaration. Not memoized here: the query layer memoizes
+ *  the params it binds per snapshot (`kernelQueries`), and the only other
+ *  reader runs once per registry swap. */
+export const outlineSkippedFieldIds = (
+  snapshot: PropertyDefinitionRegistrySnapshot,
+): ReadonlySet<string> => {
+  const skipped = new Set<string>()
+  for (const [fieldId, definition] of snapshot.definitionsByFieldId) {
+    if (definition.hidden || effectiveHideInOutline(definition, snapshot.seedsByKey)) skipped.add(fieldId)
+  }
+  for (const seed of snapshot.seedsByKey.values()) {
+    const fieldId = propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey)
+    if (snapshot.definitionsByFieldId.has(fieldId)) continue
+    if (seed.hidden || seed.hideInOutline === true) skipped.add(fieldId)
+  }
+  return skipped
+}
+
+/** Do two snapshots skip the same field ids in the outline's default view?
+ *  The input to that child view, which {@link sameFieldRecognition} does not
+ *  cover: flipping a definition's hidden or hide-in-outline bit changes no
+ *  recognition. */
+export const sameOutlineSkips = (
+  a: PropertyDefinitionRegistrySnapshot | null,
+  b: PropertyDefinitionRegistrySnapshot | null,
+): boolean => {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  return a.workspaceId === b.workspaceId && sameKeys(outlineSkippedFieldIds(a), outlineSkippedFieldIds(b))
+}
+
 /** Do two snapshots recognize the same field ids as definitions (§9
  *  condition 3)? The inputs to both views' answer: the parsed definitions, the
  *  unparseable blocks, the seed slots, and the workspace they belong to. A

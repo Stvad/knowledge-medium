@@ -20,6 +20,7 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
+  propertyHideInOutlineProp,
 } from '@/data/properties.js'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes.js'
 import {
@@ -36,6 +37,7 @@ import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetada
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
+import { Checkbox } from '@/components/ui/checkbox.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
@@ -682,6 +684,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           </fieldset>
         </div>
       )}
+
+      <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
+        <label className="text-xs font-semibold text-muted-foreground" htmlFor={`${block.id}-hide-in-outline`}>
+          Outline
+        </label>
+        <label className="flex items-center gap-2 text-sm" data-property-schema-hide-in-outline="true">
+          <Checkbox
+            id={`${block.id}-hide-in-outline`}
+            checked={data.properties[propertyHideInOutlineProp.name] === true}
+            disabled={readOnly}
+            onCheckedChange={(checked) => {
+              void block.set(propertyHideInOutlineProp, checked === true)
+                .catch(() => { showError('Could not change the outline setting') })
+            }}
+          />
+          <span>Hide in outline (its default view; show-all still shows it)</span>
+        </label>
+      </div>
 
       {isSeedBacked && (
         <div className="text-xs text-muted-foreground">
