@@ -329,9 +329,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const showProperties = block.peekProperty(showPropertiesProp) ?? false
       await block.set(showPropertiesProp, !showProperties)
     },
-    defaultBinding: {
-      keys: 't',
-    },
+    defaultBinding: {keys: 't'},
   }
 
   const toggleBlockCollapse: BlockAction = {
