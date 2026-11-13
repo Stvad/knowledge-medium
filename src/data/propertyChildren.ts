@@ -90,13 +90,13 @@ export const isPropertyFieldInstance = (
 /** The definition facts a child view needs, bound to one workspace. */
 export interface PropertyRowClassifier {
   readonly isFieldDefinition: IsPropertyFieldDefinition
-  /** Is this definition in the hidden tier (`hiddenTierFieldIds`)? */
-  readonly isHiddenTier: (fieldId: string) => boolean
+  /** Does the outline's `'non-hidden'` view skip this definition (`outlineSkippedFieldIds`)? */
+  readonly isOutlineSkipped: (fieldId: string) => boolean
 }
 
 /** Does a child listing under `view` leave `row` out? The JS twin of the SQL
  *  child views (`VISIBLE_CHILDREN_SQL`, `NON_HIDDEN_CHILDREN_SQL`), shared by
- *  `tx.childrenOf` and the copy serializer's prune. A hidden-tier id is a
+ *  `tx.childrenOf` and the copy serializer's prune. A skipped id is a
  *  definition the registry resolved, so that view needs no recognition leg. */
 export const isLeftOutOfChildrenView = (
   row: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm'>,
@@ -107,7 +107,7 @@ export const isLeftOutOfChildrenView = (
   if (view === 'non-hidden') {
     const fieldId = getPropertyFieldTargetId(row)
     return row.isFieldForm === true && row.parentId !== null
-      && fieldId !== undefined && classifier.isHiddenTier(fieldId)
+      && fieldId !== undefined && classifier.isOutlineSkipped(fieldId)
   }
   return isPropertyFieldInstance(row, classifier.isFieldDefinition)
 }

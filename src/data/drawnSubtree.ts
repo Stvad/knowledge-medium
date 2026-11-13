@@ -1,6 +1,6 @@
 import type { SubtreeRow } from '@/data/api'
 import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
-import { hiddenTierFieldIds } from '@/data/propertyDefinitionRegistry'
+import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
 import { isLeftOutOfChildrenView, type PropertyRowClassifier } from '@/data/propertyChildren'
 import {
   childrenViewIn,
@@ -10,7 +10,7 @@ import {
 import type { Repo } from '@/data/repo'
 
 /** Which property rows a copy of a subtree carries: those a surface with this
- *  scope draws, or `'all'` — every row, hidden tier included (the structural
+ *  scope draws, or `'all'` — every row, hidden and hide-in-outline ones included (the structural
  *  subtree). */
 export type PropertyCopy = PropertyDisplayScopeLevels | 'all'
 
@@ -40,10 +40,10 @@ export const pruneSubtreeToDrawn = (
 export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): PropertyRowClassifier => {
   const resolver = repo.propertySchemaResolverFor(workspaceId)
   const registry = repo.propertyDefinitions
-  const hidden = registry?.workspaceId === workspaceId ? hiddenTierFieldIds(registry) : new Set<string>()
+  const hidden = registry?.workspaceId === workspaceId ? outlineSkippedFieldIds(registry) : new Set<string>()
   return {
     isFieldDefinition: fieldId => isResolvableFieldDefinition(resolver.resolveField(fieldId)),
-    isHiddenTier: fieldId => hidden.has(fieldId),
+    isOutlineSkipped: fieldId => hidden.has(fieldId),
   }
 }
 

@@ -263,10 +263,10 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
-  /** The workspace's hidden-tier definition ids (`hiddenTierFieldIds` over the
+  /** The definition ids the workspace's `'non-hidden'` view skips (`outlineSkippedFieldIds` over the
    *  same tx-start registry snapshot the resolver reads), for the
    *  `'non-hidden'` child view. */
-  hiddenTierFieldIdsFor: (workspaceId: string) => ReadonlySet<string>
+  outlineSkippedFieldIdsFor: (workspaceId: string) => ReadonlySet<string>
   /** Tx-start write scope; null permits stage-0 or explicitly forced writes.
    *  A scope with workspaceId null has no open workspace and refuses writes. */
   writableWorkspace: {readonly workspaceId: string | null} | null
@@ -1360,7 +1360,7 @@ export class TxImpl implements Tx {
     const rowsWorkspaceId = data[0]!.workspaceId
     const classifier: PropertyRowClassifier = {
       isFieldDefinition: this.isFieldDefinitionCheckerFor(rowsWorkspaceId),
-      isHiddenTier: fieldId => this.ctx.hiddenTierFieldIdsFor(rowsWorkspaceId).has(fieldId),
+      isOutlineSkipped: fieldId => this.ctx.outlineSkippedFieldIdsFor(rowsWorkspaceId).has(fieldId),
     }
     return data.filter(row => !isLeftOutOfChildrenView(row, view, classifier))
   }

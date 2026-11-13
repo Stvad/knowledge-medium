@@ -62,12 +62,12 @@ import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
 import {
-  hiddenTierFieldIds,
+  outlineSkippedFieldIds,
   propertyDefinitionClaimantsForName,
   type PropertyDefinitionRegistrySnapshot,
 } from '@/data/propertyDefinitionRegistry'
 
-const NO_HIDDEN_TIER_FIELD_IDS: ReadonlySet<string> = new Set()
+const NO_OUTLINE_SKIPPED_FIELD_IDS: ReadonlySet<string> = new Set()
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -586,7 +586,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         return parent !== null && !parent.deleted ? 'live' : 'tombstoned'
       },
     }
-    const hiddenTierIdsByWorkspace = new Map<string, ReadonlySet<string>>()
+    const outlineSkippedIdsByWorkspace = new Map<string, ReadonlySet<string>>()
     const tx = new TxImpl({
       txDb,
       snapshots,
@@ -598,12 +598,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       processors,
       contentReferencePrefill,
       propertySchemaResolverFor: resolverFor,
-      hiddenTierFieldIdsFor: (workspaceId: string) => {
-        let ids = hiddenTierIdsByWorkspace.get(workspaceId)
+      outlineSkippedFieldIdsFor: (workspaceId: string) => {
+        let ids = outlineSkippedIdsByWorkspace.get(workspaceId)
         if (ids === undefined) {
           const registry = propertyDefinitionRegistryForWorkspace(workspaceId)
-          ids = registry ? hiddenTierFieldIds(registry) : NO_HIDDEN_TIER_FIELD_IDS
-          hiddenTierIdsByWorkspace.set(workspaceId, ids)
+          ids = registry ? outlineSkippedFieldIds(registry) : NO_OUTLINE_SKIPPED_FIELD_IDS
+          outlineSkippedIdsByWorkspace.set(workspaceId, ids)
         }
         return ids
       },
