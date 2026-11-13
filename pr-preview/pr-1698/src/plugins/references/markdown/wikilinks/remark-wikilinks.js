@@ -1,1 +1,0 @@
-export{gy as remarkWikilinks}from"../../../../../chunks/app-C62SP8kN.js";

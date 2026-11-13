@@ -1,1 +1,0 @@
-export{sP as appUpdatePromptExtension}from"../../../chunks/app-C62SP8kN.js";

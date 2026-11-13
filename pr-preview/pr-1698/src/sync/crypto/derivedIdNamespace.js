@@ -1,1 +1,0 @@
-export{kat as deriveWorkspaceIdNamespace}from"../../../chunks/app-C62SP8kN.js";

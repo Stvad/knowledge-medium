@@ -1,1 +1,0 @@
-export{ZF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,QF as openExtensionsSettings}from"../../chunks/app-C62SP8kN.js";

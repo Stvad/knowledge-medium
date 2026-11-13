@@ -1,1 +1,0 @@
-export{fQ as pluginPrefsExtension,pQ as pluginUIStateExtension}from"../../chunks/app-C62SP8kN.js";
