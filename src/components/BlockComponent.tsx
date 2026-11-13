@@ -3,15 +3,16 @@ import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.js'
 import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
 import { useRepo } from '@/context/repo.js'
-import { Suspense } from 'react'
+import { Suspense, useCallback, useSyncExternalStore } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useChildIdsForMode, useHandle, usePropertyDisplayMode } from '@/hooks/block.js'
+import { useChildIdsForMode, usePropertyDisplayMode } from '@/hooks/block.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { focusedBlockLocationFromProperties } from '@/data/properties.js'
-import { siblingPrecedes } from '@/data/orderKey.js'
+import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
+import { unlistedSiblingIndex } from '@/utils/selection.js'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
@@ -63,8 +64,8 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // context, so its scope is the one they will have.
   const {renderScopeId} = useBlockContext()
   const mode = usePropertyDisplayMode(block)
-  const focusedChildId = useFocusedChildId(block)
-  const childIds = withFocusedChild(block.repo, useChildIdsForMode(block, mode), focusedChildId)
+  const focusedChild = useFocusedChild(block, renderScopeId)
+  const childIds = withFocusedChild(block.repo, useChildIdsForMode(block, mode), focusedChild)
 
   return <PropertyRowListingContext value={mode !== 'none' ? block.id : null}>
     {childIds.map((childId) => (
@@ -77,35 +78,49 @@ export const BlockChildren = ({block}: { block: Block }) => {
   </PropertyRowListingContext>
 }
 
-/** The child of `parent` focused in this panel, or null. Per-parent, same
- *  selector pattern as `useInFocus`: a focus move re-renders only the parents
- *  it enters or leaves. The focused row's own parent is read reactively too,
- *  so moving it while focused (an indent) drops it from the parent it left. */
-const useFocusedChildId = (parent: Block): string | null => {
-  const candidate = useHandle(useUIStateBlock(), {
-    selector: doc => {
-      const location = focusedBlockLocationFromProperties(doc?.properties)
-      if (!location) return null
-      return parent.repo.block(location.blockId).peek()?.parentId === parent.id ? location.blockId : null
-    },
+/** The live row of `parent`'s child focused in this panel and render scope,
+ *  or null. Follows the panel's focus AND the focused row itself, so moving
+ *  that row into, out of or within `parent` re-lists it; the snapshot is null
+ *  for every other parent, so only the listings it enters, leaves or moves
+ *  within re-render. */
+const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockData | null => {
+  const uiStateBlock = useUIStateBlock()
+  const focusedRowId = useCallback((): string | null => {
+    const location = focusedBlockLocationFromProperties(uiStateBlock.peek()?.properties)
+    if (!location) return null
+    if (typeof renderScopeId === 'string' && location.renderScopeId !== renderScopeId) return null
+    return location.blockId
+  }, [uiStateBlock, renderScopeId])
+  const subscribe = useCallback((notify: () => void) => {
+    let followed: {id: string; unsubscribe: () => void} | null = null
+    const followFocusedRow = () => {
+      const id = focusedRowId()
+      if (followed?.id === id) return
+      followed?.unsubscribe()
+      followed = id === null ? null : {id, unsubscribe: parent.repo.block(id).subscribe(notify)}
+    }
+    followFocusedRow()
+    const unsubscribeFocus = uiStateBlock.subscribe(() => {
+      followFocusedRow()
+      notify()
+    })
+    return () => {
+      unsubscribeFocus()
+      followed?.unsubscribe()
+    }
+  }, [uiStateBlock, parent, focusedRowId])
+  return useSyncExternalStore(subscribe, () => {
+    const id = focusedRowId()
+    const row = id === null ? null : parent.repo.block(id).peek()
+    return row?.parentId === parent.id ? row : null
   })
-  const candidateParentId = useHandle(parent.repo.block(candidate ?? parent.id), {selector: data => data?.parentId})
-  // Defence in depth: the selector above also re-checks on each re-render.
-  return candidate !== null && candidateParentId === parent.id ? candidate : null
 }
 
 /** `childIds` with the focused child at its sibling position when the property
  *  display mode left it out: the row the user is on is never unmounted under
  *  them, whatever tier it turns into while they edit it. */
-const withFocusedChild = (repo: Repo, childIds: string[], focusedId: string | null): string[] => {
-  if (focusedId === null || childIds.includes(focusedId)) return childIds
-  const focused = repo.block(focusedId).peek()
-  if (!focused) return childIds
-  const before = childIds.findIndex(id => {
-    const sibling = repo.block(id).peek()
-    return !!sibling && siblingPrecedes(focused, sibling)
-  })
-  return before === -1
-    ? [...childIds, focusedId]
-    : [...childIds.slice(0, before), focusedId, ...childIds.slice(before)]
+const withFocusedChild = (repo: Repo, childIds: string[], focused: BlockData | null): string[] => {
+  if (!focused || childIds.includes(focused.id)) return childIds
+  const at = unlistedSiblingIndex(repo, childIds, focused)
+  return [...childIds.slice(0, at), focused.id, ...childIds.slice(at)]
 }

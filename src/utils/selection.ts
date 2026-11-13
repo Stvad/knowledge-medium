@@ -25,6 +25,23 @@ const isExpanded = (block: Block, scopeRootId: string, scopeRootForcesOpen: bool
   return !(block.peekProperty(isCollapsedProp) ?? false)
 }
 
+/** Where `row`, which `listedIds` leaves out, sits among them: the index of
+ *  the first listed sibling it sorts before, else `listedIds.length`. The
+ *  outline lists the focused row a display mode hides at this index
+ *  (`BlockChildren`), so the walkers below step from it the same way. Reads
+ *  the siblings from the cache; one not loaded there is passed over. */
+export const unlistedSiblingIndex = (
+  repo: Repo,
+  listedIds: readonly string[],
+  row: BlockData,
+): number => {
+  const at = listedIds.findIndex(id => {
+    const sibling = repo.block(id).peek()
+    return !!sibling && siblingPrecedes(row, sibling)
+  })
+  return at === -1 ? listedIds.length : at
+}
+
 /** Returns the next visible block in document order under
  *  `scopeRootId` (the surface's visible-subtree root — the panel's zoom
  *  root on the main outline, the shown block in a backlink entry, …),
@@ -61,8 +78,9 @@ export const nextVisibleBlock = async (
     await parent.load()
     const siblingIds = await parent.childIds.load()
     const idx = siblingIds.indexOf(walker.id)
-    if (idx !== -1 && idx + 1 < siblingIds.length) {
-      return repo.block(siblingIds[idx + 1])
+    const nextIdx = idx !== -1 ? idx + 1 : unlistedSiblingIndex(repo, siblingIds, data)
+    if (nextIdx < siblingIds.length) {
+      return repo.block(siblingIds[nextIdx])
     }
     walker = parent
   }
@@ -90,10 +108,11 @@ export const previousVisibleBlock = async (
   await parent.load()
   const siblingIds = await parent.childIds.load()
   const idx = siblingIds.indexOf(current.id)
+  const prevIdx = (idx !== -1 ? idx : unlistedSiblingIndex(repo, siblingIds, data)) - 1
 
-  if (idx > 0) {
+  if (prevIdx >= 0) {
     // Descend into the previous sibling's last visible descendant.
-    return getLastVisibleDescendant(repo.block(siblingIds[idx - 1]))
+    return getLastVisibleDescendant(repo.block(siblingIds[prevIdx]))
   }
   // No previous sibling — the parent is the previous visible block.
   // When current is a direct child of scopeRootId, parent === scopeRootId,
