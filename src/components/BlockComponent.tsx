@@ -128,6 +128,8 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): FocusedChild | 
       followed.forEach(unsubscribe => unsubscribe())
     }
   }, [uiStateBlock, parent, focusedRowId])
+  // Stable identity for unchanged external-store snapshots, as in useHandle.
+  /* eslint-disable react-hooks/immutability */
   const snapshot = useMemo(() => {
     let previous: FocusedChild | null = null
     return (): FocusedChild | null => {
@@ -149,6 +151,7 @@ const useFocusedChild = (parent: Block, renderScopeId: unknown): FocusedChild | 
       return previous
     }
   }, [parent, focusedRowId])
+  /* eslint-enable react-hooks/immutability */
   return useSyncExternalStore(subscribe, snapshot)
 }
 

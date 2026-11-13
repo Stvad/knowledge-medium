@@ -612,6 +612,11 @@ describe('a child the user turns into a field row', () => {
     await waitFor(() => expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull())
     expect(typedRow()).not.toBeNull()
     expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
+    await act(async () => {
+      await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
+    })
+    await waitFor(() => expect(listedUnder()).toBe(NOTE))
+    expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull()
     await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
     await waitFor(() => expect(typedRow()).toBeNull())
   })
