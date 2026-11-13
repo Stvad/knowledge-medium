@@ -7,21 +7,26 @@
  * create one block at a deterministic id with its properties (an ingested chat
  * message) then write the same machinery rows, and sync folds them by id.
  *
- * Why only then: nothing can already sit at that id on ANY device, because an
- * earlier row there would have needed the parent to exist before. Under a
- * parent that already existed, a derived id can collide with a tombstone this
- * device has not seen yet — a peer set and then removed the property — and
- * the server keeps the first create of an id, so this device's write would be
- * dropped from the children while its cell patch lands. Every other mint takes
- * a random id, so two offline first writes on an existing block still make two
- * field rows; `collapseDuplicateFieldRow` folds them at the next local write.
+ * Why only then: a row at that id on another device sits under the same parent
+ * id, so that device created the same parent too, and the parent's create
+ * collides with it. Under a block that already existed here, a derived id can
+ * instead meet a tombstone a peer left (it set and then removed the property)
+ * that this device has not received; the server keeps the first create of an
+ * id, so the write would leave the children while its cell patch landed.
+ * Every other mint takes a random id, so two offline first writes on an
+ * existing block still make two field rows (`collapseDuplicateFieldRow` folds
+ * them at the next local write).
  *
- * If the parent itself was a lost create (the server already holds that id),
- * its machinery is lost with it: the block and its properties share one fate.
+ * What converges is only what COLLIDES: a slot both devices filled resolves to
+ * the first create, alongside the parent's. A slot only one device filled — a
+ * member or a property the other did not have — lands on its own, as a
+ * random-id row would, and the cell is the last writer's. A later edit of a row that turns
+ * out to be a peer's tombstone follows the ordinary delete-vs-edit rule: the
+ * delete holds in the children while the cell takes the edit, exactly as for
+ * any row two devices share.
  *
- * A row already at the derived id — the same transaction removed the property
- * and set it again — means a random id. ACCEPTED: that row converges with
- * nothing.
+ * A row already at the derived id (this transaction removed the property and
+ * set it again) means a random id. ACCEPTED: that row converges with nothing.
  *
  * The namespace is keyed by `K_id` in a sealed workspace
  * (`@/data/workspaceIdNamespace`): `reference_target_id` does not sync, but
@@ -55,7 +60,10 @@ export const resolvePropertyChildNamespace = (repo: Repo, workspaceId: string): 
 
 /** IN-LOCK: the namespace to derive under, or `null` when the workspace is
  *  sealed and its namespace was not resolved first — mint a random id then. */
-export const propertyChildNamespaceInTx = async (tx: Tx, workspaceId: string): Promise<string | null> => {
+export const propertyChildNamespaceInTx = async (
+  tx: Tx,
+  workspaceId: string,
+): Promise<string | null> => {
   try {
     return await derivedIdNamespaceInTx(tx, tx.meta.user.id, workspaceId, PROPERTY_CHILD_NAMESPACE)
   } catch (err) {

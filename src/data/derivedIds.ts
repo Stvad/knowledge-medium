@@ -184,12 +184,7 @@ export const classifyOccupant = (
 
 /**
  * Which property-machinery row a derived id names (§9 field and value rows).
- *
- * Two devices that create one block at a deterministic id with its properties
- * mint the SAME field row and — for an equal value — the same value rows, so
- * sync folds them by id instead of leaving two field rows nothing will ever
- * fold (no processor runs on sync apply). When an id is derived at all is
- * `mintPropertyChildRow`'s rule.
+ * When an id is derived at all, and why, is `mintPropertyChildRow`'s.
  *
  *  - `field` — the owner's one field row for a definition.
  *  - `scalar-value` — a single-valued property's one value slot, so two

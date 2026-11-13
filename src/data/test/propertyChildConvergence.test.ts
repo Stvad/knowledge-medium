@@ -2,8 +2,8 @@
 /**
  * Two devices that create one block at a deterministic id WITH its properties
  * (an ingested chat message) end up with ONE set of property machinery rows
- * once both have synced — and a write to a block that already existed is never
- * dropped by meeting a peer's tombstone.
+ * once both have synced — and a first write to a block that already existed on
+ * the writing device does not meet a peer's tombstone at a derived id.
  *
  * No processor runs on sync apply, so whatever the mints leave is final until
  * someone edits that property again. Machinery ids are derived only under a

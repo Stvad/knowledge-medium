@@ -787,11 +787,11 @@ export const plannedFieldRow = (
  *  reconcile uses too.
  *
  *  Emitted rather than written so the one-time pass can hand a whole batch to
- *  `tx.createMany`. Its owners all predate it, so they take random ids — the
- *  rule `mintPropertyChildRow` applies.
+ *  `tx.createMany`. Its owners all predate it, so its rows take random ids, as
+ *  `mintPropertyChildRow` would give them.
  *
- *  The pass must encode inside its per-key guard: `encodedPropertyValueToChildContents` throws on a value no codec
- *  will take, and a key that cannot be planned has to cost its own key rather
+ *  The pass must encode inside its per-key guard: the encoder throws on a
+ *  value no codec will take, and a key that cannot be planned has to cost its own key rather
  *  than the batch. Encoding here instead would put that throw outside the
  *  guard, where it aborts the whole run — safe today only because the pass's
  *  rejection check happens to call this same encoder first, which is a
@@ -849,7 +849,8 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await mintPropertyChildRow(tx, {...plannedFieldRow(tx, owner, fieldId), parentId: owner.id},
+  const id = await mintPropertyChildRow(tx,
+    {...plannedFieldRow(tx, owner, fieldId), parentId: owner.id},
     {kind: 'field', ownerId: owner.id, fieldId})
   return {id, workspaceId: owner.workspaceId}
 }
@@ -915,33 +916,6 @@ const createValueChild = (
   content,
   references: tx.derivedReferencesFor(content),
 }, slot)
-
-/** The slot each of `contents` fills under `fieldRowId`, for a derived id
- *  (`mintPropertyChildRow` says when there is one).
- *
- *  A list member's slot is its MEMBER KEY — the reconciler's own comparison,
- *  so two devices adding an equal member mint one row — and its occurrence
- *  among equal members, so `[2, 2]` is two slots. A scalar has one slot
- *  whatever its value: two devices creating one block with different values
- *  write one row, and the server keeps the first create of it, as it does of
- *  the block's cell. */
-const valueChildSlots = (
-  schema: AnyPropertySchema,
-  fieldRowId: string,
-  contents: readonly string[],
-): PropertyChildSlot[] => {
-  if (memberCodecOf(schema.codec) === undefined) {
-    return contents.map(() => ({kind: 'scalar-value', fieldRowId}))
-  }
-  const keys = memberKeysFor(schema)
-  const seen = new Map<string, number>()
-  return contents.map(content => {
-    const memberKey = keys.content(content)
-    const occurrence = seen.get(memberKey) ?? 0
-    seen.set(memberKey, occurrence + 1)
-    return {kind: 'member', fieldRowId, occurrence, memberKey}
-  })
-}
 
 const reconcileSingleValueChild = async (
   tx: Tx,
@@ -1013,7 +987,8 @@ const reconcileMemberValueChildren = async (
     if (bucket) bucket.push(value)
     else unused.set(key, [value])
   }
-  const kept = contents.map(content => unused.get(keys.content(content))?.shift())
+  const contentKeys = contents.map(keys.content)
+  const kept = contentKeys.map(key => unused.get(key)?.shift())
 
   // Everything unmatched, in the order the value set was read, so replicas
   // agree on which of several equal rows survives.
@@ -1068,12 +1043,19 @@ const reconcileMemberValueChildren = async (
   const fresh = created > 0 ? freshSlots(values, created) : []
   const slots = [...freed, ...fresh].sort()
 
-  const idSlots = valueChildSlots(schema, fieldRow.id, contents)
+  // A member's derived-id slot is its member key — the comparison above, so
+  // two devices adding an equal member mint one row — and its occurrence
+  // among equal members, so `[2, 2]` is two slots.
+  const occurrences = new Map<string, number>()
   for (let i = 0; i < contents.length; i++) {
     const orderKey = slots[i]!
     const existing = kept[i]
+    const memberKey = contentKeys[i]!
+    const occurrence = occurrences.get(memberKey) ?? 0
+    occurrences.set(memberKey, occurrence + 1)
     if (!existing) {
-      await createValueChild(tx, fieldRow, contents[i]!, orderKey, idSlots[i]!)
+      await createValueChild(tx, fieldRow, contents[i]!, orderKey,
+        {kind: 'member', fieldRowId: fieldRow.id, occurrence, memberKey})
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row

@@ -437,6 +437,10 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+  /** Per-tx cache of `workspaces.encryption_mode`, which is written only
+   *  outside any tx (sync, `markLocalWorkspaceConverted`) and so waits behind
+   *  this tx's write lock. */
+  private readonly encryptionModeCache = new Map<string, Promise<string | null>>()
 
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
@@ -564,7 +568,12 @@ export class TxImpl implements Tx {
   }
 
   workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
-    return readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+    let mode = this.encryptionModeCache.get(workspaceId)
+    if (mode === undefined) {
+      mode = readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+      this.encryptionModeCache.set(workspaceId, mode)
+    }
+    return mode
   }
 
   /** REFUSED once this transaction has written, and that is the whole reason

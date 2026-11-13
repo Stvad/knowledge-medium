@@ -151,6 +151,8 @@ describe('a plaintext workspace', () => {
     // other device can compute, so nothing elsewhere can sit at it.
     const [field] = await liveChildrenOf(OWNER)
     expect(field!.id).not.toBe(derivedFieldRow(PLAINTEXT_NS))
+    expect((await liveChildrenOf(field!.id)).map(row => row.id))
+      .toEqual([uuidv5(scalarKey(WS, field!.id), PLAINTEXT_NS)])
   })
 
   it('takes a random id for a member added later under an existing field row', async () => {
@@ -225,17 +227,23 @@ describe('tx.createdInThisTx', () => {
 
   it('is true for a row this tx inserted, deleted or not, and false for one it only wrote', async () => {
     await createOwner()
+    await write(async tx => {
+      await tx.create({id: 'dead', workspaceId: WS, parentId: null, orderKey: 'k-dead'})
+      await tx.delete('dead')
+    })
     let seen: Record<string, boolean> = {}
     await write(async tx => {
       await tx.update(OWNER, {content: 'edited'})
+      await tx.restore('dead')
       await tx.create({id: 'fresh', workspaceId: WS, parentId: null, orderKey: 'k-fresh'})
       await tx.create({id: 'gone', workspaceId: WS, parentId: null, orderKey: 'k-gone'})
       await tx.delete('gone')
       seen = {
         edited: tx.createdInThisTx(OWNER), fresh: tx.createdInThisTx('fresh'),
-        gone: tx.createdInThisTx('gone'), untouched: tx.createdInThisTx('never-written'),
+        gone: tx.createdInThisTx('gone'), restored: tx.createdInThisTx('dead'),
+        untouched: tx.createdInThisTx('never-written'),
       }
     })
-    expect(seen).toEqual({edited: false, fresh: true, gone: true, untouched: false})
+    expect(seen).toEqual({edited: false, fresh: true, gone: true, restored: false, untouched: false})
   })
 })

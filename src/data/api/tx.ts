@@ -125,9 +125,10 @@ export interface Tx {
    *  caller is a pass that expects some of its candidates to have moved on. */
   liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
 
-  /** Whether THIS transaction inserted row `id` — synchronous, from the tx's
-   *  own write log. A row restored here, or one created and then deleted, is
-   *  still one it inserted. */
+  /** Whether row `id` did not exist at all — not even as a tombstone — when
+   *  this transaction began, and the transaction has written it since: true
+   *  for a row created here, even if deleted again; false for a pre-existing
+   *  row, a restored tombstone included. Synchronous, from the tx's snapshots. */
   createdInThisTx(id: string): boolean
 
   /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
