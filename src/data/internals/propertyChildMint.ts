@@ -10,10 +10,14 @@
  *
  * What sits at the derived id decides the rest:
  *  - nothing → the row is created there;
- *  - a tombstone → the live writer RESTORES it, which is what re-setting a
- *    removed property is. Two writers leave it dead and take a random id: the
- *    create-only backfill (a tombstone is a delete it must not undo) and a
- *    write under revival, which declines ambiguous tombstones on purpose;
+ *  - a tombstone under the same parent → the live writer RESTORES it, which
+ *    is what re-setting a removed property is, and moves it to the planned
+ *    order key (a list member re-added at the end). Two writers leave it dead
+ *    and take a random id: the create-only backfill (a tombstone is a delete
+ *    it must not undo) and a write under revival, which declines ambiguous
+ *    tombstones on purpose;
+ *  - a tombstone moved elsewhere before it died → a random id: its parent may
+ *    be dead too, and restoring a row under a dead parent aborts the write;
  *  - a live row → it is no longer this slot's row (a field row moved out from
  *    under its owner, a member edited in place to another value), so the new
  *    row takes a random id. ACCEPTED: that row converges with nothing, exactly
@@ -82,7 +86,9 @@ export const mintPropertyChildRow = async (
   const id = propertyChildBlockId(namespace, row.workspaceId, slot)
   const occupancy = classifyOccupant(await tx.get(id), {workspaceId: row.workspaceId})
   if (occupancy.verdict === 'absent') return tx.create({...row, id})
-  if (occupancy.verdict !== 'tombstoned' || onTombstone === 'leave') return tx.create(row)
+  const restorable = occupancy.verdict === 'tombstoned' && onTombstone === 'restore'
+    && occupancy.block.parentId === row.parentId
+  if (!restorable) return tx.create(row)
 
   // The tombstone keeps its own property bag: a value row can own properties
   // too, and what it held is the user's.
@@ -92,8 +98,7 @@ export const mintPropertyChildRow = async (
     ...(row.referenceTargetId !== undefined ? {referenceTargetId: row.referenceTargetId} : {}),
     ...(row.isFieldForm !== undefined ? {isFieldForm: row.isFieldForm} : {}),
   })
-  const tombstone = occupancy.block
-  if (tombstone.parentId !== row.parentId || tombstone.orderKey !== row.orderKey) {
+  if (occupancy.block.orderKey !== row.orderKey) {
     await tx.move(id, {parentId: row.parentId, orderKey: row.orderKey})
   }
   return id

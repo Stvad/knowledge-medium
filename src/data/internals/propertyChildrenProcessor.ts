@@ -801,8 +801,9 @@ export const plannedFieldRow = (
  *  the create-only case, as DATA, each with the slot its id derives from.
  *
  *  Emitted rather than written so the one-time pass can hand a whole batch to
- *  `tx.createMany` (through `withPropertyChildIds`). The live writer does NOT come through here — it reconciles
- *  an existing value set row by row (`reconcileFieldValueChildren`) — but both
+ *  `tx.createMany` (through `withPropertyChildIds`). The live writer does NOT
+ *  come through here — it reconciles an existing value set row by row
+ *  (`reconcileFieldValueChildren`) — but both
  *  routes decide a value's MEMBERS through the same
  *  `encodedPropertyValueToChildContents`, which is the part they must not be
  *  able to disagree about.
@@ -846,9 +847,11 @@ export const valueChildRowsFor = (
  *  A list member's slot is its MEMBER KEY — the reconciler's own comparison,
  *  so two devices adding an equal member mint one row — and its occurrence
  *  among equal members, so `[2, 2]` is two slots. A scalar has one slot
- *  whatever its value, so concurrent first values land on ONE row and settle
- *  by write order, as the cell does: a divergent concurrent value no longer
- *  survives as a peer.
+ *  whatever its value, so concurrent first values land on ONE row: a divergent
+ *  concurrent value no longer survives as a peer. That row keeps the server's
+ *  FIRST create while the owner's cell keeps the LAST patch, so the two can
+ *  name different writers until the next local write of the property (pinned
+ *  in `propertyChildConvergence.test.ts`).
  *
  *  ACCEPTED: a member edited in place keeps the id its OLD value derived. A
  *  later mint of that old value finds the slot taken and takes a random id

@@ -25,6 +25,7 @@ import { setModePin } from '@/sync/keys/modePin'
 import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys'
 import { keyAtStart } from '@/data/orderKey'
 import { propertyFieldContent } from '@/data/propertyChildren'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -156,18 +157,37 @@ describe('a plaintext workspace', () => {
     ])
   })
 
-  it('moves a restored row back under its owner', async () => {
+  it('re-adds a removed list member at its slot in the new order', async () => {
+    await write(tx => tx.setProperty(OWNER, tagsSchema, ['blue', 'red']))
+    const [field] = await liveChildrenOf(OWNER)
+    const [blue] = await liveChildrenOf(field!.id)
+    await write(tx => tx.setProperty(OWNER, tagsSchema, ['red']))
+
+    await write(tx => tx.setProperty(OWNER, tagsSchema, ['red', 'blue']))
+
+    const members = await liveChildrenOf(field!.id)
+    expect(members.map(row => row.content)).toEqual(['red', 'blue'])
+    expect(members[1]!.id).toBe(blue!.id)
+  })
+
+  it('leaves a tombstone that died under another parent, even a dead one', async () => {
+    // Restoring it would land a live row under a tombstoned parent, which the
+    // parent-not-deleted trigger refuses by aborting the whole write.
     await createOwner('other-owner')
     await write(tx => tx.setProperty(OWNER, statusSchema, 'done'))
     const [field] = await liveChildrenOf(OWNER)
     await write(async tx => {
       await tx.move(field!.id, {parentId: 'other-owner', orderKey: keyAtStart(null)})
-      await tx.delete(field!.id)
+      await deleteSubtreeInTx(tx, 'other-owner')
     })
+    expect(await rowAt(field!.id)).toMatchObject({deleted: 1, parent_id: 'other-owner'})
 
     await write(tx => tx.setProperty(OWNER, statusSchema, 'again'))
 
-    expect(await rowAt(field!.id)).toMatchObject({deleted: 0, parent_id: OWNER})
+    const fields = await liveChildrenOf(OWNER)
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.id).not.toBe(field!.id)
+    expect(await rowAt(field!.id)).toMatchObject({deleted: 1})
   })
 
   it('restores a tombstone that stopped being a field row as one, classified in the same tx', async () => {
