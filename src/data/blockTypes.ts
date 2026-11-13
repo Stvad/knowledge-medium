@@ -1,4 +1,5 @@
 import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type BlockData, type TypeSeedDeclaration } from '@/data/api'
+import { propertyDisplayPrefsType } from '@/data/propertyDisplayMode'
 import {
   aliasesProp,
   blockTypeColorProp,
@@ -146,6 +147,7 @@ export const SYSTEM_BLOCK_TYPES: readonly string[] = [
  * registry synthesizes into `repo.types`, so these stay authoritative before any
  * row materializes (and via the `KERNEL_TYPES` fallback before a workspace pin). */
 export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
+  propertyDisplayPrefsType,
   seedType({
     seedKey: 'system:kernel-data/type/extension',
     revision: 1,

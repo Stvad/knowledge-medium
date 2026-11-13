@@ -23,6 +23,7 @@ export const srsIntervalProp = seedProperty({
   preset: 'number',
   defaultValue: 2,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const srsFactorProp = seedProperty({
@@ -32,6 +33,7 @@ export const srsFactorProp = seedProperty({
   preset: 'number',
   defaultValue: 2.5,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const srsNextReviewDateProp = seedProperty({
@@ -42,6 +44,7 @@ export const srsNextReviewDateProp = seedProperty({
   config: {targetTypes: [DAILY_NOTE_TYPE]},
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const srsReviewCountProp = seedProperty({
@@ -51,6 +54,7 @@ export const srsReviewCountProp = seedProperty({
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const srsGradeProp = seedProperty({
@@ -60,6 +64,7 @@ export const srsGradeProp = seedProperty({
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const srsArchivedProp = seedProperty({
@@ -69,6 +74,7 @@ export const srsArchivedProp = seedProperty({
   preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const srsSnapshotHistoryProp = seedProperty({
@@ -78,6 +84,7 @@ export const srsSnapshotHistoryProp = seedProperty({
   preset: 'list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 // The shared list core is runtime-equivalent to the historical
 // list(unsafeIdentity<SrsReviewSnapshot>()) codec. Keep the typed handle local.
 // The JSON list on purpose, and the only seed still on it: these members are

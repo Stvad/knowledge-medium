@@ -5,7 +5,7 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
-import type { ComponentType, FunctionComponent, RefObject } from 'react'
+import type { ComponentType, FunctionComponent, ReactNode, RefObject } from 'react'
 import {
   showPropertiesProp,
   isCollapsedProp,
@@ -83,6 +83,10 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
    *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
    *  thing for a renderer that arrives through the facet instead. */
   contentShowsOtherBlocks?: boolean;
+  /** The layout for the block this renderer composes, in place of the
+   *  `blockLayoutFacet` resolution — for a renderer whose block has a shape of
+   *  its own (a property row's two-column grid). */
+  Layout?: BlockLayout;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -384,6 +388,38 @@ export const DefaultBlockLayout: BlockLayout = ({
   Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
+}) => (
+  <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}>
+    <div className="block-body flex-grow relative flex flex-col">
+      <div className="flex flex-col rounded-sm">
+        <Content/>
+        {Properties && <Properties/>}
+      </div>
+
+      <BelowContent/>
+
+      <CollapsibleContent>
+        <Children/>
+      </CollapsibleContent>
+
+      <Footer/>
+    </div>
+  </BlockFrame>
+)
+
+/**
+ * A block's interactive frame — the focusable, collapsible shell with its
+ * controls, selection and top-level marks — around a layout's own body. One
+ * owner for that chrome, so a layout that draws a different body (a property
+ * row) keeps every change made to it. The body sits inside the Collapsible, so
+ * a `CollapsibleContent` in it follows the block's collapse.
+ */
+export const BlockFrame = ({
+  block, Header, Shell, Controls, className = '', frameProps, children,
+}: Pick<BlockLayoutSlots, 'block' | 'Header' | 'Shell' | 'Controls'> & {
+  className?: string
+  frameProps?: Record<`data-${string}`, string>
+  children: ReactNode
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
@@ -416,25 +452,12 @@ export const DefaultBlockLayout: BlockLayout = ({
           return (
             <Collapsible
               {...collapsibleProps}
+              {...frameProps}
               open={!isCollapsed || isTopLevel}
-              className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+              className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
-
-              <div className="block-body flex-grow relative flex flex-col">
-                <div className="flex flex-col rounded-sm">
-                  <Content/>
-                  {Properties && <Properties/>}
-                </div>
-
-                <BelowContent/>
-
-                <CollapsibleContent>
-                  <Children/>
-                </CollapsibleContent>
-
-                <Footer/>
-              </div>
+              {children}
             </Collapsible>
           )
         }}
@@ -624,6 +647,7 @@ export function DefaultBlockRenderer(
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
     contentShowsOtherBlocks,
+    Layout: ComposedLayout,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -719,8 +743,8 @@ export function DefaultBlockRenderer(
   // Last-wins on the variant facet. `DefaultBlockLayout` is the no-contribution
   // fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
-    [resolveContext, resolveBlockLayout],
+    () => ComposedLayout ?? resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
+    [ComposedLayout, resolveContext, resolveBlockLayout],
   )
 
   // Content slot: the editable content surface — gesture ref + surface props +

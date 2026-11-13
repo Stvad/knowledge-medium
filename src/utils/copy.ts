@@ -17,7 +17,7 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // the root (0 for the root). No per-parent handle creation, no recursive
   // cache reads, and no re-deriving depth here.
   //
-  // `hidePropertyChildren` prunes EVERY recognized field row today, which is
+  // `propertyChildren` prunes EVERY recognized field row today, which is
   // correct only while all workspaces read 'cell' (nothing is child-backed,
   // so nothing is pruned). Copy is WYSIWYG per §10 — default copy serializes
   // exactly the visible view, so once slice D's tier-aware predicate lands a
@@ -28,7 +28,7 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // value still won't travel on default copy — an accepted WYSIWYG
   // consequence, covered by the explicit "copy with hidden properties"
   // command rather than by widening this call.
-  const blocks = await block.repo.query.subtree({id: block.id, hidePropertyChildren: true}).load()
+  const blocks = await block.repo.query.subtree({id: block.id, propertyChildren: 'none'}).load()
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }

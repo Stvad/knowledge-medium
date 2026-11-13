@@ -453,7 +453,7 @@
   are all deleted — §7); recognition is <em>form-agnostic</em> and
   <code>[[name]]</code> is never property-special-cased (§9); traversal polarity is
   inverted — everything-by-default, the visible view opts in via
-  <code>hidePropertyChildren</code> (§9, B1); renames are content-stable (cell
+  <code>propertyChildren</code> (§9, B1); renames are content-stable (cell
   re-key only, B2); the flip trigger is forward-only for everyone and refuses e2ee
   workspaces, with rollback as a deliberate trigger-drop migration (§6); the
   cross-workspace paste rules are satisfied by construction (markdown-mediated) until
@@ -1670,7 +1670,7 @@ definition field, not a curated code list, though §10's outline-vs-panel questi
 remains open for the slice-C flip),
 the visible-view/structural-view split in the traversal primitives (as shipped the
 polarity is everything-by-default with the outline opting into
-<code>hidePropertyChildren</code> — §9), and
+<code>propertyChildren</code> — §9), and
 panel-layout/orphan-alias special cases. One genuine residual to carry, eyes open —
 plus one that schema unification has since dissolved:
 </p>
@@ -3085,7 +3085,7 @@ supabase skill if it's kept.
     traversal primitive (<code>tx.childrenOf</code>,
     <code>core.children</code>/<code>childIds</code>, <code>subtree</code>) returns
     <em>everything</em> by default — the structural view — and the display-visible
-    view is opt-in via <code>hidePropertyChildren: true</code> (the outline hooks
+    view is opt-in via <code>propertyChildren: 'none'</code> (the outline hooks
     pass it). The earlier hide-by-default polarity made the <em>dangerous</em>
     mistake silent: a structural caller that forgot the include flag stranded
     machinery rows under a delete (<code>softDeleteSubtree</code> discovers
@@ -3098,7 +3098,7 @@ supabase skill if it's kept.
     <em>with their subtrees</em>, hidden-tier subtrees prune whole — and an
     explicit "copy with hidden properties" command is the full-tree variant.
     As shipped today <code>serializeBlock</code> prunes <em>all</em> machinery
-    (<code>hidePropertyChildren: true</code>) — correct while every workspace
+    (<code>propertyChildren: 'none'</code>) — correct while every workspace
     reads <code>'cell'</code>; the tier-aware predicate lands with slice D, and
     switching to it also closes #404's copy gap by construction (user content
     nested under a <em>visible</em> property's value stops being silently
@@ -3518,7 +3518,7 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         §9): <code>tx.childrenOf</code> and the outline's query-layer twin
         (<code>core.childIds</code> / <code>core.children</code>, whose SQL binds the
         recursive positional rule workspace-scoped) return everything by default;
-        the outline hooks opt into <code>hidePropertyChildren</code>. Without the
+        the outline hooks opt into <code>propertyChildren</code>. Without the
         outline opt-in, C's backfill renders every property as an ordinary outline
         row for production users until D's tree UI lands. (The blanket hide is the
         pre-D baseline; slice D replaces it with §10's tier-aware predicate —
@@ -3864,7 +3864,7 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         value hits to their owners) is made under §10's display model, before C
         flips. The baseline
         field-row <em>invisibility</em> is not here — the outline's visible-view
-        opt-in (<code>hidePropertyChildren</code>, §9) ships in B1 and gates the C
+        opt-in (<code>propertyChildren</code>, §9) ships in B1 and gates the C
         flip (PR-review P2); D is the
         positive surface that makes field rows deliberately visible and editable.
         Panel stays.
@@ -4376,7 +4376,7 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
         never machinery.</td>
       <td><a href="#s9">§9</a></td>
       <td>Rendering, hidden filtering, the visible-view opt-in
-        (<code>hidePropertyChildren</code>), projection, dedup walk</td>
+        (<code>propertyChildren</code>), projection, dedup walk</td>
       <td><code>block-type:properties</code> ref values render as values, not nested
         fields (B)</td>
     </tr>
