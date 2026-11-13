@@ -168,6 +168,10 @@ export interface BlockContextType {
      *  layout self-gate (render the navigating link + raw content) without
      *  matching embeds or backlink entries. */
     isReference?: boolean
+    /** A peek at a block (the link preview) shows this block open whatever
+     *  its stored collapse, with no expand control: looking inside it must not
+     *  write the stored flag. */
+    peekRootId?: string
     [key: string]: unknown
 }
 

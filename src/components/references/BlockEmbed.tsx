@@ -1,4 +1,5 @@
 import { BlockComponent } from '@/components/BlockComponent'
+import { cn } from '@/lib/utils'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
@@ -13,15 +14,20 @@ import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js
 // children, not editable — instead of as an embed. An embed is its own surface,
 // never a reference.
 const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true, isReference: false}
+const EMBED_BOX_CLASS = 'border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r'
 
 export function BlockEmbed({
   blockId,
   sourceBlockId,
   occurrenceId,
+  peek = false,
 }: {
   blockId: string
   sourceBlockId: string
   occurrenceId: string
+  /** A peek at the block (the link preview): no box, since the host draws its
+   *  own frame, and the block shows open whatever its stored collapse. */
+  peek?: boolean
 }) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
@@ -66,8 +72,11 @@ export function BlockEmbed({
   // no separate "source" link.
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
-        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
+      <div className={cn('blockembed', !peek && EMBED_BOX_CLASS)}>
+        <NestedBlockContextProvider overrides={{
+          ...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId,
+          ...(peek ? {peekRootId: blockId} : {}),
+        }}>
           <BlockComponent blockId={blockId}/>
         </NestedBlockContextProvider>
       </div>

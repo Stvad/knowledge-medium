@@ -43,7 +43,7 @@ import {
 } from '@/components/ui/context-menu.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockAliases, useHasChildren, usePropertyValue } from '@/hooks/block.js'
-import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
+import { useForcesOpen, useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { Facet } from '@/facets/facet.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
@@ -423,6 +423,7 @@ export const BlockFrame = ({
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
+  const forcesOpen = useForcesOpen(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   // No per-block `view-transition-name`. Tried it and reverted: the
@@ -453,7 +454,7 @@ export const BlockFrame = ({
             <Collapsible
               {...collapsibleProps}
               {...frameProps}
-              open={!isCollapsed || isTopLevel}
+              open={!isCollapsed || forcesOpen}
               className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
@@ -849,15 +850,16 @@ export function DefaultBlockRenderer(
   const ControlsSlot = useMemo<ComponentType>(() => {
     return function BlockControlsSlot() {
       const isFocal = useIsFocalRender(block)
+      const forcesOpen = useForcesOpen(block)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
-      useGutterControlsItem(gutterControls, !isFocal && isMobile && hasChildren ? MOBILE_EXPAND_GUTTER_ITEM : null)
+      useGutterControlsItem(gutterControls, !forcesOpen && isMobile && hasChildren ? MOBILE_EXPAND_GUTTER_ITEM : null)
 
       if (isFocal) return null
 
       return (
         <div className="block-controls flex items-center">
-          {!isMobile && <ExpandButton block={block}/>}
+          {!isMobile && !forcesOpen && <ExpandButton block={block}/>}
           <BlockBullet block={block} resolveContext={resolveContext}/>
         </div>
       )

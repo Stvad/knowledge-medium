@@ -16,22 +16,27 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core'
 import { ActiveContextsProvider, useActiveContextsDispatch } from '@/shortcuts/ActiveContexts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { ActionContextTypes, type BaseShortcutDependencies } from '@/shortcuts/types'
+import { linkPreviewPlugin } from '@/plugins/link-preview'
 
-const {navigate, openBlock, outerPointerDown, repo} = vi.hoisted(() => ({
+const {navigate, openBlock, outerClick, outerPointerDown, repo} = vi.hoisted(() => ({
   navigate: vi.fn(),
   openBlock: vi.fn(),
+  outerClick: vi.fn(),
   outerPointerDown: vi.fn(),
   repo: {activeWorkspaceId: 'active-workspace'},
 }))
 vi.mock('@/context/repo', () => ({useRepo: () => repo}))
 vi.mock('@/hooks/block', () => ({useWorkspaceId: () => 'link-workspace'}))
+vi.mock('@/components/references/BlockEmbed', () => ({
+  BlockEmbed: ({blockId}: {blockId: string}) => <span>Preview of {blockId}</span>,
+}))
 vi.mock('@/utils/navigation', async importOriginal => ({
   ...await importOriginal<typeof import('@/utils/navigation')>(),
   navigate,
   useOpenBlock: () => openBlock,
 }))
 
-const runtime = resolveFacetRuntimeSync([])
+const runtime = resolveFacetRuntimeSync([linkPreviewPlugin])
 const holdContext = {
   block: {id: 'holding-block'},
   uiStateBlock: {
@@ -56,10 +61,10 @@ const BackgroundShortcuts = () => {
   return <HotkeyReconciler/>
 }
 
-const renderLinks = (children?: ReactNode) => render(
-  <AppRuntimeContextProvider value={runtime}>
+const renderLinks = (children?: ReactNode, linkRuntime = runtime) => render(
+  <AppRuntimeContextProvider value={linkRuntime}>
     <BlockContextProvider initialValue={{panelId: 'source-panel'}}>
-      <div onPointerDown={outerPointerDown}>
+      <div onPointerDown={outerPointerDown} onClick={outerClick}>
         <Wikilink alias="Page" blockId="page-target" workspaceId="link-workspace">Page link</Wikilink>
         <ReferenceLink block={{id: 'ref-target'} as Block}>{children ?? 'Block reference'}</ReferenceLink>
       </div>
@@ -72,6 +77,7 @@ afterEach(() => {
   navigate.mockClear()
   openBlock.mockClear()
   outerPointerDown.mockClear()
+  outerClick.mockClear()
   setGestureActionDispatcher(null)
   vi.unstubAllGlobals()
   vi.useRealTimers()
@@ -131,6 +137,100 @@ describe('link context menus', () => {
     })
     expect(openBlock).not.toHaveBeenCalled()
     expect(outerPointerDown).not.toHaveBeenCalled()
+  })
+
+  it('keeps a click inside the Alt-hover preview from reaching the link and the source block, and open', async () => {
+    renderLinks()
+    fireEvent.mouseOver(screen.getByText('Block reference'), {altKey: true})
+    const body = await screen.findByText('Preview of ref-target')
+    fireEvent.pointerDown(body)
+    fireEvent.click(body)
+    expect(openBlock).not.toHaveBeenCalled()
+    expect(outerPointerDown).not.toHaveBeenCalled()
+    expect(outerClick).not.toHaveBeenCalled()
+  })
+
+  it('gives the innermost link under the pointer sole ownership of the Alt-hover preview', async () => {
+    renderLinks(<>Outer <Wikilink alias="Inner" blockId="inner-target" workspaceId="inner-workspace">Inner link</Wikilink></>)
+    const inner = screen.getByText('Inner link')
+    const outer = inner.closest('a')!.parentElement!.closest('a')!
+    fireEvent.mouseOver(outer)
+    fireEvent.mouseOver(inner)
+    fireEvent.keyDown(window, {key: 'Alt'})
+    await screen.findByText('Preview of inner-target')
+    expect(screen.queryByText('Preview of ref-target')).toBeNull()
+
+    fireEvent.keyDown(window, {key: 'Escape'})
+    fireEvent.mouseOver(inner, {altKey: true})
+    await screen.findByText('Preview of inner-target')
+    expect(screen.queryByText('Preview of ref-target')).toBeNull()
+
+    fireEvent.mouseOver(outer, {altKey: true})
+    await screen.findByText('Preview of ref-target')
+    fireEvent.mouseOver(inner, {altKey: true})
+    await vi.waitFor(() => expect(screen.queryByText('Preview of ref-target')).toBeNull())
+    expect(screen.getByText('Preview of inner-target')).toBeTruthy()
+  })
+
+  it('spends the Escape that closes the Alt-hover preview on it alone', async () => {
+    renderLinks()
+    const appEscape = vi.fn()
+    window.addEventListener('keydown', appEscape)
+    try {
+      fireEvent.mouseOver(screen.getByText('Page link'), {altKey: true})
+      const body = await screen.findByText('Preview of page-target')
+      fireEvent.keyDown(document.body, {key: 'Escape'})
+      expect(body.isConnected).toBe(false)
+      expect(appEscape).not.toHaveBeenCalled()
+      fireEvent.keyDown(document.body, {key: 'Escape'})
+      expect(appEscape).toHaveBeenCalledOnce()
+    } finally {
+      window.removeEventListener('keydown', appEscape)
+    }
+  })
+
+  it('opens the Alt-hover preview on a bare Alt press, not a repeat or one typed into an editor', async () => {
+    renderLinks()
+    render(<textarea aria-label="Editor"/>)
+    fireEvent.mouseOver(screen.getByText('Page link'))
+    fireEvent.keyDown(screen.getByLabelText('Editor'), {key: 'Alt'})
+    fireEvent.keyDown(window, {key: 'Alt', repeat: true})
+    expect(document.querySelector('[data-link-preview]')).toBeNull()
+    fireEvent.keyDown(window, {key: 'Alt'})
+    await screen.findByText('Preview of page-target')
+  })
+
+  it('keeps the Alt-hover preview open while the pointer crosses from the link onto it', async () => {
+    renderLinks()
+    const link = screen.getByText('Block reference')
+    fireEvent.mouseOver(link, {altKey: true})
+    const body = await screen.findByText('Preview of ref-target')
+    vi.useFakeTimers()
+    fireEvent.mouseLeave(link)
+    fireEvent.mouseEnter(body.closest('[data-link-preview]')!)
+    fireEvent.mouseOver(body)
+    act(() => vi.advanceTimersByTime(1000))
+    expect(body.isConnected).toBe(true)
+  })
+
+  it('shows no Alt-hover preview, and still navigates, without the link-preview plugin', () => {
+    renderLinks(undefined, resolveFacetRuntimeSync([]))
+    const link = screen.getByText('Page link')
+    fireEvent.mouseOver(link, {altKey: true})
+    fireEvent.keyDown(window, {key: 'Alt'})
+    expect(document.querySelector('[data-link-preview]')).toBeNull()
+    fireEvent.click(link)
+    expect(openBlock).toHaveBeenCalledOnce()
+  })
+
+  it('closes the Alt-hover preview when the link is clicked', async () => {
+    renderLinks()
+    const link = screen.getByText('Page link')
+    fireEvent.mouseOver(link, {altKey: true})
+    const body = await screen.findByText('Preview of page-target')
+    fireEvent.click(link, {altKey: true})
+    expect(openBlock).toHaveBeenCalledOnce()
+    expect(body.isConnected).toBe(false)
   })
 
   it('leaves Shift-right-click available for the browser menu', () => {
