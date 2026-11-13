@@ -1,1 +1,1 @@
-export{py as referencesMarkdownExtension}from"../../../../chunks/app-DDs9_0XT.js";
+export{my as referencesMarkdownExtension}from"../../../../chunks/app-YTjlnKPG.js";

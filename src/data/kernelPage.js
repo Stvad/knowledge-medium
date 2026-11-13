@@ -1,1 +1,1 @@
-export{Urt as getOrCreateKernelPage,Wrt as kernelPageBlockId}from"../../chunks/app-DDs9_0XT.js";
+export{Wrt as getOrCreateKernelPage,Grt as kernelPageBlockId}from"../../chunks/app-YTjlnKPG.js";

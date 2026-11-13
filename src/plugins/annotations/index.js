@@ -1,1 +1,1 @@
-export{Wd as annotationsPlugin}from"../../../chunks/app-DDs9_0XT.js";
+export{Gd as annotationsPlugin}from"../../../chunks/app-YTjlnKPG.js";

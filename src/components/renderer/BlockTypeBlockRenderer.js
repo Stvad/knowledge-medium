@@ -1,1 +1,1 @@
-export{PI as BlockTypeBlockRenderer,FI as BlockTypeContentRenderer,II as writeBlockTypeLabel}from"../../../chunks/app-DDs9_0XT.js";
+export{FI as BlockTypeBlockRenderer,II as BlockTypeContentRenderer,LI as writeBlockTypeLabel}from"../../../chunks/app-YTjlnKPG.js";

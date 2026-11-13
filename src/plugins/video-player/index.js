@@ -1,1 +1,1 @@
-export{kS as videoPlayerPlugin}from"../../../chunks/app-DDs9_0XT.js";
+export{AS as videoPlayerPlugin}from"../../../chunks/app-YTjlnKPG.js";

@@ -1,1 +1,1 @@
-export{GP as resolveAppRuntime,KP as resolveAppRuntimeSync}from"../../chunks/app-DDs9_0XT.js";
+export{KP as resolveAppRuntime,qP as resolveAppRuntimeSync}from"../../chunks/app-YTjlnKPG.js";

@@ -1,1 +1,1 @@
-export{QF as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,$F as openExtensionsSettings}from"../../chunks/app-DDs9_0XT.js";
+export{$F as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,eI as openExtensionsSettings}from"../../chunks/app-YTjlnKPG.js";

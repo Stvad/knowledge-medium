@@ -1,1 +1,1 @@
-export{xm as agentDispatchCompanionPlugin}from"../../../chunks/app-DDs9_0XT.js";
+export{Sm as agentDispatchCompanionPlugin}from"../../../chunks/app-YTjlnKPG.js";

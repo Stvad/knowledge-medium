@@ -1,1 +1,1 @@
-export{dh as extensionsOverridesProp,fh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DDs9_0XT.js";
+export{fh as extensionsOverridesProp,ph as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-YTjlnKPG.js";

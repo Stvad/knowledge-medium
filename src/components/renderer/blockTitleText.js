@@ -1,1 +1,1 @@
-export{Vz as BLOCK_TITLE_TEXT_CLASS,Hz as useBlockTitleTextClass}from"../../../chunks/app-DDs9_0XT.js";
+export{Hz as BLOCK_TITLE_TEXT_CLASS,Uz as useBlockTitleTextClass}from"../../../chunks/app-YTjlnKPG.js";
