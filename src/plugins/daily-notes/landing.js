@@ -1,1 +1,1 @@
-export{Vk as todayDailyNoteLanding}from"../../../chunks/app-CHolVKlA.js";
+export{Vk as todayDailyNoteLanding}from"../../../chunks/app-DO8EtrQ0.js";

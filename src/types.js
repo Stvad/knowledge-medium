@@ -1,1 +1,1 @@
-export{Xat as isChildBackedPropertiesWorkspace}from"../chunks/app-CHolVKlA.js";
+export{Xat as isChildBackedPropertiesWorkspace}from"../chunks/app-DO8EtrQ0.js";

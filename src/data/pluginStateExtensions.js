@@ -1,1 +1,1 @@
-export{lQ as pluginPrefsExtension,uQ as pluginUIStateExtension}from"../../chunks/app-CHolVKlA.js";
+export{lQ as pluginPrefsExtension,uQ as pluginUIStateExtension}from"../../chunks/app-DO8EtrQ0.js";

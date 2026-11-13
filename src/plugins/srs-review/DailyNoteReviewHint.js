@@ -1,1 +1,1 @@
-export{$c as dailyNoteHintDecks,el as reviewHintLabel,tl as srsDailyNoteReviewHintDecorator}from"../../../chunks/app-CHolVKlA.js";
+export{$c as dailyNoteHintDecks,el as reviewHintLabel,tl as srsDailyNoteReviewHintDecorator}from"../../../chunks/app-DO8EtrQ0.js";
