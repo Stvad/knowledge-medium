@@ -1,1 +1,1 @@
-export{Xh as authorIdOf}from"../../../chunks/app-CqFM-Olm.js";
+export{Xh as authorIdOf}from"../../../chunks/app-Do8xZkox.js";

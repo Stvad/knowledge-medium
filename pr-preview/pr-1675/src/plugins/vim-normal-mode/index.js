@@ -1,1 +1,1 @@
-export{pC as vimNormalModeInteractionExtension,mC as vimNormalModePlugin}from"../../../chunks/app-CqFM-Olm.js";
+export{pC as vimNormalModeInteractionExtension,mC as vimNormalModePlugin}from"../../../chunks/app-Do8xZkox.js";
