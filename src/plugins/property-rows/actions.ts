@@ -79,6 +79,7 @@ const cycle = defineBlocksAction({
   },
 })
 
+// Accept the static keybindings-editor warning for this exclusive default; modeling predicate overlap would add shortcut metadata.
 const cycleActions = [cycle.block, cycle.blocks].map(action => ({
   ...action,
   defaultBinding: {keys: 't'},

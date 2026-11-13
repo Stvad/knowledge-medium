@@ -14,6 +14,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ActiveContextsProvider, useActiveContextsDispatch, useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
+import { actionDispatchVerb } from '@/shortcuts/actionDispatch'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
 import { keybindingOverridesFacet, type KeybindingOverride } from '@/shortcuts/keybindingOverrides'
@@ -22,10 +23,12 @@ import { propertyDisplayActions } from '../actions'
 
 let db: TestDb
 let repo: Repo
+const dispatched: string[] = []
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 afterEach(cleanup)
 beforeEach(async () => {
+  dispatched.length = 0
   await resetTestDb(db.db)
   await db.db.execute(`INSERT INTO workspaces
     (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration)
@@ -55,6 +58,7 @@ async function mount(propertyDisplay: PropertyDisplayScopeLevels | undefined, mu
     actions.map(action => actionsFacet.of(action)),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config)),
     overrides.map(override => keybindingOverridesFacet.of(override)),
+    actionDispatchVerb.before(({action}) => { dispatched.push(action.id) }),
   ])
   repo.setFacetRuntime(runtime)
   let ready = false
@@ -115,6 +119,25 @@ describe('property display keyboard actions', () => {
     await press(key)
     await vi.waitFor(() => expect(repo.block('first').peekProperty(showPropertiesProp)).toBe(true))
     expect(setting()).toBeUndefined()
+  })
+
+  it.each([false, true])('cell-backed t respects a disabled or rebound panel command (selection: %s)', async multi => {
+    await db.db.execute("UPDATE workspaces SET properties_migration = NULL WHERE id = 'ws'")
+    const actionId = multi ? 'multi_select.toggle_properties' : 'toggle_properties'
+    for (const binding of [{unbound: true} as const, {keys: 'p'}]) {
+      await mount(scope(false), multi, [{actionId, binding, source: 'user-prefs'}])
+      await press('t')
+      expect(dispatched).toEqual([])
+      expect(repo.block('first').peekProperty(showPropertiesProp)).toBeUndefined()
+      expect(setting()).toBeUndefined()
+      if ('keys' in binding) {
+        await press('p')
+        await vi.waitFor(() => expect(repo.block('first').peekProperty(showPropertiesProp)).toBe(true))
+        if (multi) await vi.waitFor(() => expect(repo.block('second').peekProperty(showPropertiesProp)).toBe(true))
+      }
+      cleanup()
+      dispatched.length = 0
+    }
   })
 
   it('an empty selection does not write', async () => {

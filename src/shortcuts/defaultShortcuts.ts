@@ -4,6 +4,7 @@ import {
   ActionContextTypes,
   BaseShortcutDependencies,
   ActionConfig,
+  ActionContextType,
   BlockShortcutDependencies,
   MultiSelectModeDependencies,
   CodeMirrorEditModeDependencies,
@@ -12,6 +13,8 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
+import { matchesAction } from './effectiveActions'
+import { keybindingOverridesFacet } from './keybindingOverrides'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
@@ -243,15 +246,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const moveBlockDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveBlockDown)
   const deleteBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock)
   const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
-  // Keep the panel command independently rebindable on every workspace. Only
-  // this default shortcut yields to the child-backed outline cycle.
-  const togglePropertiesShortcutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
-    ...togglePropertiesDisplayAction,
-    id: 'toggle_properties_default',
+  // The default yields to both the child-backed cycle and saved panel bindings.
+  const panelDefaultShortcut = <T extends ActionContextType>(action: ActionConfig<T>): ActionConfig<T> => ({
+    ...action,
+    id: `${action.id}_default`,
     defaultBinding: {keys: 't'},
     isVisible: () => false,
-    canDispatch: ({propertyDisplay}) => !propertyDisplay?.childBacked,
-  }
+    canDispatch: ({propertyDisplay}) => !propertyDisplay?.childBacked &&
+      !repo.facetRuntime?.read(keybindingOverridesFacet).some(override => matchesAction(override, action)),
+  })
+  const togglePropertiesShortcutAction = panelDefaultShortcut(togglePropertiesDisplayAction)
+  const toggleSelectedPropertiesAction = applyToAllBlocksInSelection(togglePropertiesDisplayAction)
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock),
@@ -1362,8 +1367,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
     applyToAllBlocksInSelection(toggleBlockCollapseAction),
-    applyToAllBlocksInSelection(togglePropertiesDisplayAction),
-    applyToAllBlocksInSelection(togglePropertiesShortcutAction),
+    toggleSelectedPropertiesAction,
+    panelDefaultShortcut(toggleSelectedPropertiesAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
     // Not a per-block fan-out: one guarded, confirmed batch delete.
