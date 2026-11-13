@@ -3,10 +3,9 @@
  *
  * Every block whose `properties_json` holds a registered key gets the field and
  * value CHILD rows that key implies, built from what the live dual-write uses —
- * {@link plannedFieldRow}, and `encodedPropertyValueToChildContents` under
- * {@link valueChildRowsFor} — so the two writers cannot decide differently
- * what a value's children are. Cells are left
- * exactly as they are: this pass ADDS the child representation.
+ * {@link plannedFieldRow} and `encodedPropertyValueToChildContents` — so the
+ * two writers cannot decide differently what a value's children are. Cells
+ * are left exactly as they are: this pass ADDS the child representation.
  *
  * IT RUNS ONLY PAST THE FLIP, and is CREATE-ONLY: the live maintainers are on
  * and the children are the property truth, so the only work left is GAPS — a

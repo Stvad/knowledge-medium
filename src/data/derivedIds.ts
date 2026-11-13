@@ -196,8 +196,10 @@ export const classifyOccupant = (
  * let the server keep one device's value row beside the other's block when an
  * upload splits the two across create batches, dropping a value from both.
  *
- * The workspace is in every key; the `fieldRowId` would imply it, but stating
- * it costs nothing. `valueKey` is the one part that is user text, so it goes
+ * The PARENT is the row's own `parentId` — the owner for a field row, the
+ * field row for a value — passed beside the slot rather than restated in it.
+ * The workspace is in every key; the parent would imply it, but stating it
+ * costs nothing. `valueKey` is the one part that is user text, so it goes
  * LAST: every part before it is an id or a count, and none of those holds `|`.
  *
  * The namespace is a PARAMETER because a sealed workspace's is keyed by `K_id`
@@ -205,18 +207,19 @@ export const classifyOccupant = (
  * `derivedIds.test.ts` and the plaintext namespace beside it.
  */
 export type PropertyChildSlot =
-  | {kind: 'field'; ownerId: string; fieldId: string}
-  | {kind: 'value'; fieldRowId: string; occurrence: number; valueKey: string}
+  | {kind: 'field'; fieldId: string}
+  | {kind: 'value'; occurrence: number; valueKey: string}
 
-const propertyChildKey = (workspaceId: string, slot: PropertyChildSlot): string => {
+const propertyChildKey = (workspaceId: string, parentId: string, slot: PropertyChildSlot): string => {
   switch (slot.kind) {
-    case 'field': return `field|${workspaceId}|${slot.ownerId}|${slot.fieldId}`
-    case 'value': return `value|${workspaceId}|${slot.fieldRowId}|${slot.occurrence}|${slot.valueKey}`
+    case 'field': return `field|${workspaceId}|${parentId}|${slot.fieldId}`
+    case 'value': return `value|${workspaceId}|${parentId}|${slot.occurrence}|${slot.valueKey}`
   }
 }
 
 export const propertyChildBlockId = (
   namespace: string,
   workspaceId: string,
+  parentId: string,
   slot: PropertyChildSlot,
-): string => derivedBlockId({namespace, key: propertyChildKey(workspaceId, slot)})
+): string => derivedBlockId({namespace, key: propertyChildKey(workspaceId, parentId, slot)})

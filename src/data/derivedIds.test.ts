@@ -211,20 +211,19 @@ describe('property machinery rows', () => {
   const FIELD_ROW = '5c2e4a63-9d5f-4c7a-b1f3-4a6c8e0f2b35'
 
   it('a field row, from (workspace, owner, definition)', () => {
-    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
-      {kind: 'field', ownerId: OWNER, fieldId: FIELD}))
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS, OWNER, {kind: 'field', fieldId: FIELD}))
       .toBe('1f8652eb-7048-5e2a-9f8c-1d9065b1f2b9')
   })
 
   it('a scalar value, from (workspace, field row, occurrence 0, value key)', () => {
-    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
-      {kind: 'value', fieldRowId: FIELD_ROW, occurrence: 0, valueKey: 'cdone'}))
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS, FIELD_ROW,
+      {kind: 'value', occurrence: 0, valueKey: 'cdone'}))
       .toBe('ee995d10-bc86-54ac-be63-54ea30e0ab2b')
   })
 
   it('a list member, from (workspace, field row, occurrence, value key)', () => {
-    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS,
-      {kind: 'value', fieldRowId: FIELD_ROW, occurrence: 1, valueKey: 'v"blue"'}))
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS, FIELD_ROW,
+      {kind: 'value', occurrence: 1, valueKey: 'v"blue"'}))
       .toBe('f78f97bc-8613-5694-b4e6-a355a9bde35d')
   })
 })

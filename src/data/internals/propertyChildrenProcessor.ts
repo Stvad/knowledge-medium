@@ -73,7 +73,6 @@ import {
 import { jsonValuesEqual } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
-import type { PropertyChildSlot } from '@/data/derivedIds'
 import { mintPropertyChildRow } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -769,7 +768,7 @@ export const plannedFieldRow = (
   tx: Tx,
   owner: Pick<BlockData, 'id' | 'workspaceId'>,
   fieldId: string,
-): NewBlockData => {
+): NewBlockData & {parentId: string} => {
   const content = propertyFieldContent(fieldId)
   return {
     workspaceId: owner.workspaceId,
@@ -783,20 +782,14 @@ export const plannedFieldRow = (
 }
 
 /** The value children a cell value implies under a field row that has NONE —
- *  the create-only case, as DATA, from contents the caller has ALREADY
- *  encoded through `encodedPropertyValueToChildContents`, the encoder the live
- *  reconcile uses too.
+ *  the create-only case, as DATA, so the one-time pass can hand a whole batch
+ *  to `tx.createMany`. Its owners all predate it, so its rows take random ids,
+ *  as `mintPropertyChildRow` would give them.
  *
- *  Emitted rather than written so the one-time pass can hand a whole batch to
- *  `tx.createMany`. Its owners all predate it, so its rows take random ids, as
- *  `mintPropertyChildRow` would give them.
- *
- *  The pass must encode inside its per-key guard: the encoder throws on a
- *  value no codec will take, and a key that cannot be planned has to cost its own key rather
- *  than the batch. Encoding here instead would put that throw outside the
- *  guard, where it aborts the whole run — safe today only because the pass's
- *  rejection check happens to call this same encoder first, which is a
- *  coupling neither site states. */
+ *  Takes CONTENTS, not the encoded value: the pass encodes (with
+ *  `encodedPropertyValueToChildContents`, as the live reconcile does) inside
+ *  its per-key guard, where the encoder's throw on a value no codec takes
+ *  costs that key, not the batch. */
 export const valueChildRowsFor = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
@@ -850,9 +843,7 @@ export const upsertFieldRow = async (
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
-  const id = await mintPropertyChildRow(tx,
-    {...plannedFieldRow(tx, owner, fieldId), parentId: owner.id},
-    {kind: 'field', ownerId: owner.id, fieldId})
+  const id = await mintPropertyChildRow(tx, plannedFieldRow(tx, owner, fieldId), {kind: 'field', fieldId})
   return {id, workspaceId: owner.workspaceId}
 }
 
@@ -904,19 +895,21 @@ export const reconcileFieldValueChildren = async (
   await reconcileMemberValueChildren(tx, fieldRow, schema, values, contents, additive)
 }
 
+/** Mint one value child. `valueKey` is `content`'s `MemberKeys.content`, and
+ *  `occurrence` counts the equal values before it — what its id derives from. */
 const createValueChild = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   content: string,
   orderKey: string,
-  slot: PropertyChildSlot,
+  {valueKey, occurrence}: {valueKey: string; occurrence: number},
 ): Promise<string> => mintPropertyChildRow(tx, {
   workspaceId: fieldRow.workspaceId,
   parentId: fieldRow.id,
   orderKey,
   content,
   references: tx.derivedReferencesFor(content),
-}, slot)
+}, {kind: 'value', occurrence, valueKey})
 
 const reconcileSingleValueChild = async (
   tx: Tx,
@@ -927,23 +920,15 @@ const reconcileSingleValueChild = async (
   /** See {@link MaterializeOptions.additive}. */
   additive: boolean,
 ): Promise<void> => {
-  const slot: PropertyChildSlot = {
-    kind: 'value', fieldRowId: fieldRow.id, occurrence: 0,
-    valueKey: memberKeysFor(schema).content(content),
-  }
-  if (values.length === 0) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(null), slot)
-    return
-  }
-  // An additive call may not touch the one slot a scalar has. Giving the value
-  // set a row it lacks is the whole of what it is allowed to do, and the set is
-  // not empty — so nothing below applies, the fold included: every comparison
-  // there is against `content`, the cell value the primary was just permitted
-  // to disagree with, which would fold a row that is no duplicate of it (#1021).
-  if (additive) return
+  // An additive call may only give an EMPTY value set its row. Nothing below
+  // applies to a non-empty one, the fold included: every comparison there is
+  // against `content`, the cell value the primary was just permitted to
+  // disagree with, which would fold a row that is no duplicate of it (#1021).
+  if (additive && values.length > 0) return
+  const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
   const primary = scalarValueRow(schema, values, content)
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]!.orderKey), slot)
+    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
     return
   }
   let primaryId = primary.id
@@ -1074,8 +1059,7 @@ const reconcileMemberValueChildren = async (
     const occurrence = occurrences.get(memberKey) ?? 0
     occurrences.set(memberKey, occurrence + 1)
     if (!existing) {
-      await createValueChild(tx, fieldRow, contents[i]!, orderKey,
-        {kind: 'value', fieldRowId: fieldRow.id, occurrence, valueKey: memberKey})
+      await createValueChild(tx, fieldRow, contents[i]!, orderKey, {valueKey: memberKey, occurrence})
       continue
     }
     // Content is deliberately NOT rewritten to the canonical spelling: the row

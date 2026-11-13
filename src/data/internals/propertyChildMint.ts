@@ -84,7 +84,7 @@ export const mintPropertyChildRow = async (
   if (!tx.createdInThisTx(row.parentId)) return tx.create(row)
   const namespace = await propertyChildNamespaceInTx(tx, row.workspaceId)
   if (namespace === null) return tx.create(row)
-  const id = propertyChildBlockId(namespace, row.workspaceId, slot)
+  const id = propertyChildBlockId(namespace, row.workspaceId, row.parentId, slot)
   if (await tx.get(id) !== null) return tx.create(row)
   return tx.create({...row, id})
 }
