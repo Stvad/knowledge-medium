@@ -1,1 +1,1 @@
-export{SN as exampleExtensions,CN as insertExampleExtensionsUnder}from"../../chunks/app-CeQJ53ck.js";
+export{SN as exampleExtensions,CN as insertExampleExtensionsUnder}from"../../chunks/app-PyXAd2VT.js";

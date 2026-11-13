@@ -1,1 +1,1 @@
-export{Brt as getOrCreateKernelPage,Vrt as kernelPageBlockId}from"../../chunks/app-CeQJ53ck.js";
+export{Grt as getOrCreateKernelPage,Krt as kernelPageBlockId}from"../../chunks/app-PyXAd2VT.js";

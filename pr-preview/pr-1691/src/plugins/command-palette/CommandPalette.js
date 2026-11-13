@@ -1,1 +1,1 @@
-export{xj as CommandPalette}from"../../../chunks/app-CeQJ53ck.js";
+export{xj as CommandPalette}from"../../../chunks/app-PyXAd2VT.js";

@@ -1,1 +1,1 @@
-export{yu as blockTaggingDataExtension}from"../../../chunks/app-CeQJ53ck.js";
+export{yu as blockTaggingDataExtension}from"../../../chunks/app-PyXAd2VT.js";
