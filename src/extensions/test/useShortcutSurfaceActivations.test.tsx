@@ -11,6 +11,7 @@ import { actionContextsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import {
   ActiveContextsProvider,
@@ -238,6 +239,27 @@ describe('useShortcutSurfaceActivations', () => {
     await waitFor(() => {
       expect(screen.getByTestId('active-normal-mode')).toHaveTextContent('block-a:panel-a')
     })
+  })
+
+  it('hands its surface\'s property display scope to the active handlers', async () => {
+    const scope = {childBacked: true, workspace: 'non-hidden', panel: 'inherit'} as const
+    const DisplayScopeProbe = () => {
+      const deps = useActiveContextsState().get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies | undefined
+      return <div data-testid="property-display">{deps?.propertyDisplay ? deps.propertyDisplay.workspace : 'none'}</div>
+    }
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <Suspense fallback={<div>Loading...</div>}>
+            <PropertyDisplayScopeContext.Provider value={scope}>
+              <PanelBlockSurface blockId="block-b" layoutSessionBlockId="layout-session" panelId="panel-b"/>
+            </PropertyDisplayScopeContext.Provider>
+            <DisplayScopeProbe/>
+          </Suspense>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('property-display')).toHaveTextContent('non-hidden'))
   })
 
   // Suspension is unit-tested against `useActionContextActivations` directly in
