@@ -185,7 +185,7 @@ const panelRowsForLayoutSession = async (
   layoutSessionBlock: Block,
 ) => allPanelRowsInLayoutOrder(
   layoutSessionBlock.id,
-  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
+  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load(),
 )
 
 /** The panel rows the user can actually SEE — never index raw row order, which

@@ -1328,7 +1328,7 @@ export class TxImpl implements Tx {
   async childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {propertyChildren?: 'all' | 'none'},
   ): Promise<BlockData[]> {
     let data: BlockData[]
     if (parentId === null) {
@@ -1352,7 +1352,7 @@ export class TxImpl implements Tx {
       const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
       data = rows.map(parseBlockRow)
     }
-    // Default is the structural view (EVERY child); `hidePropertyChildren`
+    // Default is the structural view (EVERY child); `propertyChildren: 'none'`
     // is the display view. Not flip-gated — it is the in-tx twin of
     // VISIBLE_CHILDREN_SQL and must answer the same question, and the
     // backfill mints field rows before the flip. Root listings are exempt:
@@ -1363,7 +1363,7 @@ export class TxImpl implements Tx {
     // never misread, and a marked row inside a property subtree IS machinery
     // and filters like any other, at any depth.
     if (parentId === null) return data
-    if (options?.hidePropertyChildren !== true || data.length === 0) return data
+    if (options?.propertyChildren !== 'none' || data.length === 0) return data
     if (!data.some(row => row.isFieldForm === true)) return data
     const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
     return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))

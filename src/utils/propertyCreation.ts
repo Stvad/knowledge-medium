@@ -35,7 +35,7 @@ export const canConvertEmptyChildBlockToProperty = async (
   // content stops decoding makes PROJECT drop the cell key while the rows stay
   // live, so the visible facade AND the `properties` cell can BOTH look empty
   // while real data hangs off the block. The structural list is what sees it.
-  const childIds = await repo.query.childIds({id: block.id, hidePropertyChildren: false}).load()
+  const childIds = await repo.query.childIds({id: block.id, propertyChildren: 'all'}).load()
   if (childIds.length > 0) return null
 
   // The cell is the other shape property data takes — and the only one in a
