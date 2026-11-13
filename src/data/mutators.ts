@@ -22,6 +22,7 @@ import {
   keyAtEnd,
   keyBetween,
   keysBetween,
+  unlistedIndexAmong,
 } from './orderKey'
 import {
   keyImmediatelyAfter,
@@ -554,8 +555,10 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  * row is an ordinary row to all three, values included: a block moved in among
  * a field row's values becomes one, a value moved out leaves the property.
  *
- * Corollary: when the subject or the anchor is absent from that list, the
- * gesture is a clean **no-op** rather than a surprising relocation.
+ * The SUBJECT is always on the list: one the mode leaves out — the focused row
+ * the outline keeps showing (`BlockChildren`) — sits where the outline draws
+ * it ({@link withSubject}). An ANCHOR absent from the list makes the gesture a
+ * clean **no-op** rather than a surprising relocation.
  *
  * Deliberate machinery movement is not blocked, it just doesn't go through an
  * outline gesture: `core.move` places a block at an explicit position on the
@@ -563,6 +566,19 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  */
 
 const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
+
+/** `siblings` with the gesture's subject on it, and its index: a subject the
+ *  drawn list leaves out goes where the outline draws it (`unlistedIndexAmong`,
+ *  the rule `BlockChildren` and the selection walkers use). */
+const withSubject = (
+  siblings: readonly BlockData[],
+  self: BlockData,
+): {siblings: BlockData[]; index: number} => {
+  const listed = siblings.findIndex(s => s.id === self.id)
+  if (listed >= 0) return {siblings: [...siblings], index: listed}
+  const index = unlistedIndexAmong(siblings, self)
+  return {siblings: [...siblings.slice(0, index), self, ...siblings.slice(index)], index}
+}
 
 // ──── indent ────
 
@@ -584,8 +600,8 @@ export const indent = defineMutator<IndentArgs, void>({
       // No parent — can't indent the root. Legacy was a no-op here.
       return
     }
-    const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay)
-    const ix = siblings.findIndex(s => s.id === id)
+    const {siblings, index: ix} = withSubject(
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
@@ -629,11 +645,6 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     // workspace root), exiting the visible scope.
     if (scopeRootId !== undefined && self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    // Gesture anchoring (see the section note above): the subject must be a row
-    // the caller can see, so a hidden field row isn't outdentable here while it
-    // is un-indentable — `core.move` is the structural path.
-    const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay)
-    if (!siblings.some(s => s.id === id)) return false
     // Move under grandparent, positioned right after current parent.
     // tx.childrenOf(null) enumerates root-level siblings of the pinned
     // workspace, so the same logic works for both nested and root
@@ -719,9 +730,8 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // The scope root anchors the view; it can't move within itself.
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
-    const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay)
-    const idx = siblings.findIndex(s => s.id === id)
-    if (idx === -1) return false
+    const {siblings, index: idx} = withSubject(
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
 
     const up = direction === -1
     const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1

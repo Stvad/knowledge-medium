@@ -245,16 +245,23 @@ describe('without a display scope (mode none, as before property rows)', () => {
     expect(order.indexOf(ids.b)).toBeLessThan(order.indexOf(ids.a))
   })
 
-  it('leaves a property row where it is', async () => {
-    expect(await repo.mutate.moveVertical({id: ids.status, direction: -1})).toBe(false)
-    expect(await repo.mutate.outdent({id: ids.status})).toBe(false)
+  it('moves a property row the mode leaves out from where the outline would draw it', async () => {
+    // The focused row the outline keeps listed (`BlockChildren`): a gesture
+    // on it acts, from its own position among the drawn rows.
+    expect(await repo.mutate.moveVertical({id: ids.status, direction: -1})).toBe(true)
+    expect((await childIds('owner')).slice(0, 2)).toEqual([ids.status, ids.a])
+    await arrange('owner', [ids.a, ids.status, ids.secret, ids.tags, ids.b])
     await repo.mutate.indent({id: ids.status})
+    expect(await parentOf(ids.status)).toBe(ids.a)
+    expect(await repo.mutate.outdent({id: ids.status})).toBe(true)
     expect(await parentOf(ids.status)).toBe('owner')
   })
 
   it('treats a cell-backed scope as none, whatever its levels say', async () => {
-    expect(await repo.mutate.moveVertical({
-      id: ids.status, direction: -1, propertyDisplay: {...ALL, childBacked: false},
-    })).toBe(false)
+    await arrange('owner', [ids.a, ids.status, ids.b, ids.secret, ids.tags])
+    // In `all`, b would swap with the status row; as none it passes it.
+    expect(await repo.mutate.moveVertical({id: ids.b, direction: -1, propertyDisplay: {...ALL, childBacked: false}}))
+      .toBe(true)
+    expect((await childIds('owner'))[0]).toBe(ids.b)
   })
 })

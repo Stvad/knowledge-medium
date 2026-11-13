@@ -1921,20 +1921,6 @@ describe('movement gestures anchor on the visible sibling list (§9/§10)', () =
     expect(await cellValue('p')).toBe('done')
   })
 
-  // Resolves the asymmetry #404 flagged: `indent` and `moveVertical` already
-  // no-op on a row the caller can't see, while `outdent` acted on it. A
-  // deliberate machinery move goes through `core.move`, not an outline gesture.
-  it('outdenting a hidden field row is a no-op, like indent and moveVertical', async () => {
-    const {repo, fieldRowId} = await setupMovable()
-
-    expect(await repo.mutate.outdent({id: fieldRowId})).toBe(false)
-    expect(await repo.mutate.moveVertical({id: fieldRowId, direction: -1})).toBe(false)
-    await repo.mutate.indent({id: fieldRowId})
-
-    expect(await parentOf(fieldRowId)).toBe('p')
-    expect(await cellValue('p')).toBe('done')
-  })
-
   // The positive half of the rule: a hidden row must not absorb a gesture
   // either. `c2` moves up past the field row's physical slot in ONE step and
   // lands above `c1` — where it physically sits relative to the hidden row is
