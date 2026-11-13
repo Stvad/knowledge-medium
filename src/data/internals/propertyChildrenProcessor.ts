@@ -946,14 +946,25 @@ const reconcileSingleValueChild = async (
     await createValueChild(tx, fieldRow, content, keyAtStart(values[0]!.orderKey), slot)
     return
   }
-  if (primary.content !== content) await tx.update(primary.id, {content})
+  let primaryId = primary.id
+  if (primary.content !== content) {
+    // A row this tx minted is REPLACED, not rewritten: its id may derive from
+    // the value it was minted with, and the upload would carry the new value
+    // under that id — where a peer's create of the old value wins it.
+    if (tx.createdInThisTx(primary.id)) {
+      primaryId = await createValueChild(tx, fieldRow, content, primary.orderKey, slot)
+      await collapseDuplicateValueChild(tx, primaryId, primary)
+    } else {
+      await tx.update(primary.id, {content})
+    }
+  }
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
   // peer values, not silently collapsed onto the winner.
   for (const duplicate of values) {
     if (duplicate !== primary && duplicate.content === content) {
-      await collapseDuplicateValueChild(tx, primary.id, duplicate)
+      await collapseDuplicateValueChild(tx, primaryId, duplicate)
     }
   }
 }

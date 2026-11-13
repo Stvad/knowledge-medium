@@ -81,6 +81,37 @@ const deliverAndDrain = async (device: Device, server: FakeSyncServer): Promise<
   if (outcome) applySyncInvalidation(device.cache, device.repo.handleStore, outcome.snapshots, [])
 }
 
+/** `first`'s upload, with its create batch split after `k` rows (parents
+ *  first) and `peer`'s whole upload landing between the two halves — what
+ *  `apply_block_creates`' 500-row batching allows on a long catch-up. */
+const uploadSplit = async (first: Device, peer: Device, server: FakeSyncServer, k: number): Promise<void> => {
+  let split = false
+  await __runUploadLoopForTest(first.db, {
+    applyOperations: (database, ops) => __applyCompactedBlockOperationsForTest(database, ops, {
+      createRows: async rows => {
+        if (split) return server.createRows(rows)
+        split = true
+        const depth = (row: Record<string, unknown>): number => {
+          let parent = row.parent_id as string | null
+          let d = 0
+          while (parent) {
+            d += 1
+            parent = (rows.find(other => other.id === parent)?.parent_id ?? null) as string | null
+          }
+          return d
+        }
+        const ordered = [...rows].sort((x, y) => depth(x) - depth(y))
+        await server.createRows(ordered.slice(0, k))
+        await upload(peer, server)
+        await server.createRows(ordered.slice(k))
+      },
+      applyPatches: patches => server.applyPatches(patches),
+      deleteRow: id => server.deleteRow(id),
+    }),
+    recordRejection: async (_db, _tx, error) => { throw error },
+  }, new Map())
+}
+
 const quiesce = async (devices: readonly Device[], server: FakeSyncServer): Promise<void> => {
   for (let round = 0; round < 3; round++) {
     for (const device of devices) await upload(device, server)
@@ -235,6 +266,45 @@ describe('two devices creating one block with its properties converge on one set
         .toEqual({cell: {tags: ['blue', 'red']}, fieldRows: 1, values: ['blue', 'green', 'red']})
     }
   })
+})
+
+describe('an upload split between a block and its value rows keeps every value', () => {
+  // k = 1: the block alone in the first batch; k = 2: the block and its field
+  // row, the value row after the peer's upload.
+  for (const k of [1, 2]) {
+    it(`divergent scalars, split after ${k}`, async () => {
+      const {a, b, server} = await setup({ownerExists: false})
+      await createOwner(a, {status: 'from-a'})
+      await createOwner(b, {status: 'from-b'})
+
+      await uploadSplit(a, b, server, k)
+      await quiesce([a, b], server)
+
+      for (const device of [a, b]) {
+        expect((await stateOf(device, STATUS_FIELD)).values.sort()).toEqual(['from-a', 'from-b'])
+      }
+    })
+
+    it(`a scalar re-set in the transaction that created the block, split after ${k}`, async () => {
+      const {a, b, server} = await setup({ownerExists: false})
+      for (const [device, value] of [[a, 'from-a'], [b, 'from-b']] as const) {
+        await setOn(device, async tx => {
+          await tx.create({
+            id: OWNER, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'message',
+            properties: {status: 'new'},
+          })
+          await tx.setProperty(OWNER, statusSchema, value)
+        })
+      }
+
+      await uploadSplit(a, b, server, k)
+      await quiesce([a, b], server)
+
+      for (const device of [a, b]) {
+        expect((await stateOf(device, STATUS_FIELD)).values.sort()).toEqual(['from-a', 'from-b'])
+      }
+    })
+  }
 })
 
 describe('a property set on a block that already existed', () => {
