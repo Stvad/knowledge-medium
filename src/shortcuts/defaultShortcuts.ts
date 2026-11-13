@@ -32,7 +32,7 @@ import {
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
-import { isDrawnAsPropertyRow } from '@/data/drawnSubtree'
+import { isRecognizedFieldRow } from '@/data/drawnSubtree'
 import { visibleChildIds } from '@/data/visibleChildren'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
@@ -1160,10 +1160,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
-        // A row drawn as a property row shows the property's name, not its
-        // own `::((id))` text: folding it in would put text in this block
-        // that was never on screen.
-        if (await isDrawnAsPropertyRow(nextVisible, surface.propertyDisplay)) return
+        // A field row on the drawn list is drawn as a property row: the
+        // property's name, not the row's own `::((id))` text. Folding it in
+        // would put text in this block that was never on screen.
+        if (await isRecognizedFieldRow(nextVisible)) return
 
         await Promise.all([block.load(), nextVisible.load()])
         if (holdsSource(block) || holdsSource(nextVisible)) return

@@ -179,11 +179,11 @@ describe('range selection and the data walker step onto drawn property rows', ()
   })
 
   it('a row its listing leaves out counts from where the outline draws it', async () => {
-    // Mode none lists [a, b]; the row sorts between them, so `b` takes its place.
+    await repo.tx(tx => tx.create({id: 'c', workspaceId: WS, parentId: 'owner', orderKey: 'a4', content: 'c'}),
+      {scope: ChangeScope.BlockDefault})
+    // Mode none lists [a, b, c]; the row sorts between a and b, so `b` takes its place.
     expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN))?.id).toBe('b')
-    await repo.tx(tx => tx.move(statusRow, {parentId: 'owner', orderKey: 'a3'}), {scope: ChangeScope.BlockDefault})
-    expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN))?.id).toBe('b')
-    expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN, new Set(['b'])))?.id).toBe('a')
+    expect((await blockAfterSubtreeRemoval(repo.block(statusRow), HIDDEN, new Set(['b', 'c'])))?.id).toBe('a')
   })
 
   it('shift-click ranges over the drawn row', async () => {

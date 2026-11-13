@@ -48,21 +48,14 @@ export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): Prop
   }
 }
 
-/** Whether a surface with `scope` draws `block` as a PROPERTY ROW — the
- *  property's name beside its value, in place of the row's own `::((id))`
- *  text: a recognized field row under a parent whose listing there shows
- *  property rows. (In a listing that shows none, a field row on screen — the
- *  focused one — is an ordinary block showing its text.) */
-export const isDrawnAsPropertyRow = async (
-  block: Block,
-  scope: PropertyDisplayScopeLevels,
-): Promise<boolean> => {
-  if (!scope.childBacked) return false
+/** Whether `block` is a recognized property field row, by the repo's live
+ *  registry. On a list a surface draws, these are the rows drawn as a
+ *  PROPERTY ROW: the property's name beside its value, in place of the row's
+ *  own `::((id))` text. */
+export const isRecognizedFieldRow = async (block: Block): Promise<boolean> => {
   const data = await block.load()
-  if (!data?.parentId) return false
-  const {isFieldDefinition} = repoPropertyRowClassifier(block.repo, data.workspaceId)
-  if (!isPropertyFieldInstance(data, isFieldDefinition)) return false
-  return childrenViewIn(scope, await block.repo.load(data.parentId)) !== 'none'
+  if (!data) return false
+  return isPropertyFieldInstance(data, repoPropertyRowClassifier(block.repo, data.workspaceId).isFieldDefinition)
 }
 
 /** The subtree under `id` a copy carries (see {@link PropertyCopy}), in
