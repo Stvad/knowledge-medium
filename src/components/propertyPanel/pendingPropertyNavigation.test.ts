@@ -2,7 +2,7 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Block} from '@/data/block'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
-import {navigatePendingProperty} from './pendingPropertyNavigation'
+import {focusAdjacentPendingProperty, navigatePendingProperty} from './pendingPropertyNavigation'
 
 vi.mock('@/extensions/blockInteraction', async importOriginal => ({
   ...await importOriginal<object>(), enterEditModeForBlock: vi.fn(),
@@ -34,6 +34,35 @@ beforeEach(() => vi.clearAllMocks())
 afterEach(() => {document.body.replaceChildren()})
 
 describe('pending property drawn-row navigation', () => {
+  it('declines entry when the source is absent from the drawn rows', () => {
+    const target = pending()
+    document.body.append(target)
+    expect(focusAdjacentPendingProperty('missing', scope, 1)).toBe(false)
+    expect(document.activeElement).not.toBe(target.querySelector('input'))
+  })
+
+  it('does not inspect drawn rows without a rendered scope', () => {
+    const query = vi.spyOn(document, 'querySelectorAll')
+    try {
+      expect(focusAdjacentPendingProperty('owner', undefined, 1)).toBe(false)
+      expect(query).not.toHaveBeenCalled()
+    } finally {query.mockRestore()}
+  })
+
+  it('declines a pending row whose input is absent', () => {
+    const target = pending()
+    target.replaceChildren()
+    document.body.append(real('owner'), target)
+    expect(focusAdjacentPendingProperty('owner', scope, 1)).toBe(false)
+  })
+
+  it('declines a pending input that cannot receive focus', () => {
+    const target = pending()
+    target.querySelector('input')!.disabled = true
+    document.body.append(real('owner'), target)
+    expect(focusAdjacentPendingProperty('owner', scope, 1)).toBe(false)
+  })
+
   it('moves between adjacent pending inputs without creating block handles', async () => {
     const prior = pending(), current = pending(), next = pending()
     document.body.append(prior, current, next)
