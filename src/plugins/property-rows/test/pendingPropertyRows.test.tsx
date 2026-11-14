@@ -8,7 +8,8 @@ import {kernelDataExtension} from '@/data/kernelDataExtension'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import type {PropertyDisplaySetting} from '@/data/propertyDisplayMode'
+import {propertyDisplayProp, type PropertyDisplaySetting} from '@/data/propertyDisplayMode'
+import * as propertyActions from '@/data/properties'
 import {resolveFacetRuntimeSync, type FacetRuntime} from '@/facets/facet'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {actionContextsFacet} from '@/extensions/core'
@@ -28,6 +29,7 @@ import {focusBlock, focusedBlockLocationFromProperties, typesProp, isCollapsedPr
 import {showError} from '@/utils/toast'
 import * as inlineProperty from '@/data/inlineProperty'
 import {beginInlineProperty} from '@/components/propertyPanel/inlinePropertyFlow'
+import {outlinePropertySession} from '@/components/propertyPanel/outlinePropertySession'
 import {propertyRowsPlugin} from '../index'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
@@ -155,7 +157,9 @@ describe('expected property ghost rows in the outline', () => {
     expect(await repo.block(field.id).get(isCollapsedProp)).toBe(true)
   })
 
-  it.each([false, true])('finishes a selected scaffold without stealing focus after interruption; unmount %s', async unmount => {
+  it.each(['pointer', 'inactive', 'unmount'] as const)('finishes a selected scaffold without stealing focus after %s interruption', async interruption => {
+    const unmount = interruption === 'unmount'
+    let current = true
     await repo.tx(async tx => {
       await tx.create({id: 'outside', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Outside'})
       await tx.create({id: 'scaffold', workspaceId: WS, parentId: OWNER, orderKey: 'a2', content: '::'})
@@ -174,10 +178,11 @@ describe('expected property ghost rows in the outline', () => {
     try {
       let choosing!: Promise<void>
       act(() => { choosing = beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
-        source: repo.block('scaffold'), ui: repo.block(PANEL), scope: 'pending-test'}) })
+        source: repo.block('scaffold'), ui: repo.block(PANEL), scope: 'pending-test', isActive: () => current}) })
       await waitFor(async () => expect(await db.db.getOptional("SELECT id FROM blocks WHERE id = 'scaffold' AND deleted = 0")).toBeNull())
       await act(async () => {
-        if (!unmount) fireEvent.pointerDown(outside)
+        if (interruption === 'pointer') fireEvent.pointerDown(outside)
+        if (interruption === 'inactive') current = false
         outside.focus()
         await focusBlock(repo.block(PANEL), 'outside', {renderScopeId: 'pending-test'})
       })
@@ -194,6 +199,90 @@ describe('expected property ghost rows in the outline', () => {
       selected.mockRestore()
       outside.remove()
     }
+  })
+
+  it('does not reveal an existing value after its selection is interrupted', async () => {
+    await repo.block(OWNER).set(textProp, 'existing value')
+    mount('none')
+    const reveal = vi.spyOn(outlinePropertySession(repo.block(PANEL), 'pending-test'), 'reveal')
+    const original = inlineProperty.selectInlineProperty
+    let finish = () => {}
+    let selectedValue: Awaited<ReturnType<typeof original>> | undefined
+    const loads: {mockRestore(): void}[] = []
+    const released = new Promise<void>(resolve => { finish = resolve })
+    const selected = vi.spyOn(inlineProperty, 'selectInlineProperty').mockImplementation(async (...args) => {
+      selectedValue = await original(...args)
+      await released
+      return selectedValue
+    })
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    try {
+      let choosing!: Promise<void>
+      act(() => { choosing = beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+        ui: repo.block(PANEL), scope: 'pending-test'}) })
+      await waitFor(() => expect(selectedValue?.valueId).toBeDefined())
+      const fieldLoad = vi.spyOn(repo.block(selectedValue!.fieldRowId!), 'load')
+      const valueLoad = vi.spyOn(repo.block(selectedValue!.valueId!), 'load')
+      loads.push(fieldLoad, valueLoad)
+      await act(async () => {
+        fireEvent.pointerDown(outside)
+        outside.focus()
+      })
+      await act(async () => { finish(); await choosing })
+      expect(reveal).not.toHaveBeenCalled()
+      expect(fieldLoad).not.toHaveBeenCalled()
+      expect(valueLoad).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(outside)
+      expect(document.querySelector('[data-property-field-row]')).toBeNull()
+    } finally {
+      finish()
+      selected.mockRestore()
+      reveal.mockRestore()
+      for (const load of loads) load.mockRestore()
+      outside.remove()
+    }
+  })
+
+  it('does not recreate a draft when its owner leaves during the awaited focus transition', async () => {
+    const view = mount('none')
+    const original = propertyActions.focusBlock
+    let focusing = false
+    let finish = () => {}
+    const released = new Promise<void>(resolve => { finish = resolve })
+    const focus = vi.spyOn(propertyActions, 'focusBlock').mockImplementation(async (...args) => {
+      await original(...args)
+      focusing = true
+      await released
+    })
+    try {
+      let choosing!: Promise<void>
+      act(() => { choosing = beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+        ui: repo.block(PANEL), scope: 'pending-test'}) })
+      await waitFor(() => expect(focusing).toBe(true))
+      view.unmount()
+      await act(async () => { finish(); await choosing })
+      mount('none')
+      await waitForOutline()
+      expect(screen.queryByRole('textbox', {name: `Value for ${textProp.name}`})).toBeNull()
+    } finally {
+      finish()
+      focus.mockRestore()
+    }
+  })
+
+  it.each(['mode', 'types'])('keeps ghost text through a %s change', async change => {
+    mount()
+    await screen.findByRole('textbox', {name: `Value for ${textProp.name}`})
+    await act(async () => { input().focus() })
+    fireEvent.change(input(), {target: {value: 'retained ghost text'}})
+    await act(async () => {
+      if (change === 'mode') await repo.block(OWNER).set(propertyDisplayProp, 'none')
+      else await repo.block(OWNER).set(typesProp, [])
+    })
+    expect(input()).toHaveValue('retained ghost text')
+    expect(input()).toBeVisible()
+    expect(repo.block(OWNER).peekProperty(textProp)).toBeUndefined()
   })
 
   it.each(['invalid', 'valid'])('keeps the %s nonempty draft until its blur commit settles outside the owner', async kind => {

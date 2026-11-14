@@ -10,9 +10,11 @@ const drawnRows = (document: Document, renderScopeId: string) =>
   [...document.querySelectorAll<HTMLElement>(`${scopeRowSelector(renderScopeId)}, ${pendingPropertySelector(renderScopeId)}`)]
     .filter(isVisibleElement)
 
+/** Defence in depth: a detached source has no adjacent drawn row. */
 const adjacentRow = (rows: HTMLElement[], index: number, direction: -1 | 1) =>
   index < 0 ? undefined : rows[index + direction]
 
+/** Defence in depth: a global command or incomplete surface may have no pending input. */
 export const focusAdjacentPendingProperty = (
   blockId: string,
   renderScopeId: string | undefined,
