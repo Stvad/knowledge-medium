@@ -1,1 +1,1 @@
-export{XM as kernelPropertyUiExtension,ZM as typesPropertyUi,QM as typesPropertyUiExtension}from"../../../chunks/app-BJPIyTgN.js";
+export{XM as kernelPropertyUiExtension,ZM as typesPropertyUi,QM as typesPropertyUiExtension}from"../../../chunks/app-IsNNAo_6.js";

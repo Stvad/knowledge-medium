@@ -1,1 +1,1 @@
-export{VT as WorkspaceSwitcher}from"../../../chunks/app-BJPIyTgN.js";
+export{VT as WorkspaceSwitcher}from"../../../chunks/app-IsNNAo_6.js";

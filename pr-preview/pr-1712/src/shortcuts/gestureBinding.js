@@ -1,1 +1,1 @@
-export{FP as gestureBindingDescriptor,IP as matchesGestureEvent}from"../../chunks/app-BJPIyTgN.js";
+export{FP as gestureBindingDescriptor,IP as matchesGestureEvent}from"../../chunks/app-IsNNAo_6.js";

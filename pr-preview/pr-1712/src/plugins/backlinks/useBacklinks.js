@@ -1,1 +1,1 @@
-export{ny as useBacklinks}from"../../../chunks/app-BJPIyTgN.js";
+export{ny as useBacklinks}from"../../../chunks/app-IsNNAo_6.js";
