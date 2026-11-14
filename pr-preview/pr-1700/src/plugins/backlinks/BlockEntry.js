@@ -1,1 +1,1 @@
-export{Hv as LazyBlockEntry}from"../../../chunks/app-D5AWGETN.js";
+export{Hv as LazyBlockEntry}from"../../../chunks/app-KTMA_Gn0.js";

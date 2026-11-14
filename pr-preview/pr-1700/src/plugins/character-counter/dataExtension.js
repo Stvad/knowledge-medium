@@ -1,1 +1,1 @@
-export{qZ as characterCounterDataExtension}from"../../../chunks/app-D5AWGETN.js";
+export{tQ as characterCounterDataExtension}from"../../../chunks/app-KTMA_Gn0.js";

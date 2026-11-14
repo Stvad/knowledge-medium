@@ -1,1 +1,1 @@
-export{$M as kernelPropertyUiExtension,eN as typesPropertyUi,tN as typesPropertyUiExtension}from"../../../chunks/app-D5AWGETN.js";
+export{$M as kernelPropertyUiExtension,eN as typesPropertyUi,tN as typesPropertyUiExtension}from"../../../chunks/app-KTMA_Gn0.js";

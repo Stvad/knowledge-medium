@@ -1,1 +1,1 @@
-export{iN as TypeChip}from"../../../chunks/app-D5AWGETN.js";
+export{iN as TypeChip}from"../../../chunks/app-KTMA_Gn0.js";

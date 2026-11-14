@@ -1,1 +1,1 @@
-export{yp as confirmThreadDeletion}from"../../../chunks/app-D5AWGETN.js";
+export{yp as confirmThreadDeletion}from"../../../chunks/app-KTMA_Gn0.js";

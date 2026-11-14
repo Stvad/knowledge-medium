@@ -1,1 +1,1 @@
-export{k2 as runFreshInitialLoad}from"../../../chunks/app-D5AWGETN.js";
+export{L2 as runFreshInitialLoad}from"../../../chunks/app-KTMA_Gn0.js";

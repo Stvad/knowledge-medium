@@ -1,1 +1,1 @@
-export{QI as trimIfEdited}from"../../chunks/app-D5AWGETN.js";
+export{GI as trimIfEdited}from"../../chunks/app-KTMA_Gn0.js";

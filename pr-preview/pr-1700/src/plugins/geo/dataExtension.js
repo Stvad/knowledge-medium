@@ -1,1 +1,1 @@
-export{VJ as geoDataExtension}from"../../../chunks/app-D5AWGETN.js";
+export{YJ as geoDataExtension}from"../../../chunks/app-KTMA_Gn0.js";

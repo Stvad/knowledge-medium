@@ -1,1 +1,1 @@
-export{S2 as Input}from"../../../chunks/app-D5AWGETN.js";
+export{A2 as Input}from"../../../chunks/app-KTMA_Gn0.js";

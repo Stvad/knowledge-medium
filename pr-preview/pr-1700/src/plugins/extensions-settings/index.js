@@ -1,1 +1,1 @@
-export{yh as extensionsOverridesProp,bh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-D5AWGETN.js";
+export{yh as extensionsOverridesProp,bh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-KTMA_Gn0.js";

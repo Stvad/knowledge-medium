@@ -1,1 +1,1 @@
-export{zd as getExtraRoamProps}from"../../../chunks/app-D5AWGETN.js";
+export{zd as getExtraRoamProps}from"../../../chunks/app-KTMA_Gn0.js";

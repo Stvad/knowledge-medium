@@ -1,1 +1,1 @@
-export{fit as MIGRATIONS_PAGE_ALIAS,pit as getOrCreateMigrationsPage,mit as migrationsPageBlockId,hit as migrationsPageSpec}from"../../chunks/app-D5AWGETN.js";
+export{Sit as MIGRATIONS_PAGE_ALIAS,Cit as getOrCreateMigrationsPage,wit as migrationsPageBlockId,Tit as migrationsPageSpec}from"../../chunks/app-KTMA_Gn0.js";

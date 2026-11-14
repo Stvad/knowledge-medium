@@ -1,1 +1,1 @@
-export{sn as htmlDocumentPlugin}from"../../../chunks/app-D5AWGETN.js";
+export{sn as htmlDocumentPlugin}from"../../../chunks/app-KTMA_Gn0.js";

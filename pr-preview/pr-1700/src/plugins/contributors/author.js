@@ -1,1 +1,1 @@
-export{ag as authorIdOf}from"../../../chunks/app-D5AWGETN.js";
+export{ag as authorIdOf}from"../../../chunks/app-KTMA_Gn0.js";

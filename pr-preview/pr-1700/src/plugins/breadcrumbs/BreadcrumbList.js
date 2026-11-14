@@ -1,1 +1,1 @@
-export{gT as BreadcrumbList}from"../../../chunks/app-D5AWGETN.js";
+export{gT as BreadcrumbList}from"../../../chunks/app-KTMA_Gn0.js";

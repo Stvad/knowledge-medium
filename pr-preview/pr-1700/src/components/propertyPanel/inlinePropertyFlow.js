@@ -1,1 +1,1 @@
-export{dR as beginInlineProperty}from"../../../chunks/app-D5AWGETN.js";
+export{iR as beginInlineProperty}from"../../../chunks/app-KTMA_Gn0.js";

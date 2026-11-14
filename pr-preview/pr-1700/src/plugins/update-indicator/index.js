@@ -1,1 +1,1 @@
-export{cv as updateIndicatorPlugin}from"../../../chunks/app-D5AWGETN.js";
+export{cv as updateIndicatorPlugin}from"../../../chunks/app-KTMA_Gn0.js";

@@ -1,1 +1,1 @@
-export{fT as PromotableBreadcrumbList}from"../../../chunks/app-D5AWGETN.js";
+export{fT as PromotableBreadcrumbList}from"../../../chunks/app-KTMA_Gn0.js";

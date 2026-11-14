@@ -1,1 +1,1 @@
-export{nM as CommandPaletteHeaderItem}from"../../../chunks/app-D5AWGETN.js";
+export{nM as CommandPaletteHeaderItem}from"../../../chunks/app-KTMA_Gn0.js";

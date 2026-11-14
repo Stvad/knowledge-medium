@@ -1,1 +1,1 @@
-export{$G as AppRuntimeContextProvider,eK as useAppRuntime}from"../../chunks/app-D5AWGETN.js";
+export{sK as AppRuntimeContextProvider,cK as useAppRuntime}from"../../chunks/app-KTMA_Gn0.js";
