@@ -137,6 +137,7 @@ import {
 import { UndoManager, type HistoryDrop, type UndoEntry } from './internals/undoManager'
 import { awaitWriteAheadHeadroom } from './writeAheadLog'
 import { replayApplicationOrder } from './internals/txSnapshots'
+import { yieldNamesHeldPastReplay } from './aliasClaim'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
@@ -153,7 +154,7 @@ import {
   KERNEL_FIELD_RECOGNITION_KEY,
   type InvalidationRule,
 } from './invalidation'
-import { KERNEL_PROPERTY_SEEDS } from './properties'
+import { KERNEL_PROPERTY_SEEDS, aliasesProp } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { getOrCreateKernelPage } from './kernelPage'
 import { propertiesPageBlockId } from './propertiesPage'
@@ -2471,9 +2472,14 @@ export class Repo {
       // nothing wrote the entry's rows since, the end state is a
       // previously-observed valid state, so every constraint-blocked row
       // eventually unblocks; a row merged with a later write (field-level
-      // replay) can still collide with it. Either way a full pass with
-      // zero progress rethrows, failing the gesture rather than forcing it.
+      // replay) can still collide with it, and a block outside the entry can
+      // have claimed one of its names since. So a pass with zero progress
+      // first yields the names a holder keeps past the replay
+      // (`yieldNamesHeldPastReplay`) instead of failing every cmd-Z — its
+      // children, stuck behind it on the parent check, follow on the next
+      // pass. Nothing left to yield fails the gesture rather than forcing it.
       let pending = replayApplicationOrder(replaying.snapshots, direction)
+      const yielded = new Map<string, Set<string>>()
       const fromOf = (id: string): BlockData | null => {
         const snap = replaying.snapshots.get(id)!
         return direction === 'before' ? snap.after : snap.before
@@ -2494,9 +2500,21 @@ export class Repo {
             }
           }
         }
-        if (deferred.length === pending.length) throw lastError
-        pending = deferred
+        if (deferred.length < pending.length) {
+          pending = deferred
+          continue
+        }
+        const yields = await yieldNamesHeldPastReplay(tx, deferred, replaying.snapshots, direction)
+        if (yields.size === 0) throw lastError
+        for (const [id, {taken}] of yields) {
+          yielded.set(id, new Set([...(yielded.get(id) ?? []), ...taken]))
+        }
+        pending = deferred.map(([id, target]) => [id, yields.get(id)?.target ?? target])
       }
+      // The yield rewrote only cells, and the entry revived the alias children
+      // verbatim — past the properties flip those children are the truth, so
+      // the yielded names leave them too.
+      for (const [id, names] of yielded) await txImpl.releasePropertyMembers(id, aliasesProp.name, names)
       await txImpl.assertReplayAcyclic()
     }, {scope, description: action}, {isReplay: true, lockHooks: {
       beforeCommit: () => {

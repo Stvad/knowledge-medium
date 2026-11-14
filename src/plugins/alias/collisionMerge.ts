@@ -5,15 +5,15 @@ import {
   type BlockData,
   type Tx,
 } from '@/data/api'
-import { claimedAliases } from '@/data/aliasClaim'
+import { aliasClaimConflicts, claimedAliases } from '@/data/aliasClaim'
 import { aliasesProp } from '@/data/properties'
 import { foldBlocksInTx } from '@/data/blockMerge'
 import { mergeProperties } from '@/data/mergeProperties'
 
 export const ALIAS_COLLISION_MERGE_MUTATOR = 'alias.mergeCollision'
 
-/** A name the survivor would end up holding is claimed by a page this merge is
- *  not folding in.
+/** A name the survivor would newly claim is held by a page this merge is not
+ *  folding in.
  *
  *  Refused up front rather than left to the uniqueness trigger, because the
  *  trigger's ABORT is not a dead end you can retry out of — it surfaces as
@@ -125,14 +125,14 @@ const mergedAliases = (
   ]),
 ])
 
-/** Refuse if any name the survivor would end up holding is claimed by a live
- *  page outside the merge.
+/** Refuse if a name the survivor would newly claim is held by a live page
+ *  outside the merge.
  *
  *  Releasing every source before the survivor's write covers names the SOURCES
  *  hold — it does nothing about a third page co-claiming one of them, which is
- *  the same latent duplicate state this whole flow exists for. The survivor's
- *  own bag is checked too: it is re-inserted wholesale by the alias trigger on
- *  any properties write, so a name IT co-claims aborts just as hard. */
+ *  the same latent duplicate state this whole flow exists for. A name the
+ *  survivor already holds is not a new claim, so its own co-claims do not
+ *  block the merge. */
 const assertNoOutsideClaimant = async (
   tx: Tx,
   into: BlockData,
@@ -140,10 +140,9 @@ const assertNoOutsideClaimant = async (
   merged: readonly string[],
 ): Promise<void> => {
   const participants = new Set([into.id, ...sources.map(source => source.id)])
-  for (const alias of merged) {
-    for (const owner of await tx.aliasClaimants(alias, into.workspaceId)) {
-      if (!participants.has(owner.id)) throw new AliasMergeBlockedError(alias, owner.id)
-    }
+  for (const {alias, holders} of await aliasClaimConflicts(tx, into.id, into.workspaceId, merged)) {
+    const outsider = holders.find(holder => !participants.has(holder.id))
+    if (outsider !== undefined) throw new AliasMergeBlockedError(alias, outsider.id)
   }
 }
 

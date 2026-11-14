@@ -195,10 +195,10 @@ export const getOrCreateKernelPage = async (
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
       const candidates = mergeStrings([...aliases, ...txAliases])
       const claimable = await partitionClaimableAliases(tx, id, candidates, workspaceId)
-      // Compare both ways: contested stored aliases must be removed as well
-      // as missing canonical aliases added, while an unchanged set must not
-      // write on every navigation.
-      if (!includesAll(txAliases, claimable) || !includesAll(claimable, txAliases)) {
+      // Every stored alias is one the page holds, so `claimable` only ever
+      // adds to it — and a set with nothing free to add must not write on
+      // every navigation.
+      if (!includesAll(txAliases, claimable)) {
         await tx.setProperty(id, aliasesProp, claimable)
       }
       await tagTypes(tx, typeSnapshot, claimable)
