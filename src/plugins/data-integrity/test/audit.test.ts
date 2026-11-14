@@ -167,19 +167,28 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
       const input = new EventTarget()
-      const waits: number[] = []
+      const waits: { quietMs: number; over: boolean }[] = []
       const effect = createConsistencyAuditEffect((): UserActivity => {
         const user = createUserActivity(input)
-        return { whenQuiet: quietMs => { waits.push(quietMs); return user.whenQuiet(quietMs) } }
+        return {
+          whenQuiet: async quietMs => {
+            const wait = { quietMs, over: false }
+            waits.push(wait)
+            await user.whenQuiet(quietMs)
+            wait.over = true
+          },
+        }
       })
       effect.start(ctx('ws-busy'))
+      // Before the idle job runs: the tracker listens from the workspace open.
       input.dispatchEvent(new Event('keydown'))
 
       await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS - 1)
-      expect(waits).toEqual([AUDIT_QUIET_MS]) // parked at its first wait
+      expect(waits).toEqual([{ quietMs: AUDIT_QUIET_MS, over: false }]) // parked at its first
       expect(getConsistencyAuditSnapshotFor('ws-busy')).toBeNull()
 
       await vi.advanceTimersByTimeAsync(1)
+      expect(waits[0].over).toBe(true)
       await drainConsistencyAudits()
       expect(getConsistencyAuditSnapshotFor('ws-busy')?.workspaceId).toBe('ws-busy')
     } finally {
