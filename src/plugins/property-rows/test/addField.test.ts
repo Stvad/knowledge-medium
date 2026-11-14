@@ -36,9 +36,9 @@ beforeEach(async () => {
 })
 afterEach(() => __resetDialogsForTests())
 
-const dispatch = () => {
+const dispatch = (context = 'normal-mode') => {
   const runtime = resolveFacetRuntimeSync(propertyRowsPlugin)
-  const action = runtime.read(actionsFacet).find(item => item.id === addFieldAction.id)!
+  const action = runtime.read(actionsFacet).find(item => item.id.endsWith(addFieldAction.id) && item.context === context)!
   expect(runtime.read(appMountsFacet).some(mount => mount.id === 'core.dialogs')).toBe(true)
   return invokeAction(runtime, {
     action,
@@ -48,9 +48,9 @@ const dispatch = () => {
 }
 
 describe('add field command', () => {
-  it('opens schema autocomplete and hands the choice to the same outline flow', async () => {
+  it.each(['normal-mode', 'edit-mode-cm'])('opens schema autocomplete from %s and hands the choice to the same outline flow', async context => {
     const before = await db.db.getAll('SELECT * FROM blocks ORDER BY id')
-    const invocation = dispatch()
+    const invocation = dispatch(context)
     await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
     const dialog = getDialogQueue()[0]
     expect(dialog.Component).toBe(AddFieldDialog)

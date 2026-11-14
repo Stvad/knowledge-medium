@@ -1,4 +1,5 @@
 import type {ActionConfig} from '@/shortcuts/types'
+import {makeCMMode} from '@/shortcuts/utils'
 import {ActionContextTypes} from '@/shortcuts/types'
 import {useRef} from 'react'
 import type {Block} from '@/data/block'
@@ -42,3 +43,5 @@ export const addFieldAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
     }
   },
 }
+
+export const addFieldActions = [addFieldAction, makeCMMode(addFieldAction)]

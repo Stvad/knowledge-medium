@@ -11,7 +11,7 @@ import { blockSetting, cyclePropertyDisplayActions, propertyDisplayActions, setB
 import { FieldRowRenderer } from './FieldRowRenderer'
 import { ValueRowRenderer } from './ValueRowRenderer'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount'
-import { addFieldAction } from './addField'
+import { addFieldActions } from './addField'
 
 const SOURCE = 'property-rows'
 
@@ -35,7 +35,7 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
   dialogAppMountExtension,
-  actionsFacet.of(addFieldAction, {source: SOURCE}),
+  addFieldActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   blockRenderersFacet.of({id: 'propertyFieldRow', renderer: FieldRowRenderer}, {source: SOURCE}),
   blockRenderersFacet.of({id: 'propertyValueRow', renderer: ValueRowRenderer}, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),
