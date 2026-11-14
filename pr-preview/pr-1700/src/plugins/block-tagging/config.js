@@ -1,1 +1,1 @@
-export{Ou as blockTaggingPrefsType,ku as blockTagsConfigCodec,Au as blockTagsConfigPresetCore,ju as blockTagsConfigProp,Mu as isValidTagName,Nu as normalizeBlockTagsConfig,Pu as selectableTagNames,Fu as tagNameIssue}from"../../../chunks/app-Dpzhulp8.js";
+export{Ou as blockTaggingPrefsType,ku as blockTagsConfigCodec,Au as blockTagsConfigPresetCore,ju as blockTagsConfigProp,Mu as isValidTagName,Nu as normalizeBlockTagsConfig,Pu as selectableTagNames,Fu as tagNameIssue}from"../../../chunks/app-Dld7wef1.js";

@@ -1,1 +1,1 @@
-export{yat as getOrCreateTypesPage,bat as typesPageBlockId,xat as typesPageSpec}from"../../chunks/app-Dpzhulp8.js";
+export{yat as getOrCreateTypesPage,bat as typesPageBlockId,xat as typesPageSpec}from"../../chunks/app-Dld7wef1.js";
