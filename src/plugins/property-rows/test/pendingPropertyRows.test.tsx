@@ -185,6 +185,46 @@ describe('expected property ghost rows in the outline', () => {
     }
   })
 
+  it('keeps a committed field visible on blur to nothing while logical focus remains on its owner', async () => {
+    mount('none')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    const editor = input()
+    fireEvent.change(editor, {target: {value: 'blurred value'}})
+    await act(async () => { editor.blur() })
+    await waitFor(() => expect(repo.block(OWNER).peekProperty(textProp)).toBe('blurred value'))
+    expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe(OWNER)
+    await waitFor(() => expect(document.querySelector('[data-property-field-row] [data-property-definition-link]')?.textContent).toBe(textProp.name))
+  })
+
+  it('clears owner session on unmount and does not steal focus when remounted', async () => {
+    await repo.tx(tx => tx.create({id: 'outside', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Outside'}), {scope: ChangeScope.BlockDefault})
+    const view = mount('none')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    fireEvent.change(input(), {target: {value: 'unsaved text'}})
+    view.unmount()
+    await focusBlock(repo.block(PANEL), 'outside', {renderScopeId: 'pending-test'})
+    mount('none')
+    await waitForOutline()
+    expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe('outside')
+    expect(screen.queryByRole('textbox', {name: `Value for ${textProp.name}`})).toBeNull()
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('unsaved text'))
+  })
+
+  it('keeps draft text through owner collapse and selecting its field again', async () => {
+    mount()
+    const editor = await screen.findByRole('textbox', {name: `Value for ${textProp.name}`})
+    await act(async () => { editor.focus() })
+    fireEvent.change(editor, {target: {value: 'keep this draft'}})
+    await act(async () => { await repo.block(OWNER).set(isCollapsedProp, true) })
+    await act(async () => { await repo.block(OWNER).set(isCollapsedProp, false) })
+    expect(input()).toHaveValue('keep this draft')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    expect(input()).toHaveValue('keep this draft')
+  })
+
   it('renders unset expected fields without writing rows or adding structural children', async () => {
     const count = await rowCount()
     const beforeIds = await repo.block(OWNER).childIds.load()
@@ -248,12 +288,12 @@ describe('expected property ghost rows in the outline', () => {
     expect((await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()).some(row => row.id === fields[0].id)).toBe(false)
   })
 
-  it('refuses undecodable input visibly and retains the draft without creating rows', async () => {
+  it.each(['Enter', 'Escape'])('refuses undecodable input on %s visibly and retains the draft without creating rows', async gesture => {
     mount()
     await screen.findByRole('textbox', {name: `Value for ${numberProp.name}`})
     const count = await rowCount()
     fireEvent.change(input(numberProp.name), {target: {value: 'not a number'}})
-    await act(async () => { fireEvent.keyDown(input(numberProp.name), {key: 'Enter'}) })
+    await act(async () => { fireEvent.keyDown(input(numberProp.name), {key: gesture}) })
     await waitFor(() => expect(showError).toHaveBeenCalled())
     expect(input(numberProp.name)).toHaveValue('not a number')
     expect(await rowCount()).toBe(count)
@@ -273,22 +313,15 @@ describe('expected property ghost rows in the outline', () => {
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
   })
 
-  it.each(['Enter', 'blur'])('commits a still-focused ghost on %s after Escape and new typing', async gesture => {
-    mount()
+  it.each(['pending', 'ghost'])('Escape commits nonempty text in a %s row instead of discarding it', async kind => {
+    mount(kind === 'pending' ? 'none' : 'non-hidden')
+    if (kind === 'pending') await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
     const editor = await screen.findByRole('textbox', {name: `Value for ${textProp.name}`})
     await act(async () => { editor.focus() })
-    const count = await rowCount()
-    fireEvent.change(editor, {target: {value: 'cancelled text'}})
-    fireEvent.keyDown(editor, {key: 'Escape'})
-    expect(document.activeElement).toBe(editor)
-    expect(editor).toHaveValue('')
-    expect(await rowCount()).toBe(count)
-    fireEvent.change(editor, {target: {value: 'replacement text'}})
-    await act(async () => {
-      if (gesture === 'blur') editor.blur()
-      else fireEvent.keyDown(editor, {key: 'Enter'})
-    })
-    await waitFor(() => expect(repo.block(OWNER).peekProperty(textProp)).toBe('replacement text'))
+    fireEvent.change(editor, {target: {value: 'saved on Escape'}})
+    await act(async () => { fireEvent.keyDown(editor, {key: 'Escape'}) })
+    await waitFor(() => expect(repo.block(OWNER).peekProperty(textProp)).toBe('saved on Escape'))
     const field = (await repo.query.children({id: OWNER, propertyChildren: 'all'}).load())
       .find(row => {
         if (!row.isFieldForm || !row.referenceTargetId) return false
@@ -296,9 +329,8 @@ describe('expected property ghost rows in the outline', () => {
         return resolved.status === 'resolved' && resolved.schema.name === textProp.name
       })!
     const values = await repo.block(field.id).children.load()
-    expect(values.map(row => row.content)).toEqual(['replacement text'])
-    if (gesture === 'Enter') await waitFor(() => expect(
-      focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe(values[0].id))
+    expect(values.map(row => row.content)).toEqual(['saved on Escape'])
+    await waitFor(() => expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe(values[0].id))
   })
 
   it('offers no editable ghosts in a read-only workspace', async () => {

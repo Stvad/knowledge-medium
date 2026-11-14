@@ -1,11 +1,13 @@
 import type {Block} from '@/data/block'
-import type {InlinePropertySelection} from '@/data/inlineProperty'
+import {commitInlineProperty, type InlinePropertySelection} from '@/data/inlineProperty'
 import {CallbackSet} from '@/utils/callbackSet'
 
 export interface PendingOutlineProperty extends InlinePropertySelection {
   ownerId: string
   parentId: string
-  hasText?: boolean
+  ghost?: boolean
+  text?: string
+  committing?: boolean
 }
 export interface ListingState {
   pending: readonly PendingOutlineProperty[]
@@ -41,6 +43,7 @@ export class OutlinePropertySession {
   add(ownerId: string, selection: InlinePropertySelection) {
     const parentId = selection.fieldRowId ?? ownerId
     const previous = this.snapshot(parentId)
+    if (previous.pending.some(item => item.schema.fieldId === selection.schema.fieldId)) return
     this.listings.set(parentId, {...previous, pending: [
       ...previous.pending.filter(item => item.schema.fieldId !== selection.schema.fieldId),
       {...selection, ownerId, parentId},
@@ -55,19 +58,56 @@ export class OutlinePropertySession {
     this.setListing(parentId, {...previous, pending})
     this.publish()
   }
-  setHasText(parentId: string, fieldId: string, hasText: boolean) {
-    const previous = this.snapshot(parentId)
-    const entry = previous.pending.find(item => item.schema.fieldId === fieldId)
-    if (!entry || !!entry.hasText === hasText) return
-    this.setListing(parentId, {...previous, pending: previous.pending.map(item => item === entry ? {...item, hasText} : item)})
+  setText(draft: PendingOutlineProperty, text: string) {
+    const previous = this.snapshot(draft.parentId)
+    const entry = previous.pending.find(item => item.schema.fieldId === draft.schema.fieldId)
+    if (entry?.committing || (entry?.text ?? '') === text) return
+    const pending = entry
+      ? previous.pending.map(item => item === entry ? {...entry, text} : item)
+      : [...previous.pending, {...draft, text}]
+    this.setListing(draft.parentId, {...previous, pending})
+    if (draft.fieldRowId) this.revealField(draft.ownerId, draft.fieldRowId)
     this.publish()
+  }
+  async submit(owner: Block, draft: PendingOutlineProperty) {
+    const previous = this.snapshot(draft.parentId)
+    const entry = previous.pending.find(item => item.schema.fieldId === draft.schema.fieldId)
+    if (!entry?.text || entry.committing) return null
+    const submitting = {...entry, committing: true}
+    this.setListing(draft.parentId, {...previous, pending: previous.pending.map(item => item === entry ? submitting : item)})
+    this.publish()
+    try {
+      const target = await commitInlineProperty(owner, submitting, entry.text)
+      if (this.snapshot(draft.parentId).pending.includes(submitting)) this.remove(draft.parentId, draft.schema.fieldId)
+      return target
+    } catch (error) {
+      const current = this.snapshot(draft.parentId)
+      this.setListing(draft.parentId, {...current, pending: current.pending.map(item => item === submitting ? {...item, committing: false} : item)})
+      this.publish()
+      throw error
+    }
+  }
+  disposeOwner(ownerId: string): PendingOutlineProperty[] {
+    const removed: PendingOutlineProperty[] = []
+    let changed = false
+    for (const [parentId, state] of this.listings) {
+      removed.push(...state.pending.filter(item => item.ownerId === ownerId))
+      const pending = state.pending.filter(item => item.ownerId !== ownerId)
+      const revealed = parentId === ownerId ? EMPTY.revealed : state.revealed
+      if (pending.length !== state.pending.length || revealed.length !== state.revealed.length) {
+        this.setListing(parentId, {pending, revealed})
+        changed = true
+      }
+    }
+    if (changed) this.publish()
+    return removed
   }
   /** Unsaved text outlives focus, including its containing field; empty drafts may expire. */
   clearOwner(ownerId: string) {
     let changed = false
     for (const [parentId, state] of this.listings) {
-      const pending = state.pending.filter(item => item.ownerId !== ownerId || item.hasText)
-      const revealed = parentId === ownerId ? state.revealed.filter(id => this.snapshot(id).pending.some(item => item.hasText)) : state.revealed
+      const pending = state.pending.filter(item => item.ownerId !== ownerId || item.text)
+      const revealed = parentId === ownerId ? state.revealed.filter(id => this.snapshot(id).pending.some(item => item.text)) : state.revealed
       if (pending.length !== state.pending.length || revealed.length !== state.revealed.length) {
         this.setListing(parentId, {pending, revealed})
         changed = true

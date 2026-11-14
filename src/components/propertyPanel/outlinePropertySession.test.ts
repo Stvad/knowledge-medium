@@ -1,6 +1,11 @@
-import {describe, expect, it, vi} from 'vitest'
+import {beforeEach, describe, expect, it, vi} from 'vitest'
+import type {Block} from '@/data/block'
+import {commitInlineProperty} from '@/data/inlineProperty'
 import type {AnyResolvedPropertySchema} from '@/data/api'
 import {OutlinePropertySession} from './outlinePropertySession'
+
+vi.mock('@/data/inlineProperty', () => ({commitInlineProperty: vi.fn()}))
+beforeEach(() => { vi.mocked(commitInlineProperty).mockReset() })
 
 const schema = {fieldId: 'field', name: 'test:field'} as AnyResolvedPropertySchema
 
@@ -38,27 +43,43 @@ describe('outline property session publications', () => {
   it('retains text and its containing field while expiring empty sibling drafts', () => {
     const session = new OutlinePropertySession()
     session.add('owner', {schema, fieldRowId: 'row'})
-    session.setHasText('row', schema.fieldId, true)
+    session.setText(session.snapshot('row').pending[0]!, 'text')
     session.add('owner', {schema: {...schema, fieldId: 'empty'}})
     session.reveal('owner', 'saved-row')
     session.clearOwner('owner')
     expect(session.snapshot('owner')).toEqual({pending: [], revealed: ['row']})
     expect(session.snapshot('row').pending).toHaveLength(1)
-    session.setHasText('row', schema.fieldId, false)
+    session.setText(session.snapshot('row').pending[0]!, '')
     session.clearOwner('owner')
     expect(session.snapshot('owner')).toEqual({pending: [], revealed: []})
     expect(session.snapshot('row').pending).toHaveLength(0)
   })
 
-  it('publishes only transitions between empty and nonempty text', () => {
+  it('keeps ghost text when Add field selects the same definition', () => {
+    const session = new OutlinePropertySession()
+    session.setText({schema, ownerId: 'owner', parentId: 'owner'}, 'uncommitted text')
+    session.add('owner', {schema})
+    expect(session.snapshot('owner').pending[0]?.text).toBe('uncommitted text')
+  })
+
+  it('clears departing owner entries and returns unsaved text for a visible warning', () => {
+    const session = new OutlinePropertySession()
+    session.setText({schema, ownerId: 'owner', parentId: 'row', fieldRowId: 'row'}, 'keep me visible')
+    session.setText({schema, ownerId: 'other', parentId: 'other'}, 'other text')
+    expect(session.disposeOwner('owner').map(row => row.text)).toEqual(['keep me visible'])
+    expect(session.snapshot('owner').pending).toEqual([])
+    expect(session.snapshot('row').pending).toEqual([])
+    expect(session.snapshot('other').pending[0]?.text).toBe('other text')
+  })
+
+  it('publishes text changes but not an unchanged draft', () => {
     const session = new OutlinePropertySession()
     session.add('owner', {schema})
     const changed = vi.fn()
     session.subscribe(changed)
-    session.setHasText('owner', schema.fieldId, true)
+    session.setText(session.snapshot('owner').pending[0]!, 'text')
     expect(changed).toHaveBeenCalledOnce()
-    session.setHasText('owner', schema.fieldId, true)
-    session.setHasText('owner', 'absent', true)
+    session.setText(session.snapshot('owner').pending[0]!, 'text')
     expect(changed).toHaveBeenCalledOnce()
   })
 
@@ -80,5 +101,55 @@ describe('outline property session publications', () => {
     changed.mockClear()
     session.clearOwner('owner')
     expect(changed).not.toHaveBeenCalled()
+  })
+})
+
+describe('session-owned draft submission', () => {
+  const owner = {} as Block
+  const draft = {schema, ownerId: 'owner', parentId: 'owner'}
+  it('does not submit an absent or empty draft', async () => {
+    const session = new OutlinePropertySession()
+    expect(await session.submit(owner, draft)).toBeNull()
+    session.add('owner', {schema})
+    expect(await session.submit(owner, draft)).toBeNull()
+    expect(commitInlineProperty).not.toHaveBeenCalled()
+  })
+  it('keeps one in-flight write and its text through remounts', async () => {
+    const session = new OutlinePropertySession()
+    session.setText(draft, 'one member')
+    let finish = () => {}
+    vi.mocked(commitInlineProperty).mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({fieldRowId: 'field-row', valueId: 'value'})
+    }))
+    const save = session.submit(owner, draft)
+    expect(session.snapshot('owner').pending[0]?.committing).toBe(true)
+    session.setText(draft, 'cannot overwrite a submitting draft')
+    expect(session.snapshot('owner').pending[0]?.text).toBe('one member')
+    expect(await session.submit(owner, draft)).toBeNull()
+    expect(commitInlineProperty).toHaveBeenCalledOnce()
+    finish()
+    await save
+    expect(session.snapshot('owner').pending).toEqual([])
+  })
+  it('returns a rejected draft to editing without losing its text', async () => {
+    const session = new OutlinePropertySession()
+    session.setText(draft, 'invalid value')
+    vi.mocked(commitInlineProperty).mockRejectedValue(new Error('invalid'))
+    await expect(session.submit(owner, draft)).rejects.toThrow('invalid')
+    expect(session.snapshot('owner').pending[0]).toMatchObject({text: 'invalid value', committing: false})
+  })
+  it('does not remove a new draft when an unmounted owner save completes', async () => {
+    const session = new OutlinePropertySession()
+    session.setText(draft, 'old value')
+    let finish = () => {}
+    vi.mocked(commitInlineProperty).mockImplementation(() => new Promise(resolve => {
+      finish = () => resolve({fieldRowId: 'field-row', valueId: 'value'})
+    }))
+    const save = session.submit(owner, draft)
+    session.disposeOwner('owner')
+    session.setText(draft, 'new unsaved value')
+    finish()
+    await save
+    expect(session.snapshot('owner').pending[0]?.text).toBe('new unsaved value')
   })
 })

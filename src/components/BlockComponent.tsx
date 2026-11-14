@@ -11,7 +11,7 @@ import { useChildIdsForMode, useHandle, usePropertyDisplayMode } from '@/hooks/b
 import type { BlockData } from '@/data/api'
 import { unlistedSiblingIndex } from '@/utils/selection.js'
 import { useFocusedChild } from '@/hooks/focusedChild'
-import { OutlinePropertyDrafts, useOutlinePropertyListing } from './propertyPanel/OutlinePropertyDrafts'
+import { OutlinePropertyDrafts, useOutlinePropertyListing, useOutlinePropertyOwner } from './propertyPanel/OutlinePropertyDrafts'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
@@ -22,6 +22,7 @@ export function BlockComponent({blockId}: BlockComponentProps) {
   const repo = useRepo()
   const block = repo.block(blockId)
   const context = useBlockContext()
+  useOutlinePropertyOwner(block)
   const Renderer = useRenderer({block, context})
 
   return <ErrorBoundary FallbackComponent={FallbackComponent}>
