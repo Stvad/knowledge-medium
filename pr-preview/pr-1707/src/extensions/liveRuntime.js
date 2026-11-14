@@ -1,1 +1,1 @@
-export{WP as EffectReconciler,GP as LiveRuntimeHandle}from"../../chunks/app-B_II37oH.js";
+export{WP as EffectReconciler,GP as LiveRuntimeHandle}from"../../chunks/app-C5iP7ck-.js";

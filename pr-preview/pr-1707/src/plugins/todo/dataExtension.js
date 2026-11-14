@@ -1,1 +1,1 @@
-export{VK as todoDataExtension}from"../../../chunks/app-B_II37oH.js";
+export{VK as todoDataExtension}from"../../../chunks/app-C5iP7ck-.js";

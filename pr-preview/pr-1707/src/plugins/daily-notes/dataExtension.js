@@ -1,1 +1,1 @@
-export{PY as dailyNotesDataExtension}from"../../../chunks/app-B_II37oH.js";
+export{PY as dailyNotesDataExtension}from"../../../chunks/app-C5iP7ck-.js";

@@ -1,1 +1,1 @@
-export{SN as ensureMetricsConsoleHook}from"../../chunks/app-B_II37oH.js";
+export{SN as ensureMetricsConsoleHook}from"../../chunks/app-C5iP7ck-.js";
