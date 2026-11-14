@@ -1,1 +1,0 @@
-export{cZ as contributorsDataExtension}from"../../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{FP as gestureBindingDescriptor,IP as matchesGestureEvent}from"../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{wP as appUpdate,TP as useAppUpdateAvailable}from"../chunks/app-roajnCN4.js";

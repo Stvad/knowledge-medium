@@ -1,1 +1,0 @@
-export{rb as useIsReadOnly}from"../../chunks/app-roajnCN4.js";

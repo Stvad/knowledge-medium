@@ -1,1 +1,0 @@
-export{$d as quotedInFooterContribution}from"../../../chunks/app-roajnCN4.js";

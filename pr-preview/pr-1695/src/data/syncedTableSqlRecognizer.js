@@ -1,1 +1,0 @@
-export{o1 as SYNCED_TABLES,s1 as syncedWriteTarget,c1 as writeTargets}from"../../chunks/app-roajnCN4.js";

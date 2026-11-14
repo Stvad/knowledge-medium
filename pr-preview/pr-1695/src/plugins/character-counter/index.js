@@ -1,1 +1,0 @@
-export{kZ as CHAR_COUNTER_TYPE,PZ as RAW_CHARACTER_COUNT_PROFILE_ID,FZ as WORDS_COUNT_PROFILE_ID,MZ as WORD_COUNTER_TYPE,tr as charCountDisplay,IZ as charLimitProp,LZ as charProfileProp,RZ as charScopeProp,qn as characterCountProfilesFacet,Hn as characterCounterPlugin,Zn as textCountProfile}from"../../../chunks/app-roajnCN4.js";

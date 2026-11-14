@@ -1,1 +1,0 @@
-export{ng as authorIdOf}from"../../../chunks/app-roajnCN4.js";

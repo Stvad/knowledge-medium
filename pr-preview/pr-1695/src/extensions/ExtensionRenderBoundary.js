@@ -1,1 +1,0 @@
-export{wz as ExtensionRenderBoundary}from"../../chunks/app-roajnCN4.js";

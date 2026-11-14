@@ -1,1 +1,0 @@
-export{Out as CHANGE_SCOPE_POLICIES,kut as ChangeScope,Aut as isChangeScope,jut as policyForScope,Mut as scopeAllowedInReadOnly,Nut as scopeIsUndoable,Put as scopePoliciesEquivalent,Fut as scopeUploadsToServer,Iut as sourceForScope}from"../../../chunks/app-roajnCN4.js";

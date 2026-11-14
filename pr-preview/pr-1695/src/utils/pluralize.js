@@ -1,1 +1,0 @@
-export{S8 as agree,C8 as pluralize}from"../../chunks/app-roajnCN4.js";

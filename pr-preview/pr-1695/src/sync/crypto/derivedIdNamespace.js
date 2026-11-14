@@ -1,1 +1,0 @@
-export{Bat as deriveWorkspaceIdNamespace}from"../../../chunks/app-roajnCN4.js";

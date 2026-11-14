@@ -1,1 +1,0 @@
-export{pP as appUpdatePromptExtension}from"../../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{gW as isIOS,_W as isMacPlatform}from"../../chunks/app-roajnCN4.js";

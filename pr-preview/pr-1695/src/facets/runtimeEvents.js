@@ -1,1 +1,0 @@
-export{IG as appRuntimeUpdateEvent,LG as refreshAppRuntime}from"../../chunks/app-roajnCN4.js";

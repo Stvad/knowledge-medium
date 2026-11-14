@@ -1,1 +1,0 @@
-export{po as propertiesMigrationPlugin}from"../../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{WB as MetadataRow,GB as PropertySectionLabel}from"../../../chunks/app-roajnCN4.js";

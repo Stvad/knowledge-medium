@@ -1,1 +1,0 @@
-export{LK as staticDataExtensions}from"../../chunks/app-roajnCN4.js";

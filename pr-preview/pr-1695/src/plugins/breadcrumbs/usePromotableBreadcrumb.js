@@ -1,1 +1,0 @@
-export{cT as usePromotableBreadcrumb}from"../../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{XE as usePendingInvitations}from"../../chunks/app-roajnCN4.js";

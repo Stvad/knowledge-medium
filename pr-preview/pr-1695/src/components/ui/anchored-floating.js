@@ -1,1 +1,0 @@
-export{DG as floatingAnchorFromRect,OG as useAnchoredFloating}from"../../../chunks/app-roajnCN4.js";

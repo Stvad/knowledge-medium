@@ -1,1 +1,0 @@
-export{h1 as omnilinerNamespace}from"../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{Mb as richPastePlugin}from"../../../chunks/app-roajnCN4.js";

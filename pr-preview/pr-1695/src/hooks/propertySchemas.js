@@ -1,1 +1,0 @@
-export{kG as usePropertySchemas}from"../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{mo as MigrationGate}from"../../../chunks/app-roajnCN4.js";

@@ -1,1 +1,0 @@
-export{Fk as dailyDateWikilinkDecorator}from"../../../chunks/app-roajnCN4.js";

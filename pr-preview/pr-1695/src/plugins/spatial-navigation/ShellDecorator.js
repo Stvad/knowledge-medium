@@ -1,1 +1,0 @@
-export{UC as SpatialNavigationShellDecorator}from"../../../chunks/app-roajnCN4.js";
