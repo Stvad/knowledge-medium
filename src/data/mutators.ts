@@ -29,7 +29,9 @@ import {
   keysImmediatelyAfter,
   keysImmediatelyBefore,
 } from './orderKeyPlacement'
-import { isCollapsedProp } from '@/data/properties'
+import { isCollapsedProp, propertyNameProp } from '@/data/properties'
+import { assertNotGrammarShapedLabel, isGrammarShapedLabel } from '@/data/referenceBlock'
+import { valueChildContentToEncoded } from '@/data/propertyChildren'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import {
   displayScopeOf,
@@ -180,6 +182,20 @@ export const setContent = defineMutator<{id: string; content: string}, void>({
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `set content on ${id}`,
   apply: async (tx, {id, content}) => {
+    const candidateName = valueChildContentToEncoded(propertyNameProp, content)
+    if (typeof candidateName === 'string' && isGrammarShapedLabel(candidateName)) {
+      const row = await requireBlock(tx, id)
+      if (row.content !== content && row.parentId && row.isFieldForm !== true &&
+        await tx.isPropertyChildBackedWorkspace(row.workspaceId)) {
+        const field = await tx.get(row.parentId)
+        const schema = field?.isFieldForm && field.referenceTargetId
+          ? tx.resolvePropertyFieldSchema(row.workspaceId, field.referenceTargetId)
+          : null
+        if (schema?.name === propertyNameProp.name) {
+          assertNotGrammarShapedLabel(candidateName, 'Property name')
+        }
+      }
+    }
     await tx.update(id, {content})
   },
 })

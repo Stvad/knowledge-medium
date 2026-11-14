@@ -22,6 +22,7 @@ import {
   type PropertyCellCoverageBucket,
 } from '@/data/internals/propertyCellBackfill'
 import { projectFieldRowValues } from '@/data/internals/propertyChildrenProcessor'
+import { GrammarShapedLabelError } from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import { buildInClause, MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds'
 import { propertyFieldRowsForParentsSql } from '@/data/internals/treeQueries'
@@ -219,9 +220,15 @@ export const runPropertyCellDivergenceCheck = async (
           continue
         }
         fieldsChecked += 1
-        const projected = projectFieldRowValues(schema, rows.map(row => valuesOf.get(row.id) ?? []))
         const stored = Object.hasOwn(cell, schema.name) ? cell[schema.name] : undefined
-        const kind = divergenceOf(stored, projected)
+        let kind: DivergenceKind | null
+        try {
+          const projected = projectFieldRowValues(schema, rows.map(row => valuesOf.get(row.id) ?? []), stored)
+          kind = divergenceOf(stored, projected)
+        } catch (error) {
+          if (!(error instanceof GrammarShapedLabelError)) throw error
+          kind = stored === undefined ? 'cellMissing' : 'cellDiffers'
+        }
         if (kind === null) continue
         divergentCells += 1
         byKind[kind] += 1

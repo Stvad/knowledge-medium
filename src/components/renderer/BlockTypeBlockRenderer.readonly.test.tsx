@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showError: vi.fn(),
+}))
+vi.mock('@/components/propertyPanel/PropertyPicker.js', () => ({PropertyPicker: () => null}))
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -12,6 +18,9 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { seedType } from '@/data/typeSeeds'
 import { canonicalTypeSeedProperties, typeDefinitionBlockId } from '@/data/definitionSeeds'
+import { blockTypeLabelProp } from '@/data/properties'
+import { RepoContext } from '@/context/repo'
+import { showError } from '@/utils/toast.js'
 import { BlockTypeContentRenderer } from './BlockTypeBlockRenderer'
 
 const WS = 'ws-1'
@@ -68,9 +77,11 @@ describe('BlockTypeContentRenderer read-only for code-owned type seeds', () => {
 
   const renderType = (blockId: string) =>
     render(
-      <AppRuntimeContextProvider value={runtime}>
-        <BlockTypeContentRenderer block={repo.block(blockId)} />
-      </AppRuntimeContextProvider>,
+      <RepoContext value={repo}>
+        <AppRuntimeContextProvider value={runtime}>
+          <BlockTypeContentRenderer block={repo.block(blockId)} />
+        </AppRuntimeContextProvider>
+      </RepoContext>,
     )
 
   it('renders a materialized type seed read-only: label locked, no "Add property"', () => {
@@ -84,5 +95,23 @@ describe('BlockTypeContentRenderer read-only for code-owned type seeds', () => {
     // model.test.ts, where the panel row lock has no PropertyPicker/RepoContext
     // render dependency.)
     expect(screen.queryByPlaceholderText('Add property')).toBeNull()
+  })
+
+  it('shows why a grammar-shaped type label was refused', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'user-type', workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'Author',
+      })
+      await repo.addTypeInTx(tx, 'user-type', 'block-type', {})
+      await tx.setProperty('user-type', blockTypeLabelProp, 'Author')
+    }, {scope: ChangeScope.BlockDefault, description: 'create editable type'})
+
+    renderType('user-type')
+    const labelInput = screen.getByPlaceholderText('type label') as HTMLInputElement
+    fireEvent.change(labelInput, {target: {value: '[[Author]]'}})
+    fireEvent.blur(labelInput)
+
+    await waitFor(() => expect(labelInput.value).toBe('Author'))
+    expect(showError).toHaveBeenCalledWith(expect.stringMatching(/reads as a block reference/i))
   })
 })

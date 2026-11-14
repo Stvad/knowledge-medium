@@ -22,6 +22,7 @@ import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
+import { showError } from '@/utils/toast.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -80,7 +81,9 @@ export const BlockEditor = ({
   // genuinely confirms our write.
   const pushChange = useRef(
     debounce((value: string) => {
-      void block.setContent(value)
+      void block.setContent(value).catch(error => {
+        showError(error instanceof Error ? error.message : String(error))
+      })
     }, 300),
   ).current
 

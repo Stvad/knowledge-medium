@@ -38,6 +38,7 @@ import {
 } from './propertyPanel/model'
 import { PropertyRow } from './propertyPanel/PropertyRow'
 import { MetadataRow, PropertySectionLabel } from './propertyPanel/Rows'
+import {resolveOrCreateProperty} from './propertyPanel/resolveOrCreateProperty'
 
 interface BlockPropertiesProps {
   block: Block
@@ -219,15 +220,12 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     //    the inferred type (`row.shape`) as the preset id, then open
     //    the new schema's block. Cmd-Z reverses the materialize.
     if (row.schemaUnknown) {
-      try {
-        await block.repo.userSchemas.addSchema({name: row.name, presetId: row.shape})
-        const newId = block.repo.userSchemas.getSchemaBlockId(row.name)
-        if (newId) {
-          flashRecent(row.name)
-          openSchemaPanel(newId)
-        }
-      } catch (err) {
-        console.error(`[BlockProperties] failed to register schema for "${row.name}":`, err)
+      const schema = await resolveOrCreateProperty(block.repo, {name: row.name, presetId: row.shape})
+      if (!schema) return
+      const newId = block.repo.userSchemas.getSchemaBlockId(schema.name)
+      if (newId) {
+        flashRecent(schema.name)
+        openSchemaPanel(newId)
       }
       return
     }
@@ -311,34 +309,15 @@ export function BlockProperties({block}: BlockPropertiesProps) {
             )
           }}
           onConfigureNewSchema={async ({name, presetId}) => {
-            const trimmed = name.trim()
-            if (!trimmed) return undefined
-            const existingId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-            if (existingId) {
-              openSchemaPanel(existingId)
-              return schemas.get(trimmed)
+            const existingId = block.repo.userSchemas.getSchemaBlockId(name.trim())
+            const schema = await resolveOrCreateProperty(block.repo, {name, presetId}, schemas)
+            if (!schema) return undefined
+            const schemaId = block.repo.userSchemas.getSchemaBlockId(schema.name)
+            if (schemaId) {
+              if (!existingId) flashRecent(schema.name)
+              openSchemaPanel(schemaId)
             }
-            // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. A synthesized
-            // seed may not have materialized its definition row yet, so there
-            // is no panel to open; the form can still adopt its behavior.
-            const kernelSchema = schemas.get(trimmed)
-            if (kernelSchema) return kernelSchema
-            try {
-              const schema = await block.repo.userSchemas.addSchema({
-                name: trimmed,
-                presetId,
-              })
-              const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-              if (newId) {
-                flashRecent(trimmed)
-                openSchemaPanel(newId)
-              }
-              return schema
-            } catch (err) {
-              console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
-              return undefined
-            }
+            return schema
           }}
         />
       )}

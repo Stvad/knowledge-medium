@@ -34,6 +34,7 @@ import {
 } from '@/data/properties'
 import { useContent } from '@/hooks/block'
 import type { BlockRendererProps } from '@/types'
+import { showError } from '@/utils/toast.js'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -79,6 +80,11 @@ vi.mock('@/utils/navigation.ts', () => ({
   useOpenBlock: ({blockId, workspaceId}: {blockId: string; workspaceId?: string}) => () => {
     navigateCallsRef.current.push({blockId, workspaceId})
   },
+}))
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showError: vi.fn(),
 }))
 
 // Type-embedded properties are code-owned seeds (the type-lift that used to
@@ -192,6 +198,8 @@ describe('BlockProperties component', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
+    vi.mocked(showError).mockClear()
+    vi.restoreAllMocks()
   })
 
   // A panel can show a block from another workspace (a side panel left open
@@ -580,6 +588,26 @@ describe('BlockProperties component', () => {
     })
   })
 
+  it('shows schema registration failure when configuring an unregistered property', async () => {
+    const block = repo.block('block-1')
+    await block.set(degradedFallbackSchema('mood', 'string'), 'ok')
+    vi.spyOn(repo.userSchemas, 'addSchema').mockRejectedValue(new Error('Schema name refused'))
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
+    })
+
+    await waitFor(() => expect(showError).toHaveBeenCalledWith('Schema name refused'))
+  })
+
   it('moves between property values and labels without selecting row controls', async () => {
     const block = repo.block('block-1')
 
@@ -675,6 +703,29 @@ describe('BlockProperties component', () => {
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Field')).toBeNull()
     })
+  })
+
+  it('shows schema registration failure from AddPropertyForm configuration', async () => {
+    const block = repo.block('block-1')
+    vi.spyOn(repo.userSchemas, 'addSchema').mockRejectedValue(new Error('Schema name refused'))
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => { requestPropertyCreate({blockId: block.id}) })
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('Field'), {target: {value: 'priority'}})
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /configure new field/i}))
+    })
+
+    await waitFor(() => expect(showError).toHaveBeenCalledWith('Schema name refused'))
   })
 
   it('opens property creation from a Tana-style request and tabs into the value row', async () => {

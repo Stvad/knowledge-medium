@@ -13,6 +13,7 @@ import { ChangeScope, seedProperty, type BlockData } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
+import { propertyNameProp } from '@/data/properties'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { definitionSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -261,6 +262,22 @@ describe('property_cell_divergence', () => {
     const check = (await audit()).property_cell_divergence
 
     expect(check).toMatchObject({ status: 'ok', ownersScanned: 1, fieldsChecked: 2, divergentCells: 0 })
+  })
+
+  it.each([
+    ['[[Old]]', '[[Old]]', 'ok'],
+    ['[[Old]]', '[[New]]', 'anomaly'],
+    ['ordinary', '[[New]]', 'anomaly'],
+    [undefined, '[[New]]', 'anomaly'],
+  ])('accepts only unchanged legacy names: cell %s, row %s', async (stored, content, status) => {
+    await insertRaw(
+      owner('legacy', stored === undefined ? {} : {[propertyNameProp.name]: stored}),
+      fieldRow('name-field', 'legacy', propertyNameProp.name),
+      valueChild('name-value', 'name-field', content!),
+    )
+    const before = await sharedDb.db.getAll('SELECT * FROM blocks ORDER BY id')
+    expect((await audit()).property_cell_divergence).toMatchObject({status, divergentCells: status === 'ok' ? 0 : 1})
+    expect(await sharedDb.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
   it('flags a cell that disagrees with its value child, by key and kind', async () => {

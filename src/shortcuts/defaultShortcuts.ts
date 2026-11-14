@@ -99,6 +99,7 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
+import { focusAdjacentPendingProperty } from '@/components/propertyPanel/pendingPropertyNavigation'
 
 /** The Roam rule both merge gestures refuse on: `into` and `from` each show
  *  children of their own on `surface`, so folding one into the other would
@@ -891,6 +892,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
+        if (focusAdjacentPendingProperty(block.id, deps.renderScopeId, -1)) return
         const prevVisible = await previousVisibleBlock(block, surface)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
@@ -940,6 +942,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
+        if (focusAdjacentPendingProperty(block.id, deps.renderScopeId, 1)) return
         const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 

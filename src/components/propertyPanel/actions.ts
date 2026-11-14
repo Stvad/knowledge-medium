@@ -11,6 +11,7 @@ import {
 } from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
 import {declarationOnlyDefinitionForName} from './declarationOnly'
+import {resolveOrCreateProperty} from './resolveOrCreateProperty'
 
 export const writeProperty = (
   block: Block,
@@ -25,9 +26,7 @@ export const writeProperty = (
   return block.set(schema, decodedValue)
 }
 
-/** AddPropertyForm submit handler: adopt a registered schema if the
- *  user picked one, or have UserSchemasService.addSchema register a
- *  new one synchronously. The returned schema lets the caller render an
+/** AddPropertyForm submit handler. The returned schema lets the caller render an
  *  unset row without writing the schema default as stored data. Refuses
  *  hidden / reserved names. */
 export const addProperty = async (
@@ -45,27 +44,7 @@ export const addProperty = async (
     return undefined
   }
 
-  if (args.adopted) {
-    return args.adopted
-  }
-
-  // Existing registered schema with the same name → adopt it instead
-  // of creating a duplicate (the form should have offered it as a
-  // suggestion; this is the fallback for non-autocomplete submits).
-  const existing = schemas.get(name)
-  if (existing) {
-    return existing
-  }
-
-  try {
-    return await block.repo.userSchemas.addSchema({
-      name,
-      presetId: args.presetId,
-    })
-  } catch (err) {
-    console.error(`[addProperty] failed to register schema for "${name}":`, err)
-    return undefined
-  }
+  return resolveOrCreateProperty(block.repo, args, schemas)
 }
 
 export const deleteProperty = async (args: {

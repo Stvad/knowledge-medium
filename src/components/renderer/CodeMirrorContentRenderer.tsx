@@ -1,5 +1,6 @@
 import { BlockRendererProps } from '@/types.js'
-import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
+import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef, useState } from 'react'
+import type { EditorView } from '@codemirror/view'
 import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
@@ -24,6 +25,9 @@ import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
 import { useGutterText } from './BlockGutter.js'
+import { InlinePropertyPicker } from '@/components/propertyPanel/InlinePropertyPicker'
+import { beginInlineProperty } from '@/components/propertyPanel/inlinePropertyFlow'
+import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -49,13 +53,18 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   // handlePaste. Cmd/Ctrl+Shift+V ('single-block') drops text into the
   // current block verbatim; plain Cmd/Ctrl+V ('split') keeps the
   // existing outline-splitting behavior.
+  const [inlinePicker, setInlinePicker] = useState<{view: EditorView; parentId: string} | null>(null)
+  const openInlinePicker = useCallback((view: EditorView, parentId: string) => {
+    setInlinePicker({view, parentId})
+  }, [])
+
   const pasteIntentRef = useRef<'split' | 'single-block'>('split')
 
   const extensions = useMemo(() => {
-    const fieldCreationExtension = createFieldCreationKeydownExtension(block, repo)
+    const fieldCreationExtension = createFieldCreationKeydownExtension(block, repo, openInlinePicker)
     const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime])
+  }, [block, repo, runtime, openInlinePicker])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before
@@ -179,6 +188,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   }
 
   return (
+    <>
     <BlockEditor
       ref={handleEditorRef}
       block={block}
@@ -189,5 +199,21 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       onKeyDownCapture={handleKeyDownCapture}
       onPasteCapture={handlePaste}
     />
+    {inlinePicker && <InlinePropertyPicker
+      owner={repo.block(inlinePicker.parentId)}
+      canSubmit={() => inlinePicker.view.state.doc.toString() === FIELD_FORM_MARKER}
+      onCancel={(restoreFocus = true) => {
+        setInlinePicker(null)
+        if (restoreFocus) inlinePicker.view.focus()
+      }}
+      onPick={async (schema, isActive) => {
+        flushEditorContent(inlinePicker.view)
+        await beginInlineProperty({owner: repo.block(inlinePicker.parentId), schema, ui: uiStateBlock,
+          scope: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined,
+          source: block, isActive})
+        setInlinePicker(null)
+      }}
+    />}
+    </>
   )
 }

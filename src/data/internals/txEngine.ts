@@ -119,6 +119,8 @@ import {
 } from './propertyChildrenProcessor'
 import { deleteSubtreeAnnouncedInTx } from '@/data/subtreeDelete'
 import { storedPropertyValue } from '@/data/rowProperty'
+import { propertyNameProp } from '@/data/properties'
+import { assertNotGrammarShapedLabel } from '@/data/referenceBlock'
 import { replayConflicts, replayTarget } from './replayMerge'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -129,6 +131,17 @@ export interface TxDb {
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
+}
+
+/** A rename cannot introduce reference grammar; copying a legacy bag is not a rename. */
+const assertPropertyNameWrite = (
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>,
+): void => {
+  const name = after[propertyNameProp.name]
+  if (typeof name === 'string' && name !== before[propertyNameProp.name]) {
+    assertNotGrammarShapedLabel(name, 'Property name')
+  }
 }
 
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
@@ -501,6 +514,7 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
+    if (before) assertPropertyNameWrite(before.properties, after.properties)
     const names = changedPropertyNames(before?.properties ?? {}, after.properties)
     if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
     if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
@@ -1189,6 +1203,7 @@ export class TxImpl implements Tx {
     opts: EngineWriteOpts | undefined,
   ): Promise<void> {
     this.assertWritableWorkspace(before.workspaceId)
+    assertPropertyNameWrite(before.properties, properties)
     const after: BlockData = {
       ...before,
       properties,

@@ -27,6 +27,7 @@ import { BlockContextProvider, NestedBlockContextProvider } from '@/context/bloc
 import { PropertyDisplayScopeContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import { RepoContext } from '@/context/repo'
 import { BlockComponent } from '@/components/BlockComponent'
+import { outlinePropertySession } from '@/components/propertyPanel/outlinePropertySession'
 import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewportMount'
 import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -37,6 +38,7 @@ import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import {
   focusBlock,
+  exitEditModeForBlock,
   isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
@@ -83,8 +85,11 @@ let repo: Repo
 let runtime: FacetRuntime
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-afterEach(() => {
+afterEach(async () => {
   cleanup()
+  // Blur callbacks run on the next frame; fence their writes before the DB reset.
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  await repo.tx(async () => {}, {scope: ChangeScope.UiState})
   committedListings.clear()
   vi.unstubAllGlobals()
   __resetLazyMountRegistryForTesting()
@@ -565,11 +570,14 @@ describe('a child the user turns into a field row', () => {
 
   // The editor itself remounts as the row's renderer changes; the caret comes
   // back from the stored selection, which this harness does not write.
-  it('keeps the row editable, with its text, while the user is on it, where the mode hides every property row', async () => {
+  it('draws a directly focused field as a property row even when the mode hides every property row', async () => {
     await typeIntoChild('none', '::((def-plain))')
     await outlineSettled()
     expect(typedRow()).not.toBeNull()
+    expect(typedRow()!.querySelector('[data-property-row-layout]')).not.toBeNull()
     expect(typedRow()!.querySelector('.cm-content')?.textContent).toBe('::((def-plain))')
+    await act(async () => { await exitEditModeForBlock(repo.block(PANEL), TYPED) })
+    await waitFor(() => expect(typedRow()!.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain'))
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
@@ -584,6 +592,83 @@ describe('a child the user turns into a field row', () => {
     expect(typedEditor()?.querySelector('.cm-content')?.textContent).toBe(rawContent)
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
+  })
+
+  it('the real picker refuses changed editor text before creating a definition', async () => {
+    const addSchema = vi.spyOn(repo.userSchemas, 'addSchema')
+    await focusBlock(repo.block(PANEL), TYPED, {edit: true})
+    mount({workspace: 'none'})
+    await waitFor(() => expect(typedEditor()).not.toBeNull())
+    const view = EditorView.findFromDOM(typedEditor()!)!
+    act(() => {
+      view.dispatch({changes: {from: 0, insert: ':'}, selection: {anchor: 1}})
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key: ':', bubbles: true, cancelable: true}))
+    })
+    const input = await screen.findByPlaceholderText('Property name')
+    act(() => view.dispatch({changes: {from: 2, insert: 'kept'}, selection: {anchor: 6}}))
+    fireEvent.change(input, {target: {value: 'new draft schema'}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+    await waitFor(() => expect(screen.queryByPlaceholderText('Property name')).toBeNull())
+    expect(addSchema).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).toBe('::kept')
+  })
+
+  it('picking an existing collapsed field opens it temporarily and focuses its value editor', async () => {
+    const ownerChildren = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const field = ownerChildren.find(row => {
+      if (!row.isFieldForm || !row.referenceTargetId) return false
+      const resolution = repo.propertySchemaResolverFor(WS).resolveField(row.referenceTargetId)
+      return resolution.status === 'resolved' && resolution.schema.name === statusProp.name
+    })!
+    expect(field).toBeDefined()
+    const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    await repo.block(field.id).set(isCollapsedProp, true)
+    await focusBlock(repo.block(PANEL), TYPED, {edit: true})
+    mount({workspace: 'none'})
+    await waitFor(() => expect(typedEditor()).not.toBeNull())
+    expect(document.querySelector(`[data-block-id="${value.id}"]`)).toBeNull()
+    const view = EditorView.findFromDOM(typedEditor()!)!
+    act(() => {
+      view.dispatch({changes: {from: 0, insert: ':'}, selection: {anchor: 1}})
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key: ':', bubbles: true, cancelable: true}))
+    })
+    const input = await screen.findByPlaceholderText('Property name')
+    fireEvent.change(input, {target: {value: statusProp.name}})
+    act(() => {
+      // Mount queries can refill the cache; make the pick itself start cold.
+      repo.cache.deleteSnapshot(field.id)
+      repo.cache.deleteSnapshot(value.id)
+      expect(repo.block(field.id).peek()).toBeUndefined()
+      expect(repo.block(value.id).peek()).toBeUndefined()
+      fireEvent.keyDown(input, {key: 'Enter'})
+    })
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${value.id}"] .cm-content`)).not.toBeNull())
+    expect(await repo.block(field.id).get(isCollapsedProp)).toBe(true)
+    expect(repo.block(TYPED).peek()).toBeNull()
+  })
+
+  it('keeps a hidden field row mounted while the caret edits its value child', async () => {
+    await repo.tx(tx => tx.update('def-plain', {properties: definition('rows:plain', {
+      'property-schema:preset': 'optional-number',
+    })}), {scope: ChangeScope.BlockDefault})
+    await typeIntoChild('none', '::((def-plain))')
+    await act(async () => {
+      await repo.tx(tx => tx.create({id: 'typed-value', workspaceId: WS, parentId: TYPED,
+        orderKey: 'a0', content: 'not a number'}), {scope: ChangeScope.BlockDefault})
+    })
+    await act(async () => { await focusBlock(repo.block(PANEL), 'typed-value', {edit: true}) })
+    await waitFor(() => expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull())
+    expect(typedRow()).not.toBeNull()
+    expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
+    await act(async () => {
+      await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
+    })
+    await waitFor(() => expect(listedUnder()).toBe(NOTE))
+    expect(repo.block(OWNER).peek()?.properties['rows:plain']).toBeUndefined()
+    expect(repo.block(NOTE).peek()?.properties['rows:plain']).toBeUndefined()
+    expect(document.querySelector('[data-block-id="typed-value"] .cm-editor')).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
+    await waitFor(() => expect(typedRow()).toBeNull())
   })
 
   it('lets the mode hide the row once the user moves on', async () => {
@@ -606,6 +691,25 @@ describe('a child the user turns into a field row', () => {
       await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
     })
     await waitFor(() => expect(listedUnder()).toBe(NOTE))
+  })
+
+  it('removes a revealed field from its old listing when moved under the same focused child', async () => {
+    await setBlockPropertyDisplay([repo.block(NOTE)], 'all')
+    await typeIntoChild('none', '::((def-plain))')
+    act(() => outlinePropertySession(repo.block(PANEL), undefined).reveal(OWNER, TYPED))
+    await act(async () => { await focusBlock(repo.block(PANEL), NOTE) })
+    await waitFor(() => expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain'))
+    expect(listedUnder()).toBe(OWNER)
+    expect(document.querySelectorAll(`[data-block-id="${TYPED}"]`)).toHaveLength(1)
+
+    await act(async () => {
+      await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+    })
+    await waitFor(() => {
+      expect(document.querySelectorAll(`[data-block-id="${TYPED}"]`)).toHaveLength(1)
+      expect(listedUnder()).toBe(NOTE)
+      expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
+    })
   })
 
   it('keeps the row only in the render scope the focus is in', async () => {

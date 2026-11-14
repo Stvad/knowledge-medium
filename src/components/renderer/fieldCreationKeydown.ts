@@ -2,6 +2,7 @@ import { EditorView } from '@codemirror/view'
 import type { BlockRendererProps } from '@/types.js'
 import type { Repo } from '@/data/repo.js'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock.js'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema.js'
 import { flushEditorContent } from '@/editor/contentFlush.js'
 import {
   canConvertEmptyChildBlockToProperty,
@@ -58,6 +59,7 @@ export const handleFieldCreationKeydown = (
   view: EditorView,
   block: BlockRendererProps['block'],
   repo: Repo,
+  openInlinePicker: (view: EditorView, parentId: string) => void,
 ): boolean => {
   if (
     repo.isReadOnly ||
@@ -76,7 +78,7 @@ export const handleFieldCreationKeydown = (
   event.preventDefault()
   event.stopPropagation()
 
-  void createFieldFromTrigger(view, block, repo).catch(error => {
+  void createFieldFromTrigger(view, block, repo, openInlinePicker).catch(error => {
     console.error('[CodeMirrorContentRenderer] Failed to create property field', error)
   })
 
@@ -87,6 +89,7 @@ const createFieldFromTrigger = async (
   view: EditorView,
   block: BlockRendererProps['block'],
   repo: Repo,
+  openInlinePicker: (view: EditorView, parentId: string) => void,
 ): Promise<void> => {
   try {
     // Decide BEFORE touching the live doc: everything dispatched below is
@@ -98,6 +101,16 @@ const createFieldFromTrigger = async (
     // Re-check: the user keeps typing through the await above, and the clear
     // below would wipe whatever they added.
     if (!isTriggerState(view)) return
+
+    restoreTypedMarker(view, TRIGGER_PREFIX)
+    const childBacked = await readIsChildBackedWorkspace(repo.db, eligible.workspaceId)
+    if (!docIsExactly(view, FIELD_FORM_MARKER)) return
+    if (childBacked) {
+      restoreTypedMarker(view, TRIGGER_PREFIX)
+      flushEditorContent(view)
+      openInlinePicker(view, eligible.parentId!)
+      return
+    }
 
     // Drop the pending first colon and commit that now: the debounce is
     // holding it, and `tx.update` writes tombstones happily, so an unflushed
@@ -124,7 +137,8 @@ const createFieldFromTrigger = async (
 export const createFieldCreationKeydownExtension = (
   block: BlockRendererProps['block'],
   repo: Repo,
+  openInlinePicker: (view: EditorView, parentId: string) => void,
 ) =>
   EditorView.domEventHandlers({
-    keydown: (event, view) => handleFieldCreationKeydown(event, view, block, repo),
+    keydown: (event, view) => handleFieldCreationKeydown(event, view, block, repo, openInlinePicker),
   })

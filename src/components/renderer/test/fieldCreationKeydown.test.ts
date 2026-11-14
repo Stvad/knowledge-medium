@@ -18,11 +18,16 @@ import { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@/data/workspaceSchema.js', () => ({
+  readIsChildBackedWorkspace: vi.fn(async () => false),
+}))
+
 vi.mock('@/utils/propertyCreation.js', () => ({
   canConvertEmptyChildBlockToProperty: vi.fn(async () => ({parentId: 'parent-1'})),
   convertEmptyChildBlockToProperty: vi.fn(async () => true),
 }))
 
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema.js'
 import {
   canConvertEmptyChildBlockToProperty,
   convertEmptyChildBlockToProperty,
@@ -37,6 +42,7 @@ const ELIGIBLE = {parentId: 'parent-1'} as unknown as BlockData
 
 const canConvertMock = vi.mocked(canConvertEmptyChildBlockToProperty)
 const convertMock = vi.mocked(convertEmptyChildBlockToProperty)
+const childBackedMock = vi.mocked(readIsChildBackedWorkspace)
 
 interface Opts {
   /** Live doc at keydown time. `':'` (the default) is the state the second
@@ -61,6 +67,7 @@ interface Harness {
   caret: () => number
   dispatched: () => number
   flushed: () => number
+  opened: () => number
 }
 
 /** A view stand-in with a real EditorState (so the facet lookup in
@@ -70,6 +77,7 @@ interface Harness {
 const mount = (opts: Opts = {}): Harness => {
   const doc = opts.doc ?? ':'
   const flush = vi.fn()
+  const open = vi.fn()
   let state = EditorState.create({
     doc,
     extensions: [editorContentFlushFacet.of(flush)],
@@ -95,7 +103,7 @@ const mount = (opts: Opts = {}): Harness => {
     fire: (eventInit: KeyboardEventInit = {}) => {
       const event = new KeyboardEvent('keydown', {key: ':', cancelable: true, ...eventInit})
       if (opts.preventDefaulted) event.preventDefault()
-      return handleFieldCreationKeydown(event, view, block, repo)
+      return handleFieldCreationKeydown(event, view, block, repo, open)
     },
     // Bypasses `dispatch` so it doesn't pollute the dispatch-count assertions.
     type: text => {
@@ -106,6 +114,7 @@ const mount = (opts: Opts = {}): Harness => {
     caret: () => state.selection.main.from,
     dispatched: () => dispatch.mock.calls.length,
     flushed: () => flush.mock.calls.length,
+    opened: () => open.mock.calls.length,
   }
 }
 
@@ -122,6 +131,8 @@ const fire = (opts: Opts = {}, eventInit: KeyboardEventInit = {}) => {
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
 afterEach(() => {
+  childBackedMock.mockReset()
+  childBackedMock.mockResolvedValue(false)
   canConvertMock.mockClear()
   convertMock.mockClear()
   canConvertMock.mockResolvedValue(ELIGIBLE)
@@ -253,6 +264,7 @@ describe('handleFieldCreationKeydown', () => {
 
       expect(canConvertMock).toHaveBeenCalledTimes(1)
       expect(convertMock).not.toHaveBeenCalled()
+      expect(childBackedMock).not.toHaveBeenCalled()
       expect(h.dispatched()).toBe(0)
       expect(h.flushed()).toBe(0)
       expect(h.doc()).toBe(':abc')
@@ -314,5 +326,61 @@ describe('handleFieldCreationKeydown', () => {
   it('falls through on any other key', () => {
     expect(fire({}, {key: 'a'}).handled).toBe(false)
     expect(canConvertMock).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('child-backed field creation', () => {
+  it('opens the inline picker with the complete marker without panel conversion', async () => {
+    childBackedMock.mockResolvedValue(true)
+    const h = fire()
+    await settle()
+    expect(h.opened()).toBe(1)
+    expect(h.doc()).toBe('::')
+    expect(h.caret()).toBe(2)
+    expect(h.flushed()).toBe(1)
+    expect(convertMock).not.toHaveBeenCalled()
+  })
+
+  it('does not query the workspace or open the picker after an eligibility refusal', async () => {
+    childBackedMock.mockResolvedValue(true)
+    canConvertMock.mockResolvedValue(null)
+    const h = fire()
+    await settle()
+    expect(childBackedMock).not.toHaveBeenCalled()
+    expect(h.opened()).toBe(0)
+    expect(h.doc()).toBe('::')
+  })
+
+  it('preserves text typed during the workspace query', async () => {
+    const h = mount()
+    childBackedMock.mockImplementation(async () => {
+      h.type('word')
+      return true
+    })
+    h.fire()
+    await settle()
+    expect(h.doc()).toBe('::word')
+    expect(h.dispatched()).toBe(1)
+    expect(h.opened()).toBe(0)
+  })
+
+  it.each([false, true])('only opens one picker when two pending gestures resolve in reverse order=%s', async reverse => {
+    const resolvers: Array<(value: BlockData) => void> = []
+    canConvertMock.mockImplementation(() => new Promise(resolve => resolvers.push(resolve)))
+    childBackedMock.mockResolvedValue(true)
+    const h = mount()
+    h.fire()
+    h.fire()
+    await settle()
+    expect(resolvers).toHaveLength(2)
+    const order = reverse ? resolvers.toReversed() : resolvers
+    order[0]!(ELIGIBLE)
+    await settle()
+    order[1]!(ELIGIBLE)
+    await settle()
+    expect(h.opened()).toBe(1)
+    expect(h.doc()).toBe('::')
+    expect(convertMock).not.toHaveBeenCalled()
   })
 })

@@ -15,6 +15,7 @@ import {
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
+import { focusAdjacentPendingProperty } from '@/components/propertyPanel/pendingPropertyNavigation'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { undoOrTakeBackCut } from '@/paste/armedCut.js'
 import {
@@ -120,6 +121,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const surface = outlineSurfaceOf(deps)
         if (!block || !uiStateBlock || !surface) return
 
+        if (focusAdjacentPendingProperty(block.id, deps.renderScopeId, 1)) return
         const next = await nextVisibleBlock(block, surface)
         if (next && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
@@ -137,6 +139,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const surface = outlineSurfaceOf(deps)
         if (!block || !uiStateBlock || !surface) return
 
+        if (focusAdjacentPendingProperty(block.id, deps.renderScopeId, -1)) return
         const prev = await previousVisibleBlock(block, surface)
         if (prev && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
