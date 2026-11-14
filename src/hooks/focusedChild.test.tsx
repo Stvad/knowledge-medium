@@ -80,7 +80,31 @@ const setFocus = (id: string, scope = 'outline') => {
 }
 
 describe('useFocusedChild', () => {
+  it('reveals the containing row when the focused leaf loads after its ancestors', async () => {
+    repo.cache.deleteSnapshot('value')
+    const focused = repo.block('value')
+    const originalLoad = focused.load.bind(focused)
+    let release = () => {}
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const load = vi.spyOn(focused, 'load').mockImplementation(async () => {
+      await ready
+      return originalLoad()
+    })
+    try {
+      const {result} = renderHook(() => useFocusedChild(repo.block('owner'), 'outline'))
+      await waitFor(() => expect(repo.query.ancestors({id: 'value'}).status()).toBe('ready'))
+      expect(focused.peek()).toBeUndefined()
+      expect(result.current).toBeNull()
+      await act(async () => { release() })
+      await waitFor(() => expect(result.current?.id).toBe('field'))
+    } finally {
+      release()
+      load.mockRestore()
+    }
+  })
+
   it('follows an ancestor move without a parent component rerender', async () => {
+    await repo.query.ancestors({id: 'value'}).load()
     const {result} = renderHook(() => useFocusedChild(repo.block('owner'), 'outline'))
     await waitFor(() => expect(result.current?.id).toBe('field'))
     const value = repo.block('value').peek()

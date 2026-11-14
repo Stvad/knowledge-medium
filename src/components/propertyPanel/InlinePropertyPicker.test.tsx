@@ -116,6 +116,24 @@ describe('InlinePropertyPicker', () => {
     fireEvent.change(screen.getByPlaceholderText('Property name'), {target: {value: 'new field'}})
     await act(async () => { fireEvent.click(screen.getByRole('button', {name: 'Configure New field'})) })
     expect(addSchema).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('input changed'))
+  })
+
+  it('reports changed text while schema creation is in flight', async () => {
+    let current = true
+    let finish: (schema: AnyPropertySchema) => void = () => {}
+    addSchema.mockImplementation(() => new Promise<AnyPropertySchema>(resolve => { finish = resolve }))
+    const onPick = vi.fn(), onCancel = vi.fn()
+    render(<InlinePropertyPicker owner={owner} onPick={onPick} onCancel={onCancel} canSubmit={() => current}/>)
+    const input = screen.getByPlaceholderText('Property name')
+    fireEvent.change(input, {target: {value: 'new field'}})
+    fireEvent.keyDown(input, {key: 'Enter'})
+    expect(addSchema).toHaveBeenCalledOnce()
+    current = false
+    await act(async () => { finish(schema) })
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('input changed'))
+    expect(onCancel).toHaveBeenCalledOnce()
+    expect(onPick).not.toHaveBeenCalled()
   })
 
   it('does not select a schema that finishes creating after cancellation', async () => {
@@ -146,6 +164,14 @@ describe('InlinePropertyPicker', () => {
     view.unmount()
     await act(async () => { finish(schema) })
     expect(onPick).not.toHaveBeenCalled()
+  })
+
+  it('reports a refused pick and closes the unusable picker', async () => {
+    const onCancel = vi.fn()
+    render(<InlinePropertyPicker owner={owner} onPick={vi.fn().mockRejectedValue(new Error('Input block changed'))} onCancel={onCancel}/>)
+    await typeAndSubmit('status')
+    expect(showError).toHaveBeenCalledWith('Input block changed')
+    expect(onCancel).toHaveBeenCalledOnce()
   })
 
   it('reports a refused name without selecting it', async () => {

@@ -40,21 +40,19 @@ export function InlinePropertyPicker({owner, onPick, onCancel, canSubmit}: Inlin
       release()
     }
   }, [])
-  const canContinue = useCallback(() =>
-    !cancelled.current && (!canSubmit || canSubmit()), [canSubmit])
-  const requireCurrentInput = () => {
+  const requireCurrentInput = useCallback(() => {
     if (cancelled.current) return false
     if (!canSubmit || canSubmit()) return true
     showError('The input changed. Your text was kept; type :: in an empty child to try again.')
     onCancel()
     return false
-  }
+  }, [canSubmit, onCancel])
 
   const resolveSchema = useCallback(async ({name, presetId}: ConfigureNewSchemaArgs) => {
-    if (!canContinue()) return undefined
+    if (!requireCurrentInput()) return undefined
     const schema = await resolveOrCreateProperty(owner.repo, {name, presetId})
-    return canContinue() ? schema : undefined
-  }, [canContinue, owner])
+    return requireCurrentInput() ? schema : undefined
+  }, [requireCurrentInput, owner])
 
   return <div ref={element} className="flex min-w-0 items-center gap-2" data-inline-property-picker="true">
     <PropertyPicker
@@ -72,6 +70,7 @@ export function InlinePropertyPicker({owner, onPick, onCancel, canSubmit}: Inlin
           await onPick(schema, () => !cancelled.current)
         } catch (error) {
           showError(error instanceof Error ? error.message : 'Could not add property')
+          onCancel()
         }
       }}
     />
