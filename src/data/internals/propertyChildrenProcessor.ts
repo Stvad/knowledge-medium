@@ -74,7 +74,7 @@ import { jsonValuesEqual } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import { propertyNameProp } from '@/data/properties'
-import { isGrammarShapedLabel } from '@/data/referenceBlock'
+import { assertNotGrammarShapedLabel } from '@/data/referenceBlock'
 import { mintPropertyChildRow } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -225,6 +225,7 @@ const projectedFieldValue = async (
   tx: Tx,
   schema: AnyPropertySchema,
   fieldRows: readonly BlockData[],
+  stored: unknown,
 ): Promise<unknown | undefined> => {
   // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
   // materialized under the field row is its own machinery, never a value
@@ -233,7 +234,7 @@ const projectedFieldValue = async (
   for (const fieldRow of fieldRows) {
     perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
   }
-  return projectFieldRowValues(schema, perFieldRow)
+  return projectFieldRowValues(schema, perFieldRow, stored)
 }
 
 /** {@link projectedFieldValue} over values already read: each of one schema's
@@ -244,6 +245,7 @@ const projectedFieldValue = async (
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly Pick<BlockData, 'id' | 'content'>[])[],
+  stored?: unknown,
 ): unknown | undefined => {
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition
@@ -251,8 +253,15 @@ export const projectFieldRowValues = (
   // it answers `[]` for a live field row with nothing parseable under it.
   if (perFieldRow.length === 0) return undefined
   // `unionValuesAcrossFieldRows` owns what happens across the rows.
-  return childContentsToEncodedPropertyValue(
+  const projected = childContentsToEncodedPropertyValue(
     schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
+  // Legacy names may remain unchanged; no writer may shadow a different name
+  // with reference grammar. Defence in depth for writes; the audit also uses
+  // this projection without a writer's property-bag guard.
+  if (schema.name === propertyNameProp.name && typeof projected === 'string' && projected !== stored) {
+    assertNotGrammarShapedLabel(projected, 'Property name')
+  }
+  return projected
 }
 
 // §9 selection: the bit + target pair (the JS twin of
@@ -306,11 +315,7 @@ const reprojectOwner = async (
     // Editing the OWNER does not help — `collectAffectedProjection` maps a
     // CHANGED row through its own bit or its parent's.
     if (mode === 'additive' && fieldRows.length > 1) continue
-    const projected = await projectedFieldValue(tx, schema, fieldRows)
-    // Projection also runs for reference maintenance and imported legacy rows;
-    // preserve their stored name instead of refusing the enclosing transaction.
-    if (schema.name === propertyNameProp.name && typeof projected === 'string' &&
-      isGrammarShapedLabel(projected)) continue
+    const projected = await projectedFieldValue(tx, schema, fieldRows, nextProperties[schema.name])
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
