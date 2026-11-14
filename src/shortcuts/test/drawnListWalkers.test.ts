@@ -191,7 +191,9 @@ describe('range selection and the data walker step onto drawn property rows', ()
     await repo.tx(tx => tx.create({id: 'c', workspaceId: WS, parentId: 'owner', orderKey: 'a4', content: 'c'}),
       {scope: ChangeScope.BlockDefault})
     const remover = await coldRepo()
-    expect(await remover.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', 'b', 'c'])
+    // The scenario: the row is NOT on the list (its registry has recognized it).
+    await vi.waitFor(async () => expect(
+      await remover.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', 'b', 'c']))
     expect((await blockAfterSubtreeRemoval(remover.block(statusRow), HIDDEN))?.id).toBe('b')
   })
 
