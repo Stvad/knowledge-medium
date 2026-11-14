@@ -1,1 +1,1 @@
-export{zI as BlockTypeBlockRenderer,BI as BlockTypeContentRenderer,VI as writeBlockTypeLabel}from"../../../chunks/app-DRaG6-Mi.js";
+export{zI as BlockTypeBlockRenderer,BI as BlockTypeContentRenderer,VI as writeBlockTypeLabel}from"../../../chunks/app-BedcnQBa.js";

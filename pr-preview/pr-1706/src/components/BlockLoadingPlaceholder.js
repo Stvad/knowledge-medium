@@ -1,1 +1,1 @@
-export{IF as BlockLoadingPlaceholder}from"../../chunks/app-DRaG6-Mi.js";
+export{IF as BlockLoadingPlaceholder}from"../../chunks/app-BedcnQBa.js";

@@ -1,1 +1,1 @@
-export{LK as staticDataExtensions}from"../../chunks/app-DRaG6-Mi.js";
+export{LK as staticDataExtensions}from"../../chunks/app-BedcnQBa.js";

@@ -1,1 +1,1 @@
-export{Olt as SYSTEM_AUTHOR_PREFIX,klt as isSystemAuthor,Alt as systemAuthor}from"../../../chunks/app-DRaG6-Mi.js";
+export{Olt as SYSTEM_AUTHOR_PREFIX,klt as isSystemAuthor,Alt as systemAuthor}from"../../../chunks/app-BedcnQBa.js";

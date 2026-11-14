@@ -1,1 +1,1 @@
-export{zF as defaultRegistry,BF as defaultRendererContributions,VF as defaultRenderersExtension}from"../../chunks/app-DRaG6-Mi.js";
+export{zF as defaultRegistry,BF as defaultRendererContributions,VF as defaultRenderersExtension}from"../../chunks/app-BedcnQBa.js";

@@ -1,1 +1,1 @@
-export{NF as LazyBlockComponent}from"../../chunks/app-DRaG6-Mi.js";
+export{NF as LazyBlockComponent}from"../../chunks/app-BedcnQBa.js";

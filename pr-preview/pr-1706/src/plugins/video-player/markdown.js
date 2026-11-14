@@ -1,1 +1,1 @@
-export{FS as videoPlayerMarkdownExtension}from"../../../chunks/app-DRaG6-Mi.js";
+export{FS as videoPlayerMarkdownExtension}from"../../../chunks/app-BedcnQBa.js";

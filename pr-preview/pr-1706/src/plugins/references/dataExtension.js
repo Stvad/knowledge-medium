@@ -1,1 +1,1 @@
-export{QK as referencesDataExtension}from"../../../chunks/app-DRaG6-Mi.js";
+export{QK as referencesDataExtension}from"../../../chunks/app-BedcnQBa.js";

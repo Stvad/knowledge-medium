@@ -1,1 +1,1 @@
-export{Dut as CHANGE_SCOPE_POLICIES,Out as ChangeScope,kut as isChangeScope,Aut as policyForScope,jut as scopeAllowedInReadOnly,Mut as scopeIsUndoable,Nut as scopePoliciesEquivalent,Put as scopeUploadsToServer,Fut as sourceForScope}from"../../../chunks/app-DRaG6-Mi.js";
+export{Dut as CHANGE_SCOPE_POLICIES,Out as ChangeScope,kut as isChangeScope,Aut as policyForScope,jut as scopeAllowedInReadOnly,Mut as scopeIsUndoable,Nut as scopePoliciesEquivalent,Put as scopeUploadsToServer,Fut as sourceForScope}from"../../../chunks/app-BedcnQBa.js";

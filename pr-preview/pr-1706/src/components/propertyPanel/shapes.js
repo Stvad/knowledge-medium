@@ -1,1 +1,1 @@
-export{NG as propertyShapeLabel}from"../../../chunks/app-DRaG6-Mi.js";
+export{NG as propertyShapeLabel}from"../../../chunks/app-BedcnQBa.js";
