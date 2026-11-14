@@ -12,6 +12,10 @@ export const hasLoneSurrogate = (value: string): boolean =>
 const LONE_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
+/** `value` with CRLF and CR rewritten to LF, the line ending editors hold and
+ *  the one thing platforms rewrite on the way through the clipboard. */
+export const normalizeLineEndings = (value: string): string => value.replace(/\r\n?/g, '\n')
+
 /** Truncate `value` to at most `max` characters, replacing the overflow with a
  *  single ellipsis (`…`). Strings already within `max` are returned unchanged.
  *  The result is always ≤ `max` chars — the ellipsis occupies the last slot. */

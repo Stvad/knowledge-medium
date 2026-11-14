@@ -19,6 +19,23 @@ export const readClipboardContent = (
   return {text, html, files}
 }
 
+/** What the async clipboard holds, for a paste with no paste event. Files are
+ *  not read: nothing on that path captures them. `read()` can be refused where
+ *  `readText()` isn't, so a refusal costs the html, not the paste. */
+export const readAsyncClipboard = async (): Promise<ClipboardContent> => {
+  try {
+    const items = await navigator.clipboard.read()
+    const textOf = async (type: string): Promise<string> => {
+      const item = items.find(candidate => candidate.types.includes(type))
+      return item ? (await item.getType(type)).text() : ''
+    }
+    const [text, html] = await Promise.all([textOf('text/plain'), textOf('text/html')])
+    return {text, html: html || undefined}
+  } catch {
+    return {text: await navigator.clipboard.readText()}
+  }
+}
+
 /** Content that is only whitespace: the one test of an empty target, so the request
  *  below and the paste's absorption of its target agree. */
 export const isBlankContent = (content: string): boolean => content.trim().length === 0

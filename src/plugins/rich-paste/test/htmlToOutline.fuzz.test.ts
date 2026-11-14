@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import type { Nodes } from 'mdast'
 import { fromMarkdown } from 'mdast-util-from-markdown'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, happyDomGcYield } from '@/test/fuzz'
 import type { OutlineNode } from '@/utils/markdownParser'
 import { convertClipboardHtml } from '../htmlToOutline'
 import { normalizeClipboardDom } from '../normalizeClipboardDom'
@@ -92,10 +92,10 @@ const plainTextArb = fc.constantFrom('', 'copied text')
  *  parsed document alive until the task ends, and a synchronous property never
  *  ends it — a deep run would exhaust the heap. */
 const clipboardProperty = (predicate: (html: string, plainText: string) => void) => {
-  let cases = 0
+  const yieldForGc = happyDomGcYield()
   return fc.asyncProperty(htmlArb, plainTextArb, async (html, plainText) => {
     predicate(html, plainText)
-    if (++cases % 500 === 0) await new Promise(resolve => setTimeout(resolve, 0))
+    await yieldForGc()
   })
 }
 

@@ -1,41 +1,27 @@
-// @vitest-environment node
+// @vitest-environment happy-dom
 /**
- * Fuzz suite for the in-app copy → paste round-trip: `serializeBlock` /
- * `serializeSelectedBlocks` (`src/utils/copy.ts`) write the clipboard text,
- * and a multi-line paste reads it back through `parseMarkdownToBlocks`
- * (`src/paste/decision.ts`: any `\n` makes the paste a `split`;
- * `src/paste/operations.ts` parses it). The oracle: the forest the parser
- * rebuilds (parentId + orderKey) equals the copied forest, content verbatim.
+ * Fuzz suite for the in-app copy → paste round-trip, from the real clipboard
+ * writer (`copyBlockIdsToClipboard`) through the real paste decision and plan
+ * on both surfaces. The oracle: what the paste would create is the copied
+ * forest, content verbatim but for line endings, which normalize to `\n` as
+ * they do on every other way into a block.
  *
- * Why it holds on the generated class: `createIndentedContent` writes every
- * block of a multi-block copy as `'  '.repeat(depth) + '- ' + content`, so
- * each line is a `list-item` token (`lineToken`'s bullet branch runs before
- * the fence/table/quote checks, which only see paragraphs), indentation is
- * the only nesting signal (`nestsAtSameIndent` is false between list items),
- * and the bullet capture returns the content. Unlike the parser suite's
- * round-trip, content here may START with markdown structure (`#`, `- `,
- * `>`, `|`, fences) or be empty — the copy prefix is what must make those
- * safe.
- *
- * Generator scope, each a deliberate restriction:
- * - Single-line content only. A multi-line block's continuation lines are
- *   indented under its bullet and read back as children: an open product
- *   decision, not fuzzed here. `\r` counts as a line break (the parser
- *   normalizes it); U+2028/U+2029 do not, and are drawn on purpose.
- * - Content equals its own `trim()`: the parser trims each line, so edge
- *   whitespace of a block does not survive a paste.
- * - A single copied root has at least one child: a lone childless block is
- *   copied bare and pasted as one line, which is not a parsed paste. Several
- *   roots may be childless; each is bulleted.
+ * The generator has no carve-outs: content may be empty, span lines, carry
+ * edge whitespace or `\r`, hold whole fences, tables and quotes, or start with
+ * markdown structure. It draws no unpaired surrogates because no stored block
+ * holds one: the text columns replace them.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, happyDomGcYield } from '@/test/fuzz'
 import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { serializeBlock, serializeSelectedBlocks } from '@/utils/copy'
-import { parseMarkdownToBlocks } from '@/utils/markdownParser'
+import { readClipboardContent } from '@/paste/clipboard'
+import { defaultPasteDecision } from '@/paste/decision'
+import { planEditModeMultilinePaste, planSingleBlockPaste } from '@/paste/operations'
+import { copyBlockIdsToClipboard } from '@/utils/copy'
+import { parsedBlocksFromOutline, parseMarkdownToBlocks } from '@/utils/markdownParser'
 import { outlineOf } from './outline'
 
 interface Node {
@@ -46,17 +32,31 @@ interface Node {
 /** Leading text that is markdown structure on a line of its own. */
 const leadArb = fc.constantFrom(
   '', '', '', '- ', '* ', '+ ', '-', '*', '# ', '###### ', '#tag ', '1. ', '> ',
-  '| a | b |', '```', '~~~', '\t',
+  '| a | b |', '```', '~~~', '\t', '  ',
 )
-/** Joins two runs of text: JS counts U+2028/U+2029 as line terminators (the
- *  parser splits on `\n` only), and `trim()` strips them at the edges, so a
- *  join is where they survive into the content. */
-const midArb = fc.constantFrom('', '', ' ', '\u2028', '\u2029', '\u0085', ' | ', ' - ')
+const midArb = fc.constantFrom('', '', ' ', ' ', ' ', '\u0085', ' | ', ' - ')
 const textArb = fc.string({unit: codePointUnitArb, maxLength: 6})
-
-const contentArb = fc
-  .tuple(leadArb, textArb, midArb, textArb)
-  .map(parts => parts.join('').replace(/[\r\n]/g, ' ').trim())
+const lineArb = fc.tuple(leadArb, textArb, midArb, textArb).map(parts => parts.join(''))
+const edgeArb = fc.constantFrom('', '', '', ' ', '   ', '\t', '\n', ' \n', '\n\n', '\r\n', '\r')
+const wholeArb = fc.constantFrom(
+  '```\ncode\n```',
+  '```js\n- not a bullet\n\n  indented\n',
+  '> quote\n> more',
+  '| a | b |\n| - | - |\n| 1 | 2 |',
+  '# heading\nbody',
+  '   ',
+  '\n',
+)
+const contentArb = fc.oneof(
+  {weight: 1, arbitrary: fc.constant('')},
+  {weight: 1, arbitrary: wholeArb},
+  {
+    weight: 6,
+    arbitrary: fc
+      .tuple(edgeArb, fc.array(lineArb, {minLength: 1, maxLength: 3}), edgeArb)
+      .map(([before, lines, after]) => before + lines.join('\n') + after),
+  },
+)
 
 const {tree: treeArb} = fc.letrec<{tree: Node; forest: Node[]}>(tie => ({
   tree: fc.record({content: contentArb, children: tie('forest')}),
@@ -67,13 +67,8 @@ const {tree: treeArb} = fc.letrec<{tree: Node; forest: Node[]}>(tie => ({
   ),
 }))
 
-/** A lone copied root: one with children, so the copy is a parsed outline. */
-const rootArb = fc
-  .tuple(contentArb, fc.array(treeArb, {minLength: 1, maxLength: 3}))
-  .map(([content, children]): Node => ({content, children}))
-
-/** The rows `repo.query.subtree` hands `serializeBlock`: pre-order, each with
- *  its depth below the copied root. */
+/** The rows `repo.query.subtree` hands the copy: pre-order, each with its
+ *  depth below the copied root. */
 const subtreeRows = (root: Node): Array<{id: string; content: string; depth: number}> => {
   const rows: Array<{id: string; content: string; depth: number}> = []
   const walk = (node: Node, depth: number) => {
@@ -86,31 +81,90 @@ const subtreeRows = (root: Node): Array<{id: string; content: string; depth: num
 
 const fakeRepo = (roots: readonly Node[]): Repo => {
   const repo = {
-    block: (id: string) => ({
-      id,
-      repo,
-      // `serializeBlock` reads only `block.id` and this query.
-    }) as unknown as Block,
-    query: {
-      subtree: ({id}: {id: string}) => ({load: async () => subtreeRows(roots[Number(id)])}),
-    },
+    // The copy reads only `block.id` and this query.
+    block: (id: string) => ({id, repo}) as unknown as Block,
+    query: {subtree: ({id}: {id: string}) => ({load: async () => subtreeRows(roots[Number(id)])})},
   }
   return repo as unknown as Repo
 }
 
-const pasted = (markdown: string): Node[] => {
-  // Only a multi-line paste is parsed; every copy generated here has two lines.
-  expect(markdown).toContain('\n')
-  return outlineOf(parseMarkdownToBlocks(markdown))
+interface Clipboard {
+  text: string
+  html: string
+}
+
+const withNormalizedLineEndings = (node: Node): Node => ({
+  content: node.content.replace(/\r\n?/g, '\n'),
+  children: node.children.map(withNormalizedLineEndings),
+})
+
+const expectRoundTrip = async (roots: Node[]): Promise<void> => {
+  const from = await copied(roots)
+  const expected = roots.map(withNormalizedLineEndings)
+  expect(pastedOnShell(from)).toEqual(expected)
+  expect(pastedInEditor(from)).toEqual(expected)
+}
+
+let clipboard: Clipboard | null
+
+const copied = async (roots: readonly Node[]): Promise<Clipboard> => {
+  await copyBlockIdsToClipboard(roots.map((_, i) => String(i)), fakeRepo(roots))
+  return clipboard!
+}
+
+const clipboardContent = ({text, html}: Clipboard) =>
+  readClipboardContent({getData: type => (type === 'text/plain' ? text : type === 'text/html' ? html : '')})!
+
+const pastedOnShell = (from: Clipboard): Node[] => {
+  const content = clipboardContent(from)
+  const decision = defaultPasteDecision({...content, intent: 'split', surface: 'shell'})
+  if (decision.kind !== 'split') throw new Error(`unexpected ${decision.kind}`)
+  return outlineOf(decision.blocks ? parsedBlocksFromOutline(decision.blocks) : parseMarkdownToBlocks(content.text))
+}
+
+/** A paste at the caret of an empty block, which becomes the first root. */
+const pastedInEditor = (from: Clipboard): Node[] => {
+  const content = clipboardContent(from)
+  const decision = defaultPasteDecision({
+    ...content,
+    intent: 'split',
+    surface: 'editor',
+    caret: {line: 1, lineCount: 1, from: 0, to: 0},
+  })
+  if (decision.kind === 'media') throw new Error('unexpected media')
+  if (decision.kind === 'single-block') {
+    return [{content: planSingleBlockPaste(content.text, {from: 0, to: 0}).insert, children: []}]
+  }
+  const plan = planEditModeMultilinePaste(decision.blocks ?? content.text, '', {from: 0})
+  if (!plan) throw new Error('nothing planned')
+  return outlineOf(plan.parsed.map(block =>
+    block.id === plan.absorbedRoot.id ? {...block, content: plan.targetContent} : block))
 }
 
 describe('copy → paste round-trip', () => {
-  it('a copied subtree pastes back as the same tree', async () => {
+  const yieldForGc = happyDomGcYield()
+
+  beforeEach(() => {
+    clipboard = null
+    vi.stubGlobal('ClipboardItem', class {
+      constructor(readonly items: Record<string, Blob>) {}
+    })
+    vi.stubGlobal('navigator', {clipboard: {
+      write: async ([{items}]: [{items: Record<string, Blob>}]) => {
+        clipboard = {
+          text: await items['text/plain'].text(),
+          html: items['text/html'] ? await items['text/html'].text() : '',
+        }
+      },
+    }})
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('a copied subtree pastes back as the same tree on both surfaces', async () => {
     await fc.assert(
-      fc.asyncProperty(rootArb, async root => {
-        const repo = fakeRepo([root])
-        const {markdown} = await serializeBlock(repo.block('0'))
-        expect(pasted(markdown)).toEqual([root])
+      fc.asyncProperty(treeArb, async root => {
+        await expectRoundTrip([root])
+        await yieldForGc()
       }),
       fuzzParams(150),
     )
@@ -118,34 +172,26 @@ describe('copy → paste round-trip', () => {
 
   it('several copied subtrees paste back as the same forest, in order', async () => {
     await fc.assert(
-      fc.asyncProperty(
-        fc.oneof(
-          fc.array(rootArb, {minLength: 1, maxLength: 4}),
-          fc.array(treeArb, {minLength: 2, maxLength: 4}),
-        ),
-        async roots => {
-        const repo = fakeRepo(roots)
-        const {markdown} = await serializeSelectedBlocks(roots.map((_, i) => String(i)), repo)
-        expect(pasted(markdown)).toEqual(roots)
-      },
-      ),
+      fc.asyncProperty(fc.array(treeArb, {minLength: 2, maxLength: 4}), async roots => {
+        await expectRoundTrip(roots)
+        await yieldForGc()
+      }),
       fuzzParams(100),
     )
   }, fuzzTestTimeout())
 
-  // The two parser rules this round-trip depends on, pinned outside the
-  // sampled space.
-  it('an empty block pastes back empty, not as a literal marker', async () => {
-    const root: Node = {content: 'a', children: [{content: '', children: []}, {content: 'b', children: []}]}
-    const {markdown} = await serializeBlock(fakeRepo([root]).block('0'))
-    expect(pasted(markdown)).toEqual([root])
-  })
-
-  it('a U+2028 inside a block does not cut its content short', async () => {
-    const root: Node = {content: 'a\u2028b', children: [{content: 'c\u2029d', children: []}]}
-    const {markdown} = await serializeBlock(fakeRepo([root]).block('0'))
-    expect(pasted(markdown)).toEqual([root])
-  })
+  // The reported shapes, pinned outside the sampled space.
+  it.each<[string, Node]>([
+    ['a multi-line block keeps its children one level down', {content: 'a\nb', children: [{content: 'c', children: []}]}],
+    ['a fence does not swallow the child after it', {content: '```\ncode\n```', children: [{content: 'c', children: []}]}],
+    ['a block keeps its edge whitespace', {content: 'a', children: [{content: '  padded  ', children: []}]}],
+    ['an empty block stays empty', {content: 'a\nb', children: [{content: '', children: []}, {content: 'c', children: []}]}],
+    ['a lone bullet-shaped block keeps its marker', {content: '- foo', children: []}],
+    ['a lone empty block stays a block', {content: '', children: []}],
+    ['a CRLF in the first root stays a valid caret paste', {content: 'a\r\nb', children: [{content: 'c', children: []}]}],
+    ['an empty root keeps no marker', {content: '', children: [{content: '', children: []}]}],
+    ['a U+2028 does not cut a block short', {content: 'a\u2028b', children: [{content: 'c\u2029d', children: []}]}],
+  ])('%s', (_, root) => expectRoundTrip([root]))
 
   it('a lone marker right under a prose line stays text', () => {
     expect(parseMarkdownToBlocks('Pros\n-\nCons').map(block => block.content))
