@@ -1,0 +1,1 @@
+export{_m as contributorsPlugin}from"../../../chunks/app-DRaG6-Mi.js";

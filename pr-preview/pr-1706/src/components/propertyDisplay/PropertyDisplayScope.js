@@ -1,0 +1,1 @@
+export{SI as PropertyDisplayScope}from"../../../chunks/app-DRaG6-Mi.js";

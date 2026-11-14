@@ -1,0 +1,1 @@
+export{ng as authorIdOf}from"../../../chunks/app-DRaG6-Mi.js";

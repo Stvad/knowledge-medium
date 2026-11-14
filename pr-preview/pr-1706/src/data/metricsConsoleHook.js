@@ -1,0 +1,1 @@
+export{yN as ensureMetricsConsoleHook}from"../../chunks/app-DRaG6-Mi.js";

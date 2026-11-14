@@ -1,0 +1,1 @@
+export{UB as BlockProperties}from"../../chunks/app-DRaG6-Mi.js";

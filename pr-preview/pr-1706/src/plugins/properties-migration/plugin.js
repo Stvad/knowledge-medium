@@ -1,0 +1,1 @@
+export{po as propertiesMigrationPlugin}from"../../../chunks/app-DRaG6-Mi.js";

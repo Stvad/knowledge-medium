@@ -1,0 +1,1 @@
+export{IG as appRuntimeUpdateEvent,LG as refreshAppRuntime}from"../../chunks/app-DRaG6-Mi.js";

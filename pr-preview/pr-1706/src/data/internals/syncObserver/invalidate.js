@@ -1,0 +1,1 @@
+export{V3 as applySyncInvalidation}from"../../../../chunks/app-DRaG6-Mi.js";

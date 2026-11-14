@@ -1,0 +1,1 @@
+export{SP as checkForAppUpdate,CP as registerServiceWorker}from"../chunks/app-DRaG6-Mi.js";

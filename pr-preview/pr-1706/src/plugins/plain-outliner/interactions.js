@@ -1,0 +1,1 @@
+export{vT as blockEditingContentRenderer}from"../../../chunks/app-DRaG6-Mi.js";

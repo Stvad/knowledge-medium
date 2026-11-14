@@ -1,0 +1,1 @@
+export{hK as SuspenseFallback}from"../../../chunks/app-DRaG6-Mi.js";

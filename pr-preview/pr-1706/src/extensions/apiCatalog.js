@@ -1,0 +1,1 @@
+export{ph as extensionApiCatalog,mh as extensionApiRuntimeExports}from"../../chunks/app-DRaG6-Mi.js";

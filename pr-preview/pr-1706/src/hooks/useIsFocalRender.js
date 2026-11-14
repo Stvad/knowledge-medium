@@ -1,0 +1,1 @@
+export{AB as isFocalRender,jB as useIsFocalRender}from"../../chunks/app-DRaG6-Mi.js";

@@ -1,0 +1,1 @@
+export{zat as deriveWorkspaceIdNamespace}from"../../../chunks/app-DRaG6-Mi.js";

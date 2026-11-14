@@ -1,0 +1,1 @@
+export{Yd as annotationsPlugin}from"../../../chunks/app-DRaG6-Mi.js";

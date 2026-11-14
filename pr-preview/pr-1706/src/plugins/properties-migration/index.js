@@ -1,0 +1,1 @@
+export{_o as migratePropertiesToBlocksAction,po as propertiesMigrationPlugin}from"../../../chunks/app-DRaG6-Mi.js";

@@ -1,0 +1,1 @@
+export{XN as editorAutocompleteExtension}from"../../chunks/app-DRaG6-Mi.js";

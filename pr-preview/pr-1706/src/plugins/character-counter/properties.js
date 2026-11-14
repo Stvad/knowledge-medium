@@ -1,0 +1,1 @@
+export{PZ as RAW_CHARACTER_COUNT_PROFILE_ID,FZ as WORDS_COUNT_PROFILE_ID,IZ as charLimitProp,LZ as charProfileProp,RZ as charScopeProp}from"../../../chunks/app-DRaG6-Mi.js";
