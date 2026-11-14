@@ -174,19 +174,25 @@ describe('range selection and the data walker step onto drawn property rows', ()
   })
 
   it('walks from a cold cache: the ancestors and siblings it reads are loaded by the walk', async () => {
-    const cold = createTestRepo({db: sharedDb.db, user: USER}).repo
-    cold.setFacetRuntime(resolveFacetRuntimeSync([
-      kernelDataExtension,
-      definitionSeedsFacet.of(statusProp, {source: 'test'}),
-    ]))
-    cold.setActiveWorkspaceId(WS)
-    await vi.waitFor(() => expect(cold.propertySchemas.has(statusProp.name)).toBe(true))
-    expect((await nextVisibleBlock(cold.block('b'), HIDDEN))?.id).toBe('solo')
+    const coldRepo = async (): Promise<Repo> => {
+      const cold = createTestRepo({db: sharedDb.db, user: USER}).repo
+      cold.setFacetRuntime(resolveFacetRuntimeSync([
+        kernelDataExtension,
+        definitionSeedsFacet.of(statusProp, {source: 'test'}),
+      ]))
+      cold.setActiveWorkspaceId(WS)
+      await vi.waitFor(() => expect(cold.propertySchemas.has(statusProp.name)).toBe(true))
+      return cold
+    }
+    // No display scope: nothing but the walk itself loads the parent it climbs through.
+    const climber = await coldRepo()
+    expect((await nextVisibleBlock(climber.block('b'), outlineSurfaceOf({scopeRootId: 'page'})!))?.id).toBe('solo')
+
     await repo.tx(tx => tx.create({id: 'c', workspaceId: WS, parentId: 'owner', orderKey: 'a4', content: 'c'}),
       {scope: ChangeScope.BlockDefault})
-    const colder = createTestRepo({db: sharedDb.db, user: USER}).repo
-    colder.setActiveWorkspaceId(WS)
-    expect((await blockAfterSubtreeRemoval(colder.block(statusRow), HIDDEN))?.id).toBe('b')
+    const remover = await coldRepo()
+    expect(await remover.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', 'b', 'c'])
+    expect((await blockAfterSubtreeRemoval(remover.block(statusRow), HIDDEN))?.id).toBe('b')
   })
 
   it('a range from `a` to `b` covers the drawn row between them', async () => {
