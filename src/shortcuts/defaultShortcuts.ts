@@ -20,7 +20,6 @@ import {
   previousVisibleBlock,
   getRootBlock,
   blockAfterSubtreeRemoval,
-  caretNeighbour,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -895,7 +894,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await caretNeighbour(block, surface, 'previous')
+        const prevVisible = await previousVisibleBlock(block, surface)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
         if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
@@ -944,7 +943,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        const nextVisible = await caretNeighbour(block, surface, 'next')
+        const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -974,7 +973,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const prevVisible = await caretNeighbour(block, surface, 'previous')
+        const prevVisible = await previousVisibleBlock(block, surface)
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
@@ -1005,7 +1004,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await caretNeighbour(block, surface, 'next')
+        const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -1064,7 +1063,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           const landing: {at: {id: string; start: number} | null} = {at: null}
           const deleted = await deleteBlockThroughUi(block, {
             beforeWrite: async () => {
-              const prevVisible = await caretNeighbour(block, surface, 'previous')
+              const prevVisible = await previousVisibleBlock(block, surface)
               if (!prevVisible) return
               const prevData = await prevVisible.load()
               landing.at = {id: prevVisible.id, start: prevData?.content.length ?? 0}

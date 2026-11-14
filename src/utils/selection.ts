@@ -13,7 +13,6 @@ import { ChangeScope, type BlockData } from '@/data/api'
 import { precedesInTree } from '@/data/treeOrder.js'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import { unlistedIndexAmong } from '@/data/orderKey'
-import { isDrawnAsPropertyName } from '@/data/drawnSubtree'
 import type { OutlineSurface } from '@/data/outlineSurface'
 import { visibleChildIds } from '@/data/visibleChildren'
 
@@ -126,23 +125,6 @@ export const previousVisibleBlock = async (
   // When current is a direct child of the scope root, parent is that root,
   // which is itself the first visible block in the surface.
   return parent
-}
-
-/** Where the edit-mode caret goes from `block`: the nearest visible row in
- *  `direction` with text to edit. A row drawn as a property's name is passed
- *  over — it has no editor to hold a caret, and a block left editing there
- *  takes no keys. Anything that moves
- *  the CARET to a neighbour asks this; block-level walks (selection, vim
- *  motion, merge targets) use the plain walkers. */
-export const caretNeighbour = async (
-  block: Block,
-  surface: OutlineSurface,
-  direction: 'next' | 'previous',
-): Promise<Block | null> => {
-  const step = direction === 'next' ? nextVisibleBlock : previousVisibleBlock
-  let neighbour = await step(block, surface)
-  while (neighbour && await isDrawnAsPropertyName(neighbour, surface)) neighbour = await step(neighbour, surface)
-  return neighbour
 }
 
 /** Picks the block that should hold focus after `current` and its

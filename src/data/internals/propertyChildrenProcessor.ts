@@ -45,6 +45,7 @@
  */
 
 import {
+  CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
   memberCodecOf,
   type AnyPropertySchema,
@@ -72,7 +73,7 @@ import {
 } from '@/data/propertyChildren'
 import { jsonValuesEqual } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
-import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deleteSubtreeAnnouncedInTx, deleteSubtreeInTx } from '@/data/subtreeDelete'
 import { mintPropertyChildRow } from './propertyChildMint'
 
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME = 'core.materializePropertyChildren'
@@ -607,7 +608,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // history). Distinct from the §5 pending-materialization rule, which
       // is about ABSENT CHILDREN never licensing cell-key deletion.
       for (const child of matchingChildren) {
-        await deleteSubtreeInTx(tx, child.id)
+        await deleteSubtreeAnnouncedInTx(tx, child.id)
       }
       continue
     }
@@ -1021,7 +1022,7 @@ const reconcileMemberValueChildren = async (
       // its sub-children with it, on an unrelated write to the same property.
       // Kept, exactly as the scalar branch keeps a divergent peer; removing it
       // is a delete in the tree, which is how any value row goes.
-      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeInTx(tx, row.id)
+      else if (keyByRow.get(row.id)!.denotesValue) await deleteSubtreeAnnouncedInTx(tx, row.id)
     }
   }
 
@@ -1130,7 +1131,13 @@ const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<v
  *  `(order_key, id)` — arbitrary relative to content — so the loser may carry
  *  user-authored sub-children. Relocate those under the survivor BEFORE
  *  deleting; a bare subtree-delete would silently tombstone them, and a shallow
- *  delete would orphan them live under a tombstone.
+ *  delete would orphan them live under a tombstone. The loser may also be a
+ *  block others link to (any block can be moved into a value list): it is
+ *  announced as merged into the survivor, so its links follow as a merge's do.
+ *  ACCEPTED: a fold made BY the merge-retarget processor (rewriting a ref-list
+ *  that names both rows) is announced after it took its events, so links to
+ *  that ref-list's folded row stay on the tombstone; closing it needs event
+ *  re-dispatch in the commit pipeline.
  *
  *  WHETHER to fold is the caller's call, and it differs by grain: an
  *  equal-valued sibling is a redundant copy of ONE value to a scalar, and an
@@ -1142,6 +1149,9 @@ export const collapseDuplicateValueChild = async (
 ): Promise<void> => {
   await relocateChildren(tx, duplicate.id, survivorValueId)
   await deleteSubtreeInTx(tx, duplicate.id)
+  tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {
+    workspaceId: duplicate.workspaceId, fromId: duplicate.id, intoId: survivorValueId, aliasRewrites: [],
+  })
 }
 
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
