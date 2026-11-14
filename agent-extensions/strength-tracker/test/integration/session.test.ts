@@ -105,7 +105,7 @@ const plan = (lifts: PlannedLift[], over: Partial<SessionPlan> = {}): SessionPla
 // ──── tree readers ────
 
 const childrenOf = async (parentId: string, typeId?: string): Promise<BlockData[]> => {
-  const rows = (await repo.block(parentId).children.load()) ?? []
+  const rows = (await repo.query.children({id: parentId, propertyChildren: 'none'}).load()) ?? []
   const live = rows.filter(row => !row.deleted)
   return typeId === undefined ? live : live.filter(row => hasBlockType(row, typeId))
 }

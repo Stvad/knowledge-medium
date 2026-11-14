@@ -17,6 +17,7 @@ import {
   showPropertiesProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
+import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
@@ -121,11 +122,10 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
-  scopeRootId: string | undefined,
-  scopeRootForcesOpen = true,
+  surface: OutlineSurface | null,
   clearEditing = false,
 ): Promise<boolean> => {
-  if (!scopeRootId) return false
+  if (!surface) return false
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
@@ -135,14 +135,14 @@ export const extendSelectionDown = async (
   // select the surface's own root — acting on the view root within its view is
   // meaningless, so leave the keystroke native (matches the old no-op there).
   if (!hasBlockSelection(uiStateBlock)) {
-    if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
+    if (focusedId === surface.scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, surface, {clearEditing})
   }
 
-  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
+  const nextBlock = await nextVisibleBlock(repo.block(focusedId), surface)
   if (!nextBlock) return false
 
-  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
+  return extendSelection(nextBlock.id, uiStateBlock, repo, surface, {clearEditing})
 }
 
 /** Mirror of {@link extendSelectionDown} for the previous visible block.
@@ -151,25 +151,24 @@ export const extendSelectionDown = async (
 export const extendSelectionUp = async (
   uiStateBlock: Block,
   repo: Repo,
-  scopeRootId: string | undefined,
-  scopeRootForcesOpen = true,
+  surface: OutlineSurface | null,
   clearEditing = false,
 ): Promise<boolean> => {
-  if (!scopeRootId) return false
+  if (!surface) return false
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
 
   // Roam-style first press — see extendSelectionDown.
   if (!hasBlockSelection(uiStateBlock)) {
-    if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
+    if (focusedId === surface.scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, surface, {clearEditing})
   }
 
-  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
+  const prevBlock = await previousVisibleBlock(repo.block(focusedId), surface)
   if (!prevBlock) return false
 
-  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, {scopeRootForcesOpen, clearEditing})
+  return extendSelection(prevBlock.id, uiStateBlock, repo, surface, {clearEditing})
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
@@ -192,7 +191,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // No-op on a scope root: indenting it would reparent the visible
       // root under a sibling that lives outside the surface. The
       // mutator separately no-ops when there's no previous sibling.
-      const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps.scopeRootId)
+      const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps)
       if (!canIndent) return
       await repo.mutate.indent({id: deps.block.id, propertyDisplay: deps.propertyDisplay})
       requestEditorFocusIfEditing(deps.uiStateBlock)
@@ -215,7 +214,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // Don't outdent the scope root itself; the mutator additionally
       // refuses when the block is a direct child of the scope root
       // (outdenting would escape the visible subtree).
-      const {canOutdent} = await structuralEditPolicyForBlock(block, scopeRootId)
+      const {canOutdent} = await structuralEditPolicyForBlock(block, {scopeRootId, propertyDisplay})
       if (!canOutdent) return
 
       await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
@@ -267,7 +266,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Delete block',
     icon: Trash2,
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock, scopeRootId} = deps
+      const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
       // No scope-root special case: deleting the root of a surface is an
@@ -307,7 +306,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const deleted = await deleteBlockThroughUi(block, {
         animate: true,
         beforeWrite: async () => {
-          focus.next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
+          const surface = outlineSurfaceOf(deps)
+          focus.next = surface ? await blockAfterSubtreeRemoval(block, surface) : null
         },
       })
       // Don't move focus for a delete a guard refused, or the user cancelled.
@@ -453,7 +453,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+      await extendSelectionUp(deps.uiStateBlock, repo, outlineSurfaceOf(deps))
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -467,7 +467,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+      await extendSelectionDown(deps.uiStateBlock, repo, outlineSurfaceOf(deps))
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

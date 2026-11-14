@@ -2,6 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -262,7 +263,7 @@ const pressExtendSelectionDown = async (
     context: ActionContextTypes.NORMAL_MODE,
     handler: async baseDeps => {
       structuralExtend()
-      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, baseDeps.scopeRootId)
+      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, outlineSurfaceOf(baseDeps))
     },
   })
   await action.handler(deps, {} as ActionTrigger)
@@ -281,7 +282,7 @@ const pressMultiSelectExtendDown = async (
     context: ActionContextTypes.MULTI_SELECT_MODE,
     handler: async baseDeps => {
       structuralExtend()
-      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, baseDeps.scopeRootId)
+      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, outlineSurfaceOf(baseDeps))
     },
   })
   await action.handler(deps, {} as ActionTrigger)

@@ -13,6 +13,7 @@ import type {
 } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import {
   editorSelection,
   focusBlock,
@@ -885,10 +886,18 @@ export const isSelectionClick = (event: MouseEvent) =>
  * among visible blocks. Shared by the block shell's click path, the content
  * surface's double-click/tap path and the gesture recognizers, so the
  * supplied-deps shape stays in one place.
+ *
+ * `propertyDisplay` is the surface's display scope, which the resolve context
+ * cannot hold (a mode switch would change it under every block's slots): a
+ * caller rendered inside the surface reads it from context and passes it, so
+ * a gesture that walks the outline (shift-click's range) walks the drawn
+ * list. The content-surface and recognizer callers have no render to read it
+ * in; the actions bound to their gestures do not walk the outline.
  */
 export const blockPointerDepsFrom = (
   context: BlockResolveContext,
   targetElement: HTMLElement,
+  propertyDisplay?: PropertyDisplayScopeLevels,
 ): BlockPointerDependencies => {
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
@@ -900,5 +909,6 @@ export const blockPointerDepsFrom = (
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
     targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),
+    ...(propertyDisplay ? {propertyDisplay} : {}),
   }
 }

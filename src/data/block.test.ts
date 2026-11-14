@@ -6,8 +6,6 @@
  *   - subscribe: fires on cache mutation
  *   - write sugar (set / setContent / delete) routes through repo.mutate
  *   - repo.load(id, opts) hydrates the requested neighborhood
- *   - childIds / children expose handles backed by repo.childIds /
- *     repo.children
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -403,7 +401,7 @@ describe('Block.subscribe', () => {
   })
 })
 
-describe('Block.childIds / children / parent', () => {
+describe('Block.parent', () => {
   beforeEach(async () => {
     // p → c1 / c2
     await env.repo.tx(
@@ -414,24 +412,10 @@ describe('Block.childIds / children / parent', () => {
     await env.repo.mutate.createChild({parentId: 'p', id: 'c2'})
   })
 
-  it('childIds returns the repo.childIds handle ordered by (orderKey, id)', async () => {
-    const b = new Block(env.repo, 'p')
-    const ids = await b.childIds.load()
-    expect(ids).toEqual(['c1', 'c2'])
-  })
-
-  it('childIds is identity-stable with repo.query.childIds (visible view)', () => {
-    const b = new Block(env.repo, 'p')
-    // The facade getter speaks the visible/outline view (§9), so it delegates
-    // to the `propertyChildren`-keyed handle — same instance the option
-    // returns, distinct from the everything-view handle.
-    expect(b.childIds).toBe(env.repo.query.childIds({id: 'p', propertyChildren: 'none'}))
-  })
-
-  it('children returns the repo.children handle with full BlockData rows', async () => {
-    const b = new Block(env.repo, 'p')
-    const rows = await b.children.load()
-    expect(rows.map(r => r.id)).toEqual(['c1', 'c2'])
+  it('the deprecated child getters still answer the no-property-rows view', async () => {
+    const p = new Block(env.repo, 'p')
+    expect(p.childIds).toBe(env.repo.query.childIds({id: 'p', propertyChildren: 'none'}))
+    expect((await p.children.load()).map(child => child.id)).toEqual(['c1', 'c2'])
   })
 
   it('parent returns the parent Block whenever this block is loaded', () => {

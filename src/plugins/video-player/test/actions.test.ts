@@ -239,8 +239,7 @@ describe('video player actions', () => {
     })
     const scopedVideoBlock = fakeBlock({
       id: 'video',
-      childIds: {load: vi.fn(async () => ['note'])},
-      repo: {isReadOnly: false},
+      repo: {isReadOnly: false, query: {childIds: () => ({load: vi.fn(async () => ['note'])})}},
     })
     const deps: VideoPlayerShortcutDependencies = {
       block: fakeBlock({id: 'note'}),

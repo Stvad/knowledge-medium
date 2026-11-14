@@ -18,7 +18,7 @@ import {
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
@@ -76,7 +76,7 @@ const layoutSessionBlock = async () => {
   return getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
 }
 
-const currentPanelRows = async () => (await layoutSessionBlock()).children.load()
+const currentPanelRows = async () => childrenOf(env.repo, (await layoutSessionBlock()).id)
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
 const currentActivePanelId = async () => {

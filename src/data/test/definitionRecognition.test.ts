@@ -15,6 +15,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
 import { materializePropertySeeds } from '@/data/definitionSeeds'
 import { typesProp } from '@/data/properties'
@@ -51,7 +52,7 @@ const seed = async (repo: Repo, bag: Record<string, unknown>): Promise<void> => 
 
 const views = async (repo: Repo): Promise<{sql: string[]; tx: string[]}> => ({
   sql: await repo.runQuery('core.childIds', {id: OWNER, propertyChildren: 'none'}) as string[],
-  tx: (await repo.tx(tx => visibleChildrenOf(tx, OWNER), {scope: ChangeScope.BlockDefault}))
+  tx: (await repo.tx(tx => visibleChildrenOf(tx, OWNER, undefined, NO_PROPERTY_DISPLAY_SCOPE), {scope: ChangeScope.BlockDefault}))
     .map(child => child.id),
 })
 

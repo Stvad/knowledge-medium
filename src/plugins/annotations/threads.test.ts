@@ -6,7 +6,7 @@ import {propertyFieldContent} from '@/data/propertyChildren'
 import {isCollapsedProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {COMMENTS_PAGE_ALIAS, commentsPageBlockId} from './container'
@@ -56,7 +56,7 @@ const threadsOf = (targetId: string) =>
   }).load()
 
 const childContents = async (id: string) =>
-  (await repo.block(id).children.load()).map(child => child.content)
+  (await childrenOf(repo, id)).map(child => child.content)
 
 describe('createThread', () => {
   beforeEach(() => setUp())

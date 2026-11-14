@@ -33,6 +33,7 @@ import {
 import { isCollapsedProp } from '@/data/properties'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import {
+  displayScopeOf,
   propertyDisplayScopeSchema,
   type PropertyDisplayScopeLevels,
 } from '@/data/propertyDisplayMode'
@@ -601,7 +602,7 @@ export const indent = defineMutator<IndentArgs, void>({
       return
     }
     const {siblings, index: ix} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
@@ -652,7 +653,7 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     const grandparent = parent.parentId
     // Pass self.workspaceId so the null-grandparent case scopes
     // correctly even before this tx pins a workspace.
-    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId, propertyDisplay)
+    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId, displayScopeOf({propertyDisplay}))
     const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
     // The anchor — the current parent — isn't on the caller's list (a hidden
     // parent, or a stale read): a no-op, not a fallback to the grandparent's
@@ -731,7 +732,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
     const {siblings, index: idx} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
 
     const up = direction === -1
     const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
@@ -760,7 +761,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // shallower level (changing indentation), so it's also a no-op.
     if (scopeRootId === undefined || self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId, propertyDisplay)
+    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId, displayScopeOf({propertyDisplay}))
     const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
     // The parent isn't on the caller's list (a hidden parent, or a stale read).
     // Without this guard the DOWN branch reads `parentSiblings[-1 + 1]`,
