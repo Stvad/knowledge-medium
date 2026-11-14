@@ -1,5 +1,6 @@
 import { BlockRendererProps } from '@/types.js'
-import { useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
+import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
@@ -22,18 +23,27 @@ import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
+import { useGutterText } from './BlockGutter.js'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   // The editor draws the block's own text too, so it carries the same title
   // typography as the read renderer — otherwise a page title would shrink to
   // body size the moment you clicked into it. CodeMirror's theme sets
   // `fontSize: 'inherit'`, so the class on the wrapper reaches the editor.
   const titleClass = useBlockTitleTextClass(block)
   const editorRef = useRef<ReactCodeMirrorRef>(null)
+  // The editor's wrapper is the text element the gutter measures and keeps the
+  // first line of clear, as the read renderer's container is in read mode.
+  const gutterText = useGutterText(block)
+  const handleEditorRef = useCallback((value: ReactCodeMirrorRef | null) => {
+    editorRef.current = value
+    gutterText?.(value?.editor ?? null)
+  }, [gutterText])
   // The paste ClipboardEvent carries no modifier state, so we latch the
   // most recent paste chord's intent on keydown and read it back in
   // handlePaste. Cmd/Ctrl+Shift+V ('single-block') drops text into the
@@ -103,6 +113,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     if (intent === 'split') {
       const cutPaste = await pasteArmedCut(content.text, block, repo, {
         scopeRootId: blockContext.scopeRootId,
+        propertyDisplay,
       })
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
@@ -159,6 +170,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
     const result = await pasteEditModeMultilineText(plan, block, repo, {
       scopeRootId: blockContext.scopeRootId,
+      propertyDisplay,
     })
     if (!result) return
 
@@ -171,7 +183,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   return (
     <BlockEditor
-      ref={editorRef}
+      ref={handleEditorRef}
       block={block}
       extensions={extensions}
       className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}

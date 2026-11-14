@@ -8,6 +8,12 @@ import type { ChangeScope, TxSource } from './changeScope'
 import type { AnyPropertyAssignment, AnyPropertySchema, PropertySchema } from './propertySchema'
 import type { User } from './user'
 
+/** Which property children a child listing shows: `'all'` every one (the
+ *  structural view), `'non-hidden'` the field rows whose definition is not
+ *  hidden, `'none'` no recognized field row. Also the outline's
+ *  `PropertyDisplayMode`. */
+export type PropertyChildrenView = 'all' | 'non-hidden' | 'none'
+
 /** Per-write opt: skip the engine's automatic `updatedAt`/`updatedBy` bump
  *  (and `createdAt`/`createdBy` on `tx.create`). Used by bookkeeping writes
  *  whose state isn't user intent — e.g. parseReferences updating
@@ -124,6 +130,12 @@ export interface Tx {
    *  Missing and soft-deleted ids are simply absent from the result — the
    *  caller is a pass that expects some of its candidates to have moved on. */
   liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]>
+
+  /** Whether row `id` did not exist at all — not even as a tombstone — when
+   *  this transaction began, and the transaction has written it since: true
+   *  for a row created here, even if deleted again; false for a pre-existing
+   *  row, a restored tombstone included. Synchronous, from the tx's snapshots. */
+  createdInThisTx(id: string): boolean
 
   /** Every property FIELD ROW under any of `parentIds`, live and tombstoned
    *  alike, batched through the same shared cap. The union is deliberate: "this owner
@@ -403,11 +415,13 @@ export interface Tx {
    *  Returns EVERY child by default — property field/value rows included.
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
-   *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
-   *  `{hidePropertyChildren: true}`. Recognition is data-keyed, not
-   *  flip-gated, so it prunes in every workspace: the cell→children backfill
-   *  mints field rows while the workspace still reads cells.
+   *  cascade, copy, merge). The view without recognized property field rows
+   *  (docs/properties-as-blocks-migration.html §9) is opt-IN via
+   *  `{propertyChildren: 'none'}`; `'non-hidden'` drops only the field rows
+   *  whose definition is hidden (see {@link PropertyChildrenView}).
+   *  Recognition is data-keyed, not flip-gated, so it prunes in every
+   *  workspace: the cell→children backfill mints field rows while the
+   *  workspace still reads cells.
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
@@ -424,7 +438,7 @@ export interface Tx {
   childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {propertyChildren?: PropertyChildrenView},
   ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by
@@ -581,6 +595,10 @@ export interface RepoTxOptions {
    *  Prefer a non-undoable SCOPE when the write genuinely is not a document
    *  edit (`UiState`, `UserPrefs`, `Automation`). This flag exists for the case
    *  where the scope must stay `BlockDefault` for gating reasons but the entry
-   *  would be a trap. Default false (entries are recorded as usual). */
+   *  would be a trap. Default false (entries are recorded as usual).
+   *
+   *  A skipped tx does not clear the redo stack, so a redo can find its rows
+   *  moved since and refuse (as after a synced edit) — accepted: it writes
+   *  nothing. */
   skipUndo?: boolean
 }

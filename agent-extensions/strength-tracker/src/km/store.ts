@@ -38,6 +38,7 @@ import {asAltChoice, asWorkout} from './records'
 import {discardTally, nestedWorkouts, type DiscardTally} from './subtree'
 
 import {buildAltChoices} from './history'
+import {contentChildren} from './children'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
@@ -164,7 +165,7 @@ const findLegacyGapRecord = async (
   exclude: string,
 ): Promise<BlockData | null> => {
   const candidates = new Map<string, BlockData>()
-  for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+  for (const block of await tx.childrenOf(pageId, undefined, {propertyChildren: 'none'})) {
     candidates.set(block.id, block)
   }
   for (const id of knownLayoffIds) {
@@ -314,14 +315,14 @@ export const discardSession = async (
     // the whole thing went silently. Refused rather than reparented, because
     // where those blocks should go instead is the user's call, not ours.
     const nested = await nestedWorkouts(
-      id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+      id => tx.childrenOf(id, undefined, {propertyChildren: 'none'}),
       workoutId,
     )
     if (nested.length > 0) return 'holds-a-session' as const
 
     if (expected !== undefined) {
       const now = await discardTally(
-        id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+        id => tx.childrenOf(id, undefined, {propertyChildren: 'none'}),
         workoutId,
       )
       if (now.logged !== expected.logged || now.yours !== expected.yours) return 'changed' as const
@@ -436,7 +437,7 @@ export const readAltChoices = async (
   repo: Repo,
   settingsBlockId: string,
 ): Promise<Record<string, string>> => {
-  const children = await repo.block(settingsBlockId).children.load()
+  const children = await contentChildren(repo, settingsBlockId)
   // Through `asAltChoice`, so removing `strength-alt-choice` from a block
   // actually removes its preference. The group and option properties survive
   // an untag, and folding them regardless meant a choice you had visibly taken

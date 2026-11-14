@@ -4,7 +4,7 @@
  * business logic belongs in this package.
  */
 import type { BridgeClient } from './client.js'
-import type { CommentsView } from './protocol.js'
+import { BEING_EDITED_BLOCKS_SQL, type CommentsView } from './protocol.js'
 
 export interface HydratedRef {
   id: string
@@ -169,7 +169,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
    *  update unless the block still has exactly that content. */
   const updateBlock = async (
     id: string,
-    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string} & ExactIds,
+    patch: {content?: string, properties?: Record<string, unknown>, expectedContent?: string, undoable?: boolean} & ExactIds,
   ): Promise<unknown> => {
     return client.runCommand({type: 'update-block', id, ...patch})
   }
@@ -256,7 +256,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
   const reconcileMarkdownSubtree = async (
     parentId: string,
     markdown: string,
-    opts: {key: string, shape?: 'outline' | 'block', final?: boolean, properties?: Record<string, unknown>},
+    opts: {key: string, shape?: 'outline' | 'block', final?: boolean, properties?: Record<string, unknown>, undoable?: boolean},
   ): Promise<unknown> => {
     return client.runCommand({
       type: 'reconcile-markdown-subtree',
@@ -266,6 +266,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
       ...(opts.shape ? {shape: opts.shape} : {}),
       ...(opts.final ? {final: true} : {}),
       ...(opts.properties ? {properties: opts.properties} : {}),
+      ...(opts.undoable === false ? {undoable: false} : {}),
     })
   }
 
@@ -278,7 +279,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
   /** Batched pending-decision views — ONE query per tick instead of a
    *  bridge round-trip per backlink source, so processed mentions stay
    *  cheap to re-scan forever. Includes the last-edit timestamp for the
-   *  quiet-period gate. */
+   *  settle and edit-hold gates. */
   const blockViews = async (ids: string[]): Promise<Map<string, BlockView>> => {
     const views = new Map<string, BlockView>()
     for (let offset = 0; offset < ids.length; offset += 500) {
@@ -300,6 +301,12 @@ export const createBridgeGraph = (client: BridgeClient) => {
       }
     }
     return views
+  }
+
+  /** Block id → when an editor holding it last wrote (ms). */
+  const beingEditedBlocks = async (): Promise<Map<string, number>> => {
+    const rows = await sqlAll(BEING_EDITED_BLOCKS_SQL) as Array<{id: string, active_at: number}>
+    return new Map(rows.map(row => [row.id, row.active_at]))
   }
 
   return {
@@ -324,6 +331,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     updateBlockContent,
     sqlAll,
     blockViews,
+    beingEditedBlocks,
   }
 }
 

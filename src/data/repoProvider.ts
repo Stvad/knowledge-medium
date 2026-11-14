@@ -57,6 +57,7 @@ import {
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   dropStaleAnyFieldFormIndex,
   CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
+  CREATE_BLOCKS_BEING_EDITED_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -454,6 +455,7 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
       // Same per-user resolver the observer deps draw from (`syncObserverDepsFor`).
       const resolver = resolverForUser(userId)
       await db.connect(createPowerSyncConnector({
+        dbFilename: dbFilenameForUser(userId),
         encryption: {
           getWorkspaceMode: resolver.getUploadMode,
           getCek: resolver.getCek,
@@ -537,6 +539,7 @@ export const initializeClientSchema = async (db: SchemaDb): Promise<void> => {
   // index is created after so it exists on upgrading devices too.
   await ensureBlockLocalColumns(db)
   await runDdl(db, [
+    CREATE_BLOCKS_BEING_EDITED_INDEX_SQL,
     CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
     CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
     CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,

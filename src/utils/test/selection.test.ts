@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -11,6 +12,9 @@ import {
   getLastVisibleDescendant,
   insertInDocumentOrder,
 } from '@/utils/selection.js'
+
+const surface = (scopeRootId: string, scopeRootForcesOpen = true) =>
+  outlineSurfaceOf({scopeRootId, scopeRootForcesOpen})!
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -124,7 +128,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
       {id: 'c', parentId: 'top', orderKey: 'd'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), surface('top'))
     expect(result?.id).toBe('c')
   })
 
@@ -135,7 +139,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'a', parentId: 'top', orderKey: 'b'},
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), surface('top'))
     expect(result?.id).toBe('a')
   })
 
@@ -147,7 +151,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
       {id: 'c', parentId: 'top', orderKey: 'd'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('c'), 'top', new Set(['b', 'c']))
+    const result = await blockAfterSubtreeRemoval(env.repo.block('c'), surface('top'), new Set(['b', 'c']))
     expect(result?.id).toBe('a')
   })
 
@@ -158,7 +162,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'parent', parentId: 'top', orderKey: 'b'},
       {id: 'only', parentId: 'parent', orderKey: 'c'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('only'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('only'), surface('top'))
     expect(result?.id).toBe('parent')
   })
 
@@ -174,7 +178,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'c2', parentId: 'parent', orderKey: 'e'},
       {id: 'below', parentId: 'top', orderKey: 'f'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('parent'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('parent'), surface('top'))
     expect(result?.id).toBe('below')
   })
 
@@ -182,7 +186,7 @@ describe('blockAfterSubtreeRemoval', () => {
     await seedOutline(env.repo, [
       {id: 'top', parentId: null, orderKey: 'a'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('top'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('top'), surface('top'))
     expect(result).toBeNull()
   })
 })
@@ -197,7 +201,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'd'},
       {id: 'b2', parentId: 'b', orderKey: 'e'},
     ])
-    const result = await getLastVisibleDescendant(env.repo.block('top'))
+    const result = await getLastVisibleDescendant(env.repo.block('top'), surface('no-scope-root'))
     expect(result.id).toBe('b2')
   })
 
@@ -210,7 +214,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('b'))
+    const result = await getLastVisibleDescendant(env.repo.block('b'), surface('no-scope-root'))
     expect(result.id).toBe('b')
   })
 
@@ -226,7 +230,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top')
+    const result = await getLastVisibleDescendant(env.repo.block('top'), surface('top'))
     expect(result.id).toBe('b')
   })
 
@@ -240,7 +244,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top', false)
+    const result = await getLastVisibleDescendant(env.repo.block('top'), surface('top', false))
     expect(result.id).toBe('top')
   })
 
@@ -253,7 +257,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
+    const result = await getLastVisibleDescendant(env.repo.block('b'), surface('top'))
     expect(result.id).toBe('b')
   })
 })

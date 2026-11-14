@@ -21,7 +21,7 @@ import {
   STRANDED_CLAIM_RECOVERY,
 } from '@/data/internals/graphBackfillClaim'
 import { rematerializeWorkspaceWithFeedback } from '@/utils/workspaceRecovery'
-import { getClientId } from '@/utils/clientId'
+import { getClientId, isClientIdPersistent } from '@/utils/clientId'
 import { NAMES_IN_A_SENTENCE, describeNames } from '@/utils/nameList'
 import { parsePropertiesMigration, type WorkspaceRow } from '@/data/workspaceSchema'
 import { isChildBackedPropertiesWorkspace } from '@/types'
@@ -34,6 +34,7 @@ import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { reportMigrationProgress, type MigrationProgress } from './progressReport.ts'
+import { MIGRATING_STATUS, createSweepProgressLine } from './sweepProgress.ts'
 import { oweAnalyzeInstalledTables, runAnalyzeInstalledTables } from '@/data/maintenance'
 import { runBulkWrite } from '@/data/writeAheadLog'
 import {
@@ -91,6 +92,18 @@ const readMigrationEligibility = async (
     'SELECT properties_migration, owner_user_id FROM workspaces WHERE id = ?', [workspaceId])
   const childBacked = isChildBackedPropertiesWorkspace(parsePropertiesMigration(workspace?.properties_migration))
   if (repo.isReadOnly) return {eligible: false, reason: 'this workspace is read-only', retryable: false}
+  // The claim is keyed on the client id. One that dies with this page leaves a
+  // claim no reload can resume or release, and every device waits on it. On
+  // BOTH paths: a backfill-only run on a flipped workspace takes the same claim.
+  if (!isClientIdPersistent()) {
+    return {
+      eligible: false,
+      reason: 'this browser cannot keep its device id across a reload (private window or '
+        + 'blocked site storage), so an interrupted run here could never be resumed or released. '
+        + 'Run this from a normal, non-private browser profile',
+      retryable: false,
+    }
+  }
   if (!childBacked && !isRemoteSyncActive()) {
     return {
       eligible: false,
@@ -394,6 +407,22 @@ interface ClaimedMigration {
   readonly banner: MigrationProgress
 }
 
+/** Keys that still need a definition under the claim but were not among the
+ *  ones the confirmation offered to mint — arrived while it was open. Refused
+ *  rather than minted: the user did not consent to them, and flipping past
+ *  them leaves keys the pass skips. A re-run shows them in the dialog. */
+const keysWithoutConsent = (
+  consented: PropertyDefinitionSynthesisPlan,
+  now: PropertyDefinitionSynthesisPlan,
+): string | null => {
+  const offered = new Set(consented.candidates.map(candidate => candidate.key))
+  const arrived = now.candidates.filter(candidate => !offered.has(candidate.key))
+  return arrived.length === 0 ? null
+    : `${arrived.length} property key(s) with no definition appeared while the confirmation ` +
+      `was open (${describeNames(arrived.map(candidate => candidate.key))}). Run this again ` +
+      'to review them.'
+}
+
 /** The banner, remembering the last line this gesture put up: what the dialog
  *  goes back to when a pause ends. Not the sweep count, which would overwrite
  *  a later step's line when another writer pauses during it. */
@@ -493,6 +522,26 @@ const migrateUnderClaim = async (
     // Assumes no workspace has run an earlier build's pass, so none holds
     // stale property machinery. Owner's call not to carry a check for a state
     // that cannot exist.
+    // The KEY-level gate again, for the same reason as the cell survey below
+    // and placed above it, as the pre-dialog pair is. Only the gate's inputs
+    // are re-derived: the fresh plan can REFUSE, never change what is minted.
+    let keysNow: PropertyDefinitionSynthesisPlan
+    try {
+      keysNow = await planPropertyDefinitionSynthesis(repo, workspaceId)
+    } catch (err) {
+      console.error('[properties-migration] could not re-check property keys:', err)
+      banner.fail('Stopped before switching this workspace over: this device could not ' +
+        're-check whether every property key can be given a definition ' +
+        `(${err instanceof Error ? err.message : String(err)}). Nothing was switched.` +
+        undoNote(undoCleared))
+      return
+    }
+    const keysBlocked = flipBlockedBySynthesis(keysNow) ?? keysWithoutConsent(plan, keysNow)
+    if (keysBlocked !== null) {
+      banner.fail(`Stopped before switching this workspace over. ${keysBlocked}` +
+        undoNote(undoCleared))
+      return
+    }
     // The cell survey AGAIN, and this is the one that guards the flip — the
     // pre-dialog answer was taken across a user-length pause, in which a sync
     // arrival or a raw write can land a value no codec carries. Past the flip
@@ -641,7 +690,8 @@ const migrateUnderClaim = async (
    *  gesture without the gesture changing. */
   let pending = 0
   let valuesMaterializedTotal = 0
-  const status = rememberingStatus(banner, 'Migrating properties to blocks…')
+  const status = rememberingStatus(banner, MIGRATING_STATUS)
+  const progressLine = createSweepProgressLine(blockCount)
   const unsubscribe = onPropertyCellBackfillProgress(progress => {
     // The RUN's total, not this sweep's. They answer different questions: the
     // per-sweep count is "was what this sweep scanned acceptable", so on a
@@ -653,14 +703,7 @@ const migrateUnderClaim = async (
     unresolved = progress.unresolvedCount
     unresolvedNames = progress.unresolvedNames
     pending = pendingValueCount(progress)
-    // Counts are per-sweep, and the sweep number is shown because a second
-    // pass over the same blocks is normal — without it the bar restarts from
-    // zero for no reason the operator can see.
-    status.show(
-      `Migrating properties to blocks… sweep ${progress.sweeps}, ` +
-      `${progress.blocksScanned.toLocaleString()}/` +
-      `${Math.max(blockCount, progress.blocksScanned).toLocaleString()}`,
-    )
+    status.show(progressLine(progress))
   })
   try {
     const result = await runPassThenTidyDatabase(pass, repo, status)
@@ -837,7 +880,7 @@ export const migratePropertiesToBlocksAction = ({repo}: {repo: Repo}): ActionCon
     // see `MigrationGate`. That is why the progress line and the outcome go to
     // different places: the dialog closes when the claim clears, and several
     // outcomes below are reported on paths where no claim was ever taken.
-    const banner = reportMigrationProgress(workspaceId, 'Migrating properties to blocks…')
+    const banner = reportMigrationProgress(workspaceId, MIGRATING_STATUS)
     try {
       // Before synthesis: once definitions are written, a pre-migration refusal
       // would conceal the writes already made.

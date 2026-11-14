@@ -1,9 +1,7 @@
-import type { ComponentType } from 'react'
-import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
 import {
   blockContentDecoratorsFacet,
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -52,19 +50,7 @@ const TodoContentDecorator = ({block, Inner}: TodoContentDecoratorProps) => {
   )
 }
 
-const todoDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorateTodoContent: BlockContentDecorator = inner => {
-  const cached = todoDecoratorCache.get(inner)
-  if (cached) return cached
-
-  const Decorated: ComponentType<{block: Block}> = ({block}) => (
-    <TodoContentDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithTodoCheckbox'
-  todoDecoratorCache.set(inner, Decorated)
-  return Decorated
-}
+const decorateTodoContent = cachedContentDecorator(TodoContentDecorator, 'WithTodoCheckbox')
 
 const todoContentDecoratorContribution: BlockContentDecoratorContribution =
   () => decorateTodoContent
@@ -82,10 +68,8 @@ export const todoPlugin: AppExtension = systemToggle({
 export { cycleTodoState, todoActions } from './actions.ts'
 export { todoDataExtension } from './dataExtension.ts'
 export {
-  roamTodoStateProp,
   statusProp,
   TODO_TYPE,
   todoType,
-  type RoamTodoState,
   type TodoStatus,
 } from './schema.ts'

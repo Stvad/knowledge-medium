@@ -23,6 +23,7 @@ import {
   rolloverHourProp,
   roundToProp,
 } from './schema'
+import {contentChildren} from './children'
 
 /** Resolves the plan outline when the settings block's `plan` points
  *  nowhere live. */
@@ -38,7 +39,7 @@ const loadPlanTree = async (repo: Repo, rootId: string): Promise<PlanNode | null
   const root = await repo.block(rootId).load()
   if (!root || root.deleted) return null
   const build = async (block: BlockData): Promise<PlanNode> => {
-    const childData = await repo.block(block.id).children.load()
+    const childData = await contentChildren(repo, block.id)
     const children = await Promise.all((childData ?? []).filter(c => !c.deleted).map(build))
     return {id: block.id, content: block.content, properties: block.properties, children}
   }

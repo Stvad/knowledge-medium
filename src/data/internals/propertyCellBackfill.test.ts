@@ -190,6 +190,7 @@ const makeCtx = (): WorkspaceBackfillContext => {
   return {
     syncWaitCount: 0,
     workspaceId: WS,
+    awaitCaughtUp: async () => {},
     getAll: (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined),
     tx: (fn, opts) => repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
     resolveNameSchema: name => {
@@ -370,6 +371,26 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // for its original key and again in sweep 2 for the one that arrived behind
     // the cursor; summing the sweeps would count it twice and report more
     // migrated blocks than the graph holds.
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
+  })
+
+  it('catches up before every sweep after the first, outside the sweep it gates', async () => {
+    const ids = await seedNotes(TWO_BATCHES)
+    await flip()
+    let syncWaitCount = 0
+    const order: string[] = []
+    const ctx = {
+      ...makeCtx(),
+      get syncWaitCount() { return syncWaitCount },
+      // A catch-up that had to wait, as one after a writing sweep does.
+      awaitCaughtUp: async () => { order.push('catch-up'); syncWaitCount += 1 },
+    }
+    const progress = await runPropertyCellBackfill(ctx, p => {
+      if (order.at(-1) !== `sweep ${p.sweeps}`) order.push(`sweep ${p.sweeps}`)
+    })
+
+    expect(order).toEqual(['sweep 1', 'catch-up', 'sweep 2'])
+    expect(progress.sweeps).toBe(2)
     expect(progress.blocksMaterializedTotal).toBe(ids.length)
   })
 
@@ -789,10 +810,10 @@ describe('the pass and the live writer agree about a value\'s children', () => {
    *
    *  `tx.setProperty` dual-writes children inside a user's edit, one row at a
    *  time; the pass emits the same rows for a whole batch and hands them to
-   *  `tx.createMany`. They share the builders (`plannedFieldRow`,
-   *  `plannedValueChildRows`) precisely so they cannot decide differently —
-   *  and this is what would notice if a future edit taught one of them
-   *  something the other does not know. Asserted on the SHAPE, since the two
+   *  `tx.createMany`. They share `plannedFieldRow` and the member encoder
+   *  (`encodedPropertyValueToChildContents`) precisely so they cannot decide
+   *  differently — and this is what would notice if a future edit taught one
+   *  of them something the other does not know. Asserted on the SHAPE, since the two
    *  routes never share ids.
    *
    *  Both grains, because the member split is the interesting half: a scalar

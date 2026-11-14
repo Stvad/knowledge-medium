@@ -76,6 +76,9 @@ export type {
   BlockContentRendererSlot,
   BlockContentSurfaceContribution,
   BlockContentSurfaceProps,
+  BlockGutterCorner,
+  BlockGutterItem,
+  BlockGutterItemContribution,
   BlockTextClassContext,
   BlockTextClassContribution,
   BlockInteractionContext,
@@ -113,6 +116,11 @@ export type {
   BlockOpenerOptions,
   OpenBlockContext,
 } from '@/utils/navigation.js'
+
+export type {
+  SurfaceZoom,
+  ZoomCrumb,
+} from '@/components/ZoomableSurface.js'
 
 export type {
   ActionConfig,

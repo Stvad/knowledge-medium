@@ -262,7 +262,7 @@ describe('the conversion flow against the real stack', {timeout: 30_000}, () => 
     if (media) await byteStore.put(owner.id, ws, rawNameOf(media.onDeviceOnly[0]), media.onDeviceOnly[1])
 
     const resolver = createSyncResolver(() => owner.id, keyStore, id => readWorkspaceEncryptionMode(testDb.db, id))
-    const connector = createPowerSyncConnector({encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek}})
+    const connector = createPowerSyncConnector({dbFilename: 'conversion-test', encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek}})
     const attachments = createAttachmentCleanerIO({
       client: owner.client,
       blobStore: createSupabaseBlobStore({

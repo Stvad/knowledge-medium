@@ -25,7 +25,7 @@ import { ChangeScope, type BlockData, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { waitFor } from '@/test/waitFor'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
@@ -49,6 +49,7 @@ import {
   deletePanelRow,
   insertPanelRow,
   insertSidebarStackedPanel,
+  isPanelStackRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -133,7 +134,7 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
   }, {scope: ChangeScope.UiState, description: 'seed panel rows'})
 }
 
-const rows = async () => layoutSessionBlock().children.load()
+const rows = async () => childrenOf(env.repo, env.layoutSessionBlockId)
 const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
 
 const startProjection = (initialHash: string) => {
@@ -358,7 +359,7 @@ describe('applyCurrentLayoutUrl', () => {
 
     // Slot-bearing lane deep link: must NOT materialize rows in base.
     expect((await apply('#ws-1;persp=lane/b1')).kind).toBe('deferred')
-    expect(await base.children.load()).toEqual([])
+    expect(await childrenOf(env.repo, base.id)).toEqual([])
 
     // Slot-less lane URL over persisted BASE rows: must NOT normalize the
     // lane URL from them (that would smuggle base's layout into the lane).
@@ -598,7 +599,7 @@ describe('applyCurrentLayoutUrl', () => {
       repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=lane/b1',
     })
     expect(result.kind).toBe('deferred')
-    expect(await base.children.load()).toEqual([])
+    expect(await childrenOf(env.repo, base.id)).toEqual([])
     env.repo.setLayoutSessionRouter(null)
   })
 
@@ -1066,6 +1067,52 @@ describe('layoutSlotsFromRows normalization', () => {
     expect(result.kind).toBe('noop')
     const idsAfter = (await layoutRows()).map(row => row.id).sort()
     expect(idsAfter).toEqual(idsBefore) // the stack row silently survives
+  })
+})
+
+describe('stack rows across a reconcile', () => {
+  const stackIds = async () => (await layoutRows()).filter(isPanelStackRow).map(row => row.id)
+
+  it('keeps the row of a stack whose panels stay together when a pane changes content', async () => {
+    await applyUrl('#ws-1/a/x,b/c')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/a/x,d/c')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'x', 'd', 'c'])
+  })
+
+  it('keeps the row of a stack when a column is opened before it', async () => {
+    await applyUrl('#ws-1/a/x,b')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/n/a/x,b')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'n'},
+      {kind: 'leaf', blockId: 'a'},
+      {kind: 'stack', children: [{kind: 'leaf', blockId: 'x'}, {kind: 'leaf', blockId: 'b'}]},
+    ])
+  })
+
+  it('makes a new row for a stack whose panels were in none', async () => {
+    await applyUrl('#ws-1/a/b/c')
+
+    await applyUrl('#ws-1/a,b/c')
+
+    expect(await stackIds()).toHaveLength(1)
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'b', 'c'])
+  })
+
+  it('deletes the row of a stack its panels left', async () => {
+    await applyUrl('#ws-1/x,b/c')
+
+    await applyUrl('#ws-1/x/b/c')
+
+    expect(await stackIds()).toEqual([])
+    expect(panelBlockIds(await rows())).toEqual(['x', 'b', 'c'])
   })
 })
 

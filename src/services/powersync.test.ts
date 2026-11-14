@@ -5,10 +5,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
   from: vi.fn(),
+  /** The signal each request was bounded with, in order. */
+  deadlines: [] as AbortSignal[],
 }))
 
+/** A PostgREST request as the upload path uses one: awaitable, and able to
+ *  take the signal that bounds it. */
+const request = vi.hoisted(() => <T>(result: T) =>
+  Object.assign(Promise.resolve(result), {
+    abortSignal(signal: AbortSignal) {
+      supabaseRef.deadlines.push(signal)
+      return this
+    },
+  }))
+
 vi.mock('@/services/supabase.js', () => ({
-  supabase: supabaseRef,
+  supabase: {
+    rpc: (...args: unknown[]) => request(supabaseRef.rpc(...args)),
+    from: (...args: unknown[]) => supabaseRef.from(...args),
+  },
   hasSupabaseAuthConfig: true,
 }))
 
@@ -22,8 +37,10 @@ import {
   __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
   __encryptUploadOpsForTest,
-  __orderedBlockUpsertsForTest,
+  __chunkBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
+  createPowerSyncConnector,
+  uploadLockName,
   type BlockUploadSink,
   type CompactedBlockOperation,
   type GetWorkspaceMode,
@@ -282,13 +299,27 @@ describe('PowerSync upload compaction', () => {
   })
 
   it('orders parent upserts before child upserts within a bulk request', () => {
-    const ordered = __orderedBlockUpsertsForTest([
+    const chunks = __chunkBlockUpsertsForTest([
       {id: 'child', parent_id: 'parent', content: 'child'},
       {id: 'parent', parent_id: null, content: 'parent'},
       {id: 'sibling', parent_id: 'parent', content: 'sibling'},
-    ])
+    ], 500)
 
-    expect(ordered.map(row => row.id)).toEqual(['parent', 'child', 'sibling'])
+    expect(chunks.map(chunk => chunk.map(row => row.id))).toEqual([['parent', 'child', 'sibling']])
+  })
+
+  it('places a row listed before the parent cycle it hangs from after that cycle', () => {
+    const chunks = __chunkBlockUpsertsForTest([
+      {id: 'below', parent_id: 'a', content: 'below'},
+      {id: 'a', parent_id: 'b', content: 'a'},
+      {id: 'b', parent_id: 'a', content: 'b'},
+      {id: 'self-child', parent_id: 'self', content: 'self-child'},
+      {id: 'self', parent_id: 'self', content: 'self'},
+    ], 500)
+
+    const ids = chunks.flat().map(row => row.id)
+    expect(ids.indexOf('a')).toBeLessThan(ids.indexOf('below'))
+    expect(ids.indexOf('self')).toBeLessThan(ids.indexOf('self-child'))
   })
 })
 
@@ -1052,9 +1083,9 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
   })
 
   it('chunks an oversized create batch into capped RPC calls, order preserved across chunks', async () => {
-    // orderedBlockUpserts runs before chunk(), so a parent never lands in a later
-    // chunk than its child — each chunk is a separate RPC = separate transaction,
-    // and the parent self-FK is only DEFERRABLE within one transaction.
+    // A parent never lands in a later chunk than its child — each chunk is a
+    // separate RPC = separate transaction, and the parent self-FK is only
+    // DEFERRABLE within one transaction.
     supabaseRef.rpc.mockResolvedValue({data: null, error: null})
     const total = MAX_CREATES_PER_SUPABASE_RPC * 2 + 1
     const rows = Array.from({length: total}, (_, i) => ({
@@ -1080,6 +1111,58 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
   it('is a no-op when given an empty create array', async () => {
     await __applyBlockCreatesForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
+  })
+
+  // Each RPC is one server transaction, and the server keeps the FIRST create of
+  // an id. A block and the rows created under it must land in the same one, or
+  // a peer's upload between two RPCs can win the block while this device wins
+  // its children (or the reverse) — the property machinery under a block two
+  // devices both created is what that splits apart.
+  it('keeps a new block and the rows created under it in one RPC', async () => {
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const singles = Array.from({length: MAX_CREATES_PER_SUPABASE_RPC - 1}, (_, i) => ({
+      id: `single-${i}`, workspace_id: 'w', parent_id: null, content: `s${i}`,
+    }))
+    const family = [
+      {id: 'owner', workspace_id: 'w', parent_id: null, content: 'owner'},
+      {id: 'field', workspace_id: 'w', parent_id: 'owner', content: 'field'},
+      {id: 'value', workspace_id: 'w', parent_id: 'field', content: 'value'},
+    ]
+
+    await __applyBlockCreatesForTest([...singles, ...family])
+
+    const calls = supabaseRef.rpc.mock.calls.map(
+      call => (call[1] as {creates: Array<{id: string}>}).creates.map(row => row.id))
+    expect(calls).toHaveLength(2)
+    expect(calls.find(ids => ids.includes('owner'))).toEqual(['owner', 'field', 'value'])
+  })
+
+  it('splits a subtree bigger than one RPC only between whole child subtrees, parents first', async () => {
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const messages = Math.ceil(MAX_CREATES_PER_SUPABASE_RPC / 3) + 10
+    const rows: Array<{id: string; workspace_id: string; parent_id: string | null; content: string}> =
+      [{id: 'day', workspace_id: 'w', parent_id: null, content: 'day'}]
+    for (let i = 0; i < messages; i++) {
+      rows.push(
+        {id: `m${i}`, workspace_id: 'w', parent_id: 'day', content: 'message'},
+        {id: `m${i}-field`, workspace_id: 'w', parent_id: `m${i}`, content: 'field'},
+        {id: `m${i}-value`, workspace_id: 'w', parent_id: `m${i}-field`, content: 'value'},
+      )
+    }
+
+    await __applyBlockCreatesForTest(rows)
+
+    const calls = supabaseRef.rpc.mock.calls.map(
+      call => (call[1] as {creates: Array<{id: string}>}).creates.map(row => row.id))
+    expect(calls.length).toBeGreaterThan(1)
+    const chunkOf = new Map(calls.flatMap((ids, chunk) => ids.map(id => [id, chunk] as const)))
+    expect(chunkOf.size).toBe(rows.length)
+    for (let i = 0; i < messages; i++) {
+      expect(chunkOf.get(`m${i}-field`)).toBe(chunkOf.get(`m${i}`))
+      expect(chunkOf.get(`m${i}-value`)).toBe(chunkOf.get(`m${i}`))
+      expect(chunkOf.get('day')!).toBeLessThanOrEqual(chunkOf.get(`m${i}`)!)
+    }
+    for (const ids of calls) expect(ids.length).toBeLessThanOrEqual(MAX_CREATES_PER_SUPABASE_RPC)
   })
 })
 
@@ -1118,7 +1201,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
     // Fixing commit: 71bd72efe (issue #459).
-    const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    const eq = vi.fn(() => request({data: null, error: {message: 'Bad Request'}, status: 400}))
     const del = vi.fn().mockReturnValue({eq})
     supabaseRef.from.mockReturnValue({delete: del})
 
@@ -1188,5 +1271,98 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     expect(inserts.every(c => /INSERT INTO ps_crud_rejected/.test(c.sql))).toBe(true)
     expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
     expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
+  })
+})
+
+describe('uploadData — one pass per database at a time', () => {
+  /** The upload queue as the connector reads it: completing a transaction
+   *  drains it and everything queued before it. */
+  const uploadQueue = () => {
+    const queued: CrudTransaction[] = []
+    const enqueue = (transactionId: number, entries: CrudEntry[]) => {
+      const tx = {
+        transactionId,
+        crud: entries,
+        complete: async () => { queued.splice(0, queued.indexOf(tx) + 1) },
+      } as unknown as CrudTransaction
+      queued.push(tx)
+    }
+    const database = {
+      getCrudTransactions: () => ({
+        [Symbol.asyncIterator]: () => {
+          const snapshot = [...queued]
+          return {next: async () => snapshot.length > 0
+            ? {done: false as const, value: snapshot.shift()!}
+            : {done: true as const, value: undefined}}
+        },
+      }),
+    } as unknown as CommonPowerSyncDatabase
+    return {database, enqueue}
+  }
+
+  /** The patches each `apply_block_patches` request carried, in send order. */
+  const sentPatches = () => supabaseRef.rpc.mock.calls.map(([, body]) => body.patches)
+  const landed = {data: null, error: null}
+
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+    supabaseRef.deadlines.length = 0
+  })
+
+  it('holds a second pass until the request already in flight has landed', async () => {
+    const dbFilename = `upload-lock-${crypto.randomUUID()}`
+    const {database, enqueue} = uploadQueue()
+    let landFirst!: () => void
+    supabaseRef.rpc
+      .mockReturnValueOnce(new Promise(resolve => { landFirst = () => resolve(landed) }))
+      .mockResolvedValue(landed)
+    const {uploadData} = createPowerSyncConnector({dbFilename})
+
+    enqueue(1, [patch(1, 'block-a', {content: 'it ', base_updated_at: 100}, 1)])
+    const abandonedPass = uploadData(database)
+    await vi.waitFor(() => expect(sentPatches()).toHaveLength(1))
+
+    // The SDK stopped waiting on that pass and starts another, with a later
+    // edit queued behind the one still in flight.
+    enqueue(2, [patch(2, 'block-a', {content: 'it m', base_updated_at: 200}, 2)])
+    const nextPass = uploadData(database)
+    await vi.waitFor(async () => {
+      const {pending = []} = await navigator.locks.query()
+      expect(sentPatches().length > 1 || pending.some(lock => lock.name === uploadLockName(dbFilename))).toBe(true)
+    })
+    expect(sentPatches()).toHaveLength(1)
+
+    // Another database's uploads are not behind it.
+    const other = uploadQueue()
+    other.enqueue(3, [patch(3, 'block-b', {content: 'elsewhere'}, 3)])
+    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`}).uploadData(other.database)
+
+    landFirst()
+    await Promise.all([abandonedPass, nextPass])
+    expect(sentPatches()).toEqual([
+      [{id: 'block-a', content: 'it ', base_updated_at: 100}],
+      [{id: 'block-b', content: 'elsewhere'}],
+      [{id: 'block-a', content: 'it m', base_updated_at: 200}],
+    ])
+  })
+
+  it('bounds every upload request, and one that hit the bound is retried rather than quarantined', async () => {
+    // What postgrest-js resolves with when the signal aborts the request.
+    const aborted = {data: null, error: {message: 'TimeoutError: signal timed out', code: ''}, status: 0}
+    supabaseRef.rpc.mockResolvedValue(aborted)
+    const eq = vi.fn(() => request(aborted))
+    supabaseRef.from.mockReturnValue({delete: () => ({eq})})
+
+    const errors: unknown[] = []
+    for (const op of [
+      {kind: 'create', id: 'block-a', payload: {id: 'block-a'}, order: 0},
+      {kind: 'patch', id: 'block-a', payload: {content: 'A'}, order: 0},
+      {kind: 'delete', id: 'block-a', order: 0},
+    ] satisfies CompactedBlockOperation[]) {
+      errors.push(await __applyCompactedBlockOperationsForTest(fakeDatabase, [op]).catch((err: unknown) => err))
+    }
+
+    expect(supabaseRef.deadlines).toHaveLength(3)
+    expect(errors.map(classifyUploadError)).toEqual(['transient', 'transient', 'transient'])
   })
 })

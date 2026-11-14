@@ -13,13 +13,13 @@ import { debounce } from 'lodash-es'
 import { clampSelectionToLength, placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
-import { EditorView } from '@codemirror/view'
+import { EditorView, tooltips } from '@codemirror/view'
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
-import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
+import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
 
@@ -41,6 +41,7 @@ export const BlockEditor = ({
   const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
+  const {editorTooltipParent} = blockContext
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -121,16 +122,9 @@ export const BlockEditor = ({
   useLayoutEffect(() => registerPendingContentFlush(flushContent), [flushContent])
 
   // Leaving this block's editor (unmount / block switch) is the "done
-  // editing" signal — consumers like watch-events short-circuit their
-  // settle window on it. The debounced content commit above may still
-  // be in flight when this fires; subscribers re-check after a beat.
-  useEffect(() => {
-    // Mounting means the user is editing (again): revoke whatever the
-    // last settled signal implied — e.g. a lingering blur exemption
-    // must not vouch for a block being retyped right now.
-    notifyBlockEditResumed(block.id)
-    return () => notifyBlockEditSettled(block.id)
-  }, [block.id])
+  // editing" signal. The debounced content commit above may still be in
+  // flight when this fires.
+  useEffect(() => () => notifyBlockEditSettled(block.id), [block.id])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return
@@ -265,8 +259,9 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
+      editorTooltipParent ? tooltips({parent: editorTooltipParent}) : [],
     ],
-    [providedExtensions, flushDebouncers],
+    [providedExtensions, flushDebouncers, editorTooltipParent],
   )
 
   if (!blockEditData) return null

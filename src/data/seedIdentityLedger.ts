@@ -108,6 +108,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/watcher', 'agent:watcher', 'string', 'string'],
   ['system:agent-runtime/property/subtree-key', 'agent:subtreeKey', 'string', 'string'],
   ['system:annotations/property/margin-open', 'annotation:marginOpen', 'boolean', 'boolean'],
+  ['system:annotations/property/margin-share', 'annotation:marginShare', 'optional-number', 'number'],
   ['system:annotations/property/quote-prefix', 'annotation:quotePrefix', 'optional-string', 'string'],
   ['system:annotations/property/quote-start', 'annotation:quoteStart', 'optional-number', 'number'],
   ['system:annotations/property/quote-suffix', 'annotation:quoteSuffix', 'optional-string', 'string'],
@@ -162,6 +163,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:kernel-data/property/extension-name', 'extension:name', 'string', 'string'],
   ['system:kernel-data/property/focused-block-location', 'focusedBlockLocation', 'optional-json', 'object'],
   ['system:kernel-data/property/is-editing', 'isEditing', 'boolean', 'boolean'],
+  ['system:kernel-data/property/layout-column-weight', 'layoutColumnWeight', 'optional-number', 'number'],
   ['system:kernel-data/property/migration-claimant', 'migration:claimant', 'string', 'string'],
   ['system:kernel-data/property/migration-claimed-at', 'migration:claimed-at', 'number', 'number'],
   ['system:kernel-data/property/migration-completed-at', 'migration:completed-at', 'optional-number', 'number'],
@@ -171,8 +173,11 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:kernel-data/property/property-schema-config', 'property-schema:config', 'json', 'object'],
   ['system:kernel-data/property/property-schema-default', 'property-schema:default', 'raw-json', 'object'],
   ['system:kernel-data/property/property-schema-hidden', 'property-schema:hidden', 'boolean', 'boolean'],
+  ['system:kernel-data/property/property-schema-hide-in-outline', 'property-schema:hide-in-outline', 'boolean', 'boolean'],
   ['system:kernel-data/property/property-schema-name', 'property-schema:name', 'string', 'string'],
   ['system:kernel-data/property/property-schema-preset', 'property-schema:preset', 'string', 'string'],
+  ['system:kernel-data/property/property-display', 'system:propertyDisplay', 'strict-enum', 'enum'],
+  ['system:kernel-data/property/property-display-default', 'system:propertyDisplayDefault', 'strict-enum', 'enum'],
   ['system:kernel-data/property/renderer', 'renderer', 'optional-string', 'string'],
   ['system:kernel-data/property/renderer-name', 'rendererName', 'optional-string', 'string'],
   ['system:kernel-data/property/scroll-top', 'scrollTop', 'optional-number', 'number'],
@@ -198,7 +203,6 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:srs-review/property/deck-tag', 'srs-review:deck-tag', 'string', 'string'],
   ['system:srs-review/property/progress', 'srs-review:progress', 'json', 'object'],
   ['system:startup-metrics/property/startup-record', 'startupRecord', 'optional-json', 'object'],
-  ['system:todo/property/roam-todo-state', 'roam:todo-state', 'strict-enum', 'enum'],
   ['system:todo/property/status', 'status', 'strict-enum', 'enum'],
   ['system:update-indicator/property/current-load-time', 'currentLoadTime', 'optional-number', 'number'],
   ['system:update-indicator/property/previous-load-time', 'previousLoadTime', 'optional-number', 'number'],
@@ -227,6 +231,7 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
   ['system:kernel-data/type/page', 'page'],
   ['system:kernel-data/type/panel', 'panel'],
   ['system:kernel-data/type/panel-stack', 'panel-stack'],
+  ['system:kernel-data/type/property-display-prefs', 'property-display-prefs'],
   ['system:kernel-data/type/panel:migrations', 'panel:migrations'],
   ['system:kernel-data/type/panel:properties', 'panel:properties'],
   ['system:kernel-data/type/panel:recents', 'panel:recents'],
@@ -273,6 +278,14 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
 
 /** Property names no shipped seed may claim. Each was a declaration once. */
 export const RETIRED_PROPERTY_NAMES: readonly string[] = [
+  // Existing strict-enum definition rows and values remain readable; new
+  // imports register this source metadata through ordinary schema inference.
+  'roam:todo-state',
+  // The comments margin's dragged width in px, replaced by its share of the
+  // pane (`annotation:marginShare`) so it scales with the pane. Not converted:
+  // a panel with a dragged width goes back to the automatic one; the px cells
+  // stay on the panels' UI-state rows.
+  'annotation:marginWidth',
   // Renamed to `backlinks:predicates` when the filter shape changed from
   // {includeIds, removeIds} to predicate arrays; stored values were dropped,
   // not converted. A remove id is ONE ancestor-scoped `referencedBy` predicate

@@ -18,7 +18,8 @@ export const AGENT_PROPS = {
   attempts: 'agent:attempts',
   error: 'agent:error',
   reply: 'agent:reply',
-  /** Transient "what the run is doing now" label; empty/absent when idle. */
+  /** Transient "what the run is doing now" label (on a queued task, why it
+   *  waits); empty/absent when idle. */
   activity: 'agent:activity',
   /** Written by the Ask Agent action (companion-owned, daemon-inert). */
   askedAt: 'agent:asked-at',
@@ -93,7 +94,7 @@ export const elapsedLabel = (seconds: number): string => {
 export const chipTitle = (chip: ChipState): string => {
   switch (chip.kind) {
     case 'queued':
-      return `Queued for ${chip.executorLabel}`
+      return chip.activity ? `Queued for ${chip.executorLabel} — ${chip.activity}` : `Queued for ${chip.executorLabel}`
     case 'running': {
       if (chip.cancelling) return `Cancelling the ${chip.executorLabel} run`
       const base = chip.attempts > 1

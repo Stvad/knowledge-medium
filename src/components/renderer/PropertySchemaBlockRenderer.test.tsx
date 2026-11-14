@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChangeScope, codecs, type AnyValuePresetCore } from '@/data/api'
-import { valuePresetCoresFacet } from '@/data/facets'
+import { definitionSeedsFacet, valuePresetCoresFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -30,6 +30,7 @@ const seed = seedProperty({
   name: 'test:readOnlyDemo',
   preset: 'optional-string',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 const SEED_ID = propertyDefinitionBlockId(WS, seed.seedKey)
 
@@ -79,7 +80,11 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     repo = createTestRepo({
       db: sharedDb.db,
       user: {id: 'user-1'},
-      extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension],
+      extensions: [
+        kernelPropertyUiExtension,
+        kernelValuePresetsExtension,
+        definitionSeedsFacet.of(seed, {source: 'test'}),
+      ],
     }).repo
     repo.setActiveWorkspaceId(WS)
 
@@ -93,7 +98,10 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
         parentId: 'root',
         orderKey: 'a1',
         content: seed.name,
-        properties: canonicalPropertySeedProperties(seed),
+        properties: Object.fromEntries(
+          Object.entries(canonicalPropertySeedProperties(seed))
+            .filter(([name]) => name !== 'property-schema:hide-in-outline'),
+        ),
       })
       await tx.create({
         id: REF_SEED_ID,
@@ -229,6 +237,7 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
       extensions: [
         kernelPropertyUiExtension,
         kernelValuePresetsExtension,
+        definitionSeedsFacet.of(seed, {source: 'test'}),
         ...cores.map(core => valuePresetCoresFacet.of(core, {source: 'test'})),
       ],
     }).repo
@@ -295,6 +304,44 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
       expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('string')
     })
     expect(repo.block('user-schema')).toBeTruthy()
+  })
+
+  it('marks a user definition and leaves a seed outline setting editable', async () => {
+    renderSchema('user-schema')
+    const box = screen.getByRole('checkbox', {name: /Hide in outline/})
+    expect(box.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(box)
+    await waitFor(() => expect(repo.block('user-schema').peek()?.properties['property-schema:hide-in-outline']).toBe(true))
+    await waitFor(() => expect(box.getAttribute('aria-checked')).toBe('true'))
+    cleanup()
+
+    renderSchema(SEED_ID)
+    expect((screen.getByRole('checkbox', {name: /Hide in outline/}) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows and edits the effective outline default for a code-owned seed', async () => {
+    // The declaration defaults this seed to hidden, while its materialized row
+    // deliberately has no stored hide-in-outline property. An explicit false
+    // then overrides the declaration, and the checkbox can set it back to true.
+    expect(repo.block(SEED_ID).peek()?.properties['property-schema:hide-in-outline']).toBeUndefined()
+    renderSchema(SEED_ID)
+
+    const box = screen.getByRole('checkbox', {name: /Hide in outline/})
+    expect(box.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(box)
+    await waitFor(() => expect(repo.block(SEED_ID).peek()?.properties['property-schema:hide-in-outline']).toBe(false))
+    await waitFor(() => expect(box.getAttribute('aria-checked')).toBe('false'))
+
+    fireEvent.click(box)
+    await waitFor(() => expect(repo.block(SEED_ID).peek()?.properties['property-schema:hide-in-outline']).toBe(true))
+    await waitFor(() => expect(box.getAttribute('aria-checked')).toBe('true'))
+  })
+
+  it('keeps the outline setting disabled when the repository is read-only', async () => {
+    const viewer = await otherRepo(SEED_ID, {isReadOnly: true})
+    renderSchema(SEED_ID, viewer)
+
+    expect((screen.getByRole('checkbox', {name: /Hide in outline/}) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('keeps a user-created schema editable', () => {

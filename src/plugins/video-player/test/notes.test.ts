@@ -40,10 +40,10 @@ const makeBlocks = ({
 
   const videoBlock = {
     id: 'video-1',
-    childIds: {load: loadChildIds},
     repo: {
       isReadOnly: readOnly,
       mutate: {createChild},
+      query: {childIds: () => ({load: loadChildIds})},
     },
     set: setVideoProperty,
   } as unknown as Block

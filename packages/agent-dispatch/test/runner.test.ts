@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process'
 import {
   BILLING_ENV_DENYLIST,
   buildClaudeArgs,
+  formatRunUsage,
   createStreamJsonParser,
   runClaude,
   scrubEnv,
@@ -22,6 +23,7 @@ describe('buildClaudeArgs', () => {
   it('builds a print-mode stream-json run WITHOUT the prompt in argv (stdin carries it)', () => {
     expect(buildClaudeArgs(baseOptions)).toEqual([
       '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+      '--disable-slash-commands', '--tools', '',
     ])
   })
 
@@ -43,8 +45,30 @@ describe('buildClaudeArgs', () => {
       '--model', 'claude-sonnet-5',
       '--effort', 'high',
       '--mcp-config', '/tmp/km.json', '--strict-mcp-config',
+      '--disable-slash-commands', '--tools', '',
       '--allowedTools', 'mcp__km__get_block,mcp__km__search',
     ])
+  })
+
+  it('offers only the built-in tools the run may use, named without their permission patterns', () => {
+    const args = buildClaudeArgs({
+      ...baseOptions,
+      allowedTools: ['mcp__km__search', 'WebSearch', 'Bash(git *)', 'Bash(ls)', 'Read'],
+    })
+    expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2))
+      .toEqual(['--tools', 'WebSearch,Bash,Read'])
+  })
+})
+
+describe('formatRunUsage', () => {
+  it('summarizes the counts compactly for a log line', () => {
+    expect(formatRunUsage({inputTokens: 244, cacheReadTokens: 25_134_938, cacheWriteTokens: 983_213, outputTokens: 95_722}))
+      .toBe('tokens: in 244 · cache read 25.1M · cache write 983.2k · out 95.7k')
+  })
+
+  it('leaves out a cache-write count the executor does not report', () => {
+    expect(formatRunUsage({inputTokens: 11_485, cacheReadTokens: 2432, cacheWriteTokens: null, outputTokens: 20}))
+      .toBe('tokens: in 11.5k · cache read 2.4k · out 20')
   })
 })
 
@@ -116,6 +140,13 @@ describe('createStreamJsonParser', () => {
 
     expect(events).toEqual([])
     expect(parser.finish()).toMatchObject({resultText: 'ok'})
+  })
+
+  it('the last result line wins: a run that waited on a background subagent ends with a second one', () => {
+    const parser = createStreamJsonParser()
+    parser.feed(line({type: 'result', result: 'Launched the agent; I will reply when it returns.', session_id: 's', is_error: false}))
+    parser.feed(line({type: 'result', result: 'The final answer', session_id: 's', is_error: false}))
+    expect(parser.finish()).toMatchObject({resultText: 'The final answer'})
   })
 
   it('finish() returns null when no result line was seen', () => {
@@ -231,6 +262,36 @@ const streamResult = (obj: Record<string, unknown>) =>
   `process.stdout.write(JSON.stringify(${JSON.stringify(obj)}) + '\\n')`
 
 describe('runClaude', () => {
+  it('reports the run\'s token usage from the result line', async () => {
+    const result = await runClaude(baseOptions, fakeClaude(streamResult({
+      type: 'result', result: 'hi', session_id: 's1', is_error: false,
+      usage: {input_tokens: 4, cache_creation_input_tokens: 14625, cache_read_input_tokens: 14244, output_tokens: 34},
+    })))
+    expect(result.usage).toEqual({inputTokens: 4, cacheWriteTokens: 14625, cacheReadTokens: 14244, outputTokens: 34})
+  })
+
+  it('totals usage over the whole process — every model and subagent — from modelUsage', async () => {
+    // A background subagent makes claude emit a result line per parent turn;
+    // each line's `usage` covers that turn only, while `modelUsage` is the
+    // process-wide total.
+    const result = await runClaude(baseOptions, fakeClaude(streamResult({
+      type: 'result', result: 'hi', session_id: 's1', is_error: false,
+      usage: {input_tokens: 2, cache_creation_input_tokens: 723, cache_read_input_tokens: 18720, output_tokens: 12},
+      modelUsage: {
+        'claude-opus-5-5': {inputTokens: 6, cacheReadInputTokens: 37_032, cacheCreationInputTokens: 33_302, outputTokens: 1132},
+        'claude-haiku-5-5': {inputTokens: 4, cacheReadInputTokens: 100, cacheCreationInputTokens: 200, outputTokens: 30},
+      },
+    })))
+    expect(result.usage).toEqual({inputTokens: 10, cacheReadTokens: 37_132, cacheWriteTokens: 33_502, outputTokens: 1162})
+  })
+
+  it('reports no usage when the result line carries none', async () => {
+    const result = await runClaude(baseOptions, fakeClaude(
+      streamResult({type: 'result', result: 'hi', session_id: 's1', is_error: false}),
+    ))
+    expect(result.usage).toBeNull()
+  })
+
   it('returns ok with parsed result on a clean run', async () => {
     const result = await runClaude(baseOptions, fakeClaude(
       streamResult({type: 'result', result: 'hi', session_id: 's1', is_error: false}),

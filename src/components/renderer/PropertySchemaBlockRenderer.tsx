@@ -5,7 +5,7 @@
  *  `preset.ConfigEditor`, and a delete button. See
  *  user-defined-properties.md §4a. */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -20,6 +20,7 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
+  propertyHideInOutlineProp,
 } from '@/data/properties.js'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes.js'
 import {
@@ -33,9 +34,11 @@ import {
 } from '@/data/api'
 import { decodeRowProperty } from '@/data/rowProperty.js'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
+import { effectiveHideInOutline } from '@/data/propertyDefinitionRegistry.js'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
+import { Checkbox } from '@/components/ui/checkbox.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
@@ -246,6 +249,8 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
       id: d.id,
       workspaceId: d.workspaceId,
       properties: d.properties,
+      deleted: d.deleted,
+      createdAt: d.createdAt,
     } : undefined,
   })
   const runtime = useAppRuntime()
@@ -257,16 +262,23 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   // delete-and-recreate, and the gate would be an async count the tx re-checks.
   const typeUnavailable = useCurrentTypeUnavailable(block)
 
-  // A materialized seed row is a kernel/plugin property *defined in code*.
-  // In v1 these are code-owned and unshadowable: their name, type, config,
-  // and lifecycle are fixed by the declaration. Editing the seed's own row
-  // has no legitimate meaning and silently corrupts the definition — e.g.
-  // switching its preset leaves a stored default the new codec can't decode,
-  // which drops the whole schema to metadata-only. Render read-only so the
-  // user sees what the property is without being able to mutate it. A viewer
-  // (repo read-only) is the same case for a different reason.
+  // Seed-backed schema identity, type, config, and lifecycle are code-owned;
+  // the outline preference is user-owned. A read-only repository locks both.
   const isSeedBacked = data ? isValidSeededDefinition(data) : false
   const readOnly = block.repo.isReadOnly || isSeedBacked
+  // `hideInOutline` can default from a code seed without being stored on the
+  // row. Subscribe through the existing schema registry event so the control
+  // follows both row edits and declaration/runtime changes.
+  const propertyDefinitions = useSyncExternalStore(
+    useCallback(cb => block.repo.onPropertySchemasChange(cb), [block.repo]),
+    () => block.repo.propertyDefinitions,
+    () => block.repo.propertyDefinitions,
+  )
+  const definitionMetadata = data ? parsePropertyDefinitionMetadata(data) : null
+  const storedHide = data?.properties[propertyHideInOutlineProp.name]
+  const effectiveHide = definitionMetadata && propertyDefinitions
+    ? effectiveHideInOutline(definitionMetadata, propertyDefinitions.seedsByKey)
+    : storedHide === true
 
 
   const facts = useMemo(() => definitionFacts(data?.properties), [data])
@@ -682,6 +694,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
           </fieldset>
         </div>
       )}
+
+      <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
+        <label className="text-xs font-semibold text-muted-foreground" htmlFor={`${block.id}-hide-in-outline`}>
+          Outline
+        </label>
+        <label className="flex items-center gap-2 text-sm" data-property-schema-hide-in-outline="true">
+          <Checkbox
+            id={`${block.id}-hide-in-outline`}
+            checked={effectiveHide}
+            disabled={block.repo.isReadOnly}
+            onCheckedChange={(checked) => {
+              void block.set(propertyHideInOutlineProp, checked === true)
+                .catch(() => { showError('Could not change the outline setting') })
+            }}
+          />
+          <span>Hide in outline (its default view; show-all still shows it)</span>
+        </label>
+      </div>
 
       {isSeedBacked && (
         <div className="text-xs text-muted-foreground">

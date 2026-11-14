@@ -3,8 +3,16 @@ import { describe, expect, it } from 'vitest'
 import {
   getElementScrollportBounds,
   isEditorElement,
+  isElementProperlyVisible,
   shouldExitEditModeAfterBlur,
 } from '@/utils/dom.js'
+
+const stubRect = (el: HTMLElement, top: number, height: number): void => {
+  el.getBoundingClientRect = () => ({
+    top, bottom: top + height, left: 0, right: 100, width: 100, height,
+    x: 0, y: top, toJSON: () => ({}),
+  }) as DOMRect
+}
 
 describe('dom editor focus helpers', () => {
   it('treats textareas as editor elements', () => {
@@ -34,13 +42,6 @@ describe('dom editor focus helpers', () => {
 })
 
 describe('getElementScrollportBounds', () => {
-  const stubRect = (el: HTMLElement, top: number, height: number): void => {
-    el.getBoundingClientRect = () => ({
-      top, bottom: top + height, left: 0, right: 100, width: 100, height,
-      x: 0, y: top, toJSON: () => ({}),
-    }) as DOMRect
-  }
-
   const scrollport = (top: number, height: number): HTMLElement => {
     const el = document.createElement('div')
     el.style.overflowY = 'auto'
@@ -73,6 +74,22 @@ describe('getElementScrollportBounds', () => {
     expect(getElementScrollportBounds(row)).toEqual({top: 200, bottom: 400})
   })
 
+  // The comments margin sits outside the outline's scrollport and clips its
+  // cards (`overflow: clip`) to the scrollport's band: a card row above that
+  // band is hidden although no scrollport cuts it.
+  it.each(['clip', 'hidden'])('clips to an ancestor that clips its overflow without scrolling (%s)', overflowY => {
+    const port = scrollport(0, 700)
+    const column = document.createElement('div')
+    column.style.overflowY = overflowY
+    stubRect(column, 48, 600)
+    port.appendChild(column)
+    const row = document.createElement('div')
+    column.appendChild(row)
+    document.body.appendChild(port)
+
+    expect(getElementScrollportBounds(row)).toEqual({top: 48, bottom: 648})
+  })
+
   it('ignores ancestors that do not scroll', () => {
     const port = scrollport(100, 300)
     const plain = document.createElement('div')
@@ -83,5 +100,30 @@ describe('getElementScrollportBounds', () => {
     document.body.appendChild(port)
 
     expect(getElementScrollportBounds(row)).toEqual({top: 100, bottom: 400})
+  })
+})
+
+describe('isElementProperlyVisible', () => {
+  const bounds = {top: 0, bottom: 500}
+  const rowAt = (top: number, height: number): HTMLElement => {
+    const el = document.createElement('div')
+    el.style.lineHeight = '24px'
+    document.body.appendChild(el)
+    stubRect(el, top, height)
+    return el
+  }
+
+  it('counts a row shorter than its line height as visible once all of it is in view', () => {
+    expect(isElementProperlyVisible(rowAt(100, 20), bounds)).toBe(true)
+    expect(isElementProperlyVisible(rowAt(490, 20), bounds)).toBe(false)
+  })
+
+  it('still asks a taller row for a whole line in view', () => {
+    expect(isElementProperlyVisible(rowAt(480, 60), bounds)).toBe(false)
+    expect(isElementProperlyVisible(rowAt(470, 60), bounds)).toBe(true)
+  })
+
+  it('never counts an element with no height', () => {
+    expect(isElementProperlyVisible(rowAt(100, 0), bounds)).toBe(false)
   })
 })

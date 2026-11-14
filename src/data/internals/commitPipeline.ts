@@ -62,9 +62,12 @@ import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type { BlockIdPolicy } from '@/data/blockId'
 import {
+  outlineSkippedFieldIds,
   propertyDefinitionClaimantsForName,
   type PropertyDefinitionRegistrySnapshot,
 } from '@/data/propertyDefinitionRegistry'
+
+const NO_OUTLINE_SKIPPED_FIELD_IDS: ReadonlySet<string> = new Set()
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -583,6 +586,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         return parent !== null && !parent.deleted ? 'live' : 'tombstoned'
       },
     }
+    const outlineSkippedIdsByWorkspace = new Map<string, ReadonlySet<string>>()
     const tx = new TxImpl({
       txDb,
       snapshots,
@@ -594,6 +598,15 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       processors,
       contentReferencePrefill,
       propertySchemaResolverFor: resolverFor,
+      outlineSkippedFieldIdsFor: (workspaceId: string) => {
+        let ids = outlineSkippedIdsByWorkspace.get(workspaceId)
+        if (ids === undefined) {
+          const registry = propertyDefinitionRegistryForWorkspace(workspaceId)
+          ids = registry ? outlineSkippedFieldIds(registry) : NO_OUTLINE_SKIPPED_FIELD_IDS
+          outlineSkippedIdsByWorkspace.set(workspaceId, ids)
+        }
+        return ids
+      },
       writableWorkspace,
       propertyWritesAreSettled: () => settleWrites,
       revivalHistory,
@@ -803,10 +816,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // content/references edit), and that entry's `applyRaw` snapshot
     // captures the row's full state including its properties bag.
     // Replaying it restores that snapshot verbatim, which can transiently
-    // regress a code-owned bag (e.g. undoing an edit recorded before a
-    // revision-upgrade re-materialization). Accepted because
-    // materialization self-heals the bag on its next pass, and blocking
-    // replays outright would break undo atomicity.
+    // restore an earlier bag. Schema migrations must clear undo history;
+    // blocking replays outright would break undo atomicity.
     if (!isReplay) assertNoSeedDefinitionWrites(snapshots, scope)
 
     // Step 4: write command_events row — one per repo.tx invocation

@@ -8,7 +8,9 @@
 //
 // All checks are READ-ONLY over the client SQLite (it runs on the decrypted
 // client, so unlike the server probe it covers the e2ee workspace). The lean
-// checks use SQL counts plus a BOUNDED e2ee decrypt spot-check. `full` mode
+// checks use SQL counts plus a BOUNDED e2ee decrypt spot-check, and on a
+// workspace at property children, two keyset-paged scans of the property cells
+// (coverage and cell-vs-children divergence: see propertyChildrenChecks.ts). `full` mode
 // adds the heavier inspections — precise property-ref projection, schema-aware at-rest,
 // content-link recompute, dangling refs, and an EXHAUSTIVE keyset-paginated
 // decrypt-compare — which need the app's own projection/parser + the active
@@ -33,22 +35,14 @@ import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
 import { hasSourceContent } from '@/data/blockTypes'
-
-/** `blocks.properties_json` → the bag `hasSourceContent` reads. Tolerant
- *  by design: a row whose JSON is unparseable is not source content (its
- *  `types` can't say so) — the same answer `hasSourceContent` gives for a
- *  wrong-shaped value. */
-const parsePropertiesJson = (json: string | null): Record<string, unknown> => {
-  if (json === null) return {}
-  try {
-    const parsed: unknown = JSON.parse(json)
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
-}
+import type { Repo } from '@/data/repo'
+import { readWorkspacePropertiesMigration } from '@/data/workspaceSchema'
+import {
+  runPropertyCellCoverageCheck,
+  runPropertyCellDivergenceCheck,
+  runPropertyFieldRowDuplicatesCheck,
+} from './propertyChildrenChecks.js'
+import { parsePropertiesJson } from './rowJson.js'
 
 /** {@link hasSourceContent} for a raw row. */
 const rowHasSourceContent = (propertiesJson: string | null): boolean =>
@@ -166,12 +160,16 @@ export interface DecryptSpotCheckResult {
 export interface AuditOptions {
   /** When set (with `sleep`), the divergence check that finds anomalies on its
    *  first pass re-measures after this delay and reports the SETTLED counts —
-   *  debouncing transient mid-sync divergence (an own write uploaded but its
-   *  server echo not yet streamed back; a mid-resync window). The point-in-time
-   *  snapshot can't otherwise tell a transient from a persistent divergence
-   *  (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
+   *  debouncing transient mid-sync divergence (a mid-resync window). The
+   *  point-in-time snapshot can't otherwise tell a transient from a persistent
+   *  divergence (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
   divergenceRecheckMs?: number
   sleep?: (ms: number) => Promise<void>
+  /** Epoch ms of the last checkpoint the sync client APPLIED (PowerSync's
+   *  `lastSyncedAt`), or undefined before the first. When set, the divergence
+   *  check judges stranded / local-richer rows only if stamped before it. Omit
+   *  to judge every row (tests). */
+  syncedThroughMs?: () => number | undefined
   /** When set, the divergence check decrypts a bounded sample of equal-stamp
    *  e2ee staging rows and compares plaintext-to-plaintext — recovering the
    *  content-divergence detection the cleartext-only SQL diff gives up on an
@@ -185,6 +183,10 @@ export interface AuditOptions {
    *  and an EXHAUSTIVE e2ee content divergence) — the rich superset the bridge
    *  eval used to reimplement. Omit for the lean always-on cadence run. */
   full?: AuditFullDeps
+  /** The repo whose loaded property registry resolves the audited workspace's
+   *  keys — the coverage and divergence checks read through it. Omit and they
+   *  report `skipped`; the SQL-only duplicate check runs either way. */
+  repo?: Repo
 }
 
 /** Runtime context the deep `full`-mode checks need beyond the DB: the active
@@ -867,9 +869,14 @@ export const runConsistencyAudit = async (
   // after a delay (opts.divergenceRecheckMs) and the SETTLED counts are reported.
   await run('local_server_divergence', async () => {
     const pendingClause = `b.id NOT IN (${PENDING_UPLOAD_IDS_SQL})`
+    // An upload-path divergence is due only on a row stamped before the last
+    // APPLIED checkpoint: PowerSync applies one only with an empty upload queue,
+    // so every earlier write's echo has landed (a stamp is max(now, prev+1),
+    // never earlier than its write). A later row's echo may still be in flight.
+    const echoDueClause = `b.updated_at<?`
     const strandedWhere = `b.workspace_id=? AND b.deleted=0
       AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
-      AND ${pendingClause}`
+      AND ${pendingClause} AND ${echoDueClause}`
     // Cross-view content diff. An e2ee staging row holds `enc:v1:` ciphertext
     // while `blocks` holds decrypted plaintext, so they're never byte-equal —
     // comparing them flags every e2ee row. The prefix ALONE can't tell real
@@ -899,16 +906,25 @@ export const runConsistencyAudit = async (
     const contentDiffers = `(b.deleted!=bs.deleted OR ${sealedDiffers})`
     const standoffWhere = `b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
       AND ${contentDiffers}`
-    const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`
+    const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}
+      AND ${echoDueClause}`
     const serverAheadWhere = `b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
       AND ${contentDiffers}`
 
-    const measure = async () => ({
-      strandedLocalOnly: await count(db, `SELECT count(*) AS n FROM blocks b WHERE ${strandedWhere}`, [workspaceId]),
-      equalStampStandoff: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`, [workspaceId]),
-      localRicherNoPending: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`, [workspaceId]),
-      serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
-    })
+    // Re-read per pass: a checkpoint applied during the recheck delay makes more
+    // rows due. Before the first checkpoint nothing is due; `?? 0` is defence in
+    // depth so no driver is handed an undefined binding.
+    let uploadPathParams: unknown[] = []
+    const measure = async () => {
+      const dueBefore = opts.syncedThroughMs ? (opts.syncedThroughMs() ?? 0) : Number.MAX_SAFE_INTEGER
+      uploadPathParams = [workspaceId, dueBefore]
+      return {
+        strandedLocalOnly: await count(db, `SELECT count(*) AS n FROM blocks b WHERE ${strandedWhere}`, uploadPathParams),
+        equalStampStandoff: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`, [workspaceId]),
+        localRicherNoPending: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`, uploadPathParams),
+        serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
+      }
+    }
     // stranded + standoff + local-richer are real anomalies; server-ahead is info.
     const anomalyTotal = (m: Awaited<ReturnType<typeof measure>>) =>
       m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
@@ -923,13 +939,13 @@ export const runConsistencyAudit = async (
 
     const samples: string[] = []
     if (m.strandedLocalOnly > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b WHERE ${strandedWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b WHERE ${strandedWhere} LIMIT ${SAMPLE_LIMIT}`, uploadPathParams))
     }
     if (m.equalStampStandoff > 0) {
       addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
     }
     if (m.localRicherNoPending > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
+      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere} LIMIT ${SAMPLE_LIMIT}`, uploadPathParams))
     }
 
     // e2ee content divergence: the cleartext-only diff above can't see through
@@ -979,6 +995,35 @@ export const runConsistencyAudit = async (
       opts.full ? (opts.full.candidateCap ?? 60000) : (opts.decryptSampleSize ?? DECRYPT_SAMPLE_LIMIT),
     ),
   )
+
+  // Property children (#1011, read-only). Only a workspace at 'children' has
+  // both representations to compare: before it there are no field rows to
+  // trust, and past it the cell is no longer the read surface. All three run
+  // on the cadence: they page through owners, so no statement holds the
+  // connection for long, and the divergence count is the signal that gates
+  // stopping cell uploads.
+  let propertiesMigration: ReturnType<typeof readWorkspacePropertiesMigration> | undefined
+  const whenSwitched = async (
+    check: () => Promise<ConsistencyCheckResult>,
+  ): Promise<ConsistencyCheckResult> => {
+    propertiesMigration ??= readWorkspacePropertiesMigration(
+      { getOptional: async <T>(sql: string, params?: unknown[]) => (await db.getAll<T>(sql, params))[0] ?? null },
+      workspaceId,
+    )
+    const mode = await propertiesMigration
+    return mode === 'children'
+      ? check()
+      : { status: 'skipped', reason: `properties_migration is '${mode}', not 'children'` }
+  }
+  const noRepo: ConsistencyCheckResult = {
+    status: 'skipped', reason: 'no repo passed to resolve property keys against',
+  }
+  await run('property_field_row_duplicates', () => whenSwitched(() =>
+    runPropertyFieldRowDuplicatesCheck(db, workspaceId, SAMPLE_LIMIT)))
+  await run('property_cell_coverage', () => whenSwitched(async () =>
+    opts.repo ? runPropertyCellCoverageCheck(opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
+  await run('property_cell_divergence', () => whenSwitched(async () =>
+    opts.repo ? runPropertyCellDivergenceCheck(db, opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
 
   // Deep ON-DEMAND checks (full mode only) — the rich superset the bridge eval
   // used to reimplement, now run by the engine so the eval just invokes it.

@@ -53,3 +53,22 @@ export const keyAtStart = (firstExisting: string | null = null): string =>
  *  very end. */
 export const keyAtEnd = (lastExisting: string | null = null): string =>
   keyBetween(lastExisting, null)
+
+/** Whether sibling `a` sorts before sibling `b` in every children query's
+ *  `(order_key, id)` order. Plain `<` agrees with SQLite's BINARY collation
+ *  on the ASCII keys and ids the app mints. */
+export const siblingPrecedes = (
+  a: {readonly orderKey: string; readonly id: string},
+  b: {readonly orderKey: string; readonly id: string},
+): boolean => a.orderKey < b.orderKey || (a.orderKey === b.orderKey && a.id < b.id)
+
+/** Where `row`, which `siblings` (in order) leaves out, sits among them: the
+ *  index of the first sibling it sorts before, else `siblings.length`. A
+ *  sibling not known (`null`) is passed over. */
+export const unlistedIndexAmong = (
+  siblings: readonly ({readonly orderKey: string; readonly id: string} | null | undefined)[],
+  row: {readonly orderKey: string; readonly id: string},
+): number => {
+  const at = siblings.findIndex(sibling => !!sibling && siblingPrecedes(row, sibling))
+  return at === -1 ? siblings.length : at
+}

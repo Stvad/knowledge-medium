@@ -147,7 +147,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
+    const {selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
@@ -169,6 +169,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           block,
           uiStateBlock,
           scopeRootId,
+          propertyDisplay,
         } as ShortcutDependenciesMap[T]
 
         await (runtime
@@ -250,6 +251,7 @@ export interface BlocksActionContext {
    *  leaves later shortcuts acting on a row the pane no longer shows. */
   uiStateBlock: Block
   scopeRootId?: string
+  propertyDisplay?: BlockShortcutDependencies['propertyDisplay']
 }
 
 export interface BlocksActionPair {
@@ -302,8 +304,8 @@ export const defineBlocksAction = ({
     ...(appliesTo
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
-    handler: ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) =>
-      flow([block], {uiStateBlock, scopeRootId}),
+    handler: ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) =>
+      flow([block], {uiStateBlock, scopeRootId, propertyDisplay}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -315,7 +317,7 @@ export const defineBlocksAction = ({
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))
     },
-    handler: ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks, {uiStateBlock, scopeRootId}),
+    handler: ({selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks, {uiStateBlock, scopeRootId, propertyDisplay}),
   },
 })

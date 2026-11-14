@@ -55,6 +55,7 @@
  * `command_events.tx_id` primary key.
  */
 
+import type { BlockData } from '@/data/api'
 import type { User } from '@/data/api/user.js'
 import { BlockCache } from '@/data/blockCache'
 import type { BackfillCompletionClaim } from '@/data/facets'
@@ -120,6 +121,14 @@ export const isBlockDeleted = async (repo: Repo, id: string): Promise<boolean> =
   )
   return row?.deleted === 1
 }
+
+/** A block's children as the outline's hide-all-properties view lists them
+ *  (mode `none`): what most tests mean by "its children". */
+export const childIdsOf = (repo: Repo, id: string): Promise<string[]> =>
+  repo.query.childIds({id, propertyChildren: 'none'}).load()
+
+export const childrenOf = (repo: Repo, id: string): Promise<BlockData[]> =>
+  repo.query.children({id, propertyChildren: 'none'}).load()
 
 export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
   const cache = new BlockCache()

@@ -30,6 +30,7 @@ export const mediaHashProp = seedProperty({
   preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 /** A media block's content hash from its stored properties, or null when it
@@ -61,6 +62,7 @@ export const mediaMimeProp = seedProperty({
   preset: 'string',
   defaultValue: 'application/octet-stream',
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 /** Plaintext byte length (cosmetic — for the file chip / pending UI). */
@@ -71,6 +73,7 @@ export const mediaSizeProp = seedProperty({
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 /** Original filename, when captured from a file (cosmetic; cross-device LWW). */
@@ -81,6 +84,7 @@ export const mediaFilenameProp = seedProperty({
   preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const MEDIA_PROPERTY_SCHEMAS = [

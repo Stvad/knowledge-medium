@@ -462,6 +462,41 @@ describe('update-block compare-and-set', () => {
   })
 })
 
+describe('undoable: false writes', () => {
+  const undoDepth = () => repo.undoManager.depths(ChangeScope.BlockDefault).undo
+
+  it('keeps update-block off the undo stack, and an undo of the user\'s edit keeps it', async () => {
+    await seed([{id: NOTE, content: 'v1'}])
+    repo.undoManager.clear()
+    await repo.tx(async tx => { await tx.update(NOTE, {content: 'typed'}) },
+      {scope: ChangeScope.BlockDefault, description: 'type'})
+
+    await run({type: 'update-block', id: NOTE, properties: {'agent:status': 'done'}, undoable: false})
+    expect(undoDepth()).toBe(1)
+
+    expect(await repo.undo()).toBe(true)
+    const after = (await repo.load(NOTE))!
+    expect(after.content).toBe('v1')
+    expect(after.properties['agent:status']).toBe('done')
+  })
+
+  it('keeps reconcile-markdown-subtree off the undo stack', async () => {
+    await seed([{id: NOTE, content: 'v1'}])
+    repo.undoManager.clear()
+    await run({type: 'reconcile-markdown-subtree', parentId: NOTE, markdown: 'reply', key: 'k', final: true, undoable: false})
+    expect((await liveChildren(NOTE)).map(child => child.content)).toEqual(['reply'])
+    expect(undoDepth()).toBe(0)
+  })
+
+  it('records the same writes on the undo stack by default', async () => {
+    await seed([{id: NOTE, content: 'v1'}])
+    repo.undoManager.clear()
+    await run({type: 'update-block', id: NOTE, properties: {'agent:status': 'done'}})
+    await run({type: 'reconcile-markdown-subtree', parentId: NOTE, markdown: 'reply', key: 'k', final: true})
+    expect(undoDepth()).toBe(2)
+  })
+})
+
 describe('create-page', () => {
   it('creates a page by name once, and returns it again after', async () => {
     const first = await run({type: 'create-page', name: 'Groceries'}) as {id: string, created: boolean}
