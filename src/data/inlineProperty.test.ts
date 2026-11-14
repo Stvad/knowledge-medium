@@ -102,6 +102,46 @@ describe('inline property drafts', () => {
     expect(await children(result.fieldRowId!)).toHaveLength(2)
   })
 
+  it.each(['lagging member', 'duplicate fields without a cell'])('appends from live rows without changing existing members: %s', async setup => {
+    await repo.block('owner').set(tags, [setup === 'lagging member' ? 'a' : 'one'])
+    const selected = await selectInlineProperty(repo.block('owner'), tags, repo.block('source'))
+    const first = (await children(selected.fieldRowId!))[0]!
+    await h.db.writeTransaction(async tx => {
+      const insert = (id: string, parentId: string, orderKey: string, content: string, fieldId: string | null = null) => tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          reference_target_id, is_field_form, deleted, created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES (?, 'ws', ?, ?, ?, '{}', ?, ?, 0, 1, 1, 1, 'user', 'user')`,
+        [id, parentId, orderKey, content, fieldId, fieldId ? 1 : 0])
+      if (setup === 'duplicate fields without a cell') {
+        await insert('second-field', 'owner', 'a2', `::((${selected.schema.fieldId}))`, selected.schema.fieldId)
+        await tx.execute("UPDATE blocks SET properties_json = '{}' WHERE id = 'owner'")
+      }
+      await insert('arrived-member', setup === 'lagging member' ? selected.fieldRowId! : 'second-field',
+        'a2', setup === 'lagging member' ? 'from other device' : 'two')
+      await insert('nested-note', 'arrived-member', 'a0', 'keep nested note')
+    })
+    const held = () => h.db.getAll<{id: string; deleted: number}>(
+      `SELECT id, parent_id, order_key, content, properties_json, deleted FROM blocks
+       WHERE id IN (?, ?, 'second-field', 'arrived-member', 'nested-note') ORDER BY id`, [selected.fieldRowId!, first.id])
+    const before = await held()
+    const count = (await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n
+    expect(before.every(row => row.deleted === 0)).toBe(true)
+    const bag = JSON.parse((await h.db.get<{properties_json: string}>("SELECT properties_json FROM blocks WHERE id = 'owner'")).properties_json)
+    expect(bag[tags.name]).toEqual(setup === 'lagging member' ? ['a'] : undefined)
+    repo.undoManager.clear()
+
+    const target = await commitInlineProperty(repo.block('owner'), selected, 'new')
+
+    expect(await held()).toEqual(before)
+    expect((await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n).toBe(count + 1)
+    expect(await repo.block('owner').get(tags)).toEqual(setup === 'lagging member' ? ['a', 'from other device', 'new'] : ['one', 'two', 'new'])
+    expect((await children(target!.fieldRowId)).at(-1)?.id).toBe(target!.valueId)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+    await repo.undo()
+    expect(await held()).toEqual(before)
+    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', [target!.valueId])).toBeNull()
+  })
+
   it.each([
     {schema: note, value: 'keep pending text'},
     {schema: tags, value: ['keep', 'members']},

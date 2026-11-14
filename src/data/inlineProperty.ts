@@ -1,9 +1,10 @@
 import type {Block} from './block'
 import {ChangeScope, memberCodecOf, type AnyPropertySchema, type AnyResolvedPropertySchema} from './api'
-import {isFieldValueChild, scalarValueRow, valueChildContentToEncoded} from './propertyChildren'
+import {encodedToValueChildContent, isFieldValueChild, scalarValueRow, valueChildContentToEncoded} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
 import {keyBetween} from './orderKey'
 import {FIELD_FORM_MARKER} from './referenceBlock'
+import {upsertFieldRow} from './internals/propertyChildrenProcessor'
 
 /** Expected fields follow existing children; both rendering and commit use this placement. */
 export const expectedPropertyPosition = (childCount: number): number => childCount
@@ -43,8 +44,8 @@ export const selectInlineProperty = async (
   }, {scope: ChangeScope.BlockDefault, description: 'Choose inline property'})
 }
 
-/** Commit a draft through the ordinary typed writer, including list append.
- * The writer owns canonical field/value rows, reference prefill and undo. */
+/** Scalars use the typed writer; list appends add one row and project the cell.
+ * A stored list cell can lag its live members and must never drive an append. */
 export const commitInlineProperty = async (
   owner: Block, selection: InlinePropertySelection, content: string,
 ): Promise<{fieldRowId: string; valueId: string} | null> => {
@@ -65,18 +66,25 @@ export const commitInlineProperty = async (
     if (!member && (previousValues.length || storedPropertyValue(parent.properties, schema.name) !== undefined)) {
       throw new Error('This property now has a value. Edit its existing row instead.')
     }
-    const oldIds = new Set(previousValues.map(row => row.id))
-    await tx.setProperty(owner.id, schema, member
-      ? (current: readonly unknown[] | undefined) => [...(current ?? []), value]
-      : value)
-    const field = (await tx.childrenOf(owner.id)).find(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)!
+    let field: {id: string; workspaceId: string}
+    let valueId: string
+    if (member) {
+      field = before.at(-1) ?? await upsertFieldRow(tx, parent, schema.fieldId, [])
+      const siblings = await tx.childrenOf(field.id)
+      const content = encodedToValueChildContent(schema, member.encode(value))
+      valueId = await tx.create({workspaceId: parent.workspaceId, parentId: field.id,
+        orderKey: keyBetween(siblings.at(-1)?.orderKey ?? null, null), content,
+        references: tx.derivedReferencesFor(content)})
+    } else {
+      await tx.setProperty(owner.id, schema, value)
+      field = (await tx.childrenOf(owner.id)).find(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)!
+      valueId = (await tx.childrenOf(field.id)).filter(isFieldValueChild).at(-1)!.id
+    }
     if (!before.length) {
       const at = expectedPropertyPosition(ownerChildren.length)
       const orderKey = selection.orderKey ?? keyBetween(ownerChildren[at - 1]?.orderKey ?? null, ownerChildren[at]?.orderKey ?? null)
       await tx.move(field.id, {parentId: owner.id, orderKey})
     }
-    const values = (await tx.childrenOf(field.id)).filter(isFieldValueChild)
-    const target = values.find(row => !oldIds.has(row.id)) ?? values.at(-1)!
-    return {fieldRowId: field.id, valueId: target.id}
+    return {fieldRowId: field.id, valueId}
   }, {scope: selection.schema.changeScope, description: 'Set inline property'})
 }
