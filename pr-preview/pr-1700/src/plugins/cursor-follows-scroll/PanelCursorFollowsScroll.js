@@ -1,1 +1,1 @@
-export{TC as PanelCursorFollowsScroll}from"../../../chunks/app-uYV7JbTU.js";
+export{PC as PanelCursorFollowsScroll}from"../../../chunks/app-Dpzhulp8.js";

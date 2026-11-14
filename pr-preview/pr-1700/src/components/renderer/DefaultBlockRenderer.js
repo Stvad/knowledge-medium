@@ -1,1 +1,1 @@
-export{HI as BlockFrame,UI as BulletDot,WI as DefaultBlockLayout,GI as DefaultBlockRenderer}from"../../../chunks/app-uYV7JbTU.js";
+export{iL as BlockFrame,aL as BulletDot,oL as DefaultBlockLayout,sL as DefaultBlockRenderer}from"../../../chunks/app-Dpzhulp8.js";

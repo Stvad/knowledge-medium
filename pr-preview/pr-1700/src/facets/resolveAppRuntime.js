@@ -1,1 +1,1 @@
-export{WP as resolveAppRuntime,GP as resolveAppRuntimeSync}from"../../chunks/app-uYV7JbTU.js";
+export{$P as resolveAppRuntime,eF as resolveAppRuntimeSync}from"../../chunks/app-Dpzhulp8.js";

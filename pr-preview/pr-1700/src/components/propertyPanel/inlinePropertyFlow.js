@@ -1,0 +1,1 @@
+export{dR as beginInlineProperty}from"../../../chunks/app-Dpzhulp8.js";

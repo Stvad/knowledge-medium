@@ -1,1 +1,0 @@
-export{YL as createInlineProperty}from"../../chunks/app-uYV7JbTU.js";

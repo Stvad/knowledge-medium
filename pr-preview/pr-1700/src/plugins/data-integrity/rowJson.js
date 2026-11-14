@@ -1,0 +1,1 @@
+export{Vs as parsePropertiesJson}from"../../../chunks/app-Dpzhulp8.js";

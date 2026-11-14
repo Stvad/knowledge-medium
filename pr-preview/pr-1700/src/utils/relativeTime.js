@@ -1,1 +1,1 @@
-export{FD as formatAbsoluteDateTime,ID as formatRelativeTime}from"../../chunks/app-uYV7JbTU.js";
+export{WD as formatAbsoluteDateTime,GD as formatRelativeTime}from"../../chunks/app-Dpzhulp8.js";
