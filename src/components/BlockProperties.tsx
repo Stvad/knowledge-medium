@@ -23,7 +23,7 @@ import {
   focusBlock,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
-import { caretNeighbour } from '@/utils/selection.js'
+import { nextVisibleBlock } from '@/utils/selection.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -179,7 +179,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
     if (!surface) return
 
-    const next = await caretNeighbour(block, surface, 'next')
+    const next = await nextVisibleBlock(block, surface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})

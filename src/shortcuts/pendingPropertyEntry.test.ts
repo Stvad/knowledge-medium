@@ -5,13 +5,12 @@ import type {Block} from '@/data/block'
 import type {Repo} from '@/data/repo'
 import {getDefaultActions} from './defaultShortcuts'
 import {getVimNormalModeActions} from '@/plugins/vim-normal-mode/actions'
-import {caretNeighbour, nextVisibleBlock, previousVisibleBlock} from '@/utils/selection'
+import {nextVisibleBlock, previousVisibleBlock} from '@/utils/selection'
 import {isOnFirstVisualLine, isOnLastVisualLine} from '@/utils/codemirror'
 import {ActionContextTypes, type ActionTrigger, type CodeMirrorEditModeDependencies} from './types'
 
 vi.mock('@/utils/selection', async importOriginal => ({
   ...await importOriginal<object>(),
-  caretNeighbour: vi.fn(async () => null),
   nextVisibleBlock: vi.fn(async () => null),
   previousVisibleBlock: vi.fn(async () => null),
 }))
@@ -75,7 +74,7 @@ describe.each([
     const current = real(block.id)
     document.body.append(...(direction < 0 ? [...neighbours].reverse().concat(current) : [current, ...neighbours]))
   }
-  const walk = () => mode === 'CodeMirror' ? caretNeighbour : direction < 0 ? previousVisibleBlock : nextVisibleBlock
+  const walk = () => direction < 0 ? previousVisibleBlock : nextVisibleBlock
 
   it('focuses the immediately drawn pending input before any structural walk', async () => {
     const target = pending()

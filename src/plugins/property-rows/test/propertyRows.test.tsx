@@ -38,6 +38,7 @@ import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import {
   focusBlock,
+  exitEditModeForBlock,
   isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
@@ -573,18 +574,22 @@ describe('a child the user turns into a field row', () => {
     await typeIntoChild('none', '::((def-plain))')
     await outlineSettled()
     expect(typedRow()).not.toBeNull()
-    expect(typedRow()!.querySelector('.cm-content')).toBeNull()
-    expect(typedRow()!.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
+    expect(typedRow()!.querySelector('[data-property-row-layout]')).not.toBeNull()
+    expect(typedRow()!.querySelector('.cm-content')?.textContent).toBe('::((def-plain))')
+    await act(async () => { await exitEditModeForBlock(repo.block(PANEL), TYPED) })
+    await waitFor(() => expect(typedRow()!.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain'))
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
 
   it.each([
-    {tier: 'hidden', id: 'def-hidden', name: 'rows:hid'},
-    {tier: 'hidden in the outline', id: 'def-outline-skip', name: 'rows:skip'},
-  ])('keeps the row while the user is on it, where the mode hides a $tier definition', async ({id, name}) => {
-    await typeIntoChild('non-hidden', `::((${id}))`)
-    await waitFor(() => expect(shownRows()).toEqual([name, 'rows:status']))
+    {tier: 'hidden', id: 'def-hidden'},
+    {tier: 'hidden in the outline', id: 'def-outline-skip'},
+  ])('keeps the row while the user is on it, where the mode hides a $tier definition', async ({id}) => {
+    const rawContent = `::((${id}))`
+    await typeIntoChild('non-hidden', rawContent)
+    await waitFor(() => expect(typedRow()).not.toBeNull())
+    expect(typedEditor()?.querySelector('.cm-content')?.textContent).toBe(rawContent)
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
@@ -778,21 +783,44 @@ describe('moving the caret off a row the listing leaves out', () => {
 
 
 describe('a name row asked to edit', () => {
-  // The row has no text editor; left editing, it would take no keys.
-  it('hands edit mode back, staying focused', async () => {
+  it('keeps its raw block content editable and preserves its value child', async () => {
     mount({workspace: 'non-hidden'})
     await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
     const statusRow = shownRowId()!
     expect((await repo.load(statusRow))?.isFieldForm).toBe(true)
+    const original = (await repo.load(statusRow))!.content
+    const childrenBefore = await childIdsOf(repo, statusRow)
+    expect(childrenBefore).toHaveLength(1)
     const panel = repo.block(PANEL)
 
     // The control: an ordinary block asked to edit stays editing.
     await act(async () => { await focusBlock(panel, NOTE, {edit: true}) })
     await waitFor(() => expect(panel.peekProperty(isEditingProp)).toBe(true))
 
+    let editor: HTMLElement | null = null
     await act(async () => { await focusBlock(panel, statusRow, {edit: true}) })
-    await waitFor(() => expect(panel.peekProperty(isEditingProp)).toBe(false))
+    await waitFor(() => {
+      expect(panel.peekProperty(isEditingProp)).toBe(true)
+      editor = document.querySelector<HTMLElement>(`[data-block-id="${statusRow}"] .cm-editor`)
+      expect(editor).not.toBeNull()
+    })
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe(statusRow)
+    const view = EditorView.findFromDOM(editor!)!
+    expect(view.state.doc.toString()).toBe(original)
+
+    const edited = `${original}!`
+    const swallowSelectionChange = (event: Event) => event.stopImmediatePropagation()
+    window.addEventListener('selectionchange', swallowSelectionChange, true)
+    try {
+      act(() => {
+        view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: edited}, selection: {anchor: edited.length}})
+        flushEditorContent(view)
+      })
+    } finally {
+      window.removeEventListener('selectionchange', swallowSelectionChange, true)
+    }
+    await waitFor(async () => expect((await repo.load(statusRow))?.content).toBe(edited))
+    expect(await childIdsOf(repo, statusRow)).toEqual(childrenBefore)
   })
 })
 

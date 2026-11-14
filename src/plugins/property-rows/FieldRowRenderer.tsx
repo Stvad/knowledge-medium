@@ -15,9 +15,8 @@ import { BlockLink } from '@/components/references/BlockLink'
 import { useAppHashInContext } from '@/context/layoutWsContext'
 import { useHandle, usePropertyDisplayMode, usePropertyValue } from '@/hooks/block'
 import { useOpenBlock } from '@/utils/navigation'
-import { useContext, useEffect } from 'react'
-import { exitEditModeForBlock, isCollapsedProp } from '@/data/properties'
-import { useUIStateBlock } from '@/data/globalState'
+import { useContext } from 'react'
+import { isCollapsedProp } from '@/data/properties'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import { drawsPropertyRows, fieldRowDefinition, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 import './FieldRowRenderer.css'
@@ -56,20 +55,6 @@ const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
   )
 }
 FieldRowLabel.displayName = 'FieldRowLabel'
-
-/** The name cell of a row that is being EDITED. A name row has no text
- *  editor, so a block left editing here takes no keys: whatever put the caret
- *  on it (a merge that made the block this row, vim `i`, a walker's landing),
- *  it hands edit mode back. The one owner of that rule; handlers that move the
- *  caret pass name rows (`caretNeighbour`) for where it should GO, not to
- *  avoid this state. */
-const FieldRowLabelLeavingEditMode: BlockRenderer = (props: BlockRendererProps) => {
-  const uiStateBlock = useUIStateBlock()
-  const {block} = props
-  useEffect(() => { void exitEditModeForBlock(uiStateBlock, block.id) }, [uiStateBlock, block.id])
-  return <FieldRowLabel {...props}/>
-}
-FieldRowLabelLeavingEditMode.displayName = 'FieldRowLabelLeavingEditMode'
 
 const FieldRowLayout: BlockLayout = ({
   block,
@@ -123,9 +108,6 @@ export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
     ? <DefaultBlockRenderer
         {...props}
         ContentRenderer={FieldRowLabel}
-        // Not the raw `::((id))` text: an Enter there makes a first value child
-        // (the projection's new value) and a split or merge un-marks the row.
-        EditContentRenderer={FieldRowLabelLeavingEditMode}
         Layout={FieldRowLayout}
       />
     // Not one of the rows of a listing that shows them (a backlink of its
