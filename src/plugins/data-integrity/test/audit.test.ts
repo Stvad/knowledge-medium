@@ -163,6 +163,31 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     expect(getConsistencyAuditSnapshotFor('ws-eff3')).toBeNull()
   })
 
+  it('a run parked when its effect is torn down ends at its next statement, unpublished', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
+    try {
+      const input = new EventTarget()
+      const effect = createConsistencyAuditEffect(() => createUserActivity(input))
+      const cleanup = effect.start(ctx('ws-left'))
+      input.dispatchEvent(new Event('keydown'))
+      await vi.advanceTimersByTimeAsync(1) // the idle job starts and parks
+      expect(getAll).not.toHaveBeenCalled()
+
+      if (typeof cleanup === 'function') cleanup() // e.g. a workspace switch
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+
+      expect(getAll).not.toHaveBeenCalled()
+      expect(getConsistencyAuditSnapshotFor('ws-left')).toBeNull()
+      expect(isAuditDue('ws-left', Date.now())).toBe(true)
+    } finally {
+      getAll.mockRestore()
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      vi.useRealTimers()
+    }
+  })
+
   it('the scheduled audit waits until the user has been quiet, then runs', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
@@ -192,6 +217,9 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
       await drainConsistencyAudits()
       expect(getConsistencyAuditSnapshotFor('ws-busy')?.workspaceId).toBe('ws-busy')
     } finally {
+      // A failed assertion above leaves the run parked on a fake timer, where
+      // the shared job queue would hang every later drain in this file.
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
       vi.useRealTimers()
     }
   })
@@ -235,8 +263,7 @@ describe('runConsistencyAudit — yieldWhenBusy', () => {
     await vi.waitFor(() => expect(yields).toBe(2))
     const statementsWhileHeld = db.statements
     expect(statementsWhileHeld).toBe(1)
-    // Pending on the hook's promise, nothing else can run: a second turn of the
-    // event loop would show any statement that slipped past it.
+    // Still nothing a turn of the event loop later.
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(db.statements).toBe(statementsWhileHeld)
 

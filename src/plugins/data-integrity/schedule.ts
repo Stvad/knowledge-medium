@@ -43,16 +43,14 @@ export const isAuditDue = (workspaceId: string, now: number): boolean => {
   return last === undefined || now - last >= CADENCE_MS
 }
 
-/** Run the audit now (bypassing the cadence gate), publish the result, and stamp
- *  the cadence. Used by both the on-demand action and the cadenced effect. Passes
- *  the §6 mode/key resolver so the divergence check can decrypt-compare e2ee
- *  rows. Throws on failure so callers can surface it. */
-export const runConsistencyAuditNow = async (
+/** Audit one workspace without publishing. Passes the §6 mode/key resolver so
+ *  the divergence check can decrypt-compare e2ee rows. */
+const auditWorkspace = (
   repo: Repo,
   workspaceId: string,
-  { yieldWhenBusy }: Pick<AuditOptions, 'yieldWhenBusy'> = {},
-): Promise<ConsistencyAuditResult> => {
-  const result = await runConsistencyAudit(repo.db, workspaceId, Date.now(), {
+  yieldWhenBusy?: AuditOptions['yieldWhenBusy'],
+): Promise<ConsistencyAuditResult> =>
+  runConsistencyAudit(repo.db, workspaceId, Date.now(), {
     yieldWhenBusy,
     divergenceRecheckMs: DIVERGENCE_RECHECK_MS,
     sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
@@ -62,8 +60,21 @@ export const runConsistencyAuditNow = async (
     decrypt: repo.syncObserverDeps,
     repo,
   })
+
+const recordAudit = (workspaceId: string, result: ConsistencyAuditResult): void => {
   lastRun.set(workspaceId, Date.now())
   publishConsistencyAudit(result)
+}
+
+/** Run the audit now (bypassing the cadence gate), publish the result, and stamp
+ *  the cadence. Used by the on-demand action and dialog. Throws on failure so
+ *  callers can surface it. */
+export const runConsistencyAuditNow = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<ConsistencyAuditResult> => {
+  const result = await auditWorkspace(repo, workspaceId)
+  recordAudit(workspaceId, result)
   return result
 }
 
@@ -82,9 +93,14 @@ export const createConsistencyAuditEffect = (activity: () => UserActivity): AppE
       // Re-check at run time: a rapid workspace re-open may have queued twice.
       if (cancelled || !isAuditDue(workspaceId, Date.now())) return
       try {
-        await runConsistencyAuditNow(repo, workspaceId, {
-          yieldWhenBusy: () => user.whenQuiet(AUDIT_QUIET_MS),
+        const result = await auditWorkspace(repo, workspaceId, async () => {
+          await user.whenQuiet(AUDIT_QUIET_MS)
+          // Torn down while parked (a workspace switch): every remaining check
+          // fails at its next statement instead of reading against a repo that
+          // has moved on, and the result is dropped below.
+          if (cancelled) throw new Error('audit cancelled: its workspace effect was torn down')
         })
+        if (!cancelled) recordAudit(workspaceId, result)
       } catch (err) {
         console.error(`[data-integrity] audit for workspace ${workspaceId} failed`, err)
       }

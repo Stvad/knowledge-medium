@@ -435,6 +435,38 @@ describe('property_cell_divergence', () => {
   })
 })
 
+describe('property_cell_divergence reads a page as one snapshot', () => {
+  it('does not wait between reading a page\'s cells and their value children', async () => {
+    await setMode('children')
+    await insertRaw(
+      owner('o1', { [statusProp.name]: 'old' }),
+      fieldRow('f1', 'o1', statusProp.name),
+      valueChild('v1', 'f1', 'old'),
+    )
+    let lastSql = ''
+    const db = {
+      getAll: <T,>(sql: string, params?: unknown[]) => {
+        lastSql = sql
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+    // The user edits cell and value together while the audit waits, right
+    // after the scan has read the page's owners.
+    let edited = false
+    const yieldWhenBusy = async () => {
+      if (edited || !lastSql.includes('properties_json AS propertiesJson')) return
+      edited = true
+      await sharedDb.db.execute(`UPDATE blocks SET properties_json = ? WHERE id = 'o1'`,
+        [JSON.stringify({ [statusProp.name]: 'new' })])
+      await sharedDb.db.execute(`UPDATE blocks SET content = 'new' WHERE id = 'v1'`)
+    }
+
+    const { checks } = await runConsistencyAudit(db, WS, 0, { repo, yieldWhenBusy })
+
+    expect(checks.property_cell_divergence).toMatchObject({ status: 'ok', divergentCells: 0 })
+  })
+})
+
 describe('property_cell_coverage stands aside between pages', () => {
   // Its reads go through the repo, past the audit's yielding reader, so the
   // page boundary is where it waits.
@@ -458,15 +490,18 @@ describe('property_cell_coverage stands aside between pages', () => {
     expect(yields).toBe(1)
   })
 
-  it('gets the audit\'s hook', async () => {
+  it('gets the audit\'s hook, as does the divergence scan', async () => {
     await setMode('children')
     await insertRaw(...pageAndOneOwners())
-    // The audit's own statements go through this reader; coverage's go
-    // through the repo, so they wait only at its page boundary.
-    let statements = 0
+    // Statements through this reader wait one by one until the divergence
+    // scan (the last check) starts; it waits between its pages instead.
+    // Coverage reads through the repo and waits at its own page boundary.
+    let beforeDivergence = 0
+    let inDivergence = false
     const db = {
       getAll: <T,>(sql: string, params?: unknown[]) => {
-        statements += 1
+        inDivergence ||= sql.includes('ORDER BY parent_id')
+        if (!inDivergence) beforeDivergence += 1
         return sharedDb.db.getAll<T>(sql, params)
       },
     }
@@ -474,6 +509,7 @@ describe('property_cell_coverage stands aside between pages', () => {
 
     await runConsistencyAudit(db, WS, 0, { repo, yieldWhenBusy: async () => { yields += 1 } })
 
-    expect(yields).toBe(statements + 1)
+    expect(inDivergence).toBe(true)
+    expect(yields).toBe(beforeDivergence + 2)
   })
 })

@@ -187,11 +187,11 @@ export interface AuditOptions {
    *  keys — the coverage and divergence checks read through it. Omit and they
    *  report `skipped`; the SQL-only duplicate check runs either way. */
   repo?: Repo
-  /** Awaited before every statement the audit issues (between pages, for the
-   *  coverage scan, whose reads go through the repo), so the audit stands
-   *  aside while it stays pending and holds the connection for one statement
-   *  at most past it. The scheduled run passes "until the user is quiet"; a
-   *  run someone asked for passes nothing. */
+  /** Awaited before every statement the audit issues, except inside a page of
+   *  the two paged property scans, which wait between pages: a page's reads are
+   *  one snapshot. The audit stands aside while it stays pending, past one
+   *  statement or one page. The scheduled run passes "until the user is
+   *  quiet"; a run someone asked for passes nothing. */
   yieldWhenBusy?: () => Promise<void>
 }
 
@@ -1038,7 +1038,9 @@ export const runConsistencyAudit = async (
   await run('property_cell_coverage', () => whenSwitched(async () =>
     opts.repo ? runPropertyCellCoverageCheck(opts.repo, workspaceId, SAMPLE_LIMIT, yieldWhenBusy) : noRepo))
   await run('property_cell_divergence', () => whenSwitched(async () =>
-    opts.repo ? runPropertyCellDivergenceCheck(db, opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
+    opts.repo
+      ? runPropertyCellDivergenceCheck(rawDb, opts.repo, workspaceId, SAMPLE_LIMIT, yieldWhenBusy)
+      : noRepo))
 
   // Deep ON-DEMAND checks (full mode only) — the rich superset the bridge eval
   // used to reimplement, now run by the engine so the eval just invokes it.
