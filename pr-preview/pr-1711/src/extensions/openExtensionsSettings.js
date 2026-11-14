@@ -1,1 +1,0 @@
-export{rI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,iI as openExtensionsSettings}from"../../chunks/app-Le0BNHQ3.js";

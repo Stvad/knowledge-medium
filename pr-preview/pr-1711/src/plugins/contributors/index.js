@@ -1,1 +1,0 @@
-export{_m as contributorsPlugin}from"../../../chunks/app-Le0BNHQ3.js";

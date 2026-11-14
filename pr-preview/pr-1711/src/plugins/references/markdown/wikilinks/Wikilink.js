@@ -1,1 +1,0 @@
-export{xy as Wikilink}from"../../../../../chunks/app-Le0BNHQ3.js";

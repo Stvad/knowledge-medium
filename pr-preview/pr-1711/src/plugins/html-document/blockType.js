@@ -1,1 +1,0 @@
-export{Xq as htmlDocumentTypeSeed}from"../../../chunks/app-Le0BNHQ3.js";

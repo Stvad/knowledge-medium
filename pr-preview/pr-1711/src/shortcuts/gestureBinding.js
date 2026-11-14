@@ -1,1 +1,0 @@
-export{FP as gestureBindingDescriptor,IP as matchesGestureEvent}from"../../chunks/app-Le0BNHQ3.js";

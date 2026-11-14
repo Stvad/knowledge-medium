@@ -1,1 +1,0 @@
-export{zK as staticDataExtensions}from"../../chunks/app-Le0BNHQ3.js";
