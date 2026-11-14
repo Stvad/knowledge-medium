@@ -1,1 +1,1 @@
-export{LS as videoPlayerPlugin}from"../../../chunks/app-KTMA_Gn0.js";
+export{LS as videoPlayerPlugin}from"../../../chunks/app-CzujQieZ.js";

@@ -1,1 +1,1 @@
-export{oJ as preferredSpanReplacement}from"../../../chunks/app-KTMA_Gn0.js";
+export{iJ as preferredSpanReplacement}from"../../../chunks/app-CzujQieZ.js";

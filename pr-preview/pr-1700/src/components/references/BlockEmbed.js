@@ -1,1 +1,1 @@
-export{YM as BlockEmbed}from"../../../chunks/app-KTMA_Gn0.js";
+export{YM as BlockEmbed}from"../../../chunks/app-CzujQieZ.js";

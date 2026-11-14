@@ -1,1 +1,1 @@
-export{zb as attachmentsPlugin}from"../../../chunks/app-KTMA_Gn0.js";
+export{zb as attachmentsPlugin}from"../../../chunks/app-CzujQieZ.js";

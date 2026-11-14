@@ -1,1 +1,1 @@
-export{iR as beginInlineProperty}from"../../../chunks/app-KTMA_Gn0.js";
+export{iR as beginInlineProperty}from"../../../chunks/app-CzujQieZ.js";

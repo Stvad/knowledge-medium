@@ -1,1 +1,1 @@
-export{oN as DEFAULT_TYPE_COLORS,sN as defaultTypeColor,cN as pickLeastUsedTypeColor}from"../../chunks/app-KTMA_Gn0.js";
+export{oN as DEFAULT_TYPE_COLORS,sN as defaultTypeColor,cN as pickLeastUsedTypeColor}from"../../chunks/app-CzujQieZ.js";

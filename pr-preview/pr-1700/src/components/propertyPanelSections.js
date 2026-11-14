@@ -1,1 +1,1 @@
-export{IB as buildPropertyPanelSections}from"../../chunks/app-KTMA_Gn0.js";
+export{IB as buildPropertyPanelSections}from"../../chunks/app-CzujQieZ.js";

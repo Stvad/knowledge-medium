@@ -1,1 +1,1 @@
-export{zF as BlockLoadingPlaceholder}from"../../chunks/app-KTMA_Gn0.js";
+export{zF as BlockLoadingPlaceholder}from"../../chunks/app-CzujQieZ.js";

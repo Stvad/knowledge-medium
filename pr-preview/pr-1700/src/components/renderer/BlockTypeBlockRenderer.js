@@ -1,1 +1,1 @@
-export{HI as BlockTypeBlockRenderer,UI as BlockTypeContentRenderer,WI as writeBlockTypeLabel}from"../../../chunks/app-KTMA_Gn0.js";
+export{HI as BlockTypeBlockRenderer,UI as BlockTypeContentRenderer,WI as writeBlockTypeLabel}from"../../../chunks/app-CzujQieZ.js";

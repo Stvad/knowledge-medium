@@ -1,1 +1,1 @@
-export{RP as gestureBindingDescriptor,zP as matchesGestureEvent}from"../../chunks/app-KTMA_Gn0.js";
+export{RP as gestureBindingDescriptor,zP as matchesGestureEvent}from"../../chunks/app-CzujQieZ.js";

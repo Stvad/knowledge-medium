@@ -1,1 +1,1 @@
-export{tF as dynamicExtensionsExtension}from"../../chunks/app-KTMA_Gn0.js";
+export{tF as dynamicExtensionsExtension}from"../../chunks/app-CzujQieZ.js";

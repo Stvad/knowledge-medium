@@ -1,1 +1,1 @@
-export{gP as appUpdatePromptExtension}from"../../../chunks/app-KTMA_Gn0.js";
+export{gP as appUpdatePromptExtension}from"../../../chunks/app-CzujQieZ.js";

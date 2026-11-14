@@ -1,1 +1,1 @@
-export{oI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,sI as openExtensionsSettings}from"../../chunks/app-KTMA_Gn0.js";
+export{oI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,sI as openExtensionsSettings}from"../../chunks/app-CzujQieZ.js";

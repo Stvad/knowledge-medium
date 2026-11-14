@@ -1,1 +1,1 @@
-export{xu as appendTagToBlocks,Su as appendTagToContent}from"../../../chunks/app-KTMA_Gn0.js";
+export{xu as appendTagToBlocks,Su as appendTagToContent}from"../../../chunks/app-CzujQieZ.js";

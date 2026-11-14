@@ -1,1 +1,1 @@
-export{BB as resolveOrCreateProperty}from"../../../chunks/app-KTMA_Gn0.js";
+export{BB as resolveOrCreateProperty}from"../../../chunks/app-CzujQieZ.js";

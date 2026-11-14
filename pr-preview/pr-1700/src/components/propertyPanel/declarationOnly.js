@@ -1,1 +1,1 @@
-export{VB as declarationOnlyDefinitionForName,HB as declarationOnlyStatusText}from"../../../chunks/app-KTMA_Gn0.js";
+export{VB as declarationOnlyDefinitionForName,HB as declarationOnlyStatusText}from"../../../chunks/app-CzujQieZ.js";
