@@ -36,11 +36,19 @@ export const useOutlinePropertySession = () => {
 
 export const useOutlinePropertyOwner = (owner: Block) => {
   const session = useOutlinePropertySession()
-  useEffect(() => () => {
-    for (const draft of session.disposeOwner(owner.id)) {
-      if (draft.text && !draft.committing) showError(`Unsaved value for ${draft.schema.name}: ${JSON.stringify(draft.text)}`)
+  useEffect(() => {
+    session.mountOwner(owner.id)
+    return () => {
+      for (const draft of session.disposeOwner(owner.id)) {
+        if (draft.text && !draft.committing) showError(`Unsaved value for ${draft.schema.name}: ${JSON.stringify(draft.text)}`)
+      }
     }
   }, [owner.id, session])
+}
+
+export const useOutlinePropertyExpansion = (owner: Block): boolean => {
+  const session = useOutlinePropertySession()
+  return useSyncExternalStore(session.subscribe, () => session.isExpanded(owner.id))
 }
 
 export const useOutlinePropertyListing = (parent: Block) => {
@@ -63,7 +71,7 @@ export function OutlinePropertyDrafts({owner, mode, children}: {
       const row = owner.repo.block(child.id).peek()
       return row !== undefined && row !== null && row.orderKey > draft.orderKey!
     })
-    rows.splice(at < 0 ? rows.length : at, 0, renderDraft(draft, true))
+    rows.splice(at < 0 ? rows.length : at, 0, renderDraft(draft, draft.autoFocus !== false))
   }
   if (scope.childBacked && !owner.repo.isReadOnly && (mode !== 'none' || state.pending.some(draft => draft.ghost))) {
     rows.splice(expectedPropertyPosition(rows.length), 0,

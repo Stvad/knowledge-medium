@@ -5,6 +5,7 @@ import {CallbackSet} from '@/utils/callbackSet'
 export interface PendingOutlineProperty extends InlinePropertySelection {
   ownerId: string
   parentId: string
+  autoFocus?: boolean
   ghost?: boolean
   text?: string
   committing?: boolean
@@ -13,10 +14,19 @@ export interface ListingState {
   pending: readonly PendingOutlineProperty[]
   revealed: readonly string[]
 }
+const keepsDraftVisible = (draft: PendingOutlineProperty) => !!draft.text || draft.autoFocus === false
 const EMPTY: ListingState = {pending: [], revealed: []}
 
 /** View state only: drafts have no block identity and never enter the repo. */
 export class OutlinePropertySession {
+  private owners = new Set<string>()
+  mountOwner = (ownerId: string) => { this.owners.add(ownerId) }
+  hasOwner = (ownerId: string) => this.owners.has(ownerId)
+  isExpanded = (id: string): boolean => {
+    const own = this.snapshot(id)
+    return own.pending.length > 0 || own.revealed.length > 0 ||
+      [...this.listings.values()].some(state => state.revealed.includes(id))
+  }
   private listings = new Map<string, ListingState>()
   private changes = new CallbackSet()
   private revision = 0
@@ -40,13 +50,13 @@ export class OutlinePropertySession {
   reveal(ownerId: string, fieldRowId: string) {
     if (this.revealField(ownerId, fieldRowId)) this.publish()
   }
-  add(ownerId: string, selection: InlinePropertySelection) {
+  add(ownerId: string, selection: InlinePropertySelection, autoFocus = true) {
     const parentId = selection.fieldRowId ?? ownerId
     const previous = this.snapshot(parentId)
     if (previous.pending.some(item => item.schema.fieldId === selection.schema.fieldId)) return
     this.listings.set(parentId, {...previous, pending: [
       ...previous.pending.filter(item => item.schema.fieldId !== selection.schema.fieldId),
-      {...selection, ownerId, parentId},
+      {...selection, ownerId, parentId, autoFocus},
     ]})
     if (selection.fieldRowId) this.revealField(ownerId, selection.fieldRowId)
     this.publish()
@@ -88,6 +98,7 @@ export class OutlinePropertySession {
     }
   }
   disposeOwner(ownerId: string): PendingOutlineProperty[] {
+    this.owners.delete(ownerId)
     const removed: PendingOutlineProperty[] = []
     let changed = false
     for (const [parentId, state] of this.listings) {
@@ -106,8 +117,8 @@ export class OutlinePropertySession {
   clearOwner(ownerId: string) {
     let changed = false
     for (const [parentId, state] of this.listings) {
-      const pending = state.pending.filter(item => item.ownerId !== ownerId || item.text)
-      const revealed = parentId === ownerId ? state.revealed.filter(id => this.snapshot(id).pending.some(item => item.text)) : state.revealed
+      const pending = state.pending.filter(item => item.ownerId !== ownerId || keepsDraftVisible(item))
+      const revealed = parentId === ownerId ? state.revealed.filter(id => this.snapshot(id).pending.some(keepsDraftVisible)) : state.revealed
       if (pending.length !== state.pending.length || revealed.length !== state.revealed.length) {
         this.setListing(parentId, {pending, revealed})
         changed = true

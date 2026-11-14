@@ -596,7 +596,7 @@ describe('a child the user turns into a field row', () => {
     expect(view.state.doc.toString()).toBe('::kept')
   })
 
-  it('picking an existing collapsed field expands it and focuses its value editor', async () => {
+  it('picking an existing collapsed field opens it temporarily and focuses its value editor', async () => {
     const ownerChildren = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
     const field = ownerChildren.find(row => {
       if (!row.isFieldForm || !row.referenceTargetId) return false
@@ -623,7 +623,7 @@ describe('a child the user turns into a field row', () => {
     fireEvent.change(input, {target: {value: statusProp.name}})
     fireEvent.keyDown(input, {key: 'Enter'})
     await waitFor(() => expect(document.querySelector(`[data-block-id="${value.id}"] .cm-content`)).not.toBeNull())
-    expect(repo.block(field.id).peekProperty(isCollapsedProp)).toBe(false)
+    expect(await repo.block(field.id).get(isCollapsedProp)).toBe(true)
     expect(repo.block(TYPED).peek()).toBeNull()
   })
 

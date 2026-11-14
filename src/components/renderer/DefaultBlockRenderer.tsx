@@ -1,3 +1,4 @@
+import {useOutlinePropertyExpansion} from '@/components/propertyPanel/OutlinePropertyDrafts'
 import { writeTextToClipboard } from '@/utils/copy.js'
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { cn } from '@/lib/utils'
@@ -424,6 +425,7 @@ export const BlockFrame = ({
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const draftExpanded = useOutlinePropertyExpansion(block)
 
   // No per-block `view-transition-name`. Tried it and reverted: the
   // slide-between-positions effect was barely perceptible vs. the
@@ -453,7 +455,7 @@ export const BlockFrame = ({
             <Collapsible
               {...collapsibleProps}
               {...frameProps}
-              open={!isCollapsed || isTopLevel}
+              open={!isCollapsed || isTopLevel || draftExpanded}
               className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>

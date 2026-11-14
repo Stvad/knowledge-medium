@@ -128,12 +128,72 @@ const input = (name = textProp.name) => screen.getByRole('textbox', {name: `Valu
 const waitForOutline = async () => { await screen.findByText('Existing note') }
 
 describe('expected property ghost rows in the outline', () => {
-  it('opens the add-field draft beneath a collapsed owner', async () => {
+  it('opens the add-field draft beneath a collapsed owner without storing expansion', async () => {
     await repo.block(OWNER).set(isCollapsedProp, true)
     mount('none')
     await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
       ui: repo.block(PANEL), scope: 'pending-test'}) })
     expect(screen.getByRole('textbox', {name: 'Value for draft:text'})).toBeVisible()
+    expect(await repo.block(OWNER).get(isCollapsedProp)).toBe(true)
+  })
+
+  it('temporarily opens a collapsed owner and existing scalar field without stored expansion', async () => {
+    await repo.block(OWNER).set(textProp, 'existing value')
+    const fields = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const field = fields.find(row => {
+      if (!row.isFieldForm || !row.referenceTargetId) return false
+      const result = repo.propertySchemaResolverFor(WS).resolveField(row.referenceTargetId)
+      return result.status === 'resolved' && result.schema.name === textProp.name
+    })!
+    await repo.block(field.id).set(isCollapsedProp, true)
+    await repo.block(OWNER).set(isCollapsedProp, true)
+    mount('none')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${field.id}"] .cm-content`)).not.toBeNull())
+    expect(await repo.block(OWNER).get(isCollapsedProp)).toBe(true)
+    expect(await repo.block(field.id).get(isCollapsedProp)).toBe(true)
+  })
+
+  it.each([false, true])('finishes a selected scaffold without stealing focus after interruption; unmount %s', async unmount => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'outside', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Outside'})
+      await tx.create({id: 'scaffold', workspaceId: WS, parentId: OWNER, orderKey: 'a2', content: '::'})
+    }, {scope: ChangeScope.BlockDefault})
+    const view = mount('none')
+    const original = inlineProperty.selectInlineProperty
+    let finish = () => {}
+    const released = new Promise<void>(resolve => { finish = resolve })
+    const selected = vi.spyOn(inlineProperty, 'selectInlineProperty').mockImplementation(async (...args) => {
+      const result = await original(...args)
+      await released
+      return result
+    })
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    try {
+      let choosing!: Promise<void>
+      act(() => { choosing = beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+        source: repo.block('scaffold'), ui: repo.block(PANEL), scope: 'pending-test'}) })
+      await waitFor(async () => expect(await db.db.getOptional("SELECT id FROM blocks WHERE id = 'scaffold' AND deleted = 0")).toBeNull())
+      await act(async () => {
+        if (!unmount) fireEvent.pointerDown(outside)
+        outside.focus()
+        await focusBlock(repo.block(PANEL), 'outside', {renderScopeId: 'pending-test'})
+      })
+      if (unmount) view.unmount()
+      await act(async () => { finish(); await choosing })
+      if (unmount) mount('none')
+      await waitForOutline()
+      expect(document.activeElement).toBe(outside)
+      expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe('outside')
+      if (unmount) expect(screen.queryByRole('textbox', {name: `Value for ${textProp.name}`})).toBeNull()
+      else expect(input()).toBeVisible()
+    } finally {
+      finish()
+      selected.mockRestore()
+      outside.remove()
+    }
   })
 
   it.each(['invalid', 'valid'])('keeps the %s nonempty draft until its blur commit settles outside the owner', async kind => {
@@ -210,6 +270,31 @@ describe('expected property ghost rows in the outline', () => {
     expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe('outside')
     expect(screen.queryByRole('textbox', {name: `Value for ${textProp.name}`})).toBeNull()
     expect(showError).toHaveBeenCalledWith(expect.stringContaining('unsaved text'))
+  })
+
+  it.each(['empty', 'committing'])('does not warn on owner unmount for %s drafts', async kind => {
+    const view = mount('none')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    const original = inlineProperty.commitInlineProperty
+    let finish = () => {}
+    const released = new Promise<void>(resolve => { finish = resolve })
+    const commit = vi.spyOn(inlineProperty, 'commitInlineProperty').mockImplementation(async (...args) => {
+      await released
+      return original(...args)
+    })
+    try {
+      if (kind === 'committing') {
+        fireEvent.change(input(), {target: {value: 'saving text'}})
+        fireEvent.keyDown(input(), {key: 'Enter'})
+        expect(commit).toHaveBeenCalledOnce()
+      } else expect(commit).not.toHaveBeenCalled()
+      view.unmount()
+      expect(showError).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => { finish() })
+      commit.mockRestore()
+    }
   })
 
   it('keeps draft text through owner collapse and selecting its field again', async () => {

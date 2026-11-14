@@ -28,7 +28,7 @@ describe('outline property session publications', () => {
     session.add('owner', {schema, fieldRowId: 'row'})
     expect(snapshots).toEqual([{
       owner: {pending: [], revealed: ['row']},
-      field: {pending: [{schema, fieldRowId: 'row', ownerId: 'owner', parentId: 'row'}], revealed: []},
+      field: {pending: [{schema, fieldRowId: 'row', ownerId: 'owner', parentId: 'row', autoFocus: true}], revealed: []},
     }])
   })
 
@@ -66,7 +66,9 @@ describe('outline property session publications', () => {
     const session = new OutlinePropertySession()
     session.setText({schema, ownerId: 'owner', parentId: 'row', fieldRowId: 'row'}, 'keep me visible')
     session.setText({schema, ownerId: 'other', parentId: 'other'}, 'other text')
+    expect(session.snapshot('owner').revealed).toEqual(['row'])
     expect(session.disposeOwner('owner').map(row => row.text)).toEqual(['keep me visible'])
+    expect(session.snapshot('owner').revealed).toEqual([])
     expect(session.snapshot('owner').pending).toEqual([])
     expect(session.snapshot('row').pending).toEqual([])
     expect(session.snapshot('other').pending[0]?.text).toBe('other text')

@@ -1,7 +1,7 @@
 import type {Block} from '@/data/block'
 import type {AnyPropertySchema} from '@/data/api'
 import {selectInlineProperty} from '@/data/inlineProperty'
-import {focusBlock, isCollapsedProp} from '@/data/properties'
+import {focusBlock} from '@/data/properties'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {outlinePropertySession} from './outlinePropertySession'
 
@@ -11,27 +11,24 @@ export const beginInlineProperty = async ({owner, schema, ui, scope, source, isA
 }): Promise<void> => {
   let interrupted = false
   const interrupt = () => { interrupted = true }
-  const active = () => !interrupted && isActive()
+  const session = outlinePropertySession(ui, scope)
+  const active = () => !interrupted && isActive() && session.hasOwner(owner.id)
   document.addEventListener('pointerdown', interrupt, true)
   try {
-  const selected = await selectInlineProperty(owner, schema, source)
-  if (!active()) return
-  if (selected.fieldRowId) {
-    await Promise.all([owner.repo.block(selected.fieldRowId).load(), selected.valueId ? owner.repo.block(selected.valueId).load() : Promise.resolve()])
-    if (!active()) return
-    if (owner.repo.block(selected.fieldRowId).peekProperty(isCollapsedProp)) {
-      await owner.repo.block(selected.fieldRowId).set(isCollapsedProp, false)
+    const selected = await selectInlineProperty(owner, schema, source)
+    if (active() && selected.fieldRowId) {
+      await Promise.all([owner.repo.block(selected.fieldRowId).load(), selected.valueId ? owner.repo.block(selected.valueId).load() : Promise.resolve()])
     }
-  }
-  if (!active()) return
-  if (owner.peekProperty(isCollapsedProp)) await owner.set(isCollapsedProp, false)
-  if (!active()) return
-  await focusBlock(ui, owner.id, {edit: false, renderScopeId: scope})
-  if (!active()) return
-  const session = outlinePropertySession(ui, scope)
-  if (selected.valueId && selected.fieldRowId) {
-    session.reveal(owner.id, selected.fieldRowId)
-    await enterEditModeForBlock(owner.repo.block(selected.valueId), ui, scope, {start: 0})
-  } else session.add(owner.id, selected)
+    if (active()) await focusBlock(ui, owner.id, {edit: false, renderScopeId: scope})
+    if (!session.hasOwner(owner.id)) return
+    if (selected.valueId && selected.fieldRowId) {
+      if (!active()) return
+      session.reveal(owner.id, selected.fieldRowId)
+      await enterEditModeForBlock(owner.repo.block(selected.valueId), ui, scope, {start: 0})
+    } else {
+      // Selection already removed the scaffold: interruption cancels focus,
+      // not the pending row. An unfocused draft lives until blur or unmount.
+      session.add(owner.id, selected, active())
+    }
   } finally { document.removeEventListener('pointerdown', interrupt, true) }
 }
