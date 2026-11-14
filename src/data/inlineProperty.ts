@@ -67,10 +67,7 @@ export const commitInlineProperty = async (
     }
     const oldIds = new Set(previousValues.map(row => row.id))
     await tx.setProperty(owner.id, schema, member
-      ? (current: unknown) => {
-        if (current !== undefined && !Array.isArray(current)) throw new Error('The stored property is not a list.')
-        return [...(current ?? []), value]
-      }
+      ? (current: readonly unknown[] | undefined) => [...(current ?? []), value]
       : value)
     const field = (await tx.childrenOf(owner.id)).find(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)!
     if (!before.length) {

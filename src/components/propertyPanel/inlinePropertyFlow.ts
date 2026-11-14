@@ -24,6 +24,8 @@ export const beginInlineProperty = async ({owner, schema, ui, scope, source, isA
     }
   }
   if (!active()) return
+  if (owner.peekProperty(isCollapsedProp)) await owner.set(isCollapsedProp, false)
+  if (!active()) return
   await focusBlock(ui, owner.id, {edit: false, renderScopeId: scope})
   if (!active()) return
   const session = outlinePropertySession(ui, scope)

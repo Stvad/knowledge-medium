@@ -114,13 +114,45 @@ describe('inline property drafts', () => {
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
+  it.each(['value row', 'stored cell'])('refuses a scalar draft when a %s appears after selection', async kind => {
+    const selection = await selectInlineProperty(repo.block('owner'), note)
+    if (kind === 'value row') {
+      await repo.block('owner').set(note, 'existing')
+      await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', ['{}', 'owner']))
+      const field = (await children('owner')).find(row => row.isFieldForm)!
+      expect(await children(field.id)).toHaveLength(1)
+    } else {
+      await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
+        [JSON.stringify({[note.name]: 'existing'}), 'owner']))
+      expect((await children('owner')).some(row => row.isFieldForm)).toBe(false)
+    }
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(commitInlineProperty(repo.block('owner'), selection, 'draft')).rejects.toThrow('This property now has a value.')
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
+  it.each(['read-only', 'cell', 'missing owner', 'deleted owner'])('refuses a draft whose target became unavailable: %s', async kind => {
+    const selection = await selectInlineProperty(repo.block('owner'), note)
+    if (kind === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
+    if (kind === 'cell') await h.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = 'ws'")
+    if (kind === 'deleted owner') await repo.tx(tx => tx.delete('owner'), {scope: ChangeScope.BlockDefault})
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    const tx = vi.spyOn(repo, 'tx')
+    await expect(commitInlineProperty(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), selection, 'draft')).rejects.toThrow(
+      kind === 'read-only' ? 'This workspace is read-only.' : 'This block no longer supports properties in the outline.')
+    if (kind === 'read-only') expect(tx).not.toHaveBeenCalled()
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+    tx.mockRestore()
+  })
+
   it.each(['cell', 'missing owner', 'deleted owner', 'missing source', 'read-only'])('refuses an unavailable target: %s', async kind => {
     if (kind === 'cell') await h.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = 'ws'")
     if (kind === 'deleted owner') await repo.tx(tx => tx.delete('owner'), {scope: ChangeScope.BlockDefault})
     if (kind === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
     await expect(selectInlineProperty(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
-      repo.block(kind === 'missing source' ? 'absent' : 'source'))).rejects.toThrow()
+      repo.block(kind === 'missing source' ? 'absent' : 'source'))).rejects.toThrow(
+        kind === 'read-only' ? 'This workspace is read-only.' : kind === 'missing source' ? 'The input block changed.' : 'This block no longer supports properties in the outline.')
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
@@ -135,7 +167,7 @@ describe('inline property drafts', () => {
     if (kind === 'moved') await repo.tx(tx => tx.move('source', {parentId: null, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
     if (kind === 'deleted') await repo.tx(tx => tx.delete('source'), {scope: ChangeScope.BlockDefault})
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(selectInlineProperty(repo.block('owner'), note, repo.block('source'))).rejects.toThrow()
+    await expect(selectInlineProperty(repo.block('owner'), note, repo.block('source'))).rejects.toThrow('The input block changed.')
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 })

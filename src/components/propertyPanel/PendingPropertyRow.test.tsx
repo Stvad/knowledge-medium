@@ -174,3 +174,32 @@ describe('PendingPropertyRow', () => {
     await act(async () => { finishSecond() })
   })
 })
+
+
+it('cancels only once when Escape repeats before unmount', () => {
+  const onCancel = vi.fn()
+  render(<PendingPropertyRow owner={owner} schema={schema} onCommit={vi.fn()} onCancel={onCancel}/>)
+  fireEvent.keyDown(input(), {key: 'Escape'})
+  fireEvent.keyDown(input(), {key: 'Escape'})
+  expect(onCancel).toHaveBeenCalledOnce()
+})
+
+it('keeps a new attempt failure visible after a cancelled commit succeeds', async () => {
+  let finishFirst = () => {}
+  let rejectSecond = (_error: Error) => {}
+  const onCommit = vi.fn()
+    .mockImplementationOnce(() => new Promise<void>(resolve => { finishFirst = resolve }))
+    .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectSecond = reject }))
+  render(<PendingPropertyRow owner={owner} schema={schema} onCommit={onCommit} onCancel={vi.fn()}/>)
+  fireEvent.change(input(), {target: {value: '12'}})
+  fireEvent.keyDown(input(), {key: 'Enter'})
+  fireEvent.keyDown(input(), {key: 'Escape'})
+  fireEvent.focus(input())
+  fireEvent.change(input(), {target: {value: '14'}})
+  fireEvent.keyDown(input(), {key: 'Enter'})
+  expect(onCommit).toHaveBeenCalledTimes(2)
+  await act(async () => { finishFirst() })
+  await act(async () => { rejectSecond(new Error('Second refused')) })
+  expect(showError).toHaveBeenCalledWith('Second refused')
+  expect(input()).not.toHaveAttribute('readonly')
+})

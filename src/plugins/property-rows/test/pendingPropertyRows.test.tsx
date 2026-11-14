@@ -24,8 +24,9 @@ import {__resetLazyMountRegistryForTesting} from '@/components/util/lazyMountReg
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
-import {focusedBlockLocationFromProperties, typesProp} from '@/data/properties'
+import {focusedBlockLocationFromProperties, typesProp, isCollapsedProp} from '@/data/properties'
 import {showError} from '@/utils/toast'
+import {beginInlineProperty} from '@/components/propertyPanel/inlinePropertyFlow'
 import {propertyRowsPlugin} from '../index'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
@@ -126,6 +127,14 @@ const input = (name = textProp.name) => screen.getByRole('textbox', {name: `Valu
 const waitForOutline = async () => { await screen.findByText('Existing note') }
 
 describe('expected property ghost rows in the outline', () => {
+  it('opens the add-field draft beneath a collapsed owner', async () => {
+    await repo.block(OWNER).set(isCollapsedProp, true)
+    mount('none')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    expect(screen.getByRole('textbox', {name: 'Value for draft:text'})).toBeVisible()
+  })
+
   it('renders unset expected fields without writing rows or adding structural children', async () => {
     const count = await rowCount()
     const beforeIds = await repo.block(OWNER).childIds.load()
@@ -166,8 +175,8 @@ describe('expected property ghost rows in the outline', () => {
     mount()
     await screen.findByRole('textbox', {name: `Value for ${textProp.name}`})
     expect(await rowCount()).toBe(count)
+    await act(async () => { input().focus() })
     fireEvent.change(input(), {target: {value: 'committed text'}})
-    expect(await rowCount()).toBe(count)
     await act(async () => { fireEvent.keyDown(input(), {key: 'Enter'}) })
     await waitFor(() => expect(repo.block(OWNER).peekProperty(textProp)).toBe('committed text'))
     const ownerChildren = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()

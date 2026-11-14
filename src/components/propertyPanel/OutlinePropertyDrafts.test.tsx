@@ -119,3 +119,34 @@ describe('OutlinePropertyDrafts', () => {
     expect(document.activeElement).toBe(outside)
   })
 })
+
+
+it('cancels the pending continuation on Escape without moving focus', async () => {
+  let finish: (value: {fieldRowId: string; valueId: string}) => void = () => {}
+  vi.mocked(commitInlineProperty).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  session().add('owner', {schema})
+  const reveal = vi.spyOn(session(), 'reveal')
+  mount()
+  fireEvent.change(input(), {target: {value: '12'}})
+  fireEvent.keyDown(input(), {key: 'Enter'})
+  expect(commitInlineProperty).toHaveBeenCalledOnce()
+  fireEvent.keyDown(input(), {key: 'Escape'})
+  await act(async () => { finish({fieldRowId: 'field', valueId: 'value'}) })
+  expect(reveal).not.toHaveBeenCalled()
+  expect(enterEditModeForBlock).not.toHaveBeenCalled()
+})
+
+it('cancels the pending continuation when the owner unmounts', async () => {
+  let finish: (value: {fieldRowId: string; valueId: string}) => void = () => {}
+  vi.mocked(commitInlineProperty).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  session().add('owner', {schema})
+  const reveal = vi.spyOn(session(), 'reveal')
+  const view = mount()
+  fireEvent.change(input(), {target: {value: '12'}})
+  fireEvent.keyDown(input(), {key: 'Enter'})
+  expect(commitInlineProperty).toHaveBeenCalledOnce()
+  view.unmount()
+  await act(async () => { finish({fieldRowId: 'field', valueId: 'value'}) })
+  expect(reveal).not.toHaveBeenCalled()
+  expect(enterEditModeForBlock).not.toHaveBeenCalled()
+})
