@@ -38,7 +38,7 @@ const requireExplicitChildView = {
     type: 'problem',
     docs: {
       description:
-        'Outline/display code must choose the child view explicitly (visible vs. structural).',
+        'Outline/display code must name the child view it reads (`propertyChildren`).',
     },
     // `check` picks how much of the surface to guard:
     //   'all'   — query handles AND `tx.childrenOf`. For pure display dirs,
@@ -46,7 +46,7 @@ const requireExplicitChildView = {
     //   'query' — query handles only. The default everywhere else: a
     //             `repo.query.{children,subtree,childIds}({id})` is a READ-OUT
     //             (render, serialize, hand to an agent) and every such call
-    //             site in `src/` wants the visible view, while `tx.childrenOf`
+    //             site in `src/` wants a view it can name, while `tx.childrenOf`
     //             is the low-level primitive that mixed data-layer files
     //             (mutators, paste, panelLayoutProjection, agent-runtime)
     //             legitimately call structurally for order-key/sibling math.

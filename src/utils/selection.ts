@@ -12,7 +12,7 @@ import {
 import { ChangeScope, type BlockData } from '@/data/api'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import { siblingPrecedes, unlistedIndexAmong } from '@/data/orderKey'
-import { isRecognizedFieldRow } from '@/data/drawnSubtree'
+import { isDrawnAsPropertyName } from '@/data/drawnSubtree'
 import type { OutlineSurface } from '@/data/outlineSurface'
 import { visibleChildIds } from '@/data/visibleChildren'
 
@@ -35,6 +35,18 @@ export const unlistedSiblingIndex = (
   listedIds: readonly string[],
   row: BlockData,
 ): number => unlistedIndexAmong(listedIds.map(id => repo.block(id).peek()), row)
+
+/** {@link unlistedSiblingIndex} for a walker, which cannot assume the
+ *  siblings are in the cache (a mounted outline has them; the bridge and a
+ *  cold walk do not): loads them first. */
+const unlistedSiblingIndexLoaded = async (
+  repo: Repo,
+  listedIds: readonly string[],
+  row: BlockData,
+): Promise<number> => {
+  await Promise.all(listedIds.map(id => repo.load(id)))
+  return unlistedSiblingIndex(repo, listedIds, row)
+}
 
 /** Returns the next visible block in document order on `surface`,
  *  walking *relatively* — descend into the first child if `current` is
@@ -70,9 +82,11 @@ export const nextVisibleBlock = async (
     if (!data || data.parentId === null) return null
     const parentId = data.parentId
     const parent = repo.block(parentId)
+    // The climb reads the parent's own row next (`walker.peek()`).
+    await parent.load()
     const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
     const idx = siblingIds.indexOf(walker.id)
-    const nextIdx = idx !== -1 ? idx + 1 : unlistedSiblingIndex(repo, siblingIds, data)
+    const nextIdx = idx !== -1 ? idx + 1 : await unlistedSiblingIndexLoaded(repo, siblingIds, data)
     if (nextIdx < siblingIds.length) {
       return repo.block(siblingIds[nextIdx])
     }
@@ -101,7 +115,7 @@ export const previousVisibleBlock = async (
   await parent.load()
   const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
   const idx = siblingIds.indexOf(current.id)
-  const prevIdx = (idx !== -1 ? idx : unlistedSiblingIndex(repo, siblingIds, data)) - 1
+  const prevIdx = (idx !== -1 ? idx : await unlistedSiblingIndexLoaded(repo, siblingIds, data)) - 1
 
   if (prevIdx >= 0) {
     // Descend into the previous sibling's last visible descendant.
@@ -114,9 +128,9 @@ export const previousVisibleBlock = async (
 }
 
 /** Where the edit-mode caret goes from `block`: the nearest visible row in
- *  `direction` with text to edit. A field row on the drawn list is passed
- *  over — it is drawn as the property's name, with no editor to hold a
- *  caret, and a block left editing there takes no keys. Anything that moves
+ *  `direction` with text to edit. A row drawn as a property's name is passed
+ *  over — it has no editor to hold a caret, and a block left editing there
+ *  takes no keys. Anything that moves
  *  the CARET to a neighbour asks this; block-level walks (selection, vim
  *  motion, merge targets) use the plain walkers. */
 export const caretNeighbour = async (
@@ -126,7 +140,7 @@ export const caretNeighbour = async (
 ): Promise<Block | null> => {
   const step = direction === 'next' ? nextVisibleBlock : previousVisibleBlock
   let neighbour = await step(block, surface)
-  while (neighbour && await isRecognizedFieldRow(neighbour)) neighbour = await step(neighbour, surface)
+  while (neighbour && await isDrawnAsPropertyName(neighbour, surface)) neighbour = await step(neighbour, surface)
   return neighbour
 }
 
@@ -170,7 +184,7 @@ export const blockAfterSubtreeRemoval = async (
   await parent.load()
   const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
   const listedAt = siblingIds.indexOf(current.id)
-  const idx = listedAt !== -1 ? listedAt : unlistedSiblingIndex(repo, siblingIds, data)
+  const idx = listedAt !== -1 ? listedAt : await unlistedSiblingIndexLoaded(repo, siblingIds, data)
 
   const next = siblingIds.slice(listedAt !== -1 ? idx + 1 : idx).find(id => !leaving.has(id))
   if (next !== undefined) return repo.block(next)
@@ -182,14 +196,9 @@ export const blockAfterSubtreeRemoval = async (
 /** Last visible descendant of `block` (deepest, last child of last
  *  child, etc.). Used by keyboard navigation that needs to land on
  *  the bottom of an expanded subtree. Returns the input block if it
- *  does not show children (`isExpanded`) or has none.
- *
- *  A scope root its surface force-opens is descended whatever its collapse
- *  flag, so vim `Shift+G` (jump to last visible block) still descends from
- *  a focal panel root carrying a stale collapsed flag from when it was
- *  viewed as a child; a nested scope root that honours its flag terminates
- *  the descent. So does a collapsed block mid-walk, which is
- *  `previousVisibleBlock`'s contract (don't dive into a collapsed sibling). */
+ *  does not show children (`isExpanded`) or has none; a collapsed block
+ *  mid-walk ends the descent, which is `previousVisibleBlock`'s contract
+ *  (don't dive into a collapsed sibling). */
 export const getLastVisibleDescendant = async (
   block: Block,
   surface: OutlineSurface,

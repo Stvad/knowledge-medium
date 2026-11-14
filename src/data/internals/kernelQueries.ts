@@ -707,10 +707,10 @@ const propertyChildrenViewSchema = z.enum(['all', 'non-hidden', 'none'])
  *
  *  Returns the FULL subtree by default (property field/value machinery
  *  included) — the structural view, so a consumer never silently misses
- *  machinery. The display-visible view — excluding recognized machinery
+ *  machinery. The view without recognized machinery
  *  (docs/properties-as-blocks-migration.html §9 — data-keyed, not flip-gated, since the backfill mints field
  *  rows pre-flip; prunes at every recognized `::` field row, see
- *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `propertyChildren:
+ *  {@link VISIBLE_SUBTREE_SQL}) is opt-in via `propertyChildren:
  *  'none'`, the same option `core.children` / `tx.childrenOf` take. Copy
  *  needs the per-parent mode, so it prunes the structural subtree itself
  *  (`copiedSubtree`). */
@@ -947,8 +947,8 @@ const childrenStatement = (
 
 /** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
  *  by default (property field rows included) — the structural view. The
- *  display-visible view — excluding recognized field rows
- *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
+ *  view without recognized field rows
+ *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) is opt-in via
  *  `propertyChildren: 'none'`, the option `tx.childrenOf` also takes;
  *  `'non-hidden'` drops only the field rows the outline's default view skips
  *  (`outlineSkippedFieldIds`). The outline hooks pass

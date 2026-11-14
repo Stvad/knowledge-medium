@@ -1,7 +1,7 @@
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { memberCodecOf } from '@/data/api'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
-import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
+import { repoFieldDefinitionTest } from '@/data/drawnSubtree'
 import type { Repo } from '@/data/repo'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import { useCallback, useSyncExternalStore } from 'react'
@@ -32,11 +32,9 @@ export const fieldRowDefinition = (
   data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'> | null | undefined,
 ): FieldRowDefinition | undefined => {
   if (!data) return undefined
-  const resolver = repo.propertySchemaResolverFor(data.workspaceId)
-  const isDefinition = (fieldId: string) => isResolvableFieldDefinition(resolver.resolveField(fieldId))
-  if (!isPropertyFieldInstance(data, isDefinition)) return undefined
+  if (!isPropertyFieldInstance(data, repoFieldDefinitionTest(repo, data.workspaceId))) return undefined
   const fieldId = data.referenceTargetId!
-  const resolution = resolver.resolveField(fieldId)
+  const resolution = repo.propertySchemaResolverFor(data.workspaceId).resolveField(fieldId)
   if (resolution.status === 'resolved') {
     return {fieldId, name: resolution.schema.name, schema: resolution.schema}
   }

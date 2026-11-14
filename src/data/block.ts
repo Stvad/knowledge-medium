@@ -244,7 +244,7 @@ export class Block implements Handle<BlockData | null> {
   // the reader names it: a fixed view is `repo.query.children /
   // childIds({id, propertyChildren})`, the list a surface draws is
   // `visibleChildIds(block, scope)` (`@/data/visibleChildren`). The two getters
-  // below predate that and answer one view without saying which.
+  // below answer one view without saying which.
 
   /** @deprecated Removal planned for 2026-11-20. The mode-`none` child ids
    *  (no property field row). Say the view instead:

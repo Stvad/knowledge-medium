@@ -17,12 +17,8 @@ export interface OutlineSurface {
 }
 
 /** What a gesture's dependencies say about its surface (the fields
- *  `useShortcutSurfaceActivations` injects). */
-export interface SurfaceCarrier {
-  readonly scopeRootId?: string
-  readonly scopeRootForcesOpen?: boolean
-  readonly propertyDisplay?: PropertyDisplayScopeLevels
-}
+ *  `useShortcutSurfaceActivations` injects): any of it may be absent. */
+export type SurfaceCarrier = Partial<OutlineSurface>
 
 /** The surface `carrier` ran in, or null when it names no scope root (a
  *  global command, the bridge without a panel): there is then no visible

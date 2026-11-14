@@ -415,8 +415,8 @@ export interface Tx {
    *  Returns EVERY child by default — property field/value rows included.
    *  This is the structural view: the actual tree, no hidden rows, so a
    *  traversal can never silently miss machinery it needs to carry (delete
-   *  cascade, copy, merge). The display-visible view — which excludes
-   *  recognized property field rows (docs/properties-as-blocks-migration.html §9) — is opt-IN via
+   *  cascade, copy, merge). The view without recognized property field rows
+   *  (docs/properties-as-blocks-migration.html §9) is opt-IN via
    *  `{propertyChildren: 'none'}`; `'non-hidden'` drops only the field rows
    *  whose definition is hidden (see {@link PropertyChildrenView}).
    *  Recognition is data-keyed, not flip-gated, so it prunes in every

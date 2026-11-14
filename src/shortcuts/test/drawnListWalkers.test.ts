@@ -173,6 +173,22 @@ describe('range selection and the data walker step onto drawn property rows', ()
     expect((await getLastVisibleDescendant(repo.block('solo'), HIDDEN)).id).toBe('solo')
   })
 
+  it('walks from a cold cache: the ancestors and siblings it reads are loaded by the walk', async () => {
+    const cold = createTestRepo({db: sharedDb.db, user: USER}).repo
+    cold.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
+    ]))
+    cold.setActiveWorkspaceId(WS)
+    await vi.waitFor(() => expect(cold.propertySchemas.has(statusProp.name)).toBe(true))
+    expect((await nextVisibleBlock(cold.block('b'), HIDDEN))?.id).toBe('solo')
+    await repo.tx(tx => tx.create({id: 'c', workspaceId: WS, parentId: 'owner', orderKey: 'a4', content: 'c'}),
+      {scope: ChangeScope.BlockDefault})
+    const colder = createTestRepo({db: sharedDb.db, user: USER}).repo
+    colder.setActiveWorkspaceId(WS)
+    expect((await blockAfterSubtreeRemoval(colder.block(statusRow), HIDDEN))?.id).toBe('b')
+  })
+
   it('a range from `a` to `b` covers the drawn row between them', async () => {
     expect(await getBlocksInRange('a', 'b', DRAWN, repo)).toEqual(['a', statusRow, 'b'])
     expect(await getBlocksInRange('a', 'b', HIDDEN, repo)).toEqual(['a', 'b'])
@@ -222,6 +238,22 @@ describe('the edit-mode caret passes a row drawn as a property\'s name', () => {
   it('ArrowLeft at the start of the value lands in `a`', async () => {
     await pressInEditor('move_left_from_cm_start', draftRow, 'start', NON_HIDDEN)
     expect(focusedId()).toBe('a')
+  })
+
+  it('a field row that is the surface root is an ordinary block, and the caret lands on it', async () => {
+    const action = getDefaultActions({repo}).find(
+      (candidate): candidate is ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =>
+        candidate.id === 'move_left_from_cm_start' && candidate.context === ActionContextTypes.EDIT_MODE_CM)!
+    await action.handler({
+      block: repo.block(draftRow), editorView: editorAt('draft', 0), uiStateBlock: repo.block('ui'),
+      scopeRootId: statusRow, propertyDisplay: NON_HIDDEN,
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    expect(focusedId()).toBe(statusRow)
+  })
+
+  it('in mode none the field row above a value shows its text, and the caret lands on it', async () => {
+    await pressInEditor('move_left_from_cm_start', draftRow, 'start', NONE)
+    expect(focusedId()).toBe(statusRow)
   })
 
   it('Backspace on an emptied value lands in `a`', async () => {
@@ -304,11 +336,11 @@ describe('merge targets are the drawn neighbours', () => {
 })
 
 describe('a block whose only drawn children are property rows has children', () => {
-  it('Enter at its end creates a first child', async () => {
+  it('a new block below it goes in as its first child', async () => {
     expect((await structuralEditPolicyForBlock(repo.block('solo'), DRAWN)).createBelowPlacement).toBe('child-first')
   })
 
-  it('in mode none it has none, and Enter creates a sibling', async () => {
+  it('in mode none it has none, and a new block below is a sibling', async () => {
     expect((await structuralEditPolicyForBlock(repo.block('solo'), HIDDEN)).createBelowPlacement).toBe('sibling-below')
   })
 

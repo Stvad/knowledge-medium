@@ -258,7 +258,7 @@ export default tseslint.config(
     //
     //   - a `repo.query.{children,subtree,childIds}({id})` is a READ-OUT —
     //     rendered, serialized, or handed to an agent. Every such call site in
-    //     `src/` wants the visible view, so guard the query handles EVERYWHERE
+    //     `src/` wants a view it can name, so guard the query handles EVERYWHERE
     //     and let new consumers inherit the check for free.
     //   - `tx.childrenOf` is the low-level primitive. Mixed data-layer files
     //     (mutators, paste, panelLayoutProjection, agent-runtime) call it
