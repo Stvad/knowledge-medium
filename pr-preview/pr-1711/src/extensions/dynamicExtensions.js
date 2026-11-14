@@ -1,0 +1,1 @@
+export{QP as dynamicExtensionsExtension}from"../../chunks/app-Le0BNHQ3.js";

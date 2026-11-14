@@ -1,0 +1,1 @@
+export{yN as ensureMetricsConsoleHook}from"../../chunks/app-Le0BNHQ3.js";

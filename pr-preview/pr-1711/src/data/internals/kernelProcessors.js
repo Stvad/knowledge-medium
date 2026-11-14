@@ -1,0 +1,1 @@
+export{J6 as KERNEL_PROCESSORS}from"../../../chunks/app-Le0BNHQ3.js";

@@ -1,0 +1,1 @@
+export{Yt as supertagsPlugin}from"../../../chunks/app-Le0BNHQ3.js";

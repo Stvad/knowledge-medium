@@ -1,0 +1,1 @@
+export{XP as resolveAppRuntime,ZP as resolveAppRuntimeSync}from"../../chunks/app-Le0BNHQ3.js";

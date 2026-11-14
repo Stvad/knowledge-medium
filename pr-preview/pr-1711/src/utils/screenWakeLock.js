@@ -1,0 +1,1 @@
+export{d as holdScreenWakeLock}from"../../chunks/app-Le0BNHQ3.js";

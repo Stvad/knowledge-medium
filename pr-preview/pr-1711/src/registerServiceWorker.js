@@ -1,0 +1,1 @@
+export{SP as checkForAppUpdate,CP as registerServiceWorker}from"../chunks/app-Le0BNHQ3.js";

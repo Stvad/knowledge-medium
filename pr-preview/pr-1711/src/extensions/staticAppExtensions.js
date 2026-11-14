@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-Le0BNHQ3.js";

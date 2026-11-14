@@ -1,0 +1,1 @@
+export{OB as defineVariant,kB as defineVariantFacet}from"../../chunks/app-Le0BNHQ3.js";

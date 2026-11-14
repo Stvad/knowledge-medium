@@ -1,0 +1,1 @@
+export{Xl as srsBlockDateAdapter}from"../../../chunks/app-Le0BNHQ3.js";
