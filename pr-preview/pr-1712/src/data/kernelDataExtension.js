@@ -1,0 +1,1 @@
+export{r6 as kernelDataExtension}from"../../chunks/app-BJPIyTgN.js";

@@ -1,0 +1,1 @@
+export{$j as CommandPaletteHeaderItem}from"../../../chunks/app-BJPIyTgN.js";

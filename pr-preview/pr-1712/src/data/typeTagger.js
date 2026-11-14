@@ -1,0 +1,1 @@
+export{S2 as TypeTagger,C2 as applyTypeTagInTx}from"../../chunks/app-BJPIyTgN.js";

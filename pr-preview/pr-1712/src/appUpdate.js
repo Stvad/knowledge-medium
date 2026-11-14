@@ -1,0 +1,1 @@
+export{wP as appUpdate,TP as useAppUpdateAvailable}from"../chunks/app-BJPIyTgN.js";

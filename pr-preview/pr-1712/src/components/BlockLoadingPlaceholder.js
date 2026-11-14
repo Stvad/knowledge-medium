@@ -1,0 +1,1 @@
+export{IF as BlockLoadingPlaceholder}from"../../chunks/app-BJPIyTgN.js";

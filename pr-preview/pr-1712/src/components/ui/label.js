@@ -1,0 +1,1 @@
+export{QO as Label}from"../../../chunks/app-BJPIyTgN.js";

@@ -1,0 +1,1 @@
+export{EP as kernelPageDeletionGuard}from"../../chunks/app-BJPIyTgN.js";

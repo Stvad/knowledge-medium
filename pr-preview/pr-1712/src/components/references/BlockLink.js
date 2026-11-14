@@ -1,0 +1,1 @@
+export{GD as BlockLink}from"../../../chunks/app-BJPIyTgN.js";

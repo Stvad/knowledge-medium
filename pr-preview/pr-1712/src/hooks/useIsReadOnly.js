@@ -1,0 +1,1 @@
+export{rb as useIsReadOnly}from"../../chunks/app-BJPIyTgN.js";

@@ -1,0 +1,1 @@
+export{Y$ as agentDispatchCompanionDataExtension}from"../../../chunks/app-BJPIyTgN.js";

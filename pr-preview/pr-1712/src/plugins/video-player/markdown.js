@@ -1,0 +1,1 @@
+export{FS as videoPlayerMarkdownExtension}from"../../../chunks/app-BJPIyTgN.js";

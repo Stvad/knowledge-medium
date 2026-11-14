@@ -1,0 +1,1 @@
+export{MP as HotkeyReconciler}from"../../chunks/app-BJPIyTgN.js";

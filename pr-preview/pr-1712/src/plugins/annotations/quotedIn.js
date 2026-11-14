@@ -1,0 +1,1 @@
+export{$d as quotedInFooterContribution}from"../../../chunks/app-BJPIyTgN.js";

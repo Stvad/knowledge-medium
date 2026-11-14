@@ -1,0 +1,1 @@
+export{SI as PropertyDisplayScope}from"../../../chunks/app-BJPIyTgN.js";
