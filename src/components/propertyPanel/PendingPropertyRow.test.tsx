@@ -186,7 +186,7 @@ it('cancels only once when Escape repeats before unmount', () => {
 
 it('keeps a new attempt failure visible after a cancelled commit succeeds', async () => {
   let finishFirst = () => {}
-  let rejectSecond = (_error: Error) => {}
+  let rejectSecond: (error: Error) => void = () => {}
   const onCommit = vi.fn()
     .mockImplementationOnce(() => new Promise<void>(resolve => { finishFirst = resolve }))
     .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectSecond = reject }))
