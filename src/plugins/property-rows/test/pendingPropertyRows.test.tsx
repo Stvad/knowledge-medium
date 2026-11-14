@@ -273,6 +273,34 @@ describe('expected property ghost rows in the outline', () => {
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
   })
 
+  it.each(['Enter', 'blur'])('commits a still-focused ghost on %s after Escape and new typing', async gesture => {
+    mount()
+    const editor = await screen.findByRole('textbox', {name: `Value for ${textProp.name}`})
+    await act(async () => { editor.focus() })
+    const count = await rowCount()
+    fireEvent.change(editor, {target: {value: 'cancelled text'}})
+    fireEvent.keyDown(editor, {key: 'Escape'})
+    expect(document.activeElement).toBe(editor)
+    expect(editor).toHaveValue('')
+    expect(await rowCount()).toBe(count)
+    fireEvent.change(editor, {target: {value: 'replacement text'}})
+    await act(async () => {
+      if (gesture === 'blur') editor.blur()
+      else fireEvent.keyDown(editor, {key: 'Enter'})
+    })
+    await waitFor(() => expect(repo.block(OWNER).peekProperty(textProp)).toBe('replacement text'))
+    const field = (await repo.query.children({id: OWNER, propertyChildren: 'all'}).load())
+      .find(row => {
+        if (!row.isFieldForm || !row.referenceTargetId) return false
+        const resolved = repo.propertySchemaResolverFor(WS).resolveField(row.referenceTargetId)
+        return resolved.status === 'resolved' && resolved.schema.name === textProp.name
+      })!
+    const values = await repo.block(field.id).children.load()
+    expect(values.map(row => row.content)).toEqual(['replacement text'])
+    if (gesture === 'Enter') await waitFor(() => expect(
+      focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe(values[0].id))
+  })
+
   it('offers no editable ghosts in a read-only workspace', async () => {
     Object.defineProperty(repo, 'isReadOnly', {value: true})
     const count = await rowCount()

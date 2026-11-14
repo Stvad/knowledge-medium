@@ -65,13 +65,11 @@ export function PendingPropertyRow({owner, schema, autoFocus = false, onCommit, 
       value={draft}
       readOnly={committing}
       onChange={event => {
+        phase.current = {state: 'editing'}
         setDraft(event.target.value)
         onHasTextChange?.(event.target.value !== '')
       }}
-      onFocus={event => {
-        if (phase.current.state === 'done') phase.current = {state: 'editing'}
-        activation.onFocus(event)
-      }}
+      onFocus={activation.onFocus}
       onBlur={() => { activation.onBlur(); void commit() }}
       onKeyDown={event => {
         event.stopPropagation()
