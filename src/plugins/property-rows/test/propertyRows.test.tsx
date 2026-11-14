@@ -35,7 +35,13 @@ import { propertyRowsPlugin } from '../index'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
-import { focusBlock, isCollapsedProp, showPropertiesProp } from '@/data/properties'
+import {
+  focusBlock,
+  isCollapsedProp,
+  isEditingProp,
+  peekFocusedBlockLocation,
+  showPropertiesProp,
+} from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { setBlockPropertyDisplay } from '../actions'
@@ -178,6 +184,11 @@ const structuralFieldRowNames = async (): Promise<string[]> => {
   }
   return names
 }
+
+/** The block id of the one property row on screen. */
+const shownRowId = (): string | undefined =>
+  document.querySelector<HTMLElement>('[data-property-field-row="true"]')
+    ?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId
 
 /** Waits until the owner's ordinary child is on screen, so an empty
  *  `shownRows()` means "rendered without rows", never "not rendered yet". */
@@ -664,6 +675,25 @@ describe('moving the caret off a row the listing leaves out', () => {
   })
 })
 
+
+describe('a name row asked to edit', () => {
+  // The row has no text editor; left editing, it would take no keys.
+  it('hands edit mode back, staying focused', async () => {
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
+    const statusRow = shownRowId()!
+    expect((await repo.load(statusRow))?.isFieldForm).toBe(true)
+    const panel = repo.block(PANEL)
+
+    // The control: an ordinary block asked to edit stays editing.
+    await act(async () => { await focusBlock(panel, NOTE, {edit: true}) })
+    await waitFor(() => expect(panel.peekProperty(isEditingProp)).toBe(true))
+
+    await act(async () => { await focusBlock(panel, statusRow, {edit: true}) })
+    await waitFor(() => expect(panel.peekProperty(isEditingProp)).toBe(false))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe(statusRow)
+  })
+})
 
 describe('field row expansion affordance', () => {
   it('only hides the wide-row control for one expanded leaf value', async () => {
