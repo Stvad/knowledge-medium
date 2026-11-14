@@ -4,6 +4,7 @@ import type { AnyPropertySchema } from '@/data/api'
 import { acquireEditModeKeepalive } from '@/components/editModeKeepalive'
 import { showError } from '@/utils/toast'
 import { PropertyPicker, type ConfigureNewSchemaArgs } from './PropertyPicker'
+import {resolveOrCreateProperty} from './resolveOrCreateProperty'
 
 interface InlinePropertyPickerProps {
   owner: Block
@@ -13,7 +14,9 @@ interface InlinePropertyPickerProps {
 }
 
 /** The outline's schema input. Picking and configuring share the registry's
- *  creation path; the caller owns where the selected field is written. */
+ *  creation path; the caller owns where the selected field is written.
+ *  Keep this picker inline to retain the authored scaffold and caret;
+ *  Cancel preserves the typed text until a selection is committed. */
 export function InlinePropertyPicker({owner, onPick, onCancel, canSubmit}: InlinePropertyPickerProps) {
   const cancelled = useRef(false)
   const submitted = useRef(false)
@@ -49,15 +52,8 @@ export function InlinePropertyPicker({owner, onPick, onCancel, canSubmit}: Inlin
 
   const resolveSchema = useCallback(async ({name, presetId}: ConfigureNewSchemaArgs) => {
     if (!canContinue()) return undefined
-    const existing = owner.repo.propertySchemas.get(name.trim())
-    if (existing) return existing
-    try {
-      const schema = await owner.repo.userSchemas.addSchema({name: name.trim(), presetId})
-      return canContinue() ? schema : undefined
-    } catch (error) {
-      showError(error instanceof Error ? error.message : 'Could not create property')
-      return undefined
-    }
+    const schema = await resolveOrCreateProperty(owner.repo, {name, presetId})
+    return canContinue() ? schema : undefined
   }, [canContinue, owner])
 
   return <div ref={element} className="flex min-w-0 items-center gap-2" data-inline-property-picker="true">
