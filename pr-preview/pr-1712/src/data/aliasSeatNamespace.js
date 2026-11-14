@@ -1,1 +1,0 @@
-export{uat as aliasSeatNamespacesInTx,dat as resolveAliasSeatNamespaces}from"../../chunks/app-IsNNAo_6.js";

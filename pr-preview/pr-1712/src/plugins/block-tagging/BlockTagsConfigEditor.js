@@ -1,1 +1,0 @@
-export{Su as BlockTagsConfigEditor}from"../../../chunks/app-IsNNAo_6.js";

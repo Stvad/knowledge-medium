@@ -1,1 +1,0 @@
-export{Uat as deriveWorkspaceIdNamespace}from"../../../chunks/app-IsNNAo_6.js";

@@ -1,1 +1,0 @@
-export{Mb as richPastePlugin}from"../../../chunks/app-IsNNAo_6.js";

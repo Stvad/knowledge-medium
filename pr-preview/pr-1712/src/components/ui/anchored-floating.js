@@ -1,1 +1,0 @@
-export{kG as floatingAnchorFromRect,AG as useAnchoredFloating}from"../../../chunks/app-IsNNAo_6.js";

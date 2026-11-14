@@ -1,1 +1,0 @@
-export{wJ as geoDataExtension}from"../../../chunks/app-IsNNAo_6.js";

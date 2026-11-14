@@ -1,1 +1,0 @@
-export{KM as BlockEmbed}from"../../../chunks/app-IsNNAo_6.js";

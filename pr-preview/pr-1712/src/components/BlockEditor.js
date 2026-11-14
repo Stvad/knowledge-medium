@@ -1,1 +1,0 @@
-export{wR as BlockEditor}from"../../chunks/app-IsNNAo_6.js";

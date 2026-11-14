@@ -1,1 +1,0 @@
-export{NG as PropertyShapeButton,PG as PropertyShapeGlyph}from"../../../chunks/app-IsNNAo_6.js";

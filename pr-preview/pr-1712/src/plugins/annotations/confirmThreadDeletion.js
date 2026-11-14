@@ -1,1 +1,0 @@
-export{gp as confirmThreadDeletion}from"../../../chunks/app-IsNNAo_6.js";

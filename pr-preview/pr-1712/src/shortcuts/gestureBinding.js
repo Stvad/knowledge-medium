@@ -1,1 +1,0 @@
-export{FP as gestureBindingDescriptor,IP as matchesGestureEvent}from"../../chunks/app-IsNNAo_6.js";

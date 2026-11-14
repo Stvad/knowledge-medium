@@ -1,1 +1,0 @@
-export{po as propertiesMigrationPlugin}from"../../../chunks/app-IsNNAo_6.js";

@@ -1,1 +1,0 @@
-"use client";export{zB as Collapsible,BB as CollapsibleContent,VB as CollapsibleTrigger}from"../../../chunks/app-IsNNAo_6.js";

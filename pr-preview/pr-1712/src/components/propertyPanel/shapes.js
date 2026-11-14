@@ -1,1 +1,0 @@
-export{FG as propertyShapeLabel}from"../../../chunks/app-IsNNAo_6.js";

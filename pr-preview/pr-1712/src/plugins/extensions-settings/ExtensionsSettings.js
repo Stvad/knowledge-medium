@@ -1,1 +1,0 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-IsNNAo_6.js";

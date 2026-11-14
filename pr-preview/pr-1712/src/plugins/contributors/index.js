@@ -1,1 +1,0 @@
-export{_m as contributorsPlugin}from"../../../chunks/app-IsNNAo_6.js";

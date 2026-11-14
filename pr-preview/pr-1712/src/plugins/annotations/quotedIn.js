@@ -1,1 +1,0 @@
-export{$d as quotedInFooterContribution}from"../../../chunks/app-IsNNAo_6.js";

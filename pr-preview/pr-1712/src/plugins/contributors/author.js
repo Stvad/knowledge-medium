@@ -1,1 +1,0 @@
-export{ng as authorIdOf}from"../../../chunks/app-IsNNAo_6.js";

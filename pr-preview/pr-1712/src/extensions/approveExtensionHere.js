@@ -1,1 +1,0 @@
-export{cP as approveExtensionHere}from"../../chunks/app-IsNNAo_6.js";

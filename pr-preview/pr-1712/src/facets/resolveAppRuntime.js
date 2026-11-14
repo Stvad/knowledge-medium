@@ -1,1 +1,0 @@
-export{XP as resolveAppRuntime,ZP as resolveAppRuntimeSync}from"../../chunks/app-IsNNAo_6.js";

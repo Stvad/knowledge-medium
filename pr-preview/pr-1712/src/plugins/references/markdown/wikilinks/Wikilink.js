@@ -1,1 +1,0 @@
-export{xy as Wikilink}from"../../../../../chunks/app-IsNNAo_6.js";

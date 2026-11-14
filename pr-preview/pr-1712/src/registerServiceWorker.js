@@ -1,1 +1,0 @@
-export{SP as checkForAppUpdate,CP as registerServiceWorker}from"../chunks/app-IsNNAo_6.js";

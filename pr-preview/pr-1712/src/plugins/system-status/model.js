@@ -1,1 +1,0 @@
-export{Dc as getSyncIndicatorView}from"../../../chunks/app-IsNNAo_6.js";
