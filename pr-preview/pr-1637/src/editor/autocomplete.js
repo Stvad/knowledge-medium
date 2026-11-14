@@ -1,1 +1,1 @@
-export{qM as editorAutocompleteExtension}from"../../chunks/app-BPXsBhrs.js";
+export{XN as editorAutocompleteExtension}from"../../chunks/app-CGdfGHHd.js";
