@@ -106,6 +106,7 @@ import {
 import {
   isLeftOutOfChildrenView,
   propertyCellValueRejection,
+  scalarValueRow,
   type IsPropertyFieldDefinition,
   type PropertyRowClassifier,
 } from '@/data/propertyChildren'
@@ -406,6 +407,7 @@ export class TxImpl implements Tx {
   private readonly explicitlyUnsetProperties = new Map<string, Set<string>>()
   private userWritesFinished = false
   private readonly propertyChildTx: Tx
+  private readonly scalarValueWrites = new Map<string, {id: string; content: string}>()
 
   finishUserWrites(): void {
     this.userWritesFinished = true
@@ -719,9 +721,24 @@ export class TxImpl implements Tx {
     return row === null ? null : parseBlockRow(row)
   }
 
-  async getAtStart(id: string): Promise<BlockData | null> {
-    const entry = this.ctx.snapshots.get(id)
-    return entry === undefined ? this.get(id) : entry.before
+  async scalarValueWriteTarget(
+    fieldRow: {id: string; parentId: string},
+    schema: AnyPropertySchema,
+    values: readonly BlockData[],
+    writing: string,
+  ): Promise<BlockData | undefined> {
+    const previous = this.scalarValueWrites.get(fieldRow.id)
+    const retained = values.find(row => row.id === previous?.id && row.content === previous?.content)
+    const owner = await this.requireExisting(fieldRow.parentId)
+    const replacingOwner = previous === undefined
+      ? this.ctx.snapshots.get(owner.id)?.before ?? owner
+      : owner
+    return retained ?? scalarValueRow(schema, values, writing,
+      storedPropertyValue(replacingOwner.properties, schema.name))
+  }
+
+  recordScalarValueWrite(fieldRowId: string, valueRowId: string, content: string): void {
+    this.scalarValueWrites.set(fieldRowId, {id: valueRowId, content})
   }
 
   peek(id: string): BlockData | null {

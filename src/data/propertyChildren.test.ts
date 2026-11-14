@@ -1788,12 +1788,19 @@ describe('a scalar write rewrites the value the cell reads', () => {
   const liveContents = async (fieldId: string): Promise<string[]> =>
     (await childrenRows(fieldId)).filter(row => row.deleted === 0).map(row => row.content)
 
-  it.each(['setProperty', 'bag update'] as const)(
-    '%s replaces the cell value behind an earlier divergent peer', async write => {
+  it.each([
+    {write: 'setProperty', spelling: '5'}, {write: 'setProperty', spelling: ' 5 '},
+    {write: 'bag update', spelling: '5'}, {write: 'bag update', spelling: ' 5 '},
+  ])(
+    '$write replaces the cell value spelled $spelling behind an earlier divergent peer', async ({write, spelling}) => {
       const {repo, fieldId, valueId} = await setupCount()
+      await sharedDb.db.writeTransaction(async tx => {
+        await tx.execute('UPDATE blocks SET content = ? WHERE id = ?', [spelling, valueId])
+      })
+      expect(valueChildContentToEncoded(countSchema, spelling)).toBe(5)
       await seedEarlierPeer(valueId, '9')
       expect(await bagOf('p')).toMatchObject({count: 5})
-      expect(await liveContents(fieldId)).toEqual(['9', '5']) // Sibling order.
+      expect(await liveContents(fieldId)).toEqual(['9', spelling]) // Sibling order.
 
       await repo.tx(async tx => {
         if (write === 'setProperty') {
@@ -1820,6 +1827,70 @@ describe('a scalar write rewrites the value the cell reads', () => {
 
     expect(await liveContents(fieldId)).toEqual(['9', '8'])
     expect(await contentOf(valueId)).toBe('8')
+  })
+
+  it('preserves unreadable text authored before the first scalar write in the same tx', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.tx(async tx => {
+      await tx.update(valueId, {content: 'about five'})
+      await tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'})
+      expect((await tx.childrenOf(fieldId, undefined)).map(row => row.content))
+        .toEqual(['meeting notes', 'about five'])
+      await tx.setProperty('p', countSchema, 7)
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await liveContents(fieldId)).sort()).toEqual(['7', 'about five', 'meeting notes'])
+  })
+
+  it.each(['setProperty', 'bag update'])('retains a target minted earlier in the same tx through %s', async write => {
+    await seedWorkspace('children')
+    const repo = setup()
+    registerDefinition(repo, 'test-count-definition', COUNT_FIELD_ID, countSchema)
+    await createBlock(repo, 'p')
+    let fieldId = ''
+    await repo.tx(async tx => {
+      await tx.setProperty('p', countSchema, 5)
+      const [field] = await tx.childrenOf('p', undefined)
+      fieldId = field!.id
+      await tx.create({id: 'peer', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: '9'})
+      expect((await tx.childrenOf(fieldId, undefined)).map(row => row.content)).toEqual(['9', '5'])
+      if (write === 'setProperty') await tx.setProperty('p', countSchema, 7)
+      else await tx.update('p', {properties: {count: 7}})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await liveContents(fieldId)).toEqual(['9', '7'])
+  })
+
+  it('preserves text authored after a scalar write in the same tx', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.tx(async tx => {
+      await tx.setProperty('p', countSchema, 6)
+      await tx.update(valueId, {content: 'about six'})
+      await tx.create({id: 'notes', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: 'meeting notes'})
+      await tx.setProperty('p', countSchema, 7)
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await liveContents(fieldId)).sort()).toEqual(['7', 'about six', 'meeting notes'])
+  })
+
+  it('retains row identity when an equal peer arrives between two writes', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.tx(async tx => {
+      await tx.setProperty('p', countSchema, 6)
+      await tx.create({id: 'peer', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: '6'})
+      await tx.setProperty('p', countSchema, 7)
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await liveContents(fieldId)).toEqual(['6', '7'])
+    expect(await contentOf(valueId)).toBe('7')
+  })
+
+  it('uses the current cell when an authored edit invalidates the earlier target', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await repo.tx(async tx => {
+      await tx.setProperty('p', countSchema, 6)
+      await tx.update(valueId, {content: 'about six'})
+      await tx.create({id: 'old-peer', workspaceId: WS, parentId: fieldId, orderKey: 'Zy', content: '5'})
+      await tx.create({id: 'current-peer', workspaceId: WS, parentId: fieldId, orderKey: 'Zz', content: '6'})
+      await tx.setProperty('p', countSchema, 7)
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await liveContents(fieldId)).toEqual(['5', '7', 'about six'])
   })
 
   it('leaves a block ahead of the value alone', async () => {

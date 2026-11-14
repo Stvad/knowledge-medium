@@ -94,9 +94,18 @@ export interface Tx {
    *  for missing rows. */
   get(id: string): Promise<BlockData | null>
 
-  /** Read the row as it stood before this transaction's first write to it.
-   *  Returns null for a row created here or an id that does not exist. */
-  getAtStart(id: string): Promise<BlockData | null>
+  /** Choose from live scalar value rows, retaining this transaction's last
+   *  reconciliation target while its written content is unchanged. The first
+   *  selection prefers the owner's pre-write cell from the tx snapshots. */
+  scalarValueWriteTarget(
+    fieldRow: {id: string; parentId: string},
+    schema: AnyPropertySchema,
+    values: readonly BlockData[],
+    writing: string,
+  ): Promise<BlockData | undefined>
+
+  /** Record the row actually written, including a newly minted scalar row. */
+  recordScalarValueWrite(fieldRowId: string, valueRowId: string, content: string): void
 
   /** Sync read: tx-private snapshots map first (own writes in this tx),
    *  then the shared (pre-tx) cache. Returns null if neither has it.

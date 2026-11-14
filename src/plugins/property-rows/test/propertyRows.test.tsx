@@ -293,6 +293,33 @@ describe('a scalar whose value children disagree', () => {
   })
 })
 
+it('edits a number spelled noncanonically behind an earlier divergent peer', async () => {
+  await repo.block(OWNER).set(ratingProp, 5)
+  const field = await sharedDb.db.get<{id: string}>(
+    `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
+       AND EXISTS (SELECT 1 FROM blocks v WHERE v.parent_id = f.id AND v.content = '5' AND v.deleted = 0)`,
+    [OWNER])
+  await sharedDb.db.writeTransaction(async tx => {
+    await tx.execute("UPDATE blocks SET content = ' 5 ' WHERE parent_id = ? AND content = '5'", [field.id])
+    await tx.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+         created_at, updated_at, created_by, updated_by)
+       VALUES ('number-peer', ?, ?, 'Zz', '9', '{}', 0, 1, 1, ?, ?)`,
+      [WS, field.id, USER.id, USER.id])
+  })
+  mount({workspace: 'all'})
+  const input = await screen.findByDisplayValue('5') as HTMLInputElement
+  await act(async () => {
+    fireEvent.change(input, {target: {value: '7'}})
+    fireEvent.blur(input)
+  })
+  await waitFor(async () => {
+    const values = await sharedDb.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [field.id])
+    expect(values.map(row => row.content)).toEqual(['9', '7'])
+  })
+})
+
 describe('resetting the block switch', () => {
   // The switch is itself a property, so in show-all its field row is visible
   // and a user can nest content under it. Clearing the switch must not take

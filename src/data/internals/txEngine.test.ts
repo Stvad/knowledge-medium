@@ -126,26 +126,6 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 
-describe('tx.getAtStart', () => {
-  it('reads untouched rows and retains original rows across repeated writes', async () => {
-    const id = await env.repo.tx(tx => tx.create({
-      workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'original',
-    }), {scope: ChangeScope.BlockDefault})
-
-    await env.repo.tx(async tx => {
-      expect((await tx.getAtStart(id))?.content).toBe('original')
-      await tx.update(id, {content: 'first'})
-      await tx.update(id, {content: 'second'})
-      expect((await tx.getAtStart(id))?.content).toBe('original')
-      const created = await tx.create({
-        workspaceId: 'ws-1', parentId: null, orderKey: 'a1', content: 'created here',
-      })
-      expect(await tx.getAtStart(created)).toBeNull()
-      expect(await tx.getAtStart('missing')).toBeNull()
-    }, {scope: ChangeScope.BlockDefault})
-  })
-})
-
 // ──── tx.create ────
 
 describe('tx.create', () => {

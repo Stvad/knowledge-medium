@@ -59,7 +59,6 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
-  scalarValueRow,
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
@@ -939,20 +938,14 @@ const reconcileSingleValueChild = async (
   // disagree with, which would fold a row that is no duplicate of it (#1021).
   if (additive && values.length > 0) return
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
-  const ownerBefore = await tx.getAtStart(fieldRow.parentId)
-  const replaced = storedPropertyValue(ownerBefore?.properties ?? {}, schema.name)
-  // Choose against the same row versions as the owner's cell. Eager writes,
-  // repeated writes and deferred materialization must retain one target even
-  // after its new content stops decoding (for example a cleared ref).
-  const candidates = await Promise.all(values.map(async row => ({
-    row, content: (await tx.getAtStart(row.id))?.content ?? row.content,
-  })))
-  const primary = scalarValueRow(schema, candidates, content, replaced)?.row
+  const primary = await tx.scalarValueWriteTarget(fieldRow, schema, values, content)
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
+    const id = await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
+    tx.recordScalarValueWrite(fieldRow.id, id, content)
     return
   }
   if (primary.content !== content) await tx.update(primary.id, {content})
+  tx.recordScalarValueWrite(fieldRow.id, primary.id, content)
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as

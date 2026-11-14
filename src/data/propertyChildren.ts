@@ -1031,8 +1031,8 @@ const firstDecodingValue = (
   return undefined
 }
 
-/** The scalar row to edit, in sibling order: prefer the content implied by
- *  the replaced cell, then the first readable row (including `writing`), then
+/** The scalar row to edit: prefer the replaced cell's exact content, then
+ *  an equivalent decoded value, then the first readable row (including `writing`), then
  *  a sole unreadable row. If none identifies a value, the writer adds a row.
  *  A missing match retains this repair rule rather than minting another
  *  conflict on every write to a cell whose children disagree with it. */
@@ -1044,13 +1044,17 @@ export const scalarValueRow = <T extends {readonly content: string}>(
   /** The encoded cell value being replaced; the editor supplies its current cell. */
   replacing?: unknown,
 ): T | undefined => {
-  let preferred: string | undefined
+  let preferred: T | undefined
   try {
-    if (replacing !== undefined) preferred = encodedToValueChildContent(schema, replacing)
+    if (replacing !== undefined) {
+      const content = encodedToValueChildContent(schema, replacing)
+      preferred = values.find(value => value.content === content)
+        ?? values.find(value => jsonValuesEqual(firstDecodingValue(schema, [value.content])?.value, replacing))
+    }
   } catch {
     // A legacy cell that cannot be represented has no matching child.
   }
-  return values.find(value => value.content === preferred)
+  return preferred
     ?? values.find(value => value.content === writing
       || firstDecodingValue(schema, [value.content]) !== undefined)
     ?? (values.length === 1 ? values[0] : undefined)

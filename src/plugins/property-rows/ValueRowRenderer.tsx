@@ -49,7 +49,7 @@ const scalarOf = (
  *  `scalarValueRow` of the owner's first field row for the definition, in
  *  `(order_key, id)` order — the row `upsertFieldRow` keeps and
  *  `reconcileSingleValueChild` overwrites. Derived from the structural child
- *  lists, so it follows reorders, folds and arrivals. */
+ *  lists and current cell, so it follows cell changes, reorders, folds and arrivals. */
 const useWriteTargetId = (
   repo: Block['repo'],
   ownerId: string | null,

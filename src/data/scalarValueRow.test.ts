@@ -19,6 +19,19 @@ describe('scalarValueRow', () => {
     expect(scalarValueRow(schema, [peer, current], '9', 5)).toBe(current)
   })
 
+  it('matches an equivalent noncanonical spelling of the replaced value', () => {
+    const spelled = {content: ' 5 '}
+    expect(scalarValueRow(schema, [peer, spelled], '7', 5)).toBe(spelled)
+  })
+
+  it('matches the cleared ref even though its content does not decode', () => {
+    const ref = defineProperty('cleared-ref', {
+      codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const cleared = {content: ''}
+    expect(scalarValueRow(ref, [{content: '((peer))'}, cleared], '((new))', '')).toBe(cleared)
+  })
+
   it('does not prefer blank content when the cell is absent', () => {
     expect(scalarValueRow(schema, [{content: ''}, peer], '7')).toBe(peer)
   })
