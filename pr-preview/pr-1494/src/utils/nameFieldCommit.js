@@ -1,1 +1,1 @@
-export{LI as trimIfEdited}from"../../chunks/app-C3pyyVAZ.js";
+export{UI as trimIfEdited}from"../../chunks/app-C3dUC_tN.js";

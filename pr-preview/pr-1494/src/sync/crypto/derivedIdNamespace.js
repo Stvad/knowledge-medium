@@ -1,1 +1,1 @@
-export{Mat as deriveWorkspaceIdNamespace}from"../../../chunks/app-C3pyyVAZ.js";
+export{qat as deriveWorkspaceIdNamespace}from"../../../chunks/app-C3dUC_tN.js";

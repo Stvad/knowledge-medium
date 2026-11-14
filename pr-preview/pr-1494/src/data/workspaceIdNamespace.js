@@ -1,0 +1,1 @@
+export{gat as DerivedIdNamespaceUnavailableError,_at as derivedIdNamespaceInTx,vat as resolveDerivedIdNamespace}from"../../chunks/app-C3dUC_tN.js";
