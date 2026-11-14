@@ -10,11 +10,21 @@ import {usePropertySchemas} from '@/hooks/propertySchemas'
 import {useBlockContext} from '@/context/block'
 import {PropertyDisplayScopeContext} from '@/context/propertyDisplay'
 import type {PropertyDisplayMode} from '@/data/propertyDisplayMode'
-import {outlineSkippedFieldIds} from '@/data/propertyDefinitionRegistry'
+import {outlineSkippedFieldIds, type PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import {commitInlineProperty, expectedPropertyPosition} from '@/data/inlineProperty'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {PendingPropertyRow} from './PendingPropertyRow'
 import {outlinePropertySession, type PendingOutlineProperty} from './outlinePropertySession'
+
+const skippedByRegistry = new WeakMap<PropertyDefinitionRegistrySnapshot, ReadonlySet<string>>()
+const skippedFields = (registry: PropertyDefinitionRegistrySnapshot): ReadonlySet<string> => {
+  let skipped = skippedByRegistry.get(registry)
+  if (!skipped) {
+    skipped = outlineSkippedFieldIds(registry)
+    skippedByRegistry.set(registry, skipped)
+  }
+  return skipped
+}
 
 export const useOutlinePropertySession = () => {
   const ui = useUIStateBlock()
@@ -75,18 +85,20 @@ function ExpectedPropertyDrafts({owner, mode, pending}: {
   // Existence check only; navigation uses the drawn listing, never this query.
   const stored = useHandle(owner.repo.query.children({id: owner.id, propertyChildren: 'all'}), {selector: rows => rows})
   if (!data || !stored) return null
+  const ownerTypes = getBlockTypes(data)
+  if (ownerTypes.length === 0) return null
   const resolver = owner.repo.propertySchemaResolverFor(data.workspaceId)
-  const skipped = owner.repo.propertyDefinitions ? outlineSkippedFieldIds(owner.repo.propertyDefinitions) : new Set<string>()
+  const skipped = mode === 'non-hidden' && owner.repo.propertyDefinitions ? skippedFields(owner.repo.propertyDefinitions) : null
   const seen = new Set(pending.map(item => item.schema.fieldId))
   const expected: PendingOutlineProperty[] = []
-  for (const typeId of getBlockTypes(data)) {
+  for (const typeId of ownerTypes) {
     for (const declaration of types.get(typeId)?.properties ?? []) {
       const active = schemas.get(declaration.name)
       if (!active) continue
       const result = resolver.resolve(active.name)
       if (result.status !== 'resolved') continue
       const schema = result.schema as AnyResolvedPropertySchema
-      if (seen.has(schema.fieldId) || (mode === 'non-hidden' && skipped.has(schema.fieldId)) ||
+      if (seen.has(schema.fieldId) || skipped?.has(schema.fieldId) ||
         stored.some(row => row.isFieldForm && row.referenceTargetId === schema.fieldId) ||
         Object.hasOwn(data.properties, schema.name)) continue
       seen.add(schema.fieldId)
