@@ -35,6 +35,33 @@ describe('outline property session publications', () => {
     expect(session.snapshot('owner')).toBe(empty)
   })
 
+  it('retains text and its containing field while expiring empty sibling drafts', () => {
+    const session = new OutlinePropertySession()
+    session.add('owner', {schema, fieldRowId: 'row'})
+    session.setHasText('row', schema.fieldId, true)
+    session.add('owner', {schema: {...schema, fieldId: 'empty'}})
+    session.reveal('owner', 'saved-row')
+    session.clearOwner('owner')
+    expect(session.snapshot('owner')).toEqual({pending: [], revealed: ['row']})
+    expect(session.snapshot('row').pending).toHaveLength(1)
+    session.setHasText('row', schema.fieldId, false)
+    session.clearOwner('owner')
+    expect(session.snapshot('owner')).toEqual({pending: [], revealed: []})
+    expect(session.snapshot('row').pending).toHaveLength(0)
+  })
+
+  it('publishes only transitions between empty and nonempty text', () => {
+    const session = new OutlinePropertySession()
+    session.add('owner', {schema})
+    const changed = vi.fn()
+    session.subscribe(changed)
+    session.setHasText('owner', schema.fieldId, true)
+    expect(changed).toHaveBeenCalledOnce()
+    session.setHasText('owner', schema.fieldId, true)
+    session.setHasText('owner', 'absent', true)
+    expect(changed).toHaveBeenCalledOnce()
+  })
+
   it('clears only the departing owner, including pending members under its field', () => {
     const session = new OutlinePropertySession()
     const empty = session.snapshot('absent')

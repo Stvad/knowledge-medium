@@ -9,7 +9,6 @@ import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useChildIdsForMode, useHandle, usePropertyDisplayMode } from '@/hooks/block.js'
 import type { BlockData } from '@/data/api'
-import type { Repo } from '@/data/repo.js'
 import { unlistedSiblingIndex } from '@/utils/selection.js'
 import { useFocusedChild } from '@/hooks/focusedChild'
 import { OutlinePropertyDrafts, useOutlinePropertyListing } from './propertyPanel/OutlinePropertyDrafts'
@@ -68,13 +67,13 @@ export const BlockChildren = ({block}: { block: Block }) => {
   const transient = useOutlinePropertyListing(block)
   const listed = useChildIdsForMode(block, mode)
   const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
-  // A row placed outside the listing sits by every sibling's order, which a
-  // move can change without changing the listing: watch the full child list
-  // while there is one (otherwise this is the listing's own handle again).
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: placesUnlistedChild ? 'all' : mode}),
+  // Temporary rows need the full child list: a move can change their parent
+  // or sibling position without changing the mode's filtered listing.
+  const hasTemporaryRows = placesUnlistedChild || transient.revealed.length > 0
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: hasTemporaryRows ? 'all' : mode}),
     {selector: ids => ids})
-  let childIds = withFocusedChild(block.repo, listed, focusedChild)
-  for (const id of transient.revealed) childIds = withFocusedChild(block.repo, childIds, block.repo.block(id).peek() ?? null)
+  let childIds = withUnlistedChild(block, listed, focusedChild)
+  for (const id of transient.revealed) childIds = withUnlistedChild(block, childIds, block.repo.block(id).peek() ?? null)
 
   return <PropertyRowListingContext value={mode !== 'none' || placesUnlistedChild || transient.revealed.length ? block.id : null}>
     <OutlinePropertyDrafts owner={block} mode={mode} children={childIds.map(childId => ({
@@ -84,11 +83,10 @@ export const BlockChildren = ({block}: { block: Block }) => {
   </PropertyRowListingContext>
 }
 
-/** `childIds` with the focused child at its sibling position when the property
- *  display mode left it out: the row the user is on is never unmounted under
- *  them, whatever tier it turns into while they edit it. */
-const withFocusedChild = (repo: Repo, childIds: string[], focused: BlockData | null): string[] => {
-  if (!focused || childIds.includes(focused.id)) return childIds
-  const at = unlistedSiblingIndex(repo, childIds, focused)
-  return [...childIds.slice(0, at), focused.id, ...childIds.slice(at)]
+/** Place a focused or revealed row at its sibling position only while it
+ *  remains a direct child of this listing. */
+const withUnlistedChild = (parent: Block, childIds: string[], child: BlockData | null): string[] => {
+  if (!child || child.parentId !== parent.id || childIds.includes(child.id)) return childIds
+  const at = unlistedSiblingIndex(parent.repo, childIds, child)
+  return [...childIds.slice(0, at), child.id, ...childIds.slice(at)]
 }

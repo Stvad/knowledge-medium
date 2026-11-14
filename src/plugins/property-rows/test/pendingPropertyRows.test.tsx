@@ -24,8 +24,9 @@ import {__resetLazyMountRegistryForTesting} from '@/components/util/lazyMountReg
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
-import {focusedBlockLocationFromProperties, typesProp, isCollapsedProp} from '@/data/properties'
+import {focusBlock, focusedBlockLocationFromProperties, typesProp, isCollapsedProp} from '@/data/properties'
 import {showError} from '@/utils/toast'
+import * as inlineProperty from '@/data/inlineProperty'
 import {beginInlineProperty} from '@/components/propertyPanel/inlinePropertyFlow'
 import {propertyRowsPlugin} from '../index'
 
@@ -133,6 +134,49 @@ describe('expected property ghost rows in the outline', () => {
     await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: textProp,
       ui: repo.block(PANEL), scope: 'pending-test'}) })
     expect(screen.getByRole('textbox', {name: 'Value for draft:text'})).toBeVisible()
+  })
+
+  it.each(['invalid', 'valid'])('keeps the %s nonempty draft until its blur commit settles outside the owner', async kind => {
+    await repo.tx(tx => tx.create({id: 'outside', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Outside'}), {scope: ChangeScope.BlockDefault})
+    mount('none')
+    await act(async () => { await beginInlineProperty({owner: repo.block(OWNER), schema: numberProp,
+      ui: repo.block(PANEL), scope: 'pending-test'}) })
+    const editor = input(numberProp.name)
+    fireEvent.change(editor, {target: {value: kind === 'invalid' ? 'not a number' : '42'}})
+    const original = inlineProperty.commitInlineProperty
+    let finish = () => {}
+    const released = new Promise<void>(resolve => { finish = resolve })
+    const commit = vi.spyOn(inlineProperty, 'commitInlineProperty').mockImplementation(async (...args) => {
+      await released
+      return original(...args)
+    })
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    try {
+      await act(async () => {
+        outside.focus()
+        await focusBlock(repo.block(PANEL), 'outside', {renderScopeId: 'pending-test'})
+      })
+      await waitFor(() => expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).toBe('outside'))
+      expect(commit).toHaveBeenCalledOnce()
+      expect(input(numberProp.name)).toHaveValue(kind === 'invalid' ? 'not a number' : '42')
+      await act(async () => { finish() })
+      if (kind === 'invalid') {
+        await waitFor(() => expect(showError).toHaveBeenCalled())
+        expect(input(numberProp.name)).toHaveValue('not a number')
+        expect(repo.block(OWNER).peekProperty(numberProp)).toBeUndefined()
+        await act(async () => { fireEvent.keyDown(editor, {key: 'Escape'}) })
+        await waitFor(() => expect(screen.queryByRole('textbox', {name: `Value for ${numberProp.name}`})).toBeNull())
+      } else {
+        await waitFor(() => expect(repo.block(OWNER).peekProperty(numberProp)).toBe(42))
+        await waitFor(() => expect(screen.queryByRole('textbox', {name: `Value for ${numberProp.name}`})).toBeNull())
+      }
+      expect(document.activeElement).toBe(outside)
+    } finally {
+      await act(async () => { finish() })
+      commit.mockRestore()
+      outside.remove()
+    }
   })
 
   it('renders unset expected fields without writing rows or adding structural children', async () => {

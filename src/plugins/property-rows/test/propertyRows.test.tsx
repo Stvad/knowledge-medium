@@ -27,6 +27,7 @@ import { BlockContextProvider, NestedBlockContextProvider } from '@/context/bloc
 import { PropertyDisplayScopeContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import { RepoContext } from '@/context/repo'
 import { BlockComponent } from '@/components/BlockComponent'
+import { outlinePropertySession } from '@/components/propertyPanel/outlinePropertySession'
 import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewportMount'
 import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -670,6 +671,25 @@ describe('a child the user turns into a field row', () => {
       await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
     })
     await waitFor(() => expect(listedUnder()).toBe(NOTE))
+  })
+
+  it('removes a revealed field from its old listing when moved under the same focused child', async () => {
+    await setBlockPropertyDisplay([repo.block(NOTE)], 'all')
+    await typeIntoChild('none', '::((def-plain))')
+    act(() => outlinePropertySession(repo.block(PANEL), undefined).reveal(OWNER, TYPED))
+    await act(async () => { await focusBlock(repo.block(PANEL), NOTE) })
+    await waitFor(() => expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain'))
+    expect(listedUnder()).toBe(OWNER)
+    expect(document.querySelectorAll(`[data-block-id="${TYPED}"]`)).toHaveLength(1)
+
+    await act(async () => {
+      await repo.tx(tx => tx.move(TYPED, {parentId: NOTE, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+    })
+    await waitFor(() => {
+      expect(document.querySelectorAll(`[data-block-id="${TYPED}"]`)).toHaveLength(1)
+      expect(listedUnder()).toBe(NOTE)
+      expect(typedRow()?.querySelector('[data-property-definition-link]')?.textContent).toBe('rows:plain')
+    })
   })
 
   it('keeps the row only in the render scope the focus is in', async () => {

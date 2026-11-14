@@ -5,6 +5,7 @@ import {CallbackSet} from '@/utils/callbackSet'
 export interface PendingOutlineProperty extends InlinePropertySelection {
   ownerId: string
   parentId: string
+  hasText?: boolean
 }
 export interface ListingState {
   pending: readonly PendingOutlineProperty[]
@@ -48,11 +49,19 @@ export class OutlinePropertySession {
     this.setListing(parentId, {...previous, pending})
     this.changes.notify()
   }
+  setHasText(parentId: string, fieldId: string, hasText: boolean) {
+    const previous = this.snapshot(parentId)
+    const entry = previous.pending.find(item => item.schema.fieldId === fieldId)
+    if (!entry || !!entry.hasText === hasText) return
+    this.setListing(parentId, {...previous, pending: previous.pending.map(item => item === entry ? {...item, hasText} : item)})
+    this.changes.notify()
+  }
+  /** Unsaved text outlives focus, including its containing field; empty drafts may expire. */
   clearOwner(ownerId: string) {
     let changed = false
     for (const [parentId, state] of this.listings) {
-      const pending = state.pending.filter(item => item.ownerId !== ownerId)
-      const revealed = parentId === ownerId ? EMPTY.revealed : state.revealed
+      const pending = state.pending.filter(item => item.ownerId !== ownerId || item.hasText)
+      const revealed = parentId === ownerId ? state.revealed.filter(id => this.snapshot(id).pending.some(item => item.hasText)) : state.revealed
       if (pending.length !== state.pending.length || revealed.length !== state.revealed.length) {
         this.setListing(parentId, {pending, revealed})
         changed = true

@@ -9,10 +9,10 @@ import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {OutlinePropertyDrafts} from './OutlinePropertyDrafts'
 import {outlinePropertySession} from './outlinePropertySession'
 
-const fixture = vi.hoisted(() => ({ui: {} as Block, owner: undefined as unknown as Block}))
+const fixture = vi.hoisted(() => ({ui: {} as Block, owner: undefined as unknown as Block, within: true}))
 vi.mock('@/data/globalState', () => ({useUIStateBlock: () => fixture.ui}))
 vi.mock('@/context/block', () => ({useBlockContext: () => ({renderScopeId: 'outline'})}))
-vi.mock('@/hooks/focusedChild', () => ({useFocusWithin: () => true}))
+vi.mock('@/hooks/focusedChild', () => ({useFocusWithin: () => fixture.within}))
 vi.mock('@/hooks/propertySchemas', () => ({usePropertySchemas: () => new Map()}))
 vi.mock('@/hooks/typeRegistry', () => ({useTypes: () => new Map()}))
 vi.mock('@/hooks/block', () => ({useHandle: (handle: {peek: () => unknown}) => handle.peek()}))
@@ -35,6 +35,7 @@ const mount = (mode: 'none' | 'all' = 'none') => render(<>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  fixture.within = true
   fixture.ui = {} as Block
   fixture.owner = {id: 'owner', peek: () => ({workspaceId: 'workspace', properties: {}}), repo: {
     isReadOnly: false, query: {children: childrenQuery},
@@ -72,6 +73,20 @@ describe('OutlinePropertyDrafts', () => {
     expect(enterEditModeForBlock).not.toHaveBeenCalled()
     expect(reveal).not.toHaveBeenCalled()
     expect(document.activeElement).toBe(outside)
+  })
+
+  it('expires each containing field after its draft finishes outside the owner', () => {
+    session().add('owner', {schema, fieldRowId: 'first-field'})
+    session().add('owner', {schema: {...schema, fieldId: 'second'}, fieldRowId: 'second-field'})
+    session().setHasText('first-field', schema.fieldId, true)
+    session().setHasText('second-field', 'second', true)
+    fixture.within = false
+    mount()
+    expect(session().snapshot('owner').revealed).toEqual(['first-field', 'second-field'])
+    act(() => session().remove('first-field', schema.fieldId))
+    expect(session().snapshot('owner').revealed).toEqual(['second-field'])
+    act(() => session().remove('second-field', 'second'))
+    expect(session().snapshot('owner').revealed).toEqual([])
   })
 
   it('focuses the committed value after removing the pending row', async () => {

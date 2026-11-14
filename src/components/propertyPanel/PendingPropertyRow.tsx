@@ -11,11 +11,12 @@ interface PendingPropertyRowProps {
   autoFocus?: boolean
   onCommit: (content: string) => Promise<void>
   onCancel: () => void
+  onHasTextChange?: (hasText: boolean) => void
   onNavigate?: (direction: -1 | 1) => void
 }
 
 /** A draft has no block identity: only committing its value may create one. */
-export function PendingPropertyRow({owner, schema, autoFocus = false, onCommit, onCancel, onNavigate}: PendingPropertyRowProps) {
+export function PendingPropertyRow({owner, schema, autoFocus = false, onCommit, onCancel, onHasTextChange, onNavigate}: PendingPropertyRowProps) {
   const [draft, setDraft] = useState('')
   const [committing, setCommitting] = useState(false)
   const phase = useRef<{state: 'editing' | 'committing' | 'done'}>({state: 'editing'})
@@ -30,6 +31,7 @@ export function PendingPropertyRow({owner, schema, autoFocus = false, onCommit, 
     if (phase.current.state === 'done') return
     phase.current = {state: 'done'}
     setDraft('')
+    onHasTextChange?.(false)
     setCommitting(false)
     onCancel()
   }
@@ -62,7 +64,10 @@ export function PendingPropertyRow({owner, schema, autoFocus = false, onCommit, 
       className="h-7 min-w-0"
       value={draft}
       readOnly={committing}
-      onChange={event => setDraft(event.target.value)}
+      onChange={event => {
+        setDraft(event.target.value)
+        onHasTextChange?.(event.target.value !== '')
+      }}
       onFocus={event => {
         if (phase.current.state === 'done') phase.current = {state: 'editing'}
         activation.onFocus(event)

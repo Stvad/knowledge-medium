@@ -71,7 +71,11 @@ function SessionRetention({owner}: {owner: Block}) {
   const {renderScopeId} = useBlockContext()
   const within = useFocusWithin(owner, renderScopeId)
   useEffect(() => {
-    if (within === false) session.clearOwner(owner.id)
+    if (within !== false) return
+    const expireEmptyDrafts = () => session.clearOwner(owner.id)
+    const unsubscribe = session.subscribe(expireEmptyDrafts)
+    expireEmptyDrafts()
+    return unsubscribe
   }, [within, owner.id, session])
   return null
 }
@@ -124,6 +128,7 @@ function Draft({draft, owner, autoFocus, scope}: {draft: PendingOutlineProperty;
   }} onBlurCapture={event => { blurTarget.current = event.relatedTarget as Node | null }}>
     <PendingPropertyRow owner={owner} schema={draft.schema} autoFocus={autoFocus}
     onCancel={() => { attempt.current++; remove() }}
+    onHasTextChange={hasText => session.setHasText(draft.parentId, draft.schema.fieldId, hasText)}
     onNavigate={direction => {
       if (surface.current && renderScopeId) void navigatePendingProperty(surface.current, renderScopeId, direction, ui)
     }}
