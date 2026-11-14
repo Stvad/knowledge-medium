@@ -1177,11 +1177,9 @@ describe('groupedBacklinksDataExtension query', () => {
   })
 
   // Grouped backlinks resolve their own source ids instead of
-  // routing through `backlinks.forBlock`, so the flip-gated machinery
-  // exclusion has to be applied here too — otherwise a hidden property value
-  // row is filtered out of Linked References and the inline count but still
-  // shows up grouped, duplicating the owner's projected property backlink.
-  describe('property-machinery source exclusion (§9)', () => {
+  // routing through `backlinks.forBlock`, so a property value row has to count
+  // as its owner here too, as it does in Linked References and the inline count.
+  describe('property-machinery sources (§9)', () => {
     const seedDefinitionAndFieldRow = async () => {
       await create({id: 'target', content: 'Target'})
       await create({id: 'defn', content: 'status'})
@@ -1212,7 +1210,7 @@ describe('groupedBacklinksDataExtension query', () => {
         [WS, state],
       )
 
-    it('drops a hidden value-row source in a flipped workspace', async () => {
+    it('lists a value-row source as its owner in a flipped workspace', async () => {
       await seedDefinitionAndFieldRow()
       await setFlip('children')
 
@@ -1221,14 +1219,10 @@ describe('groupedBacklinksDataExtension query', () => {
         id: 'target',
       }).load()
 
-      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary', 'owner'])
     })
 
-    it('drops it in an un-flipped workspace too, where the backfill mints it', async () => {
-      // Was asserted dormant, on the premise that an un-flipped workspace has
-      // no value rows. The backfill mints them before the flip. The exclusion
-      // is de-duplication, not machinery-hygiene: the owner already projects
-      // this edge from its cell, so the value row would state one fact twice.
+    it('does so in an un-flipped workspace too, where the backfill mints it', async () => {
       await seedDefinitionAndFieldRow()
 
       const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
@@ -1236,7 +1230,7 @@ describe('groupedBacklinksDataExtension query', () => {
         id: 'target',
       }).load()
 
-      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary', 'owner'])
     })
   })
 })

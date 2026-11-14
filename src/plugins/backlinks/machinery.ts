@@ -85,28 +85,34 @@ export const workspaceHasPropertyMachinery = async (
   return found
 }
 
-/** Two CTEs for a `WITH RECURSIVE` list, `up` and `machinery(id)`. `machinery`
- *  holds the ids among `seedIdsSql` (anything `IN (…)` accepts: placeholders or
- *  a subquery) that are property-subtree INTERIOR machinery — a value child, or
- *  a row deeper inside a property subtree, whose parent chain passes through a
- *  §9 field row. Recognition IS `recognizedFieldRowSql`, shared with the
- *  outline rather than restated: the walk hoists the four columns the fragment
- *  reads under the names it expects, so parity is structural. Do not inline a
- *  copy here — the two predicates disagreeing is silent in both directions,
- *  dropping real backlinks or leaking duplicate ones.
+/** Two CTEs for a `WITH RECURSIVE` list, `up` and `machinery(target_id, id,
+ *  owner_id, live, depth)`. `seedRowsSql` selects `(target_id, id)` rows, and
+ *  `machinery` holds the seeds that are property-subtree INTERIOR machinery — a
+ *  value child, or a row deeper inside a property subtree, whose parent chain
+ *  passes through a §9 field row. Recognition IS `recognizedFieldRowSql`, shared
+ *  with the outline rather than restated: the walk hoists the four columns the
+ *  fragment reads under the names it expects, so parity is structural. Do not
+ *  inline a copy here — the two predicates disagreeing is silent in both
+ *  directions, misattributing real backlinks.
  *
- *  Bind `RecognitionParams` after every placeholder in `seedIdsSql`: the
+ *  `target_id` rides along the walk so a reader can use `machinery` without
+ *  joining it back to the seeds: a CTE has no index, and the planner scans it
+ *  once per seed.
+ *
+ *  Bind `RecognitionParams` after every placeholder in `seedRowsSql`: the
  *  fragment's parameters sit textually after the seed.
  *
+ *  `owner_id` is the parent of the OUTERMOST field row on the walk: the block a
+ *  reader sees holding this subtree, since a row inside a value's own property
+ *  is still inside the outer property. `live` is false when anything above the
+ *  row, up to and including that field row, is tombstoned. `depth` exists only
+ *  to select the outermost row, relying on SQLite taking bare columns from the
+ *  `MAX()` row.
+ *
  *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
- *  matched. The de-dup this filter exists for only applies to interiors — a
- *  value row's `[[X]]` duplicates the owner's reprojected `O --prop--> X`, so
- *  showing both would state one fact twice and attribute a copy to a hidden
- *  row. A field row has no such duplicate: its only edge is to its OWN
- *  definition, which is the "used by" backlink (every block using this
- *  property), and nothing else projects that edge. Suppressing it would make a
- *  property definition's backlinks empty — the opposite of why field rows were
- *  put in `block_references` in the first place.
+ *  matched. Its only edge is to its OWN definition, the "used by" backlink
+ *  (every block using this property), which is about the field row rather than
+ *  anything the owner says.
  *
  *  NOT flip-gated, and callers must not gate it either. `reference_target_id`
  *  derivation and `property-schema` types both exist independent of the flip,
@@ -120,43 +126,50 @@ export const workspaceHasPropertyMachinery = async (
  *  cyclic `parent_id` chain (issue #183) still terminates on `depth < 100`,
  *  but re-emits every cycle member on each loop iteration instead of
  *  stopping the moment a walk revisits a row it's already seen. */
-export const machineryInteriorCtes = (seedIdsSql: string): string => `
-  up(start_id, id, reference_target_id, is_field_form, parent_id, workspace_id, path, depth) AS (
-    SELECT id, id, reference_target_id, is_field_form, parent_id, workspace_id,
-           '!' || hex(id) || '/',
-           0
-      FROM blocks WHERE id IN (${seedIdsSql})
+export const machineryInteriorCtes = (seedRowsSql: string): string => `
+  up(target_id, start_id, id, reference_target_id, is_field_form, parent_id, workspace_id, path, depth, live) AS (
+    SELECT seed.target_id, b.id, b.id, b.reference_target_id, b.is_field_form, b.parent_id, b.workspace_id,
+           '!' || hex(b.id) || '/',
+           0,
+           1
+      FROM (${seedRowsSql}) AS seed
+      CROSS JOIN blocks AS b ON b.id = seed.id
     UNION ALL
-    SELECT up.start_id, b.id, b.reference_target_id, b.is_field_form, b.parent_id, b.workspace_id,
+    SELECT up.target_id, up.start_id, b.id, b.reference_target_id, b.is_field_form, b.parent_id, b.workspace_id,
            up.path || '!' || hex(b.id) || '/',
-           up.depth + 1
+           up.depth + 1,
+           up.live AND b.deleted = 0
       FROM blocks AS b JOIN up ON b.id = up.parent_id
      WHERE up.depth < 100
        AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
   ),
-  machinery(id) AS (
-    SELECT DISTINCT up.start_id
+  machinery(target_id, id, owner_id, live, depth) AS (
+    SELECT up.target_id, up.start_id, up.parent_id, up.live, MAX(up.depth)
       FROM up
      WHERE up.depth > 0
        AND (${recognizedFieldRowSql('up')})
+     GROUP BY up.target_id, up.start_id
   )`
 
-/** Which of `sourceIds` are property machinery (`machineryInteriorCtes`). */
-export const propertyMachinerySourceIds = async (
+/** Which of `sourceIds` are property machinery (`machineryInteriorCtes`), and
+ *  the owner each one displays as. */
+export const propertyMachineryOwners = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
   recognitionParams: RecognitionParams,
   chunkSize: number = MACHINERY_SOURCE_CHUNK,
-): Promise<Set<string>> => {
-  const machinery = new Set<string>()
+): Promise<Map<string, string>> => {
+  const owners = new Map<string, string>()
   for (let i = 0; i < sourceIds.length; i += chunkSize) {
     const chunk = sourceIds.slice(i, i + chunkSize)
     const placeholders = chunk.map(() => '?').join(', ')
-    const rows = await db.getAll<{ id: string }>(
-      `WITH RECURSIVE ${machineryInteriorCtes(placeholders)} SELECT id FROM machinery`,
+    const rows = await db.getAll<{ id: string; owner_id: string }>(
+      `WITH RECURSIVE ${machineryInteriorCtes(
+        `SELECT NULL AS target_id, id FROM blocks WHERE id IN (${placeholders})`,
+      )} SELECT id, owner_id FROM machinery`,
       [...chunk, ...recognitionParams],
     )
-    for (const r of rows) machinery.add(r.id)
+    for (const r of rows) owners.set(r.id, r.owner_id)
   }
-  return machinery
+  return owners
 }

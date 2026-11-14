@@ -45,10 +45,17 @@ export const backlinkEdgeExclusionsFacet = defineFacet<BacklinkEdgeExclusion, re
  *  counts its own surface through the same batch. */
 export type BacklinkEdges = 'mentions' | { field: string }
 
-export interface EdgePredicate {
-  /** A predicate over `br`, a `block_references` row. */
+interface SqlPredicate {
   sql: string
   params: readonly string[]
+}
+
+export interface EdgePredicate extends SqlPredicate {
+  /** `sql` and `params` are a predicate over `br`, a `block_references` row.
+   *  This one is over `o`, the block an edge from inside a property subtree
+   *  counts as coming from: a block whose content is a copy has copied values
+   *  too. */
+  owner: SqlPredicate
 }
 
 const exclusionsOf = (repo: Pick<Repo, 'facetRuntime'>): readonly BacklinkEdgeExclusion[] =>
@@ -60,8 +67,10 @@ const exclusionsOf = (repo: Pick<Repo, 'facetRuntime'>): readonly BacklinkEdgeEx
 export const contentCopyTypes = (repo: Pick<Repo, 'facetRuntime'>): string[] =>
   [...new Set(exclusionsOf(repo).flatMap(e => e.kind === 'content-from-type' ? [e.type] : []))].sort()
 
+const EVERY_OWNER: SqlPredicate = {sql: '1', params: []}
+
 export const edgePredicate = (repo: Repo, edges: BacklinkEdges): EdgePredicate => {
-  if (edges !== 'mentions') return {sql: 'br.source_field = ?', params: [edges.field]}
+  if (edges !== 'mentions') return {sql: 'br.source_field = ?', params: [edges.field], owner: EVERY_OWNER}
   const fields = [...new Set(exclusionsOf(repo).flatMap(e => e.kind === 'field' ? [e.field] : []))].sort()
   const types = contentCopyTypes(repo)
   const clauses: {sql: string; params: readonly string[]}[] = []
@@ -70,7 +79,12 @@ export const edgePredicate = (repo: Repo, edges: BacklinkEdges): EdgePredicate =
     clauses.push({sql: `NOT (br.source_field = '' AND EXISTS (
       SELECT 1 FROM block_types bt WHERE bt.block_id = br.source_id AND bt.type IN (${buildInClause(types.length)})))`, params: types})
   }
+  const owner = types.length === 0 ? EVERY_OWNER : {
+    sql: `NOT EXISTS (
+      SELECT 1 FROM block_types bt WHERE bt.block_id = o.id AND bt.type IN (${buildInClause(types.length)}))`,
+    params: types,
+  }
   return clauses.length === 0
-    ? {sql: '1', params: []}
-    : {sql: clauses.map(c => c.sql).join(' AND '), params: clauses.flatMap(c => c.params)}
+    ? {sql: '1', params: [], owner}
+    : {sql: clauses.map(c => c.sql).join(' AND '), params: clauses.flatMap(c => c.params), owner}
 }

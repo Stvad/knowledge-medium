@@ -21,7 +21,7 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { registryRecognitionParams } from '@/data/internals/kernelQueries'
-import { propertyMachinerySourceIds } from '@/plugins/backlinks/machinery'
+import { propertyMachineryOwners } from '@/plugins/backlinks/machinery'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
@@ -657,19 +657,19 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // Pre-stamp the row is an ordinary block, so nothing under it is
     // machinery and both edges display. Asserting this half is what makes
     // the post-stamp assertion evidence rather than a tautology.
-    expect(await propertyMachinerySourceIds(
+    expect((await propertyMachineryOwners(
       sharedDb.db, ['row', 'value'], registryRecognitionParams(repo),
-    )).toEqual(new Set())
+    )).size).toBe(0)
 
     await runPass(repo)
     expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
 
-    // Same stored edges, read differently: the interior value row is now
-    // suppressed from the backlink panel and the field row itself is not
+    // Same stored edges, read differently: the interior value row now counts
+    // as its owner in the backlink panel and the field row itself does not
     // (its edge to its own definition IS the "used by" backlink).
-    expect(await propertyMachinerySourceIds(
+    expect([...(await propertyMachineryOwners(
       sharedDb.db, ['row', 'value'], registryRecognitionParams(repo),
-    )).toEqual(new Set(['value']))
+    )).keys()]).toEqual(['value'])
 
     // And the edges themselves are untouched — deliberately. Parse writes
     // them from content alone, so a field row carries a reference to its
