@@ -1,4 +1,6 @@
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
+import {presetIdProp} from '@/data/properties'
+import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
 import {ChangeScope} from '@/data/api'
 import {definitionSeedsFacet} from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
@@ -54,6 +56,20 @@ describe('inline property drafts', () => {
     expect(pending.valueId).toBeUndefined()
     await commitInlineProperty(repo.block('owner'), pending, 'first value')
     expect(await repo.block('owner').get(note)).toBe('first value')
+  })
+
+  it('a stale list draft does not replace a scalar value after a preset change', async () => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    const mutable = await repo.userSchemas.addSchema({name: 'mutable', presetId: 'string-list'})
+    const selected = await selectInlineProperty(repo.block('owner'), mutable, repo.block('source'))
+    await repo.block(mutable.fieldId).set(presetIdProp, 'json')
+    await vi.waitFor(() => expect(repo.propertySchemas.get('mutable')?.codec.type).toBe('object'))
+    const current = repo.propertySchemas.get('mutable')!
+    await repo.block('owner').set(current, {keep: 'stored object'})
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(commitInlineProperty(repo.block('owner'), selected, 'new draft')).rejects.toThrow()
+    expect(await repo.block('owner').get(current)).toEqual({keep: 'stored object'})
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
   it('an empty draft writes nothing at all', async () => {

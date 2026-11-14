@@ -50,15 +50,15 @@ export const commitInlineProperty = async (
 ): Promise<{fieldRowId: string; valueId: string} | null> => {
   if (content === '') return null
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
-  const {schema} = selection
-  const member = memberCodecOf(schema.codec)
-  const encoded = valueChildContentToEncoded(schema, content)
-  const value = (member ?? schema.codec).decode(encoded)
   return owner.repo.tx(async tx => {
     const parent = await tx.get(owner.id)
     if (!parent || parent.deleted || !await tx.isPropertyChildBackedWorkspace(parent.workspaceId)) {
       throw new Error('This block no longer supports properties in the outline.')
     }
+    const schema = await tx.resolvePropertySchema(owner.id, selection.schema) as AnyResolvedPropertySchema
+    const member = memberCodecOf(schema.codec)
+    const encoded = valueChildContentToEncoded(schema, content)
+    const value = (member ?? schema.codec).decode(encoded)
     const ownerChildren = await tx.childrenOf(owner.id)
     const before = ownerChildren.filter(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)
     const previousValues = (await Promise.all(before.map(row => tx.childrenOf(row.id)))).flat().filter(isFieldValueChild)
@@ -67,7 +67,10 @@ export const commitInlineProperty = async (
     }
     const oldIds = new Set(previousValues.map(row => row.id))
     await tx.setProperty(owner.id, schema, member
-      ? (current: unknown) => [...(Array.isArray(current) ? current : []), value]
+      ? (current: unknown) => {
+        if (current !== undefined && !Array.isArray(current)) throw new Error('The stored property is not a list.')
+        return [...(current ?? []), value]
+      }
       : value)
     const field = (await tx.childrenOf(owner.id)).find(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)!
     if (!before.length) {
@@ -78,5 +81,5 @@ export const commitInlineProperty = async (
     const values = (await tx.childrenOf(field.id)).filter(isFieldValueChild)
     const target = values.find(row => !oldIds.has(row.id)) ?? values.at(-1)!
     return {fieldRowId: field.id, valueId: target.id}
-  }, {scope: schema.changeScope, description: 'Set inline property'})
+  }, {scope: selection.schema.changeScope, description: 'Set inline property'})
 }
