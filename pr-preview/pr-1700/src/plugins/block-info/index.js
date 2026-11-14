@@ -1,1 +1,1 @@
-export{ov as blockInfoPlugin}from"../../../chunks/app-Dld7wef1.js";
+export{ov as blockInfoPlugin}from"../../../chunks/app-D5AWGETN.js";

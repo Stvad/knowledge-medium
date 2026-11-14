@@ -1,1 +1,1 @@
-export{iot as deriveWorkspaceIdNamespace}from"../../../chunks/app-Dld7wef1.js";
+export{iot as deriveWorkspaceIdNamespace}from"../../../chunks/app-D5AWGETN.js";
