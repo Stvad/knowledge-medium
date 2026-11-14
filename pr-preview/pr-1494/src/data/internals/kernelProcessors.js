@@ -1,1 +1,1 @@
-export{Q6 as KERNEL_PROCESSORS}from"../../../chunks/app-C3dUC_tN.js";
+export{X6 as KERNEL_PROCESSORS}from"../../../chunks/app-_jHrbcHH.js";

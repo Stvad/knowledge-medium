@@ -1,1 +1,1 @@
-export{UK as staticDataExtensions}from"../../chunks/app-C3dUC_tN.js";
+export{VK as staticDataExtensions}from"../../chunks/app-_jHrbcHH.js";

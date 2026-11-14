@@ -1,1 +1,1 @@
-export{h1 as releasePowerSyncConnection}from"../../chunks/app-C3dUC_tN.js";
+export{p1 as releasePowerSyncConnection}from"../../chunks/app-_jHrbcHH.js";
