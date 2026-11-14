@@ -1,1 +1,1 @@
-export{zI as BlockTypeBlockRenderer,BI as BlockTypeContentRenderer,VI as writeBlockTypeLabel}from"../../../chunks/app-TDN7-hpj.js";
+export{zI as BlockTypeBlockRenderer,BI as BlockTypeContentRenderer,VI as writeBlockTypeLabel}from"../../../chunks/app-Dm_HqtYU.js";

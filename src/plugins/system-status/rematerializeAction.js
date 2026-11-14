@@ -1,1 +1,1 @@
-export{dc as REMATERIALIZE_WORKSPACE_ACTION_ID,fc as rematerializeWorkspaceAction,pc as rematerializeWorkspaceActionContribution}from"../../../chunks/app-TDN7-hpj.js";
+export{dc as REMATERIALIZE_WORKSPACE_ACTION_ID,fc as rematerializeWorkspaceAction,pc as rematerializeWorkspaceActionContribution}from"../../../chunks/app-Dm_HqtYU.js";

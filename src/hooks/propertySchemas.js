@@ -1,1 +1,1 @@
-export{NG as usePropertySchemas}from"../../chunks/app-TDN7-hpj.js";
+export{jG as usePropertySchemas}from"../../chunks/app-Dm_HqtYU.js";

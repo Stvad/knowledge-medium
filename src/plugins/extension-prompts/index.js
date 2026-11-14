@@ -1,1 +1,1 @@
-export{$N as ExtensionPromptSurface,eP as extensionPromptsExtension}from"../../../chunks/app-TDN7-hpj.js";
+export{$N as ExtensionPromptSurface,eP as extensionPromptsExtension}from"../../../chunks/app-Dm_HqtYU.js";

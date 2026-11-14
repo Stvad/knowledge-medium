@@ -1,1 +1,1 @@
-export{rI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,iI as openExtensionsSettings}from"../../chunks/app-TDN7-hpj.js";
+export{rI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,iI as openExtensionsSettings}from"../../chunks/app-Dm_HqtYU.js";

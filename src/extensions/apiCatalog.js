@@ -1,1 +1,1 @@
-export{ph as extensionApiCatalog,mh as extensionApiRuntimeExports}from"../../chunks/app-TDN7-hpj.js";
+export{ph as extensionApiCatalog,mh as extensionApiRuntimeExports}from"../../chunks/app-Dm_HqtYU.js";

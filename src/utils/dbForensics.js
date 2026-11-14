@@ -1,1 +1,1 @@
-export{w1 as DbForensics,T1 as dbForensics}from"../../chunks/app-TDN7-hpj.js";
+export{S1 as DbForensics,C1 as dbForensics}from"../../chunks/app-Dm_HqtYU.js";
