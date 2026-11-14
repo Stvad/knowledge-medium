@@ -8,13 +8,21 @@ import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
 import { PendingIdleJobs } from '@/data/internals/idleMarkerJobs.js'
 import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
-import { runConsistencyAudit, type ConsistencyAuditResult } from './audit.js'
+import { userActivity, type UserActivity } from '@/utils/userActivity.js'
+import {
+  runConsistencyAudit,
+  type AuditOptions,
+  type ConsistencyAuditResult,
+} from './audit.js'
 import { publishConsistencyAudit } from './store.js'
 
 const CADENCE_MS = 30 * 60 * 1000
 // Debounce transient mid-sync divergence: a dirty divergence pass re-measures
 // after this delay and reports the settled counts.
 const DIVERGENCE_RECHECK_MS = 4000
+/** The scheduled audit waits out input this recent before each statement, so
+ *  it never starts one while someone is typing or scrolling. */
+export const AUDIT_QUIET_MS = 10_000
 
 // Per-session, in-memory: workspaceId → epoch ms of the last completed audit, so
 // each page session runs once per workspace per cadence window and repopulates
@@ -42,8 +50,10 @@ export const isAuditDue = (workspaceId: string, now: number): boolean => {
 export const runConsistencyAuditNow = async (
   repo: Repo,
   workspaceId: string,
+  { yieldWhenBusy }: Pick<AuditOptions, 'yieldWhenBusy'> = {},
 ): Promise<ConsistencyAuditResult> => {
   const result = await runConsistencyAudit(repo.db, workspaceId, Date.now(), {
+    yieldWhenBusy,
     divergenceRecheckMs: DIVERGENCE_RECHECK_MS,
     sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     syncedThroughMs: () => repo.lastSyncedAt?.getTime(),
@@ -58,18 +68,23 @@ export const runConsistencyAuditNow = async (
 }
 
 /** Long-lived effect: on each workspace open, schedule one cadenced audit on
- *  idle. The effect lifecycle restarts on workspaceId change, so `start` is the
- *  "workspace opened" hook. */
-export const consistencyAuditEffect: AppEffect = {
+ *  idle, which stands aside whenever the user is active. The effect lifecycle
+ *  restarts on workspaceId change, so `start` is the "workspace opened" hook.
+ *  `activity` is asked at start, not at run time, so input between the open and
+ *  the idle window counts. */
+export const createConsistencyAuditEffect = (activity: () => UserActivity): AppEffect => ({
   id: 'data-integrity.consistency-audit',
   start: ({ repo, workspaceId }) => {
     if (!workspaceId || !isAuditDue(workspaceId, Date.now())) return
+    const user = activity()
     let cancelled = false
     jobs.schedule(async () => {
       // Re-check at run time: a rapid workspace re-open may have queued twice.
       if (cancelled || !isAuditDue(workspaceId, Date.now())) return
       try {
-        await runConsistencyAuditNow(repo, workspaceId)
+        await runConsistencyAuditNow(repo, workspaceId, {
+          yieldWhenBusy: () => user.whenQuiet(AUDIT_QUIET_MS),
+        })
       } catch (err) {
         console.error(`[data-integrity] audit for workspace ${workspaceId} failed`, err)
       }
@@ -78,10 +93,10 @@ export const consistencyAuditEffect: AppEffect = {
       cancelled = true
     }
   },
-}
+})
 
 export const consistencyAuditEffectContribution = appEffectsFacet.of(
-  consistencyAuditEffect,
+  createConsistencyAuditEffect(userActivity),
   { source: 'data-integrity' },
 )
 

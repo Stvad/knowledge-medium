@@ -187,6 +187,12 @@ export interface AuditOptions {
    *  keys — the coverage and divergence checks read through it. Omit and they
    *  report `skipped`; the SQL-only duplicate check runs either way. */
   repo?: Repo
+  /** Awaited before every statement the audit issues (between pages, for the
+   *  coverage scan, whose reads go through the repo), so the audit stands
+   *  aside while it stays pending and holds the connection for one statement
+   *  at most past it. The scheduled run passes "until the user is quiet"; a
+   *  run someone asked for passes nothing. */
+  yieldWhenBusy?: () => Promise<void>
 }
 
 /** Runtime context the deep `full`-mode checks need beyond the DB: the active
@@ -667,11 +673,20 @@ const runExhaustiveE2eeDivergenceCheck = async (
  *  optional divergence-recheck sleep): caller supplies `now` (epoch ms). Never
  *  throws — per-check failures are captured as `error`. */
 export const runConsistencyAudit = async (
-  db: AuditDb,
+  rawDb: AuditDb,
   workspaceId: string,
   now: number,
   opts: AuditOptions = {},
 ): Promise<ConsistencyAuditResult> => {
+  const { yieldWhenBusy } = opts
+  const db: AuditDb = yieldWhenBusy
+    ? {
+        getAll: async <T = Record<string, unknown>>(sql: string, params?: unknown[]) => {
+          await yieldWhenBusy()
+          return rawDb.getAll<T>(sql, params)
+        },
+      }
+    : rawDb
   const checks: Record<string, ConsistencyCheckResult> = {}
   let anomalies = 0
   const run = async (name: string, fn: () => Promise<ConsistencyCheckResult>): Promise<void> => {
@@ -1021,7 +1036,7 @@ export const runConsistencyAudit = async (
   await run('property_field_row_duplicates', () => whenSwitched(() =>
     runPropertyFieldRowDuplicatesCheck(db, workspaceId, SAMPLE_LIMIT)))
   await run('property_cell_coverage', () => whenSwitched(async () =>
-    opts.repo ? runPropertyCellCoverageCheck(opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
+    opts.repo ? runPropertyCellCoverageCheck(opts.repo, workspaceId, SAMPLE_LIMIT, yieldWhenBusy) : noRepo))
   await run('property_cell_divergence', () => whenSwitched(async () =>
     opts.repo ? runPropertyCellDivergenceCheck(db, opts.repo, workspaceId, SAMPLE_LIMIT) : noRepo))
 

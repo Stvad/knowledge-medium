@@ -87,9 +87,10 @@ const bucketOwners = (bucket: PropertyCellCoverageBucket): string[] =>
  *  a cell the children do not back, so any of them is an anomaly. */
 export const runPropertyCellCoverageCheck = async (
   repo: Repo, workspaceId: string, sampleLimit: number,
+  betweenPages?: () => Promise<void>,
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
-  const coverage = await surveyPropertyCellCoverage(repo, workspaceId)
+  const coverage = await surveyPropertyCellCoverage(repo, workspaceId, betweenPages)
   const uncovered = coverage.missing.cells + coverage.refused.cells
     + coverage.deletedThroughChildren.cells
   const samples = [...new Set([

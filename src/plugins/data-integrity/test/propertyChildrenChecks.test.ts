@@ -20,7 +20,7 @@ import {
   BLOCKS_SYNCED_RAW_TABLE, BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams, blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { runConsistencyAudit, type ConsistencyCheckResult } from '../audit'
-import { runPropertyCellDivergenceCheck } from '../propertyChildrenChecks'
+import { runPropertyCellCoverageCheck, runPropertyCellDivergenceCheck } from '../propertyChildrenChecks'
 import { runConsistencyAuditNow } from '../schedule'
 import { resetConsistencyAuditStore } from '../store'
 
@@ -127,6 +127,19 @@ const fieldRow = (id: string, ownerId: string, property: string, overrides: Part
 
 const valueChild = (id: string, fieldRowId: string, content: string, overrides: Partial<BlockData> = {}) =>
   block(id, { parentId: fieldRowId, content, ...overrides })
+
+/** One owner past a scan page (500), each with a stale cell, so a keyset
+ *  scan over owners takes two pages. */
+const PAGE_AND_ONE = 501
+const pageAndOneOwners = (): BlockData[] => {
+  const rows: BlockData[] = []
+  for (let i = 0; i < PAGE_AND_ONE; i++) {
+    const id = `o${String(i).padStart(4, '0')}`
+    rows.push(owner(id, { [statusProp.name]: 'stale' }), fieldRow(`f-${id}`, id, statusProp.name),
+      valueChild(`v-${id}`, `f-${id}`, 'fresh'))
+  }
+  return rows
+}
 
 const audit = async (): Promise<Record<string, ConsistencyCheckResult>> =>
   (await runConsistencyAudit(sharedDb.db, WS, 0, { repo })).checks
@@ -365,17 +378,10 @@ describe('property_cell_divergence', () => {
   })
 
   it('reads every owner across keyset pages', async () => {
-    const owners = 501
-    const rows: BlockData[] = []
-    for (let i = 0; i < owners; i++) {
-      const id = `o${String(i).padStart(4, '0')}`
-      rows.push(owner(id, { [statusProp.name]: 'stale' }), fieldRow(`f-${id}`, id, statusProp.name),
-        valueChild(`v-${id}`, `f-${id}`, 'fresh'))
-    }
-    await insertRaw(...rows)
+    await insertRaw(...pageAndOneOwners())
 
     expect((await audit()).property_cell_divergence).toMatchObject({
-      ownersScanned: owners, divergentCells: owners,
+      ownersScanned: PAGE_AND_ONE, divergentCells: PAGE_AND_ONE,
     })
   })
 
@@ -426,5 +432,29 @@ describe('property_cell_divergence', () => {
     })
     expect(checks.property_cell_coverage.status).toBe('error')
     expect(checks.property_field_row_duplicates.status).toBe('ok')
+  })
+})
+
+describe('property_cell_coverage stands aside between pages', () => {
+  // Its reads go through the repo, past the audit's yielding reader, so the
+  // page boundary is where it waits.
+  it('awaits the hook at the page boundary and reads nothing while it holds', async () => {
+    await insertRaw(...pageAndOneOwners())
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
+    let yields = 0
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+
+    const result = runPropertyCellCoverageCheck(repo, WS, 8, () => { yields += 1; return held })
+    await vi.waitFor(() => expect(yields).toBe(1))
+    const readsWhileHeld = getAll.mock.calls.length
+    expect(readsWhileHeld).toBeGreaterThan(0)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(getAll.mock.calls.length).toBe(readsWhileHeld)
+
+    release()
+    expect((await result).blocksScanned).toBe(PAGE_AND_ONE)
+    // Two pages, one boundary: no wait before the first page or after the last.
+    expect(yields).toBe(1)
   })
 })
