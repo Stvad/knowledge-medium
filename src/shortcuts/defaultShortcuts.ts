@@ -20,6 +20,7 @@ import {
   previousVisibleBlock,
   getRootBlock,
   blockAfterSubtreeRemoval,
+  caretNeighbour,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -115,21 +116,6 @@ const bothShowIndependentChildren = async (
   if (fromChildIds.length === 0) return false
   const intoChildIds = await visibleChildIds(into, surface.propertyDisplay)
   return intoChildIds.some(childId => childId !== from.id)
-}
-
-/** Where the edit-mode caret goes from `block`: the nearest visible row in
- *  `direction` with text to edit. A field row on the drawn list is passed
- *  over — it is drawn as the property's name, with no editor to hold a
- *  caret, and a block left editing there takes no keys. */
-const caretNeighbour = async (
-  block: Block,
-  surface: OutlineSurface,
-  direction: 'next' | 'previous',
-): Promise<Block | null> => {
-  const step = direction === 'next' ? nextVisibleBlock : previousVisibleBlock
-  let neighbour = await step(block, surface)
-  while (neighbour && await isRecognizedFieldRow(neighbour)) neighbour = await step(neighbour, surface)
-  return neighbour
 }
 
 const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
@@ -1175,11 +1161,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
-        // A field row on the drawn list is drawn as a property row: the
-        // property's name, not the row's own `::((id))` text. Folding it in
-        // would put text in this block that was never on screen.
-        if (await isRecognizedFieldRow(nextVisible)) return
-
         await Promise.all([block.load(), nextVisible.load()])
         if (holdsSource(block) || holdsSource(nextVisible)) return
         if (await bothShowIndependentChildren({into: block, from: nextVisible}, surface)) return
@@ -1218,6 +1199,15 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             await tx.update(block.id, {content: liveContent})
             await tx.run(mergeMutator, {intoId: block.id, fromId})
           }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'}))
+
+        // A property's name row folds in as its `::((id))` text like any
+        // block's. An EMPTY block that took it in is that name row now, drawn
+        // as a name with no editor: leave edit mode, where a caret would take
+        // no keys.
+        if (await isRecognizedFieldRow(block)) {
+          setIsEditing(uiStateBlock, false)
+          return
+        }
 
         await uiStateBlock.set(editorSelection, {
           blockId: block.id,

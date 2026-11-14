@@ -21,11 +21,17 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
-import { focusBlock, isCollapsedProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
+import {
+  focusBlock,
+  isCollapsedProp,
+  isEditingProp,
+  peekFocusedBlockLocation,
+  selectionStateProp,
+} from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { pasteMultilineText } from '@/paste/operations'
@@ -39,6 +45,7 @@ import {
 } from '@/shortcuts/types'
 import {
   blockAfterSubtreeRemoval,
+  caretNeighbour,
   getBlocksInRange,
   getLastVisibleDescendant,
   nextVisibleBlock,
@@ -224,6 +231,14 @@ describe('the edit-mode caret passes a row drawn as a property\'s name', () => {
   })
 })
 
+describe('the caret leaving a block for its neighbour', () => {
+  it('passes name rows in both directions', async () => {
+    const todoRow = (await allChildren(soloStatusRow))[0]!.id
+    expect((await caretNeighbour(repo.block('solo'), DRAWN, 'next'))?.id).toBe(todoRow)
+    expect((await caretNeighbour(repo.block(todoRow), DRAWN, 'previous'))?.id).toBe('solo')
+  })
+})
+
 describe('merge targets are the drawn neighbours', () => {
   it('Backspace at the start of `b` joins it onto the value drawn above it', async () => {
     await pressInEditor('delete_empty_block_cm', 'b', 'start', NON_HIDDEN)
@@ -237,16 +252,36 @@ describe('merge targets are the drawn neighbours', () => {
     expect(await contentOf(draftRow)).toBe('draft')
   })
 
-  it('Delete at the end of `a` does not reach past the drawn row for `b`', async () => {
+  it('Delete at the end of `a` folds in the name row drawn below it, not `b`', async () => {
+    const rowText = await contentOf(statusRow)
     await pressInEditor('merge_next_block_cm', 'a', 'end', NON_HIDDEN)
-    expect(await contentOf('a')).toBe('a')
+    expect(await contentOf('a')).toBe(`a${rowText}`)
+    expect(await isBlockDeleted(repo, statusRow)).toBe(true)
     expect(await parentOf('b')).toBe('owner')
-    expect((await repo.load(statusRow))?.deleted).toBe(false)
+    expect(await contentOf('b')).toBe('b')
+  })
+
+  it('an empty block that folds in a name row becomes it, and leaves edit mode', async () => {
+    const ui = repo.block('ui')
+    await repo.tx(tx => tx.update('a', {content: ''}), {scope: ChangeScope.BlockDefault})
+    await focusBlock(ui, 'a', {edit: true})
+    await pressInEditor('merge_next_block_cm', 'a', 'end', NON_HIDDEN)
+    expect((await repo.load('a'))?.isFieldForm).toBe(true)
+    expect(await parentOf(draftRow)).toBe('a')
+    await vi.waitFor(() => expect(ui.peekProperty(isEditingProp)).toBe(false))
   })
 
   it('in mode none the same Delete folds `b` into `a`', async () => {
     await pressInEditor('merge_next_block_cm', 'a', 'end', NONE)
     expect(await contentOf('a')).toBe('ab')
+  })
+
+  it('Backspace below a collapsed name row folds the block onto it', async () => {
+    await repo.block(statusRow).set(isCollapsedProp, true)
+    const rowText = await contentOf(statusRow)
+    await pressInEditor('delete_empty_block_cm', 'b', 'start', NON_HIDDEN)
+    expect(await contentOf(statusRow)).toBe(`${rowText}b`)
+    expect(await contentOf('a')).toBe('a')
   })
 
   it('a block showing only drawn property rows is not folded into a block with children of its own', async () => {
