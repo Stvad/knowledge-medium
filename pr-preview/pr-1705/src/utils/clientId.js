@@ -1,1 +1,1 @@
-export{krt as deviceSurface,Art as getClientId,jrt as getDeviceLabel,Mrt as isClientIdPersistent,Nrt as resetClientIdCache}from"../../chunks/app-BKNY72Gg.js";
+export{jrt as deviceSurface,Mrt as getClientId,Nrt as getDeviceLabel,Prt as isClientIdPersistent,Frt as resetClientIdCache}from"../../chunks/app-DLCjKiSv.js";

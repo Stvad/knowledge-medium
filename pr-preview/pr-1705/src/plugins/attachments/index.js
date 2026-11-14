@@ -1,1 +1,1 @@
-export{Ib as attachmentsPlugin}from"../../../chunks/app-BKNY72Gg.js";
+export{Ib as attachmentsPlugin}from"../../../chunks/app-DLCjKiSv.js";

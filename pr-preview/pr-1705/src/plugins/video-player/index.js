@@ -1,1 +1,1 @@
-export{PS as videoPlayerPlugin}from"../../../chunks/app-BKNY72Gg.js";
+export{PS as videoPlayerPlugin}from"../../../chunks/app-DLCjKiSv.js";

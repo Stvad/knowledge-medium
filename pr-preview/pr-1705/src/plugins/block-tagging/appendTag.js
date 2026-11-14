@@ -1,1 +1,1 @@
-export{vu as appendTagToBlocks,yu as appendTagToContent}from"../../../chunks/app-BKNY72Gg.js";
+export{vu as appendTagToBlocks,yu as appendTagToContent}from"../../../chunks/app-DLCjKiSv.js";

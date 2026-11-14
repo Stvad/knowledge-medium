@@ -1,1 +1,1 @@
-export{bU as copiedSubtree,xU as isRecognizedFieldRow,SU as pruneSubtreeToDrawn,CU as repoPropertyRowClassifier}from"../../chunks/app-BKNY72Gg.js";
+export{xU as copiedSubtree,SU as isDrawnAsPropertyName,CU as pruneSubtreeToDrawn,wU as repoFieldDefinitionTest,TU as repoPropertyRowClassifier}from"../../chunks/app-DLCjKiSv.js";
