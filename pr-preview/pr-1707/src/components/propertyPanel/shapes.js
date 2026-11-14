@@ -1,0 +1,1 @@
+export{IG as propertyShapeLabel}from"../../../chunks/app-B_II37oH.js";

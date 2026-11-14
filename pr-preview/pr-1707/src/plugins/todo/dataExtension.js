@@ -1,0 +1,1 @@
+export{VK as todoDataExtension}from"../../../chunks/app-B_II37oH.js";

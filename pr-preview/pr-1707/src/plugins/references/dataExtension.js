@@ -1,0 +1,1 @@
+export{tq as referencesDataExtension}from"../../../chunks/app-B_II37oH.js";

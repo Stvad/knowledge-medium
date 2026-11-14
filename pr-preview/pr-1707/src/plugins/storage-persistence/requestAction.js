@@ -1,0 +1,1 @@
+export{ic as requestPersistenceActionContribution}from"../../../chunks/app-B_II37oH.js";

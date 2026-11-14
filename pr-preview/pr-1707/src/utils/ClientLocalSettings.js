@@ -1,0 +1,1 @@
+export{ZP as ClientLocalSettings,QP as clientLocalSettings}from"../../chunks/app-B_II37oH.js";

@@ -1,0 +1,1 @@
+export{gP as appUpdatePromptExtension}from"../../../chunks/app-B_II37oH.js";

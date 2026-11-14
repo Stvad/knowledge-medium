@@ -1,0 +1,1 @@
+export{Iq as preferredSpanReplacement}from"../../../chunks/app-B_II37oH.js";

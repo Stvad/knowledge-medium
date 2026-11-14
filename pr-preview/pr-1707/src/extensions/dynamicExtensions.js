@@ -1,0 +1,1 @@
+export{tF as dynamicExtensionsExtension}from"../../chunks/app-B_II37oH.js";

@@ -1,0 +1,1 @@
+export{i2 as Button}from"../../../chunks/app-B_II37oH.js";

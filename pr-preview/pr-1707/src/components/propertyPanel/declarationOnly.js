@@ -1,0 +1,1 @@
+export{bV as declarationOnlyDefinitionForName,xV as declarationOnlyStatusText}from"../../../chunks/app-B_II37oH.js";
