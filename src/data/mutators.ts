@@ -8,7 +8,6 @@
 import { z } from 'zod'
 import {
   ChangeScope,
-  CORE_BLOCK_DELETED_EVENT,
   CORE_BLOCK_SPLIT_EVENT,
   defineMutator,
   type AnyMutator,
@@ -35,6 +34,7 @@ import { assertNotGrammarShapedLabel, isGrammarShapedLabel } from '@/data/refere
 import { valueChildContentToEncoded } from '@/data/propertyChildren'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import {
+  displayScopeOf,
   propertyDisplayScopeSchema,
   type PropertyDisplayScopeLevels,
 } from '@/data/propertyDisplayMode'
@@ -42,7 +42,7 @@ import {
   mergeBlocksInTx,
   type ContentStrategy,
 } from './blockMerge'
-import { deleteSubtreeInTx } from './subtreeDelete'
+import { deleteSubtreeAnnouncedInTx } from './subtreeDelete'
 
 // ──── Common helpers ────
 
@@ -236,36 +236,13 @@ export const setProperty = defineMutator<
 
 // ──── delete (subtree-aware soft-delete) ────
 
-/** Subtree-aware soft-delete via the shared `deleteSubtreeInTx` walk
- *  (property field/value rows included — docs/properties-as-blocks-migration.html §9).
- *
- *  Each freshly soft-deleted block emits `CORE_BLOCK_DELETED_EVENT` so
- *  same-tx consumers can react atomically with the delete — the
- *  references plugin uses it to inline a deleted block's content into the
- *  blocks that referenced it (`((id))`), keeping those referrers readable
- *  instead of leaving dangling block-refs. The `!block.deleted` guard only
- *  ever skips an already-tombstoned root (children come back live from
- *  `childrenOf`, which is always live-only). */
-const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> =>
-  // deleteSubtreeInTx fetches the root itself (for the payload) and surfaces
-  // BlockNotFoundError via tx.delete on a missing root, so no separate
-  // existence pre-check is needed here.
-  deleteSubtreeInTx(tx, rootId, (block: BlockData) => {
-    if (!block.deleted) {
-      tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {
-        workspaceId: block.workspaceId,
-        blockId: block.id,
-      })
-    }
-  })
-
 export const deleteBlock = defineMutator<{id: string}, void>({
   name: 'core.delete',
   argsSchema: z.object({id: z.string()}),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `delete ${id} (subtree)`,
   apply: async (tx, {id}) => {
-    await softDeleteSubtree(tx, id)
+    await deleteSubtreeAnnouncedInTx(tx, id)
   },
 })
 
@@ -617,7 +594,7 @@ export const indent = defineMutator<IndentArgs, void>({
       return
     }
     const {siblings, index: ix} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
@@ -668,7 +645,7 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     const grandparent = parent.parentId
     // Pass self.workspaceId so the null-grandparent case scopes
     // correctly even before this tx pins a workspace.
-    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId, propertyDisplay)
+    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId, displayScopeOf({propertyDisplay}))
     const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
     // The anchor — the current parent — isn't on the caller's list (a hidden
     // parent, or a stale read): a no-op, not a fallback to the grandparent's
@@ -747,7 +724,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
     const {siblings, index: idx} = withSubject(
-      await visibleChildrenOf(tx, self.parentId, self.workspaceId, propertyDisplay), self)
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
 
     const up = direction === -1
     const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
@@ -776,7 +753,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // shallower level (changing indentation), so it's also a no-op.
     if (scopeRootId === undefined || self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId, propertyDisplay)
+    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId, displayScopeOf({propertyDisplay}))
     const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
     // The parent isn't on the caller's list (a hidden parent, or a stale read).
     // Without this guard the DOWN branch reads `parentSiblings[-1 + 1]`,

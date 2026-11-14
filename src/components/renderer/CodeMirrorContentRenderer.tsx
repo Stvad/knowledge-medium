@@ -1,6 +1,7 @@
 import { BlockRendererProps } from '@/types.js'
-import { useCallback, useMemo, ClipboardEvent, KeyboardEvent, useRef, useState } from 'react'
+import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef, useState } from 'react'
 import type { EditorView } from '@codemirror/view'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
@@ -33,6 +34,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   // The editor draws the block's own text too, so it carries the same title
   // typography as the read renderer — otherwise a page title would shrink to
   // body size the moment you clicked into it. CodeMirror's theme sets
@@ -117,6 +119,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       flushEditorContent(editorView)
       const cutPaste = await pasteArmedCut(content.text, block, repo, {
         scopeRootId: blockContext.scopeRootId,
+        propertyDisplay,
       })
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
@@ -173,6 +176,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
     const result = await pasteEditModeMultilineText(plan, block, repo, {
       scopeRootId: blockContext.scopeRootId,
+      propertyDisplay,
     })
     if (!result) return
 

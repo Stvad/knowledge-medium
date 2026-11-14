@@ -5,7 +5,7 @@ import { ChangeScope, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { makeBlockData } from '@/data/test/factories.js'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
@@ -280,7 +280,7 @@ describe('VideoNotesLayout', () => {
     // misattributed to whichever test is mid-flight). editorFocusRequestProp is
     // the chain's tail, so once it's visible every panel write has committed.
     await vi.waitFor(async () => {
-      const childIds = await repo.block(VIDEO).childIds.load()
+      const childIds = await childIdsOf(repo, VIDEO)
       const panel = repo.block(PANEL)
       expect(panel.peekProperty(focusedBlockLocationProp)?.blockId).toBe(childIds[0])
       expect(panel.peekProperty(editorFocusRequestProp)).toBeGreaterThanOrEqual(1)
@@ -324,7 +324,7 @@ describe('VideoNotesLayout', () => {
   })
 })
 
-const videoBlockChildCount = async () => (await repo.block(VIDEO).childIds.load()).length
+const videoBlockChildCount = async () => (await childIdsOf(repo, VIDEO)).length
 
 describe('pane resize drag', () => {
   const columnSeparator = () => screen.getAllByRole('separator')

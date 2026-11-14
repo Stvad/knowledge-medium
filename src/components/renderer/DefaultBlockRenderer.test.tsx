@@ -39,6 +39,7 @@ import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } fr
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -263,7 +264,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       {decision: {kind: 'split'}, text: 'first\nsecond'},
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root'},
+      {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE},
     )
   })
 
@@ -277,7 +278,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     })
 
     await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
-    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root'})
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE})
     // A cut leaves the originals in place, so a text paste here would duplicate them.
     // Every mock here is already resolved, so one macrotask runs the handler's
     // whole continuation; the absence checks below can't run before it.

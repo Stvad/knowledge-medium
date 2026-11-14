@@ -30,7 +30,6 @@ import { isBlockConfirmedDeleted, panelHistory, writePanelContent } from '@/util
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
-import { visibleChildrenOf } from '@/data/visibleChildren'
 import { layoutSessionBlockIdForKey, layoutSessionsContainerBlockId } from '@/data/stateBlocks'
 import { peekRowProperty } from '@/data/rowProperty'
 
@@ -412,7 +411,7 @@ const loadSubtreeRowsInTx = async (
 ): Promise<BlockData[]> => {
   const rows: BlockData[] = [root]
   const visit = async (parentId: string): Promise<void> => {
-    const children = await visibleChildrenOf(tx, parentId, root.workspaceId)
+    const children = await tx.childrenOf(parentId, root.workspaceId, {propertyChildren: 'none'})
     for (const child of children) {
       rows.push(child)
       await visit(child.id)
@@ -561,7 +560,7 @@ export const insertPanelRow = async (
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
     await clearMaximizedPanelsInTx(tx, parent)
 
-    const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {propertyChildren: 'none'})
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
@@ -592,7 +591,7 @@ const insertPanelAtStartOfStackInTx = async (
     blockId: string
   },
 ): Promise<string> => {
-  const children = await visibleChildrenOf(tx, args.stackId, args.workspaceId)
+  const children = await tx.childrenOf(args.stackId, args.workspaceId, {propertyChildren: 'none'})
   const orderKey = keyBetween(null, children[0]?.orderKey ?? null)
   return createPanelRowInTx(repo, tx, {
     workspaceId: args.workspaceId,
@@ -627,7 +626,7 @@ export const insertSidebarStackedPanel = async (
       }
 
       if (source?.parentId === layoutSessionBlock.id) {
-        const topLevelSiblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
+        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {propertyChildren: 'none'})
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
@@ -662,7 +661,7 @@ export const insertSidebarStackedPanel = async (
       }
     }
 
-    const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {propertyChildren: 'none'})
     const previous = siblings.at(-1)
     const stackId = await createPanelStackRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,

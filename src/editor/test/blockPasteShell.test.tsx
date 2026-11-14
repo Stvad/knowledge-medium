@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { SOURCE_BLOCK, setupBlockUi } from '@/test/blockUiFixture.tsx'
+import { childIdsOf } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
@@ -56,7 +57,7 @@ describe('pasting on an empty source block with no editor open', () => {
     const target = await openBlock(ui)
     await paste({text: PASTED})
     await waitFor(() => expect(target.peek()?.content).toBe(PASTED))
-    expect(await target.childIds.load()).toEqual([])
+    expect(await childIdsOf(target.repo, target.id)).toEqual([])
   })
 
   it('leaves an empty ordinary block to paste as an outline', async () => {
@@ -75,7 +76,7 @@ describe('pasting on an empty source block with no editor open', () => {
     await paste(clipboard)
     await paste({text: PASTED})
     await waitFor(() => expect(target.peek()?.content).toBe(PASTED))
-    expect(await target.childIds.load()).toEqual([])
+    expect(await childIdsOf(target.repo, target.id)).toEqual([])
   })
 
   it('leaves a file out when there is text too', async () => {
@@ -92,9 +93,9 @@ describe('pasting on a source block that already has content', () => {
     const target = await openBlock(ui)
     await paste({text: PASTED})
     // It lands elsewhere; the fence is that it landed.
-    await waitFor(async () => expect((await target.childIds.load()).length).toBeGreaterThan(0))
+    await waitFor(async () => expect((await childIdsOf(target.repo, target.id)).length).toBeGreaterThan(0))
     expect(target.peek()?.content).toBe('<p>keep</p>')
-    const [first] = await target.childIds.load()
+    const [first] = await childIdsOf(target.repo, target.id)
     expect(target.repo.block(first).peek()?.content).toBe('<div>')
   })
 })

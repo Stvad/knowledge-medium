@@ -8,6 +8,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -47,7 +48,7 @@ beforeEach(async () => {
 })
 
 const jump = (from: string, count: number, direction: 'up' | 'down') =>
-  jumpVisibleBlocks(repo.block(from), ROOT, count, direction)
+  jumpVisibleBlocks(repo.block(from), outlineSurfaceOf({scopeRootId: ROOT})!, count, direction)
 
 describe('jumpVisibleBlocks', () => {
   it('lands exactly `count` visible blocks down', async () => {

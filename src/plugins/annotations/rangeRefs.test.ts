@@ -4,7 +4,7 @@ import {PAGE_TYPE} from '@/data/blockTypes'
 import {typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, type RangeAnchor} from './anchor'
 import {annotationsPlugin} from './index'
@@ -64,7 +64,7 @@ describe('threadForRange', () => {
     expect(second).toBe(first)
     expect(await threadsOnB()).toEqual([first])
     // A highlight: no comments under it.
-    expect(await repo.block(first).children.load()).toEqual([])
+    expect(await childrenOf(repo, first)).toEqual([])
   })
 
   it('reuses a discussion on the range, not only a highlight', async () => {

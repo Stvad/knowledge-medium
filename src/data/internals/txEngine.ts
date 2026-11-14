@@ -117,7 +117,7 @@ import {
   upsertFieldRow,
   type RevivalHistory,
 } from './propertyChildrenProcessor'
-import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deleteSubtreeAnnouncedInTx } from '@/data/subtreeDelete'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { propertyNameProp } from '@/data/properties'
 import { assertNotGrammarShapedLabel } from '@/data/referenceBlock'
@@ -1176,7 +1176,7 @@ export class TxImpl implements Tx {
    *  tx's NET bag change: a key `setProperty`-created then removed in the SAME
    *  tx nets to "no change", so its eagerly-written children would never be
    *  reconciled and PROJECT would reproject the value back. The machinery-aware
-   *  `deleteSubtreeInTx` carries any user-authored sub-children down with it
+   *  `deleteSubtreeAnnouncedInTx` carries any user-authored sub-children down with it
    *  (recoverable via history), matching MATERIALIZE's own removal branch. */
   private async deletePropertyValueChildren(
     parent: BlockData,
@@ -1187,7 +1187,7 @@ export class TxImpl implements Tx {
       [parent.workspaceId, parent.id, schema.fieldId],
     )
     for (const row of fieldRows) {
-      await deleteSubtreeInTx(this.propertyChildTx, row.id)
+      await deleteSubtreeAnnouncedInTx(this.propertyChildTx, row.id)
     }
   }
 

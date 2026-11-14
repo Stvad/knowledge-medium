@@ -4,10 +4,12 @@
  * row/add/config UI lives under `propertyPanel/`.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { useChildIds, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock, useUserPage } from '@/data/globalState.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -21,7 +23,7 @@ import {
   focusBlock,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
-import { nextVisibleBlock } from '@/utils/selection.js'
+import { caretNeighbour } from '@/utils/selection.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -71,6 +73,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
   const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -173,9 +176,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    if (!scopeRootId) return
+    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
+    if (!surface) return
 
-    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
+    const next = await caretNeighbour(block, surface, 'next')
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})
