@@ -42,14 +42,12 @@ export const fieldRowDefinition = (
   return {fieldId, name, schema: undefined}
 }
 
-/** Does one value child hold the whole value? True for a scalar property;
- *  false for a list, whose value children are one MEMBER each — those render
- *  as the ordinary blocks they are, since no editor edits one member.
- *  Defence in depth for `ValueRowRenderer`: a member's content never stores
- *  the whole list, so its owner-value check refuses one too; this keeps list
- *  members off that path before any hook runs. */
-export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
-  memberCodecOf(schema.codec) === undefined
+/** Whether a scalar value child belongs in the property row editor. Lists
+ *  store one child per member, while refs stay ordinary reference blocks for
+ *  the markdown renderer, accepting its UUID-only block-id grammar rather
+ *  than introducing a property-only reference rendering path. */
+export const isPropertyValueEditorEligible = (schema: AnyPropertySchema): boolean =>
+  memberCodecOf(schema.codec) === undefined && schema.codec.type !== 'ref'
 
 /** Surfaces that show a block as something other than an outline row — a
  *  breadcrumb crumb, an inline reference — keep their own rendering. */
