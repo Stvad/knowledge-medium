@@ -70,13 +70,10 @@ function SessionRetention({owner}: {owner: Block}) {
   const session = useOutlinePropertySession()
   const {renderScopeId} = useBlockContext()
   const within = useFocusWithin(owner, renderScopeId)
+  const revision = useSyncExternalStore(session.subscribe, session.snapshotRevision)
   useEffect(() => {
-    if (within !== false) return
-    const expireEmptyDrafts = () => session.clearOwner(owner.id)
-    const unsubscribe = session.subscribe(expireEmptyDrafts)
-    expireEmptyDrafts()
-    return unsubscribe
-  }, [within, owner.id, session])
+    if (within === false) session.clearOwner(owner.id)
+  }, [within, revision, owner.id, session])
   return null
 }
 

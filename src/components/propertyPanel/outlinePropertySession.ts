@@ -17,6 +17,12 @@ const EMPTY: ListingState = {pending: [], revealed: []}
 export class OutlinePropertySession {
   private listings = new Map<string, ListingState>()
   private changes = new CallbackSet()
+  private revision = 0
+  snapshotRevision = () => this.revision
+  private publish() {
+    this.revision++
+    this.changes.notify()
+  }
   subscribe = (notify: () => void) => this.changes.add(notify)
   snapshot = (parentId: string): ListingState => this.listings.get(parentId) ?? EMPTY
   private setListing(parentId: string, state: ListingState) {
@@ -30,7 +36,7 @@ export class OutlinePropertySession {
     return true
   }
   reveal(ownerId: string, fieldRowId: string) {
-    if (this.revealField(ownerId, fieldRowId)) this.changes.notify()
+    if (this.revealField(ownerId, fieldRowId)) this.publish()
   }
   add(ownerId: string, selection: InlinePropertySelection) {
     const parentId = selection.fieldRowId ?? ownerId
@@ -40,21 +46,21 @@ export class OutlinePropertySession {
       {...selection, ownerId, parentId},
     ]})
     if (selection.fieldRowId) this.revealField(ownerId, selection.fieldRowId)
-    this.changes.notify()
+    this.publish()
   }
   remove(parentId: string, fieldId: string) {
     const previous = this.snapshot(parentId)
     const pending = previous.pending.filter(item => item.schema.fieldId !== fieldId)
     if (pending.length === previous.pending.length) return
     this.setListing(parentId, {...previous, pending})
-    this.changes.notify()
+    this.publish()
   }
   setHasText(parentId: string, fieldId: string, hasText: boolean) {
     const previous = this.snapshot(parentId)
     const entry = previous.pending.find(item => item.schema.fieldId === fieldId)
     if (!entry || !!entry.hasText === hasText) return
     this.setListing(parentId, {...previous, pending: previous.pending.map(item => item === entry ? {...item, hasText} : item)})
-    this.changes.notify()
+    this.publish()
   }
   /** Unsaved text outlives focus, including its containing field; empty drafts may expire. */
   clearOwner(ownerId: string) {
@@ -67,7 +73,7 @@ export class OutlinePropertySession {
         changed = true
       }
     }
-    if (changed) this.changes.notify()
+    if (changed) this.publish()
   }
 }
 

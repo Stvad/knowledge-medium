@@ -75,6 +75,19 @@ describe('OutlinePropertyDrafts', () => {
     expect(document.activeElement).toBe(outside)
   })
 
+  it('uses the current focus when a returning draft reveals its committed field', () => {
+    session().add('owner', {schema})
+    session().setHasText('owner', schema.fieldId, true)
+    fixture.within = false
+    mount()
+    act(() => {
+      fixture.within = true
+      session().reveal('owner', 'field')
+      session().remove('owner', schema.fieldId)
+    })
+    expect(session().snapshot('owner').revealed).toEqual(['field'])
+  })
+
   it('expires each containing field after its draft finishes outside the owner', () => {
     session().add('owner', {schema, fieldRowId: 'first-field'})
     session().add('owner', {schema: {...schema, fieldId: 'second'}, fieldRowId: 'second-field'})

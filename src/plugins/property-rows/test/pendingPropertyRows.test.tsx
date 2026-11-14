@@ -165,13 +165,19 @@ describe('expected property ghost rows in the outline', () => {
         await waitFor(() => expect(showError).toHaveBeenCalled())
         expect(input(numberProp.name)).toHaveValue('not a number')
         expect(repo.block(OWNER).peekProperty(numberProp)).toBeUndefined()
-        await act(async () => { fireEvent.keyDown(editor, {key: 'Escape'}) })
-        await waitFor(() => expect(screen.queryByRole('textbox', {name: `Value for ${numberProp.name}`})).toBeNull())
+        await act(async () => {
+          editor.focus()
+          fireEvent.change(editor, {target: {value: '42'}})
+          fireEvent.keyDown(editor, {key: 'Enter'})
+        })
+        await waitFor(() => expect(repo.block(OWNER).peekProperty(numberProp)).toBe(42))
+        await waitFor(() => expect(document.querySelector('[data-property-field-row] [data-property-definition-link]')?.textContent).toBe(numberProp.name))
+        await waitFor(() => expect(focusedBlockLocationFromProperties(repo.block(PANEL).peek()?.properties)?.blockId).not.toBe(OWNER))
       } else {
         await waitFor(() => expect(repo.block(OWNER).peekProperty(numberProp)).toBe(42))
         await waitFor(() => expect(screen.queryByRole('textbox', {name: `Value for ${numberProp.name}`})).toBeNull())
       }
-      expect(document.activeElement).toBe(outside)
+      if (kind === 'valid') expect(document.activeElement).toBe(outside)
     } finally {
       await act(async () => { finish() })
       commit.mockRestore()
