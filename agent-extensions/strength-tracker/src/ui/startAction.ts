@@ -23,6 +23,7 @@ import {ensureStrengthHome, prescribeFor, readProgram, standingSession} from '..
 import {placeAtFocus, type Placement} from './placement'
 import {showSession} from './showSession'
 import {StartSessionDialog, type StartSessionResult} from './StartSessionDialog'
+import {contentChildren} from '../km/children'
 
 export const START_SESSION_ACTION_ID = 'strength.startSession'
 
@@ -176,7 +177,7 @@ export const startSessionAction: ActionConfig<typeof ActionContextTypes.NORMAL_M
     // Loaded rather than peeked: "does this block already hold something" is
     // the difference between taking an empty line's place and burying the
     // session under a heading, and children are not on the row.
-    const children = (await block.repo.query.children({id: block.id, propertyChildren: 'none'}).load()) ?? []
+    const children = await contentChildren(block.repo, block.id)
     // `uiStateBlock` IS the pane block in this context — the same thing core's
     // own zoom action navigates by.
     await runStartSession(block.repo, placeAtFocus({

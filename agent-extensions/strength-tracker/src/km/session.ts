@@ -43,6 +43,7 @@ import {writeLayoffInTx} from './store'
 import {asSet, asWorkout} from './records'
 import {discardTally, type DiscardTally} from './subtree'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
+import {contentChildren} from './children'
 import {
   catchUpRpeProp,
   completedAtProp,
@@ -231,7 +232,7 @@ export const takePlaceOf = async (
  *  the warning ends up describing a tree the delete no longer applies to.
  */
 export const discardCounts = async (repo: Repo, workoutId: string): Promise<DiscardTally> =>
-  discardTally(async id => (await repo.query.children({id, propertyChildren: 'none'}).load()) ?? [], workoutId)
+  discardTally(id => contentChildren(repo, id), workoutId)
 
 // ──── stamping ────
 

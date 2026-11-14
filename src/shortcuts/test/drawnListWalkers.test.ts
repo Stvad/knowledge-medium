@@ -322,6 +322,8 @@ describe('merge targets are the drawn neighbours', () => {
     await pressInEditor('delete_empty_block_cm', 'b', 'start', NON_HIDDEN)
     expect(await contentOf(statusRow)).toBe(`${rowText}b`)
     expect(await contentOf('a')).toBe('a')
+    // No longer a name row: an ordinary block, with an editor for the caret the merge hands it.
+    expect((await repo.load(statusRow))?.isFieldForm).not.toBe(true)
   })
 
   it('a block showing only drawn property rows is not folded into a block with children of its own', async () => {
