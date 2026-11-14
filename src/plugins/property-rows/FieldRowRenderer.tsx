@@ -5,7 +5,7 @@
  * children. It is an ordinary block otherwise: its bullet, selection,
  * collapse and gestures are the default block's. Collapsing it hides the
  * value column; the value children (and anything nested under them) are its
- * children, rendered by `ValueRowRenderer`.
+ * children, with scalar value editors provided by `ValueRowRenderer`.
  */
 import type { BlockRenderer, BlockRendererProps } from '@/types'
 import type { BlockLayout } from '@/extensions/blockInteraction'

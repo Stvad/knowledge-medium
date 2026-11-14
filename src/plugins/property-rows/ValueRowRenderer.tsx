@@ -5,8 +5,8 @@
  * value the panel shows, not a text edit of the row — but only while the child
  * IS that value (`useOwnersValue`); otherwise it shows its own text. Either way
  * the value child is an ordinary block: its children nest under it and its
- * bullet works as any other's. List members never get the editor — see
- * `isSingleValueProperty`.
+ * bullet works as any other's. Lists and refs stay with their own renderers —
+ * see `isPropertyValueEditorEligible`.
  */
 import { useContext, useMemo } from 'react'
 import { PropertyFieldRowContext } from '@/context/propertyDisplay'
@@ -27,21 +27,26 @@ import type { Block } from '@/data/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { useHandle } from '@/hooks/block'
 import { usePropertySchemas } from '@/hooks/propertySchemas'
-import { drawsPropertyRows, fieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
+import {
+  drawsPropertyRows,
+  fieldRowDefinition,
+  isPropertyValueEditorEligible,
+  useIsChildOf,
+  usePropertyDefinitions,
+} from './fieldRow'
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
 type FieldRowData = Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'>
 
-/** The scalar property a value child is a value of, given its field row: when
- *  that row is recognized and the property is single-valued. */
+/** The scalar property a value child can edit, given its recognized field row. */
 const scalarOf = (
   repo: Repo,
   definitions: PropertyDefinitionRegistrySnapshot | null,
   fieldRow: FieldRowData | null | undefined,
 ): {fieldId: string; schema: AnyPropertySchema} | undefined => {
   const definition = fieldRowDefinition(repo, definitions, fieldRow)
-  if (!fieldRow?.parentId || !definition?.schema || !isSingleValueProperty(definition.schema)) return undefined
+  if (!fieldRow?.parentId || !definition?.schema || !isPropertyValueEditorEligible(definition.schema)) return undefined
   return {fieldId: definition.fieldId, schema: definition.schema}
 }
 

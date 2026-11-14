@@ -33,6 +33,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { propertyRowsPlugin } from '../index'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { referencesPlugin } from '@/plugins/references'
 import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import {
@@ -77,6 +78,10 @@ const sourceProp = seedProperty({
   seedKey: 'test/property/rows-source', revision: 1, name: 'rows:source',
   preset: 'optional-ref', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
 })
+const requiredSourceProp = seedProperty({
+  seedKey: 'test/property/rows-required-source', revision: 1, name: 'rows:required-source',
+  preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
+})
 
 let sharedDb: TestDb
 let repo: Repo
@@ -109,10 +114,12 @@ beforeEach(async () => {
     kernelPropertyUiExtension,
     kernelValuePresetsExtension,
     defaultRenderersExtension,
+    referencesPlugin,
     propertyRowsPlugin,
     plainOutlinerPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [statusProp, secretProp, tagsProp, ratingProp, sourceProp].map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    [statusProp, secretProp, tagsProp, ratingProp, sourceProp, requiredSourceProp]
+      .map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
   ])
   repo.setFacetRuntime(runtime)
   repo.setActiveWorkspaceId(WS)
@@ -420,22 +427,45 @@ describe('a list property', () => {
   })
 })
 
-describe('a read-only workspace', () => {
-  it('still shows a reference value as the referenced block, not its id', async () => {
-    await repo.tx(tx => tx.create({id: 'cited', workspaceId: WS, parentId: null, orderKey: 'a5', content: 'the cited block'}),
+describe('a reference property', () => {
+  it.each([
+    {prop: sourceProp, readOnly: false},
+    {prop: sourceProp, readOnly: true},
+    {prop: requiredSourceProp, readOnly: false},
+    {prop: requiredSourceProp, readOnly: true},
+  ])('renders $prop.name as an ordinary reference block (readOnly: $readOnly)', async ({prop, readOnly}) => {
+    const targetId = crypto.randomUUID()
+    await repo.tx(tx => tx.create({id: targetId, workspaceId: WS, parentId: null, orderKey: 'a5', content: 'the cited block'}),
       {scope: ChangeScope.BlockDefault})
-    await repo.block(OWNER).set(sourceProp, 'cited')
-    repo.setReadOnly(true)
+    await repo.block(OWNER).set(prop, targetId)
+    repo.setReadOnly(readOnly)
     mount({workspace: 'non-hidden'})
-    await waitFor(() => expect(shownRows()).toContain('rows:source'))
-    const cell = await waitFor(() => {
-      const found = document.querySelector<HTMLElement>('[data-property-value-row="true"][data-property-name="rows:source"]')
+    await waitFor(() => expect(shownRows()).toContain(prop.name))
+    // Resolve the definition and value child explicitly to keep an unrelated
+    // reference elsewhere in the outline from satisfying the renderer check.
+    const fieldRows = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const matchingFieldRow = fieldRows.find(data => {
+      if (!data?.isFieldForm || !data.referenceTargetId) return false
+      const schema = repo.propertySchemaResolverFor(WS).resolveField(data.referenceTargetId)
+      return schema.status === 'resolved' && schema.schema.name === prop.name
+    })
+    expect(matchingFieldRow).toBeDefined()
+    const valueChildId = (await repo.query.children({id: matchingFieldRow!.id, propertyChildren: 'all'}).load())[0]?.id
+    expect(valueChildId).toBeDefined()
+    const reference = await waitFor(() => {
+      const found = document.querySelector<HTMLAnchorElement>(
+        `[data-block-id="${valueChildId}"] a.blockref[data-block-id="${targetId}"]`,
+      )
+      expect(found?.getAttribute('href')).toBe(`#${WS}/${targetId}`)
       expect(found?.textContent).toContain('the cited block')
       return found!
     })
-    expect(cell.textContent).not.toContain('"cited"')
+    expect(reference.closest('.blockembed')).toBeNull()
+    expect(reference.closest('[data-property-value-row="true"]')).toBeNull()
   })
+})
 
+describe('a read-only workspace', () => {
   it('shows values without editors', async () => {
     repo.setReadOnly(true)
     mount({workspace: 'non-hidden'})
