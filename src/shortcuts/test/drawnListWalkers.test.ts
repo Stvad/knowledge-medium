@@ -24,7 +24,6 @@ import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import {
   focusBlock,
   isCollapsedProp,
-  isEditingProp,
   peekFocusedBlockLocation,
   selectionStateProp,
 } from '@/data/properties'
@@ -301,14 +300,11 @@ describe('merge targets are the drawn neighbours', () => {
     expect(await contentOf('b')).toBe('b')
   })
 
-  it('an empty block that folds in a name row becomes it, and leaves edit mode', async () => {
-    const ui = repo.block('ui')
+  it('an empty block that folds in a name row becomes it', async () => {
     await repo.tx(tx => tx.update('a', {content: ''}), {scope: ChangeScope.BlockDefault})
-    await focusBlock(ui, 'a', {edit: true})
     await pressInEditor('merge_next_block_cm', 'a', 'end', NON_HIDDEN)
     expect((await repo.load('a'))?.isFieldForm).toBe(true)
     expect(await parentOf(draftRow)).toBe('a')
-    await vi.waitFor(() => expect(ui.peekProperty(isEditingProp)).toBe(false))
   })
 
   it('in mode none the same Delete folds `b` into `a`', async () => {

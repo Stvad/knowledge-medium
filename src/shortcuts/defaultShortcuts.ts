@@ -33,7 +33,6 @@ import {
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
-import { isDrawnAsPropertyName } from '@/data/drawnSubtree'
 import { visibleChildIds } from '@/data/visibleChildren'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
@@ -1199,15 +1198,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             await tx.update(block.id, {content: liveContent})
             await tx.run(mergeMutator, {intoId: block.id, fromId})
           }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'}))
-
-        // A property's name row folds in as its `::((id))` text like any
-        // block's. An EMPTY block that took it in is that name row now, drawn
-        // as a name with no editor: leave edit mode, where a caret would take
-        // no keys.
-        if (await isDrawnAsPropertyName(block, surface)) {
-          setIsEditing(uiStateBlock, false)
-          return
-        }
 
         await uiStateBlock.set(editorSelection, {
           blockId: block.id,
