@@ -838,7 +838,7 @@ export const upsertFieldRow = async (
   existingRows: readonly BlockData[],
   /** See {@link MaterializeOptions.additive}. */
   additive = false,
-): Promise<Pick<BlockData, 'id' | 'workspaceId'>> => {
+): Promise<Pick<BlockData, 'id' | 'workspaceId'> & {parentId: string}> => {
   const content = propertyFieldContent(fieldId)
   const [primary, ...duplicates] = existingRows
   if (primary) {
@@ -851,13 +851,13 @@ export const upsertFieldRow = async (
     for (const duplicate of duplicates) {
       await collapseDuplicateFieldRow(tx, primary.id, duplicate, additive)
     }
-    return primary
+    return {id: primary.id, workspaceId: primary.workspaceId, parentId: owner.id}
   }
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
   const id = await mintPropertyChildRow(tx, plannedFieldRow(tx, owner, fieldId), {kind: 'field', fieldId})
-  return {id, workspaceId: owner.workspaceId}
+  return {id, workspaceId: owner.workspaceId, parentId: owner.id}
 }
 
 /**
@@ -887,7 +887,7 @@ export const upsertFieldRow = async (
  */
 export const reconcileFieldValueChildren = async (
   tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'> & {parentId: string},
   schema: AnyPropertySchema,
   encoded: unknown,
   /** See {@link MaterializeOptions.additive}. */
@@ -926,7 +926,7 @@ const createValueChild = (
 
 const reconcileSingleValueChild = async (
   tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'> & {parentId: string},
   schema: AnyPropertySchema,
   values: readonly BlockData[],
   content: string,
@@ -939,7 +939,15 @@ const reconcileSingleValueChild = async (
   // disagree with, which would fold a row that is no duplicate of it (#1021).
   if (additive && values.length > 0) return
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
-  const primary = scalarValueRow(schema, values, content)
+  const ownerBefore = await tx.getAtStart(fieldRow.parentId)
+  const replaced = storedPropertyValue(ownerBefore?.properties ?? {}, schema.name)
+  // Choose against the same row versions as the owner's cell. Eager writes,
+  // repeated writes and deferred materialization must retain one target even
+  // after its new content stops decoding (for example a cleared ref).
+  const candidates = await Promise.all(values.map(async row => ({
+    row, content: (await tx.getAtStart(row.id))?.content ?? row.content,
+  })))
+  const primary = scalarValueRow(schema, candidates, content, replaced)?.row
   if (!primary) {
     await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
     return

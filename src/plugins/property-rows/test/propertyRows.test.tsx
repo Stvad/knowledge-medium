@@ -246,7 +246,7 @@ describe('a scalar whose value children disagree', () => {
   // Concurrent offline edits can leave two value children under one scalar's
   // field row; the data layer keeps both. Written raw, so no processor folds
   // the second into the owner's cell before the render.
-  it('shows the stray sibling as its own text, not as a second copy of the owner\'s value', async () => {
+  it.each(['Zz', 'z9'])('keeps a peer at %s as text and edits the current cell row', async orderKey => {
     const fieldRow = await sharedDb.db.getOptional<{id: string}>(
       `SELECT f.id FROM blocks f WHERE f.parent_id = ? AND f.is_field_form = 1 AND f.deleted = 0
          AND EXISTS (SELECT 1 FROM blocks v WHERE v.parent_id = f.id AND v.content = 'draft' AND v.deleted = 0)`,
@@ -256,8 +256,8 @@ describe('a scalar whose value children disagree', () => {
       await tx.execute(
         `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
            created_at, updated_at, created_by, updated_by)
-         VALUES ('stray', ?, ?, 'z9', 'final', '{}', 0, 1, 1, ?, ?)`,
-        [WS, fieldRow!.id, USER.id, USER.id])
+         VALUES ('stray', ?, ?, ?, 'final', '{}', 0, 1, 1, ?, ?)`,
+        [WS, fieldRow!.id, orderKey, USER.id, USER.id])
     })
     expect(repo.block(OWNER).peekProperty(statusProp)).toBe('draft')
 
@@ -270,6 +270,26 @@ describe('a scalar whose value children disagree', () => {
     })
     expect(stray.querySelector('[data-property-value-row]')).toBeNull()
     expect(screen.queryByDisplayValue('final')).toBeNull()
+    const editor = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-property-value-row="true"][data-property-name="rows:status"]')
+      expect(found).not.toBeNull()
+      return found!
+    })
+    const input = editor.querySelector('input')!
+    expect(input.value).toBe('draft')
+    await act(async () => {
+      fireEvent.change(input, {target: {value: 'published'}})
+      fireEvent.blur(input)
+    })
+    await waitFor(async () => {
+      const row = await sharedDb.db.getOptional<{content: string}>(
+        'SELECT content FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0',
+        [fieldRow!.id, 'published'])
+      expect(row?.content).toBe('published')
+    })
+    const values = await sharedDb.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY content', [fieldRow!.id])
+    expect(values.map(row => row.content)).toEqual(['final', 'published'])
   })
 })
 

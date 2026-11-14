@@ -719,6 +719,11 @@ export class TxImpl implements Tx {
     return row === null ? null : parseBlockRow(row)
   }
 
+  async getAtStart(id: string): Promise<BlockData | null> {
+    const entry = this.ctx.snapshots.get(id)
+    return entry === undefined ? this.get(id) : entry.before
+  }
+
   peek(id: string): BlockData | null {
     const own = peekSnapshot(this.ctx.snapshots, id)
     if (own !== undefined) return own

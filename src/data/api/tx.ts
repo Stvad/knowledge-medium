@@ -94,6 +94,10 @@ export interface Tx {
    *  for missing rows. */
   get(id: string): Promise<BlockData | null>
 
+  /** Read the row as it stood before this transaction's first write to it.
+   *  Returns null for a row created here or an id that does not exist. */
+  getAtStart(id: string): Promise<BlockData | null>
+
   /** Sync read: tx-private snapshots map first (own writes in this tx),
    *  then the shared (pre-tx) cache. Returns null if neither has it.
    *  The shared cache is mutated only on commit walk (v4.24), so

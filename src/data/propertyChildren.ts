@@ -1031,28 +1031,28 @@ const firstDecodingValue = (
   return undefined
 }
 
-/** The value child a single-valued property's value lives in, of `values` in
- *  sibling order: the one the cell reads ({@link firstDecodingValue}), else
- *  the ONLY child — a value its user made unreadable, which a write repairs in
- *  place. `undefined` when neither holds: no child can be told apart as the
- *  value, so a write must add one rather than overwrite any. The writer and
- *  the outline's value editor both bind here, so the editor sits on the row a
- *  write lands on — except for a write whose content does not decode (a
- *  cleared ref) when an earlier row already holds that content: it lands
- *  there, the value row keeps its text and the cell reads stale until the
- *  rows change. Accepted: every other order lets the second pass overwrite a
- *  divergent peer. */
+/** The scalar row to edit, in sibling order: prefer the content implied by
+ *  the replaced cell, then the first readable row (including `writing`), then
+ *  a sole unreadable row. If none identifies a value, the writer adds a row.
+ *  A missing match retains this repair rule rather than minting another
+ *  conflict on every write to a cell whose children disagree with it. */
 export const scalarValueRow = <T extends {readonly content: string}>(
   schema: AnyPropertySchema,
   values: readonly T[],
-  /** A write's own content: a row already holding it counts as readable, so
-   *  a write that reconciles twice in one tx (the eager dual-write, then the
-   *  deferred materializer) lands on the same row both times even when that
-   *  content does not decode, as a cleared ref's does. */
+  /** A write's content counts as readable even for a cleared ref. */
   writing?: string,
+  /** The encoded cell value being replaced; the editor supplies its current cell. */
+  replacing?: unknown,
 ): T | undefined => {
-  return values.find(value => value.content === writing
-    || firstDecodingValue(schema, [value.content]) !== undefined)
+  let preferred: string | undefined
+  try {
+    if (replacing !== undefined) preferred = encodedToValueChildContent(schema, replacing)
+  } catch {
+    // A legacy cell that cannot be represented has no matching child.
+  }
+  return values.find(value => value.content === preferred)
+    ?? values.find(value => value.content === writing
+      || firstDecodingValue(schema, [value.content]) !== undefined)
     ?? (values.length === 1 ? values[0] : undefined)
 }
 

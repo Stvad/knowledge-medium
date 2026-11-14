@@ -1777,6 +1777,51 @@ describe('a scalar write rewrites the value the cell reads', () => {
     return {repo, fieldId: field!.id, valueId: value!.id}
   }
 
+  const seedEarlierPeer = async (valueId: string, content: string): Promise<void> => {
+    await sharedDb.db.writeTransaction(tx => tx.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, deleted,
+         created_at, updated_at, created_by, updated_by)
+       SELECT 'earlier-peer', workspace_id, parent_id, 'Zz', ?, '{}', 0,
+         created_at, updated_at, created_by, updated_by FROM blocks WHERE id = ?`,
+      [content, valueId]).then(() => undefined))
+  }
+  const liveContents = async (fieldId: string): Promise<string[]> =>
+    (await childrenRows(fieldId)).filter(row => row.deleted === 0).map(row => row.content)
+
+  it.each(['setProperty', 'bag update'] as const)(
+    '%s replaces the cell value behind an earlier divergent peer', async write => {
+      const {repo, fieldId, valueId} = await setupCount()
+      await seedEarlierPeer(valueId, '9')
+      expect(await bagOf('p')).toMatchObject({count: 5})
+      expect(await liveContents(fieldId)).toEqual(['9', '5']) // Sibling order.
+
+      await repo.tx(async tx => {
+        if (write === 'setProperty') {
+          await tx.setProperty('p', countSchema, 7)
+          expect((await tx.childrenOf(fieldId, undefined)).map(row => row.content)).toEqual(['9', '7'])
+        } else {
+          await tx.update('p', {properties: {count: 7}})
+        }
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await liveContents(fieldId)).toEqual(['9', '7'])
+      // Projection still reads the first decodable sibling; order is user-owned.
+      expect(await bagOf('p')).toMatchObject({count: 9})
+    })
+
+  it('keeps one target across repeated scalar writes in one transaction', async () => {
+    const {repo, fieldId, valueId} = await setupCount()
+    await seedEarlierPeer(valueId, '9')
+
+    await repo.tx(async tx => {
+      await tx.setProperty('p', countSchema, 7)
+      await tx.setProperty('p', countSchema, 8)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await liveContents(fieldId)).toEqual(['9', '8'])
+    expect(await contentOf(valueId)).toBe('8')
+  })
+
   it('leaves a block ahead of the value alone', async () => {
     const {repo, fieldId, valueId} = await setupCount()
     // An ordinary block first among the values: it does not decode, so the
@@ -1803,6 +1848,7 @@ describe('a scalar write rewrites the value the cell reads', () => {
     expect(await contentOf('notes')).toBe('meeting notes')
     expect(await contentOf(valueId)).toBe('about five')
     expect(await bagOf('p')).toMatchObject({count: 7})
+    expect((await liveContents(fieldId)).sort()).toEqual(['7', 'about five', 'meeting notes'])
   })
 
   describe('a write whose content does not decode (a cleared ref)', () => {
@@ -1824,6 +1870,22 @@ describe('a scalar write rewrites the value the cell reads', () => {
       const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
       return {repo, fieldId: field!.id, valueId: value!.id}
     }
+
+    it('clears the replaced ref behind an earlier peer in both passes', async () => {
+      const {repo, fieldId, valueId} = await setupRef()
+      await seedEarlierPeer(valueId, '((target-b))')
+      expect(await bagOf('p')).toMatchObject({related: 'target-a'})
+      expect(await liveContents(fieldId)).toEqual(['((target-b))', '((target-a))'])
+
+      await repo.tx(async tx => {
+        await tx.setProperty('p', refSchema, '')
+        expect((await tx.childrenOf(fieldId, undefined)).map(row => row.content))
+          .toEqual(['((target-b))', ''])
+      }, {scope: ChangeScope.BlockDefault})
+
+      expect(await liveContents(fieldId)).toEqual(['((target-b))', ''])
+      expect(await contentOf(valueId)).toBe('')
+    })
 
     it('keeps a divergent peer: both passes of the write land on the same row', async () => {
       const {repo, fieldId, valueId} = await setupRef()
