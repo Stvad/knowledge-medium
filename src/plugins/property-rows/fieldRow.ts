@@ -44,7 +44,8 @@ export const fieldRowDefinition = (
 
 /** Whether a scalar value child belongs in the property row editor. Lists
  *  store one child per member, while refs stay ordinary reference blocks for
- *  the markdown renderer. */
+ *  the markdown renderer, accepting its UUID-only block-id grammar rather
+ *  than introducing a property-only reference rendering path. */
 export const isPropertyValueEditorEligible = (schema: AnyPropertySchema): boolean =>
   memberCodecOf(schema.codec) === undefined && schema.codec.type !== 'ref'
 
