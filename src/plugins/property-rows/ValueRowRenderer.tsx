@@ -54,11 +54,12 @@ const scalarOf = (
  *  `scalarValueRow` of the owner's first field row for the definition, in
  *  `(order_key, id)` order — the row `upsertFieldRow` keeps and
  *  `reconcileSingleValueChild` overwrites. Derived from the structural child
- *  lists, so it follows reorders, folds and arrivals. */
+ *  lists and current cell, so it follows cell changes, reorders, folds and arrivals. */
 const useWriteTargetId = (
   repo: Block['repo'],
   ownerId: string | null,
   scalar: {fieldId: string; schema: AnyPropertySchema} | null,
+  ownerProperties: Readonly<Record<string, unknown>>,
 ): string | null => {
   const fieldId = scalar?.fieldId
   const fieldRowId = useHandle(repo.query.children({id: ownerId ?? '', propertyChildren: 'all'}), {
@@ -67,7 +68,8 @@ const useWriteTargetId = (
   })
   return useHandle(repo.query.children({id: fieldRowId ?? '', propertyChildren: 'all'}), {
     selector: children => scalar
-      ? scalarValueRow(scalar.schema, (children ?? []).filter(isFieldValueChild))?.id ?? null
+      ? scalarValueRow(scalar.schema, (children ?? []).filter(isFieldValueChild),
+        undefined, ownerProperties[scalar.schema.name])?.id ?? null
       : null,
   })
 }
@@ -97,7 +99,7 @@ const useOwnersValue = (block: Block): {owner: Block; row: PropertyPanelModelRow
   const owner = repo.block(ownerId ?? block.id)
   const ownerProperties = useHandle(owner, {selector: data => data?.properties ?? EMPTY_PROPERTIES})
   const scalar = scalarOf(repo, definitions, fieldRow)
-  const writeTargetId = useWriteTargetId(repo, ownerId, scalar ?? null)
+  const writeTargetId = useWriteTargetId(repo, ownerId, scalar ?? null, ownerProperties)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   return useMemo(() => {

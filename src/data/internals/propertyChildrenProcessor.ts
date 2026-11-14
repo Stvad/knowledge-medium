@@ -60,7 +60,6 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
-  scalarValueRow,
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
@@ -839,7 +838,7 @@ export const upsertFieldRow = async (
   existingRows: readonly BlockData[],
   /** See {@link MaterializeOptions.additive}. */
   additive = false,
-): Promise<Pick<BlockData, 'id' | 'workspaceId'>> => {
+): Promise<Pick<BlockData, 'id' | 'workspaceId'> & {parentId: string}> => {
   const content = propertyFieldContent(fieldId)
   const [primary, ...duplicates] = existingRows
   if (primary) {
@@ -852,13 +851,13 @@ export const upsertFieldRow = async (
     for (const duplicate of duplicates) {
       await collapseDuplicateFieldRow(tx, primary.id, duplicate, additive)
     }
-    return primary
+    return {id: primary.id, workspaceId: primary.workspaceId, parentId: owner.id}
   }
   // Machinery inserts field rows FIRST among children (§9 ordering
   // decision): fields cluster above content as an emergent default;
   // orderKey stays user-owned afterwards.
   const id = await mintPropertyChildRow(tx, plannedFieldRow(tx, owner, fieldId), {kind: 'field', fieldId})
-  return {id, workspaceId: owner.workspaceId}
+  return {id, workspaceId: owner.workspaceId, parentId: owner.id}
 }
 
 /**
@@ -888,7 +887,7 @@ export const upsertFieldRow = async (
  */
 export const reconcileFieldValueChildren = async (
   tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'> & {parentId: string},
   schema: AnyPropertySchema,
   encoded: unknown,
   /** See {@link MaterializeOptions.additive}. */
@@ -927,7 +926,7 @@ const createValueChild = (
 
 const reconcileSingleValueChild = async (
   tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'> & {parentId: string},
   schema: AnyPropertySchema,
   values: readonly BlockData[],
   content: string,
@@ -940,12 +939,14 @@ const reconcileSingleValueChild = async (
   // disagree with, which would fold a row that is no duplicate of it (#1021).
   if (additive && values.length > 0) return
   const slot = {valueKey: memberKeysFor(schema).content(content), occurrence: 0}
-  const primary = scalarValueRow(schema, values, content)
+  const primary = await tx.scalarValueWriteTarget(fieldRow, schema, values, content)
   if (!primary) {
-    await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
+    const id = await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
+    tx.recordScalarValueWrite(fieldRow.id, id, content)
     return
   }
   if (primary.content !== content) await tx.update(primary.id, {content})
+  tx.recordScalarValueWrite(fieldRow.id, primary.id, content)
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
