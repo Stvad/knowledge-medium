@@ -1,9 +1,7 @@
-/**
- * Whether the USER is active, as opposed to the main thread: `requestIdleCallback`
- * fires between keystrokes, so it cannot tell background work to stand aside
- * while someone is typing. This watches input events and says how long ago the
- * last one arrived.
- */
+// Whether the USER is active, as opposed to the main thread: `requestIdleCallback`
+// fires between keystrokes, so it cannot tell background work to stand aside
+// while someone is typing. This watches input events and says how long ago the
+// last one arrived.
 
 /** Input that means someone is at the keyboard, pointer or screen. `scroll` is
  *  caught in the capture phase, so a scroll inside any element counts. */
