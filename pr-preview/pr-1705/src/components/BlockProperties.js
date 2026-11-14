@@ -1,1 +1,0 @@
-export{UB as BlockProperties}from"../../chunks/app-DLCjKiSv.js";

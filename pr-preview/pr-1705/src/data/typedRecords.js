@@ -1,1 +1,0 @@
-export{uj as adoptTypedBlock,dj as createTypedChild,yot as derivedBlockId,fj as getOrCreateTypedChild}from"../../chunks/app-DLCjKiSv.js";

@@ -1,1 +1,0 @@
-export{Irt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Lrt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Rrt as __resetLayoutSessionIdForTesting,zrt as getLayoutSessionId,Brt as isInstalledAppDisplayMode,Vrt as readOrCreateLayoutSessionId}from"../../chunks/app-DLCjKiSv.js";

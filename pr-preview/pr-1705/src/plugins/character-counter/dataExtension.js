@@ -1,1 +1,0 @@
-export{MZ as characterCounterDataExtension}from"../../../chunks/app-DLCjKiSv.js";

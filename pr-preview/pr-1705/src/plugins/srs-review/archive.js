@@ -1,1 +1,0 @@
-export{Qc as archiveSrsCard}from"../../../chunks/app-DLCjKiSv.js";

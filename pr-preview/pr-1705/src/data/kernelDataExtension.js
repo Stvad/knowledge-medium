@@ -1,1 +1,0 @@
-export{r6 as kernelDataExtension}from"../../chunks/app-DLCjKiSv.js";

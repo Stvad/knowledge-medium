@@ -1,1 +1,0 @@
-export{Lq as preferredSpanReplacement}from"../../../chunks/app-DLCjKiSv.js";

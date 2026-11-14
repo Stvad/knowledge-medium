@@ -1,1 +1,0 @@
-export{cT as usePromotableBreadcrumb}from"../../../chunks/app-DLCjKiSv.js";

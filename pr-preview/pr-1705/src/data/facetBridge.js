@@ -1,1 +1,0 @@
-export{h2 as FacetBridge}from"../../chunks/app-DLCjKiSv.js";

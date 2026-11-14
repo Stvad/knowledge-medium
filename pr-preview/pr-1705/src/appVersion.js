@@ -1,1 +1,0 @@
-export{Oc as appVersion}from"../chunks/app-DLCjKiSv.js";

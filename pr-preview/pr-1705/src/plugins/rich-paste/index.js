@@ -1,1 +1,0 @@
-export{Mb as richPastePlugin}from"../../../chunks/app-DLCjKiSv.js";

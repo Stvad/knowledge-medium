@@ -1,1 +1,0 @@
-export{Nut as CHANGE_SCOPE_POLICIES,Put as ChangeScope,Fut as isChangeScope,Iut as policyForScope,Lut as scopeAllowedInReadOnly,Rut as scopeIsUndoable,zut as scopePoliciesEquivalent,But as scopeUploadsToServer,Vut as sourceForScope}from"../../../chunks/app-DLCjKiSv.js";

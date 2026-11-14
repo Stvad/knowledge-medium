@@ -1,1 +1,0 @@
-export{rv as blockInfoPlugin}from"../../../chunks/app-DLCjKiSv.js";

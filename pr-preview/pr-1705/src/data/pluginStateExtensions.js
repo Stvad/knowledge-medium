@@ -1,1 +1,0 @@
-export{xQ as pluginPrefsExtension,SQ as pluginUIStateExtension}from"../../chunks/app-DLCjKiSv.js";

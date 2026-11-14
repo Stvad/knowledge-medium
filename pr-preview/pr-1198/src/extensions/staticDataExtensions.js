@@ -1,1 +1,0 @@
-import{LF as e}from"../../chunks/app-CUbZJub7.js";export{e as staticDataExtensions};

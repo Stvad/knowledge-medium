@@ -1,1 +1,0 @@
-export{jG as floatingAnchorFromRect,MG as useAnchoredFloating}from"../../../chunks/app-DLCjKiSv.js";

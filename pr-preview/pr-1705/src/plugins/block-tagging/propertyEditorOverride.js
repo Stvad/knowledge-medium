@@ -1,1 +1,0 @@
-export{xu as blockTagsConfigUi}from"../../../chunks/app-DLCjKiSv.js";

@@ -1,1 +1,0 @@
-export{$j as CommandPaletteHeaderItem}from"../../../chunks/app-DLCjKiSv.js";

@@ -1,1 +1,0 @@
-export{BN as BlockPasteShellDecorator,VN as blockPasteShellDecorator}from"../../chunks/app-DLCjKiSv.js";

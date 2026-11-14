@@ -1,1 +1,0 @@
-export{QP as dynamicExtensionsExtension}from"../../chunks/app-DLCjKiSv.js";

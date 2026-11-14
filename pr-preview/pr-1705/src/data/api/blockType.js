@@ -1,1 +1,0 @@
-export{Hut as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-DLCjKiSv.js";

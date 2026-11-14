@@ -1,1 +1,0 @@
-export{Wat as deriveWorkspaceIdNamespace}from"../../../chunks/app-DLCjKiSv.js";

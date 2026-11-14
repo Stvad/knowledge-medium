@@ -1,1 +1,0 @@
-export{GD as BlockLink}from"../../../chunks/app-DLCjKiSv.js";

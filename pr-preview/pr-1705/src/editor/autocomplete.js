@@ -1,1 +1,0 @@
-export{XN as editorAutocompleteExtension}from"../../chunks/app-DLCjKiSv.js";
