@@ -457,4 +457,23 @@ describe('property_cell_coverage stands aside between pages', () => {
     // Two pages, one boundary: no wait before the first page or after the last.
     expect(yields).toBe(1)
   })
+
+  it('gets the audit\'s hook', async () => {
+    await setMode('children')
+    await insertRaw(...pageAndOneOwners())
+    // The audit's own statements go through this reader; coverage's go
+    // through the repo, so they wait only at its page boundary.
+    let statements = 0
+    const db = {
+      getAll: <T,>(sql: string, params?: unknown[]) => {
+        statements += 1
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+    let yields = 0
+
+    await runConsistencyAudit(db, WS, 0, { repo, yieldWhenBusy: async () => { yields += 1 } })
+
+    expect(yields).toBe(statements + 1)
+  })
 })
