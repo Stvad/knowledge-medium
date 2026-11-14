@@ -417,6 +417,9 @@ const ownerField = (ownerId: string, fieldId: string): string => `${ownerId}\0${
 export const surveyPropertyCellCoverage = async (
   repo: Repo,
   workspaceId: string,
+  /** Awaited between pages, never mid-page, so a caller running in the
+   *  background can hand the connection back while it stays pending. */
+  betweenPages: () => Promise<void> = async () => {},
 ): Promise<PropertyCellCoverage> => {
   // Guarded rather than trusted: past the retained previous workspace the
   // resolver fails CLOSED, every key reads as unresolved, and every bucket
@@ -470,6 +473,8 @@ export const surveyPropertyCellCoverage = async (
         }
       }
     }
+    if (page.length < SCAN_PAGE) break
+    await betweenPages()
   }
   return {
     blocksScanned,

@@ -4,7 +4,7 @@
  * plugin's run/publish/cadence wiring (schedule.ts) and that the engine's checks
  * actually catch injected inconsistencies. The engine lives in ./audit.ts.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -16,7 +16,8 @@ import {
   type DecryptSpotCheckResult,
 } from '../audit'
 import {
-  consistencyAuditEffect,
+  AUDIT_QUIET_MS,
+  createConsistencyAuditEffect,
   drainConsistencyAudits,
   isAuditDue,
   resetConsistencyAuditCadence,
@@ -38,6 +39,7 @@ import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/wor
 import type { BlockData } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet'
 import { Repo } from '@/data/repo'
+import { createUserActivity, type UserActivity } from '@/utils/userActivity'
 
 interface Harness {
   repo: Repo
@@ -132,6 +134,8 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     runtime: {} as FacetRuntime, // the effect ignores runtime/safeMode
     safeMode: false,
   })
+  // No input ever arrives on a bare target, so the user always reads as quiet.
+  const consistencyAuditEffect = createConsistencyAuditEffect(() => createUserActivity(new EventTarget()))
   // Let the deferred idle job fire (setTimeout(0) under node), then drain it.
   const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -157,6 +161,115 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     consistencyAuditEffect.start(ctx('ws-eff3')) // not due → schedules nothing
     await settle()
     expect(getConsistencyAuditSnapshotFor('ws-eff3')).toBeNull()
+  })
+
+  it('a run parked when its effect is torn down ends at its next statement, unpublished', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
+    try {
+      const input = new EventTarget()
+      const effect = createConsistencyAuditEffect(() => createUserActivity(input))
+      const cleanup = effect.start(ctx('ws-left'))
+      input.dispatchEvent(new Event('keydown'))
+      await vi.advanceTimersByTimeAsync(1) // the idle job starts and parks
+      expect(getAll).not.toHaveBeenCalled()
+
+      if (typeof cleanup === 'function') cleanup() // e.g. a workspace switch
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+
+      expect(getAll).not.toHaveBeenCalled()
+      expect(getConsistencyAuditSnapshotFor('ws-left')).toBeNull()
+      expect(isAuditDue('ws-left', Date.now())).toBe(true)
+    } finally {
+      getAll.mockRestore()
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      vi.useRealTimers()
+    }
+  })
+
+  it('the scheduled audit waits until the user has been quiet, then runs', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const input = new EventTarget()
+      const waits: { quietMs: number; over: boolean }[] = []
+      const effect = createConsistencyAuditEffect((): UserActivity => {
+        const user = createUserActivity(input)
+        return {
+          whenQuiet: async quietMs => {
+            const wait = { quietMs, over: false }
+            waits.push(wait)
+            await user.whenQuiet(quietMs)
+            wait.over = true
+          },
+        }
+      })
+      effect.start(ctx('ws-busy'))
+      // Before the idle job runs: the tracker listens from the workspace open.
+      input.dispatchEvent(new Event('keydown'))
+
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS - 1)
+      expect(waits).toEqual([{ quietMs: AUDIT_QUIET_MS, over: false }]) // parked at its first
+      expect(getConsistencyAuditSnapshotFor('ws-busy')).toBeNull()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(waits[0].over).toBe(true)
+      await drainConsistencyAudits()
+      expect(getConsistencyAuditSnapshotFor('ws-busy')?.workspaceId).toBe('ws-busy')
+    } finally {
+      // A failed assertion above leaves the run parked on a fake timer, where
+      // the shared job queue would hang every later drain in this file.
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('runConsistencyAudit — yieldWhenBusy', () => {
+  /** Counts the statements the audit issues, so a hook can see where it ran. */
+  const countingDb = () => {
+    const db = {
+      statements: 0,
+      getAll: <T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]> => {
+        db.statements += 1
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+    return db
+  }
+
+  it('awaits the hook before every statement it issues', async () => {
+    const db = countingDb()
+    const statementsAtYield: number[] = []
+
+    await runConsistencyAudit(db, 'ws-1', 0, {
+      yieldWhenBusy: async () => { statementsAtYield.push(db.statements) },
+    })
+
+    expect(db.statements).toBeGreaterThan(1)
+    expect(statementsAtYield).toEqual([...Array(db.statements).keys()])
+  })
+
+  it('issues no statement while the hook holds it', async () => {
+    const db = countingDb()
+    let yields = 0
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+
+    const audit = runConsistencyAudit(db, 'ws-1', 0, {
+      // Lets the first statement through and holds the second.
+      yieldWhenBusy: () => ++yields === 2 ? held : Promise.resolve(),
+    })
+    await vi.waitFor(() => expect(yields).toBe(2))
+    const statementsWhileHeld = db.statements
+    expect(statementsWhileHeld).toBe(1)
+    // Still nothing a turn of the event loop later.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(db.statements).toBe(statementsWhileHeld)
+
+    release()
+    expect((await audit).checks.references_index_mirror.status).toBe('ok')
+    expect(db.statements).toBeGreaterThan(statementsWhileHeld)
   })
 })
 

@@ -87,9 +87,10 @@ const bucketOwners = (bucket: PropertyCellCoverageBucket): string[] =>
  *  a cell the children do not back, so any of them is an anomaly. */
 export const runPropertyCellCoverageCheck = async (
   repo: Repo, workspaceId: string, sampleLimit: number,
+  betweenPages?: () => Promise<void>,
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
-  const coverage = await surveyPropertyCellCoverage(repo, workspaceId)
+  const coverage = await surveyPropertyCellCoverage(repo, workspaceId, betweenPages)
   const uncovered = coverage.missing.cells + coverage.refused.cells
     + coverage.deletedThroughChildren.cells
   const samples = [...new Set([
@@ -144,7 +145,10 @@ const inChunks = async <T>(
 
 /** Recompute every child-backed cell key from its live field rows' value
  *  children and compare with the stored cell. Owners are visited in keyset
- *  pages, so memory is bounded by a page, not by the graph.
+ *  pages, so memory is bounded by a page, not by the graph. A page's reads run
+ *  back to back and `betweenPages` is awaited only between pages: an edit
+ *  landing between a page's cell read and its children read would compare the
+ *  old cell with the new children and report a divergence that is not there.
  *
  *  Cell keys with no live field row are coverage's question, not this one's:
  *  only (owner, definition) pairs with a field row are recomputed. A field row
@@ -152,6 +156,7 @@ const inChunks = async <T>(
  *  processor either, so it is counted (`unresolvedFields`) and not compared. */
 export const runPropertyCellDivergenceCheck = async (
   db: AuditDb, repo: Repo, workspaceId: string, sampleLimit: number,
+  betweenPages: () => Promise<void> = async () => {},
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
   const resolver = repo.propertySchemaResolverFor(workspaceId)
@@ -237,6 +242,7 @@ export const runPropertyCellDivergenceCheck = async (
       }
     }
     if (page.length < SCAN_PAGE) break
+    await betweenPages()
   }
 
   return {
