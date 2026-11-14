@@ -18,7 +18,7 @@ vi.mock('@/hooks/typeRegistry', () => ({useTypes: () => new Map()}))
 vi.mock('@/hooks/block', () => ({useHandle: (handle: {peek: () => unknown}) => handle.peek()}))
 vi.mock('./usePropertyEditingActivation', () => ({usePropertyEditingActivation: () => ({onFocus() {}, onBlur() {}})}))
 vi.mock('@/data/inlineProperty', async importOriginal => ({...await importOriginal<object>(), commitInlineProperty: vi.fn()}))
-vi.mock('@/extensions/blockInteraction', () => ({enterEditModeForBlock: vi.fn()}))
+vi.mock('@/extensions/blockInteraction', async importOriginal => ({...await importOriginal<object>(), enterEditModeForBlock: vi.fn()}))
 vi.mock('@/data/properties', async importOriginal => ({...await importOriginal<object>(), focusBlock: vi.fn().mockResolvedValue(undefined)}))
 
 const schema = {fieldId: 'definition', name: 'Priority'} as AnyResolvedPropertySchema
@@ -41,6 +41,7 @@ beforeEach(() => {
     propertySchemaResolverFor: () => ({resolve: () => ({status: 'missing'})}),
     block: (id: string) => id === 'owner' ? fixture.owner : {id, load},
   }} as unknown as Block
+  fixture.ui = {repo: fixture.owner.repo} as Block
 })
 afterEach(cleanup)
 
@@ -149,4 +150,19 @@ it('cancels the pending continuation when the owner unmounts', async () => {
   await act(async () => { finish({fieldRowId: 'field', valueId: 'value'}) })
   expect(reveal).not.toHaveBeenCalled()
   expect(enterEditModeForBlock).not.toHaveBeenCalled()
+})
+
+it('wires pending ArrowDown to the drawn row in its own scope', async () => {
+  session().add('owner', {schema})
+  mount()
+  const next = document.createElement('div')
+  next.dataset.blockShell = 'true'
+  next.dataset.blockId = 'next'
+  next.dataset.renderScopeId = 'outline'
+  document.body.append(next)
+  try {
+    fireEvent.keyDown(input(), {key: 'ArrowDown'})
+    await waitFor(() => expect(enterEditModeForBlock).toHaveBeenCalledWith(
+      expect.objectContaining({id: 'next'}), fixture.ui, 'outline', {start: 0}))
+  } finally { next.remove() }
 })

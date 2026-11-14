@@ -13,6 +13,7 @@ import type {PropertyDisplayMode} from '@/data/propertyDisplayMode'
 import {outlineSkippedFieldIds, type PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import {commitInlineProperty, expectedPropertyPosition} from '@/data/inlineProperty'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
+import {navigatePendingProperty} from './pendingPropertyNavigation'
 import {PendingPropertyRow} from './PendingPropertyRow'
 import {outlinePropertySession, type PendingOutlineProperty} from './outlinePropertySession'
 
@@ -117,12 +118,15 @@ function Draft({draft, owner, autoFocus, scope}: {draft: PendingOutlineProperty;
   const attempt = useRef(0)
   const remove = useCallback(() => session.remove(draft.parentId, draft.schema.fieldId), [draft, session])
   const renderScopeId = typeof scope === 'string' ? scope : undefined
-  return <div ref={surface} onFocusCapture={() => {
+  return <div ref={surface} data-pending-property-scope-id={renderScopeId} onFocusCapture={() => {
     blurTarget.current = null
     void focusBlock(ui, owner.id, {edit: false, renderScopeId})
   }} onBlurCapture={event => { blurTarget.current = event.relatedTarget as Node | null }}>
     <PendingPropertyRow owner={owner} schema={draft.schema} autoFocus={autoFocus}
     onCancel={() => { attempt.current++; remove() }}
+    onNavigate={direction => {
+      if (surface.current && renderScopeId) void navigatePendingProperty(surface.current, renderScopeId, direction, ui)
+    }}
     onCommit={async content => {
       const currentAttempt = ++attempt.current
       const inputSurface = surface.current
