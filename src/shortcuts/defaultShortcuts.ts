@@ -97,6 +97,7 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
+import { focusAdjacentPendingProperty } from '@/components/propertyPanel/pendingPropertyNavigation'
 
 const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
   editorView.state.facet(language)?.name === markdownLanguage.name
@@ -873,6 +874,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
+        if (focusAdjacentPendingProperty(block.id, deps.renderScopeId, -1)) return
         const prevVisible = await previousVisibleBlock(block, scopeRootId)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
@@ -921,6 +923,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
+        if (focusAdjacentPendingProperty(block.id, deps.renderScopeId, 1)) return
         const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
         if (!nextVisible) return
 

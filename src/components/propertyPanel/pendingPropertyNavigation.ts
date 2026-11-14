@@ -3,20 +3,42 @@ import {enterEditModeForBlock, scopeRowBlockId, scopeRowSelector} from '@/extens
 
 import {isVisibleElement} from '@/utils/propertyNavigation'
 
+const pendingPropertySelector = (renderScopeId: string) =>
+  `[data-pending-property-scope-id="${CSS.escape(renderScopeId)}"]`
+
+const drawnRows = (document: Document, renderScopeId: string) =>
+  [...document.querySelectorAll<HTMLElement>(`${scopeRowSelector(renderScopeId)}, ${pendingPropertySelector(renderScopeId)}`)]
+    .filter(isVisibleElement)
+
+const adjacentRow = (rows: HTMLElement[], index: number, direction: -1 | 1) =>
+  index < 0 ? undefined : rows[index + direction]
+
+export const focusAdjacentPendingProperty = (
+  blockId: string,
+  renderScopeId: string | undefined,
+  direction: -1 | 1,
+): boolean => {
+  if (!renderScopeId || typeof document === 'undefined') return false
+  const rows = drawnRows(document, renderScopeId)
+  const current = rows.findIndex(row => scopeRowBlockId(row) === blockId)
+  const target = adjacentRow(rows, current, direction)
+  if (!target?.matches(pendingPropertySelector(renderScopeId))) return false
+  const input = target.querySelector<HTMLInputElement>('input')
+  if (!input) return false
+  input.focus()
+  return document.activeElement === input
+}
+
 export const navigatePendingProperty = async (
   surface: HTMLElement,
   renderScopeId: string,
   direction: -1 | 1,
   ui: Block,
 ): Promise<void> => {
-  const pendingSelector = `[data-pending-property-scope-id="${CSS.escape(renderScopeId)}"]`
-  const rows = [...surface.ownerDocument.querySelectorAll<HTMLElement>(`${scopeRowSelector(renderScopeId)}, ${pendingSelector}`)]
-    .filter(isVisibleElement)
-  if (direction < 0) rows.reverse()
-  const position = direction < 0 ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING
-  const target = rows.find(row => surface.compareDocumentPosition(row) & position)
+  const rows = drawnRows(surface.ownerDocument, renderScopeId)
+  const target = adjacentRow(rows, rows.indexOf(surface), direction)
   if (!target) return
-  if (target.matches(pendingSelector)) {
+  if (target.matches(pendingPropertySelector(renderScopeId))) {
     target.querySelector<HTMLInputElement>('input')?.focus()
     return
   }
