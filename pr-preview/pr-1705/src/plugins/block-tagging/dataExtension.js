@@ -1,0 +1,1 @@
+export{wu as blockTaggingDataExtension}from"../../../chunks/app-BKNY72Gg.js";

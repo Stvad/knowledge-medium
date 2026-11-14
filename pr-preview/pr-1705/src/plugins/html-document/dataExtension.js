@@ -1,0 +1,1 @@
+export{Yq as htmlDocumentDataExtension}from"../../../chunks/app-BKNY72Gg.js";

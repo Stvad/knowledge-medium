@@ -1,0 +1,1 @@
+export{tr as charCountDisplay}from"../../../chunks/app-BKNY72Gg.js";

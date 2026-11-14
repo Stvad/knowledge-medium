@@ -1,0 +1,1 @@
+export{dat as DerivedIdNamespaceUnavailableError,fat as derivedIdNamespaceInTx,pat as resolveDerivedIdNamespace}from"../../chunks/app-BKNY72Gg.js";

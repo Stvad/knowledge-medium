@@ -1,0 +1,1 @@
+export{pP as appUpdatePromptExtension}from"../../../chunks/app-BKNY72Gg.js";

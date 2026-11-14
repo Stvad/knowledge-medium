@@ -1,0 +1,1 @@
+export{qy as blockDragPlugin}from"../../../chunks/app-BKNY72Gg.js";

@@ -1,0 +1,1 @@
+export{Id as getExtraRoamProps}from"../../../chunks/app-BKNY72Gg.js";

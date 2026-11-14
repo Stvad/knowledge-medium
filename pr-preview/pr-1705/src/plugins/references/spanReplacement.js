@@ -1,0 +1,1 @@
+export{Fq as preferredSpanReplacement}from"../../../chunks/app-BKNY72Gg.js";

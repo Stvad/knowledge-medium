@@ -1,0 +1,1 @@
+export{tN as TypeChip}from"../../../chunks/app-BKNY72Gg.js";

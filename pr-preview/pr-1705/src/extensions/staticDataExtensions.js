@@ -1,0 +1,1 @@
+export{zK as staticDataExtensions}from"../../chunks/app-BKNY72Gg.js";

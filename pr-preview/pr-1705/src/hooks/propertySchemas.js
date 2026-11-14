@@ -1,0 +1,1 @@
+export{jG as usePropertySchemas}from"../../chunks/app-BKNY72Gg.js";

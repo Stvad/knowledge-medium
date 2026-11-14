@@ -1,0 +1,1 @@
+export{NF as LazyBlockComponent}from"../../chunks/app-BKNY72Gg.js";

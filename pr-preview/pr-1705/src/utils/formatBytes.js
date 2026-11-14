@@ -1,0 +1,1 @@
+export{M2 as formatBytes}from"../../chunks/app-BKNY72Gg.js";

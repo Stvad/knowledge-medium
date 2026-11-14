@@ -1,0 +1,1 @@
+export{UB as BlockProperties}from"../../chunks/app-BKNY72Gg.js";

@@ -1,0 +1,1 @@
+export{J6 as KERNEL_PROCESSORS}from"../../../chunks/app-BKNY72Gg.js";

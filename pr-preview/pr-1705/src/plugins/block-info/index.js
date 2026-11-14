@@ -1,0 +1,1 @@
+export{rv as blockInfoPlugin}from"../../../chunks/app-BKNY72Gg.js";

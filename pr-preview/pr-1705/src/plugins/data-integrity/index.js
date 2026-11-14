@@ -1,0 +1,1 @@
+export{ys as dataIntegrityPlugin}from"../../../chunks/app-BKNY72Gg.js";

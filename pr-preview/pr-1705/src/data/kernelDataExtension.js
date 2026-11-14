@@ -1,0 +1,1 @@
+export{t6 as kernelDataExtension}from"../../chunks/app-BKNY72Gg.js";

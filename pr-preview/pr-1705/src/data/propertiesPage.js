@@ -1,0 +1,1 @@
+export{oat as getOrCreatePropertiesPage,sat as propertiesPageBlockId,cat as propertiesPageSpec}from"../../chunks/app-BKNY72Gg.js";

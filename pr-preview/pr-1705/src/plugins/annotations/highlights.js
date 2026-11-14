@@ -1,0 +1,1 @@
+export{sm as HIGHLIGHT_CLASS,cm as MOVED_HIGHLIGHT_CLASS,lm as SUGGESTION_HIGHLIGHT_CLASS,um as coveringStyle,dm as highlightClasses,fm as highlightField,pm as highlightRange,mm as highlightRanges,hm as threadHighlights,gm as threadHighlightsContribution}from"../../../chunks/app-BKNY72Gg.js";

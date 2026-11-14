@@ -1,0 +1,1 @@
+export{AZ as characterCounterDataExtension}from"../../../chunks/app-BKNY72Gg.js";

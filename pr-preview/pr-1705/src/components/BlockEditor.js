@@ -1,0 +1,1 @@
+export{wR as BlockEditor}from"../../chunks/app-BKNY72Gg.js";

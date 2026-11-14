@@ -1,0 +1,1 @@
+export{gK as BootFallback}from"../../../chunks/app-BKNY72Gg.js";

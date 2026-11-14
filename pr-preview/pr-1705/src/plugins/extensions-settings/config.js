@@ -1,0 +1,1 @@
+export{hh as extensionsOverridesPresetCore,gh as extensionsOverridesProp,_h as extensionsPrefsType,vh as overridesCodec}from"../../../chunks/app-BKNY72Gg.js";

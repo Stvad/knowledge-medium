@@ -1,0 +1,1 @@
+export{RG as appRuntimeUpdateEvent,zG as refreshAppRuntime}from"../../chunks/app-BKNY72Gg.js";

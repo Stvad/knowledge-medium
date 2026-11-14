@@ -1,0 +1,1 @@
+export{Yt as supertagsPlugin}from"../../../chunks/app-BKNY72Gg.js";

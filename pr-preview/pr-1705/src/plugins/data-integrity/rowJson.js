@@ -1,0 +1,1 @@
+export{Rs as parsePropertiesJson}from"../../../chunks/app-BKNY72Gg.js";

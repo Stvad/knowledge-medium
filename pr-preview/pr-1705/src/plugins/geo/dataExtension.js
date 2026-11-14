@@ -1,0 +1,1 @@
+export{wJ as geoDataExtension}from"../../../chunks/app-BKNY72Gg.js";

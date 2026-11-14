@@ -1,0 +1,1 @@
+export{U3 as applySyncInvalidation}from"../../../../chunks/app-BKNY72Gg.js";

@@ -1,0 +1,1 @@
+export{MJ as addPlaceToExistingBlock,NJ as createOrFindPlace,PJ as placeMachineAlias}from"../../../chunks/app-BKNY72Gg.js";

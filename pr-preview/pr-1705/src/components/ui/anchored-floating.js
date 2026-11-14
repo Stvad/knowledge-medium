@@ -1,0 +1,1 @@
+export{kG as floatingAnchorFromRect,AG as useAnchoredFloating}from"../../../chunks/app-BKNY72Gg.js";

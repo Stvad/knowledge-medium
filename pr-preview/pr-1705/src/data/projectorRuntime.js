@@ -1,0 +1,1 @@
+export{w2 as ProjectorRuntime}from"../../chunks/app-BKNY72Gg.js";
