@@ -32,6 +32,7 @@ import {
   setIsEditing,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent.js'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import { visibleChildIds } from '@/data/visibleChildren'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
@@ -149,17 +150,20 @@ const applyEndEdit = (editorView: EditorView, edit: EditorEndEdit): EditorEndEdi
 
 /**
  * Run `write` with the editor showing the text its block holds once `write`
- * lands: its text with `edit` applied. The editor is re-armed BEFORE `write`
- * runs, so its debounced pushChange can't later flush the old text over what
- * `write` stored. It stays editable while `write` runs, so a `write` that
- * fails undoes `edit` alone and keeps what was typed meanwhile; that flush
- * saves whatever the editor is left showing.
+ * lands: its text with `edit` applied. The editor's pending text is saved
+ * first, as its own undo step, so undoing `write` restores a row that has it.
+ * The editor is re-armed BEFORE `write` runs, so its debounced pushChange
+ * can't later flush the old text over what `write` stored. It stays editable
+ * while `write` runs, so a `write` that fails undoes `edit` alone and keeps
+ * what was typed meanwhile; the debounced write then saves whatever the editor
+ * is left showing.
  */
 const writeWithEditorRearmed = async <T>(
   editorView: EditorView,
   edit: EditorEndEdit,
   write: () => Promise<T>,
 ): Promise<T> => {
+  flushPendingEditorContent()
   const undo = applyEndEdit(editorView, edit)
   try {
     return await write()
@@ -1109,7 +1113,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // guarded page merges it away while `Delete` on it is refused.
         if (!await ensureDeletableThroughUi([block])) return
 
-        // Single tx: flush the editor's live content into `from` first so
+        // The editor's pending text is saved as its own undo step first, so
+        // undoing the merge restores `from` with what was typed.
+        flushPendingEditorContent()
+        // Single tx: write the editor's live content into `from` first so
         // core.merge concatenates the latest text, then run the merge.
         // tx.run sees writes from the same tx via SQL.
         await repo.tx(async tx => {
