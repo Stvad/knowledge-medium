@@ -35,7 +35,7 @@ export const focusVideoNote = async (
   renderScopeId?: string,
   preferredNoteId?: string,
 ): Promise<string | null> => {
-  const childIds = await videoBlock.childIds.load()
+  const childIds = await videoBlock.repo.query.childIds({id: videoBlock.id, propertyChildren: 'none'}).load()
   const noteId = preferredNoteId && childIds.includes(preferredNoteId)
     ? preferredNoteId
     : childIds[0]
@@ -55,7 +55,7 @@ export const ensureEditableVideoNoteChild = async (
 ): Promise<string | null> => {
   if (videoBlock.repo.isReadOnly) return null
 
-  const childIds = await videoBlock.childIds.load()
+  const childIds = await videoBlock.repo.query.childIds({id: videoBlock.id, propertyChildren: 'none'}).load()
   if (childIds.length > 0) return null
 
   const newId = await videoBlock.repo.mutate.createChild({

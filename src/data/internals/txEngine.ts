@@ -69,7 +69,9 @@ import {
   normalizeReferences,
   scopePoliciesEquivalent,
 } from '@/data/api'
-import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { isValidSeededDefinition, seededDefinitionKey } from '@/data/definitionSeeds'
+import { isPropertySeedKey } from '@/data/propertySeeds'
+import { propertyHideInOutlineProp } from '@/data/properties'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
 import { chunk as chunksOf } from 'lodash-es'
 import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
@@ -158,13 +160,17 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
   return false
 }
 
-/** v1 invariant (schema-unification §5.1): a materialized seed definition is
- *  wholly code-owned — its bag and lifecycle belong to materialization and
- *  the §13 revision-upgrade step (both `Automation` scope); synced-in
- *  changes never pass through this engine at all. The schema editor and
- *  property panel already render seed rows read-only; this is the
- *  data-layer backstop for the agent bridge, the importer, and the outline
- *  delete key.
+/** A property's outline visibility is user-owned; all other seed metadata
+ *  and type-definition metadata stay code-owned. Removing the override
+ *  restores the declaration's default. */
+const isEditableSeedPreference = (row: BlockData, name: string): boolean =>
+  isPropertySeedKey(seededDefinitionKey(row))
+  && name === propertyHideInOutlineProp.name
+  && (row.properties[name] === undefined || typeof row.properties[name] === 'boolean')
+
+/** A materialized seed definition's schema and lifecycle are code-owned.
+ *  Only its outline preference is user-editable. This commit-time check
+ *  also covers writes from the agent bridge, importer, and outline.
  *
  *  ONE commit-time check over the tx's snapshots map — the single
  *  convergence point for everything a tx wrote — rather than per-primitive
@@ -178,7 +184,7 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
  *
  *  Rules, under `BlockDefault` scope only:
  *   - a row may not BECOME a valid seeded definition (forgery);
- *   - a valid seeded definition's bag may not change (which also covers
+ *   - a valid seeded definition's code-owned metadata may not change (which also covers
  *     stripping its provenance) and it may not be tombstoned or
  *     hard-deleted. Content/references edits and plain restores stay
  *     allowed — they don't touch the code-owned fields, and
@@ -204,7 +210,7 @@ export const assertNoSeedDefinitionWrites = (
     }
     if (beforeSeed && (
       after === null
-      || !jsonValuesEqual(before.properties, after.properties)
+      || changedPropertyNames(before.properties, after.properties).some(name => !isEditableSeedPreference(after, name))
       || (!before.deleted && after.deleted)
     )) {
       throw new SeededDefinitionWriteError(id)
@@ -443,6 +449,10 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+  /** Per-tx cache of `workspaces.encryption_mode`, which is written only
+   *  outside any tx (sync, `markLocalWorkspaceConverted`) and so waits behind
+   *  this tx's write lock. */
+  private readonly encryptionModeCache = new Map<string, Promise<string | null>>()
 
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
@@ -570,7 +580,12 @@ export class TxImpl implements Tx {
   }
 
   workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
-    return readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+    let mode = this.encryptionModeCache.get(workspaceId)
+    if (mode === undefined) {
+      mode = readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+      this.encryptionModeCache.set(workspaceId, mode)
+    }
+    return mode
   }
 
   /** REFUSED once this transaction has written, and that is the whole reason
@@ -602,6 +617,11 @@ export class TxImpl implements Tx {
   workspaceUnappliedCount(workspaceId: string): Promise<number> {
     return this.viewGapReadsBeforeAnyWrite('workspaceUnappliedCount')
       .workspaceUnappliedCount(workspaceId)
+  }
+
+  createdInThisTx(id: string): boolean {
+    const entry = this.ctx.snapshots.get(id)
+    return entry !== undefined && entry.before === null
   }
 
   async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {

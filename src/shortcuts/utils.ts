@@ -247,6 +247,7 @@ export interface BlocksActionContext {
    *  leaves later shortcuts acting on a row the pane no longer shows. */
   uiStateBlock: Block
   scopeRootId?: string
+  propertyDisplay?: BlockShortcutDependencies['propertyDisplay']
 }
 
 export interface BlocksActionPair {
@@ -299,8 +300,8 @@ export const defineBlocksAction = ({
     ...(appliesTo
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
-    handler: ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) =>
-      flow([block], {uiStateBlock, scopeRootId}),
+    handler: ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) =>
+      flow([block], {uiStateBlock, scopeRootId, propertyDisplay}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -312,7 +313,7 @@ export const defineBlocksAction = ({
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))
     },
-    handler: ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks, {uiStateBlock, scopeRootId}),
+    handler: ({selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks, {uiStateBlock, scopeRootId, propertyDisplay}),
   },
 })

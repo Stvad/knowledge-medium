@@ -84,7 +84,7 @@ export const processBlocks = async (
 export const readChildBlocks = async (repo: any, blockId: string): Promise<PostBlock[]> => {
   const block = repo.block(blockId)
   await block.load()
-  const children = await block.children.load()
+  const children = await repo.query.children({id: blockId, propertyChildren: 'none'}).load()
   return children.map((child: {id: string; content: string}) => ({
     id: child.id,
     content: child.content ?? '',

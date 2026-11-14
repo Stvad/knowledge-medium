@@ -27,7 +27,7 @@ export const canConvertEmptyChildBlockToProperty = async (
   // either way, so do not use BlockData.content as the emptiness gate here.
   //
   // Load the STRUCTURAL child list (property field/value rows INCLUDED), not
-  // the visible `block.childIds` facade (§9 excludes field rows). A block that
+  // the mode-`none` view (§9 excludes field rows). A block that
   // owns property data isn't empty — converting it `delete()`s the block and
   // strands/soft-deletes that data, incl. value-row comments. A child-backed
   // workspace can leave a block with hidden field/value rows but an EMPTY

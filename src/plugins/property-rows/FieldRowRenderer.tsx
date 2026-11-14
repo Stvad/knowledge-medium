@@ -13,11 +13,14 @@ import { BlockFrame, DefaultBlockRenderer } from '@/components/renderer/DefaultB
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { BlockLink } from '@/components/references/BlockLink'
 import { useAppHashInContext } from '@/context/layoutWsContext'
-import { useHandle } from '@/hooks/block'
+import { useHandle, usePropertyDisplayMode, usePropertyValue } from '@/hooks/block'
 import { useOpenBlock } from '@/utils/navigation'
-import { useContext } from 'react'
+import { useContext, useEffect } from 'react'
+import { exitEditModeForBlock, isCollapsedProp } from '@/data/properties'
+import { useUIStateBlock } from '@/data/globalState'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import { drawsPropertyRows, fieldRowDefinition, useIsChildOf, usePropertyDefinitions } from './fieldRow'
+import './FieldRowRenderer.css'
 
 /** The name cell: the property's name as a link to its definition block. */
 const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
@@ -54,34 +57,66 @@ const FieldRowLabel: BlockRenderer = ({block}: BlockRendererProps) => {
 }
 FieldRowLabel.displayName = 'FieldRowLabel'
 
+/** The name cell of a row that is being EDITED. A name row has no text
+ *  editor, so a block left editing here takes no keys: whatever put the caret
+ *  on it (a merge that made the block this row, vim `i`, a walker's landing),
+ *  it hands edit mode back. The one owner of that rule; handlers that move the
+ *  caret pass name rows (`caretNeighbour`) for where it should GO, not to
+ *  avoid this state. */
+const FieldRowLabelLeavingEditMode: BlockRenderer = (props: BlockRendererProps) => {
+  const uiStateBlock = useUIStateBlock()
+  const {block} = props
+  useEffect(() => { void exitEditModeForBlock(uiStateBlock, block.id) }, [uiStateBlock, block.id])
+  return <FieldRowLabel {...props}/>
+}
+FieldRowLabelLeavingEditMode.displayName = 'FieldRowLabelLeavingEditMode'
+
 const FieldRowLayout: BlockLayout = ({
   block,
   Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
-}) => (
-  <BlockFrame
-    block={block} Header={Header} Shell={Shell} Controls={Controls}
-    className="tm-property-field-row"
-    frameProps={{'data-property-field-row': 'true'}}
-  >
-    <div className="block-body relative min-w-0 flex-grow">
-      <div className="grid min-w-0 grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent hover:border-border/50">
-        <div className="min-w-0" data-property-name-cell="true">
-          <Content/>
+}) => {
+  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const mode = usePropertyDisplayMode(block)
+  const soleChildId = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
+    selector: children => children?.length === 1 ? children[0] : null,
+  })
+  const childMode = usePropertyDisplayMode(block.repo.block(soleChildId ?? ''))
+  const soleChildIsLeaf = useHandle(block.repo.query.childIds({
+    id: soleChildId ?? '', hydrate: true, propertyChildren: childMode,
+  }), {
+    selector: childIds => soleChildId !== null && childIds?.length === 0,
+  })
+
+  return (
+    <BlockFrame
+      block={block} Header={Header} Shell={Shell} Controls={Controls}
+      className="tm-property-field-row"
+      frameProps={{
+        'data-property-field-row': 'true',
+        // Keep the control on collapsed rows so keyboard users can reopen them.
+        'data-expanded-single-leaf': String(!isCollapsed && soleChildIsLeaf),
+      }}
+    >
+      <div className="block-body relative min-w-0 flex-grow">
+        <div data-property-row-layout="true" className="grid min-w-0 grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent hover:border-border/50">
+          <div className="min-w-0" data-property-name-cell="true">
+            <Content/>
+          </div>
+          <CollapsibleContent className="min-w-0" data-property-value-cell="true">
+            <PropertyFieldRowContext value={block.id}>
+              <Children/>
+            </PropertyFieldRowContext>
+          </CollapsibleContent>
         </div>
-        <CollapsibleContent className="min-w-0" data-property-value-cell="true">
-          <PropertyFieldRowContext value={block.id}>
-            <Children/>
-          </PropertyFieldRowContext>
-        </CollapsibleContent>
+        {Properties && <Properties/>}
+        <BelowContent/>
+        <Footer/>
       </div>
-      {Properties && <Properties/>}
-      <BelowContent/>
-      <Footer/>
-    </div>
-  </BlockFrame>
-)
+    </BlockFrame>
+  )
+}
 
 export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
   return useIsChildOf(props.block, useContext(PropertyRowListingContext))
@@ -90,7 +125,7 @@ export const FieldRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
         ContentRenderer={FieldRowLabel}
         // Not the raw `::((id))` text: an Enter there makes a first value child
         // (the projection's new value) and a split or merge un-marks the row.
-        EditContentRenderer={FieldRowLabel}
+        EditContentRenderer={FieldRowLabelLeavingEditMode}
         Layout={FieldRowLayout}
       />
     // Not one of the rows of a listing that shows them (a backlink of its

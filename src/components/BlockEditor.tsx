@@ -13,7 +13,7 @@ import { debounce } from 'lodash-es'
 import { clampSelectionToLength, placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
-import { EditorView } from '@codemirror/view'
+import { EditorView, tooltips } from '@codemirror/view'
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
@@ -41,6 +41,7 @@ export const BlockEditor = ({
   const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
+  const {editorTooltipParent} = blockContext
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -258,8 +259,9 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
+      editorTooltipParent ? tooltips({parent: editorTooltipParent}) : [],
     ],
-    [providedExtensions, flushDebouncers],
+    [providedExtensions, flushDebouncers, editorTooltipParent],
   )
 
   if (!blockEditData) return null

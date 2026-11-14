@@ -7,7 +7,7 @@ import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
 import { actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
-import { blockSetting, propertyDisplayActions, setBlockPropertyDisplay } from './actions'
+import { blockSetting, cyclePropertyDisplayActions, propertyDisplayActions, setBlockPropertyDisplay } from './actions'
 import { FieldRowRenderer } from './FieldRowRenderer'
 import { ValueRowRenderer } from './ValueRowRenderer'
 
@@ -36,4 +36,5 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   blockRenderersFacet.of({id: 'propertyValueRow', renderer: ValueRowRenderer}, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),
   propertyDisplayActions.map(action => actionsFacet.of(action, {source: SOURCE})),
+  cyclePropertyDisplayActions.map(action => actionsFacet.of(action, {source: SOURCE, precedence: -100})),
 ])

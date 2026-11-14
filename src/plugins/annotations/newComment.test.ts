@@ -5,7 +5,7 @@ import {PAGE_TYPE} from '@/data/blockTypes'
 import {exitEditModeForBlock, focusBlock, isEditingBlock, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {notifyBlockEditSettled} from '@/editor/editSettleSignal'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {deleteBlockThroughUi} from '@/utils/deleteBlockThroughUi'
@@ -58,7 +58,7 @@ const threadsOnB = () => repo.query['core.typedBlockIds']({
 const start = async (anchor = captureAnchor(B_TEXT, B_TEXT.indexOf('Thursday'), B_TEXT.indexOf('Thursday') + 8)) => {
   expect(await startComment(repo, {targetId: 'B', anchor, renderScopeId: SCOPE})).toBe(true)
   const [threadId] = await threadsOnB()
-  const [comment] = await repo.block(threadId).children.load()
+  const [comment] = await childrenOf(repo, threadId)
   return {threadId, commentId: comment.id, scope: cardRenderScopeId('comments', SCOPE, threadId)}
 }
 
@@ -134,7 +134,7 @@ describe('starting a comment', () => {
     setMarginShowing('panel', true)
     expect(await startComment(repo, {targetId: 'B', anchor: null, renderScopeId: SCOPE})).toBe(true)
     const [threadId] = await threadsOnB()
-    const [comment] = await repo.block(threadId).children.load()
+    const [comment] = await childrenOf(repo, threadId)
     expect(isEditingBlock(panel(), comment.id, cardRenderScopeId('margin', SCOPE, threadId))).toBe(true)
   })
 

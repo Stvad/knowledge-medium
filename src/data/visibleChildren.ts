@@ -1,38 +1,42 @@
 import type { BlockData, Tx } from '@/data/api'
+import type { Block } from '@/data/block'
 import { unlistedIndexAmong } from '@/data/orderKey'
-import {
-  childrenViewIn,
-  NO_PROPERTY_DISPLAY_SCOPE,
-  type PropertyDisplayScopeLevels,
-} from '@/data/propertyDisplayMode'
+import { childrenViewIn, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 
 /**
- * The visible / outline view of a parent's children: the list a surface with
- * `scope` draws (`childrenViewIn` — the parent's own display setting over the
- * scope). Named counterpart to the raw `tx.childrenOf`, whose default returns
- * EVERY child — the structural everything-view. Without a scope the view is
- * mode `none`: every recognized property row left out, the outline before
- * property rows.
+ * The children a surface DRAWS under a parent: the parent's own display
+ * setting over the surface's `scope` (`childrenViewIn`). The owner of that
+ * list for imperative code — the outline hooks (`useChildIds`) resolve the
+ * same view reactively.
  *
- * Reach for this in outline / movement / display code: every gesture resolves
- * its anchors against the sibling list the CALLER sees, so a hidden row can
- * neither absorb nor deflect a gesture, and a drawn one is an ordinary row.
- * Use the bare `tx.childrenOf` for the structural view — merge/delete,
- * order-key math, machinery surgery.
+ * Reach for these in anything a gesture drives: every walk and anchor resolves
+ * against the list the user is looking at, so a row the surface leaves out can
+ * neither absorb nor deflect a gesture, and a drawn property row is an
+ * ordinary row. `scope` is required — a caller with no surface says so
+ * (`displayScopeOf`), it does not get a default here.
  *
- * The `block/require-explicit-child-view` lint enforces this choice in
- * pure-display modules; elsewhere the two spellings document intent
- * side by side.
+ * A FIXED view is not this: read it by name, `tx.childrenOf(id, ws,
+ * {propertyChildren})` / `repo.query.childIds({id, propertyChildren})`.
  */
 export const visibleChildrenOf = async (
   tx: Tx,
   parentId: string | null,
-  workspaceId?: string,
-  scope: PropertyDisplayScopeLevels = NO_PROPERTY_DISPLAY_SCOPE,
+  workspaceId: string | undefined,
+  scope: PropertyDisplayScopeLevels,
 ): Promise<BlockData[]> => {
   // A cell-backed scope is mode `none` whatever the parent says: skip the read.
   const parent = parentId === null || !scope.childBacked ? null : await tx.get(parentId)
   return tx.childrenOf(parentId, workspaceId, {propertyChildren: childrenViewIn(scope, parent)})
+}
+
+/** {@link visibleChildrenOf} outside a transaction, as ids in
+ *  `(orderKey, id)` order. */
+export const visibleChildIds = async (
+  parent: Block,
+  scope: PropertyDisplayScopeLevels,
+): Promise<string[]> => {
+  const data = scope.childBacked ? await parent.load() : null
+  return parent.repo.query.childIds({id: parent.id, propertyChildren: childrenViewIn(scope, data)}).load()
 }
 
 /** `self`'s siblings as a surface with `scope` draws them, and `self`'s index
@@ -42,7 +46,7 @@ export const visibleChildrenOf = async (
 export const visibleSiblingsOf = async (
   tx: Tx,
   self: BlockData,
-  scope?: PropertyDisplayScopeLevels,
+  scope: PropertyDisplayScopeLevels,
 ): Promise<{siblings: BlockData[]; index: number}> => {
   const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId, scope)
   const listed = siblings.findIndex(sibling => sibling.id === self.id)

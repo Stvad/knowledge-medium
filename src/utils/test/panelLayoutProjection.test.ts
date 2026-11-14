@@ -25,7 +25,7 @@ import { ChangeScope, type BlockData, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { waitFor } from '@/test/waitFor'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
@@ -134,7 +134,7 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
   }, {scope: ChangeScope.UiState, description: 'seed panel rows'})
 }
 
-const rows = async () => layoutSessionBlock().children.load()
+const rows = async () => childrenOf(env.repo, env.layoutSessionBlockId)
 const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
 
 const startProjection = (initialHash: string) => {
@@ -359,7 +359,7 @@ describe('applyCurrentLayoutUrl', () => {
 
     // Slot-bearing lane deep link: must NOT materialize rows in base.
     expect((await apply('#ws-1;persp=lane/b1')).kind).toBe('deferred')
-    expect(await base.children.load()).toEqual([])
+    expect(await childrenOf(env.repo, base.id)).toEqual([])
 
     // Slot-less lane URL over persisted BASE rows: must NOT normalize the
     // lane URL from them (that would smuggle base's layout into the lane).
@@ -599,7 +599,7 @@ describe('applyCurrentLayoutUrl', () => {
       repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=lane/b1',
     })
     expect(result.kind).toBe('deferred')
-    expect(await base.children.load()).toEqual([])
+    expect(await childrenOf(env.repo, base.id)).toEqual([])
     env.repo.setLayoutSessionRouter(null)
   })
 

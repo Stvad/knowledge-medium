@@ -14,7 +14,7 @@ import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { propertyDisplayProp, resolvePropertyDisplayMode, type PropertyDisplayMode, type PropertyDisplaySetting } from '@/data/propertyDisplayMode'
 import { useHandle } from '@/hooks/block'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
@@ -35,8 +35,15 @@ import { propertyRowsPlugin } from '../index'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
-import { focusBlock, showPropertiesProp } from '@/data/properties'
+import {
+  focusBlock,
+  isCollapsedProp,
+  isEditingProp,
+  peekFocusedBlockLocation,
+  showPropertiesProp,
+} from '@/data/properties'
 import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { setBlockPropertyDisplay } from '../actions'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -177,6 +184,11 @@ const structuralFieldRowNames = async (): Promise<string[]> => {
   }
   return names
 }
+
+/** The block id of the one property row on screen. */
+const shownRowId = (): string | undefined =>
+  document.querySelector<HTMLElement>('[data-property-field-row="true"]')
+    ?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId
 
 /** Waits until the owner's ordinary child is on screen, so an empty
  *  `shownRows()` means "rendered without rows", never "not rendered yet". */
@@ -641,6 +653,7 @@ describe('a child the user turns into a field row', () => {
 })
 
 describe('moving the caret off a row the listing leaves out', () => {
+  const OWNER_SURFACE = outlineSurfaceOf({scopeRootId: OWNER})!
   // The focused row a display mode hides is on screen between its siblings,
   // so the walkers the arrow keys and merges use must place it there too.
   beforeEach(async () => {
@@ -650,14 +663,64 @@ describe('moving the caret off a row the listing leaves out', () => {
       await tx.create({id: 'nav-row', workspaceId: WS, parentId: OWNER, orderKey: 'a0V', content: '::((def-nav))'})
       await tx.create({id: 'after', workspaceId: WS, parentId: OWNER, orderKey: 'a1', content: 'after'})
     }, {scope: ChangeScope.BlockDefault})
-    await waitFor(async () => expect(await repo.block(OWNER).childIds.load()).toEqual([NOTE, 'after']))
+    await waitFor(async () => expect(await childIdsOf(repo, OWNER)).toEqual([NOTE, 'after']))
   })
 
   it('steps back to the sibling before it', async () => {
-    expect((await previousVisibleBlock(repo.block('nav-row'), OWNER))?.id).toBe(NOTE)
+    expect((await previousVisibleBlock(repo.block('nav-row'), OWNER_SURFACE))?.id).toBe(NOTE)
   })
 
   it('steps on to the sibling after it', async () => {
-    expect((await nextVisibleBlock(repo.block('nav-row'), OWNER))?.id).toBe('after')
+    expect((await nextVisibleBlock(repo.block('nav-row'), OWNER_SURFACE))?.id).toBe('after')
+  })
+})
+
+
+describe('a name row asked to edit', () => {
+  // The row has no text editor; left editing, it would take no keys.
+  it('hands edit mode back, staying focused', async () => {
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
+    const statusRow = shownRowId()!
+    expect((await repo.load(statusRow))?.isFieldForm).toBe(true)
+    const panel = repo.block(PANEL)
+
+    // The control: an ordinary block asked to edit stays editing.
+    await act(async () => { await focusBlock(panel, NOTE, {edit: true}) })
+    await waitFor(() => expect(panel.peekProperty(isEditingProp)).toBe(true))
+
+    await act(async () => { await focusBlock(panel, statusRow, {edit: true}) })
+    await waitFor(() => expect(panel.peekProperty(isEditingProp)).toBe(false))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe(statusRow)
+  })
+})
+
+describe('field row expansion affordance', () => {
+  it('only hides the wide-row control for one expanded leaf value', async () => {
+    mount({workspace: 'non-hidden'})
+    const input = await screen.findByDisplayValue('draft')
+    const row = input.closest('[data-property-field-row="true"]')!
+    const fieldId = row.getAttribute('data-block-id')!
+    const [valueId] = await repo.query.childIds({id: fieldId, propertyChildren: 'all'}).load()
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
+    await act(() => repo.block(fieldId).set(isCollapsedProp, true))
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('false'))
+    await act(() => repo.block(fieldId).set(isCollapsedProp, false))
+    expect(await screen.findByDisplayValue('draft')).toBeTruthy()
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
+    await act(() => repo.tx(tx => tx.create({id: 'nested-note', workspaceId: WS, parentId: valueId, orderKey: 'a0', content: 'nested detail'}), {scope: ChangeScope.BlockDefault}))
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('false'))
+    expect(await screen.findByText('nested detail')).toBeTruthy()
+  })
+
+  it('keeps the control for multiple values, then follows a change to one value', async () => {
+    await repo.block(OWNER).set(tagsProp, ['alpha', 'beta'])
+    mount({workspace: 'non-hidden'})
+    const alpha = await screen.findByText('alpha')
+    expect(await screen.findByText('beta')).toBeTruthy()
+    const row = alpha.closest('[data-property-field-row="true"]')!
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('false'))
+    await act(() => repo.block(OWNER).set(tagsProp, ['alpha']))
+    await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
   })
 })
