@@ -1,5 +1,5 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {presetIdProp} from '@/data/properties'
+import {presetIdProp, propertyChangeScopeProp} from '@/data/properties'
 import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
 import {ChangeScope} from '@/data/api'
 import {definitionSeedsFacet} from '@/data/facets'
@@ -10,6 +10,7 @@ import type {Repo} from '@/data/repo'
 import {selectInlineProperty, commitInlineProperty} from '@/data/inlineProperty'
 
 const note = seedProperty({seedKey: 'test/property/note', revision: 1, name: 'test:note', preset: 'string', changeScope: ChangeScope.BlockDefault})
+const preference = seedProperty({seedKey: 'test/property/preference', revision: 1, name: 'test:preference', preset: 'string', changeScope: ChangeScope.UserPrefs})
 const tags = seedProperty({seedKey: 'test/property/tags', revision: 1, name: 'test:tags', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
 let h: TestDb
 let repo: Repo
@@ -17,7 +18,7 @@ beforeAll(async () => { h = await createTestDb() })
 afterAll(async () => { await h.cleanup() })
 beforeEach(async () => {
   await resetTestDb(h.db)
-  repo = createTestRepo({db: h.db, newId: () => crypto.randomUUID(), extensions: [definitionSeedsFacet.of(note), definitionSeedsFacet.of(tags)]}).repo
+  repo = createTestRepo({db: h.db, newId: () => crypto.randomUUID(), extensions: [definitionSeedsFacet.of(note), definitionSeedsFacet.of(tags), definitionSeedsFacet.of(preference)]}).repo
   repo.setActiveWorkspaceId('ws')
   await h.db.execute("INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration) VALUES ('ws', 'Test', 'user', 1, 1, 'none', 'children')")
   await repo.tx(async tx => {
@@ -44,6 +45,49 @@ describe('inline property drafts', () => {
     expect(events).toHaveLength(1)
     expect(await repo.undo()).toBe(true)
     expect(await children('owner')).toEqual([])
+  })
+
+  it('keeps selection and commit under a non-undoable definition policy', async () => {
+    const selected = await selectInlineProperty(repo.block('owner'), preference, repo.block('source'))
+    await commitInlineProperty(repo.block('owner'), selected, 'saved preference')
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+    expect(await repo.undo()).toBe(false)
+    expect(await h.db.getOptional("SELECT id FROM blocks WHERE id = 'source' AND deleted = 0")).toBeNull()
+    expect(await repo.block('owner').get(preference)).toBe('saved preference')
+  })
+
+  it.each([false, true])('chooses a free order key at the scaffold position after an intervening insert: collision %s', async collision => {
+    const selected = await selectInlineProperty(repo.block('owner'), note, repo.block('source'))
+    await repo.tx(async tx => {
+      if (collision) await tx.create({id: 'intervening', workspaceId: 'ws', parentId: 'owner', orderKey: selected.orderKey!, content: 'keep sibling'})
+      await tx.create({id: 'after', workspaceId: 'ws', parentId: 'owner', orderKey: 'a2', content: 'later sibling'})
+    }, {scope: ChangeScope.BlockDefault})
+    const target = await commitInlineProperty(repo.block('owner'), selected, 'value')
+    const rows = await children('owner')
+    expect(new Set(rows.map(row => row.orderKey)).size).toBe(rows.length)
+    expect(rows.map(row => row.id)).toEqual(collision ? ['intervening', target!.fieldRowId, 'after'] : [target!.fieldRowId, 'after'])
+    if (!collision) expect(rows[0]?.orderKey).toBe(selected.orderKey)
+  })
+
+  it.each(['select', 'commit'])('refuses a stale list definition scope before %s can write', async stage => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    const mutable = await repo.userSchemas.addSchema({name: 'scoped list', presetId: 'string-list'})
+    const selected = stage === 'commit' ? await selectInlineProperty(repo.block('owner'), mutable, repo.block('source')) : undefined
+    await repo.block(mutable.fieldId).set(propertyChangeScopeProp, ChangeScope.UserPrefs)
+    await vi.waitFor(() => expect(repo.propertySchemas.get(mutable.name)?.changeScope).toBe(ChangeScope.UserPrefs))
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(stage === 'select' ? selectInlineProperty(repo.block('owner'), mutable, repo.block('source')) :
+      commitInlineProperty(repo.block('owner'), selected!, 'new member')).rejects.toThrow(/scope/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
+  it('reports a friendly property-specific refusal for undecodable text', async () => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    const numeric = await repo.userSchemas.addSchema({name: 'count', presetId: 'optional-number'})
+    const selected = await selectInlineProperty(repo.block('owner'), numeric)
+    await expect(commitInlineProperty(repo.block('owner'), selected, 'not a number'))
+      .rejects.toThrow('Enter a valid value for count. Your draft was kept.')
+    expect(await repo.block('owner').get(numeric)).toBeUndefined()
   })
 
   it('allows filling a scalar field that exists without a value child', async () => {
