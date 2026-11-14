@@ -1,1 +1,1 @@
-export{Rq as mergeReferrers,zq as wikilinkSourcesByContent}from"../../../chunks/app-3hqrpvRu.js";
+export{Rq as mergeReferrers,zq as wikilinkSourcesByContent}from"../../../chunks/app-TDN7-hpj.js";

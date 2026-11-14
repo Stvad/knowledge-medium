@@ -1,1 +1,1 @@
-export{pj as openKeybindingsSettingsAction}from"../../../chunks/app-3hqrpvRu.js";
+export{pj as openKeybindingsSettingsAction}from"../../../chunks/app-TDN7-hpj.js";

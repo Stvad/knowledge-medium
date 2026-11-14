@@ -1,1 +1,1 @@
-export{Hut as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-3hqrpvRu.js";
+export{Uut as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-TDN7-hpj.js";

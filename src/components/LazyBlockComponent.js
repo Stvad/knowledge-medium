@@ -1,1 +1,1 @@
-export{NF as LazyBlockComponent}from"../../chunks/app-3hqrpvRu.js";
+export{NF as LazyBlockComponent}from"../../chunks/app-TDN7-hpj.js";

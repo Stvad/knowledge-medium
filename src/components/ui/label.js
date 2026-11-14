@@ -1,1 +1,1 @@
-export{QO as Label}from"../../../chunks/app-3hqrpvRu.js";
+export{QO as Label}from"../../../chunks/app-TDN7-hpj.js";
