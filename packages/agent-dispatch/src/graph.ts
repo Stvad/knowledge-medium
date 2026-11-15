@@ -142,8 +142,29 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     })
   }
 
+  /** Which of `ids` are property VALUE blocks: an unmarked child of a field
+   *  row (a marked row with a parent). */
+  const propertyValueBlocks = async (ids: readonly string[]): Promise<Set<string>> => {
+    const found = new Set<string>()
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500)
+      const rows = await bridgeGraph.sqlAll(
+        `SELECT s.id FROM blocks s JOIN blocks f ON f.id = s.parent_id
+          WHERE s.id IN (${chunk.map(() => '?').join(', ')})
+            AND s.is_field_form IS NOT 1 AND f.is_field_form = 1 AND f.parent_id IS NOT NULL`,
+        chunk,
+      )
+      for (const row of rows) {
+        const {id} = row as {id?: unknown}
+        if (typeof id === 'string') found.add(id)
+      }
+    }
+    return found
+  }
+
   return {
     ensureMemoryBlock,
+    propertyValueBlocks,
     memoryOutline,
     memoryEntries,
     resolvePageId: bridgeGraph.resolvePageId,

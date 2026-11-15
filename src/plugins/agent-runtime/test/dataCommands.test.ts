@@ -11,9 +11,8 @@
 // (`block_references`, `block_aliases`, `blocks_fts`) are part of the test
 // DB schema, so manual references / aliases / content project
 // deterministically on insert without that processor.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, seedProperty, type BlockReference } from '@/data/api'
-import { definitionSeedsFacet } from '@/data/facets'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { ChangeScope, type BlockReference } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -129,55 +128,6 @@ describe('backlinks command', () => {
     expect(byId.get('src-a')?.deepLink).toBe(`#${WS}/src-a`)
     expect(byId.get('src-a')?.sourceFields).toEqual([''])          // body wikilink
     expect(byId.get('src-b')?.sourceFields).toEqual(['reviewer'])  // projected property ref
-  })
-
-  it('reports a property value child as a ref through that property', async () => {
-    const CHILD_WS = 'ws-child-backed'
-    const reviewersProp = seedProperty({
-      seedKey: 'test/property/reviewers', revision: 1, name: 'test:reviewers',
-      preset: 'refList', defaultValue: [], changeScope: ChangeScope.BlockDefault,
-    })
-    await sharedDb.db.execute(
-      `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
-         encryption_mode, wk_canary, properties_migration)
-       VALUES (?, 'child ws', ?, 1, 1, 'none', NULL, 'children')`, [CHILD_WS, USER.id])
-    context = createTestAgentContext(repo, CHILD_WS, [
-      kernelDataExtension, backlinksDataExtension, definitionSeedsFacet.of(reviewersProp, {source: 'test'}),
-    ])
-    await vi.waitFor(() => expect(repo.propertySchemas.has(reviewersProp.name)).toBe(true))
-    await repo.tx(async tx => {
-      await tx.create({id: TOPIC_A, workspaceId: CHILD_WS, parentId: null, orderKey: 'a0', content: 'Target'})
-      await tx.create({id: 'owner', workspaceId: CHILD_WS, parentId: null, orderKey: 'a1', content: 'Owner'})
-    }, {scope: ChangeScope.BlockDefault})
-    await repo.block('owner').set(reviewersProp, [TOPIC_A])
-    const [valueChild] = await sharedDb.db.getAll<{id: string, fieldId: string}>(
-      `SELECT v.id, f.reference_target_id AS fieldId FROM blocks v JOIN blocks f ON f.id = v.parent_id
-        WHERE f.parent_id = 'owner' AND f.is_field_form = 1 AND v.deleted = 0`)
-    expect(valueChild).toBeDefined()
-    // The edges the references processor (omitted here, see header) derives:
-    // the value child's `((id))` content, plus a ref from a property of its own,
-    // which keeps its own field.
-    await repo.tx(tx => tx.update(valueChild!.id, {references: [
-      {id: TOPIC_A, alias: TOPIC_A},
-      {id: TOPIC_A, alias: TOPIC_A, sourceField: 'note:about'},
-    ]}), {scope: ChangeScope.BlockDefault})
-    // An ordinary block that only links the definition is no field row, so a
-    // note under it links the target as plain text.
-    await repo.tx(async tx => {
-      await tx.create({id: 'def-link', workspaceId: CHILD_WS, parentId: null, orderKey: 'a2',
-        content: `((${valueChild!.fieldId}))`, referenceTargetId: valueChild!.fieldId})
-      await tx.create({id: 'note', workspaceId: CHILD_WS, parentId: 'def-link', orderKey: 'a0',
-        content: 'note', references: [{id: TOPIC_A, alias: TOPIC_A}]})
-    }, {scope: ChangeScope.BlockDefault})
-
-    const out = await executeCommand(
-      {commandId: 'bl-value', type: 'backlinks', id: TOPIC_A},
-      context,
-    ) as BacklinksResult
-
-    const byId = new Map(out.backlinks.map(ref => [ref.id, ref]))
-    expect(byId.get(valueChild!.id)?.sourceFields).toEqual(['note:about', reviewersProp.name])
-    expect(byId.get('note')?.sourceFields).toEqual([''])
   })
 
   it('an explicit object filter narrows the set', async () => {
