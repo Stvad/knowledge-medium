@@ -1,0 +1,1 @@
+export{vm as contributorsPlugin}from"../../../chunks/app-Cho99JfZ.js";

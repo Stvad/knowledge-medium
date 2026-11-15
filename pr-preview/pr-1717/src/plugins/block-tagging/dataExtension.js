@@ -1,0 +1,1 @@
+export{Tu as blockTaggingDataExtension}from"../../../chunks/app-Cho99JfZ.js";

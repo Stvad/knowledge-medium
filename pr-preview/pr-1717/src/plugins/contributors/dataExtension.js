@@ -1,0 +1,1 @@
+export{fZ as contributorsDataExtension}from"../../../chunks/app-Cho99JfZ.js";

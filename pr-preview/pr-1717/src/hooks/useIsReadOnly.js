@@ -1,0 +1,1 @@
+export{ib as useIsReadOnly}from"../../chunks/app-Cho99JfZ.js";

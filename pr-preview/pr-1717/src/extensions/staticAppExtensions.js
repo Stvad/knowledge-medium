@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-Cho99JfZ.js";

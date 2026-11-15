@@ -1,0 +1,1 @@
+export{ba as startupMetricsPlugin}from"../../../chunks/app-Cho99JfZ.js";

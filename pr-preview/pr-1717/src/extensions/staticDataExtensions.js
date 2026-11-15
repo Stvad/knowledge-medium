@@ -1,0 +1,1 @@
+export{VK as staticDataExtensions}from"../../chunks/app-Cho99JfZ.js";

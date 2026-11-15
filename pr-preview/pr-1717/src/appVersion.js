@@ -1,0 +1,1 @@
+export{kc as appVersion}from"../chunks/app-Cho99JfZ.js";
