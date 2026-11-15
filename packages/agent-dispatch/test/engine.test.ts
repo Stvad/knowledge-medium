@@ -39,6 +39,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const memory = seed.memory ?? []
   const graph: Graph & ReplyWriter = {
     ensureMemoryBlock: vi.fn(async () => 'mem-1'),
+    propertyValueBlocks: async () => new Set(),
     memoryOutline: vi.fn(async () => ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n')),
     memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),

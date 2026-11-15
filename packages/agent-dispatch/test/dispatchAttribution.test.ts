@@ -63,12 +63,12 @@ const memoryState = (): StateStore => ({
 })
 
 /** The daemon's wiring: one client carrying the agent's contributor. */
-const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult>) => {
+const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult>, target = 'claude') => {
   const client = withContributorId(inProcessClient(), agentId)
   return createEngine({
     config: parseConfig({
       workspaceId: WS,
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}],
+      watchers: [{kind: 'backlinks', name: 'mentions', target, settleMs: 0, streamReply: true}],
     }),
     graph: createGraph(client),
     replies: createReplyWriter(client),
@@ -172,6 +172,60 @@ describe('dispatch attribution', () => {
     expect((await repo.load(MENTION))?.properties[PROPS.cancel]).toBe('')
     expect(runTask).not.toHaveBeenCalled()
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
+  })
+})
+
+describe('a child-backed workspace', () => {
+  it('does not take the agent\'s own reply attribution, stored as property value blocks, for a mention', async () => {
+    await db.db.execute(
+      `INSERT OR REPLACE INTO workspaces (id, name, owner_user_id, create_time, update_time,
+         encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'ws', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    // The watcher watches the agent's own contributor page, so every block the
+    // agent writes is attributed to the page it watches.
+    await repo.tx(async tx => {
+      await tx.update(MENTION, {content: `((${agentId})) summarize this`})
+    }, opts)
+    await repo.awaitProcessors()
+    const runTask = vi.fn(async () => result({resultText: 'The summary.'}))
+    const engine = engineFor(runTask, 'Claude agent')
+    await engine.tick()
+    await engine.drain()
+    await repo.awaitProcessors()
+    // The scenario reached the shape under test: the reply's attribution
+    // value block links the agent's contributor page as plain content.
+    const [reply] = await replyIds()
+    const valueLinks = await db.db.getAll<{id: string}>(
+      `SELECT v.id FROM blocks f JOIN blocks v ON v.parent_id = f.id
+         JOIN block_references r ON r.source_id = v.id AND r.target_id = ? AND r.source_field = ''
+        WHERE f.parent_id = ? AND f.is_field_form = 1 AND v.deleted = 0`, [agentId, reply])
+    expect(valueLinks.length).toBeGreaterThan(0)
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledOnce()
+  })
+
+  it('counts as a property value only an unmarked child of a field row that has an owner', async () => {
+    // Raw rows, so no processor re-derives the marks under test.
+    await db.db.writeTransaction(async tx => {
+      for (const [id, parentId, isFieldForm] of [
+        ['field', 'page', 1], ['value', 'field', null], ['nested-field', 'field', 1],
+        ['root-marked', null, 1], ['under-root-marked', 'root-marked', null], ['note-under-value', 'value', null],
+      ] as const) {
+        await tx.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+             created_at, updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form)
+           VALUES (?, ?, ?, ?, '', '{}', '[]', 1, 1, 'vlad', 'vlad', 0, ?, ?)`,
+          [id, WS, parentId, `z-${id}`, CLAUDE, isFieldForm])
+      }
+    })
+
+    const found = await createGraph(inProcessClient()).propertyValueBlocks(
+      ['value', 'nested-field', 'under-root-marked', 'note-under-value', 'field', MENTION])
+
+    expect([...found]).toEqual(['value'])
   })
 })
 
