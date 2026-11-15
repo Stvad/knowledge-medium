@@ -1,1 +1,1 @@
-export{HP as HotkeyReconciler}from"../../chunks/app-CEs22tzm.js";
+export{JP as HotkeyReconciler}from"../../chunks/app-BRemjiF3.js";

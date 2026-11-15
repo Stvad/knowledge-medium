@@ -1,1 +1,1 @@
-export{Dot as isChildBackedPropertiesWorkspace}from"../chunks/app-CEs22tzm.js";
+export{Lot as isChildBackedPropertiesWorkspace}from"../chunks/app-BRemjiF3.js";

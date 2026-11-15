@@ -1,1 +1,1 @@
-export{lo as PropertyPlaceholder}from"../../../chunks/app-CEs22tzm.js";
+export{lo as PropertyPlaceholder}from"../../../chunks/app-BRemjiF3.js";

@@ -1,1 +1,1 @@
-export{db as useIsReadOnly}from"../../chunks/app-CEs22tzm.js";
+export{mb as useIsReadOnly}from"../../chunks/app-BRemjiF3.js";

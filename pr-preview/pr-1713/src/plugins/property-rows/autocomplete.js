@@ -1,1 +1,1 @@
-export{uo as handlePropertyValueEnter,do as propertyAutocomplete,fo as propertyCompletionSource}from"../../../chunks/app-CEs22tzm.js";
+export{uo as OUTLINE_PROPERTY_PRESET_ID,do as handlePropertyValueEnter,fo as propertyAutocomplete,po as propertyCompletionSource}from"../../../chunks/app-BRemjiF3.js";

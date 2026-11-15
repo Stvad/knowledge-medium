@@ -1,1 +1,1 @@
-export{f6 as kernelDataExtension}from"../../chunks/app-CEs22tzm.js";
+export{S6 as kernelDataExtension}from"../../chunks/app-BRemjiF3.js";
