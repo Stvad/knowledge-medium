@@ -3,6 +3,10 @@ import {Suspense, useEffect} from 'react'
 import {focusAdjacentPlaceholder, focusPlaceholder, focusPickedPlaceholder, navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
 import {keybindingOverridesFacet} from '@/shortcuts/keybindingOverrides'
+import {getDefaultActionGroups} from '@/shortcuts/defaultShortcuts'
+import {useActionContext} from '@/shortcuts/useActionContext'
+import {commandPaletteAction} from '@/plugins/command-palette'
+import {commandPaletteToggle} from '@/plugins/command-palette/toggleStore'
 import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
 import {vimNormalModeInteractionExtension} from '@/plugins/vim-normal-mode'
 import {getVimNormalModeActions, vimNormalModeActionsExtension} from '@/plugins/vim-normal-mode/actions'
@@ -71,12 +75,14 @@ let db: TestDb
 let repo: Repo
 let runtime: FacetRuntime
 const configureRuntime = (vim = true) => {
+  const defaults = getDefaultActionGroups({repo})
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
     defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
     ...(vim ? [vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo})] : []),
     blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
+    [...defaults.globalActions, ...defaults.normalModeActions, commandPaletteAction].map(action => actionsFacet.of(action)),
     actionsFacet.of({id: 'test:normal-command', context: ActionContextTypes.NORMAL_MODE, description: 'Test normal command', defaultBinding: {keys: 'q'}, handler: normalCommand}),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
     typeSeedsFacet.of(expectedType, {source: 'test'}),
@@ -88,6 +94,7 @@ beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 afterEach(() => {
   vi.restoreAllMocks()
+  commandPaletteToggle.close()
   cleanup()
   window.removeEventListener('selectionchange', swallowSelectionChange, true)
   vi.unstubAllGlobals()
@@ -131,6 +138,7 @@ const ContextProbe = () => {
   useEffect(() => { activeContexts = contexts }, [contexts])
   return null
 }
+const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
 const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, isReference = false) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
@@ -139,6 +147,7 @@ const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER,
         <ContextProbe/>
         <Suspense fallback={null}>
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root, isReference}}>
+            <GlobalShortcuts/>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
               <BlockComponent blockId={root}/>
             </PropertyDisplayScopeContext>
@@ -227,8 +236,8 @@ describe('expected property placeholders in the outline', () => {
       const before = await ownerDescendants()
       for (const press of chord.split(' ')) {
         const parts = press.split('+'), key = parts.at(-1)!
-        expect(fireEvent.keyDown(target, {key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, shiftKey: parts.includes('Shift'), metaKey: parts.includes('Meta')})).toBe(false)
-        expect(fireEvent.keyUp(target, {key})).toBe(false)
+        fireEvent.keyDown(target, {key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, shiftKey: parts.includes('Shift'), metaKey: parts.includes('Meta')})
+        fireEvent.keyUp(target, {key})
       }
       fireEvent.paste(target, {clipboardData: {getData: () => 'must not paste'}})
       expect(tx).not.toHaveBeenCalled()
@@ -238,6 +247,50 @@ describe('expected property placeholders in the outline', () => {
       expect(document.activeElement).toBe(target)
       expect(await ownerDescendants()).toEqual(before)
     } finally { window.removeEventListener('keydown', bubbled); tx.mockRestore() }
+  })
+
+  it('a landed placeholder opens the command palette through its global action', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    await waitFor(() => expect(activeContexts.has(ActionContextTypes.GLOBAL)).toBe(true))
+    fireEvent.keyDown(target, {key: 'k', code: 'KeyK', ctrlKey: true})
+    expect(commandPaletteToggle.isOpen()).toBe(true)
+    expect(target.contentEditable).toBe('false')
+  })
+
+  it.each(['global', 'vim'])('a landed placeholder permits %s undo and redo', async kind => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    await waitFor(() => expect(activeContexts.has(ActionContextTypes.GLOBAL)).toBe(true))
+    repo.undoManager.clear()
+    await act(async () => { await repo.block(NOTE).setContent('Changed note') })
+    fireEvent.keyDown(target, {key: kind === 'global' ? 'z' : 'u', code: kind === 'global' ? 'KeyZ' : 'KeyU', ctrlKey: kind === 'global'})
+    await waitFor(() => expect(repo.block(NOTE).peek()?.content).toBe('Existing note'))
+    fireEvent.keyDown(target, {key: kind === 'global' ? 'y' : 'r', code: kind === 'global' ? 'KeyY' : 'KeyR', ctrlKey: true})
+    await waitFor(() => expect(repo.block(NOTE).peek()?.content).toBe('Changed note'))
+  })
+
+  it('a landed placeholder leaves unhandled browser shortcuts unprevented', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    expect(fireEvent.keyDown(target, {key: 'r', code: 'KeyR', metaKey: true})).toBe(true)
+    expect(fireEvent.keyUp(target, {key: 'r', code: 'KeyR', metaKey: true})).toBe(true)
+  })
+
+  it('a declined global action cannot fall through to a block action on the landed owner', async () => {
+    repo.setRuntimeContributions(actionsFacet, 'test-decline', [
+      {id: 'test:declined', context: ActionContextTypes.GLOBAL, description: 'Declined global', defaultBinding: {keys: 'Control+x'}, canDispatch: () => false, handler: vi.fn()},
+      {id: 'test:declined', context: ActionContextTypes.NORMAL_MODE, description: 'Block command', defaultBinding: {keys: 'Control+x'}, handler: normalCommand},
+    ])
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    await waitFor(() => expect(activeContexts.has(ActionContextTypes.GLOBAL)).toBe(true))
+    expect(fireEvent.keyDown(target, {key: 'x', code: 'KeyX', ctrlKey: true})).toBe(true)
+    expect(normalCommand).not.toHaveBeenCalled()
   })
 
   it.each(['i', 'a', 'o', 'O'])('landed %s activates without creating a row, and Escape lands again', async key => {
@@ -277,14 +330,14 @@ describe('expected property placeholders in the outline', () => {
     await waitFor(async () => expect(await repo.block(OWNER).get(hidden)).toBe('value'))
   })
 
-  it('does not use another context’s edit bindings on a landed stop', async () => {
+  it('dispatches a global action sharing an edit id without activating the landed stop', async () => {
     repo.setRuntimeContributions(actionsFacet, 'test-global-edit', [{id: 'enter_edit_mode', context: ActionContextTypes.GLOBAL, description: 'Global edit', defaultBinding: {keys: 'z'}, handler: normalCommand}])
     mount('all')
     const target = await screen.findByLabelText(`Enter ${plain.name}`)
     await act(async () => { focusPlaceholder(target, false) })
     fireEvent.keyDown(target, {key: 'z', code: 'KeyZ'})
     expect(target.contentEditable).toBe('false')
-    expect(normalCommand).not.toHaveBeenCalled()
+    expect(normalCommand.mock.calls.length).toBe(1)
   })
 
   it('a landed stop rejects native input and composition without opening a transaction', async () => {
@@ -888,6 +941,36 @@ describe('expected property placeholders in the outline', () => {
     await waitFor(() => expect(document.activeElement).toBe(placeholder))
     expect((await repo.load(id))?.isFieldForm).toBe(true)
     expect(await repo.query.children({id, propertyChildren: 'all'}).load()).toEqual([])
+  })
+
+  it('automatic Create is accepted from prose and one undo restores the text and removes the definition', async () => {
+    await getOrCreatePropertiesPage(repo, WS)
+    const text = '::some prose'
+    const id = await repo.mutate.createChild({parentId: OWNER, content: text})
+    mount('all')
+    await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
+    const view = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
+      expect(node).not.toBeNull()
+      return EditorView.findFromDOM(node!)!
+    })
+    repo.undoManager.clear()
+    act(() => {
+      view.focus()
+      view.dispatch({changes: {from: text.length - 1, to: text.length, insert: 'e'}, selection: {anchor: text.length}, userEvent: 'input.type'})
+    })
+    await screen.findByRole('option', {name: 'Create “some prose”'})
+    await waitFor(() => expect(acceptCompletion(view)).toBe(true))
+    const placeholder = await screen.findByRole('textbox', {name: 'Enter some prose'})
+    await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    const definitionId = repo.block(id).peek()!.referenceTargetId!
+    expect(definitionId).toBeTruthy()
+    expect(repo.propertySchemas.has('some prose')).toBe(true)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+    await act(async () => { await repo.undo() })
+    await waitFor(() => expect(repo.propertySchemas.has('some prose')).toBe(false))
+    expect((await repo.load(id))?.content).toBe(text)
+    expect(await db.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', [definitionId])).toBeNull()
   })
 
   it('creates a text property from the menu and accepts plain words without an invalid marker', async () => {

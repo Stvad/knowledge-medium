@@ -1,7 +1,9 @@
+import {ActionContextTypes} from '@/shortcuts/types'
+import {dispatchActionWithDeps} from '@/shortcuts/runAction'
 import {usePlaceholderKeys} from './placeholderKeys'
 import {isImeKeyEvent, withRecoveredLetterKey} from '@/shortcuts/utils'
 import {usePropertyEditingActivation} from '@/components/propertyPanel/usePropertyEditingActivation'
-import {useRef, useState} from 'react'
+import {useRef, useState, type KeyboardEvent} from 'react'
 import {Block} from '@/data/block'
 import type {Repo} from '@/data/repo'
 import type {AnyPropertySchema} from '@/data/api'
@@ -69,6 +71,20 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
       showError(error instanceof Error ? error.message : 'Could not enter value')
     }).finally(() => { busy.current = false })
   }
+  const landedKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    const matches = keys.filter(key => key.phase === event.type).map(key => ({key, result: key.matcher.next(withRecoveredLetterKey(event.nativeEvent))}))
+    const global = matches.find(({key, result}) => key.kind === 'global' && result.completed)
+    if (global) {
+      if (dispatchActionWithDeps(global.key.id, undefined, event.nativeEvent, ActionContextTypes.GLOBAL)) event.preventDefault()
+      return
+    }
+    if (matches.some(({result}) => result.pending || result.completed)) event.preventDefault()
+    for (const {key, result} of matches) if (result.completed) {
+      if (key.kind === 'edit') activate('active')
+      else if (key.kind === 'move') void navigatePlaceholder(event.currentTarget, scope, key.move, ui, false)
+    }
+  }
   if (!available && mode === 'idle') return null
   return <div ref={element} contentEditable={mode === 'active'} data-placeholder-mode={mode} suppressContentEditableWarning tabIndex={-1} data-block-interaction="ignore" role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
     data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true" data-placeholder="Enter value…"
@@ -84,17 +100,10 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
       void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope})
     }}
     onClick={() => activate('active')}
-    onKeyUp={event => { if (event.currentTarget.contentEditable !== 'true') { event.preventDefault(); event.stopPropagation() } }}
+    onKeyUp={event => { if (event.currentTarget.contentEditable !== 'true') landedKey(event) }}
     onPaste={event => { event.preventDefault(); event.stopPropagation(); if (event.currentTarget.contentEditable !== 'true') return; event.currentTarget.textContent += event.clipboardData.getData('text/plain'); input() }}
     onKeyDown={event => {
-      if (event.currentTarget.contentEditable !== 'true') {
-        event.preventDefault(); event.stopPropagation()
-        for (const key of keys) if (key.matcher.next(withRecoveredLetterKey(event.nativeEvent)).completed) {
-          if (key.move === undefined) activate('active')
-          else void navigatePlaceholder(event.currentTarget, scope, key.move, ui, false)
-        }
-        return
-      }
+      if (event.currentTarget.contentEditable !== 'true') { landedKey(event); return }
       if (isImeKeyEvent(event.nativeEvent)) return
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopPropagation()

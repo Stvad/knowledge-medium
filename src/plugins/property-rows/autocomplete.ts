@@ -55,7 +55,7 @@ export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): Co
   const schemas = [...repo.propertySchemas.values()].filter(schema => schema.changeScope === ChangeScope.BlockDefault && !hidden(schema.name) && schema.name.toLowerCase().includes(query))
     .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name)).slice(0, 8)
   const candidates: PropertyChoice[] = schemas.map(schema => ({kind: 'existing', label: schema.name, schema}))
-  if (context.explicit && name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.splice(7, 1, {kind: 'create', label: `Create “${name}”`, name})
+  if (name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.splice(7, 1, {kind: 'create', label: `Create “${name}”`, name})
   if (!candidates.length) return null
   return {from: 0, filter: false, options: candidates.map(candidate => ({label: candidate.label, apply: (view: EditorView) => {
     closeCompletion(view)

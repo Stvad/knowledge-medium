@@ -68,8 +68,10 @@ it('uses picker visibility and only ordinary undoable scopes', async () => {
   expect(await complete('::hidden choice', 15, true)).toBeNull()
   expect(await complete('::system:new field', 18, true)).toBeNull()
 })
-it('offers Create only on an explicit request and compares existing names without case', async () => {
-  expect(await complete('::some prose')).toBeNull()
+it('offers Create last automatically and compares existing names without case', async () => {
+  expect((await complete('::some prose'))!.options.map(option => option.label)).toEqual(['Create “some prose”'])
+  expect((await complete('::stat'))!.options.at(-1)?.label).toBe('Create “stat”')
+  expect((await complete('::stat'))!.options[0].label).toBe('status')
   expect((await complete('::STATUS', 8, true))!.options.some(option => option.label.startsWith('Create'))).toBe(false)
 })
 it.each(['::((field))', '::name [[link', '::name ((block'])('does not complete property or reference grammar: %s', async text => {

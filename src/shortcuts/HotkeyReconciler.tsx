@@ -229,13 +229,13 @@ export function HotkeyReconciler(): null {
   // default-handling (swipe preventDefaults off the boolean return), so no event
   // options are applied here.
   useEffect(() => {
-    setActionWithDepsDispatcher((actionId, supplied, trigger) => {
+    setActionWithDepsDispatcher((actionId, supplied, trigger, context) => {
       const active = activeRef.current
       const contextConfigsByType = contextConfigsByTypeRef.current
       const ordered = resolve(
-        getEffectiveActions(runtime),
+        getEffectiveActions(runtime).filter(action => context === undefined || action.context === context),
         {active, contextConfigsByType},
-        {kind: 'supplied', actionId},
+        {kind: supplied === undefined ? 'action' : 'supplied', actionId},
       )
       return runOrderedCandidates(
         ordered,

@@ -51,7 +51,8 @@ export const focusPickedPlaceholder = (fieldId: string, scope: string | undefine
     return !!target
   }
   if (focus()) return
-  const observer = new MutationObserver(() => { if (focus()) observer.disconnect() })
+  const observer = new MutationObserver(() => { if (focus()) { observer.disconnect(); clearTimeout(deadline) } })
+  const deadline = setTimeout(() => observer.disconnect(), 5000)
   observer.observe(document.body, {childList: true, subtree: true, attributes: true})
 }
 
