@@ -1,1 +1,0 @@
-export{cut as defineQuery}from"../../../chunks/app-CzujQieZ.js";

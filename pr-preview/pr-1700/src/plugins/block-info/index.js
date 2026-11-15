@@ -1,1 +1,0 @@
-export{ov as blockInfoPlugin}from"../../../chunks/app-CzujQieZ.js";

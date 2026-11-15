@@ -1,1 +1,0 @@
-export{iK as propertyShapeLabel}from"../../../chunks/app-CzujQieZ.js";

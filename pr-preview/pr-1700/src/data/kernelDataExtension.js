@@ -1,1 +1,0 @@
-export{w6 as kernelDataExtension}from"../../chunks/app-CzujQieZ.js";

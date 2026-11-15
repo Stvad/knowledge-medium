@@ -1,1 +1,0 @@
-export{dT as usePromotableBreadcrumb}from"../../../chunks/app-CzujQieZ.js";

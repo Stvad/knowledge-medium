@@ -1,1 +1,0 @@
-export{wy as Wikilink}from"../../../../../chunks/app-CzujQieZ.js";

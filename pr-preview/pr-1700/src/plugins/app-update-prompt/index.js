@@ -1,1 +1,0 @@
-export{gP as appUpdatePromptExtension}from"../../../chunks/app-CzujQieZ.js";

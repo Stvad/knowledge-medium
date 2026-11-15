@@ -1,1 +1,0 @@
-export{YM as BlockEmbed}from"../../../chunks/app-CzujQieZ.js";

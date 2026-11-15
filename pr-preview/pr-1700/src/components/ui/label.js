@@ -1,1 +1,0 @@
-export{tk as Label}from"../../../chunks/app-CzujQieZ.js";

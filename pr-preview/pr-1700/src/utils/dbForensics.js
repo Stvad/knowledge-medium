@@ -1,1 +1,0 @@
-export{G1 as DbForensics,K1 as dbForensics}from"../../chunks/app-CzujQieZ.js";

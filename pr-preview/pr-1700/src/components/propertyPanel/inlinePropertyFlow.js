@@ -1,1 +1,0 @@
-export{iR as beginInlineProperty}from"../../../chunks/app-CzujQieZ.js";

@@ -1,1 +1,0 @@
-export{eK as usePropertySchemas}from"../../chunks/app-CzujQieZ.js";

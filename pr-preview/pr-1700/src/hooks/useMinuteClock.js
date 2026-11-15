@@ -1,1 +1,0 @@
-export{XD as useMinuteClock}from"../../chunks/app-CzujQieZ.js";

@@ -1,1 +1,0 @@
-export{IB as buildPropertyPanelSections}from"../../chunks/app-CzujQieZ.js";

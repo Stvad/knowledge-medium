@@ -1,1 +1,0 @@
-export{QD as openRecentsPage}from"../../../chunks/app-CzujQieZ.js";
