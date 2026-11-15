@@ -1,0 +1,1 @@
+export{lo as PropertyPlaceholder}from"../../../chunks/app-DiEjfySd.js";

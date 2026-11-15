@@ -1,1 +1,1 @@
-export{XE as PendingInvitations}from"../../../chunks/app-CdKbeYUa.js";
+export{lD as PendingInvitations}from"../../../chunks/app-DiEjfySd.js";

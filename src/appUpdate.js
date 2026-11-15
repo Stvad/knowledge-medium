@@ -1,1 +1,1 @@
-export{TP as appUpdate,EP as useAppUpdateAvailable}from"../chunks/app-CdKbeYUa.js";
+export{WP as appUpdate,GP as useAppUpdateAvailable}from"../chunks/app-DiEjfySd.js";
