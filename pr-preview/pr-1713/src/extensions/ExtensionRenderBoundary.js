@@ -1,1 +1,1 @@
-export{Hz as ExtensionRenderBoundary}from"../../chunks/app-BRemjiF3.js";
+export{Kz as ExtensionRenderBoundary}from"../../chunks/app-K5YFYOKK.js";
