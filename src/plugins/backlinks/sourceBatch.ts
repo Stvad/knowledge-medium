@@ -3,7 +3,8 @@
  * the same microtask by ONE statement per kind of edge: the mentions (every
  * edge but those another surface owns, `edgeExclusions.ts`) or the edges of one
  * property (`{field}`, how a thread's target finds its threads). Self
- * references are excluded. This is the one place that decides
+ * references and canonical value copies represented by an owner property are
+ * excluded. This is the one place that decides
  * what a backlink source is; the filtered route (`sources.ts`) narrows it.
  *
  * The badge count and the unfiltered `backlinks.forBlock` list both come from
@@ -14,6 +15,8 @@
  */
 
 import type { QueryCtx, QueryReadDb } from '@/data/api'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { propertyNameProp } from '@/data/properties'
 import {
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
@@ -23,6 +26,7 @@ import {
 import { ReadBatcher, readBatcherPerDb } from '@/data/internals/readBatch'
 import { MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds'
 import { edgePredicate, type BacklinkEdges, type EdgePredicate } from './edgeExclusions.ts'
+import { BACKLINK_PRESENTATION_CHANNEL, backlinkPresentationTargetKey } from './presentationInvalidation'
 
 type Projection = 'ids' | 'count'
 type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
@@ -39,14 +43,16 @@ type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
  *  0` (the references trigger already keeps `block_references` to live
  *  sources) and the `b.id` tiebreak (a seeded `created_at` tie came out in id
  *  order without it). */
-// Each source block keeps its backlink, including a value whose owner projects the same target.
+// A canonical value reference repeats its owner's same-field edge. Other
+// content and edges keep their own source, including notes below value blocks.
+// An unresolved definition cannot establish that identity, so its values stay visible.
 const backlinkSourcesSql = (
   targetCount: number,
   projection: Projection,
   edges: EdgePredicate,
 ): string => {
-  const pairs = `pairs(target_id, id) AS (
-    SELECT DISTINCT br.target_id, b.id
+  const pairs = `eligible_edges AS (
+    SELECT br.target_id, br.source_field, b.id, b.parent_id, b.content, b.workspace_id
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id
      WHERE br.workspace_id = ?
@@ -54,6 +60,23 @@ const backlinkSourcesSql = (
        AND b.deleted = 0
        AND b.id != br.target_id
        AND (${edges.sql})
+  ), pairs(target_id, id) AS (
+    SELECT DISTINCT e.target_id, e.id FROM eligible_edges e
+     WHERE NOT EXISTS (
+       SELECT 1 FROM blocks field
+       JOIN blocks definition ON definition.id = field.reference_target_id
+       JOIN block_types definition_type ON definition_type.block_id = definition.id
+         AND definition_type.type = '${PROPERTY_SCHEMA_TYPE}'
+       JOIN eligible_edges owner_edge ON owner_edge.id = field.parent_id
+         AND owner_edge.target_id = e.target_id
+         AND owner_edge.source_field = json_extract(definition.properties_json, '$."${propertyNameProp.name}"')
+        WHERE e.source_field = ''
+          AND e.content = '((' || e.target_id || '))'
+          AND field.id = e.parent_id AND field.is_field_form = 1 AND field.deleted = 0
+          AND field.workspace_id = e.workspace_id
+          AND field.workspace_id = definition.workspace_id
+          AND definition.deleted = 0
+     )
   )`
   return projection === 'count'
     ? `WITH ${pairs}
@@ -134,6 +157,9 @@ const resolveSources = async <P extends Projection>(
   ctx.depend(edges === 'mentions'
     ? {kind: 'plugin', channel: TYPED_BLOCKS_REFERENCE_CHANNEL, key: typedBlocksReferenceKey(workspaceId, targetId)}
     : {kind: 'plugin', channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, key: typedBlocksReferenceFieldKey(workspaceId, targetId, edges.field)})
+  ctx.depend({kind: 'plugin', channel: BACKLINK_PRESENTATION_CHANNEL, key: workspaceId})
+  ctx.depend({kind: 'plugin', channel: BACKLINK_PRESENTATION_CHANNEL,
+    key: backlinkPresentationTargetKey(workspaceId, targetId)})
   return batcherFor(ctx.db).request(
     workspaceId, targetId, projection, edgePredicate(ctx.repo, edges),
   )
