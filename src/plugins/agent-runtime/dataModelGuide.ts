@@ -210,8 +210,11 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - ★ \`groupedBacklinks.forBlock({workspaceId, id, filter?, groupingConfig?})\`.
 - \`byType({workspaceId, type})\` → all blocks of a type (e.g. \`todo\`, \`srs-sm2.5\`).
 - \`recentBlocks({workspaceId, limit?})\` → recently-touched blocks.
-- \`children({id})\` / \`childIds({id})\` / \`subtree({id})\` / \`ancestors({id})\`
-  / \`manyAncestors({ids})\` → outline structure.
+- \`children({id, propertyChildren})\` / \`childIds({id, propertyChildren})\` /
+  \`subtree({id, propertyChildren})\` → outline structure. Name the view:
+  \`'none'\` leaves out property field rows, \`'all'\` (what an omitted
+  \`propertyChildren\` means) lists every child.
+- \`ancestors({id})\` / \`manyAncestors({ids})\`.
 - \`typedBlockIds({workspaceId, match?, exclude?, referencedBy?, order?})\` → the
   unified predicate engine backing backlinks/filters.
 - \`aliasesInWorkspace({workspaceId, filter?})\` → all alias strings.

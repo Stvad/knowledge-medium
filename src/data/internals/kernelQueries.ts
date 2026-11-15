@@ -28,6 +28,7 @@ import {
   type SubtreeRow,
   type TypedBlockQueryReferenceFilter,
   type AnyPropertySchema,
+  type PropertyChildrenView,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
@@ -694,12 +695,6 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
 
 // ──── Tree queries ────
 
-/** Which property children a child listing shows: `'all'` every one (the
- *  structural view), `'non-hidden'` the field rows whose definition is not
- *  hidden, `'none'` no recognized field row. Also the outline's
- *  `PropertyDisplayMode`. */
-export type PropertyChildrenView = 'all' | 'non-hidden' | 'none'
-
 // The child queries' args are `.strict()`: a caller still passing a renamed
 // option (`hidePropertyChildren`) fails loudly instead of silently getting the
 // default structural view.
@@ -712,13 +707,13 @@ const propertyChildrenViewSchema = z.enum(['all', 'non-hidden', 'none'])
  *
  *  Returns the FULL subtree by default (property field/value machinery
  *  included) — the structural view, so a consumer never silently misses
- *  machinery. The display-visible view — excluding recognized machinery
+ *  machinery. The view without recognized machinery
  *  (docs/properties-as-blocks-migration.html §9 — data-keyed, not flip-gated, since the backfill mints field
  *  rows pre-flip; prunes at every recognized `::` field row, see
- *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `propertyChildren:
- *  'none'`, the same option `core.children` / `tx.childrenOf` take. The
- *  outline hooks pass it; structural consumers (copy, navigation) get
- *  everything. */
+ *  {@link VISIBLE_SUBTREE_SQL}) is opt-in via `propertyChildren:
+ *  'none'`, the same option `core.children` / `tx.childrenOf` take. Copy
+ *  needs the per-parent mode, so it prunes the structural subtree itself
+ *  (`copiedSubtree`). */
 export const subtreeQuery = defineQuery<
   {id: string; propertyChildren?: PropertyChildrenView},
   SubtreeRow[]
@@ -952,8 +947,8 @@ const childrenStatement = (
 
 /** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
  *  by default (property field rows included) — the structural view. The
- *  display-visible view — excluding recognized field rows
- *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) — is opt-in via
+ *  view without recognized field rows
+ *  (docs/properties-as-blocks-migration.html §9; data-keyed, not flip-gated) is opt-in via
  *  `propertyChildren: 'none'`, the option `tx.childrenOf` also takes;
  *  `'non-hidden'` drops only the field rows the outline's default view skips
  *  (`outlineSkippedFieldIds`). The outline hooks pass

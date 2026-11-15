@@ -203,7 +203,6 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:srs-review/property/deck-tag', 'srs-review:deck-tag', 'string', 'string'],
   ['system:srs-review/property/progress', 'srs-review:progress', 'json', 'object'],
   ['system:startup-metrics/property/startup-record', 'startupRecord', 'optional-json', 'object'],
-  ['system:todo/property/roam-todo-state', 'roam:todo-state', 'strict-enum', 'enum'],
   ['system:todo/property/status', 'status', 'strict-enum', 'enum'],
   ['system:update-indicator/property/current-load-time', 'currentLoadTime', 'optional-number', 'number'],
   ['system:update-indicator/property/previous-load-time', 'previousLoadTime', 'optional-number', 'number'],
@@ -279,6 +278,9 @@ export const FROZEN_TYPE_SEEDS: readonly FrozenTypeSeed[] = [
 
 /** Property names no shipped seed may claim. Each was a declaration once. */
 export const RETIRED_PROPERTY_NAMES: readonly string[] = [
+  // Existing strict-enum definition rows and values remain readable; new
+  // imports register this source metadata through ordinary schema inference.
+  'roam:todo-state',
   // The comments margin's dragged width in px, replaced by its share of the
   // pane (`annotation:marginShare`) so it scales with the pane. Not converted:
   // a panel with a dragged width goes back to the automatic one; the px cells

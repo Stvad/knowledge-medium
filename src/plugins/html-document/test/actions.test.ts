@@ -4,7 +4,7 @@ import {ChangeScope} from '@/data/api'
 import {isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childIdsOf} from '@/data/test/createTestRepo'
 import {kernelDataExtension} from '@/data/kernelDataExtension'
 import {resolveFacetRuntimeSync} from '@/facets/facet.js'
 import {htmlDocumentActions} from '../actions.ts'
@@ -33,7 +33,7 @@ describe('the insert example action', () => {
       {block: parent, uiStateBlock: repo.block('ui')} as never,
       new CustomEvent('test') as never,
     )
-    expect(await parent.childIds.load()).toHaveLength(1)
+    expect(await childIdsOf(repo, parent.id)).toHaveLength(1)
     expect((await repo.load('parent'))?.properties[isCollapsedProp.name]).not.toBe(true)
   })
 })

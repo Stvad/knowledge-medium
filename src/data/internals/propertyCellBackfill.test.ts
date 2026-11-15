@@ -810,10 +810,10 @@ describe('the pass and the live writer agree about a value\'s children', () => {
    *
    *  `tx.setProperty` dual-writes children inside a user's edit, one row at a
    *  time; the pass emits the same rows for a whole batch and hands them to
-   *  `tx.createMany`. They share the builders (`plannedFieldRow`,
-   *  `plannedValueChildRows`) precisely so they cannot decide differently —
-   *  and this is what would notice if a future edit taught one of them
-   *  something the other does not know. Asserted on the SHAPE, since the two
+   *  `tx.createMany`. They share `plannedFieldRow` and the member encoder
+   *  (`encodedPropertyValueToChildContents`) precisely so they cannot decide
+   *  differently — and this is what would notice if a future edit taught one
+   *  of them something the other does not know. Asserted on the SHAPE, since the two
    *  routes never share ids.
    *
    *  Both grains, because the member split is the interesting half: a scalar

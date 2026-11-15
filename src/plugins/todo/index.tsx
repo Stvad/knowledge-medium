@@ -68,10 +68,8 @@ export const todoPlugin: AppExtension = systemToggle({
 export { cycleTodoState, todoActions } from './actions.ts'
 export { todoDataExtension } from './dataExtension.ts'
 export {
-  roamTodoStateProp,
   statusProp,
   TODO_TYPE,
   todoType,
-  type RoamTodoState,
   type TodoStatus,
 } from './schema.ts'

@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope, type User } from '@/data/api'
 import { getUserBlock } from '@/data/stateBlocks.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { journalBlockId } from '@/plugins/daily-notes/dailyNotes'
 import {
@@ -46,7 +46,7 @@ const setup = async (): Promise<Harness> => {
 }
 
 const shortcutChildren = async (repo: Repo, shortcutsId: string) => {
-  const ids = await repo.block(shortcutsId).childIds.load()
+  const ids = await childIdsOf(repo, shortcutsId)
   return Promise.all(ids.map(id => repo.block(id).load()))
 }
 
@@ -118,7 +118,7 @@ describe('getOrCreateShortcutsBlock', () => {
 
     const shortcuts = await getOrCreateShortcutsBlock(userBlock)
     expect(shortcuts.id).toBe(id)
-    expect(await env.repo.block(shortcuts.id).childIds.load()).toEqual([])
+    expect(await childIdsOf(env.repo, shortcuts.id)).toEqual([])
   })
 
   it('two Repo instances on the same db converge to the same row', async () => {

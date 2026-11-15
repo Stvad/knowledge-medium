@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { Suspense } from 'react'
 import { cleanup, render } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
@@ -6,6 +7,7 @@ import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { BlockContextProvider } from '@/context/block'
+import { RepoContext } from '@/context/repo'
 import { BlockChildren } from '@/components/BlockComponent'
 import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewportMount'
 import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
@@ -18,6 +20,8 @@ class NeverIntersectingObserver {
 }
 
 const WS = 'ws-1'
+const USER = {id: 'user-1'}
+vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
 const SCOPE = 'panel:p1:parent'
 
 let sharedDb: TestDb
@@ -39,9 +43,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
+  repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
+    await tx.create({id: 'p1', workspaceId: WS, parentId: null, orderKey: 'Z0', content: ''})
     await tx.create({id: 'parent', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'parent'})
     await tx.create({id: 'child', workspaceId: WS, parentId: 'parent', orderKey: 'a0', content: 'child'})
   }, {scope: ChangeScope.BlockDefault})
@@ -64,9 +69,13 @@ describe('BlockChildren — the scope a deferred row publishes', () => {
     vi.stubGlobal('IntersectionObserver', NeverIntersectingObserver)
 
     const {container} = render(
-      <BlockContextProvider initialValue={{renderScopeId: SCOPE}}>
-        <BlockChildren block={repo.block('parent')}/>
-      </BlockContextProvider>,
+      <RepoContext value={repo}>
+        <Suspense fallback={null}>
+          <BlockContextProvider initialValue={{panelId: 'p1', renderScopeId: SCOPE}}>
+            <BlockChildren block={repo.block('parent')}/>
+          </BlockContextProvider>
+        </Suspense>
+      </RepoContext>,
     )
 
     const slot = await vi.waitFor(() => {

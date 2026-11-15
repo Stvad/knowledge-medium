@@ -79,7 +79,7 @@ import {startupRecordProp} from '@/plugins/startup-metrics/record'
 import {interactionMetricsPlugin} from '@/plugins/interaction-metrics'
 import {interactionRecordProp} from '@/plugins/interaction-metrics/record'
 import {todoDataExtension} from '@/plugins/todo/dataExtension'
-import {roamTodoStateProp, statusProp} from '@/plugins/todo/schema'
+import {statusProp} from '@/plugins/todo/schema'
 import {updateIndicatorPlugin} from '@/plugins/update-indicator'
 import {
   currentLoadTimeProp,
@@ -144,7 +144,7 @@ const registrationCases: readonly SeedRegistrationCase[] = [
   },
   {label: 'startup metrics', extension: startupMetricsPlugin, declarations: [startupRecordProp]},
   {label: 'interaction metrics', extension: interactionMetricsPlugin, declarations: [interactionRecordProp]},
-  {label: 'todo', extension: todoDataExtension, declarations: [statusProp, roamTodoStateProp]},
+  {label: 'todo', extension: todoDataExtension, declarations: [statusProp]},
   {
     label: 'update indicator',
     extension: updateIndicatorPlugin,
@@ -171,15 +171,14 @@ describe('static plugin property seeds', () => {
   })
 
   it('covers the complete static inventory with collision-free seed keys', () => {
-    expect(allDeclarations).toHaveLength(44)
-    expect(new Set(allDeclarations.map(declaration => declaration.seedKey))).toHaveProperty('size', 44)
+    expect(allDeclarations).toHaveLength(43)
+    expect(new Set(allDeclarations.map(declaration => declaration.seedKey))).toHaveProperty('size', 43)
   })
 
   it('keeps fixed code enums strict on write and lenient for historical reads', () => {
     const declarations: readonly AnyPropertySeedDeclaration[] = [
       charScopeProp,
       statusProp,
-      roamTodoStateProp,
     ]
     for (const declaration of declarations) {
       expect(declaration.presetId).toBe('strict-enum')

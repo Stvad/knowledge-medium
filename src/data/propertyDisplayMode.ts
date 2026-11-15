@@ -7,15 +7,16 @@
  *   - `non-hidden` property rows whose definition is not hidden;
  *   - `none`       no property rows — the outline before properties-as-blocks.
  *
- * The mode is set at three levels, most specific wins: workspace (a per-user
- * preference) > panel > block. {@link resolvePropertyDisplayMode} is the ONE
- * place they combine; every reader asks it rather than layering levels itself.
+ * The mode is set at three levels, most specific wins: block > panel >
+ * workspace (a per-user preference). {@link resolvePropertyDisplayMode} is the
+ * ONE place they combine; every reader asks it rather than layering levels itself.
  * A cell-backed workspace is always `none`: its property children (minted by
  * the backfill) are not the source of truth and must not be edited in place.
  */
 
+import { z } from 'zod'
 import { ChangeScope, seedType } from '@/data/api'
-import type { PropertyChildrenView } from '@/data/internals/kernelQueries'
+import type { PropertyChildrenView } from '@/data/api'
 import { seedProperty } from './propertySeeds'
 
 export const PROPERTY_DISPLAY_MODES = ['all', 'non-hidden', 'none'] as const satisfies readonly PropertyChildrenView[]
@@ -101,6 +102,29 @@ export interface PropertyDisplayLevels {
   readonly block: PropertyDisplaySetting
 }
 
+/** The levels above the block — workspace and panel — as a surface supplies
+ *  them (`PropertyDisplayScope` per panel). A gesture or copy carries the
+ *  scope of the surface it ran in, so it acts on the list that surface draws. */
+export type PropertyDisplayScopeLevels = Omit<PropertyDisplayLevels, 'block'>
+
+/** No surface: a cell-backed reading, so mode `none` — the outline before
+ *  property rows. What a caller without a surface (the bridge, a plugin)
+ *  gets. */
+export const NO_PROPERTY_DISPLAY_SCOPE: PropertyDisplayScopeLevels = Object.freeze({
+  childBacked: false,
+  workspace: 'inherit',
+  panel: 'inherit',
+})
+
+/** The scope a gesture, paste or mutator call carries, or
+ *  {@link NO_PROPERTY_DISPLAY_SCOPE} when it carries none (the bridge, a
+ *  global command, a plugin). Where those callers' absent scope becomes mode
+ *  `none`: the children readers (`visibleChildren.ts`) take a scope, never a
+ *  default. */
+export const displayScopeOf = (
+  carrier: {readonly propertyDisplay?: PropertyDisplayScopeLevels},
+): PropertyDisplayScopeLevels => carrier.propertyDisplay ?? NO_PROPERTY_DISPLAY_SCOPE
+
 /** The mode for one block in one panel. */
 export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): PropertyDisplayMode => {
   if (!levels.childBacked) return 'none'
@@ -109,3 +133,29 @@ export const resolvePropertyDisplayMode = (levels: PropertyDisplayLevels): Prope
   }
   return DEFAULT_PROPERTY_DISPLAY_MODE
 }
+
+const NEXT_PROPERTY_DISPLAY_MODE: Record<PropertyDisplayMode, PropertyDisplayMode> = {
+  none: 'non-hidden', 'non-hidden': 'all', all: 'none',
+}
+
+/** Cycle the effective mode, storing `inherit` when the scope already supplies
+ *  the target so later workspace or panel changes still reach this block. */
+export const nextBlockPropertyDisplaySetting = (levels: PropertyDisplayLevels): PropertyDisplaySetting => {
+  const mode = NEXT_PROPERTY_DISPLAY_MODE[resolvePropertyDisplayMode(levels)]
+  return mode === resolvePropertyDisplayMode({...levels, block: 'inherit'}) ? 'inherit' : mode
+}
+
+/** The child listing of `parent` that a surface with `scope` draws: the
+ *  parent's own block setting over the scope. `parent` is null for a
+ *  workspace-root listing, which has no block setting. */
+export const childrenViewIn = (
+  scope: PropertyDisplayScopeLevels,
+  parent: {readonly properties: Readonly<Record<string, unknown>>} | null,
+): PropertyDisplayMode =>
+  resolvePropertyDisplayMode({...scope, block: blockPropertyDisplaySetting(parent)})
+
+export const propertyDisplayScopeSchema = z.object({
+  childBacked: z.boolean(),
+  workspace: z.enum(['inherit', ...PROPERTY_DISPLAY_MODES]),
+  panel: z.enum(['inherit', ...PROPERTY_DISPLAY_MODES]),
+})

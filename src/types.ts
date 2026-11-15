@@ -124,6 +124,8 @@ export interface BlockContextType {
      *  inherit it like any context field; a mode renderer that embeds normal
      *  block content clears it in its own `NestedBlockContextProvider`. */
     panelViewMode?: string
+    /** Mount outside the editor when its surface clips tooltips. */
+    editorTooltipParent?: HTMLElement
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
      *  one rendered occurrence of that block, even when the same block is

@@ -9,14 +9,16 @@ import type { Repo } from '@/data/repo'
 import { getPluginPrefsBlock, requireWorkspaceId } from '@/data/stateBlocks'
 import {
   blockPropertyDisplaySetting,
+  nextBlockPropertyDisplaySetting,
   PROPERTY_DISPLAY_MODE_LABELS,
   PROPERTY_DISPLAY_MODES,
   propertyDisplayDefaultProp,
   propertyDisplayPrefsType,
   propertyDisplayProp,
   type PropertyDisplaySetting,
+  type PropertyDisplayScopeLevels,
 } from '@/data/propertyDisplayMode'
-import type { ActionConfig } from '@/shortcuts/types'
+import type { ActionConfig, BaseShortcutDependencies } from '@/shortcuts/types'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { defineBlocksAction } from '@/shortcuts/utils'
 
@@ -63,6 +65,34 @@ const blockActions = SETTINGS.flatMap(setting => {
   })
   return [pair.block, pair.blocks]
 })
+
+const canCyclePropertyDisplay = (
+  context: BaseShortcutDependencies,
+): context is BaseShortcutDependencies & {propertyDisplay: PropertyDisplayScopeLevels} =>
+  context.propertyDisplay?.childBacked === true && !context.uiStateBlock.repo.isReadOnly
+
+const cycle = defineBlocksAction({
+  id: 'property-rows.block.cycle',
+  blockDescription: 'Cycle properties in outline, this block',
+  blocksDescription: 'Cycle properties in outline, selected blocks',
+  flow: (blocks, context) => {
+    if (!canCyclePropertyDisplay(context)) return
+    const first = blocks[0]
+    if (!first) return
+    const setting = nextBlockPropertyDisplaySetting({...context.propertyDisplay, block: blockSetting(first)})
+    return setBlockPropertyDisplay(blocks, setting)
+  },
+})
+
+// Accept the static conflict warning: precedence -100 tries the cycle before
+// the panel toggle, falling through when ineligible.
+// Explicit cycle overrides keep standard collision rules: an ineligible cycle leaves the key idle.
+export const cyclePropertyDisplayActions = [cycle.block, cycle.blocks].map<ActionConfig>(action => ({
+  ...action,
+  defaultBinding: {keys: 't'},
+  canDispatch: canCyclePropertyDisplay,
+  isVisible: canCyclePropertyDisplay,
+}))
 
 const workspaceActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = SETTINGS.map(setting => ({
   id: `property-rows.workspace.${setting}`,

@@ -238,8 +238,10 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     let sampleQueries = 0
     const db: AuditDb = {
       getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
-        // A sample query never selects count(*); flag any non-count SELECT as one.
-        if (!sql.includes('count(*)')) sampleQueries += 1
+        // A sample query never selects count(*); flag any non-count SELECT as
+        // one, bar the workspace's properties_migration read that gates the
+        // property-children checks.
+        if (!sql.includes('count(*)') && !sql.includes('FROM workspaces')) sampleQueries += 1
         return [{ n: 0 }] as unknown as T[]
       },
     }

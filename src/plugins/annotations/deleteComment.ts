@@ -1,6 +1,5 @@
 import {ChangeScope} from '@/data/api'
 import type {Block} from '@/data/block'
-import {visibleChildrenOf} from '@/data/visibleChildren'
 import {deleteBlockThroughUi} from '@/utils/deleteBlockThroughUi.js'
 import {confirmThreadDeletion} from './confirmThreadDeletion.tsx'
 import {THREAD_TYPE} from './schema.ts'
@@ -27,7 +26,7 @@ export const deleteCommentFromCard = (comment: Block): Promise<CommentDeletion> 
 const deleteFromCard = async (comment: Block, confirmedThreadId: string | null): Promise<CommentDeletion> => {
   const repo = comment.repo
   const blanked = await repo.tx(async tx => {
-    if ((await visibleChildrenOf(tx, comment.id)).length === 0) return false
+    if ((await tx.childrenOf(comment.id, undefined, {propertyChildren: 'none'})).length === 0) return false
     await tx.update(comment.id, {content: DELETED_COMMENT_CONTENT})
     return true
   }, {scope: ChangeScope.BlockDefault, description: 'delete comment'})
@@ -36,7 +35,7 @@ const deleteFromCard = async (comment: Block, confirmedThreadId: string | null):
   await comment.load()
   const parent = comment.parent
   if (parent && await parent.load() && parent.hasType(THREAD_TYPE)) {
-    if ((await parent.children.load()).length === 1) {
+    if ((await repo.query.children({id: parent.id, propertyChildren: 'none'}).load()).length === 1) {
       if (confirmedThreadId !== parent.id) {
         return await confirmThreadDeletion(parent) ? deleteFromCard(comment, parent.id) : 'refused'
       }

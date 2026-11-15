@@ -22,7 +22,7 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted, childIdsOf } from '@/data/test/createTestRepo'
 import {
   addDaysIso,
   dailyNoteBlockId,
@@ -183,7 +183,7 @@ describe('getOrCreateDailyNote', () => {
     const journalId = journalBlockId(WS)
     const journal = await env.repo.load(journalId, {children: true})
     expect(journal).not.toBeNull()
-    const childIds = await env.repo.block(journalId).childIds.load()
+    const childIds = await childIdsOf(env.repo, journalId)
     expect(childIds).toContain(note.id)
   })
 
@@ -206,7 +206,7 @@ describe('getOrCreateDailyNote', () => {
 
     const journalId = journalBlockId(WS)
     await env.repo.load(journalId, {children: true})
-    const childIds = await env.repo.block(journalId).childIds.load()
+    const childIds = await childIdsOf(env.repo, journalId)
     expect(childIds).toEqual([b.id, a.id])
   })
 
@@ -234,7 +234,7 @@ describe('getOrCreateDailyNote', () => {
     await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
     await getOrCreateDailyNote(env.repo, WS, '2026-04-29')
 
-    const childIds = await env.repo.block(journal.id).childIds.load()
+    const childIds = await childIdsOf(env.repo, journal.id)
     expect(childIds).toEqual([newerId, olderId])
     expect(env.repo.block(olderId).hasType(PAGE_TYPE)).toBe(true)
     expect(env.repo.block(olderId).hasType(DAILY_NOTE_TYPE)).toBe(true)

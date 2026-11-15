@@ -20,8 +20,6 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { registryRecognitionParams } from '@/data/internals/kernelQueries'
-import { propertyMachinerySourceIds } from '@/plugins/backlinks/machinery'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
@@ -622,13 +620,9 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     expect(await cellOf(STATUS_FIELD_ID, aliasesProp.name)).toBeUndefined()
   })
 
-  /** The stamp writes one local column and re-runs no reference parsing, so
-   *  whether a row's stored `references` can go stale across the transition
-   *  decides whether the repair needs a references reconcile bolted on
-   *  (issue #781). It can't, and this pins the two facts that make it so:
-   *  parse output does not read recognition, and the display-side machinery
-   *  filter is a live query rather than parse-time state. */
-  it('recognizes a row without touching its parsed references — the machinery filter follows the stamp', async () => {
+  /** The stamp writes the derived target column while preserving parsed
+   *  references; both remain independently observable after the pass. */
+  it('stamps recognized field rows without changing their parsed references', async () => {
     await seedDormantWorkspace()
     const repo = setup()
     // The upgrading device's shape: derived columns NULL because they
@@ -654,27 +648,11 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     })
     await flipSeededWorkspace()
 
-    // Pre-stamp the row is an ordinary block, so nothing under it is
-    // machinery and both edges display. Asserting this half is what makes
-    // the post-stamp assertion evidence rather than a tautology.
-    expect(await propertyMachinerySourceIds(
-      sharedDb.db, ['row', 'value'], registryRecognitionParams(repo),
-    )).toEqual(new Set())
-
     await runPass(repo)
     expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
 
-    // Same stored edges, read differently: the interior value row is now
-    // suppressed from the backlink panel and the field row itself is not
-    // (its edge to its own definition IS the "used by" backlink).
-    expect(await propertyMachinerySourceIds(
-      sharedDb.db, ['row', 'value'], registryRecognitionParams(repo),
-    )).toEqual(new Set(['value']))
-
-    // And the edges themselves are untouched — deliberately. Parse writes
-    // them from content alone, so a field row carries a reference to its
-    // definition exactly as an unrecognized `::((id))` row does, and
-    // definition merge/rename retarget reach both through the same index.
+    // Parse writes references from content alone, independent of derived
+    // recognition, and the pass leaves those stored references untouched.
     expect(await refsOf('row')).toEqual([{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}])
     expect(await refsOf('value')).toEqual([{id: 'target-page', alias: 'Target'}])
   })

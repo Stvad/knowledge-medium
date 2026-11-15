@@ -147,8 +147,15 @@ export const readIsChildBackedWorkspace = async (
   db: WorkspaceColumnReader,
   workspaceId: string,
 ): Promise<boolean> =>
-  isChildBackedPropertiesWorkspace(parsePropertiesMigration(
-    await readWorkspaceColumn(db, workspaceId, 'properties_migration')))
+  isChildBackedPropertiesWorkspace(await readWorkspacePropertiesMigration(db, workspaceId))
+
+/** The workspace's `properties_migration`, parsed — `'cell'` when this device
+ *  has no local row for it (see {@link parsePropertiesMigration}). */
+export const readWorkspacePropertiesMigration = async (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+): Promise<PropertiesMigrationState> =>
+  parsePropertiesMigration(await readWorkspaceColumn(db, workspaceId, 'properties_migration'))
 
 /** The minimal read surface the tx engine (`TxDb`) and `Repo` (`PowerSyncDb`)
  *  both already satisfy. */

@@ -5,7 +5,7 @@ import {isCollapsedProp, peekFocusedBlockLocation} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {getLayoutSessionBlock, getUIStateBlock} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {__resetLayoutSessionIdForTesting} from '@/utils/layoutSessionId'
 import {navigate} from '@/utils/navigation'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
@@ -55,7 +55,7 @@ beforeEach(async () => {
 
 const panelRows = async () => {
   const uiState = await getUIStateBlock(repo, WS, USER, {})
-  return (await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)).children.load()
+  return childrenOf(repo, (await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)).id)
 }
 
 const shown = async () => panelBlockIds(await panelRows())

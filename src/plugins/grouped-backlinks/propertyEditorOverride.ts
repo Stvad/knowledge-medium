@@ -5,4 +5,5 @@ import { GroupedBacklinksDefaultsEditor } from './GroupedBacklinksConfigEditor.t
 export const groupedBacklinksDefaultsUi = definePropertyEditorOverride(groupedBacklinksDefaultsProp, {
   label: 'Grouped backlinks defaults',
   Editor: GroupedBacklinksDefaultsEditor,
+  InlineEditor: GroupedBacklinksDefaultsEditor,
 })

@@ -6,7 +6,7 @@ import {ChangeScope} from '@/data/api'
 import {exitEditModeForBlock, focusedBlockLocationProp, isEditingProp} from '@/data/properties.js'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {backlinkRenderScopeId, panelRenderScopeId} from '@/utils/renderScope.js'
 import {showInfo} from '@/utils/toast.js'
@@ -105,13 +105,13 @@ describe('suggesting an edit to a selection', () => {
     expect(await submitComposer(repo, KEY)).toBe(true)
     const [bare] = await threadsOnB()
     expect(threadReplacementOf((await repo.load(bare))!)).toBe('Thursday 9am')
-    expect(await repo.block(bare).children.load()).toEqual([])
+    expect(await childrenOf(repo, bare)).toEqual([])
 
     await suggest(editorSelecting('vendor'))
     updateComposer(KEY, {replacement: 'supplier', draft: 'Per the contract.'})
     expect(await submitComposer(repo, KEY)).toBe(true)
     const withComment = (await threadsOnB()).find(id => id !== bare)!
-    expect((await repo.block(withComment).children.load()).map(child => child.content)).toEqual(['Per the contract.'])
+    expect((await childrenOf(repo, withComment)).map(child => child.content)).toEqual(['Per the contract.'])
   })
 
   it('submits nothing for an empty replacement, and refuses an unchanged one, keeping the composer', async () => {

@@ -153,9 +153,8 @@ export function PropertyRow({
 const rendersReadOnly = (schema: PropertyPanelModelRow['schema']): boolean =>
   isRefCodec(schema.codec) || isRefListCodec(schema.codec)
 
-/** A property's VALUE: its editor, or the raw value when it has none. The
- *  panel row's value cell, shared with the outline's in-place property rows so
- *  the two edit through one component. */
+/** The panel's value editor, bound to the owner's whole property. Outline
+ *  value blocks use their own read renderer and edit their own content. */
 export function PropertyValueCell({
   row,
   block,

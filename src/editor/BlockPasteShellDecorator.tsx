@@ -1,4 +1,5 @@
-import { useMemo, type ClipboardEvent } from 'react'
+import { useContext, useMemo, type ClipboardEvent } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import {
   isInteractiveContentEvent,
   type BlockShellDecoratorContribution,
@@ -29,6 +30,7 @@ export function BlockPasteShellDecorator({
 }: BlockShellDecoratorProps) {
   const runtime = useAppRuntime()
   const { block, repo, uiStateBlock, scopeRootId, blockContext } = resolveContext
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const renderScopeId = typeof blockContext?.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -42,7 +44,7 @@ export function BlockPasteShellDecorator({
       const content = readClipboardContent(e.clipboardData)
       if (!content) return
 
-      const cutPaste = await pasteArmedCut(content.text, block, repo, { scopeRootId })
+      const cutPaste = await pasteArmedCut(content.text, block, repo, { scopeRootId, propertyDisplay })
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
           void focusBlock(uiStateBlock, cutPaste.blocks[0].id, { renderScopeId })
@@ -56,12 +58,12 @@ export function BlockPasteShellDecorator({
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
       const resolved = await resolvePasteWithMediaCapture(runtime, shellPasteRequest(content, block), { repo, workspaceId })
       if (!resolved) return
-      const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId })
+      const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId, propertyDisplay })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, { renderScopeId })
       }
     },
-    [block, renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
+    [block, propertyDisplay, renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
   )
 
   const nextState = useMemo<BlockShellState>(

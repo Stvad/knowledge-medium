@@ -66,6 +66,7 @@ import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcesso
 import { VISIBLE_CHILDREN_SQL, VISIBLE_SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-visible'
@@ -450,7 +451,7 @@ const compareViews = async (u: Universe): Promise<void> => {
   const jsChildren = new Map<string, string[]>()
   await tx(u, async t => {
     for (const id of live) {
-      jsChildren.set(id, (await visibleChildrenOf(t, id)).map(c => c.id))
+      jsChildren.set(id, (await visibleChildrenOf(t, id, undefined, NO_PROPERTY_DISPLAY_SCOPE)).map(c => c.id))
     }
   })
 

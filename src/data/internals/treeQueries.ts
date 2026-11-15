@@ -314,8 +314,8 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
 
 /**
  * VISIBLE-subtree form of {@link SUBTREE_SQL}: subtree consumers (panels,
- * copy, navigation, shortcuts) get the same view as the outline rather
- * than a second, more permissive one. Same INTERIM scope as
+ * navigation, shortcuts, copy in mode `none` on a cell-backed scope) get the
+ * same view as the outline rather than a second, more permissive one. Same INTERIM scope as
  * {@link recognizedFieldRowSql}.
  *
  * The recursive descent refuses to step INTO a recognized field-row child,

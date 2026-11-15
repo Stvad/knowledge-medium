@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import type { ReactNode } from 'react'
+import { BlockComponent } from '@/components/BlockComponent'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -15,6 +16,7 @@ import {
   isCollapsedProp,
   focusBlock,
   isEditingProp,
+  propertyNameProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
@@ -227,6 +229,40 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(content.closest('.block-content')).toBeNull()
     expect(document.body.querySelector('[data-editing]')).toBeNull()
     expect(document.body.querySelector('textarea, [contenteditable="true"], .cm-editor')).toBeNull()
+  })
+
+  it('cites a property schema by its current name and opens its editor on click', async () => {
+    const schemaId = '22222222-2222-4222-8222-222222222222'
+    await repo.tx(async tx => {
+      await tx.create({
+        id: schemaId, workspaceId: 'ws-1', parentId: null, orderKey: 'b0',
+        content: 'Schema block body',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'delivery-date',
+          'property-schema:preset': 'string',
+        },
+      })
+      await tx.update('source', {content: `The ((${schemaId})) property`})
+    }, {scope: ChangeScope.BlockDefault, description: 'create property schema reference'})
+
+    renderInSource(<MarkdownContentRenderer block={repo.block('source')}/>)
+    const link = await screen.findByRole('link')
+    expect(link).toHaveTextContent(/^delivery-date$/)
+    expect(link.querySelector('a, input, select, textarea, button, [contenteditable="true"]')).toBeNull()
+
+    await act(() => repo.block(schemaId).set(propertyNameProp, 'ship-date'))
+    expect(await screen.findByRole('link', {name: 'ship-date'})).toBe(link)
+
+    const panel = repo.block('ui-state')
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('source')
+    fireEvent.click(link)
+    await waitFor(() => expect(panel.peekProperty(topLevelBlockIdProp)).toBe(schemaId))
+
+    cleanup()
+    renderInSource(<BlockComponent blockId={schemaId}/>)
+    expect(await screen.findByPlaceholderText('property name')).toHaveValue('ship-date')
+    expect(screen.getByRole('button', {name: 'Delete schema'})).toBeEnabled()
   })
 
   it('renders an alias as a link WITHOUT mounting the target', async () => {

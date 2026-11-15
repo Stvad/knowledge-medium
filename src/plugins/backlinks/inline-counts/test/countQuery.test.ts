@@ -9,8 +9,6 @@ import { type AppExtension } from '@/facets/facet.js'
 import { invalidationRulesFacet, queriesFacet } from '@/data/facets.js'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import {
-  KERNEL_FIELD_RECOGNITION_CHANNEL,
-  KERNEL_FIELD_RECOGNITION_KEY,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksReferenceKey,
@@ -209,11 +207,8 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     await vi.waitFor(() => expect(fired).toEqual([0, 1, 0]))
   })
 
-  it('agrees with the list on the aggregate path, where no machinery exists', async () => {
-    // The badge takes a SQL COUNT when the workspace holds no field rows, and
-    // the id-list resolve otherwise. Two paths means two chances to disagree,
-    // and only the id-list one applies the machinery filter — so pin that they
-    // return the SAME number when the fast path is the one taken.
+  it('agrees with the source list when the workspace has no property rows', async () => {
+    // Count and id-list projections share the same batched source query.
     const PLAIN_WS = 'ws-no-machinery'
     await sharedDb.db.execute(
       `INSERT OR REPLACE INTO workspaces
@@ -244,13 +239,9 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     expect(count).toBe(list.length)
   })
 
-  // The badge must not count sources the expanded list drops, or the user sees
-  // a phantom backlink that vanishes on expand.
-  // Both states, because the cell->children backfill mints machinery BEFORE
-  // the flip: the badge used to take a pure-aggregate fast path when
-  // un-flipped, and then counted a hidden value row the expanded list dropped.
+  // Property value blocks are visible backlink sources and count in the badge.
   it.each(['children', 'cell'])(
-    'excludes property-machinery sources, properties_migration=%s (badge/list parity)',
+    'includes property value sources, properties_migration=%s (badge/list parity)',
     async (migration) => {
     const FLIP_WS = 'ws-flip'
     await sharedDb.db.execute(
@@ -277,12 +268,11 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     await createIn({ id: 'Target' })
     await createIn({ id: 'O' })
     await createIn({ id: 'F', parentId: 'O', content: '::((D))', referenceTargetId: 'D' })
-    // Hidden value row pointing at Target — the owning block's reprojection
-    // already carries this backlink, so the list drops it and so must the badge.
+    // The value row itself is a backlink source.
     await createIn({ id: 'V', parentId: 'F', references: [{ id: 'Target', alias: 'T' }] })
     await createIn({ id: 'Q', references: [{ id: 'Target', alias: 'T' }] })
 
-    await expectCount('Target', 1, FLIP_WS)
+    await expectCount('Target', 2, FLIP_WS)
   })
 })
 
@@ -326,44 +316,31 @@ describe('backlinks.countForBlock — one read per wave of badges', () => {
       )
       await mk({ id: 'O' })
       await mk({ id: 'F', parentId: 'O', content: `::((${at('D')}))`, referenceTargetId: 'D' })
-      // Hidden value row: dropped from A's count, inside the same statement.
+      // The property value row is included in A's backlink count.
       await mk({ id: 'V', parentId: 'F', references: [ref('A')] })
     }
   }
 
   const wave = (wsId: string) => Promise.all(['A', 'B', 'C'].map(id => count(`${wsId}:${id}`, wsId)))
 
-  it('answers a wave with one read once the Repo has seen machinery in the workspace', async () => {
+  it('answers a wave with one batched read', async () => {
     await seedWorkspace('ws-wave', true)
     await count('ws-wave:Warm', 'ws-wave')
     env.repo.resetMetrics()
-    expect(await wave('ws-wave')).toEqual([3, 1, 0])
+    expect(await wave('ws-wave')).toEqual([4, 1, 0])
     expect(reads()).toBe(1)
   })
 
-  it('adds one probe to the first wave, and to every wave of a workspace with no machinery', async () => {
+  it('uses one batched read on first and ordinary workspaces', async () => {
     await seedWorkspace('ws-wave-cold', true)
     env.repo.resetMetrics()
-    expect(await wave('ws-wave-cold')).toEqual([3, 1, 0])
-    expect(reads()).toBe(2)
+    expect(await wave('ws-wave-cold')).toEqual([4, 1, 0])
+    expect(reads()).toBe(1)
 
     await seedWorkspace('ws-wave-plain', false)
     env.repo.resetMetrics()
     expect(await wave('ws-wave-plain')).toEqual([3, 1, 0])
-    expect(reads()).toBe(2)
-  })
-
-  it('depends on field recognition exactly when the exclusion runs', async () => {
-    const recognition = `${KERNEL_FIELD_RECOGNITION_CHANNEL}:${KERNEL_FIELD_RECOGNITION_KEY}`
-    const depsOf = async (wsId: string) => {
-      const handle = env.repo.query[BACKLINKS_COUNT_FOR_BLOCK_QUERY]({ workspaceId: wsId, id: `${wsId}:A` })
-      await handle.load()
-      return depIds(handle.__depsForTest(), 'plugin')
-    }
-    await seedWorkspace('ws-wave-dep', true)
-    await seedWorkspace('ws-wave-dep-plain', false)
-    expect(await depsOf('ws-wave-dep')).toContain(recognition)
-    expect(await depsOf('ws-wave-dep-plain')).not.toContain(recognition)
+    expect(reads()).toBe(1)
   })
 
   it('agrees with the list for every badge in the wave', async () => {

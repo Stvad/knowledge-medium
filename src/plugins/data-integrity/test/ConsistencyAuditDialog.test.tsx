@@ -89,6 +89,40 @@ describe('ConsistencyAuditDialog', () => {
     expect(screen.getByText(FULL_ID)).toBeTruthy()
   })
 
+  it('labels the property-children checks with their counts, and a skipped one with its reason', () => {
+    publishConsistencyAudit({
+      workspaceId: 'ws-1',
+      checkedAt: 1_700_000_000_000,
+      anomalies: 3,
+      checks: {
+        property_field_row_duplicates: { status: 'anomaly', duplicatePairs: 18, extraFieldRows: 18, samples: [] },
+        property_cell_coverage: {
+          status: 'anomaly',
+          missing: { cells: 4, blocks: 3, keys: [] },
+          refused: { cells: 0, blocks: 0, keys: [] },
+          deletedThroughChildren: { cells: 1, blocks: 1, keys: [] },
+          samples: [],
+        },
+        property_cell_divergence: {
+          status: 'anomaly',
+          divergentBlocks: 2,
+          keys: [{ key: 'status', cells: 2, blockIds: [] }, { key: 'due', cells: 1, blockIds: [] }],
+          samples: [],
+        },
+        e2ee_content_divergence: { status: 'skipped', reason: 'no key resolver' },
+      },
+    })
+    renderDialog()
+
+    expect(screen.getByText('Duplicate property field rows')).toBeTruthy()
+    expect(screen.getByText('18 (block, property) pairs with more than one field row')).toBeTruthy()
+    expect(screen.getByText('Property cells without blocks')).toBeTruthy()
+    expect(screen.getByText('4 missing, 1 deleted through children')).toBeTruthy()
+    expect(screen.getByText('Property cells vs. blocks')).toBeTruthy()
+    expect(screen.getByText('status: 2, due: 1')).toBeTruthy()
+    expect(screen.getByText('skipped: no key resolver')).toBeTruthy()
+  })
+
   it('copies the full id to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })

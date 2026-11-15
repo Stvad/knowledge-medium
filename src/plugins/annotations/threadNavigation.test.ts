@@ -6,7 +6,7 @@ import {isCollapsedProp, peekFocusedBlockLocation, typesProp} from '@/data/prope
 import type {Repo} from '@/data/repo'
 import {getLayoutSessionBlock, getUIStateBlock} from '@/data/stateBlocks'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {__resetLayoutSessionIdForTesting} from '@/utils/layoutSessionId'
 import {navigate} from '@/utils/navigation'
@@ -52,7 +52,7 @@ const quoting = (text: string, quote: string) => {
 const uiState = () => getUIStateBlock(repo, WS, USER, {})
 
 const shownPanel = async () => {
-  const rows = await (await getLayoutSessionBlock(await uiState(), repo.activeLayoutSessionId)).children.load()
+  const rows = await childrenOf(repo, (await getLayoutSessionBlock(await uiState(), repo.activeLayoutSessionId)).id)
   const [panel] = rows
   return {panelId: panel.id, blockIds: panelBlockIds(rows)}
 }

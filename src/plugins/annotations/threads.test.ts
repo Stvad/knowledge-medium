@@ -6,7 +6,7 @@ import {propertyFieldContent} from '@/data/propertyChildren'
 import {isCollapsedProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
-import {createTestRepo} from '@/data/test/createTestRepo'
+import {createTestRepo, childrenOf} from '@/data/test/createTestRepo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {COMMENTS_PAGE_ALIAS, commentsPageBlockId} from './container'
@@ -56,7 +56,7 @@ const threadsOf = (targetId: string) =>
   }).load()
 
 const childContents = async (id: string) =>
-  (await repo.block(id).children.load()).map(child => child.content)
+  (await childrenOf(repo, id)).map(child => child.content)
 
 describe('createThread', () => {
   beforeEach(() => setUp())
@@ -189,16 +189,16 @@ describe('createThread', () => {
       return {field: field.id, value: value.id}
     }
 
-    it('refuses a property field row', async () => {
+    it('allows a property field row as a target', async () => {
       const {field} = await fieldAndValueRows()
-      await expect(createThread(repo, {targetId: field, anchor: null, comment: 'x'}))
-        .rejects.toBeInstanceOf(UnannotatableTargetError)
+      const thread = await createThread(repo, {targetId: field, anchor: null, comment: 'x'})
+      expect((await repo.load(thread.threadId))!.properties[annotationTargetProp.name]).toBe(field)
     })
 
-    it('refuses a property value row', async () => {
+    it('allows a property value row as a target', async () => {
       const {value} = await fieldAndValueRows()
-      await expect(createThread(repo, {targetId: value, anchor: null, comment: 'x'}))
-        .rejects.toBeInstanceOf(UnannotatableTargetError)
+      const thread = await createThread(repo, {targetId: value, anchor: null, comment: 'x'})
+      expect((await repo.load(thread.threadId))!.properties[annotationTargetProp.name]).toBe(value)
     })
   })
 })
