@@ -601,12 +601,17 @@ export const buildCandidatesCte = (
 
 /** Recursive ancestor-chain CTE keyed off `candidates`. One row per
  *  (candidate id, ancestor id), with depth and a path guard against
- *  cycles. Hard depth cap of 100 mirrors the existing backlinks SQL. */
+ *  cycles. Hard depth cap of 100 mirrors the existing backlinks SQL.
+ *
+ *  CROSS JOIN pins the seed's join ORDER (results are identical): a
+ *  materialized `candidates` carries no size estimate, so the planner
+ *  otherwise scans every live block and probes an automatic index over the
+ *  candidates — `typedBlockQueryJoinOrder.test.ts`. */
 const ANCESTOR_CHAIN_CTE_SQL = `
   ancestor_chain(block_id, anc_id, anc_parent_id, depth, path) AS (
     SELECT c.id, seed.id, seed.parent_id, 0, '!' || hex(seed.id) || '/'
     FROM candidates c
-    JOIN blocks seed ON seed.id = c.id
+    CROSS JOIN blocks seed ON seed.id = c.id
     WHERE seed.deleted = 0
     UNION ALL
     SELECT
