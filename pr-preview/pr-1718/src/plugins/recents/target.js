@@ -1,1 +1,0 @@
-export{XD as openRecentsPage}from"../../../chunks/app-C-wMs3EK.js";

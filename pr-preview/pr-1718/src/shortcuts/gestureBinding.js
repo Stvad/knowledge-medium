@@ -1,1 +1,0 @@
-export{IP as gestureBindingDescriptor,LP as matchesGestureEvent}from"../../chunks/app-C-wMs3EK.js";

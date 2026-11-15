@@ -1,1 +1,0 @@
-export{CI as PropertyDisplayScope}from"../../../chunks/app-C-wMs3EK.js";

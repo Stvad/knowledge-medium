@@ -1,1 +1,0 @@
-export{UC as spatialNavigationShellDecorator}from"../../../chunks/app-C-wMs3EK.js";

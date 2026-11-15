@@ -1,1 +1,0 @@
-export{JI as ConfirmBulkDeleteDialog}from"../../chunks/app-C-wMs3EK.js";

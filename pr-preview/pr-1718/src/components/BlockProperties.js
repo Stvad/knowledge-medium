@@ -1,1 +1,0 @@
-export{GB as BlockProperties}from"../../chunks/app-C-wMs3EK.js";

@@ -1,1 +1,0 @@
-export{eM as CommandPaletteHeaderItem}from"../../../chunks/app-C-wMs3EK.js";

@@ -1,1 +1,0 @@
-export{PF as LazyBlockComponent}from"../../chunks/app-C-wMs3EK.js";

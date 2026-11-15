@@ -1,1 +1,0 @@
-export{e6 as kernelDataExtension}from"../../chunks/app-C-wMs3EK.js";

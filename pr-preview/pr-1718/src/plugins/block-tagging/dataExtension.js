@@ -1,1 +1,0 @@
-export{Tu as blockTaggingDataExtension}from"../../../chunks/app-C-wMs3EK.js";
