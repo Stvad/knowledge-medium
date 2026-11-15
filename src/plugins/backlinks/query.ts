@@ -100,7 +100,8 @@ export const backlinksForBlockQuery: Query<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema.optional(),
-    // Default (false): exclude edges another surface owns (`edgeExclusions.ts`).
+    // Default (false): exclude edges another surface owns (`edgeExclusions.ts`)
+    // and canonical property-value copies already represented by their owner.
     // `true` returns EVERY source in `block_references`, for inspection / debugging.
     // Reference maintenance never goes through this query — it reads
     // `block_references` directly.
