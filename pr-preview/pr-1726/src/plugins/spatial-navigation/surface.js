@@ -1,0 +1,1 @@
+export{GC as surfaceFromContext}from"../../../chunks/app-CqQBZxNH.js";

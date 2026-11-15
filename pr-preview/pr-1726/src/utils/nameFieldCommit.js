@@ -1,0 +1,1 @@
+export{UI as trimIfEdited}from"../../chunks/app-CqQBZxNH.js";

@@ -1,0 +1,1 @@
+export{Xd as annotationsPlugin}from"../../../chunks/app-CqQBZxNH.js";
