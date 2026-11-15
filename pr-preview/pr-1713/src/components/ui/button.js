@@ -1,0 +1,1 @@
+export{h2 as Button}from"../../../chunks/app-D3bcI_iL.js";

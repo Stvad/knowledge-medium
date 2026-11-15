@@ -1,0 +1,1 @@
+export{I8 as agree,L8 as pluralize}from"../../chunks/app-D3bcI_iL.js";

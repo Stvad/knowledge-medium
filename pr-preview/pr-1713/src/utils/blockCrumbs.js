@@ -1,0 +1,1 @@
+export{OO as CRUMB_ELLIPSIS,kO as CRUMB_MAX_CHARS,AO as CRUMB_MAX_SEGMENTS,jO as collapseCrumbs,MO as crumbsFromAncestors}from"../../chunks/app-D3bcI_iL.js";

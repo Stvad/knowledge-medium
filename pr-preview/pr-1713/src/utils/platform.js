@@ -1,0 +1,1 @@
+export{AW as isIOS,jW as isMacPlatform}from"../../chunks/app-D3bcI_iL.js";

@@ -1,0 +1,1 @@
+export{hX as ANCHOR_CONTEXT_LENGTH,gX as captureAnchor,_X as recaptureAnchor,vX as resolveAnchor,yX as widenToReferenceSpans,bX as widenToSpans}from"../../../chunks/app-D3bcI_iL.js";

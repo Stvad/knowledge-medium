@@ -1,0 +1,1 @@
+export{yat as getOrCreatePropertiesPage,bat as propertiesPageBlockId,xat as propertiesPageSpec}from"../../chunks/app-D3bcI_iL.js";

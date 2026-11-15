@@ -1,0 +1,1 @@
+export{eV as BlockProperties}from"../../chunks/app-D3bcI_iL.js";

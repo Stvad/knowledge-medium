@@ -1,0 +1,1 @@
+export{p6 as kernelDataExtension}from"../../chunks/app-D3bcI_iL.js";

@@ -1,0 +1,1 @@
+export{wat as DerivedIdNamespaceUnavailableError,Tat as derivedIdNamespaceInTx,Eat as resolveDerivedIdNamespace}from"../../chunks/app-D3bcI_iL.js";

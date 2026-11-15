@@ -1,0 +1,1 @@
+export{JC as spatialNavigationShellDecorator}from"../../../chunks/app-D3bcI_iL.js";

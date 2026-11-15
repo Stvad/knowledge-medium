@@ -1,0 +1,1 @@
+export{iF as resolveAppRuntime,aF as resolveAppRuntimeSync}from"../../chunks/app-D3bcI_iL.js";

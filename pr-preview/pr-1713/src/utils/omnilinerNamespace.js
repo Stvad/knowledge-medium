@@ -1,0 +1,1 @@
+export{k1 as omnilinerNamespace}from"../../chunks/app-D3bcI_iL.js";

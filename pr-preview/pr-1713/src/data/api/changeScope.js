@@ -1,0 +1,1 @@
+export{Wut as CHANGE_SCOPE_POLICIES,Gut as ChangeScope,Kut as isChangeScope,qut as policyForScope,Jut as scopeAllowedInReadOnly,Yut as scopeIsUndoable,Xut as scopePoliciesEquivalent,Zut as scopeUploadsToServer,Qut as sourceForScope}from"../../../chunks/app-D3bcI_iL.js";

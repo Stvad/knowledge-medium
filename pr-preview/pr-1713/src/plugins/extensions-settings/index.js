@@ -1,0 +1,1 @@
+export{Sh as extensionsOverridesProp,Ch as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-D3bcI_iL.js";

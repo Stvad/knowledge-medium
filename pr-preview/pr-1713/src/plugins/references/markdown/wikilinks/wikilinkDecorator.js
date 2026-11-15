@@ -1,0 +1,1 @@
+export{Uk as isWikilinkDisplayParts,Wk as resolveWikilinkDisplay,Gk as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-D3bcI_iL.js";

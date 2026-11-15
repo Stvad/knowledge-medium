@@ -1,0 +1,1 @@
+export{Cm as contributorsPlugin}from"../../../chunks/app-D3bcI_iL.js";

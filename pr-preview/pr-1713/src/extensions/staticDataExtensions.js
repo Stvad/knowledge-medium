@@ -1,0 +1,1 @@
+export{ZK as staticDataExtensions}from"../../chunks/app-D3bcI_iL.js";

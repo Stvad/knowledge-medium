@@ -1,0 +1,1 @@
+export{VG as floatingAnchorFromRect,HG as useAnchoredFloating}from"../../../chunks/app-D3bcI_iL.js";

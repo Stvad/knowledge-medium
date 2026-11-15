@@ -1,0 +1,1 @@
+export{YC as SpatialNavigationShellDecorator}from"../../../chunks/app-D3bcI_iL.js";

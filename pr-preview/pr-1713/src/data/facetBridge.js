@@ -1,0 +1,1 @@
+export{T2 as FacetBridge}from"../../chunks/app-D3bcI_iL.js";

@@ -1,0 +1,1 @@
+export{u6 as Block,d6 as requireLoadedBlock}from"../../chunks/app-D3bcI_iL.js";

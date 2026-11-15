@@ -1,0 +1,1 @@
+export{Glt as SYSTEM_AUTHOR_PREFIX,Klt as isSystemAuthor,qlt as systemAuthor}from"../../../chunks/app-D3bcI_iL.js";

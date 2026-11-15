@@ -1,0 +1,1 @@
+export{lv as blockInfoPlugin}from"../../../chunks/app-D3bcI_iL.js";

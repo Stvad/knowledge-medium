@@ -1,0 +1,1 @@
+export{KY as dailyNotesLocalSchema}from"../../../chunks/app-D3bcI_iL.js";

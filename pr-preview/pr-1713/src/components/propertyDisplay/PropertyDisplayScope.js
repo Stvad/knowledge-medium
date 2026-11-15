@@ -1,0 +1,1 @@
+export{NI as PropertyDisplayScope}from"../../../chunks/app-D3bcI_iL.js";
