@@ -63,10 +63,16 @@ def instrument(copy_root: Path) -> None:
   const frames = host.page.frames()
   const frame = frames.find(candidate => candidate.parentFrame()?.parentFrame() === host.page.mainFrame())
   if (process.env.KM_FRAME_TRACE) appendFileSync(process.env.KM_FRAME_TRACE, `${JSON.stringify({kind: 'document-frame-lookup', at: process.hrtime.bigint().toString(), found: Boolean(frame), frames: frames.map(candidate => ({url: candidate.url(), parentUrl: candidate.parentFrame()?.url() ?? null}))})}\n`)
-  if (!frame) throw new Error('no document frame')
-  return frame
+  return host.page.frameLocator('#mount iframe').frameLocator('iframe')
 }""",
     )
+
+    source = test.read_text(encoding="utf-8")
+    source = source.replace("documentFrame(host).evaluate(", "documentFrame(host).locator('html').evaluate(")
+    source = source.replace(".locator('html').evaluate(type =>", ".locator('html').evaluate((_root, type) =>")
+    source = source.replace(".locator('html').evaluate(body =>", ".locator('html').evaluate((_root, body) =>")
+    source = source.replace(".locator('html').evaluate(({selector, index = 0, text}) =>", ".locator('html').evaluate((_root, {selector, index = 0, text}) =>")
+    test.write_text(source, encoding="utf-8")
 
     harness = copy_root / HARNESS
     replace_once(
@@ -241,7 +247,7 @@ def main() -> int:
             results.append(record)
             print(json.dumps(record), flush=True)
 
-    summary = {"versions": versions, "runs": results, "passed": all(item["exit_code"] == 0 and not item["timed_out"] for item in results)}
+    summary = {"variant": "locator-helper", "versions": versions, "runs": results, "passed": all(item["exit_code"] == 0 and not item["timed_out"] for item in results)}
     (RESULTS / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return 0 if summary["passed"] else 1
 
