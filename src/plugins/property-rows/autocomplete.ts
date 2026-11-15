@@ -16,7 +16,7 @@ import {propertyEditorOverridesFacet} from '@/data/facets'
 import {showError} from '@/utils/toast'
 import {fieldPlaceholder, focusPlaceholder, focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 
-export const OUTLINE_PROPERTY_PRESET_ID = 'ref'
+export const OUTLINE_PROPERTY_PRESET_ID = 'string'
 type PropertyChoice =
   | {kind: 'existing'; label: string; schema: AnyPropertySchema}
   | {kind: 'create'; label: string; name: string}

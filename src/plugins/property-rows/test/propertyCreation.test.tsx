@@ -10,6 +10,7 @@ import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty, seedType, type User} from '@/data/api'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
+import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
 import {kernelDataExtension} from '@/data/kernelDataExtension'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -41,7 +42,7 @@ import {choosePropertyField, insertPropertyValue} from '@/data/propertyRowCreati
 import * as blockInteraction from '@/extensions/blockInteraction'
 import {propertyRowsPlugin} from '../index'
 import {editorAutocompleteExtension} from '@/editor/autocomplete'
-import {acceptCompletion} from '@codemirror/autocomplete'
+import {acceptCompletion, startCompletion} from '@codemirror/autocomplete'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {blockChildrenFooterFacet, isInteractiveContentEvent} from '@/extensions/blockInteraction'
 
@@ -887,6 +888,41 @@ describe('expected property placeholders in the outline', () => {
     await waitFor(() => expect(document.activeElement).toBe(placeholder))
     expect((await repo.load(id))?.isFieldForm).toBe(true)
     expect(await repo.query.children({id, propertyChildren: 'all'}).load()).toEqual([])
+  })
+
+  it('creates a text property from the menu and accepts plain words without an invalid marker', async () => {
+    await getOrCreatePropertiesPage(repo, WS)
+    const name = 'New outline text'
+    const words = 'plain words as the first value'
+    const id = await repo.mutate.createChild({parentId: OWNER, content: ''})
+    mount('all')
+    await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
+    const view = await waitFor(() => {
+      const editor = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
+      expect(editor).not.toBeNull()
+      return EditorView.findFromDOM(editor!)!
+    })
+    expect(repo.propertySchemas.has(name)).toBe(false)
+    act(() => {
+      view.focus()
+      view.dispatch({changes: {from: 0, insert: `::${name}`}, selection: {anchor: name.length + 2}, userEvent: 'input.type'})
+      startCompletion(view)
+    })
+    await screen.findByRole('option', {name: `Create “${name}”`})
+    await waitFor(() => expect(acceptCompletion(view)).toBe(true))
+    const placeholder = await screen.findByRole('textbox', {name: `Enter ${name}`})
+    await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    const group = vi.spyOn(repo, 'undoGroup')
+    await act(async () => { typePlaceholderText(placeholder, words) })
+    await waitFor(() => expect(document.activeElement?.classList.contains('cm-content')).toBe(true))
+    await act(async () => { await group.mock.results[0].value })
+    await waitFor(() => expect(repo.block(OWNER).peek()?.properties[name]).toBe(words))
+    const [value] = await repo.query.children({id, propertyChildren: 'all'}).load()
+    expect(value.content).toBe(words)
+    await act(async () => { await properties.exitEditModeForBlock(repo.block(PANEL), value.id, 'creation-test') })
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${value.id}"] .cm-editor`)).toBeNull())
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${value.id}"] .markdown-content`)?.textContent).toBe(words))
+    expect(document.querySelector(`[data-block-id="${value.id}"] [data-invalid-property-value]`)).toBeNull()
   })
 
   it.each([false, true])('only hands list Enter to a placeholder in the rendered document (member root: %s)', async memberRoot => {
