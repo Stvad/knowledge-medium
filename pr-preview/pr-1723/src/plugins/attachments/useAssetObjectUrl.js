@@ -1,0 +1,1 @@
+export{iS as useAssetObjectUrl}from"../../../chunks/app-BVhepZBS.js";

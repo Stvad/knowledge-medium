@@ -1,0 +1,1 @@
+export{eM as CommandPaletteHeaderItem}from"../../../chunks/app-BVhepZBS.js";
