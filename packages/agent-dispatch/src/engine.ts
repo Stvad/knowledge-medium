@@ -641,7 +641,16 @@ export const createEngine = (deps: EngineDeps) => {
     const tickStartMs = now()
     const targetId = await targetPageId(watcher.target)
 
-    const sources = (await graph.backlinkSources(targetId)).filter(source => isMention(source.sourceFields))
+    // A property value block is never a task's source: the property belongs
+    // to its owner, and while child-backed workspaces still dual-write the
+    // cell the owner carries the same reference under the property's name,
+    // where `isMention` decides it. Its own edge is plain content, so
+    // `isMention` would count an attribution value as a mention and every
+    // reply would summon the agent again. Once the cell goes, this must map
+    // a value block to its owner instead of dropping it.
+    const backlinks = await graph.backlinkSources(targetId)
+    const values = backlinks.length === 0 ? new Set<string>() : await graph.propertyValueBlocks(backlinks.map(source => source.id))
+    const sources = backlinks.filter(source => !values.has(source.id) && isMention(source.sourceFields))
 
     // First sight of this watcher: record the baseline and fire nothing.
     // Pointing a watcher at an established page must not claim (and
