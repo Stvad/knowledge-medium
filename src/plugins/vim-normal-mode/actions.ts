@@ -1,3 +1,4 @@
+import {focusAdjacentPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import { Repo } from '../../data/repo'
 import {
   focusBlock,
@@ -120,6 +121,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const surface = outlineSurfaceOf(deps)
         if (!block || !uiStateBlock || !surface) return
 
+        if (focusAdjacentPlaceholder(block.id, deps.renderScopeId, 1)) return
         const next = await nextVisibleBlock(block, surface)
         if (next && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
@@ -137,6 +139,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const surface = outlineSurfaceOf(deps)
         if (!block || !uiStateBlock || !surface) return
 
+        if (focusAdjacentPlaceholder(block.id, deps.renderScopeId, -1)) return
         const prev = await previousVisibleBlock(block, surface)
         if (prev && !focusMovedDuringWalk(deps)) {
           void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})

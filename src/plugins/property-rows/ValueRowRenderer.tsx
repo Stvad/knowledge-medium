@@ -148,7 +148,38 @@ const ownersValueRenderer = (Fallback: BlockRenderer): BlockRenderer => {
   return Renderer
 }
 
-const ValueRowContent = ownersValueRenderer(MarkdownContentRenderer)
+const decodeFailure = (schema: AnyPropertySchema | undefined, content: string | undefined): string | undefined => {
+  if (!schema || content === undefined) return undefined
+  try {
+    valueChildContentToEncoded(schema, content)
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : 'Value cannot be decoded'
+  }
+}
+
+const InvalidValueFallback: BlockRenderer = (props: BlockRendererProps) => {
+  const {block} = props
+  const definitions = usePropertyDefinitions(block.repo)
+  const data = useHandle(block, {selector: row => row ? {parentId: row.parentId, content: row.content} : null})
+  const field = useHandle(block.repo.block(data?.parentId ?? block.id), {
+    selector: row => row ? {
+      referenceTargetId: row.referenceTargetId,
+      parentId: row.parentId,
+      isFieldForm: row.isFieldForm,
+      workspaceId: row.workspaceId,
+    } : null,
+  })
+  const schema = fieldRowDefinition(block.repo, definitions, field)?.schema
+  const reason = decodeFailure(schema, data?.content)
+  return <div className="flex min-w-0 items-center gap-1">
+    {reason && <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>}
+    <MarkdownContentRenderer {...props}/>
+  </div>
+}
+InvalidValueFallback.displayName = 'InvalidValueFallback'
+
+const ValueRowContent = ownersValueRenderer(InvalidValueFallback)
 
 export const ValueRowRenderer: BlockRenderer = (props: BlockRendererProps) => {
   // Only as a value in a field row drawn as a property row; anywhere else (a
@@ -169,6 +200,8 @@ ValueRowRenderer.canRender = ({block, context}: BlockRendererProps): boolean => 
   if (!drawsPropertyRows(context)) return false
   const data = block.peek()
   if (!data?.parentId || data.isFieldForm === true) return false
-  return scalarOf(block.repo, block.repo.propertyDefinitions, block.repo.cache.getSnapshot(data.parentId)) !== undefined
+  const field = fieldRowDefinition(block.repo, block.repo.propertyDefinitions, block.repo.cache.getSnapshot(data.parentId))
+  return field?.schema !== undefined && (isPropertyValueEditorEligible(field.schema)
+    || decodeFailure(field.schema, data.content) !== undefined)
 }
 ValueRowRenderer.priority = () => 150

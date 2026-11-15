@@ -52,10 +52,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const pasteIntentRef = useRef<'split' | 'single-block'>('split')
 
   const extensions = useMemo(() => {
-    const fieldCreationExtension = createFieldCreationKeydownExtension(block, repo)
-    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block})
+    const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock,
+      renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime])
+  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, propertyDisplay.childBacked])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before

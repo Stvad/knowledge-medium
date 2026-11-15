@@ -1,3 +1,6 @@
+import {memberCodecOf} from '@/data/api'
+import {isFieldValueChild} from '@/data/propertyChildren'
+import {PropertyPlaceholder} from './PropertyPlaceholder'
 /**
  * The outline's in-place property row (issue #1674, design doc §10): a FIELD
  * ROW renders as a two-column row — the property's name, linking to its
@@ -63,6 +66,8 @@ const FieldRowLayout: BlockLayout = ({
   Shell,
 }) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const definition = fieldRowDefinition(block.repo, usePropertyDefinitions(block.repo), useHandle(block, {selector: row => row}))
+  const values = useHandle(block.repo.query.children({id: block.id, propertyChildren: 'all'}), {selector: rows => rows?.filter(isFieldValueChild)})
   const mode = usePropertyDisplayMode(block)
   const soleChildId = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
     selector: children => children?.length === 1 ? children[0] : null,
@@ -92,6 +97,8 @@ const FieldRowLayout: BlockLayout = ({
           <CollapsibleContent className="min-w-0" data-property-value-cell="true">
             <PropertyFieldRowContext value={block.id}>
               <Children/>
+              {!block.repo.isReadOnly && definition?.schema && values && (values.length === 0 || memberCodecOf(definition.schema.codec)) &&
+                <PropertyPlaceholder owner={block.repo.block(block.peek()!.parentId!)} schema={definition.schema} fieldRowId={block.id}/>}
             </PropertyFieldRowContext>
           </CollapsibleContent>
         </div>

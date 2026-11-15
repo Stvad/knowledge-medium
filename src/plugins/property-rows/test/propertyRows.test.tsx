@@ -68,6 +68,10 @@ const tagsProp = seedProperty({
   seedKey: 'test/property/rows-tags', revision: 1, name: 'rows:tags',
   preset: 'string-list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
+const jsonListProp = seedProperty({
+  seedKey: 'test/property/rows-json-list', revision: 1, name: 'rows:json-list',
+  preset: 'list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
 
 const ratingProp = seedProperty({
   seedKey: 'test/property/rows-rating', revision: 1, name: 'rows:rating',
@@ -118,7 +122,7 @@ beforeEach(async () => {
     propertyRowsPlugin,
     plainOutlinerPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [statusProp, secretProp, tagsProp, ratingProp, sourceProp, requiredSourceProp]
+    [statusProp, secretProp, tagsProp, jsonListProp, ratingProp, sourceProp, requiredSourceProp]
       .map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
   ])
   repo.setFacetRuntime(runtime)
@@ -509,6 +513,8 @@ describe('a scalar whose first value child its codec cannot read', () => {
     await waitFor(() => expect(shownRows()).toContain('rows:rating'))
     await screen.findByText('call Bob about this')
     await waitFor(() => expect(document.querySelector('[data-block-id="unreadable"]')).not.toBeNull())
+    const marker = document.querySelector<HTMLElement>('[data-block-id="unreadable"] [data-invalid-property-value="true"]')
+    expect(marker?.title).toMatch(/finite number content/)
     const input = await screen.findByDisplayValue('5') as HTMLInputElement
     await act(async () => {
       fireEvent.change(input, {target: {value: '7'}})
@@ -517,6 +523,32 @@ describe('a scalar whose first value child its codec cannot read', () => {
     await waitFor(() => expect(repo.block(OWNER).peekProperty(ratingProp)).toBe(7))
     const unreadable = await sharedDb.db.get<{content: string}>("SELECT content FROM blocks WHERE id = 'unreadable'")
     expect(unreadable.content).toBe('call Bob about this')
+  })
+
+  it.each([
+    ['a reference', sourceProp, 'not a reference'],
+    ['a list member', jsonListProp, 'not json'],
+  ] as const)('marks undecodable %s without replacing its text', async (_label, schema, content) => {
+    if (schema === sourceProp) await repo.block(OWNER).set(sourceProp, NOTE)
+    else await repo.block(OWNER).set(jsonListProp, [1])
+    const fields = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const field = fields.find(row => {
+      if (!row?.isFieldForm || !row.referenceTargetId) return false
+      const resolution = repo.propertySchemaResolverFor(WS).resolveField(row.referenceTargetId)
+      return resolution.status === 'resolved' && resolution.schema.name === schema.name
+    })
+    expect(field).toBeDefined()
+    const values = await repo.query.children({id: field!.id, propertyChildren: 'all'}).load()
+    const valueRow = values.find(row => row?.isFieldForm !== true)
+    expect(valueRow).toBeDefined()
+    await sharedDb.db.writeTransaction(tx => tx.execute('UPDATE blocks SET content = ? WHERE id = ?', [content, valueRow!.id]))
+    repo.cache.deleteSnapshot(valueRow!.id)
+
+    mount({workspace: 'non-hidden'})
+    const row = await screen.findByText(content)
+    const marker = row.closest('[data-block-id]')?.querySelector<HTMLElement>('[data-invalid-property-value="true"]')
+    expect(marker?.title).toBeTruthy()
+    expect(row.textContent).toBe(content)
   })
 })
 
@@ -600,6 +632,7 @@ describe('a child the user turns into a field row', () => {
     await outlineSettled()
     expect(typedRow()).not.toBeNull()
     expect(typedRow()!.querySelector('.cm-content')?.textContent).toBe('::((def-plain))')
+    expect(typedRow()!.querySelector('[data-property-row-layout="true"]')).toBeTruthy()
     expect(followsTheFirst(typedRow()!)).toBe(true)
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
@@ -616,14 +649,37 @@ describe('a child the user turns into a field row', () => {
     expect(precedesTheNote(typedRow()!)).toBe(true)
   })
 
-  it('lets the mode hide the row once the user moves on', async () => {
+  it('retains the focused field through its owner and siblings, then hides it after focus leaves the owner', async () => {
     await typeIntoChild('none', '::((def-plain))')
     await outlineSettled()
+    await repo.tx(tx => tx.create({id: 'nested-in-field', workspaceId: WS, parentId: TYPED, orderKey: 'a0', content: 'nested'}),
+      {scope: ChangeScope.BlockDefault})
+    await act(async () => { await focusBlock(repo.block(PANEL), 'nested-in-field', {edit: true}) })
+    await waitFor(() => expect(typedRow()?.querySelector('[data-property-row-layout="true"]')).toBeTruthy())
+    await act(async () => { await focusBlock(repo.block(PANEL), OWNER, {edit: true}) })
     expect(typedRow()).not.toBeNull()
     await act(async () => { await focusBlock(repo.block(PANEL), NOTE, {edit: true}) })
+    expect(typedRow()).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), PANEL, {edit: true}) })
     await waitFor(() => expect(typedRow()).toBeNull())
     // A focused child the mode shows anyway is listed once, not twice.
     expect(document.querySelectorAll(`[data-block-id="${NOTE}"]`)).toHaveLength(1)
+  })
+
+  it('retains each field focused under the same owner', async () => {
+    await typeIntoChild('none', '::((def-plain))')
+    await outlineSettled()
+    await repo.tx(tx => tx.create({id: 'typed-second', workspaceId: WS, parentId: OWNER, orderKey: 'z0', content: '::((def-plain))'}),
+      {scope: ChangeScope.BlockDefault})
+    await waitFor(() => expect(repo.block('typed-second').peek()?.isFieldForm).toBe(true))
+    await act(async () => { await focusBlock(repo.block(PANEL), TYPED, {edit: true}) })
+    await waitFor(() => expect(typedRow()).not.toBeNull())
+    await act(async () => { await focusBlock(repo.block(PANEL), 'typed-second', {edit: true}) })
+    await waitFor(() => expect(document.querySelector('[data-block-id="typed-second"]')).not.toBeNull())
+    expect(typedRow()).not.toBeNull()
+    await act(async () => { await focusBlock(repo.block(PANEL), OWNER, {edit: true}) })
+    expect(typedRow()).not.toBeNull()
+    expect(document.querySelector('[data-block-id="typed-second"]')).not.toBeNull()
   })
 
   it('follows the row into the parent it is indented under', async () => {

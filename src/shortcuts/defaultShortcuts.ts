@@ -1,3 +1,4 @@
+import {focusAdjacentPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import { Check, KeyboardOff, Link, Maximize2, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
@@ -891,6 +892,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
+        if (focusAdjacentPlaceholder(block.id, deps.renderScopeId, -1)) return
         const prevVisible = await previousVisibleBlock(block, surface)
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
@@ -940,6 +942,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
+        if (focusAdjacentPlaceholder(block.id, deps.renderScopeId, 1)) return
         const nextVisible = await nextVisibleBlock(block, surface)
         if (!nextVisible) return
 
