@@ -73,6 +73,7 @@ export const insertPropertyValue = async (owner: Block, requested: AnyPropertySc
 /** Definition and scaffold commit together; a refused conversion leaves no definition. */
 export const createPropertyField = async (owner: Block, source: Block, name: string, presetId: string, content: string, isCurrent: () => boolean) => {
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
+  name = name.trim()
   const schema = await owner.repo.userSchemas.addSchema({name, presetId}, async (tx, fieldId) => {
     await validateScaffold(tx, owner, source, content, isCurrent)
     const parent = await tx.get(owner.id)

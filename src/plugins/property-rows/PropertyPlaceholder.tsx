@@ -22,12 +22,13 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
   const scope = typeof context.renderScopeId === 'string' ? context.renderScopeId : undefined
   const element = useRef<HTMLDivElement>(null)
   const busy = useRef(false)
+  const failed = useRef(false)
   const [active, setActive] = useState(false)
   const activate = (value: boolean) => { setActive(value); onActiveChange?.(value) }
   const input = () => {
     const current = element.current!
     const initial = current.textContent ?? ''
-    if (busy.current || !initial.trim()) return
+    if (busy.current || failed.current || !initial.trim()) return
     busy.current = true
     void owner.repo.undoGroup(async repo => {
       const target = await insertPropertyValue(new Block(repo, owner.id), schema, initial)
@@ -52,6 +53,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
       current.textContent = ''
       activate(false)
     }).catch(error => {
+      failed.current = true
       showError(error instanceof Error ? error.message : 'Could not enter value')
     }).finally(() => { busy.current = false })
   }
@@ -62,7 +64,15 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
     onCompositionEnd={input}
     className="empty:before:content-[attr(data-placeholder)] empty:before:pointer-events-none min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:ring-1 focus:ring-ring"
     onBlur={() => { editing.onBlur(); if (!busy.current) activate(false) }}
-    onFocus={event => { activate(true); editing.onFocus(event); void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope}) }}
+    onFocus={event => {
+      const target = event.currentTarget
+      failed.current = false
+      target.contentEditable = 'true'
+      window.getSelection()?.setPosition(target, target.childNodes.length)
+      activate(true)
+      editing.onFocus(event)
+      void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope})
+    }}
     onPaste={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.textContent += event.clipboardData.getData('text/plain'); input() }}
     onKeyDown={event => {
       if (isImeKeyEvent(event.nativeEvent)) return

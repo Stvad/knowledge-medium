@@ -51,6 +51,15 @@ describe('property rows created as blocks', () => {
     }
   })
 
+  it('does not create a definition over a pending cell, including a padded name', async () => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({'pending field': 'keep'}), 'owner']))
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(createPropertyField(repo.block('owner'), repo.block('source'), ' pending field ', 'ref', '::', () => true)).rejects.toThrow('no longer supports')
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+    expect(repo.propertySchemas.has('pending field')).toBe(false)
+  })
+
   it('converts the scaffold in place without an empty value; undo restores the marker', async () => {
     const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'))
     expect(target.fieldRowId).toBe('source')
