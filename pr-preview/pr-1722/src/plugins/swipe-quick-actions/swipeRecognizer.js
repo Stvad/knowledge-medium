@@ -1,1 +1,0 @@
-export{fM as SWIPE_QUICK_ACTIONS_GESTURE_ID,pM as SWIPE_TRIGGER_PX,mM as swipeRecognizer}from"../../../chunks/app-B87bNok3.js";

@@ -1,1 +1,0 @@
-export{FG as PropertyShapeButton,IG as PropertyShapeGlyph}from"../../../chunks/app-B87bNok3.js";

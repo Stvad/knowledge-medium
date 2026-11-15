@@ -1,1 +1,0 @@
-export{Bh as lintExtensionSource}from"../../../chunks/app-B87bNok3.js";

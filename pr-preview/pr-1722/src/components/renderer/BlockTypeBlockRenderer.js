@@ -1,1 +1,0 @@
-export{BI as BlockTypeBlockRenderer,VI as BlockTypeContentRenderer,HI as writeBlockTypeLabel}from"../../../chunks/app-B87bNok3.js";
