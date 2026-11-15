@@ -38,14 +38,22 @@ export function PropertyPlaceholder({owner, schema, fieldRowId}: {owner: Block; 
     creation.current = next
     void next.then(async target => {
       if (target && (current === document.activeElement || (!current?.isConnected && document.activeElement === document.body && peekFocusedBlockLocation(ui)?.blockId === (fieldRowId ?? owner.id))) && creation.current === next) {
-        await enterEditModeForBlock(owner.repo.block(target.valueId), ui, scope, {start: (await owner.repo.load(target.valueId))!.content.length})
+        await enterEditModeForBlock(owner.repo.block(target.valueId), ui, scope, {start: Number.MAX_SAFE_INTEGER})
       }
       if (creation.current === next) creation.current = null
     }).catch(error => { creation.current = null; showError(error instanceof Error ? error.message : 'Could not enter value') })
   }
-  return <div ref={element} tabIndex={0} role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
-    data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true"
-    className="min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:ring-1 focus:ring-ring"
+  const acceptInput = (target: HTMLDivElement) => {
+    const text = target.textContent ?? ''
+    target.textContent = ''
+    input(text)
+  }
+  return <div ref={element} contentEditable suppressContentEditableWarning tabIndex={0} role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
+    data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true" data-block-interaction="ignore"
+    data-placeholder="Enter value…"
+    onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) acceptInput(event.currentTarget) }}
+    onCompositionEnd={event => acceptInput(event.currentTarget)}
+    className="empty:before:content-[attr(data-placeholder)] empty:before:pointer-events-none min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:ring-1 focus:ring-ring"
     onBlur={editing.onBlur}
     onFocus={event => { editing.onFocus(event); void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope}) }}
     onPaste={event => { event.preventDefault(); event.stopPropagation(); input(event.clipboardData.getData('text/plain')) }}
@@ -54,8 +62,5 @@ export function PropertyPlaceholder({owner, schema, fieldRowId}: {owner: Block; 
         event.preventDefault(); event.stopPropagation()
         void navigatePlaceholder(event.currentTarget, scope, event.key === 'ArrowDown' ? 1 : -1, ui)
       } else if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation() }
-      else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        event.preventDefault(); event.stopPropagation(); input(event.key)
-      }
-    }}>Enter value…</div>
+    }}/>
 }

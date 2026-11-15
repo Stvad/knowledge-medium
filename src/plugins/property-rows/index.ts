@@ -37,7 +37,7 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
   codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
-  blockChildrenFooterFacet.of(() => ExpectedPropertyRows, {source: SOURCE}),
+  blockChildrenFooterFacet.of(() => ExpectedPropertyRows, {source: SOURCE, precedence: -100}),
   blockRenderersFacet.of({id: 'propertyFieldRow', renderer: FieldRowRenderer}, {source: SOURCE}),
   blockRenderersFacet.of({id: 'propertyValueRow', renderer: ValueRowRenderer}, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),

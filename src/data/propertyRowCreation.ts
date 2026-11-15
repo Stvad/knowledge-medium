@@ -1,10 +1,9 @@
 import type {Block} from './block'
-import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema} from './api'
+import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema, type BlockData} from './api'
 import {fieldValueChildren, propertyFieldContent, scalarValueRow, memberKeysFor} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
 import {keyBetween} from './orderKey'
 import type {PropertyChildSlot} from './derivedIds'
-import type {BlockData} from './api'
 import {mintPropertyChildRow} from './internals/propertyChildMint'
 
 const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) => {

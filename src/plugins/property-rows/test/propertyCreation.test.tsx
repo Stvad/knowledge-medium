@@ -23,8 +23,7 @@ import {__resetLazyMountRegistryForTesting} from '@/components/util/lazyMountReg
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
-import {focusBlock, typesProp} from '@/data/properties'
-import {isCollapsedProp, isEditingProp, peekFocusedBlockLocation} from '@/data/properties'
+import {editorSelection, focusBlock, isCollapsedProp, isEditingProp, peekFocusedBlockLocation, topLevelBlockIdProp, typesProp} from '@/data/properties'
 import {EditorView} from '@codemirror/view'
 import {CompletionContext} from '@codemirror/autocomplete'
 import {flushEditorContent} from '@/editor/contentFlush'
@@ -33,6 +32,8 @@ import {choosePropertyField} from '@/data/propertyRowCreation'
 import {propertyRowsPlugin} from '../index'
 import {editorAutocompleteExtension} from '@/editor/autocomplete'
 import {acceptCompletion} from '@codemirror/autocomplete'
+import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
+import {blockChildrenFooterFacet, isInteractiveContentEvent} from '@/extensions/blockInteraction'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -52,6 +53,7 @@ const list = seedProperty({seedKey: 'test/property/creation-list', revision: 1,
 const props = [plain, hidden, outlineHidden, list]
 const expectedType = seedType({seedKey: 'test/type/creation-expected', revision: 1,
   id: 'test:creation-expected', label: 'Expected fields', properties: props})
+const TestFooter = () => <div data-testid="children-footer-marker">footer marker</div>
 
 let db: TestDb
 let repo: Repo
@@ -81,7 +83,8 @@ beforeEach(async () => {
   repo = createTestRepo({db: db.db, user: USER, newId: () => crypto.randomUUID()}).repo
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
-    defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin,
+    defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
+    blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
     typeSeedsFacet.of(expectedType, {source: 'test'}),
@@ -132,6 +135,10 @@ const ownerDescendants = async () => db.db.getAll<{
    ) SELECT b.id, b.parent_id, b.order_key, b.content, b.properties_json, b.reference_target_id, b.is_field_form
      FROM blocks b JOIN descendants d ON d.id = b.id ORDER BY b.parent_id, b.order_key, b.id`, [OWNER])
 const settle = () => screen.findByText('Existing note')
+const typePlaceholderText = (target: HTMLElement, text: string) => {
+  target.textContent = text
+  fireEvent.input(target, {inputType: 'insertText', data: text, isComposing: false})
+}
 
 describe('expected property placeholders in the outline', () => {
   it('renders typed fields by display tier after existing children, without adding structural children', async () => {
@@ -158,6 +165,43 @@ describe('expected property placeholders in the outline', () => {
     expect(await repo.runQuery('core.childIds', {id: OWNER})).toEqual(structuralBefore)
   })
 
+  it('shows ghosts on a collapsed focal root without changing collapse, and hides them on a nonfocal collapse', async () => {
+    await repo.block(OWNER).set(isCollapsedProp, true)
+    await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
+    const focal = mount('all')
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${OWNER}"]`)).not.toBeNull())
+    await waitFor(() => expect(ghostNames()).toEqual(props.map(prop => prop.name)))
+    expect(await repo.block(OWNER).get(isCollapsedProp)).toBe(true)
+    focal.unmount()
+
+    await repo.block(PANEL).set(topLevelBlockIdProp, undefined)
+    mount('all')
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${OWNER}"]`)).not.toBeNull())
+    expect(ghostNames()).toEqual([])
+    expect(await repo.block(OWNER).get(isCollapsedProp)).toBe(true)
+  })
+
+  it('places expected ghosts before later child-footer contributions', async () => {
+    mount('non-hidden')
+    await settle()
+    await waitFor(() => expect(ghostNames()).toEqual(['creation:plain', 'creation:list']))
+    const lastGhost = [...document.querySelectorAll('[data-property-ghost="true"]')].at(-1)!
+    const footer = [...document.querySelectorAll<HTMLElement>('[data-testid="children-footer-marker"]')]
+      .find(marker => marker.closest<HTMLElement>('[data-block-id]')?.dataset.blockId === OWNER)!
+    expect(lastGhost.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('excludes a real placeholder click from block pointer gestures', async () => {
+    mount('all')
+    const placeholder = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
+    const shell = placeholder.closest<HTMLElement>('[data-block-id]')!
+    const bullet = shell.querySelector<HTMLElement>('[data-block-bullet]')!
+    expect(isInteractiveContentEvent({target: placeholder})).toBe(true)
+    expect(isInteractiveContentEvent({target: bullet})).toBe(true)
+    await act(async () => { fireEvent.click(placeholder) })
+    expect(await repo.block(PANEL).get(isEditingProp)).toBe(false)
+  })
+
   it('focusing, navigating and pressing Enter writes no data', async () => {
     mount('all')
     const first = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
@@ -173,8 +217,67 @@ describe('expected property placeholders in the outline', () => {
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
   })
 
+  it('waits for compositionEnd before creating one Unicode value', async () => {
+    mount('non-hidden')
+    const target = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
+    const before = await ownerDescendants()
+    await act(async () => {
+      target.focus()
+      target.textContent = '日本語'
+      fireEvent.input(target, {inputType: 'insertCompositionText', data: '日本語', isComposing: true})
+    })
+    expect(await ownerDescendants()).toEqual(before)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
+
+    await act(async () => { fireEvent.compositionEnd(target, {data: '日本語'}) })
+    await waitFor(async () => expect((await ownerDescendants()).map(row => row.content)).toContain('日本語'))
+    const created = await ownerDescendants()
+    expect(created.filter(row => row.content === '日本語')).toHaveLength(1)
+    await waitFor(() => expect([...document.querySelectorAll('.cm-content')].some(node => node.textContent === '日本語')).toBe(true))
+    const editor = [...document.querySelectorAll<HTMLElement>('.cm-content')].find(node => node.textContent === '日本語')!
+    expect(EditorView.findFromDOM(editor)!.state.selection.main.anchor).toBe('日本語'.length)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+  })
+
+  it('places the first editor caret at the end when content grows during activation', async () => {
+    mount('non-hidden')
+    const target = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
+    let release!: () => void
+    let signalSelectionWrite!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const selectionWriteStarted = new Promise<void>(resolve => { signalSelectionWrite = resolve })
+    const panel = repo.block(PANEL)
+    const originalSet = panel.set.bind(panel)
+    const setSpy = vi.spyOn(panel, 'set').mockImplementation(async (schema, value) => {
+      if (schema.name === editorSelection.name) {
+        signalSelectionWrite()
+        await gate
+      }
+      return originalSet(schema, value)
+    })
+    try {
+      await act(async () => { target.focus(); typePlaceholderText(target, 'h') })
+      await selectionWriteStarted
+      const value = (await ownerDescendants()).find(row => row.content === 'h')
+      expect(value).toBeDefined()
+
+      // More queued typing lands in the block while the first editor activation
+      // is paused before it commits its initial selection.
+      await repo.block(value!.id).setContent('hello')
+      release()
+
+      await waitFor(() => expect(document.querySelector(`[data-block-id="${value!.id}"] .cm-content`)?.textContent).toBe('hello'))
+      const content = document.querySelector<HTMLElement>(`[data-block-id="${value!.id}"] .cm-content`)!
+      const view = EditorView.findFromDOM(content)!
+      expect(view.state.selection.main.anchor).toBe('hello'.length)
+    } finally {
+      release()
+      setSpy.mockRestore()
+    }
+  })
+
   it.each([
-    ['first character', async (target: HTMLElement) => fireEvent.keyDown(target, {key: 'x'}), 'x'],
+    ['first character', async (target: HTMLElement) => typePlaceholderText(target, 'x'), 'x'],
     ['paste', async (target: HTMLElement) => fireEvent.paste(target, {clipboardData: {getData: () => 'pasted'}}), 'pasted'],
   ])('typing by %s creates a populated field in one undo step and opens its ordinary editor', async (_label, input, text) => {
     mount('non-hidden')
@@ -198,8 +301,8 @@ describe('expected property placeholders in the outline', () => {
     const before = await ownerDescendants()
     await act(async () => {
       target.focus()
-      fireEvent.keyDown(target, {key: 'x'})
-      fireEvent.keyDown(target, {key: 'y'})
+      typePlaceholderText(target, 'x')
+      typePlaceholderText(target, 'y')
     })
     await waitFor(async () => expect((await ownerDescendants()).map(row => row.content)).toContain('xy'))
     const created = await ownerDescendants()
@@ -227,11 +330,11 @@ describe('expected property placeholders in the outline', () => {
     repo.undoManager.clear()
     mount('all')
     let target = await screen.findByLabelText(`Enter ${list.name}`)
-    await act(async () => { target.focus(); fireEvent.keyDown(target, {key: 'x'}) })
+    await act(async () => { target.focus(); typePlaceholderText(target, 'x') })
     await waitFor(async () => expect(await repo.block(OWNER).get(list)).toEqual(['saved', 'x']))
     await waitFor(() => expect([...document.querySelectorAll('.cm-content')].some(node => node.textContent === 'x')).toBe(true))
     target = await screen.findByLabelText(`Enter ${list.name}`)
-    await act(async () => { target.focus(); fireEvent.keyDown(target, {key: 'y'}) })
+    await act(async () => { target.focus(); typePlaceholderText(target, 'y') })
     await waitFor(async () => expect(await repo.block(OWNER).get(list)).toEqual(['saved', 'x', 'y']))
     const field = await db.db.get<{id: string}>(
       "SELECT id FROM blocks WHERE reference_target_id = ? AND is_field_form = 1 AND deleted = 0", [
@@ -275,7 +378,7 @@ describe('expected property placeholders in the outline', () => {
       return result
     })
     try {
-      await act(async () => { first.focus(); fireEvent.keyDown(first, {key: 'x'}) })
+      await act(async () => { first.focus(); typePlaceholderText(first, 'x') })
       await entered
       await act(async () => { second.focus() })
       expect(document.activeElement).toBe(second)

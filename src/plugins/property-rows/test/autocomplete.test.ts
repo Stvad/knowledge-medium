@@ -1,21 +1,23 @@
 import {EditorState} from '@codemirror/state'
 import {CompletionContext} from '@codemirror/autocomplete'
-import {afterAll, beforeAll, beforeEach, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty} from '@/data/api'
 import {definitionSeedsFacet} from '@/data/facets'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import {propertyCompletionSource} from '../autocomplete'
+import type {EditorView} from '@codemirror/view'
+import {handlePropertyValueEnter, propertyCompletionSource} from '../autocomplete'
 
 const note = seedProperty({seedKey: 'test/property/completion-note', revision: 1, name: 'test:note', preset: 'string', changeScope: ChangeScope.BlockDefault})
+const tags = seedProperty({seedKey: 'test/property/completion-tags', revision: 1, name: 'test:tags', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
 let h: TestDb
 let repo: Repo
 beforeAll(async () => { h = await createTestDb() })
 afterAll(async () => { await h.cleanup() })
 beforeEach(async () => {
   await resetTestDb(h.db)
-  repo = createTestRepo({db: h.db, extensions: [definitionSeedsFacet.of(note)]}).repo
+  repo = createTestRepo({db: h.db, extensions: [definitionSeedsFacet.of(note), definitionSeedsFacet.of(tags)]}).repo
   repo.setActiveWorkspaceId('ws')
   await h.db.execute("INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration) VALUES ('ws', 'Test', 'user', 1, 1, 'none', 'children')")
   await repo.tx(async tx => {
@@ -45,5 +47,31 @@ it.each(['cell', 'read-only', 'root', 'children', 'properties'])('refuses before
   repo.cache.deleteSnapshot('source')
   const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
   expect(await complete()).toBeNull()
+  expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+})
+
+it('does not replace a selected range with a property', async () => {
+  const state = EditorState.create({doc: '::', selection: {anchor: 0, head: 2}})
+  expect(await propertyCompletionSource({repo, block: repo.block('source')})(new CompletionContext(state, 2, false))).toBeNull()
+})
+it('offers nothing to an editor without a block', async () => {
+  const state = EditorState.create({doc: '::', selection: {anchor: 2}})
+  expect(await propertyCompletionSource({repo})(new CompletionContext(state, 2, false))).toBeNull()
+})
+it.each(['key', 'defaultPrevented', 'shiftKey', 'metaKey', 'ctrlKey', 'altKey', 'readonly', 'ui', 'selection', 'middle', 'ordinary', 'scalar'])('list member Enter declines %s without changing rows', async kind => {
+  await repo.block('owner').set(tags, ['saved'])
+  await repo.block('owner').set(note, 'saved scalar')
+  const fields = await repo.query.children({id: 'owner', propertyChildren: 'all'}).load()
+  const definition = repo.propertySchemaResolverFor('ws').resolve(kind === 'scalar' ? note.name : tags.name)
+  if (definition.status !== 'resolved') throw new Error('Missing definition')
+  const field = fields.find(row => row.referenceTargetId === definition.schema.fieldId)!
+  const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+  if (kind === 'readonly') Object.defineProperty(repo, 'isReadOnly', {value: true})
+  const event = {key: kind === 'key' ? 'x' : 'Enter', [kind]: true, preventDefault: vi.fn(), stopPropagation: vi.fn()} as unknown as KeyboardEvent
+  const state = EditorState.create({doc: 'saved', selection: {anchor: kind === 'selection' ? 0 : kind === 'middle' ? 2 : 5, head: kind === 'selection' ? 5 : undefined}})
+  const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+  expect(handlePropertyValueEnter({repo, block: repo.block(kind === 'ordinary' ? 'source' : value.id),
+    uiStateBlock: kind === 'ui' ? undefined : repo.block('owner')}, event, {state} as EditorView)).toBe(false)
+  expect(event.preventDefault).not.toHaveBeenCalled()
   expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
 })

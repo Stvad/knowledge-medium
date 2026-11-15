@@ -40,10 +40,7 @@ export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScope
   }}))}
 }
 
-export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {
-  if (!context.block) return []
-  const source = propertyCompletionSource(context)
-  return [EditorState.languageData.of(() => [{autocomplete: source}]), EditorView.domEventHandlers({keydown: (event, view) => {
+export const handlePropertyValueEnter = (context: CodeMirrorExtensionContext, event: KeyboardEvent, view: EditorView): boolean => {
     const {block, repo, uiStateBlock, renderScopeId} = context
     if (event.key !== 'Enter' || event.defaultPrevented || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || repo.isReadOnly || !uiStateBlock) return false
     if (completionStatus(view.state) === 'active') return false
@@ -54,5 +51,10 @@ export const propertyAutocomplete: CodeMirrorExtensionContribution = context => 
     event.preventDefault(); event.stopPropagation(); flushEditorContent(view)
     void focusBlock(uiStateBlock, parent!.id, {edit: false, renderScopeId})
     return true
-  }})]
+}
+export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {
+  if (!context.block) return []
+  const source = propertyCompletionSource(context)
+  return [EditorState.languageData.of(() => [{autocomplete: source}]),
+    EditorView.domEventHandlers({keydown: (event, view) => handlePropertyValueEnter(context, event, view)})]
 }

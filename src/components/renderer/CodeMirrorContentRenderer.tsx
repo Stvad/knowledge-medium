@@ -52,6 +52,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const pasteIntentRef = useRef<'split' | 'single-block'>('split')
 
   const extensions = useMemo(() => {
+    // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
     const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
     const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})

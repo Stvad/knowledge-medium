@@ -1,6 +1,8 @@
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {definitionSeedsFacet} from '@/data/facets'
+import {propertyChangeScopeProp} from '@/data/properties'
+import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
 import {seedProperty} from '@/data/propertySeeds'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -146,6 +148,37 @@ describe('property rows created as blocks', () => {
     await repo.tx(tx => tx.move('source', {parentId: 'owner', orderKey: 'a2'}), {scope: ChangeScope.BlockDefault})
     const target = await insertPropertyValue(repo.block('owner'), note, 'x')
     expect((await children('owner')).map(row => row.id)).toEqual(['source', target!.fieldRowId])
+  })
+
+  it.each([note, tags])('preserves a stored cell awaiting its field row: $name', async schema => {
+    await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[schema.name]: schema === tags ? ['stored'] : ''}), 'owner']))
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/stored value/)
+    await expect(insertPropertyValue(repo.block('owner'), schema, 'x')).rejects.toThrow(/stored value/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+  it('refuses a scalar placeholder when a value row has appeared', async () => {
+    await repo.block('owner').set(note, 'saved')
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(insertPropertyValue(repo.block('owner'), note, 'x')).rejects.toThrow(/now has a value/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+  it('refuses stale definition scope before touching the scaffold', async () => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    const schema = await repo.userSchemas.addSchema({name: 'mutable', presetId: 'string'})
+    await repo.block(schema.fieldId).set(propertyChangeScopeProp, ChangeScope.UserPrefs)
+    await vi.waitFor(() => expect(repo.propertySchemas.get('mutable')?.changeScope).toBe(ChangeScope.UserPrefs))
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/scope/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+  it('refuses read-only first input before opening a transaction', async () => {
+    Object.defineProperty(repo, 'isReadOnly', {value: true})
+    const spy = vi.spyOn(repo, 'tx')
+    await expect(insertPropertyValue(repo.block('owner'), note, 'x')).rejects.toThrow(/read-only/)
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 
 })
