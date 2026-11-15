@@ -2,6 +2,7 @@ import {isImeKeyEvent} from '@/shortcuts/utils'
 import {usePropertyEditingActivation} from '@/components/propertyPanel/usePropertyEditingActivation'
 import {useRef, useState} from 'react'
 import {Block} from '@/data/block'
+import type {Repo} from '@/data/repo'
 import type {AnyPropertySchema} from '@/data/api'
 import {insertPropertyValue} from '@/data/propertyRowCreation'
 import {focusBlock, exitEditModeForBlock, focusedBlockLocationProp} from '@/data/properties'
@@ -25,6 +26,17 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
   const failed = useRef(false)
   const [active, setActive] = useState(false)
   const activate = (value: boolean) => { setActive(value); onActiveChange?.(value) }
+  const append = async (repo: Repo, valueId: string, extra: string) => {
+    const view = document.activeElement instanceof HTMLElement ? EditorView.findFromDOM(document.activeElement) : null
+    if (view && document.activeElement?.closest('[data-block-id]')?.getAttribute('data-block-id') === valueId) {
+      view.dispatch({changes: {from: view.state.doc.length, insert: extra}, selection: {anchor: view.state.doc.length + extra.length}})
+    }
+    await repo.tx(async tx => {
+      const value = await tx.get(valueId)
+      if (!value || value.deleted) throw new Error('The value row was removed. Your input was kept.')
+      await tx.update(value.id, {content: value.content + extra})
+    }, {scope: schema.changeScope})
+  }
   const input = () => {
     const current = element.current!
     const initial = current.textContent ?? ''
@@ -40,15 +52,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
       }
       const extra = (current.textContent ?? '').slice(initial.length)
       if (extra) {
-        const view = document.activeElement instanceof HTMLElement ? EditorView.findFromDOM(document.activeElement) : null
-        if (view && document.activeElement?.closest('[data-block-id]')?.getAttribute('data-block-id') === target.valueId) {
-          view.dispatch({changes: {from: view.state.doc.length, insert: extra}, selection: {anchor: view.state.doc.length + extra.length}})
-        }
-        await repo.tx(async tx => {
-          const value = await tx.get(target.valueId)
-          if (!value || value.deleted) throw new Error('The value row was removed. Your input was kept.')
-          await tx.update(value.id, {content: value.content + extra})
-        }, {scope: schema.changeScope})
+        await append(repo, target.valueId, extra)
       }
       current.textContent = ''
       activate(false)

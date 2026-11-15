@@ -173,9 +173,9 @@ describe('expected property placeholders in the outline', () => {
 
   it('normal-mode navigation passes empty fields and ghosts without writing', async () => {
     const scalar = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-    await choosePropertyField(repo.block(OWNER), plain, repo.block(scalar))
+    await choosePropertyField(repo.block(OWNER), plain, repo.block(scalar), '::', () => true)
     const listScaffold = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-    await choosePropertyField(repo.block(OWNER), list, repo.block(listScaffold))
+    await choosePropertyField(repo.block(OWNER), list, repo.block(listScaffold), '::', () => true)
     await insertPropertyValue(repo.block(OWNER), list, 'member')
     const below = await repo.mutate.createChild({parentId: OWNER, content: 'Below fields'})
     await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
@@ -213,7 +213,7 @@ describe('expected property placeholders in the outline', () => {
 
   it('normal-mode o beside an empty scalar creates an ordinary sibling', async () => {
     const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-    await choosePropertyField(repo.block(OWNER), plain, repo.block(source))
+    await choosePropertyField(repo.block(OWNER), plain, repo.block(source), '::', () => true)
     await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
     mount('all')
     await screen.findByLabelText(`Enter ${plain.name}`)
@@ -401,7 +401,7 @@ describe('expected property placeholders in the outline', () => {
   it.each(['ghost', 'existing scalar'])('keeps command keys on the mounted %s input through every handoff stage', async kind => {
     if (kind === 'existing scalar') {
       const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-      await choosePropertyField(repo.block(OWNER), plain, repo.block(source))
+      await choosePropertyField(repo.block(OWNER), plain, repo.block(source), '::', () => true)
       repo.undoManager.clear()
     }
     mount('all')
@@ -557,7 +557,7 @@ describe('expected property placeholders in the outline', () => {
     mount('all')
     await settle()
     await act(async () => {
-      const picked = await choosePropertyField(repo.block(OWNER), list, repo.block(source))
+      const picked = await choosePropertyField(repo.block(OWNER), list, repo.block(source), '::', () => true)
       await focusBlock(repo.block(PANEL), picked.fieldRowId, {edit: false, renderScopeId: 'creation-test'})
       focusPickedPlaceholder(picked.fieldRowId, 'creation-test', () => true)
     })
@@ -622,25 +622,17 @@ describe('expected property placeholders in the outline', () => {
     })
     act(() => { view.dispatch({selection: {anchor: view.state.doc.length}}) })
     const completion = await propertyCompletionSource({repo, block: repo.block(sourceId), childBacked: true, uiStateBlock: repo.block(PANEL), renderScopeId: 'creation-test'})(new CompletionContext(view.state, view.state.doc.length, false))
-    let signalChecked!: () => void
-    const checked = new Promise<void>(resolve => { signalChecked = resolve })
     const original = propertyCreation.choosePropertyField
-    vi.spyOn(propertyCreation, 'choosePropertyField').mockImplementation((...args) => {
-      const result = original(...args).then(async target => {
-        await focusBlock(repo.block(PANEL), NOTE, {renderScopeId: 'creation-test'})
-        return target
-      })
-      // Fence the continuation's first possible focus effect, after resolving its await.
-      return {then(resolve: (value: Awaited<typeof result>) => void, reject: (error: unknown) => void) {
-        return result.then(target => { resolve(target); queueMicrotask(signalChecked) }, reject)
-      }} as unknown as typeof result
+    vi.spyOn(propertyCreation, 'choosePropertyField').mockImplementation(async (...args) => {
+      const target = await original(...args)
+      await focusBlock(repo.block(PANEL), NOTE, {renderScopeId: 'creation-test'})
+      return target
     })
     const exit = vi.spyOn(properties, 'exitEditModeForBlock').mockResolvedValue()
     const apply = completion!.options[0].apply
     expect(typeof apply).toBe('function')
     await act(async () => {
-      if (typeof apply === 'function') apply(view, completion!.options[0], 0, view.state.doc.length)
-      await checked
+      if (typeof apply === 'function') await apply(view, completion!.options[0], 0, view.state.doc.length)
     })
     expect(exit).not.toHaveBeenCalled()
     expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(NOTE)

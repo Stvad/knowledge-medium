@@ -61,7 +61,7 @@ describe('property rows created as blocks', () => {
   })
 
   it('converts the scaffold in place without an empty value; undo restores the marker', async () => {
-    const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'))
+    const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)
     expect(target.fieldRowId).toBe('source')
     expect((await children('owner')).map(row => row.id)).toEqual(['source'])
     expect(await children('source')).toEqual([])
@@ -90,7 +90,7 @@ describe('property rows created as blocks', () => {
     await repo.block('owner').set(note, 'saved')
     const fields = (await children('owner')).filter(row => row.isFieldForm)
     const values = await children(fields[0].id)
-    const result = await choosePropertyField(repo.block('owner'), note, repo.block('source'))
+    const result = await choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)
     expect(result.valueId).toBe(values[0].id)
     expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
     expect(await children(fields[0].id)).toEqual(values)
@@ -99,7 +99,7 @@ describe('property rows created as blocks', () => {
 
   it('existing list selection deletes the scaffold without appending an empty member', async () => {
     await repo.block('owner').set(tags, ['saved'])
-    const result = await choosePropertyField(repo.block('owner'), tags, repo.block('source'))
+    const result = await choosePropertyField(repo.block('owner'), tags, repo.block('source'), '::', () => true)
     expect(result.valueId).toBeUndefined()
     expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
     expect(await repo.block('owner').get(tags)).toEqual(['saved'])
@@ -111,7 +111,7 @@ describe('property rows created as blocks', () => {
 
   it.each(['lagging member', 'duplicate fields without a cell'])('appends from live rows without changing existing members: %s', async setup => {
     await repo.block('owner').set(tags, [setup === 'lagging member' ? 'a' : 'one'])
-    const selected = await choosePropertyField(repo.block('owner'), tags, repo.block('source'))
+    const selected = await choosePropertyField(repo.block('owner'), tags, repo.block('source'), '::', () => true)
     const first = (await children(selected.fieldRowId!))[0]!
     await h.db.writeTransaction(async tx => {
       const insert = (id: string, parentId: string, orderKey: string, content: string, fieldId: string | null = null) => tx.execute(
@@ -156,7 +156,7 @@ describe('property rows created as blocks', () => {
     const spy = vi.spyOn(repo, 'tx')
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
     await expect(choosePropertyField(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
-      repo.block(kind === 'missing source' ? 'absent' : 'source'))).rejects.toThrow(
+      repo.block(kind === 'missing source' ? 'absent' : 'source'), '::', () => true)).rejects.toThrow(
         kind === 'read-only' ? 'This workspace is read-only.' : kind === 'missing source' ? 'The input block changed.' : 'This block no longer supports properties in the outline.')
     if (kind === 'read-only') expect(spy).not.toHaveBeenCalled()
     spy.mockRestore()
@@ -174,7 +174,7 @@ describe('property rows created as blocks', () => {
     if (kind === 'moved') await repo.tx(tx => tx.move('source', {parentId: null, orderKey: 'a1'}), {scope: ChangeScope.BlockDefault})
     if (kind === 'deleted') await repo.tx(tx => tx.delete('source'), {scope: ChangeScope.BlockDefault})
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(choosePropertyField(repo.block('owner'), note, repo.block('source'))).rejects.toThrow('The input block changed.')
+    await expect(choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)).rejects.toThrow('The input block changed.')
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
   it('materializes a ghost after existing children at their current order keys', async () => {
@@ -187,7 +187,7 @@ describe('property rows created as blocks', () => {
     await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
       [JSON.stringify({[schema.name]: schema === tags ? ['stored'] : ''}), 'owner']))
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/stored value/)
+    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/stored value/)
     await expect(insertPropertyValue(repo.block('owner'), schema, 'x')).rejects.toThrow(/stored value/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
@@ -203,7 +203,7 @@ describe('property rows created as blocks', () => {
     await repo.block(schema.fieldId).set(propertyChangeScopeProp, ChangeScope.UserPrefs)
     await vi.waitFor(() => expect(repo.propertySchemas.get('mutable')?.changeScope).toBe(ChangeScope.UserPrefs))
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'))).rejects.toThrow(/scope/)
+    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/scope/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
   it('refuses read-only first input before opening a transaction', async () => {
@@ -221,7 +221,7 @@ describe('property rows created as blocks', () => {
     await repo.tx(tx => tx.create({id: 'plain-ref', workspaceId: 'ws', parentId: 'owner', orderKey: 'a2',
       content: `((${resolution.schema.fieldId}))`}), {scope: ChangeScope.BlockDefault})
     const before = await h.db.getAll("SELECT * FROM blocks WHERE id = 'plain-ref'")
-    const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'))
+    const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)
     expect(target.fieldRowId).toBe('source')
     expect(await h.db.getAll("SELECT * FROM blocks WHERE id = 'plain-ref'")).toEqual(before)
     expect(await repo.block('owner').get(tags)).toEqual(['keep'])

@@ -6,6 +6,9 @@ import {keyBetween} from './orderKey'
 import type {PropertyChildSlot} from './derivedIds'
 import {mintPropertyChildRow} from './internals/propertyChildMint'
 
+export const fieldRowsFor = (rows: readonly BlockData[], fieldId: string) =>
+  rows.filter(row => row.isFieldForm && row.referenceTargetId === fieldId)
+
 const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) => {
   const parent = await tx.get(owner.id)
   if (!parent || parent.deleted || !await tx.isPropertyChildBackedWorkspace(parent.workspaceId)) {
@@ -15,7 +18,7 @@ const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) 
   if (!scopePoliciesEquivalent(requested.changeScope, schema.changeScope)) {
     throw new PropertySchemaScopeMismatchError(schema.name, requested.changeScope, schema.changeScope)
   }
-  const fields = (await tx.childrenOf(owner.id)).filter(row => row.isFieldForm && row.referenceTargetId === schema.fieldId)
+  const fields = fieldRowsFor(await tx.childrenOf(owner.id), schema.fieldId)
   if (!fields.length && storedPropertyValue(parent.properties, schema.name) !== undefined) {
     throw new Error('This property has a stored value awaiting its field row. Open the property panel to inspect it.')
   }
@@ -25,16 +28,16 @@ const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) 
 }
 
 const validateScaffold = async (tx: Tx, owner: Block, source: Block, content: string, isCurrent: () => boolean) => {
-    const scaffold = await tx.get(source.id)
-    if (!scaffold || scaffold.deleted || scaffold.parentId !== owner.id || scaffold.content !== content ||
-      Object.keys(scaffold.properties).length > 0 || await tx.hasChildren(source.id)) {
-      throw new Error('The input block changed. Your text was kept; type :: in an empty child to try again.')
-    }
-    if (!isCurrent()) throw new Error('The input block changed. Your text was kept.')
+  const scaffold = await tx.get(source.id)
+  if (!scaffold || scaffold.deleted || scaffold.parentId !== owner.id || scaffold.content !== content ||
+    Object.keys(scaffold.properties).length > 0 || await tx.hasChildren(source.id)) {
+    throw new Error('The input block changed. Your text was kept; type :: in an empty child to try again.')
+  }
+  if (!isCurrent()) throw new Error('The input block changed. Your text was kept.')
 }
 
 /** Convert in place; an existing field consumes only the verified scaffold. */
-export const choosePropertyField = async (owner: Block, schema: AnyPropertySchema, source: Block, content = '::', isCurrent = () => true) => {
+export const choosePropertyField = async (owner: Block, schema: AnyPropertySchema, source: Block, content: string, isCurrent: () => boolean) => {
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
   return owner.repo.tx(async tx => {
     const context = await fieldContext(tx, owner, schema)

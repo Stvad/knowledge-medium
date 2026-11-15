@@ -1,4 +1,5 @@
-import {ChangeScope, memberCodecOf} from '@/data/api'
+import type {Block} from '@/data/block'
+import {ChangeScope, memberCodecOf, type AnyPropertySchema} from '@/data/api'
 import {fieldRowDefinition} from './fieldRow'
 import {EditorState} from '@codemirror/state'
 import {closeCompletion, completionStatus, type CompletionSource} from '@codemirror/autocomplete'
@@ -12,12 +13,36 @@ import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {isPropertyPickerName} from '@/components/propertyPanel/visibility'
 import {propertyEditorOverridesFacet} from '@/data/facets'
 
-export const OUTLINE_PROPERTY_PRESET_ID = 'ref'
 import {showError} from '@/utils/toast'
-import {focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
-import {isVisibleElement} from '@/utils/propertyNavigation'
+import {fieldPlaceholder, focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 
-export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScopeId, childBacked}: CodeMirrorExtensionContext): CompletionSource => async context => {
+export const OUTLINE_PROPERTY_PRESET_ID = 'ref'
+type PropertyChoice =
+  | {kind: 'existing'; label: string; schema: AnyPropertySchema}
+  | {kind: 'create'; label: string; name: string}
+
+const convertChoice = async (owner: Block, source: Block, choice: PropertyChoice, text: string, view: EditorView) => {
+  const unchanged = () => view.state.doc.toString() === text
+  if (!unchanged() || !await canConvertEmptyChildBlockToProperty(source, owner.repo) || !unchanged()) return
+  flushEditorContent(view)
+  return choice.kind === 'existing'
+    ? choosePropertyField(owner, choice.schema, source, text, unchanged)
+    : createPropertyField(owner, source, choice.name, OUTLINE_PROPERTY_PRESET_ID, text, unchanged)
+}
+
+const focusChoice = async (context: CodeMirrorExtensionContext & {block: Block}, target: Awaited<ReturnType<typeof convertChoice>>) => {
+  const {repo, block, uiStateBlock, renderScopeId} = context
+  if (!target || !uiStateBlock || peekFocusedBlockLocation(uiStateBlock)?.blockId !== block.id) return
+  await exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
+  if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)
+  else {
+    await focusBlock(uiStateBlock, target.fieldRowId, {edit: false, renderScopeId})
+    focusPickedPlaceholder(target.fieldRowId, renderScopeId, () => peekFocusedBlockLocation(uiStateBlock)?.blockId === target.fieldRowId)
+  }
+}
+
+export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): CompletionSource => async context => {
+  const {repo, block, childBacked} = editor
   const text = context.state.doc.toString()
   if (!childBacked || !block || block.peek()?.isFieldForm || /\(\(|\[\[/.test(text.slice(2)) || !/^::[^\n]*$/.test(text) || context.pos !== text.length || !context.state.selection.main.empty) return null
   const source = await canConvertEmptyChildBlockToProperty(block, repo)
@@ -29,26 +54,14 @@ export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScope
   const rank = (name: string) => name.toLowerCase() === query ? 0 : name.toLowerCase().startsWith(query) ? 1 : 2
   const schemas = [...repo.propertySchemas.values()].filter(schema => schema.changeScope === ChangeScope.BlockDefault && !hidden(schema.name) && schema.name.toLowerCase().includes(query))
     .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name)).slice(0, 8)
-  const candidates = schemas.map(schema => ({label: schema.name, schema}))
-  if (context.explicit && name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.push({label: `Create “${name}”`, schema: undefined!})
+  const candidates: PropertyChoice[] = schemas.map(schema => ({kind: 'existing', label: schema.name, schema}))
+  if (context.explicit && name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.push({kind: 'create', label: `Create “${name}”`, name})
   if (!candidates.length) return null
   return {from: 0, filter: false, options: candidates.map(candidate => ({label: candidate.label, apply: (view: EditorView) => {
     closeCompletion(view)
-    if (view.state.doc.toString() !== text) return
-    void (async () => {
-      if (!await canConvertEmptyChildBlockToProperty(block, repo) || view.state.doc.toString() !== text) return
-      flushEditorContent(view)
-      const target = candidate.schema
-        ? await choosePropertyField(repo.block(source.parentId!), candidate.schema, block, text, () => view.state.doc.toString() === text)
-        : await createPropertyField(repo.block(source.parentId!), block, name, OUTLINE_PROPERTY_PRESET_ID, text, () => view.state.doc.toString() === text)
-      if (!uiStateBlock || peekFocusedBlockLocation(uiStateBlock)?.blockId !== block.id) return
-      await exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
-      if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)
-      else {
-        await focusBlock(uiStateBlock, target.fieldRowId, {edit: false, renderScopeId})
-        focusPickedPlaceholder(target.fieldRowId, renderScopeId, () => peekFocusedBlockLocation(uiStateBlock)?.blockId === target.fieldRowId)
-      }
-    })().catch(error => showError(error instanceof Error ? error.message : 'Could not add property'))
+    return convertChoice(repo.block(source.parentId!), block, candidate, text, view)
+      .then(target => focusChoice({...editor, block}, target))
+      .catch(error => showError(error instanceof Error ? error.message : 'Could not add property'))
   }}))}
 }
 
@@ -60,9 +73,7 @@ export const handlePropertyValueEnter = (context: CodeMirrorExtensionContext, ev
     const parent = repo.cache.getSnapshot(block!.peek()?.parentId ?? '')
     const field = fieldRowDefinition(repo, repo.propertyDefinitions, parent)
     if (!field?.schema || !memberCodecOf(field.schema.codec)) return false
-    const placeholder = [...view.dom.ownerDocument.querySelectorAll<HTMLElement>('[data-property-placeholder]')]
-      .find(element => element.dataset.propertyPlaceholder === parent!.id &&
-        element.dataset.outlinePlaceholderScope === renderScopeId && isVisibleElement(element))
+    const placeholder = fieldPlaceholder(parent!.id, renderScopeId)
     if (!placeholder) return false
     event.preventDefault(); event.stopPropagation(); flushEditorContent(view)
     placeholder.focus()
