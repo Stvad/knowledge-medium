@@ -24,8 +24,15 @@ import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPrope
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {focusBlock, typesProp} from '@/data/properties'
+import {isCollapsedProp, isEditingProp, peekFocusedBlockLocation} from '@/data/properties'
 import {EditorView} from '@codemirror/view'
+import {CompletionContext} from '@codemirror/autocomplete'
+import {flushEditorContent} from '@/editor/contentFlush'
+import {propertyCompletionSource} from '../autocomplete'
+import {choosePropertyField} from '@/data/propertyRowCreation'
 import {propertyRowsPlugin} from '../index'
+import {editorAutocompleteExtension} from '@/editor/autocomplete'
+import {acceptCompletion} from '@codemirror/autocomplete'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -73,7 +80,7 @@ beforeEach(async () => {
      VALUES (?, 'test', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
   repo = createTestRepo({db: db.db, user: USER, newId: () => crypto.randomUUID()}).repo
   runtime = resolveFacetRuntimeSync([
-    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
+    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
     defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin,
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
@@ -213,6 +220,130 @@ describe('expected property placeholders in the outline', () => {
       if (await ownerDescendants().then(rows => rows.length === before.length)) break
     }
     expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it('creates a distinct member each time the existing list placeholder is revisited', async () => {
+    await repo.block(OWNER).set(list, ['saved'])
+    repo.undoManager.clear()
+    mount('all')
+    let target = await screen.findByLabelText(`Enter ${list.name}`)
+    await act(async () => { target.focus(); fireEvent.keyDown(target, {key: 'x'}) })
+    await waitFor(async () => expect(await repo.block(OWNER).get(list)).toEqual(['saved', 'x']))
+    await waitFor(() => expect([...document.querySelectorAll('.cm-content')].some(node => node.textContent === 'x')).toBe(true))
+    target = await screen.findByLabelText(`Enter ${list.name}`)
+    await act(async () => { target.focus(); fireEvent.keyDown(target, {key: 'y'}) })
+    await waitFor(async () => expect(await repo.block(OWNER).get(list)).toEqual(['saved', 'x', 'y']))
+    const field = await db.db.get<{id: string}>(
+      "SELECT id FROM blocks WHERE reference_target_id = ? AND is_field_form = 1 AND deleted = 0", [
+        (repo.propertySchemaResolverFor(WS).resolve(list.name) as {status: 'resolved'; schema: {fieldId: string}}).schema.fieldId,
+      ])
+    expect(await repo.query.children({id: field.id, propertyChildren: 'all'}).load()).toHaveLength(3)
+  })
+
+  it('focuses the value placeholder when choosing a collapsed existing list field', async () => {
+    await repo.block(OWNER).set(list, ['saved'])
+    const field = await db.db.get<{id: string}>("SELECT parent_id AS id FROM blocks WHERE content = 'saved' AND deleted = 0")
+    await repo.block(field.id).set(isCollapsedProp, true)
+    const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    mount('all')
+    await settle()
+    await act(async () => {
+      const picked = await choosePropertyField(repo.block(OWNER), list, repo.block(source))
+      await focusBlock(repo.block(PANEL), picked.fieldRowId, {edit: false, renderScopeId: 'creation-test'})
+    })
+    const target = await screen.findByLabelText(`Enter ${list.name}`)
+    expect(document.activeElement).toBe(target)
+  })
+
+  it('keeps focus on another placeholder when value creation finishes', async () => {
+    mount('all')
+    const first = await screen.findByLabelText(`Enter ${plain.name}`)
+    const second = await screen.findByLabelText(`Enter ${list.name}`)
+    let release!: () => void
+    let signalEntered!: () => void
+    let signalFinished!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { signalEntered = resolve })
+    const finished = new Promise<void>(resolve => { signalFinished = resolve })
+    const original = repo.tx.bind(repo)
+    const spy = vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
+      const result = await original(...args)
+      if (args[1]?.description === 'Enter property value') {
+        signalEntered()
+        try { await gate } finally { signalFinished() }
+      }
+      return result
+    })
+    try {
+      await act(async () => { first.focus(); fireEvent.keyDown(first, {key: 'x'}) })
+      await entered
+      await act(async () => { second.focus() })
+      expect(document.activeElement).toBe(second)
+      release()
+      await act(async () => { await finished; await Promise.resolve(); await Promise.resolve() })
+      expect(document.activeElement).toBe(second)
+      expect(await repo.block(PANEL).get(isEditingProp)).toBe(false)
+      expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(OWNER)
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+  })
+
+  it('preserves text typed while an existing field choice waits on its source check', async () => {
+    await repo.block(OWNER).set(list, ['saved'])
+    const id = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    mount('all')
+    await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${id}"] .cm-editor`)).not.toBeNull())
+    const editor = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)!
+    const view = EditorView.findFromDOM(editor)!
+    view.dispatch({selection: {anchor: 2}})
+    const source = propertyCompletionSource({repo, block: repo.block(id), uiStateBlock: repo.block(PANEL), renderScopeId: 'creation-test'})
+    const result = await source(new CompletionContext(view.state, 2, false))
+    const option = result?.options.find(candidate => candidate.label === list.name)
+    if (!option || typeof option.apply !== 'function') throw new Error('List completion option did not resolve')
+    let release!: () => void
+    let signalEntered!: () => void
+    let signalFinished!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { signalEntered = resolve })
+    const finished = new Promise<void>(resolve => { signalFinished = resolve })
+    const original = repo.tx.bind(repo)
+    const spy = vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
+      if (args[1]?.description !== 'Choose property field') return original(...args)
+      signalEntered()
+      try { await gate; return await original(...args) }
+      finally { signalFinished() }
+    })
+    try {
+      option.apply(view, option, 0, 2)
+      await entered
+      act(() => { view.dispatch({changes: {from: 2, insert: 'new user text'}, selection: {anchor: 15}, userEvent: 'input.type'}) })
+      release()
+      await finished
+      await act(async () => { flushEditorContent(view) })
+      await waitFor(async () => expect(await db.db.getOptional('SELECT content, deleted FROM blocks WHERE id = ?', [id]))
+        .toEqual({content: '::new user text', deleted: 0}))
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+  })
+
+  it('opens native completion while typing and converts the same block without an empty value', async () => {
+    const id = await repo.mutate.createChild({parentId: OWNER, content: ''})
+    mount('none')
+    await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${id}"] .cm-editor`)).not.toBeNull())
+    const view = EditorView.findFromDOM(document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)!)!
+    act(() => { view.focus(); view.dispatch({changes: {from: 0, insert: '::creation:plain'}, selection: {anchor: 16}, userEvent: 'input.type'}) })
+    await screen.findByRole('option', {name: plain.name})
+    await waitFor(() => { expect(acceptCompletion(view)).toBe(true) })
+    const placeholder = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
+    await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    expect((await repo.load(id))?.isFieldForm).toBe(true)
+    expect(await repo.query.children({id, propertyChildren: 'all'}).load()).toEqual([])
   })
 
   it('keeps selection of an existing list field from writing or appending an empty member', async () => {

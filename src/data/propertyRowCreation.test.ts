@@ -142,4 +142,10 @@ describe('property rows created as blocks', () => {
     await expect(choosePropertyField(repo.block('owner'), note, repo.block('source'))).rejects.toThrow('The input block changed.')
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
+  it('materializes a ghost after existing children at their current order keys', async () => {
+    await repo.tx(tx => tx.move('source', {parentId: 'owner', orderKey: 'a2'}), {scope: ChangeScope.BlockDefault})
+    const target = await insertPropertyValue(repo.block('owner'), note, 'x')
+    expect((await children('owner')).map(row => row.id)).toEqual(['source', target!.fieldRowId])
+  })
+
 })

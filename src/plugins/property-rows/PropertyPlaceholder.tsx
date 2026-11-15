@@ -1,3 +1,4 @@
+import {usePropertyEditingActivation} from '@/components/propertyPanel/usePropertyEditingActivation'
 import {useEffect, useRef} from 'react'
 import type {Block} from '@/data/block'
 import type {AnyPropertySchema} from '@/data/api'
@@ -13,6 +14,7 @@ import {showError} from '@/utils/toast'
 /** A focus target only. The first input belongs to a real block, never to a draft. */
 export function PropertyPlaceholder({owner, schema, fieldRowId}: {owner: Block; schema: AnyPropertySchema; fieldRowId?: string}) {
   const ui = useUIStateBlock()
+  const editing = usePropertyEditingActivation(owner)
   const context = useBlockContext()
   const scope = typeof context.renderScopeId === 'string' ? context.renderScopeId : undefined
   const element = useRef<HTMLDivElement>(null)
@@ -35,15 +37,17 @@ export function PropertyPlaceholder({owner, schema, fieldRowId}: {owner: Block; 
     }) : insertPropertyValue(owner, schema, text)
     creation.current = next
     void next.then(async target => {
-      if (target && (current === document.activeElement || (!current?.isConnected && peekFocusedBlockLocation(ui)?.blockId === (fieldRowId ?? owner.id))) && creation.current === next) {
+      if (target && (current === document.activeElement || (!current?.isConnected && document.activeElement === document.body && peekFocusedBlockLocation(ui)?.blockId === (fieldRowId ?? owner.id))) && creation.current === next) {
         await enterEditModeForBlock(owner.repo.block(target.valueId), ui, scope, {start: (await owner.repo.load(target.valueId))!.content.length})
       }
+      if (creation.current === next) creation.current = null
     }).catch(error => { creation.current = null; showError(error instanceof Error ? error.message : 'Could not enter value') })
   }
   return <div ref={element} tabIndex={0} role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
-    data-property-placeholder={fieldRowId ?? schema.name}
+    data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true"
     className="min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:ring-1 focus:ring-ring"
-    onFocus={() => { void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope}) }}
+    onBlur={editing.onBlur}
+    onFocus={event => { editing.onFocus(event); void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope}) }}
     onPaste={event => { event.preventDefault(); event.stopPropagation(); input(event.clipboardData.getData('text/plain')) }}
     onKeyDown={event => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {

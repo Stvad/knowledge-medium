@@ -1,14 +1,14 @@
 import {memberCodecOf} from '@/data/api'
 import {fieldRowDefinition} from './fieldRow'
 import {EditorState} from '@codemirror/state'
-import type {CompletionSource} from '@codemirror/autocomplete'
+import {completionStatus, type CompletionSource} from '@codemirror/autocomplete'
 import {EditorView} from '@codemirror/view'
 import type {CodeMirrorExtensionContribution, CodeMirrorExtensionContext} from '@/editor/codeMirrorExtensions'
 import {flushEditorContent} from '@/editor/contentFlush'
 import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import {canConvertEmptyChildBlockToProperty} from '@/utils/propertyCreation'
 import {choosePropertyField} from '@/data/propertyRowCreation'
-import {focusBlock} from '@/data/properties'
+import {exitEditModeForBlock, peekFocusedBlockLocation, focusBlock} from '@/data/properties'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {DEFAULT_PRESET_ID} from '@/components/propertyPanel/PropertyPicker'
 import {showError} from '@/utils/toast'
@@ -29,8 +29,9 @@ export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScope
       flushEditorContent(view)
       const schema = candidate.schema ?? await repo.userSchemas.addSchema({name, presetId: DEFAULT_PRESET_ID})
       if (view.state.doc.toString() !== text) return
-      const target = await choosePropertyField(repo.block(source.parentId!), schema, block, text)
-      if (!uiStateBlock) return
+      const target = await choosePropertyField(repo.block(source.parentId!), schema, block, text, () => view.state.doc.toString() === text)
+      if (!uiStateBlock || peekFocusedBlockLocation(uiStateBlock)?.blockId !== block.id) return
+      await exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
       if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)
       else {
         await focusBlock(uiStateBlock, target.fieldRowId, {edit: false, renderScopeId})
@@ -39,10 +40,13 @@ export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScope
   }}))}
 }
 
-export const propertyAutocomplete: CodeMirrorExtensionContribution = context => context.block
-  ? [EditorState.languageData.of(() => [{autocomplete: propertyCompletionSource(context)}]), EditorView.domEventHandlers({keydown: (event, view) => {
+export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {
+  if (!context.block) return []
+  const source = propertyCompletionSource(context)
+  return [EditorState.languageData.of(() => [{autocomplete: source}]), EditorView.domEventHandlers({keydown: (event, view) => {
     const {block, repo, uiStateBlock, renderScopeId} = context
     if (event.key !== 'Enter' || event.defaultPrevented || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || repo.isReadOnly || !uiStateBlock) return false
+    if (completionStatus(view.state) === 'active') return false
     if (!view.state.selection.main.empty || view.state.selection.main.head !== view.state.doc.length) return false
     const parent = repo.cache.getSnapshot(block!.peek()?.parentId ?? '')
     const field = fieldRowDefinition(repo, repo.propertyDefinitions, parent)
@@ -51,4 +55,4 @@ export const propertyAutocomplete: CodeMirrorExtensionContribution = context => 
     void focusBlock(uiStateBlock, parent!.id, {edit: false, renderScopeId})
     return true
   }})]
-  : []
+}

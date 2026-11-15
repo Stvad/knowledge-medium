@@ -176,7 +176,7 @@ export interface CodeMirrorEditModeDependencies extends BlockShortcutDependencie
  *  input — `enum` ("Choice") properties render a native `<select>`, which
  *  `hasEditableTarget` likewise treats as editable, so it needs the same
  *  Escape-exits behaviour. Actions here only focus/blur it. */
-export type PropertyEditingField = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+export type PropertyEditingField = HTMLElement
 
 export interface PropertyEditingDependencies extends BlockShortcutDependencies {
   input: PropertyEditingField;
