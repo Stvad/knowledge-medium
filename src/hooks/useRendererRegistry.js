@@ -1,1 +1,1 @@
-export{BF as defaultRegistry,RF as refreshRendererRegistry,zF as useRenderer}from"../../chunks/app-Dfts9Fm5.js";
+export{BF as defaultRegistry,RF as refreshRendererRegistry,zF as useRenderer}from"../../chunks/app-B7eg1jaZ.js";

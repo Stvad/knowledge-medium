@@ -1,1 +1,1 @@
-export{Lb as attachmentsPlugin}from"../../../chunks/app-Dfts9Fm5.js";
+export{Lb as attachmentsPlugin}from"../../../chunks/app-B7eg1jaZ.js";
