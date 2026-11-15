@@ -1,1 +1,1 @@
-export{UI as trimIfEdited}from"../../chunks/app-DF0ltfCe.js";
+export{UI as trimIfEdited}from"../../chunks/app-xMV8M1yN.js";
