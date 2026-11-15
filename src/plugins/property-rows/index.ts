@@ -7,13 +7,13 @@ import {ExpectedPropertyRows} from './ExpectedPropertyRows'
  *  the property display mode (`@/data/propertyDisplayMode`), with commands and
  *  a bullet-menu entry for its workspace and block levels. */
 import type { BlockContextMenuItemsContribution } from '@/extensions/blockInteraction.js'
-import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
-import { actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
+import { blockContextMenuItemsFacet, blockLayoutFacet, blockReadContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { blockSetting, cyclePropertyDisplayActions, propertyDisplayActions, setBlockPropertyDisplay } from './actions'
-import { FieldRowRenderer } from './FieldRowRenderer'
-import { ValueRowRenderer } from './ValueRowRenderer'
+import { fieldRowLayoutContribution } from './FieldRowRenderer'
+import { propertyReadContentContribution } from './ValueRowRenderer'
 
 const SOURCE = 'property-rows'
 
@@ -38,8 +38,8 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
 }).of([
   codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
   blockChildrenFooterFacet.of(() => ExpectedPropertyRows, {source: SOURCE, precedence: -100}),
-  blockRenderersFacet.of({id: 'propertyFieldRow', renderer: FieldRowRenderer}, {source: SOURCE}),
-  blockRenderersFacet.of({id: 'propertyValueRow', renderer: ValueRowRenderer}, {source: SOURCE}),
+  blockLayoutFacet.of(fieldRowLayoutContribution, {source: SOURCE, precedence: -100}),
+  blockReadContentDecoratorsFacet.of(propertyReadContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),
   propertyDisplayActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   cyclePropertyDisplayActions.map(action => actionsFacet.of(action, {source: SOURCE, precedence: -100})),

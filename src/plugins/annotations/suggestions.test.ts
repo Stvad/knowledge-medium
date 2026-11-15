@@ -10,10 +10,7 @@ import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {
   annotationQuotePrefixProp,
-  annotationQuoteStartProp,
-  annotationQuoteSuffixProp,
   annotationReplacementProp,
-  annotationTargetProp,
   threadAnchorOf,
   threadIsOpen,
   threadReplacementOf,
@@ -232,29 +229,35 @@ describe('acceptSuggestion', () => {
     await expect(acceptSuggestion(repo, 'B')).rejects.toThrow('Thread B is missing or deleted.')
   })
 
-  it('refuses a property row as the target, whose content is an encoded value', async () => {
+  it('accepts a suggestion on a property value block and undo restores its projection', async () => {
     await db.db.execute(`INSERT INTO workspaces
       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
       VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
     await repo.tx(tx => tx.setProperty('B', annotationQuotePrefixProp, 'a value'), opts)
+    await repo.awaitProcessors()
     const fieldId = propertyDefinitionBlockId(WS, annotationQuotePrefixProp.seedKey)
     const field = await db.db.get<{id: string}>(
       'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0', ['B', propertyFieldContent(fieldId)])
     const value = await db.db.get<{id: string; content: string}>(
       'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id])
-    // Pointed there by hand, quoting the whole value exactly: creation refuses
-    // a property row as a target.
-    const threadId = await suggest('Thursday', 'Thursday 9am')
-    await repo.tx(async tx => {
-      await tx.setProperty(threadId, annotationTargetProp, value.id)
-      await tx.update(threadId, {content: value.content})
-      await tx.setProperty(threadId, annotationQuoteStartProp, 0)
-      await tx.setProperties(threadId, {unset: [annotationQuotePrefixProp, annotationQuoteSuffixProp]})
-    }, opts)
+    const {threadId} = await createThread(repo, {
+      targetId: value.id,
+      anchor: anchorFor(value.content, value.content),
+      replacement: 'new value',
+    })
     expect(resolveAnchor(value.content, threadAnchorOf(await rootOf(threadId)) as RangeAnchor).state).toBe('exact')
 
-    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(UnannotatableTargetError)
+    await acceptSuggestion(repo, threadId)
+    await repo.awaitProcessors()
+    expect((await repo.load(value.id))!.content).toBe('new value')
+    expect((await repo.load('B'))!.properties[annotationQuotePrefixProp.name]).toBe('new value')
+    expect(threadStatusOf(await rootOf(threadId))).toBe('accepted')
+
+    expect(await repo.undo()).toBe(true)
+    await repo.awaitProcessors()
     expect((await repo.load(value.id))!.content).toBe(value.content)
+    expect((await repo.load('B'))!.properties[annotationQuotePrefixProp.name]).toBe('a value')
+    expect(threadStatusOf(await rootOf(threadId))).toBe('open')
   })
 })
 

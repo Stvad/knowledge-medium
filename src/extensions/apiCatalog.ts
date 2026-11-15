@@ -123,7 +123,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     exports: [
       'blockBelowContentFacet', 'blockBulletClassFacet', 'blockBulletHoverFacet', 'blockChildrenFooterFacet',
       'blockClickHandlersFacet',
-      'blockContentDecoratorsFacet', 'blockContentRendererFacet', 'blockContentSurfacePropsFacet',
+      'blockReadContentDecoratorsFacet', 'blockContentDecoratorsFacet', 'blockContentRendererFacet', 'blockContentSurfacePropsFacet',
       'blockGutterItemsFacet',
       'blockTextClassFacet',
       'blockHeaderFacet', 'blockLayoutFacet', 'shortcutSurfaceActivationsFacet', 'enterBlockEditMode',

@@ -6,7 +6,6 @@
 
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api'
 import {createChild} from '@/data/mutators'
-import {isPropertyFieldRow, isPropertyValueRow} from '@/data/propertyChildren'
 import {hasBlockType} from '@/data/properties'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
@@ -41,8 +40,8 @@ export class AnchorChangedError extends ThreadRefusal {
 }
 
 /** The target cannot carry a thread: it is missing or deleted, or it is a
- *  property field or value row, which scope reads never descend into and whose
- *  content is an encoded property value. */
+ *  comment thread root / its container. Property rows are ordinary blocks and
+ *  can be annotated like any other target. */
 export class UnannotatableTargetError extends ThreadRefusal {
   constructor(reason: string) {
     super(reason)
@@ -79,9 +78,6 @@ export const missingTarget = (targetId: string) => new UnannotatableTargetError(
 export const annotatableTarget = async (tx: Tx, targetId: string): Promise<BlockData> => {
   const target = await tx.get(targetId)
   if (!target || target.deleted) throw missingTarget(targetId)
-  if (await isPropertyFieldRow(tx, target) || await isPropertyValueRow(tx, target)) {
-    throw new UnannotatableTargetError('A property row can’t be commented on.')
-  }
   if (hasBlockType(target, THREAD_TYPE) || target.id === commentsPageBlockId(target.workspaceId)) {
     throw new UnannotatableTargetError('A comment thread, or the page that holds them, can’t be commented on.')
   }
