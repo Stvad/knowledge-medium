@@ -52,7 +52,8 @@ export const isImeKeyEvent = (event: {isComposing?: boolean; keyCode?: number}):
 export const isPropertyEditingField = (value: unknown): value is PropertyEditingField =>
   value instanceof HTMLInputElement ||
   value instanceof HTMLSelectElement ||
-  value instanceof HTMLTextAreaElement
+  value instanceof HTMLTextAreaElement ||
+  (value instanceof HTMLElement && value.dataset.propertyEditing === 'true')
 
 /**
  * True for keyboard events shaped like "the user is typing into an editable

@@ -19,3 +19,8 @@
     visibility: hidden;
   }
 }
+
+/* The drawing owns the focus highlight while its stored ancestor remains the navigation anchor. */
+.tm-block:has([data-placeholder-mode="landed"]:focus) > .block-body > div:first-child {
+  background-color: transparent !important;
+}

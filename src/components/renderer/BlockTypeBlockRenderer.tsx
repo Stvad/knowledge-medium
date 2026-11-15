@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /** Renderer for `'block-type'` blocks (user-defined-types Phase 1).
  *  Wraps the default block layout and replaces the content area with a
  *  type editor — label input, description textarea, and a properties
@@ -234,16 +235,8 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   }, [propertyRefs, userSchemas, writeRefs])
 
   const handlePick = useCallback(async (args: AddPropertyArgs) => {
-    if (args.adopted) {
-      await appendSchema(args.adopted)
-      return
-    }
-    // Inline create: same path AddPropertyForm uses.
-    const created = await block.repo.userSchemas.addSchema({
-      name: args.name,
-      presetId: args.presetId,
-    })
-    await appendSchema(created)
+    const {schema} = await adoptOrCreatePropertySchema(block.repo, args)
+    await appendSchema(schema)
   }, [appendSchema, block])
 
   // Glyph-click: register the schema if it doesn't exist, then return it
@@ -260,12 +253,12 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
     )
     if (existing) return existing
     try {
-      return await userSchemas.addSchema({name: trimmed, presetId: args.presetId})
+      return (await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId: args.presetId})).schema
     } catch (err) {
       console.error(`[BlockTypeBlockRenderer] failed to register schema "${trimmed}":`, err)
       return undefined
     }
-  }, [userSchemas])
+  }, [block.repo, userSchemas])
 
   const removeRef = useCallback(async (refId: string) => {
     await writeRefs(propertyRefs.filter(r => r !== refId))

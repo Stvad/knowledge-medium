@@ -9,6 +9,11 @@ export interface CodeMirrorExtensionContext {
    *  whose text becomes a block only once it is submitted: a contribution that
    *  reads or writes the block contributes nothing there. */
   block?: Block
+  /** Storage mode supplied by the renderer. */
+  childBacked?: boolean
+  /** UI state and render location used for editor focus handoff. */
+  uiStateBlock?: Block
+  renderScopeId?: string
 }
 
 /** The context of an editor bound to a block. */

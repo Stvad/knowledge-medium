@@ -1,4 +1,9 @@
 /** A property field arranges ordinary block content and children in columns. */
+import {memberCodecOf} from '@/data/api'
+import {isFieldValueChild} from '@/data/propertyChildren'
+import {PropertyPlaceholder} from './PropertyPlaceholder'
+import {useFocusWithin} from '@/hooks/focusedChild'
+import {useBlockContext} from '@/context/block'
 import type { BlockLayout, BlockLayoutContribution } from '@/extensions/blockInteraction'
 import { BlockFrame, DefaultBlockLayout } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
@@ -16,6 +21,9 @@ const PropertyFieldLayout: BlockLayout = ({
   Shell,
 }) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const focused = useFocusWithin(block, useBlockContext().renderScopeId) === true
+  const definition = useFieldRowDefinition(block)
+  const values = useHandle(block.repo.query.children({id: block.id, propertyChildren: 'all'}), {selector: rows => rows?.filter(isFieldValueChild)})
   const mode = usePropertyDisplayMode(block)
   const soleChildId = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
     selector: children => children?.length === 1 ? children[0] : null,
@@ -34,7 +42,7 @@ const PropertyFieldLayout: BlockLayout = ({
       frameProps={{
         'data-property-field-row': 'true',
         // Keep the control on collapsed rows so keyboard users can reopen them.
-        'data-expanded-single-leaf': String(!isCollapsed && soleChildIsLeaf),
+        'data-expanded-single-leaf': String((!isCollapsed || focused) && soleChildIsLeaf),
       }}
     >
       <div className="block-body relative min-w-0 flex-grow">
@@ -42,9 +50,11 @@ const PropertyFieldLayout: BlockLayout = ({
           <div className="min-w-0" data-property-name-cell="true">
             <Content/>
           </div>
-          <CollapsibleContent className="min-w-0" data-property-value-cell="true">
+          <CollapsibleContent forceMount={focused || undefined} hidden={isCollapsed && !focused} className="min-w-0" data-property-value-cell="true">
             <PropertyFieldRowContext value={block.id}>
               <Children/>
+              {!block.repo.isReadOnly && definition?.schema && values &&
+                <PropertyPlaceholder owner={block.repo.block(block.peek()!.parentId!)} schema={definition.schema} fieldRowId={block.id} available={values.length === 0 || !!memberCodecOf(definition.schema.codec)}/>}
             </PropertyFieldRowContext>
           </CollapsibleContent>
         </div>

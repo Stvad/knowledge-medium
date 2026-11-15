@@ -1,3 +1,4 @@
+import {memberCodecOf} from '@/data/api'
 import { useContext } from 'react'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import type { BlockRenderer } from '@/types'
@@ -26,15 +27,20 @@ const InlineValue = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
     runtime.read(propertyEditorOverridesFacet), schema)
   const Editor = override?.InlineEditor ?? (schema && readValuePresets(runtime).get(schema.codec.type)?.InlineEditor)
   const focusHandlers = usePropertyEditingActivation(block)
-  if (!data || data.isFieldForm || !schema || !isSingleValueProperty(schema) || !Editor) {
+  if (!data || data.isFieldForm || !schema) {
     return <Inner block={block}/>
   }
   let value: unknown
   try {
-    value = schema.codec.decode(valueChildContentToEncoded(schema, data.content))
-  } catch {
-    return <Inner block={block}/>
+    value = (memberCodecOf(schema.codec) ?? schema.codec).decode(valueChildContentToEncoded(schema, data.content))
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
+    return <div className="flex min-w-0 items-center gap-1">
+      <span data-invalid-property-value="true" aria-label="Invalid property value" title={reason}>⚠</span>
+      <Inner block={block}/>
+    </div>
   }
+  if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return <Inner block={block}/>
   return (
     <div data-property-value-row="true" data-property-name={schema.name}
       onFocus={focusHandlers.onFocus} onBlur={focusHandlers.onBlur}>
@@ -50,7 +56,7 @@ const PropertyReadContent = ({block, Inner}: {block: Block; Inner: BlockRenderer
   const definition = useFieldRowDefinition(block)
   const isListed = useIsChildOf(block, useContext(PropertyRowListingContext))
   const isValue = useIsChildOf(block, useContext(PropertyFieldRowContext))
-  if (isListed && definition) {
+  if (isListed && definition && Inner === MarkdownContentRenderer) {
     return (
       <div data-property-definition-link="true" className="min-w-0 text-sm text-muted-foreground">
         <MarkdownContentRenderer block={block} contentTransform={content => content.trim().slice(FIELD_FORM_MARKER.length)}/>
@@ -62,8 +68,9 @@ const PropertyReadContent = ({block, Inner}: {block: Block; Inner: BlockRenderer
 
 const decoratePropertyContent = cachedContentDecorator(PropertyReadContent, 'PropertyReadContent')
 
-/** Specialize ordinary Markdown only; a block's chosen type renderer wins. */
+/** Read-side only: wrapping edit content would remount it when validity changes.
+ * Controls specialize ordinary Markdown; validation retains the chosen renderer. */
 export const propertyReadContentContribution: BlockContentDecoratorContribution = context =>
   drawsPropertyRows(context.blockContext)
-    ? inner => inner === MarkdownContentRenderer ? decoratePropertyContent(inner) : inner
+    ? decoratePropertyContent
     : null
