@@ -1,0 +1,1 @@
+export{wy as blockrefMarkdownExtension}from"../../../../../chunks/app-CkRuIngU.js";

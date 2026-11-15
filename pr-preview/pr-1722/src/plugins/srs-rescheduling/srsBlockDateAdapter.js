@@ -1,0 +1,1 @@
+export{Zl as srsBlockDateAdapter}from"../../../chunks/app-CkRuIngU.js";

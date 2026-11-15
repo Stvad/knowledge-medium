@@ -1,0 +1,1 @@
+export{SO as useAncestorCrumbs}from"../../chunks/app-CkRuIngU.js";

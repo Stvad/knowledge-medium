@@ -1,0 +1,1 @@
+export{Su as blockTagsConfigUi}from"../../../chunks/app-CkRuIngU.js";

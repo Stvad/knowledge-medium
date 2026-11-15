@@ -1,0 +1,1 @@
+export{qM as BlockEmbed}from"../../../chunks/app-CkRuIngU.js";

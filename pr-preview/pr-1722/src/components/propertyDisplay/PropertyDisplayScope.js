@@ -1,0 +1,1 @@
+export{CI as PropertyDisplayScope}from"../../../chunks/app-CkRuIngU.js";

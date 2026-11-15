@@ -1,0 +1,1 @@
+export{TE as BINARY_ENVELOPE_MAGIC,EE as BINARY_ENVELOPE_MIN_BYTES,DE as BINARY_ENVELOPE_OVERHEAD_BYTES,OE as BINARY_MAGIC_BYTES,kE as decodeBinaryEnvelope,AE as encodeBinaryEnvelope,jE as hasBinaryEnvelopeMagic}from"../../../chunks/app-CkRuIngU.js";

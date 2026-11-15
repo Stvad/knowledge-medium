@@ -1,0 +1,1 @@
+export{FS as videoPlayerPlugin}from"../../../chunks/app-CkRuIngU.js";

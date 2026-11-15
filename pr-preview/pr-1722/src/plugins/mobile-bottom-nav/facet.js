@@ -1,0 +1,1 @@
+export{iT as mobileBottomNavItemsFacet}from"../../../chunks/app-CkRuIngU.js";

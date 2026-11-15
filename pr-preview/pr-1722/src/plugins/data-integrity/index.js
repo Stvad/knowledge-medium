@@ -1,0 +1,1 @@
+export{bs as dataIntegrityPlugin}from"../../../chunks/app-CkRuIngU.js";

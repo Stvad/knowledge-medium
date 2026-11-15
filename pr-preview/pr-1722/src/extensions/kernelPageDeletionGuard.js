@@ -1,0 +1,1 @@
+export{DP as kernelPageDeletionGuard}from"../../chunks/app-CkRuIngU.js";
