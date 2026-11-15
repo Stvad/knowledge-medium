@@ -1,5 +1,7 @@
 import {useIsFocalRender} from '@/hooks/useIsFocalRender'
-import {useContext} from 'react'
+import {useContext, useState} from 'react'
+import {useBlockContext} from '@/context/block'
+import {drawsPropertyRows} from './fieldRow'
 import type {Block} from '@/data/block'
 import {getBlockTypes, isCollapsedProp} from '@/data/properties'
 import {useHandle, usePropertyDisplayMode, usePropertyValue} from '@/hooks/block'
@@ -24,11 +26,13 @@ export function ExpectedPropertyRows({block}: BlockRendererProps) {
   const [collapsed] = usePropertyValue(block, isCollapsedProp)
   const focal = useIsFocalRender(block)
   const types = useHandle(block, {selector: row => row ? getBlockTypes(row) : []})
-  if (!scope.childBacked || block.repo.isReadOnly || (collapsed && !focal) || mode === 'none' || !types.length) return null
+  const context = useBlockContext()
+  if (!drawsPropertyRows(context) || !scope.childBacked || block.repo.isReadOnly || (collapsed && !focal) || mode === 'none' || !types.length) return null
   return <TypedExpectedFields owner={block} mode={mode} typeIds={types}/>
 }
 
 function TypedExpectedFields({owner, mode, typeIds}: {owner: Block; mode: 'all' | 'non-hidden'; typeIds: readonly string[]}) {
+  const [activeGhost, setActiveGhost] = useState<string | null>(null)
   const schemas = usePropertySchemas()
   const types = useTypes()
   const data = useHandle(owner, {selector: row => row})
@@ -44,11 +48,11 @@ function TypedExpectedFields({owner, mode, typeIds}: {owner: Block; mode: 'all' 
     if (result.status !== 'resolved') return []
     const schema = result.schema
     if (seen.has(schema.fieldId) || skipped?.has(schema.fieldId) ||
-      stored.some(row => row.isFieldForm && row.referenceTargetId === schema.fieldId) || Object.hasOwn(data.properties, schema.name)) return []
+      (activeGhost !== schema.fieldId && (stored.some(row => row.isFieldForm && row.referenceTargetId === schema.fieldId) || Object.hasOwn(data.properties, schema.name)))) return []
     seen.add(schema.fieldId)
     return [<div key={schema.fieldId} data-property-ghost="true" className="ml-6 grid grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] gap-3">
       <span className="text-sm text-muted-foreground">{schema.name}</span>
-      <PropertyPlaceholder owner={owner} schema={schema}/>
+      <PropertyPlaceholder owner={owner} schema={schema} onActiveChange={active => setActiveGhost(active ? schema.fieldId : null)}/>
     </div>]
   }))
 }

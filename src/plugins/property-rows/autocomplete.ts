@@ -12,6 +12,7 @@ import {exitEditModeForBlock, peekFocusedBlockLocation, focusBlock} from '@/data
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {DEFAULT_PRESET_ID} from '@/components/propertyPanel/PropertyPicker'
 import {showError} from '@/utils/toast'
+import {focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {isVisibleElement} from '@/utils/propertyNavigation'
 
 export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScopeId}: CodeMirrorExtensionContext): CompletionSource => async context => {
@@ -36,6 +37,7 @@ export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScope
       if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)
       else {
         await focusBlock(uiStateBlock, target.fieldRowId, {edit: false, renderScopeId})
+        focusPickedPlaceholder(target.fieldRowId, renderScopeId, () => peekFocusedBlockLocation(uiStateBlock)?.blockId === target.fieldRowId)
       }
     })().catch(error => showError(error instanceof Error ? error.message : 'Could not add property'))
   }}))}

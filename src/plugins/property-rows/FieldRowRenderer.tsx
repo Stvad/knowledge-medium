@@ -53,8 +53,8 @@ const PropertyFieldLayout: BlockLayout = ({
           <CollapsibleContent forceMount={focused || undefined} hidden={isCollapsed && !focused} className="min-w-0" data-property-value-cell="true">
             <PropertyFieldRowContext value={block.id}>
               <Children/>
-              {!block.repo.isReadOnly && definition?.schema && values && (values.length === 0 || memberCodecOf(definition.schema.codec)) &&
-                <PropertyPlaceholder owner={block.repo.block(block.peek()!.parentId!)} schema={definition.schema} fieldRowId={block.id}/>}
+              {!block.repo.isReadOnly && definition?.schema && values &&
+                <PropertyPlaceholder owner={block.repo.block(block.peek()!.parentId!)} schema={definition.schema} fieldRowId={block.id} available={values.length === 0 || !!memberCodecOf(definition.schema.codec)}/>}
             </PropertyFieldRowContext>
           </CollapsibleContent>
         </div>

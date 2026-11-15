@@ -1,3 +1,8 @@
+import {drawsPropertyRows} from './fieldRow'
+import {actionDispatchWrap} from '@/shortcuts/actionDispatch'
+import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
+import {structuralEditPolicyForBlock} from '@/data/structuralEditPolicy'
+import {fieldPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
 import {propertyAutocomplete} from './autocomplete'
@@ -36,8 +41,16 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   name: 'Property rows',
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
+  actionDispatchWrap({actionId: 'create_block_below_and_edit', context: ActionContextTypes.NORMAL_MODE,
+    wrap: async (deps, trigger, next) => {
+      const blockDeps = deps as BlockShortcutDependencies
+      const placeholder = fieldPlaceholder(blockDeps.block.id, blockDeps.renderScopeId)
+      if (placeholder && (await structuralEditPolicyForBlock(blockDeps.block, blockDeps)).createBelowPlacement === 'child-first') placeholder.focus()
+      else await next(deps, trigger)
+    },
+  }, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
-  blockChildrenFooterFacet.of(() => ExpectedPropertyRows, {source: SOURCE, precedence: -100}),
+  blockChildrenFooterFacet.of(context => drawsPropertyRows(context.blockContext) ? ExpectedPropertyRows : null, {source: SOURCE, precedence: -100}),
   blockLayoutFacet.of(fieldRowLayoutContribution, {source: SOURCE, precedence: -100}),
   blockReadContentDecoratorsFacet.of(propertyReadContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),

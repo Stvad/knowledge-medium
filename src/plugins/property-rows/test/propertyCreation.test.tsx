@@ -1,5 +1,10 @@
 // @vitest-environment happy-dom
-import {Suspense} from 'react'
+import {Suspense, useEffect} from 'react'
+import {focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
+import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
+import {vimNormalModeInteractionExtension} from '@/plugins/vim-normal-mode'
+import {vimNormalModeActionsExtension} from '@/plugins/vim-normal-mode/actions'
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty, seedType, type User} from '@/data/api'
@@ -10,9 +15,9 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {resolveFacetRuntimeSync, type FacetRuntime} from '@/facets/facet'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
-import {actionContextsFacet} from '@/extensions/core'
+import {actionContextsFacet, actionsFacet} from '@/extensions/core'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
-import {ActiveContextsProvider} from '@/shortcuts/ActiveContexts'
+import {ActiveContextsProvider, useActiveContextsState, type ActiveContextsMap} from '@/shortcuts/ActiveContexts'
 import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts'
 import {BlockContextProvider} from '@/context/block'
 import {PropertyDisplayScopeContext} from '@/context/propertyDisplay'
@@ -28,8 +33,7 @@ import {EditorView} from '@codemirror/view'
 import {CompletionContext} from '@codemirror/autocomplete'
 import {flushEditorContent} from '@/editor/contentFlush'
 import {handlePropertyValueEnter, propertyCompletionSource} from '../autocomplete'
-import {choosePropertyField} from '@/data/propertyRowCreation'
-import * as propertyRowCreation from '@/data/propertyRowCreation'
+import {choosePropertyField, insertPropertyValue} from '@/data/propertyRowCreation'
 import * as blockInteraction from '@/extensions/blockInteraction'
 import {propertyRowsPlugin} from '../index'
 import {editorAutocompleteExtension} from '@/editor/autocomplete'
@@ -37,6 +41,7 @@ import {acceptCompletion} from '@codemirror/autocomplete'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {blockChildrenFooterFacet, isInteractiveContentEvent} from '@/extensions/blockInteraction'
 
+const normalCommand = vi.fn()
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
 
@@ -71,6 +76,7 @@ afterEach(() => {
   __resetLazyMountCachesForTesting()
 })
 beforeEach(async () => {
+  normalCommand.mockClear()
   window.addEventListener('selectionchange', swallowSelectionChange, true)
   vi.stubGlobal('IntersectionObserver', undefined)
   vi.stubGlobal('matchMedia', (query: string) => ({
@@ -86,8 +92,10 @@ beforeEach(async () => {
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
     defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
+    vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}),
     blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
+    actionsFacet.of({id: 'test:normal-command', context: ActionContextTypes.NORMAL_MODE, description: 'Test normal command', defaultBinding: {keys: 'q'}, handler: normalCommand}),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
     typeSeedsFacet.of(expectedType, {source: 'test'}),
   ])
@@ -108,12 +116,20 @@ beforeEach(async () => {
   repo.undoManager.clear()
 })
 
+let activeContexts: ActiveContextsMap = new Map()
+const ContextProbe = () => {
+  const contexts = useActiveContextsState()
+  useEffect(() => { activeContexts = contexts }, [contexts])
+  return null
+}
 const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
+        <HotkeyReconciler/>
+        <ContextProbe/>
         <Suspense fallback={null}>
-          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test'}}>
+          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root}}>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
               <BlockComponent blockId={root}/>
             </PropertyDisplayScopeContext>
@@ -138,11 +154,73 @@ const ownerDescendants = async () => db.db.getAll<{
      FROM blocks b JOIN descendants d ON d.id = b.id ORDER BY b.parent_id, b.order_key, b.id`, [OWNER])
 const settle = () => screen.findByText('Existing note')
 const typePlaceholderText = (target: HTMLElement, text: string) => {
-  target.textContent = text
+  target.textContent += text
   fireEvent.input(target, {inputType: 'insertText', data: text, isComposing: false})
 }
 
 describe('expected property placeholders in the outline', () => {
+  it('normal-mode navigation passes empty fields and ghosts without writing', async () => {
+    const scalar = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    await choosePropertyField(repo.block(OWNER), plain, repo.block(scalar))
+    const listScaffold = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    await choosePropertyField(repo.block(OWNER), list, repo.block(listScaffold))
+    await insertPropertyValue(repo.block(OWNER), list, 'member')
+    const below = await repo.mutate.createChild({parentId: OWNER, content: 'Below fields'})
+    await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
+    mount('all')
+    await screen.findByText('Below fields')
+    await act(async () => { await focusBlock(repo.block(PANEL), scalar, {renderScopeId: 'creation-test'}) })
+    const before = await ownerDescendants()
+    expect(document.activeElement?.hasAttribute('data-property-placeholder')).toBe(false)
+    for (let i = 0; i < 3; i++) {
+      const current = peekFocusedBlockLocation(repo.block(PANEL))!.blockId
+      await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(current))
+      fireEvent.keyDown(document.querySelector(`[data-block-id="${current}"]`)!, {key: 'j', code: 'KeyJ'})
+      await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).not.toBe(current))
+      expect(document.activeElement?.hasAttribute('data-property-placeholder')).toBe(false)
+    }
+    expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(below)
+    expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it.each(['i', 'a', 'o', 'Enter'])('normal-mode %s keeps the field-row key semantics', async key => {
+    await repo.block(OWNER).set(list, ['saved'])
+    await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
+    mount('all')
+    const placeholder = await screen.findByLabelText(`Enter ${list.name}`)
+    const fieldId = placeholder.getAttribute('data-property-placeholder')!
+    await act(async () => { await focusBlock(repo.block(PANEL), fieldId, {renderScopeId: 'creation-test'}) })
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(fieldId))
+    const before = await ownerDescendants()
+    fireEvent.keyDown(document.querySelector(`[data-block-id="${fieldId}"]`)!, {key, code: key === 'Enter' ? 'Enter' : `Key${key.toUpperCase()}`})
+    if (key === 'o') await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    else if (key !== 'Enter') await waitFor(() => expect(document.querySelector(`[data-block-id="${fieldId}"] .cm-content`)?.textContent).toBe(repo.block(fieldId).peek()?.content))
+    else expect(repo.block(PANEL).peekProperty(isEditingProp)).toBe(false)
+    expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it('Escape from a ghost focuses the last drawn child, then j moves on normally', async () => {
+    const child = await repo.mutate.createChild({parentId: OWNER, content: 'Last child'})
+    mount('all')
+    const ghost = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { ghost.focus() })
+    fireEvent.keyDown(ghost, {key: 'Escape', code: 'Escape'})
+    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(child))
+    expect(document.activeElement).not.toBe(ghost)
+    expect((await repo.load(OWNER))?.deleted).toBe(false)
+  })
+
+  it('ignores whitespace-only first input without opening a transaction', async () => {
+    mount('all')
+    const ghost = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { ghost.focus() })
+    const tx = vi.spyOn(repo, 'tx')
+    try {
+      act(() => { typePlaceholderText(ghost, '  ') })
+      expect(tx).not.toHaveBeenCalled()
+    } finally { tx.mockRestore() }
+  })
+
   it('renders typed fields by display tier after existing children, without adding structural children', async () => {
     mount('non-hidden')
     await settle()
@@ -241,6 +319,50 @@ describe('expected property placeholders in the outline', () => {
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
   })
 
+  it('keeps command keys on the mounted input through every handoff stage', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    const barriers = Array.from({length: 2}, () => {
+      let release!: () => void
+      let entered!: () => void
+      return {gate: new Promise<void>(resolve => { release = resolve }), hit: new Promise<void>(resolve => { entered = resolve }), release: () => release(), entered: () => entered()}
+    })
+    const originalTx = repo.tx.bind(repo)
+    const txSpy = vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
+      const result = await originalTx(...args)
+      if (args[1]?.description === 'Enter property value') { barriers[0].entered(); await barriers[0].gate }
+      return result
+    })
+    const panel = repo.block(PANEL)
+    const originalSet = panel.set.bind(panel)
+    const setSpy = vi.spyOn(panel, 'set').mockImplementation(async (schema, value) => {
+      if (schema.name === editorSelection.name) { barriers[1].entered(); await barriers[1].gate }
+      return originalSet(schema, value)
+    })
+    try {
+      await act(async () => { target.focus() })
+      await waitFor(() => expect(activeContexts.has(ActionContextTypes.PROPERTY_EDITING)).toBe(true))
+      fireEvent.keyDown(target, {key: 'q', code: 'KeyQ'})
+      await act(async () => { typePlaceholderText(target, 'x') })
+      for (const barrier of barriers) {
+        await barrier.hit
+        expect(target.isConnected).toBe(true)
+        expect(document.activeElement).toBe(target)
+        fireEvent.keyDown(document.activeElement!, {key: 'q', code: 'KeyQ'})
+        expect(normalCommand).not.toHaveBeenCalled()
+        await act(async () => { typePlaceholderText(target, 'y'); barrier.release() })
+      }
+      await waitFor(() => expect(document.activeElement?.classList.contains('cm-content')).toBe(true))
+      await waitFor(() => expect(document.querySelector('.cm-content')?.textContent).toBe('xyy'))
+      fireEvent.keyDown(document.activeElement!, {key: 'q', code: 'KeyQ'})
+      expect(normalCommand).not.toHaveBeenCalled()
+      await waitFor(async () => expect(await repo.block(OWNER).get(plain)).toBe('xyy'))
+      expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+      await act(async () => { await repo.undo() })
+      expect(repo.block(OWNER).peek()?.properties).not.toHaveProperty(plain.name)
+    } finally { barriers.forEach(barrier => barrier.release()); txSpy.mockRestore(); setSpy.mockRestore() }
+  })
+
   it('places the first editor caret at the end when content grows during activation', async () => {
     mount('non-hidden')
     const target = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
@@ -320,10 +442,8 @@ describe('expected property placeholders in the outline', () => {
     const editor = [...document.querySelectorAll<HTMLElement>('.cm-content')].find(node => node.textContent === 'xy')!
     const view = EditorView.findFromDOM(editor)!
     expect(view.state.selection.main.anchor).toBe(2)
-    for (let step = 0; step < 4 && repo.undoManager.depths(ChangeScope.BlockDefault).undo > 0; step++) {
-      await act(async () => { await repo.undo() })
-      if (await ownerDescendants().then(rows => rows.length === before.length)) break
-    }
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+    await act(async () => { await repo.undo() })
     expect(await ownerDescendants()).toEqual(before)
   })
 
@@ -355,6 +475,7 @@ describe('expected property placeholders in the outline', () => {
     await act(async () => {
       const picked = await choosePropertyField(repo.block(OWNER), list, repo.block(source))
       await focusBlock(repo.block(PANEL), picked.fieldRowId, {edit: false, renderScopeId: 'creation-test'})
+      focusPickedPlaceholder(picked.fieldRowId, 'creation-test', () => true)
     })
     const target = await screen.findByLabelText(`Enter ${list.name}`)
     expect(document.activeElement).toBe(target)
@@ -372,19 +493,9 @@ describe('expected property placeholders in the outline', () => {
     const callbackDone = new Promise<void>(resolve => { signalCallbackDone = resolve })
     const original = repo.tx.bind(repo)
     const enterEditSpy = vi.spyOn(blockInteraction, 'enterEditModeForBlock')
-    const originalInsert = propertyRowCreation.insertPropertyValue
-    const insertSpy = vi.spyOn(propertyRowCreation, 'insertPropertyValue').mockImplementation((...args) => {
-      const promise = originalInsert(...args)
-      const then = promise.then.bind(promise)
-      Object.defineProperty(promise, 'then', {
-        configurable: true,
-        value: ((...thenArgs: Parameters<typeof promise.then>) => {
-          const callbackPromise = then(...thenArgs)
-          void callbackPromise.then(signalCallbackDone, signalCallbackDone)
-          return callbackPromise
-        }) as typeof promise.then,
-      })
-      return promise
+    const originalGroup = repo.undoGroup.bind(repo)
+    const groupSpy = vi.spyOn(repo, 'undoGroup').mockImplementation(async callback => {
+      try { return await originalGroup(callback) } finally { signalCallbackDone() }
     })
     const spy = vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
       const result = await original(...args)
@@ -397,7 +508,7 @@ describe('expected property placeholders in the outline', () => {
     try {
       await act(async () => { first.focus(); typePlaceholderText(first, 'x') })
       await entered
-      await waitFor(() => expect(first.isConnected).toBe(false))
+      expect(first.isConnected).toBe(true)
       await act(async () => { second.focus() })
       expect(document.activeElement).toBe(second)
       release()
@@ -409,7 +520,7 @@ describe('expected property placeholders in the outline', () => {
     } finally {
       release()
       spy.mockRestore()
-      insertSpy.mockRestore()
+      groupSpy.mockRestore()
       enterEditSpy.mockRestore()
     }
   })
