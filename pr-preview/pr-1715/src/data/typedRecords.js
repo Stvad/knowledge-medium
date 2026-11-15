@@ -1,0 +1,1 @@
+export{dj as adoptTypedBlock,fj as createTypedChild,_ot as derivedBlockId,pj as getOrCreateTypedChild}from"../../chunks/app-yjQr0pZB.js";
