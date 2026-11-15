@@ -1,1 +1,1 @@
-export{GD as ReferenceLink}from"../../../chunks/app-CM7LE9Hr.js";
+export{GD as ReferenceLink}from"../../../chunks/app-CdKbeYUa.js";
