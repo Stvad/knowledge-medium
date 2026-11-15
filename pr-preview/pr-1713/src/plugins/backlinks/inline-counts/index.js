@@ -1,1 +1,1 @@
-export{Nv as inlineBacklinkCountsExtension}from"../../../../chunks/app-K5YFYOKK.js";
+export{Nv as inlineBacklinkCountsExtension}from"../../../../chunks/app-RhB-Bgw5.js";

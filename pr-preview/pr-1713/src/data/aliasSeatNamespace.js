@@ -1,1 +1,1 @@
-export{Fat as aliasSeatNamespacesInTx,Iat as resolveAliasSeatNamespaces}from"../../chunks/app-K5YFYOKK.js";
+export{Fat as aliasSeatNamespacesInTx,Iat as resolveAliasSeatNamespaces}from"../../chunks/app-RhB-Bgw5.js";
