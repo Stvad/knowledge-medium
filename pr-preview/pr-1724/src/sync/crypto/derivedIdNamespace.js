@@ -1,1 +1,1 @@
-export{Gat as deriveWorkspaceIdNamespace}from"../../../chunks/app-S2nWQHgg.js";
+export{Kat as deriveWorkspaceIdNamespace}from"../../../chunks/app-DS2PNHdK.js";

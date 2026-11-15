@@ -1,1 +1,1 @@
-export{Zl as srsBlockDateAdapter}from"../../../chunks/app-S2nWQHgg.js";
+export{Zl as srsBlockDateAdapter}from"../../../chunks/app-DS2PNHdK.js";

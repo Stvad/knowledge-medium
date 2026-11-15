@@ -1,1 +1,1 @@
-export{mj as openKeybindingsSettingsAction}from"../../../chunks/app-S2nWQHgg.js";
+export{mj as openKeybindingsSettingsAction}from"../../../chunks/app-DS2PNHdK.js";

@@ -1,1 +1,1 @@
-export{fat as aliasSeatNamespacesInTx,pat as resolveAliasSeatNamespaces}from"../../chunks/app-S2nWQHgg.js";
+export{pat as aliasSeatNamespacesInTx,mat as resolveAliasSeatNamespaces}from"../../chunks/app-DS2PNHdK.js";
