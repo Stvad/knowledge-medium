@@ -1,1 +1,1 @@
-export{kF as BlockChildren,AF as BlockComponent}from"../../chunks/app-Ch3n4OSB.js";
+export{IF as BlockChildren,LF as BlockComponent}from"../../chunks/app-BDAd3sL6.js";

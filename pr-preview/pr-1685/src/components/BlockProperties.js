@@ -1,1 +1,1 @@
-export{WB as BlockProperties}from"../../chunks/app-Ch3n4OSB.js";
+export{QB as BlockProperties}from"../../chunks/app-BDAd3sL6.js";

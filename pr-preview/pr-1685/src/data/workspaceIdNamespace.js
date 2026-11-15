@@ -1,0 +1,1 @@
+export{vat as DerivedIdNamespaceUnavailableError,yat as derivedIdNamespaceInTx,bat as resolveDerivedIdNamespace}from"../../chunks/app-BDAd3sL6.js";

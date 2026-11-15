@@ -1,1 +1,1 @@
-export{gj as ShortcutHelpHeaderItem}from"../../../chunks/app-Ch3n4OSB.js";
+export{Cj as ShortcutHelpHeaderItem}from"../../../chunks/app-BDAd3sL6.js";

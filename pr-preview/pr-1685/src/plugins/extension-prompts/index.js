@@ -1,1 +1,1 @@
-export{ZN as ExtensionPromptSurface,QN as extensionPromptsExtension}from"../../../chunks/app-Ch3n4OSB.js";
+export{iP as ExtensionPromptSurface,aP as extensionPromptsExtension}from"../../../chunks/app-BDAd3sL6.js";

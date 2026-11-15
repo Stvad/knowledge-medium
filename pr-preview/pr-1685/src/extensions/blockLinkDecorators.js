@@ -1,1 +1,1 @@
-export{UD as blockLinkDecoratorsFacet}from"../../chunks/app-Ch3n4OSB.js";
+export{XD as blockLinkDecoratorsFacet}from"../../chunks/app-BDAd3sL6.js";

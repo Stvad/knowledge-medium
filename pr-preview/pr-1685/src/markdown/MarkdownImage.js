@@ -1,1 +1,1 @@
-export{UF as MarkdownImage}from"../../chunks/app-Ch3n4OSB.js";
+export{XF as MarkdownImage}from"../../chunks/app-BDAd3sL6.js";

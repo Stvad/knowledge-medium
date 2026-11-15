@@ -1,1 +1,1 @@
-export{lg as readMedia}from"../../../chunks/app-Ch3n4OSB.js";
+export{gg as readMedia}from"../../../chunks/app-BDAd3sL6.js";
