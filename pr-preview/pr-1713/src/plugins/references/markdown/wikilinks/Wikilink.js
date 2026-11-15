@@ -1,1 +1,1 @@
-export{ky as Wikilink}from"../../../../../chunks/app-CFLbgpp8.js";
+export{ky as Wikilink}from"../../../../../chunks/app-CEs22tzm.js";

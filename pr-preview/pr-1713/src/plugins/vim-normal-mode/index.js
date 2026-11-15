@@ -1,1 +1,1 @@
-export{EC as vimNormalModeInteractionExtension,DC as vimNormalModePlugin}from"../../../chunks/app-CFLbgpp8.js";
+export{EC as vimNormalModeInteractionExtension,DC as vimNormalModePlugin}from"../../../chunks/app-CEs22tzm.js";

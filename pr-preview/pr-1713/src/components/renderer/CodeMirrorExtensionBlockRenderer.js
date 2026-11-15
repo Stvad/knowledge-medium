@@ -1,1 +1,1 @@
-export{WI as CodeMirrorExtensionBlockRenderer,GI as ExtensionEditor}from"../../../chunks/app-CFLbgpp8.js";
+export{WI as CodeMirrorExtensionBlockRenderer,GI as ExtensionEditor}from"../../../chunks/app-CEs22tzm.js";

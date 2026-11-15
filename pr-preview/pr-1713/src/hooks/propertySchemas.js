@@ -1,1 +1,1 @@
-export{GG as usePropertySchemas}from"../../chunks/app-CFLbgpp8.js";
+export{GG as usePropertySchemas}from"../../chunks/app-CEs22tzm.js";

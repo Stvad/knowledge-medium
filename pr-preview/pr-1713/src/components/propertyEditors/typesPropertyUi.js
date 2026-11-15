@@ -1,1 +1,1 @@
-export{iN as kernelPropertyUiExtension,aN as typesPropertyUi,oN as typesPropertyUiExtension}from"../../../chunks/app-CFLbgpp8.js";
+export{iN as kernelPropertyUiExtension,aN as typesPropertyUi,oN as typesPropertyUiExtension}from"../../../chunks/app-CEs22tzm.js";
