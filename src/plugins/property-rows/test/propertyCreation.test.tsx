@@ -565,6 +565,48 @@ describe('expected property placeholders in the outline', () => {
     expect(document.activeElement).toBe(target)
   })
 
+  it('finishing an earlier ghost does not release the next ghost during its handoff', async () => {
+    mount('all')
+    const first = await screen.findByLabelText(`Enter ${plain.name}`)
+    const second = await screen.findByLabelText(`Enter ${list.name}`)
+    let releaseFirst!: () => void, firstEntered!: () => void, firstDone!: () => void
+    let releaseSecond!: () => void, secondEntered!: () => void
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const firstHit = new Promise<void>(resolve => { firstEntered = resolve })
+    const firstFinished = new Promise<void>(resolve => { firstDone = resolve })
+    const secondGate = new Promise<void>(resolve => { releaseSecond = resolve })
+    const secondHit = new Promise<void>(resolve => { secondEntered = resolve })
+    const originalTx = repo.tx.bind(repo), originalGroup = repo.undoGroup.bind(repo)
+    let creates = 0, groups = 0
+    vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
+      const result = await originalTx(...args)
+      if (args[1]?.description === 'Enter property value' && ++creates === 1) { firstEntered(); await firstGate }
+      return result
+    })
+    vi.spyOn(repo, 'undoGroup').mockImplementation(async fn => {
+      const group = ++groups
+      try { return await originalGroup(fn) } finally { if (group === 1) firstDone() }
+    })
+    const panel = repo.block(PANEL), originalSet = panel.set.bind(panel)
+    vi.spyOn(panel, 'set').mockImplementation(async (schema, value) => {
+      if (schema.name === editorSelection.name) { secondEntered(); await secondGate }
+      return originalSet(schema, value)
+    })
+    try {
+      await act(async () => { first.focus(); typePlaceholderText(first, 'x') })
+      await firstHit
+      await act(async () => { second.focus(); typePlaceholderText(second, 'y') })
+      await secondHit
+      await act(async () => { releaseFirst(); await firstFinished })
+      expect(second.isConnected).toBe(true)
+      expect(document.activeElement).toBe(second)
+      fireEvent.keyDown(second, {key: 'q', code: 'KeyQ'})
+      expect(normalCommand).not.toHaveBeenCalled()
+      await act(async () => { releaseSecond() })
+      await waitFor(() => expect(document.querySelector('.cm-content')?.textContent).toBe('y'))
+    } finally { releaseFirst(); releaseSecond() }
+  })
+
   it('keeps focus on another placeholder when value creation finishes', async () => {
     mount('all')
     const first = await screen.findByLabelText(`Enter ${plain.name}`)
@@ -611,7 +653,7 @@ describe('expected property placeholders in the outline', () => {
     }
   })
 
-  it('does not take focus back after applying a completion in a block the user left', async () => {
+  it.each(['block', 'scope'])('does not take focus back after applying a completion when the user changed %s', async kind => {
     const sourceId = await repo.mutate.createChild({parentId: OWNER, content: '::creation:plain'})
     mount('all')
     await act(async () => { await focusBlock(repo.block(PANEL), sourceId, {edit: true, renderScopeId: 'creation-test'}) })
@@ -625,7 +667,7 @@ describe('expected property placeholders in the outline', () => {
     const original = propertyCreation.choosePropertyField
     vi.spyOn(propertyCreation, 'choosePropertyField').mockImplementation(async (...args) => {
       const target = await original(...args)
-      await focusBlock(repo.block(PANEL), NOTE, {renderScopeId: 'creation-test'})
+      await focusBlock(repo.block(PANEL), kind === 'block' ? NOTE : sourceId, {renderScopeId: kind === 'scope' ? 'other-scope' : 'creation-test'})
       return target
     })
     const exit = vi.spyOn(properties, 'exitEditModeForBlock').mockResolvedValue()
@@ -635,7 +677,7 @@ describe('expected property placeholders in the outline', () => {
       if (typeof apply === 'function') await apply(view, completion!.options[0], 0, view.state.doc.length)
     })
     expect(exit).not.toHaveBeenCalled()
-    expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(NOTE)
+    expect(peekFocusedBlockLocation(repo.block(PANEL))).toEqual({blockId: kind === 'block' ? NOTE : sourceId, renderScopeId: kind === 'scope' ? 'other-scope' : 'creation-test'})
   })
 
   it('preserves text typed while an existing field choice waits on its source check', async () => {

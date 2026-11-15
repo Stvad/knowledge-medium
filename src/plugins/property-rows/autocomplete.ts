@@ -8,7 +8,7 @@ import type {CodeMirrorExtensionContribution, CodeMirrorExtensionContext} from '
 import {flushEditorContent} from '@/editor/contentFlush'
 import {canConvertEmptyChildBlockToProperty} from '@/utils/propertyCreation'
 import {choosePropertyField, createPropertyField} from '@/data/propertyRowCreation'
-import {exitEditModeForBlock, peekFocusedBlockLocation, focusBlock} from '@/data/properties'
+import {exitEditModeForBlock, peekFocusedBlockLocation, sameFocusedBlockLocation, uiStateRenderScopeId, focusBlock} from '@/data/properties'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {isPropertyPickerName} from '@/components/propertyPanel/visibility'
 import {propertyEditorOverridesFacet} from '@/data/facets'
@@ -32,12 +32,12 @@ const convertChoice = async (owner: Block, source: Block, choice: PropertyChoice
 
 const focusChoice = async (context: CodeMirrorExtensionContext & {block: Block}, target: Awaited<ReturnType<typeof convertChoice>>) => {
   const {repo, block, uiStateBlock, renderScopeId} = context
-  if (!target || !uiStateBlock || peekFocusedBlockLocation(uiStateBlock)?.blockId !== block.id) return
+  if (!target || !uiStateBlock || !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), {blockId: block.id, renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, block.id)})) return
   await exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
   if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)
   else {
     await focusBlock(uiStateBlock, target.fieldRowId, {edit: false, renderScopeId})
-    focusPickedPlaceholder(target.fieldRowId, renderScopeId, () => peekFocusedBlockLocation(uiStateBlock)?.blockId === target.fieldRowId)
+    focusPickedPlaceholder(target.fieldRowId, renderScopeId, () => sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), {blockId: target.fieldRowId, renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, target.fieldRowId)}))
   }
 }
 
@@ -55,7 +55,7 @@ export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): Co
   const schemas = [...repo.propertySchemas.values()].filter(schema => schema.changeScope === ChangeScope.BlockDefault && !hidden(schema.name) && schema.name.toLowerCase().includes(query))
     .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name)).slice(0, 8)
   const candidates: PropertyChoice[] = schemas.map(schema => ({kind: 'existing', label: schema.name, schema}))
-  if (context.explicit && name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.push({kind: 'create', label: `Create “${name}”`, name})
+  if (context.explicit && name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.splice(7, 1, {kind: 'create', label: `Create “${name}”`, name})
   if (!candidates.length) return null
   return {from: 0, filter: false, options: candidates.map(candidate => ({label: candidate.label, apply: (view: EditorView) => {
     closeCompletion(view)

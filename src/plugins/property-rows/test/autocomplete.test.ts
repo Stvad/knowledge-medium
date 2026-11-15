@@ -54,6 +54,9 @@ it('ranks exact names before prefixes before substrings and caps the result', as
   expect(names.slice(1).every(name => name.startsWith('status'))).toBe(true)
   const detail = (await complete('::status detail'))!.options
   expect(detail[0].label).toBe('status detail')
+  const explicit = (await complete('::stat', 6, true))!.options
+  expect(explicit).toHaveLength(8)
+  expect(explicit.at(-1)?.label).toBe('Create “stat”')
 })
 it('uses picker visibility and only ordinary undoable scopes', async () => {
   const names = (await complete())!.options.map(option => option.label)

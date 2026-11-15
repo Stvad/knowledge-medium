@@ -45,7 +45,7 @@ function TypedExpectedFields({owner, mode, typeIds}: {owner: Block; mode: 'all' 
     seen.add(schema.fieldId)
     return [<div key={schema.fieldId} data-property-ghost="true" className="ml-6 grid grid-cols-[minmax(6rem,11rem)_minmax(0,1fr)] gap-3">
       <span className="text-sm text-muted-foreground">{schema.name}</span>
-      <PropertyPlaceholder owner={owner} schema={schema} onActiveChange={active => setActiveGhost(active ? schema.fieldId : null)}/>
+      <PropertyPlaceholder owner={owner} schema={schema} onActiveChange={active => setActiveGhost(current => active ? schema.fieldId : current === schema.fieldId ? null : current)}/>
     </div>]
   }))
 }
