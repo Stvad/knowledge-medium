@@ -1830,24 +1830,37 @@ const hydrateBlockRefs = async (
   })
 }
 
+/** `value_of_field` is the definition id of the field row a source sits
+ *  under as a value child, else NULL. */
 const SOURCE_FIELDS_SQL = `
-  SELECT DISTINCT source_id, source_field
-  FROM block_references
-  WHERE workspace_id = ? AND target_id = ?
+  SELECT DISTINCT r.source_id, r.source_field,
+         CASE WHEN f.is_field_form = 1 THEN f.reference_target_id END AS value_of_field
+  FROM block_references r
+  JOIN blocks s ON s.id = r.source_id
+  LEFT JOIN blocks f ON f.id = s.parent_id
+  WHERE r.workspace_id = ? AND r.target_id = ?
 `
 
 /** Map each backlink source to the set of source_fields it referenced the
  *  target through. `''` means a plain text wikilink; other values are
- *  projected property refs (groupWith, next-review-date, …). */
+ *  property refs (groupWith, next-review-date, …), whether projected from the
+ *  owner's cell or written as a property VALUE CHILD's content: a value child
+ *  references the target through its field, so it reports the field's name.
+ *  A field the registry cannot resolve stays `''`. */
 const sourceFieldsByBacklink = async (
   repo: Repo,
   workspaceId: string,
   targetId: string,
 ): Promise<Map<string, string[]>> => {
-  const rows = await repo.db.getAll<{source_id: string, source_field: string}>(
+  const rows = await repo.db.getAll<{source_id: string, source_field: string, value_of_field: string | null}>(
     SOURCE_FIELDS_SQL,
     [workspaceId, targetId],
   )
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  const fieldName = (fieldId: string): string | null => {
+    const resolution = resolver.resolveField(fieldId)
+    return resolution.status === 'resolved' ? resolution.schema.name : null
+  }
   const out = new Map<string, Set<string>>()
   for (const row of rows) {
     let set = out.get(row.source_id)
@@ -1855,7 +1868,8 @@ const sourceFieldsByBacklink = async (
       set = new Set()
       out.set(row.source_id, set)
     }
-    set.add(row.source_field)
+    const viaValue = row.source_field === '' && row.value_of_field ? fieldName(row.value_of_field) : null
+    set.add(viaValue ?? row.source_field)
   }
   return new Map([...out].map(([id, set]) => [id, [...set].sort()]))
 }
