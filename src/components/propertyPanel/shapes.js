@@ -1,1 +1,1 @@
-export{LG as propertyShapeLabel}from"../../../chunks/app-B7eg1jaZ.js";
+export{LG as propertyShapeLabel}from"../../../chunks/app-CM7LE9Hr.js";
