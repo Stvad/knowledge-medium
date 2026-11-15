@@ -1,1 +1,1 @@
-export{BN as focusAdjacentPlaceholder,VN as navigatePlaceholder}from"../../chunks/app-BJZhCOiK.js";
+export{HN as focusAdjacentPlaceholder,UN as navigatePlaceholder}from"../../chunks/app-J_8HQCuZ.js";

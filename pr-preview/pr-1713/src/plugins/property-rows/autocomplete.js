@@ -1,1 +1,1 @@
-export{uo as propertyAutocomplete,do as propertyCompletionSource}from"../../../chunks/app-BJZhCOiK.js";
+export{uo as handlePropertyValueEnter,do as propertyAutocomplete,fo as propertyCompletionSource}from"../../../chunks/app-J_8HQCuZ.js";

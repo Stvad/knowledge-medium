@@ -1,1 +1,1 @@
-export{mo as drawsPropertyRows,ho as fieldRowDefinition,go as isPropertyValueEditorEligible,_o as useIsChildOf,vo as usePropertyDefinitions}from"../../../chunks/app-BJZhCOiK.js";
+export{ho as drawsPropertyRows,go as fieldRowDefinition,_o as isSingleValueProperty,vo as useFieldRowDefinition,yo as useIsChildOf,bo as usePropertyDefinitions}from"../../../chunks/app-J_8HQCuZ.js";

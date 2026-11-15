@@ -1,1 +1,1 @@
-export{Pr as KeybindingsEditor}from"../../../chunks/app-BJZhCOiK.js";
+export{Pr as KeybindingsEditor}from"../../../chunks/app-J_8HQCuZ.js";
