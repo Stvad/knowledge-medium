@@ -12,10 +12,13 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 35
     steps:
-      - name: Checkout full history
+      - name: Checkout diagnostic branch
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+
+      - name: Fetch comparison revisions
+        run: git fetch --no-tags --depth=1 origin 5619b6e4be5d843800c5e90d75984b442dd051ac 35771148f1b9142df7b5cdc63cce4a0962593a46
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6.1.0
