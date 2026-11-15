@@ -25,9 +25,10 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
   const element = useRef<HTMLDivElement>(null)
   const busy = useRef(false)
   const failed = useRef(false)
-  const keys = usePlaceholderKeys()
+  const {keys, normalMode} = usePlaceholderKeys()
   const [mode, setMode] = useState<'idle' | 'landed' | 'active'>('idle')
   const activate = (next: typeof mode) => {
+    keys.forEach(key => key.matcher.reset())
     setMode(next); onActiveChange?.(next !== 'idle')
     const target = element.current!
     if (target) { target.contentEditable = String(next === 'active'); target.dataset.placeholderMode = next }
@@ -78,7 +79,6 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
     onFocus={event => {
       const target = event.currentTarget
       failed.current = false
-      keys.forEach(key => key.matcher.reset())
       activate(target.dataset.placeholderMode === 'landed' ? 'landed' : 'active')
       editing.onFocus(event)
       void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope})
@@ -98,7 +98,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
       if (isImeKeyEvent(event.nativeEvent)) return
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopPropagation()
-        if (keys.length) { activate('landed'); return }
+        if (normalMode) { activate('landed'); return }
         const target = fieldRowId ?? placeholderEscapeTarget(event.currentTarget, scope, owner.id)
         event.currentTarget.blur()
         if (target) void exitEditModeForBlock(ui, target, scope).then(() => focusBlock(ui, target, {renderScopeId: scope}))

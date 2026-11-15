@@ -5,7 +5,7 @@ import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/ty
 import {keybindingOverridesFacet} from '@/shortcuts/keybindingOverrides'
 import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
 import {vimNormalModeInteractionExtension} from '@/plugins/vim-normal-mode'
-import {vimNormalModeActionsExtension} from '@/plugins/vim-normal-mode/actions'
+import {getVimNormalModeActions, vimNormalModeActionsExtension} from '@/plugins/vim-normal-mode/actions'
 import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty, seedType, type User} from '@/data/api'
@@ -314,6 +314,33 @@ describe('expected property placeholders in the outline', () => {
     fireEvent.keyDown(last, {key: 'u', code: 'KeyU', ctrlKey: true})
     await waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-block-id="${OWNER}"]`)))
     expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it('Escape remains landed when every vim entry and movement binding is unbound', async () => {
+    repo.setRuntimeContributions(keybindingOverridesFacet, 'test-unbound', getVimNormalModeActions({repo}).map(action => ({actionId: action.id, context: ActionContextTypes.NORMAL_MODE, binding: {unbound: true}, source: 'user-prefs'})))
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { target.focus() })
+    expect(target.contentEditable).toBe('true')
+    fireEvent.keyDown(target, {key: 'Escape', code: 'Escape'})
+    expect(document.activeElement).toBe(target)
+    expect(target.contentEditable).toBe('false')
+  })
+
+  it('click activates a landed stop and resets a partial normal-mode sequence', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    fireEvent.keyDown(target, {key: 'g', code: 'KeyG'})
+    fireEvent.click(target)
+    expect(target.contentEditable).toBe('true')
+    fireEvent.keyDown(target, {key: 'Escape', code: 'Escape'})
+    const focus = vi.spyOn(properties, 'focusBlock')
+    fireEvent.keyDown(target, {key: 'g', code: 'KeyG'})
+    expect(focus.mock.calls.length).toBe(0)
+    fireEvent.keyDown(target, {key: 'g', code: 'KeyG'})
+    expect(focus.mock.calls.length).toBe(1)
+    await waitFor(() => expect(document.activeElement).not.toBe(target))
   })
 
   it('keeps non-vim click, paste and Escape behavior', async () => {

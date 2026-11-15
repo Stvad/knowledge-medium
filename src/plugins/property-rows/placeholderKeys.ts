@@ -14,9 +14,15 @@ const editActions = new Set(['enter_edit_mode', 'enter_edit_mode_at_end', 'creat
 /** Reuse resolved bindings and the coordinator's matcher, including user remaps and sequences. */
 export function usePlaceholderKeys() {
   const actions = useEffectiveActions()
-  return useMemo(() => actions.flatMap(action => {
-    if (action.context !== ActionContextTypes.NORMAL_MODE || !action.defaultBinding?.keys) return []
-    if (!(action.id in placeholderMoves) && !editActions.has(action.id)) return []
-    return [{move: placeholderMoves[action.id], matcher: createSequenceMatcher(action.defaultBinding.keys)}]
-  }), [actions])
+  return useMemo(() => {
+    const normalActions = actions.filter(action => action.context === ActionContextTypes.NORMAL_MODE)
+    return {
+      normalMode: normalActions.some(action => editActions.has(action.id)),
+      keys: normalActions.flatMap(action => {
+        if (!action.defaultBinding?.keys) return []
+        if (!(action.id in placeholderMoves) && !editActions.has(action.id)) return []
+        return [{move: placeholderMoves[action.id], matcher: createSequenceMatcher(action.defaultBinding.keys)}]
+      }),
+    }
+  }, [actions])
 }
