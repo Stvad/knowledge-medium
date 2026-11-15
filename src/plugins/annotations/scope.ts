@@ -12,8 +12,6 @@
  */
 
 import {USER_TYPE} from '@/data/blockTypes'
-import {registryRecognitionParams} from '@/data/internals/kernelQueries.js'
-import {recognizedFieldRowSql} from '@/data/internals/treeQueries.js'
 import type {Repo} from '@/data/repo'
 import {attributionCreatorsProp, contributorKindProp} from '@/plugins/contributors/schema.js'
 import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.ts'
@@ -24,8 +22,7 @@ import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.
  *  to (the root's own id on the root), NULL for the scope's own blocks.
  *  `is_comment` marks ordinary comment rows. A thread root starts a comment
  *  subtree; field rows turn the mark off without pruning them from discovery.
- *  UNION dedups, so a cycle ends. Binds the scope id, then what `fieldRow`
- *  binds.
+ *  UNION dedups, so a cycle ends. Binds the scope id.
  *
  *  The descent stops at a thread root: a root is covered only through its
  *  target, so one moved by hand under another thread's comment keeps its own
@@ -39,12 +36,12 @@ import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.
  *  DEFENCE IN DEPTH: the `workspace_id` equalities. Sync applies parent ids
  *  and rewrites `workspace_id` verbatim, so a covered block's child or
  *  referrer can sit in another workspace. */
-const coveredCte = (fieldRow: (rowRef: string) => string): string => `
+const COVERED_CTE = `
   WITH RECURSIVE covered(id, thread_id, workspace_id, is_comment) AS (
     SELECT id, NULL, workspace_id, 0 FROM blocks WHERE id = ? AND deleted = 0
     UNION
     SELECT child.id, covered.thread_id, covered.workspace_id,
-           covered.is_comment AND NOT (${fieldRow('child')})
+           covered.is_comment AND NOT (COALESCE(child.is_field_form, 0) = 1)
       FROM covered
       JOIN blocks child INDEXED BY idx_blocks_parent_order ON child.parent_id = covered.id
      WHERE child.deleted = 0 AND child.workspace_id = covered.workspace_id
@@ -59,7 +56,7 @@ const coveredCte = (fieldRow: (rowRef: string) => string): string => `
        AND EXISTS (SELECT 1 FROM block_types t WHERE t.block_id = root.id AND t.type = '${THREAD_TYPE}')
   )`
 
-const THREAD_IDS_IN_SCOPE_SQL = `${coveredCte(recognizedFieldRowSql)}
+const THREAD_IDS_IN_SCOPE_SQL = `${COVERED_CTE}
   SELECT covered.id FROM covered
     JOIN blocks root ON root.id = covered.id
    WHERE covered.thread_id = covered.id
@@ -71,7 +68,7 @@ const THREAD_IDS_IN_SCOPE_SQL = `${coveredCte(recognizedFieldRowSql)}
 export const threadIdsInScope = async (repo: Repo, scopeId: string): Promise<string[]> => {
   const rows = await repo.db.getAll<{id: string}>(
     THREAD_IDS_IN_SCOPE_SQL,
-    [scopeId, ...registryRecognitionParams(repo)],
+    [scopeId],
   )
   return rows.map(row => row.id)
 }
@@ -88,11 +85,11 @@ export const COMMENTS_RECIPE_QUIET_MS = 15_000
  *  mention watcher answers those). Binds `[scopeId, targetPageIdsJson]`.
  *
  *  It runs as a watcher's raw SQL, where the registry is out of reach, so it
- *  treats every `::` field row as one; the scope read above asks the
- *  registry. The recursive `is_comment` bit follows only non-field rows after
+ *  treats every `::` field row as metadata. The recursive `is_comment` bit
+ *  follows only non-field rows after
  *  an annotation edge; property rows remain in discovery so annotations on
  *  them are found, but aren't emitted as comment text. */
-export const COMMENTS_RECIPE_SQL = `${coveredCte(rowRef => `COALESCE(${rowRef}.is_field_form, 0) = 1`)}
+export const COMMENTS_RECIPE_SQL = `${COVERED_CTE}
   SELECT comment.id, covered.thread_id AS thread_id, comment.content
     FROM covered
     JOIN blocks comment ON comment.id = covered.id
