@@ -1,1 +1,0 @@
-export{CI as PropertyDisplayScope}from"../../../chunks/app-Cho99JfZ.js";
