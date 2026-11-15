@@ -380,6 +380,7 @@ describe('expected property placeholders in the outline', () => {
     try {
       await act(async () => { first.focus(); typePlaceholderText(first, 'x') })
       await entered
+      await waitFor(() => expect(first.isConnected).toBe(false))
       await act(async () => { second.focus() })
       expect(document.activeElement).toBe(second)
       release()

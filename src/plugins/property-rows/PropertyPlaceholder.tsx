@@ -49,7 +49,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId}: {owner: Block; 
     input(text)
   }
   return <div ref={element} contentEditable suppressContentEditableWarning tabIndex={0} role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
-    data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true" data-block-interaction="ignore"
+    data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true"
     data-placeholder="Enter value…"
     onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) acceptInput(event.currentTarget) }}
     onCompositionEnd={event => acceptInput(event.currentTarget)}

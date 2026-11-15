@@ -98,7 +98,7 @@ describe('property rows created as blocks', () => {
       await insert('nested-note', 'arrived-member', 'a0', 'keep nested note')
     })
     const held = () => h.db.getAll<{id: string; deleted: number}>(
-      `SELECT id, parent_id, order_key, content, properties_json, deleted FROM blocks
+      `SELECT * FROM blocks
        WHERE id IN (?, ?, 'second-field', 'arrived-member', 'nested-note') ORDER BY id`, [selected.fieldRowId!, first.id])
     const before = await held()
     const count = (await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n
@@ -123,10 +123,13 @@ describe('property rows created as blocks', () => {
     if (kind === 'cell') await h.db.execute("UPDATE workspaces SET properties_migration = 'cell' WHERE id = 'ws'")
     if (kind === 'deleted owner') await repo.tx(tx => tx.delete('owner'), {scope: ChangeScope.BlockDefault})
     if (kind === 'read-only') Object.defineProperty(repo, 'isReadOnly', {value: true})
+    const spy = vi.spyOn(repo, 'tx')
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
     await expect(choosePropertyField(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
       repo.block(kind === 'missing source' ? 'absent' : 'source'))).rejects.toThrow(
         kind === 'read-only' ? 'This workspace is read-only.' : kind === 'missing source' ? 'The input block changed.' : 'This block no longer supports properties in the outline.')
+    if (kind === 'read-only') expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 
@@ -179,6 +182,19 @@ describe('property rows created as blocks', () => {
     await expect(insertPropertyValue(repo.block('owner'), note, 'x')).rejects.toThrow(/read-only/)
     expect(spy).not.toHaveBeenCalled()
     spy.mockRestore()
+  })
+
+  it('only reuses a marked row for the chosen definition', async () => {
+    await repo.block('owner').set(tags, ['keep'])
+    const resolution = repo.propertySchemaResolverFor('ws').resolve(note.name)
+    if (resolution.status !== 'resolved') throw new Error('Missing definition')
+    await repo.tx(tx => tx.create({id: 'plain-ref', workspaceId: 'ws', parentId: 'owner', orderKey: 'a2',
+      content: `((${resolution.schema.fieldId}))`}), {scope: ChangeScope.BlockDefault})
+    const before = await h.db.getAll("SELECT * FROM blocks WHERE id = 'plain-ref'")
+    const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'))
+    expect(target.fieldRowId).toBe('source')
+    expect(await h.db.getAll("SELECT * FROM blocks WHERE id = 'plain-ref'")).toEqual(before)
+    expect(await repo.block('owner').get(tags)).toEqual(['keep'])
   })
 
 })
