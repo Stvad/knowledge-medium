@@ -1,1 +1,0 @@
-export{mo as propertiesMigrationPlugin}from"../../../chunks/app-yjQr0pZB.js";

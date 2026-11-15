@@ -1,1 +1,0 @@
-export{Hat as deriveWorkspaceIdNamespace}from"../../../chunks/app-yjQr0pZB.js";
