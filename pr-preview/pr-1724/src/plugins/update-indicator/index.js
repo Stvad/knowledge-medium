@@ -1,0 +1,1 @@
+export{ov as updateIndicatorPlugin}from"../../../chunks/app-S2nWQHgg.js";

@@ -1,0 +1,1 @@
+export{WQ as resolvedThenable,GQ as stampFulfilled}from"../../chunks/app-S2nWQHgg.js";

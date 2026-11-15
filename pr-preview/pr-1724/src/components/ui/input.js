@@ -1,0 +1,1 @@
+export{s2 as Input}from"../../../chunks/app-S2nWQHgg.js";

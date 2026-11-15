@@ -1,0 +1,1 @@
+export{UZ as backlinksDataExtension}from"../../../chunks/app-S2nWQHgg.js";

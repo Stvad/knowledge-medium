@@ -1,0 +1,1 @@
+export{GB as BlockProperties}from"../../chunks/app-S2nWQHgg.js";
