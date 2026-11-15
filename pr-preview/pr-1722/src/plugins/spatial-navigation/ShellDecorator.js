@@ -1,1 +1,1 @@
-export{WC as SpatialNavigationShellDecorator}from"../../../chunks/app-CkRuIngU.js";
+export{WC as SpatialNavigationShellDecorator}from"../../../chunks/app-ChIWJi7q.js";

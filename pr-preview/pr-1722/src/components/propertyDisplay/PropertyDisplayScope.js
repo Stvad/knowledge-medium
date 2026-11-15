@@ -1,1 +1,1 @@
-export{CI as PropertyDisplayScope}from"../../../chunks/app-CkRuIngU.js";
+export{CI as PropertyDisplayScope}from"../../../chunks/app-ChIWJi7q.js";

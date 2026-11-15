@@ -1,1 +1,1 @@
-export{Vlt as defineQuery}from"../../../chunks/app-CkRuIngU.js";
+export{Vlt as defineQuery}from"../../../chunks/app-ChIWJi7q.js";
