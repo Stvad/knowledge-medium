@@ -1,7 +1,5 @@
 import {useIsFocalRender} from '@/hooks/useIsFocalRender'
 import {useContext, useState} from 'react'
-import {useBlockContext} from '@/context/block'
-import {drawsPropertyRows} from './fieldRow'
 import type {Block} from '@/data/block'
 import {getBlockTypes, isCollapsedProp} from '@/data/properties'
 import {useHandle, usePropertyDisplayMode, usePropertyValue} from '@/hooks/block'
@@ -26,8 +24,7 @@ export function ExpectedPropertyRows({block}: BlockRendererProps) {
   const [collapsed] = usePropertyValue(block, isCollapsedProp)
   const focal = useIsFocalRender(block)
   const types = useHandle(block, {selector: row => row ? getBlockTypes(row) : []})
-  const context = useBlockContext()
-  if (!drawsPropertyRows(context) || !scope.childBacked || block.repo.isReadOnly || (collapsed && !focal) || mode === 'none' || !types.length) return null
+  if (!scope.childBacked || block.repo.isReadOnly || (collapsed && !focal) || mode === 'none' || !types.length) return null
   return <TypedExpectedFields owner={block} mode={mode} typeIds={types}/>
 }
 

@@ -52,3 +52,8 @@ export const isPropertyPanelHiddenProperty = (
     name.startsWith('system:') ||
     schema?.changeScope === ChangeScope.UiState
 }
+
+/** Creation pickers exclude metadata managed by dedicated type/definition editors. */
+export const isPropertyPickerName = (...args: Parameters<typeof isPropertyPanelHiddenProperty>): boolean =>
+  !/^(?:system:|seed:|property-schema:|block-type:|types$)/i.test(args[0]) &&
+  !isPropertyPanelHiddenProperty(...args)

@@ -8,6 +8,7 @@ export interface CodeMirrorExtensionContext {
   /** The block the editor edits. Absent in a draft editor (`DraftEditor`),
    *  whose text becomes a block only once it is submitted: a contribution that
    *  reads or writes the block contributes nothing there. */
+  childBacked?: boolean
   uiStateBlock?: Block
   renderScopeId?: string
   block?: Block

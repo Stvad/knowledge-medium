@@ -1,37 +1,46 @@
-import {memberCodecOf} from '@/data/api'
+import {ChangeScope, memberCodecOf} from '@/data/api'
 import {fieldRowDefinition} from './fieldRow'
 import {EditorState} from '@codemirror/state'
-import {completionStatus, type CompletionSource} from '@codemirror/autocomplete'
+import {closeCompletion, completionStatus, type CompletionSource} from '@codemirror/autocomplete'
 import {EditorView} from '@codemirror/view'
 import type {CodeMirrorExtensionContribution, CodeMirrorExtensionContext} from '@/editor/codeMirrorExtensions'
 import {flushEditorContent} from '@/editor/contentFlush'
-import {readIsChildBackedWorkspace} from '@/data/workspaceSchema'
 import {canConvertEmptyChildBlockToProperty} from '@/utils/propertyCreation'
-import {choosePropertyField} from '@/data/propertyRowCreation'
+import {choosePropertyField, createPropertyField} from '@/data/propertyRowCreation'
 import {exitEditModeForBlock, peekFocusedBlockLocation, focusBlock} from '@/data/properties'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
-import {DEFAULT_PRESET_ID} from '@/components/propertyPanel/PropertyPicker'
+import {isPropertyPickerName} from '@/components/propertyPanel/visibility'
+import {propertyEditorOverridesFacet} from '@/data/facets'
+
+export const OUTLINE_PROPERTY_PRESET_ID = 'ref'
 import {showError} from '@/utils/toast'
 import {focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {isVisibleElement} from '@/utils/propertyNavigation'
 
-export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScopeId}: CodeMirrorExtensionContext): CompletionSource => async context => {
+export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScopeId, childBacked}: CodeMirrorExtensionContext): CompletionSource => async context => {
   const text = context.state.doc.toString()
-  if (!block || !/^::[^\n]*$/.test(text) || context.pos !== text.length || !context.state.selection.main.empty) return null
+  if (!childBacked || !block || block.peek()?.isFieldForm || /\(\(|\[\[/.test(text.slice(2)) || !/^::[^\n]*$/.test(text) || context.pos !== text.length || !context.state.selection.main.empty) return null
   const source = await canConvertEmptyChildBlockToProperty(block, repo)
-  if (!source || !await readIsChildBackedWorkspace(repo.db, source.workspaceId)) return null
+  if (!source) return null
   const name = text.slice(2).trim()
-  const schemas = [...repo.propertySchemas.values()].filter(schema => schema.name.toLowerCase().includes(name.toLowerCase()))
+  const query = name.toLowerCase()
+  const uis = repo.facetRuntime?.read(propertyEditorOverridesFacet) ?? new Map()
+  const hidden = (name: string) => !isPropertyPickerName(name, repo.propertySchemas, uis, repo.propertyDefinitions)
+  const rank = (name: string) => name.toLowerCase() === query ? 0 : name.toLowerCase().startsWith(query) ? 1 : 2
+  const schemas = [...repo.propertySchemas.values()].filter(schema => schema.changeScope === ChangeScope.BlockDefault && !hidden(schema.name) && schema.name.toLowerCase().includes(query))
+    .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name)).slice(0, 8)
   const candidates = schemas.map(schema => ({label: schema.name, schema}))
-  if (name && !repo.propertySchemas.has(name)) candidates.push({label: `Create “${name}”`, schema: undefined!})
+  if (context.explicit && name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.push({label: `Create “${name}”`, schema: undefined!})
+  if (!candidates.length) return null
   return {from: 0, filter: false, options: candidates.map(candidate => ({label: candidate.label, apply: (view: EditorView) => {
+    closeCompletion(view)
     if (view.state.doc.toString() !== text) return
     void (async () => {
       if (!await canConvertEmptyChildBlockToProperty(block, repo) || view.state.doc.toString() !== text) return
       flushEditorContent(view)
-      const schema = candidate.schema ?? await repo.userSchemas.addSchema({name, presetId: DEFAULT_PRESET_ID})
-      if (view.state.doc.toString() !== text) return
-      const target = await choosePropertyField(repo.block(source.parentId!), schema, block, text, () => view.state.doc.toString() === text)
+      const target = candidate.schema
+        ? await choosePropertyField(repo.block(source.parentId!), candidate.schema, block, text, () => view.state.doc.toString() === text)
+        : await createPropertyField(repo.block(source.parentId!), block, name, OUTLINE_PROPERTY_PRESET_ID, text, () => view.state.doc.toString() === text)
       if (!uiStateBlock || peekFocusedBlockLocation(uiStateBlock)?.blockId !== block.id) return
       await exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
       if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)

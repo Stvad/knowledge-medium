@@ -33,6 +33,8 @@ import {EditorView} from '@codemirror/view'
 import {CompletionContext} from '@codemirror/autocomplete'
 import {flushEditorContent} from '@/editor/contentFlush'
 import {handlePropertyValueEnter, propertyCompletionSource} from '../autocomplete'
+import * as propertyCreation from '@/data/propertyRowCreation'
+import * as toast from '@/utils/toast'
 import {choosePropertyField, insertPropertyValue} from '@/data/propertyRowCreation'
 import * as blockInteraction from '@/extensions/blockInteraction'
 import {propertyRowsPlugin} from '../index'
@@ -69,6 +71,7 @@ const swallowSelectionChange = (event: Event) => event.stopImmediatePropagation(
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 afterEach(() => {
+  vi.restoreAllMocks()
   cleanup()
   window.removeEventListener('selectionchange', swallowSelectionChange, true)
   vi.unstubAllGlobals()
@@ -122,14 +125,14 @@ const ContextProbe = () => {
   useEffect(() => { activeContexts = contexts }, [contexts])
   return null
 }
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER) => render(
+const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, isReference = false) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <HotkeyReconciler/>
         <ContextProbe/>
         <Suspense fallback={null}>
-          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root}}>
+          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root, isReference}}>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
               <BlockComponent blockId={root}/>
             </PropertyDisplayScopeContext>
@@ -221,6 +224,37 @@ describe('expected property placeholders in the outline', () => {
     } finally { tx.mockRestore() }
   })
 
+  it('hides both expected and existing value placeholders in read-only mode', async () => {
+    await repo.block(OWNER).set(list, ['saved'])
+    const editable = mount('all')
+    await screen.findByLabelText(`Enter ${plain.name}`)
+    await screen.findByLabelText(`Enter ${list.name}`)
+    editable.unmount()
+    repo.setReadOnly(true)
+    mount('all')
+    await screen.findByText('saved')
+    expect(document.querySelector('[data-property-placeholder]')).toBeNull()
+  })
+
+  it('does not put expected fields into a reference rendering', async () => {
+    mount('all', OWNER, true)
+    await settle()
+    expect(document.querySelector('[data-property-ghost]')).toBeNull()
+  })
+
+  it('keeps rejected first input and reports one error for the whole word', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { target.focus() })
+    const error = vi.spyOn(toast, 'showError').mockReturnValue(0)
+    const insert = vi.spyOn(propertyCreation, 'insertPropertyValue').mockRejectedValue(new Error('Test refusal'))
+    act(() => { typePlaceholderText(target, 'x'); typePlaceholderText(target, 'y') })
+    await waitFor(() => expect(error).toHaveBeenCalledTimes(1))
+    expect(insert).toHaveBeenCalledTimes(1)
+    expect(target.textContent).toBe('xy')
+    expect(document.activeElement).toBe(target)
+  })
+
   it('renders typed fields by display tier after existing children, without adding structural children', async () => {
     mount('non-hidden')
     await settle()
@@ -298,6 +332,7 @@ describe('expected property placeholders in the outline', () => {
   })
 
   it('waits for compositionEnd before creating one Unicode value', async () => {
+    const insert = vi.spyOn(propertyCreation, 'insertPropertyValue')
     mount('non-hidden')
     const target = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
     const before = await ownerDescendants()
@@ -309,6 +344,7 @@ describe('expected property placeholders in the outline', () => {
     expect(await ownerDescendants()).toEqual(before)
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
 
+    expect(insert).not.toHaveBeenCalled()
     await act(async () => { fireEvent.compositionEnd(target, {data: '日本語'}) })
     await waitFor(async () => expect((await ownerDescendants()).map(row => row.content)).toContain('日本語'))
     const created = await ownerDescendants()
@@ -534,7 +570,7 @@ describe('expected property placeholders in the outline', () => {
     const editor = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)!
     const view = EditorView.findFromDOM(editor)!
     view.dispatch({selection: {anchor: 2}})
-    const source = propertyCompletionSource({repo, block: repo.block(id), uiStateBlock: repo.block(PANEL), renderScopeId: 'creation-test'})
+    const source = propertyCompletionSource({repo, childBacked: true, block: repo.block(id), uiStateBlock: repo.block(PANEL), renderScopeId: 'creation-test'})
     const result = await source(new CompletionContext(view.state, 2, false))
     const option = result?.options.find(candidate => candidate.label === list.name)
     if (!option || typeof option.apply !== 'function') throw new Error('List completion option did not resolve')

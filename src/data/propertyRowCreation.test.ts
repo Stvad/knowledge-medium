@@ -7,7 +7,7 @@ import {seedProperty} from '@/data/propertySeeds'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import {choosePropertyField, insertPropertyValue} from '@/data/propertyRowCreation'
+import {choosePropertyField, createPropertyField, insertPropertyValue} from '@/data/propertyRowCreation'
 
 const note = seedProperty({seedKey: 'test/property/note', revision: 1, name: 'test:note', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const preference = seedProperty({seedKey: 'test/property/preference', revision: 1, name: 'test:preference', preset: 'string', changeScope: ChangeScope.UserPrefs})
@@ -30,6 +30,27 @@ beforeEach(async () => {
 const children = (id: string) => repo.query.children({id, propertyChildren: 'all'}).load()
 
 describe('property rows created as blocks', () => {
+  it.each(['accepted', 'changed scaffold', 'changed editor'])('creates a definition atomically with a validated scaffold: %s', async kind => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    repo.undoManager.clear()
+    if (kind === 'changed scaffold') await repo.block('source').setContent('keep text')
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    const create = createPropertyField(repo.block('owner'), repo.block('source'), 'outline new', 'ref', '::', () => kind !== 'changed editor')
+    if (kind !== 'accepted') {
+      await expect(create).rejects.toThrow('The input block changed.')
+      expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+      expect(repo.propertySchemas.has('outline new')).toBe(false)
+    } else {
+      const target = await create
+      expect((await repo.load('source'))?.content).toBe(`::((${target.schema.fieldId}))`)
+      expect(await children('source')).toEqual([])
+      expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
+      await repo.undo()
+      expect((await repo.load('source'))?.content).toBe('::')
+      await vi.waitFor(() => expect(repo.propertySchemas.has('outline new')).toBe(false))
+    }
+  })
+
   it('converts the scaffold in place without an empty value; undo restores the marker', async () => {
     const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'))
     expect(target.fieldRowId).toBe('source')

@@ -37,7 +37,7 @@ import {
   resolveEditorOverride,
   type PropertyDefinitionRegistrySnapshot,
 } from '@/data/propertyDefinitionRegistry'
-import {isPropertyPanelHiddenProperty} from './visibility'
+import {isPropertyPickerName} from './visibility'
 
 export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
@@ -75,7 +75,7 @@ const filterSuggestions = (
   const out: NameSuggestion[] = []
   for (const schema of schemas.values()) {
     if (excludedNames.has(schema.name)) continue
-    if (isPropertyPanelHiddenProperty(schema.name, schemas, uis, definitions)) continue
+    if (!isPropertyPickerName(schema.name, schemas, uis, definitions)) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
@@ -203,7 +203,7 @@ export function PropertyPicker({
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
     const name = (adopted?.name ?? propertyName).trim()
     if (!name || submitting) return
-    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
+    if (!isPropertyPickerName(name, schemas, uis, propertyDefinitions)) return
     setSubmitting(true)
     try {
       await onAdd(adopted
@@ -223,7 +223,7 @@ export function PropertyPicker({
       return
     }
     if (submitting) return
-    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
+    if (!isPropertyPickerName(name, schemas, uis, propertyDefinitions)) return
     const schema = await onConfigureNewSchema({name, presetId})
     if (!schema) return
     void submit(schema)

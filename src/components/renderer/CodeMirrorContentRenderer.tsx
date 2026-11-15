@@ -54,7 +54,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const extensions = useMemo(() => {
     // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
     const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
-    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock,
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, childBacked: propertyDisplay.childBacked,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
   }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, propertyDisplay.childBacked])
