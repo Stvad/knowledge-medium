@@ -1,1 +1,1 @@
-export{mot as deriveWorkspaceIdNamespace}from"../../../chunks/app-RhB-Bgw5.js";
+export{vot as deriveWorkspaceIdNamespace}from"../../../chunks/app-jLrVF-xn.js";

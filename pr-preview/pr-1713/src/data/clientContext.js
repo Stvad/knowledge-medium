@@ -1,1 +1,1 @@
-export{X2 as ClientContext}from"../../chunks/app-RhB-Bgw5.js";
+export{$2 as ClientContext}from"../../chunks/app-jLrVF-xn.js";

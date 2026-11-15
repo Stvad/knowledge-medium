@@ -1,1 +1,1 @@
-export{IV as buildPropertyPanelSections}from"../../chunks/app-RhB-Bgw5.js";
+export{LV as buildPropertyPanelSections}from"../../chunks/app-jLrVF-xn.js";

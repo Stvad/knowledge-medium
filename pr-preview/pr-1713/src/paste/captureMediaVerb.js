@@ -1,1 +1,1 @@
-export{HR as captureMediaVerb}from"../../chunks/app-RhB-Bgw5.js";
+export{UR as captureMediaVerb}from"../../chunks/app-jLrVF-xn.js";

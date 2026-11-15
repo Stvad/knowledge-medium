@@ -1,1 +1,1 @@
-export{wI as ConfirmDefinitionChangeDialog}from"../../../chunks/app-RhB-Bgw5.js";
+export{TI as ConfirmDefinitionChangeDialog}from"../../../chunks/app-jLrVF-xn.js";
