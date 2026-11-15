@@ -1,1 +1,1 @@
-export{C2 as Repo}from"../../chunks/app-D3bcI_iL.js";
+export{S2 as Repo}from"../../chunks/app-BJZhCOiK.js";

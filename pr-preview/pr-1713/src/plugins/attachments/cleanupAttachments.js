@@ -1,1 +1,1 @@
-export{Ub as CLEANUP_ATTACHMENTS_ACTION_ID,Wb as cleanupAttachmentsAction,Gb as prepareCleanup}from"../../../chunks/app-D3bcI_iL.js";
+export{Ub as CLEANUP_ATTACHMENTS_ACTION_ID,Wb as cleanupAttachmentsAction,Gb as prepareCleanup}from"../../../chunks/app-BJZhCOiK.js";

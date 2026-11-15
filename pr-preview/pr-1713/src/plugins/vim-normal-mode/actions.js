@@ -1,1 +1,1 @@
-export{AC as getVimNormalModeActions,jC as jumpVisibleBlocks,MC as vimNormalModeActionsExtension}from"../../../chunks/app-D3bcI_iL.js";
+export{AC as getVimNormalModeActions,jC as jumpVisibleBlocks,MC as vimNormalModeActionsExtension}from"../../../chunks/app-BJZhCOiK.js";
