@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import {Suspense, useEffect} from 'react'
-import {focusAdjacentPlaceholder, focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {focusAdjacentPlaceholder, focusPlaceholder, focusPickedPlaceholder, navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
+import {keybindingOverridesFacet} from '@/shortcuts/keybindingOverrides'
 import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
 import {vimNormalModeInteractionExtension} from '@/plugins/vim-normal-mode'
 import {vimNormalModeActionsExtension} from '@/plugins/vim-normal-mode/actions'
@@ -68,6 +69,19 @@ const TestFooter = () => <div data-testid="children-footer-marker">footer marker
 let db: TestDb
 let repo: Repo
 let runtime: FacetRuntime
+const configureRuntime = (vim = true) => {
+  runtime = resolveFacetRuntimeSync([
+    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
+    defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
+    ...(vim ? [vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo})] : []),
+    blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
+    defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
+    actionsFacet.of({id: 'test:normal-command', context: ActionContextTypes.NORMAL_MODE, description: 'Test normal command', defaultBinding: {keys: 'q'}, handler: normalCommand}),
+    props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    typeSeedsFacet.of(expectedType, {source: 'test'}),
+  ])
+  repo.setFacetRuntime(runtime)
+}
 const swallowSelectionChange = (event: Event) => event.stopImmediatePropagation()
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
@@ -93,17 +107,7 @@ beforeEach(async () => {
        encryption_mode, wk_canary, properties_migration)
      VALUES (?, 'test', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
   repo = createTestRepo({db: db.db, user: USER, newId: () => crypto.randomUUID()}).repo
-  runtime = resolveFacetRuntimeSync([
-    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
-    defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
-    vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}),
-    blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
-    defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    actionsFacet.of({id: 'test:normal-command', context: ActionContextTypes.NORMAL_MODE, description: 'Test normal command', defaultBinding: {keys: 'q'}, handler: normalCommand}),
-    props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
-    typeSeedsFacet.of(expectedType, {source: 'test'}),
-  ])
-  repo.setFacetRuntime(runtime)
+  configureRuntime()
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: PANEL, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
@@ -168,31 +172,162 @@ describe('expected property placeholders in the outline', () => {
     await settle()
     const rows = vi.spyOn(document, 'querySelectorAll')
     expect(focusAdjacentPlaceholder(NOTE, 'creation-test', 1)).toBe(false)
+    expect(await navigatePlaceholder(NOTE, 'creation-test', 1, repo.block(PANEL), false)).toBe(false)
+    expect(await navigatePlaceholder(NOTE, undefined, 1, repo.block(PANEL), false)).toBe(false)
     expect(rows).not.toHaveBeenCalled()
   })
 
-  it('normal-mode navigation passes empty fields and ghosts without writing', async () => {
+  it('normal-mode navigation stops on every placeholder in both directions without writing', async () => {
+    const root = 'navigation-root'
+    await repo.tx(tx => tx.create({id: root, content: 'Navigation root', workspaceId: WS, parentId: null, orderKey: 'a2'}), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.move(OWNER, {parentId: root, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
     const scalar = await repo.mutate.createChild({parentId: OWNER, content: '::'})
     await choosePropertyField(repo.block(OWNER), plain, repo.block(scalar), '::', () => true)
     const listScaffold = await repo.mutate.createChild({parentId: OWNER, content: '::'})
     await choosePropertyField(repo.block(OWNER), list, repo.block(listScaffold), '::', () => true)
-    await insertPropertyValue(repo.block(OWNER), list, 'member')
-    const below = await repo.mutate.createChild({parentId: OWNER, content: 'Below fields'})
-    await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
-    mount('all')
+    const member = (await insertPropertyValue(repo.block(OWNER), list, 'member'))!.valueId
+    const below = await repo.mutate.createChild({parentId: root, content: 'Below fields'})
+    await repo.block(PANEL).set(topLevelBlockIdProp, root)
+    mount('all', root)
     await screen.findByText('Below fields')
     await act(async () => { await focusBlock(repo.block(PANEL), scalar, {renderScopeId: 'creation-test'}) })
     const before = await ownerDescendants()
-    expect(document.activeElement?.hasAttribute('data-property-placeholder')).toBe(false)
-    for (let i = 0; i < 3; i++) {
-      const current = peekFocusedBlockLocation(repo.block(PANEL))!.blockId
-      await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(current))
-      fireEvent.keyDown(document.querySelector(`[data-block-id="${current}"]`)!, {key: 'j', code: 'KeyJ'})
-      await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).not.toBe(current))
-      expect(document.activeElement?.hasAttribute('data-property-placeholder')).toBe(false)
+    const placeholders = await Promise.all([plain, list, hidden, outlineHidden].map(schema => screen.findByLabelText(`Enter ${schema.name}`)))
+    const stops: (string | HTMLElement)[] = [scalar, placeholders[0], listScaffold, member, placeholders[1], placeholders[2], placeholders[3], below]
+    for (const [key, path] of [['j', stops], ['k', [...stops].reverse()]] as const) {
+      for (let index = 1; index < path.length; index++) {
+        const previous = path[index - 1]
+        const target = path[index]
+        if (typeof previous === 'string') await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(previous))
+        fireEvent.keyDown(typeof previous === 'string' ? document.querySelector(`[data-block-id="${previous}"]`)! : previous, {key, code: `Key${key.toUpperCase()}`})
+        if (typeof target === 'string') await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(target))
+        else await waitFor(() => { expect(document.activeElement).toBe(target); expect(target.contentEditable).toBe('false') })
+      }
     }
-    expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(below)
     expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it.each(['ghost', 'scalar', 'list'].flatMap(kind => ['d d', 'Tab', 'Shift+Tab', 'Meta+Shift+ArrowDown', 'Meta+Shift+ArrowUp', 't', 'Delete', 'Backspace', 'p', 'Shift+p', 'y y', 'Meta+v', 'Meta+c', 'Enter', 'q'].map(chord => [kind, chord])))('landed %s consumes %s without dispatching or writing', async (kind, chord) => {
+    const schema = kind === 'list' ? list : plain
+    if (kind !== 'ghost') {
+      const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+      await choosePropertyField(repo.block(OWNER), schema, repo.block(source), '::', () => true)
+    }
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${schema.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(kind === 'ghost' ? OWNER : target.dataset.propertyPlaceholder))
+    await waitFor(() => expect(document.activeElement).toBe(target))
+    expect(target.contentEditable).toBe('false')
+    const tx = vi.spyOn(repo, 'tx')
+    const bubbled = vi.fn()
+    window.addEventListener('keydown', bubbled)
+    try {
+      const before = await ownerDescendants()
+      for (const press of chord.split(' ')) {
+        const parts = press.split('+'), key = parts.at(-1)!
+        expect(fireEvent.keyDown(target, {key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, shiftKey: parts.includes('Shift'), metaKey: parts.includes('Meta')})).toBe(false)
+        expect(fireEvent.keyUp(target, {key})).toBe(false)
+      }
+      fireEvent.paste(target, {clipboardData: {getData: () => 'must not paste'}})
+      expect(tx).not.toHaveBeenCalled()
+      expect(bubbled).not.toHaveBeenCalled()
+      expect(target.textContent).toBe('')
+      expect(target.contentEditable).toBe('false')
+      expect(document.activeElement).toBe(target)
+      expect(await ownerDescendants()).toEqual(before)
+    } finally { window.removeEventListener('keydown', bubbled); tx.mockRestore() }
+  })
+
+  it.each(['i', 'a', 'o', 'O'])('landed %s activates without creating a row, and Escape lands again', async key => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    await waitFor(() => expect(document.activeElement).toBe(target))
+    const before = await ownerDescendants()
+    fireEvent.keyDown(target, {key, code: `Key${key.toUpperCase()}`, shiftKey: key === 'O'})
+    expect(target.contentEditable).toBe('true')
+    expect(window.getSelection()?.anchorNode).toBe(target)
+    fireEvent.keyDown(target, {key: 'Escape', code: 'Escape'})
+    expect(document.activeElement).toBe(target)
+    expect(target.contentEditable).toBe('false')
+    expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it('uses remapped activation and movement keys on a landed placeholder', async () => {
+    repo.setRuntimeContributions(keybindingOverridesFacet, 'test-remaps', [
+      {actionId: 'enter_edit_mode', context: ActionContextTypes.NORMAL_MODE, binding: {keys: 'Enter'}, source: 'user-prefs'},
+      {actionId: 'move_down', context: ActionContextTypes.NORMAL_MODE, binding: {keys: 'n'}, source: 'user-prefs'},
+      {actionId: 'create_block_above_and_edit', context: ActionContextTypes.NORMAL_MODE, binding: {unbound: true}, source: 'user-prefs'},
+    ])
+    mount('all')
+    const first = await screen.findByLabelText(`Enter ${plain.name}`)
+    const second = await screen.findByLabelText(`Enter ${hidden.name}`)
+    await act(async () => { focusPlaceholder(first, false) })
+    fireEvent.keyDown(first, {key: 'i', code: 'KeyI'})
+    expect(first.contentEditable).toBe('false')
+    fireEvent.keyDown(first, {key: 'O', code: 'KeyO', shiftKey: true})
+    expect(first.contentEditable).toBe('false')
+    fireEvent.keyDown(first, {key: 'n', code: 'KeyN'})
+    await waitFor(() => expect(document.activeElement).toBe(second))
+    fireEvent.keyDown(second, {key: 'Enter', code: 'Enter'})
+    expect(second.contentEditable).toBe('true')
+    await act(async () => { typePlaceholderText(second, 'value') })
+    await waitFor(async () => expect(await repo.block(OWNER).get(hidden)).toBe('value'))
+  })
+
+  it('does not use another context’s edit bindings on a landed stop', async () => {
+    repo.setRuntimeContributions(actionsFacet, 'test-global-edit', [{id: 'enter_edit_mode', context: ActionContextTypes.GLOBAL, description: 'Global edit', defaultBinding: {keys: 'z'}, handler: normalCommand}])
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    fireEvent.keyDown(target, {key: 'z', code: 'KeyZ'})
+    expect(target.contentEditable).toBe('false')
+    expect(normalCommand).not.toHaveBeenCalled()
+  })
+
+  it('a landed stop rejects native input and composition without opening a transaction', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    const insert = vi.spyOn(propertyCreation, 'insertPropertyValue')
+    typePlaceholderText(target, 'x')
+    fireEvent.compositionEnd(target)
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('keeps first/last and page navigation available from a landed stop', async () => {
+    mount('all')
+    const first = await screen.findByLabelText(`Enter ${plain.name}`)
+    const last = await screen.findByLabelText(`Enter ${list.name}`)
+    const before = await ownerDescendants()
+    await act(async () => { focusPlaceholder(first, false) })
+    fireEvent.keyDown(first, {key: 'G', code: 'KeyG', shiftKey: true})
+    expect(document.activeElement).toBe(last)
+    expect(last.contentEditable).toBe('false')
+    fireEvent.keyDown(last, {key: 'g', code: 'KeyG'})
+    fireEvent.keyDown(last, {key: 'g', code: 'KeyG'})
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-block-id="${OWNER}"]`)))
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(OWNER))
+    fireEvent.keyDown(document.activeElement!, {key: 'd', code: 'KeyD', ctrlKey: true})
+    await waitFor(() => expect(document.activeElement).toBe(last))
+    fireEvent.keyDown(last, {key: 'u', code: 'KeyU', ctrlKey: true})
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-block-id="${OWNER}"]`)))
+    expect(await ownerDescendants()).toEqual(before)
+  })
+
+  it('keeps non-vim click, paste and Escape behavior', async () => {
+    configureRuntime(false)
+    mount('all')
+    const ghost = await screen.findByLabelText(`Enter ${plain.name}`)
+    const before = await ownerDescendants()
+    await act(async () => { ghost.focus() })
+    expect(ghost.contentEditable).toBe('true')
+    fireEvent.keyDown(ghost, {key: 'Escape', code: 'Escape'})
+    await waitFor(() => expect(document.activeElement).not.toBe(ghost))
+    expect(await ownerDescendants()).toEqual(before)
+    await act(async () => { ghost.focus(); fireEvent.paste(ghost, {clipboardData: {getData: () => 'pasted'}}) })
+    await waitFor(async () => expect(await repo.block(OWNER).get(plain)).toBe('pasted'))
   })
 
   it.each(['i', 'a', 'o', 'Enter'])('normal-mode %s keeps the field-row key semantics', async key => {
@@ -225,17 +360,6 @@ describe('expected property placeholders in the outline', () => {
     expect(focused).not.toBe(source)
     expect((await repo.load(focused))?.parentId).toBe(OWNER)
     expect(await repo.query.children({id: source, propertyChildren: 'all'}).load()).toEqual([])
-  })
-
-  it('Escape from a ghost focuses the last drawn child, then j moves on normally', async () => {
-    const child = await repo.mutate.createChild({parentId: OWNER, content: 'Last child'})
-    mount('all')
-    const ghost = await screen.findByLabelText(`Enter ${plain.name}`)
-    await act(async () => { ghost.focus() })
-    fireEvent.keyDown(ghost, {key: 'Escape', code: 'Escape'})
-    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(child))
-    expect(document.activeElement).not.toBe(ghost)
-    expect((await repo.load(OWNER))?.deleted).toBe(false)
   })
 
   it('is editable synchronously when an explicit focus arrives', async () => {
@@ -566,6 +690,7 @@ describe('expected property placeholders in the outline', () => {
   })
 
   it('finishing an earlier ghost does not release the next ghost during its handoff', async () => {
+    const errors = vi.spyOn(toast, 'showError').mockReturnValue(0)
     mount('all')
     const first = await screen.findByLabelText(`Enter ${plain.name}`)
     const second = await screen.findByLabelText(`Enter ${list.name}`)
@@ -598,6 +723,7 @@ describe('expected property placeholders in the outline', () => {
       await act(async () => { second.focus(); typePlaceholderText(second, 'y') })
       await secondHit
       await act(async () => { releaseFirst(); await firstFinished })
+      expect(errors).not.toHaveBeenCalled()
       expect(second.isConnected).toBe(true)
       expect(document.activeElement).toBe(second)
       fireEvent.keyDown(second, {key: 'q', code: 'KeyQ'})

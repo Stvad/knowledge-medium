@@ -14,7 +14,7 @@ import {isPropertyPickerName} from '@/components/propertyPanel/visibility'
 import {propertyEditorOverridesFacet} from '@/data/facets'
 
 import {showError} from '@/utils/toast'
-import {fieldPlaceholder, focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {fieldPlaceholder, focusPlaceholder, focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 
 export const OUTLINE_PROPERTY_PRESET_ID = 'ref'
 type PropertyChoice =
@@ -76,7 +76,7 @@ export const handlePropertyValueEnter = (context: CodeMirrorExtensionContext, ev
     const placeholder = fieldPlaceholder(parent!.id, renderScopeId)
     if (!placeholder) return false
     event.preventDefault(); event.stopPropagation(); flushEditorContent(view)
-    placeholder.focus()
+    focusPlaceholder(placeholder)
     return true
 }
 export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {

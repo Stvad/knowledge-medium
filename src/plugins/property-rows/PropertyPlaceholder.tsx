@@ -1,4 +1,5 @@
-import {isImeKeyEvent} from '@/shortcuts/utils'
+import {usePlaceholderKeys} from './placeholderKeys'
+import {isImeKeyEvent, withRecoveredLetterKey} from '@/shortcuts/utils'
 import {usePropertyEditingActivation} from '@/components/propertyPanel/usePropertyEditingActivation'
 import {useRef, useState} from 'react'
 import {Block} from '@/data/block'
@@ -24,8 +25,14 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
   const element = useRef<HTMLDivElement>(null)
   const busy = useRef(false)
   const failed = useRef(false)
-  const [active, setActive] = useState(false)
-  const activate = (value: boolean) => { setActive(value); onActiveChange?.(value) }
+  const keys = usePlaceholderKeys()
+  const [mode, setMode] = useState<'idle' | 'landed' | 'active'>('idle')
+  const activate = (next: typeof mode) => {
+    setMode(next); onActiveChange?.(next !== 'idle')
+    const target = element.current!
+    if (target) { target.contentEditable = String(next === 'active'); target.dataset.placeholderMode = next }
+    if (next === 'active') window.getSelection()?.setPosition(target, target.childNodes.length)
+  }
   const append = async (repo: Repo, valueId: string, extra: string) => {
     const view = document.activeElement instanceof HTMLElement ? EditorView.findFromDOM(document.activeElement) : null
     if (view && document.activeElement?.closest('[data-block-id]')?.getAttribute('data-block-id') === valueId) {
@@ -40,7 +47,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
   const input = () => {
     const current = element.current!
     const initial = current.textContent ?? ''
-    if (busy.current || failed.current || !initial.trim()) return
+    if (current.contentEditable !== 'true' || busy.current || failed.current || !initial.trim()) return
     busy.current = true
     void owner.repo.undoGroup(async repo => {
       const target = await insertPropertyValue(new Block(repo, owner.id), schema, initial)
@@ -55,33 +62,43 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
         await append(repo, target.valueId, extra)
       }
       current.textContent = ''
-      activate(false)
+      activate('idle')
     }).catch(error => {
       failed.current = true
       showError(error instanceof Error ? error.message : 'Could not enter value')
     }).finally(() => { busy.current = false })
   }
-  if (!available && !active) return null
-  return <div ref={element} contentEditable={active} suppressContentEditableWarning tabIndex={-1} data-block-interaction="ignore" role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
+  if (!available && mode === 'idle') return null
+  return <div ref={element} contentEditable={mode === 'active'} data-placeholder-mode={mode} suppressContentEditableWarning tabIndex={-1} data-block-interaction="ignore" role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
     data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true" data-placeholder="Enter value…"
     onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) input() }}
     onCompositionEnd={input}
-    className="empty:before:content-[attr(data-placeholder)] empty:before:pointer-events-none min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:ring-1 focus:ring-ring"
-    onBlur={() => { editing.onBlur(); if (!busy.current) activate(false) }}
+    className="empty:before:content-[attr(data-placeholder)] empty:before:pointer-events-none min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:data-[placeholder-mode=active]:ring-1 focus:data-[placeholder-mode=active]:ring-ring focus:data-[placeholder-mode=landed]:bg-accent/40"
+    onBlur={() => { editing.onBlur(); if (!busy.current) activate('idle') }}
     onFocus={event => {
       const target = event.currentTarget
       failed.current = false
-      target.contentEditable = 'true'
-      window.getSelection()?.setPosition(target, target.childNodes.length)
-      activate(true)
+      keys.forEach(key => key.matcher.reset())
+      activate(target.dataset.placeholderMode === 'landed' ? 'landed' : 'active')
       editing.onFocus(event)
       void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope})
     }}
-    onPaste={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.textContent += event.clipboardData.getData('text/plain'); input() }}
+    onClick={() => activate('active')}
+    onKeyUp={event => { if (event.currentTarget.contentEditable !== 'true') { event.preventDefault(); event.stopPropagation() } }}
+    onPaste={event => { event.preventDefault(); event.stopPropagation(); if (event.currentTarget.contentEditable !== 'true') return; event.currentTarget.textContent += event.clipboardData.getData('text/plain'); input() }}
     onKeyDown={event => {
+      if (event.currentTarget.contentEditable !== 'true') {
+        event.preventDefault(); event.stopPropagation()
+        for (const key of keys) if (key.matcher.next(withRecoveredLetterKey(event.nativeEvent)).completed) {
+          if (key.move === undefined) activate('active')
+          else void navigatePlaceholder(event.currentTarget, scope, key.move, ui, false)
+        }
+        return
+      }
       if (isImeKeyEvent(event.nativeEvent)) return
       if (event.key === 'Escape') {
         event.preventDefault(); event.stopPropagation()
+        if (keys.length) { activate('landed'); return }
         const target = fieldRowId ?? placeholderEscapeTarget(event.currentTarget, scope, owner.id)
         event.currentTarget.blur()
         if (target) void exitEditModeForBlock(ui, target, scope).then(() => focusBlock(ui, target, {renderScopeId: scope}))

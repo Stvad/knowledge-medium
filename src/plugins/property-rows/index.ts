@@ -2,7 +2,8 @@ import {drawsPropertyRows} from './fieldRow'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch'
 import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
 import {structuralEditPolicyForBlock} from '@/data/structuralEditPolicy'
-import {fieldPlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {fieldPlaceholder, focusPlaceholder, navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {placeholderMoves} from './placeholderKeys'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
 import {propertyAutocomplete} from './autocomplete'
@@ -41,11 +42,17 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   name: 'Property rows',
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
+  Object.entries(placeholderMoves).map(([actionId, direction]) => actionDispatchWrap({actionId, context: ActionContextTypes.NORMAL_MODE,
+    wrap: async (deps, trigger, next) => {
+      const {block, renderScopeId, uiStateBlock} = deps as BlockShortcutDependencies
+      if (!await navigatePlaceholder(block.id, renderScopeId, direction, uiStateBlock, false)) await next(deps, trigger)
+    },
+  }, {source: SOURCE})),
   actionDispatchWrap({actionId: 'create_block_below_and_edit', context: ActionContextTypes.NORMAL_MODE,
     wrap: async (deps, trigger, next) => {
       const blockDeps = deps as BlockShortcutDependencies
       const placeholder = fieldPlaceholder(blockDeps.block.id, blockDeps.renderScopeId)
-      if (placeholder && (await structuralEditPolicyForBlock(blockDeps.block, blockDeps)).createBelowPlacement === 'child-first') placeholder.focus()
+      if (placeholder && (await structuralEditPolicyForBlock(blockDeps.block, blockDeps)).createBelowPlacement === 'child-first') focusPlaceholder(placeholder)
       else await next(deps, trigger)
     },
   }, {source: SOURCE}),

@@ -1,4 +1,5 @@
 import type {Block} from '@/data/block'
+import {focusBlock} from '@/data/properties'
 import {enterEditModeForBlock, scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction'
 import {isVisibleElement} from '@/utils/propertyNavigation'
 
@@ -13,21 +14,28 @@ export const focusAdjacentPlaceholder = (blockId: string, scope: string | undefi
   const index = rows.findIndex(row => scopeRowBlockId(row) === blockId)
   const next = index < 0 ? undefined : rows[index + direction]
   if (!next?.matches(selector(scope))) return false
-  next.focus()
+  focusPlaceholder(next)
   return document.activeElement === next
 }
 
-export const navigatePlaceholder = async (element: HTMLElement, scope: string | undefined, direction: -1 | 1, ui: Block) => {
-  if (!scope) return
+export const focusPlaceholder = (element: HTMLElement, edit = true) => {
+  element.dataset.placeholderMode = edit ? 'active' : 'landed'
+  element.focus()
+}
+
+export const navigatePlaceholder = async (element: HTMLElement | string, scope: string | undefined, direction: number, ui: Block, edit = true) => {
+  if (!scope || !document.querySelector(selector(scope))) return false
   const rows = rowsIn(scope)
-  const index = rows.indexOf(element)
-  const next = index < 0 ? undefined : rows[index + direction]
-  if (!next) return
-  if (next.matches(selector(scope))) next.focus()
+  const index = rows.findIndex(row => typeof element === 'string' ? scopeRowBlockId(row) === element : row === element)
+  const next = index < 0 ? undefined : rows[Math.max(0, Math.min(rows.length - 1, index + direction))]
+  if (!next || next === element) return false
+  if (next.matches(selector(scope))) focusPlaceholder(next, edit)
   else {
     const id = scopeRowBlockId(next)
-    if (id) await enterEditModeForBlock(ui.repo.block(id), ui, scope, {start: direction === -1 ? Number.MAX_SAFE_INTEGER : 0})
+    if (id && edit) await enterEditModeForBlock(ui.repo.block(id), ui, scope, {start: direction < 0 ? Number.MAX_SAFE_INTEGER : 0})
+    else if (id) { await focusBlock(ui, id, {renderScopeId: scope}); next.focus() }
   }
+  return true
 }
 
 export const fieldPlaceholder = (fieldId: string, scope: string | undefined): HTMLElement | undefined =>
@@ -39,7 +47,7 @@ export const focusPickedPlaceholder = (fieldId: string, scope: string | undefine
   const focus = () => {
     if (!stillCurrent()) return true
     const target = fieldPlaceholder(fieldId, scope)
-    target?.focus()
+    if (target) focusPlaceholder(target)
     return !!target
   }
   if (focus()) return
