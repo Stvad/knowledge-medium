@@ -1,0 +1,1 @@
+export{NG as usePropertySchemas}from"../../chunks/app-DF0ltfCe.js";

@@ -1,0 +1,1 @@
+export{ZP as resolveAppRuntime,QP as resolveAppRuntimeSync}from"../../chunks/app-DF0ltfCe.js";

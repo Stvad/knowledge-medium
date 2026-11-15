@@ -1,0 +1,1 @@
+export{Tu as blockTaggingDataExtension}from"../../../chunks/app-DF0ltfCe.js";

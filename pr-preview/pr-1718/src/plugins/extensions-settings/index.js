@@ -1,0 +1,1 @@
+export{_h as extensionsOverridesProp,vh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DF0ltfCe.js";

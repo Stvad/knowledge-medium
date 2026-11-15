@@ -1,0 +1,1 @@
+export{mo as propertiesMigrationPlugin}from"../../../chunks/app-DF0ltfCe.js";

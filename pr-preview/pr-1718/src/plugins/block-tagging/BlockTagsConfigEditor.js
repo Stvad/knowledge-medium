@@ -1,0 +1,1 @@
+export{Cu as BlockTagsConfigEditor}from"../../../chunks/app-DF0ltfCe.js";

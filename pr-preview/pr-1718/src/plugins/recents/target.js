@@ -1,0 +1,1 @@
+export{XD as openRecentsPage}from"../../../chunks/app-DF0ltfCe.js";

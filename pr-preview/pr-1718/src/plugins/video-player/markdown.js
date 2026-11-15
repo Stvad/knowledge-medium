@@ -1,0 +1,1 @@
+export{IS as videoPlayerMarkdownExtension}from"../../../chunks/app-DF0ltfCe.js";

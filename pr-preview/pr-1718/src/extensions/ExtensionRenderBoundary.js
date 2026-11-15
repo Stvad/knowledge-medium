@@ -1,0 +1,1 @@
+export{Tz as ExtensionRenderBoundary}from"../../chunks/app-DF0ltfCe.js";
