@@ -1,1 +1,0 @@
-export{mo as propertiesMigrationPlugin}from"../../../chunks/app-DS2PNHdK.js";

@@ -1,1 +1,0 @@
-export{VN as BlockPasteShellDecorator,HN as blockPasteShellDecorator}from"../../chunks/app-DS2PNHdK.js";

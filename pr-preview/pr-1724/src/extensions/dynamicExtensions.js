@@ -1,1 +1,0 @@
-export{$P as dynamicExtensionsExtension}from"../../chunks/app-DS2PNHdK.js";

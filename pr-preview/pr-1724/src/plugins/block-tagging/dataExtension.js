@@ -1,1 +1,0 @@
-export{Tu as blockTaggingDataExtension}from"../../../chunks/app-DS2PNHdK.js";

@@ -1,1 +1,0 @@
-export{Xd as annotationsPlugin}from"../../../chunks/app-DS2PNHdK.js";

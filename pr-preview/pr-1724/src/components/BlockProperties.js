@@ -1,1 +1,0 @@
-export{GB as BlockProperties}from"../../chunks/app-DS2PNHdK.js";

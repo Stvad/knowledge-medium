@@ -1,1 +1,0 @@
-export{XE as PendingInvitations}from"../../../chunks/app-DS2PNHdK.js";

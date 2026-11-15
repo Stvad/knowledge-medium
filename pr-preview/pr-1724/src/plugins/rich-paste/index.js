@@ -1,1 +1,0 @@
-export{Nb as richPastePlugin}from"../../../chunks/app-DS2PNHdK.js";

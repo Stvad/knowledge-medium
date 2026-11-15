@@ -1,1 +1,0 @@
-export{Sy as Wikilink}from"../../../../../chunks/app-DS2PNHdK.js";
