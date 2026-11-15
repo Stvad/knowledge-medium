@@ -89,7 +89,7 @@
     "mdast-util-from-markdown": "^2.1.0",
     "mdast-util-gfm": "^3.1.0",
     "mdast-util-gfm-table": "^2.0.1",
-    "mdast-util-to-markdown": "^2.2.3",
+    "mdast-util-to-markdown": "^2.2.0",
     "micromark-extension-gfm-table": "^2.1.2",
     "parse5": "^8.1.1",
     "react-error-boundary": "^6.1.6",
