@@ -1,12 +1,9 @@
-/** Renderer for `'property-schema'` blocks. Wraps the default block
- *  layout (so the block keeps normal indentation, children, focus,
- *  drag, hover, etc.) and only replaces the content area with a
- *  schema editor — name input, preset picker, dispatched
- *  `preset.ConfigEditor`, and a delete button. See
- *  user-defined-properties.md §4a. */
+/** The default block layout with a schema editor as its content.
+ *  Inline references display the stored property name. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresetRegistry, readValuePresets} from '@/data/valuePresetRegistry'
@@ -32,7 +29,7 @@ import {
   type BlockData,
   type Tx,
 } from '@/data/api'
-import { decodeRowProperty } from '@/data/rowProperty.js'
+import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty.js'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata.js'
 import { effectiveHideInOutline } from '@/data/propertyDefinitionRegistry.js'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical.js'
@@ -767,17 +764,24 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
 }
 PropertySchemaContentRenderer.displayName = 'PropertySchemaContentRenderer'
 
-/** Outer wrapper: keeps the default block layout (children,
- *  indentation, drag handle, focus chrome) and swaps in the
- *  schema-editing content renderer. */
+const PropertySchemaReferenceContent = ({block}: BlockRendererProps) => {
+  const name = useHandle(block, {
+    selector: row => row ? safeDecodeRowProperty(row, propertyNameProp) : '',
+  })
+  return <span>{name || 'Unnamed property'}</span>
+}
+
 export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
-  (props: BlockRendererProps) => (
-    <DefaultBlockRenderer
-      {...props}
-      ContentRenderer={PropertySchemaContentRenderer}
-      EditContentRenderer={PropertySchemaContentRenderer}
-    />
-  ),
+  (props: BlockRendererProps) => {
+    const {isReference} = useBlockContext()
+    return (
+      <DefaultBlockRenderer
+        {...props}
+        ContentRenderer={isReference ? PropertySchemaReferenceContent : PropertySchemaContentRenderer}
+        EditContentRenderer={PropertySchemaContentRenderer}
+      />
+    )
+  },
   {
     canRender: ({block}: BlockRendererProps): boolean => {
       // useRenderer's chooser also calls useData(block) before

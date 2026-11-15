@@ -2,7 +2,9 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {isReadOnlySql} from '@knowledge-medium/agent-cli/protocol'
 import {ChangeScope} from '@/data/api'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import {PAGE_TYPE, USER_TYPE} from '@/data/blockTypes'
+import {propertyFieldContent} from '@/data/propertyChildren'
 import {aliasesProp, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -14,7 +16,7 @@ import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {COMMENTS_RECIPE_QUIET_MS, COMMENTS_RECIPE_SQL, threadIdsInScope} from './scope'
-import {annotationTargetProp} from './schema'
+import {annotationQuotePrefixProp, annotationTargetProp} from './schema'
 import {createThread, setThreadStatus} from './threads'
 
 const WS = 'ws'
@@ -123,6 +125,24 @@ describe('threadIdsInScope', () => {
     expect(await threadIdsInScope(repo, OTHER)).toEqual([ids.elsewhere])
   })
 
+  it('covers property field and value blocks under the scope', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    await repo.tx(tx => tx.setProperty(BLOCK, annotationQuotePrefixProp, 'a value'), opts)
+    const fieldId = propertyDefinitionBlockId(WS, annotationQuotePrefixProp.seedKey)
+    const field = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0', [BLOCK, propertyFieldContent(fieldId)])
+    const value = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id])
+    const onField = await createThread(repo, {targetId: field.id, anchor: null, comment: 'Field note'})
+    const onValue = await createThread(repo, {targetId: value.id, anchor: null, comment: 'Value note'})
+
+    expect((await threadIdsInScope(repo, SCOPE)).sort()).toEqual(
+      [...[ids.onBlock, ids.onNested, ids.onComment, ids.resolved, onField.threadId, onValue.threadId]].sort(),
+    )
+  })
+
   it('leaves out a deleted thread, and answers nothing for a deleted scope', async () => {
     await repo.tx(tx => tx.delete(ids.onBlock), opts)
     // The thread on its comment went with it: its target is no longer covered.
@@ -152,6 +172,28 @@ describe('the comments recipe', () => {
   it('selects the quiet comments of open threads in the scope, at any depth', async () => {
     await goQuiet()
     expect(await recipe()).toEqual([ids.comment, ids.reply, ids.commentOnComment].sort())
+  })
+
+  it('finds threads on a comment property without emitting property rows as comments', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    await repo.tx(tx => tx.setProperty(ids.comment, annotationQuotePrefixProp, 'property text'), opts)
+    const fieldId = propertyDefinitionBlockId(WS, annotationQuotePrefixProp.seedKey)
+    const field = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0',
+      [ids.comment, propertyFieldContent(fieldId)],
+    )
+    const value = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id])
+    const onValue = await createThread(repo, {targetId: value.id, anchor: null, comment: 'Property note'})
+
+    expect(await threadIdsInScope(repo, SCOPE)).toContain(onValue.threadId)
+    await goQuiet()
+    const rows = await db.db.getAll<{id: string}>(COMMENTS_RECIPE_SQL, [SCOPE, JSON.stringify([])])
+    expect(rows.map(row => row.id)).toContain(onValue.commentId)
+    expect(rows.map(row => row.id)).not.toContain(field.id)
+    expect(rows.map(row => row.id)).not.toContain(value.id)
   })
 
   it('waits for a comment to go quiet, then selects it with its finished text', async () => {

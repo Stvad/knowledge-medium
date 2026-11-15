@@ -90,6 +90,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     label: 'Checkbox',
     Glyph: CheckSquare,
     Editor: asEditor<boolean>(BooleanPropertyEditor),
+    InlineEditor: asEditor<boolean>(BooleanPropertyEditor),
   }),
   kernelPresetPresentation(listValuePresetCore, {
     // Superseded by `string-list` below — the same list, with each member
@@ -124,6 +125,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     label: 'Date',
     Glyph: Calendar,
     Editor: asEditor<Date | undefined>(DatePropertyEditor),
+    InlineEditor: asEditor<Date | undefined>(DatePropertyEditor),
   }),
   kernelPresetPresentation(urlValuePresetCore, {
     id: 'url',
@@ -137,6 +139,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     label: 'Choice',
     Glyph: ChevronDownSquare,
     Editor: asEditor<string>(SelectPropertyEditor),
+    InlineEditor: asEditor<string>(SelectPropertyEditor),
     ConfigEditor: EnumOptionsConfigEditor,
   }),
   kernelPresetPresentation(strictEnumValuePresetCore, {
@@ -149,6 +152,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     label: 'Choice (fixed)',
     Glyph: ChevronDownSquare,
     Editor: asEditor<string>(SelectPropertyEditor),
+    InlineEditor: asEditor<string>(SelectPropertyEditor),
     ConfigEditor: EnumOptionsConfigEditor,
     hideFromPicker: true,
   }),

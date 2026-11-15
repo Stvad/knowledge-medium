@@ -32,4 +32,5 @@ export const ProfilePropertyEditor = ({
 export const charProfileEditorOverride = definePropertyEditorOverride(charProfileProp, {
   label: 'Count by',
   Editor: ProfilePropertyEditor,
+  InlineEditor: ProfilePropertyEditor,
 })

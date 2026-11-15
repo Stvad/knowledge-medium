@@ -568,11 +568,11 @@ export const blockContentRendererFacet = defineVariantFacet<BlockResolveContext,
 // note, opened before midnight, could never gain one. Decide on `ctx.types`,
 // `ctx.isTopLevel`, `ctx.blockContext` and the like; put anything time- or
 // data-dependent inside the decorating component, where a hook can re-run it.
-export const blockContentDecoratorsFacet = defineFacet<
+const contentDecoratorsFacet = (id: string) => defineFacet<
   BlockContentDecoratorContribution,
   BlockContentDecoratorResolver
 >({
-  id: 'core.block-content-decorators',
+  id,
   combine: contributions => (context, inner) => {
     let renderer = inner
     for (const contribution of contributions) {
@@ -584,6 +584,12 @@ export const blockContentDecoratorsFacet = defineFacet<
   empty: () => (_context, inner) => inner,
   validate: isFunction<BlockContentDecoratorContribution>,
 })
+
+/** Decorates the chosen read renderer before edit-mode dispatch. A decorator
+ *  may specialize plain content without replacing a type renderer or editor. */
+export const blockReadContentDecoratorsFacet = contentDecoratorsFacet('core.block-read-content-decorators')
+
+export const blockContentDecoratorsFacet = contentDecoratorsFacet('core.block-content-decorators')
 
 export const blockClickHandlersFacet = defineFacet<
   BlockClickContribution,

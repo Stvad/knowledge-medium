@@ -42,12 +42,10 @@ export const fieldRowDefinition = (
   return {fieldId, name, schema: undefined}
 }
 
-/** Whether a scalar value child belongs in the property row editor. Lists
- *  store one child per member, while refs stay ordinary reference blocks for
- *  the markdown renderer, accepting its UUID-only block-id grammar rather
- *  than introducing a property-only reference rendering path. */
-export const isPropertyValueEditorEligible = (schema: AnyPropertySchema): boolean =>
-  memberCodecOf(schema.codec) === undefined && schema.codec.type !== 'ref'
+/** A scalar control edits one row; list controls edit the whole list and
+ *  belong in the property panel. */
+export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
+  memberCodecOf(schema.codec) === undefined
 
 /** Surfaces that show a block as something other than an outline row — a
  *  breadcrumb crumb, an inline reference — keep their own rendering. */
@@ -66,4 +64,14 @@ export const usePropertyDefinitions = (repo: Repo): PropertyDefinitionRegistrySn
   const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
   const snapshot = useCallback(() => repo.propertyDefinitions, [repo])
   return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
+/** Observe only the fields that determine a row's property role. */
+export const useFieldRowDefinition = (block: Block): FieldRowDefinition | undefined => {
+  const definitions = usePropertyDefinitions(block.repo)
+  const data = useHandle(block, {selector: row => row ? {
+    referenceTargetId: row.referenceTargetId, parentId: row.parentId,
+    isFieldForm: row.isFieldForm, workspaceId: row.workspaceId,
+  } : undefined})
+  return fieldRowDefinition(block.repo, definitions, data)
 }
