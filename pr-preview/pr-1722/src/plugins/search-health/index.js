@@ -1,1 +1,1 @@
-export{Ys as searchHealthDiagnosticSource,Xs as searchHealthExtension}from"../../../chunks/app-ChIWJi7q.js";
+export{Ys as searchHealthDiagnosticSource,Xs as searchHealthExtension}from"../../../chunks/app-B87bNok3.js";

@@ -1,1 +1,1 @@
-export{s_ as boundDisplayId,c_ as idMark}from"../../../../chunks/app-ChIWJi7q.js";
+export{s_ as boundDisplayId,c_ as idMark}from"../../../../chunks/app-B87bNok3.js";

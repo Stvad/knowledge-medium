@@ -1,1 +1,1 @@
-export{Xk as DailyNotePickerHeaderItem}from"../../../chunks/app-ChIWJi7q.js";
+export{Xk as DailyNotePickerHeaderItem}from"../../../chunks/app-B87bNok3.js";

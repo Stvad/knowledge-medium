@@ -1,1 +1,1 @@
-export{ru as srsBarClass,iu as srsIndicatorTitle}from"../../../chunks/app-ChIWJi7q.js";
+export{ru as srsBarClass,iu as srsIndicatorTitle}from"../../../chunks/app-B87bNok3.js";

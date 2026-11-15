@@ -1,1 +1,1 @@
-export{_j as keybindingOverridesProp,vj as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-ChIWJi7q.js";
+export{_j as keybindingOverridesProp,vj as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-B87bNok3.js";

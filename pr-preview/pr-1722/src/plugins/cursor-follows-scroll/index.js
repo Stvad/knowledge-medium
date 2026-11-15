@@ -1,1 +1,1 @@
-export{jC as cursorFollowsScrollPlugin,zC as isRowInViewport,VC as resolveViewportAnchor}from"../../../chunks/app-ChIWJi7q.js";
+export{jC as cursorFollowsScrollPlugin,zC as isRowInViewport,VC as resolveViewportAnchor}from"../../../chunks/app-B87bNok3.js";

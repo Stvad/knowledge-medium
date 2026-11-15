@@ -1,1 +1,1 @@
-export{rit as getOrCreateKernelPage,iit as kernelPageBlockId}from"../../chunks/app-ChIWJi7q.js";
+export{rit as getOrCreateKernelPage,iit as kernelPageBlockId}from"../../chunks/app-B87bNok3.js";

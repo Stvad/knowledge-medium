@@ -1,1 +1,1 @@
-export{kb as AliasCollisionToast}from"../../../chunks/app-ChIWJi7q.js";
+export{kb as AliasCollisionToast}from"../../../chunks/app-B87bNok3.js";
