@@ -128,6 +128,3 @@ export const useFocusWithin = (parent: Block, renderScopeId: unknown): boolean |
   return useSyncExternalStore(store.subscribe, snapshot, snapshot)
 }
 
-/** Current logical focus for async continuations; shares the panel's followed chain. */
-export const focusIsWithin = (uiStateBlock: Block, parentId: string, renderScopeId: unknown): boolean =>
-  focusedChildren(uiStateBlock).within(parentId, renderScopeId) === true

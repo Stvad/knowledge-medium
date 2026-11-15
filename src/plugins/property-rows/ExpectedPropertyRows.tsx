@@ -5,9 +5,16 @@ import {useHandle, usePropertyDisplayMode, usePropertyValue} from '@/hooks/block
 import {usePropertySchemas} from '@/hooks/propertySchemas'
 import {useTypes} from '@/hooks/typeRegistry'
 import {PropertyDisplayScopeContext} from '@/context/propertyDisplay'
-import {outlineSkippedFieldIds} from '@/data/propertyDefinitionRegistry'
+import {outlineSkippedFieldIds, type PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import type {BlockRendererProps} from '@/types'
 import {PropertyPlaceholder} from './PropertyPlaceholder'
+
+const skippedByRegistry = new WeakMap<PropertyDefinitionRegistrySnapshot, ReadonlySet<string>>()
+const skippedFields = (registry: PropertyDefinitionRegistrySnapshot) => {
+  let skipped = skippedByRegistry.get(registry)
+  if (!skipped) { skipped = outlineSkippedFieldIds(registry); skippedByRegistry.set(registry, skipped) }
+  return skipped
+}
 
 /** This footer is the single placement for expected fields: after existing children. */
 export function ExpectedPropertyRows({block}: BlockRendererProps) {
@@ -26,7 +33,7 @@ function TypedExpectedFields({owner, mode, typeIds}: {owner: Block; mode: 'all' 
   const stored = useHandle(owner.repo.query.children({id: owner.id, propertyChildren: 'all'}), {selector: rows => rows})
   if (!data || !stored) return null
   const resolver = owner.repo.propertySchemaResolverFor(data.workspaceId)
-  const skipped = mode === 'non-hidden' && owner.repo.propertyDefinitions ? outlineSkippedFieldIds(owner.repo.propertyDefinitions) : null
+  const skipped = mode === 'non-hidden' && owner.repo.propertyDefinitions ? skippedFields(owner.repo.propertyDefinitions) : null
   const seen = new Set<string>()
   return typeIds.flatMap(typeId => (types.get(typeId)?.properties ?? []).flatMap(declaration => {
     const active = schemas.get(declaration.name)
