@@ -143,7 +143,10 @@ export const createGraph = (bridgeClient: BridgeClient) => {
   }
 
   /** Which of `ids` are property VALUE blocks: an unmarked child of a field
-   *  row (a marked row with a parent). */
+   *  row (a marked row with a parent). Deliberately does not ask whether the
+   *  row's target is a definition: seed definitions resolve by id without a
+   *  row, so that check would miss attribution and reopen the self-mention
+   *  loop. ACCEPTED: a note under a hand-made `::((page))` row is skipped. */
   const propertyValueBlocks = async (ids: readonly string[]): Promise<Set<string>> => {
     const found = new Set<string>()
     for (let offset = 0; offset < ids.length; offset += 500) {
