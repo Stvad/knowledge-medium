@@ -114,6 +114,8 @@ export interface PropertyEditorOverride<T = unknown> {
    *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
+  /** Opt-in control for the scalar value block itself in the outline. */
+  readonly InlineEditor?: PropertyEditor<T>
   /** Optional glyph override. Defaults to the matching `ValuePreset.Glyph`
    *  when absent. Use sparingly — most properties pick up the codec-type-keyed
    *  glyph from the preset and don't need a per-definition shape.
@@ -128,7 +130,8 @@ export interface PropertyEditorProps<T> {
    *  renderers; optional so older UI contributions that only need
    *  value/onChange/block keep their existing shape. */
   schema?: PropertySchema<T>
-  /** The block being edited. Type kept loose here so the data-layer api
+  /** The owner in a property panel, or the value row for an InlineEditor.
+   *  Type kept loose here so the data-layer api
    *  module doesn't need to import the `Block` facade (defined in
    *  `src/data/block.ts`). UI consumers narrow at the call site. */
   block: unknown

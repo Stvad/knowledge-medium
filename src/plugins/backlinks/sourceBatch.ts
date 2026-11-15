@@ -2,8 +2,8 @@
  * The backlink sources of a target, answered for every target asked about in
  * the same microtask by ONE statement per kind of edge: the mentions (every
  * edge but those another surface owns, `edgeExclusions.ts`) or the edges of one
- * property (`{field}`, how a thread's target finds its threads). Self and
- * property machinery are always excluded. This is the one place that decides
+ * property (`{field}`, how a thread's target finds its threads). Self
+ * references are excluded. This is the one place that decides
  * what a backlink source is; the filtered route (`sources.ts`) narrows it.
  *
  * The badge count and the unfiltered `backlinks.forBlock` list both come from
@@ -20,12 +20,9 @@ import {
   typedBlocksReferenceFieldKey,
   typedBlocksReferenceKey,
 } from '@/data/invalidation'
-import { dependOnRecognitionParams, registryRecognitionParams } from '@/data/internals/kernelQueries'
 import { ReadBatcher, readBatcherPerDb } from '@/data/internals/readBatch'
 import { MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds'
-import type { RecognitionParams } from '@/data/internals/treeQueries'
 import { edgePredicate, type BacklinkEdges, type EdgePredicate } from './edgeExclusions.ts'
-import { machineryInteriorCtes, workspaceHasPropertyMachinery } from './machinery.ts'
 
 type Projection = 'ids' | 'count'
 type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
@@ -45,10 +42,9 @@ type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
 const backlinkSourcesSql = (
   targetCount: number,
   projection: Projection,
-  excludeMachinery: boolean,
   edges: EdgePredicate,
 ): string => {
-  const ctes = [`pairs(target_id, id) AS (
+  const pairs = `pairs(target_id, id) AS (
     SELECT DISTINCT br.target_id, b.id
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id
@@ -57,31 +53,19 @@ const backlinkSourcesSql = (
        AND b.deleted = 0
        AND b.id != br.target_id
        AND (${edges.sql})
-  )`]
-  if (excludeMachinery) ctes.push(machineryInteriorCtes('SELECT id FROM pairs'))
-  const where = excludeMachinery ? 'WHERE p.id NOT IN (SELECT id FROM machinery)' : ''
+  )`
   return projection === 'count'
-    ? `WITH RECURSIVE ${ctes.join(',\n')}
-       SELECT p.target_id, COUNT(*) AS count FROM pairs p ${where} GROUP BY p.target_id`
-    : `WITH RECURSIVE ${ctes.join(',\n')}
-       SELECT p.target_id, p.id FROM pairs p JOIN blocks b ON b.id = p.id ${where}
+    ? `WITH ${pairs}
+       SELECT p.target_id, COUNT(*) AS count FROM pairs p GROUP BY p.target_id`
+    : `WITH ${pairs}
+       SELECT p.target_id, p.id FROM pairs p JOIN blocks b ON b.id = p.id
         ORDER BY p.target_id, b.created_at DESC, b.id`
 }
 
-interface Resolved<P extends Projection> {
-  value: Answer<P>
-  /** Whether the machinery exclusion ran, i.e. whether recognition could
-   *  change this answer. */
-  machinery: boolean
-}
-
-/** Requests one statement can answer: same workspace, projection, edges and
- *  recognition snapshot (`registryRecognitionParams` is cached per snapshot,
- *  so identity is the comparison). */
+/** Requests one statement can answer: same workspace, projection and edges. */
 interface Key {
   workspaceId: string
   projection: Projection
-  recognitionParams: RecognitionParams
   edges: EdgePredicate
   edgesKey: string
 }
@@ -90,25 +74,20 @@ const edgesKeyOf = (edges: EdgePredicate): string => JSON.stringify([edges.sql, 
 
 const sameStatement = (a: Key, b: Key): boolean =>
   a.workspaceId === b.workspaceId && a.projection === b.projection &&
-  a.recognitionParams === b.recognitionParams && a.edgesKey === b.edgesKey
+  a.edgesKey === b.edgesKey
 
 export class BacklinkSourceBatcher {
-  private readonly batch: ReadBatcher<Key, Resolved<Projection>>
+  private readonly batch: ReadBatcher<Key, Answer<Projection>>
 
   /** `maxTargets`: one bind per target, under the shared ceiling. */
   constructor(db: QueryReadDb, maxTargets: number = MAX_IDS_PER_IN_CLAUSE) {
     this.batch = new ReadBatcher(db, {
       sameGroup: sameStatement,
       maxIdsPerStatement: maxTargets,
-      read: async ({workspaceId, projection, recognitionParams, edges}, targets) => {
-        // Per statement, not per group: once per group would need a per-group
-        // hook on `ReadBatcher` for this caller alone. Past the ceiling that
-        // costs one cheap probe per extra chunk (a yes is cached), and a failed
-        // probe fails only its own chunk.
-        const machinery = await workspaceHasPropertyMachinery(db, workspaceId)
+      read: async ({workspaceId, projection, edges}, targets) => {
         const rows = await db.getAll<{target_id: string; id?: string; count?: number}>(
-          backlinkSourcesSql(targets.length, projection, machinery, edges),
-          [workspaceId, ...targets, ...edges.params, ...(machinery ? recognitionParams : [])],
+          backlinkSourcesSql(targets.length, projection, edges),
+          [workspaceId, ...targets, ...edges.params],
         )
         const answers = new Map<string, string[] | number>()
         for (const row of rows) {
@@ -120,7 +99,7 @@ export class BacklinkSourceBatcher {
           }
         }
         const none = projection === 'count' ? 0 : Object.freeze([]) as readonly string[]
-        return id => ({value: answers.get(id) ?? none, machinery})
+        return id => answers.get(id) ?? none
       },
     })
   }
@@ -129,12 +108,11 @@ export class BacklinkSourceBatcher {
     workspaceId: string,
     targetId: string,
     projection: P,
-    recognitionParams: RecognitionParams,
     edges: EdgePredicate,
-  ): Promise<Resolved<P>> {
+  ): Promise<Answer<P>> {
     return this.batch.request(targetId, {
-      workspaceId, projection, recognitionParams, edges, edgesKey: edgesKeyOf(edges),
-    }) as Promise<Resolved<P>>
+      workspaceId, projection, edges, edgesKey: edgesKeyOf(edges),
+    }) as Promise<Answer<P>>
   }
 }
 
@@ -142,15 +120,7 @@ const batcherFor = readBatcherPerDb(db => new BacklinkSourceBatcher(db))
 
 /** Resolve one target through the batch and declare what its answer depends
  *  on: the target's reference channel, as `core.typedBlockIds` does for
- *  `referencedBy: {id}` (or, for one property's edges, that field's key), and
- *  field recognition whenever the exclusion ran.
- *
- *  KNOWN: the machinery exclusion walks each SOURCE's ancestry, but no
- *  dependency is declared on it. Moving a source out from under a field row,
- *  or editing an ancestor between `((D))` and `::((D))`, changes membership
- *  with nothing to invalidate on, so a mounted view stays stale until the next
- *  reference change or a reload. The honest fix is a dep per candidate source
- *  and walked ancestor, on what every visible badge counts. km-nc46. */
+ *  `referencedBy: {id}` (or, for one property's edges, that field's key). */
 const resolveSources = async <P extends Projection>(
   ctx: QueryCtx,
   workspaceId: string,
@@ -163,15 +133,13 @@ const resolveSources = async <P extends Projection>(
   ctx.depend(edges === 'mentions'
     ? {kind: 'plugin', channel: TYPED_BLOCKS_REFERENCE_CHANNEL, key: typedBlocksReferenceKey(workspaceId, targetId)}
     : {kind: 'plugin', channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, key: typedBlocksReferenceFieldKey(workspaceId, targetId, edges.field)})
-  const {value, machinery} = await batcherFor(ctx.db).request(
-    workspaceId, targetId, projection, registryRecognitionParams(ctx.repo), edgePredicate(ctx.repo, edges),
+  return batcherFor(ctx.db).request(
+    workspaceId, targetId, projection, edgePredicate(ctx.repo, edges),
   )
-  if (machinery) dependOnRecognitionParams(ctx)
-  return value
 }
 
 /** Sources of `targetId` over `edges` (default: mentions), newest first, self
- *  and property machinery excluded. */
+ *  references excluded. */
 export const backlinkSourceIds = async (
   ctx: QueryCtx,
   workspaceId: string,

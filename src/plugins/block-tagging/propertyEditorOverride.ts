@@ -5,4 +5,5 @@ import { BlockTagsConfigEditor } from './BlockTagsConfigEditor.tsx'
 export const blockTagsConfigUi = definePropertyEditorOverride(blockTagsConfigProp, {
   label: 'Block tags',
   Editor: BlockTagsConfigEditor,
+  InlineEditor: BlockTagsConfigEditor,
 })

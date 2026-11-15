@@ -18,16 +18,19 @@ import type {Repo} from '@/data/repo'
 import {attributionCreatorsProp, contributorKindProp} from '@/plugins/contributors/schema.js'
 import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.ts'
 
-/** `covered(id, thread_id, workspace_id)`: the scope root, its visible
- *  descendants, each thread root anchored to a covered block, and that root's
- *  visible descendants, its comments. `thread_id` is the thread a row belongs
+/** `covered(id, thread_id, workspace_id, is_comment)`: the scope root, its
+ *  structural descendants, each thread root anchored to a covered block, and
+ *  that root's comment descendants. `thread_id` is the thread a row belongs
  *  to (the root's own id on the root), NULL for the scope's own blocks.
+ *  `is_comment` marks ordinary comment rows. A thread root starts a comment
+ *  subtree; field rows turn the mark off without pruning them from discovery.
  *  UNION dedups, so a cycle ends. Binds the scope id, then what `fieldRow`
  *  binds.
  *
  *  The descent stops at a thread root: a root is covered only through its
  *  target, so one moved by hand under another thread's comment keeps its own
- *  comments to itself.
+ *  comments to itself. Property rows are ordinary scope descendants and can
+ *  have threads; within a thread's comment tree, field rows stay metadata.
  *
  *  The `INDEXED BY` is load-bearing, as on `SUBTREE_SQL` (treeQueries.ts):
  *  without it the workspace equality below leads the planner to scan the
@@ -37,17 +40,17 @@ import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.
  *  and rewrites `workspace_id` verbatim, so a covered block's child or
  *  referrer can sit in another workspace. */
 const coveredCte = (fieldRow: (rowRef: string) => string): string => `
-  WITH RECURSIVE covered(id, thread_id, workspace_id) AS (
-    SELECT id, NULL, workspace_id FROM blocks WHERE id = ? AND deleted = 0
+  WITH RECURSIVE covered(id, thread_id, workspace_id, is_comment) AS (
+    SELECT id, NULL, workspace_id, 0 FROM blocks WHERE id = ? AND deleted = 0
     UNION
-    SELECT child.id, covered.thread_id, covered.workspace_id
+    SELECT child.id, covered.thread_id, covered.workspace_id,
+           covered.is_comment AND NOT (${fieldRow('child')})
       FROM covered
       JOIN blocks child INDEXED BY idx_blocks_parent_order ON child.parent_id = covered.id
      WHERE child.deleted = 0 AND child.workspace_id = covered.workspace_id
-       AND NOT (${fieldRow('child')})
        AND NOT EXISTS (SELECT 1 FROM block_types t WHERE t.block_id = child.id AND t.type = '${THREAD_TYPE}')
     UNION
-    SELECT root.id, root.id, covered.workspace_id
+    SELECT root.id, root.id, covered.workspace_id, 1
       FROM covered
       JOIN block_references edge
         ON edge.target_id = covered.id AND edge.source_field = '${annotationTargetProp.name}'
@@ -86,7 +89,9 @@ export const COMMENTS_RECIPE_QUIET_MS = 15_000
  *
  *  It runs as a watcher's raw SQL, where the registry is out of reach, so it
  *  treats every `::` field row as one; the scope read above asks the
- *  registry. */
+ *  registry. The recursive `is_comment` bit follows only non-field rows after
+ *  an annotation edge; property rows remain in discovery so annotations on
+ *  them are found, but aren't emitted as comment text. */
 export const COMMENTS_RECIPE_SQL = `${coveredCte(rowRef => `COALESCE(${rowRef}.is_field_form, 0) = 1`)}
   SELECT comment.id, covered.thread_id AS thread_id, comment.content
     FROM covered
@@ -94,7 +99,8 @@ export const COMMENTS_RECIPE_SQL = `${coveredCte(rowRef => `COALESCE(${rowRef}.i
     JOIN blocks root ON root.id = covered.thread_id
     LEFT JOIN blocks author
       ON author.id = json_extract(comment.properties_json, '$."${attributionCreatorsProp.name}"[0]')
-   WHERE covered.id != covered.thread_id
+   WHERE covered.is_comment = 1
+     AND covered.id != covered.thread_id
      AND COALESCE(json_extract(root.properties_json, '$."${annotationStatusProp.name}"'), 'open') = 'open'
      AND trim(comment.content, ' ' || char(9, 10, 13)) != ''
      AND COALESCE(comment.user_updated_at, comment.updated_at)
