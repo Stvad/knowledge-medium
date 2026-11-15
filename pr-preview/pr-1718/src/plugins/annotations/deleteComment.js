@@ -1,1 +1,1 @@
-export{Df as DELETED_COMMENT_CONTENT,Of as deleteCommentFromCard}from"../../../chunks/app-xMV8M1yN.js";
+export{Df as DELETED_COMMENT_CONTENT,Of as deleteCommentFromCard}from"../../../chunks/app-C-wMs3EK.js";

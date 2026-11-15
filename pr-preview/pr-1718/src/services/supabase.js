@@ -1,1 +1,1 @@
-export{Zit as hasSupabaseAuthConfig,Qit as isAuthCallbackUrl,$it as readPersistedSession,eat as sessionUserToAppUser,tat as supabase}from"../../chunks/app-xMV8M1yN.js";
+export{Zit as hasSupabaseAuthConfig,Qit as isAuthCallbackUrl,$it as readPersistedSession,eat as sessionUserToAppUser,tat as supabase}from"../../chunks/app-C-wMs3EK.js";
