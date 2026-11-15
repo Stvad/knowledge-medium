@@ -55,6 +55,7 @@ import {
   type RecognitionParams,
 } from './treeQueries'
 import {
+  ANCESTOR_CHAIN_CTE_SQL,
   assertAncestorWalkBounded,
   buildCandidatesCte,
   compileTypedBlockQuery,
@@ -1044,10 +1045,9 @@ const TARGET_DEP_KIND = 't'
  *  considers when an ancestor-scoped predicate is present. Returns the
  *  full set of ancestor ids touched so the resolver can register row
  *  deps on them — content / property / parent_id changes on any
- *  ancestor can flip membership and we need to wake. Mirrors the
- *  ancestor_chain CTE the compiler emits, but materializes only the
- *  candidate seed (no per-predicate filtering) since we want every
- *  potentially-relevant ancestor in the dep set.
+ *  ancestor can flip membership and we need to wake. Walks the compiler's
+ *  own `ancestor_chain` CTE, over the candidate seed only (no per-predicate
+ *  filtering) since we want every potentially-relevant ancestor in the dep set.
  *
  *  Each `targetArms` entry rides the SAME walk to return the target ids those
  *  rows point at, for one named property. One statement rather than two so the
@@ -1056,24 +1056,8 @@ const TARGET_DEP_KIND = 't'
 const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetArms: readonly string[]) => `
   WITH RECURSIVE
     ${candidatesCte},
-    walk(anc_id, anc_parent_id, depth, path) AS (
-      SELECT seed.id, seed.parent_id, 0, '!' || hex(seed.id) || '/'
-      FROM candidates c
-      JOIN blocks seed ON seed.id = c.id
-      WHERE seed.deleted = 0
-      UNION ALL
-      SELECT
-        parent.id,
-        parent.parent_id,
-        walk.depth + 1,
-        walk.path || '!' || hex(parent.id) || '/'
-      FROM walk
-      JOIN blocks parent ON parent.id = walk.anc_parent_id
-      WHERE parent.deleted = 0
-        AND walk.depth < 100
-        AND INSTR(walk.path, '!' || hex(parent.id) || '/') = 0
-    )
-  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM walk${
+    ${ANCESTOR_CHAIN_CTE_SQL}
+  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM ancestor_chain${
     targetArms.map(arm => `
   UNION
   ${arm}`).join('')}
@@ -1279,7 +1263,11 @@ const typedBlockNeedsAncestorChain = (
  *  target and register no dep. On the `kind: 'structure'` paths the ancestor
  *  deps do not fire on the later `references_json` edit either, so the miss
  *  would be permanent. Reading the property value cannot skew from the
- *  predicate, because it is the same expression. */
+ *  predicate, because it is the same expression.
+ *
+ *  CROSS JOIN for the reason `ANCESTOR_CHAIN_CTE_SQL` gives: left to choose,
+ *  the planner can scan every block and probe an automatic index over the
+ *  chain. Defence in depth, not pinned: it inverted only on large fixtures. */
 const targetLivenessArms = (
   props: ReadonlySet<string>,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -1291,13 +1279,13 @@ const targetLivenessArms = (
     if (kind === 'ref') {
       arms.push(
         `SELECT DISTINCT '${TARGET_DEP_KIND}', ${extract}\n` +
-        `  FROM walk JOIN blocks b ON b.id = walk.anc_id\n` +
+        `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id\n` +
         `  WHERE ${extract} IS NOT NULL`,
       )
     } else if (kind === 'refList') {
       arms.push(
         `SELECT DISTINCT '${TARGET_DEP_KIND}', je.value\n` +
-        `  FROM walk JOIN blocks b ON b.id = walk.anc_id, ${refListMembersSql('b', name)} je`,
+        `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id, ${refListMembersSql('b', name)} je`,
       )
     }
   }
