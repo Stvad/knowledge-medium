@@ -1,1 +1,0 @@
-export{Am as contributorsPlugin}from"../../../chunks/app-jLrVF-xn.js";

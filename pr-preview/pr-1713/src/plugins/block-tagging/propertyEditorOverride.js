@@ -1,1 +1,0 @@
-export{Pu as blockTagsConfigUi}from"../../../chunks/app-jLrVF-xn.js";

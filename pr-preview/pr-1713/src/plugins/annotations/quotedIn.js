@@ -1,1 +1,0 @@
-export{ff as quotedInFooterContribution}from"../../../chunks/app-jLrVF-xn.js";

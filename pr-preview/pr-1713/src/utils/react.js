@@ -1,1 +1,0 @@
-export{tR as useIsMobile,nR as usePointerCoarse}from"../../chunks/app-jLrVF-xn.js";

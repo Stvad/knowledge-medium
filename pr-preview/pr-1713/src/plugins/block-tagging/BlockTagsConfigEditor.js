@@ -1,1 +1,0 @@
-export{Fu as BlockTagsConfigEditor}from"../../../chunks/app-jLrVF-xn.js";

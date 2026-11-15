@@ -1,1 +1,0 @@
-export{YT as getOrCreateShortcutsBlock,XT as journalShortcutBlockId,ZT as shortcutsBlockId}from"../../../chunks/app-jLrVF-xn.js";

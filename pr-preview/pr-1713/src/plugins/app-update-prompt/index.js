@@ -1,1 +1,0 @@
-export{NP as appUpdatePromptExtension}from"../../../chunks/app-jLrVF-xn.js";

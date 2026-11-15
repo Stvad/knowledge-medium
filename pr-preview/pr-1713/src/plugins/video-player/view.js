@@ -1,1 +1,0 @@
-export{hC as DEFAULT_VIDEO_NOTES_PANE_RATIO,gC as VIDEO_NOTES_VIEW_MODE,_C as videoNotesPaneRatioProp}from"../../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{WN as resolveStructuralEditPolicy,GN as structuralEditPolicyForBlock}from"../../chunks/app-jLrVF-xn.js";

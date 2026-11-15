@@ -1,1 +1,0 @@
-export{MZ as annotationMarginOpenProp,NZ as annotationMarginShareProp}from"../../../chunks/app-jLrVF-xn.js";

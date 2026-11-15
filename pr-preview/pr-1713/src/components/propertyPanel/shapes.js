@@ -1,1 +1,0 @@
-export{cK as propertyShapeLabel}from"../../../chunks/app-jLrVF-xn.js";

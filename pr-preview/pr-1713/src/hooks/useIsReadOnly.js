@@ -1,1 +1,0 @@
-export{gb as useIsReadOnly}from"../../chunks/app-jLrVF-xn.js";

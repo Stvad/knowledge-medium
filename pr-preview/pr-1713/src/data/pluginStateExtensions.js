@@ -1,1 +1,0 @@
-export{qQ as pluginPrefsExtension,JQ as pluginUIStateExtension}from"../../chunks/app-jLrVF-xn.js";

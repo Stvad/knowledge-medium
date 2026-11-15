@@ -1,1 +1,0 @@
-export{Py as Wikilink}from"../../../../../chunks/app-jLrVF-xn.js";

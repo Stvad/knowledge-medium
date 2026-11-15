@@ -1,1 +1,0 @@
-export{I1 as SYNCED_TABLES,L1 as syncedWriteTarget,R1 as writeTargets}from"../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{Q8 as agree,$8 as pluralize}from"../../chunks/app-jLrVF-xn.js";

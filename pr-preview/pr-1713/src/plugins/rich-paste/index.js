@@ -1,1 +1,0 @@
-export{Gb as richPastePlugin}from"../../../chunks/app-jLrVF-xn.js";

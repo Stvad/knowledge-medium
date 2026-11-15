@@ -1,1 +1,0 @@
-export{q_ as DATA_MODEL_GUIDE,J_ as dataModelGuide}from"../../../chunks/app-jLrVF-xn.js";

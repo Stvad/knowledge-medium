@@ -1,1 +1,0 @@
-export{gN as chipStyle}from"../../../chunks/app-jLrVF-xn.js";

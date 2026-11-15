@@ -1,1 +1,0 @@
-export{lo as PropertyPlaceholder}from"../../../chunks/app-jLrVF-xn.js";

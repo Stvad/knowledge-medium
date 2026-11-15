@@ -1,1 +1,0 @@
-export{V2 as FacetBridge}from"../../chunks/app-jLrVF-xn.js";

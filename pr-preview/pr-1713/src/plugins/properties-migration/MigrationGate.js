@@ -1,1 +1,0 @@
-export{Do as MigrationGate}from"../../../chunks/app-jLrVF-xn.js";

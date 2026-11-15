@@ -1,1 +1,0 @@
-export{Bc as getSyncIndicatorView}from"../../../chunks/app-jLrVF-xn.js";

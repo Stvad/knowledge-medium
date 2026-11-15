@@ -1,1 +1,0 @@
-export{MY as matchCharTrigger}from"../../chunks/app-jLrVF-xn.js";

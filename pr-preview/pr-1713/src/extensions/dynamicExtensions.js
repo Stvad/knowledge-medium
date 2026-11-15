@@ -1,1 +1,0 @@
-export{vF as dynamicExtensionsExtension}from"../../chunks/app-jLrVF-xn.js";

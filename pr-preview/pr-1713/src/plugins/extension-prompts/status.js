@@ -1,1 +1,0 @@
-export{xP as extensionPromptDiagnosticContribution,SP as extensionPromptDiagnosticSource}from"../../../chunks/app-jLrVF-xn.js";

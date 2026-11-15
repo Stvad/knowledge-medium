@@ -1,1 +1,0 @@
-export{pM as CommandPaletteHeaderItem}from"../../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{JS as videoPlayerMarkdownExtension}from"../../../chunks/app-jLrVF-xn.js";

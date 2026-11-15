@@ -1,1 +1,0 @@
-export{_N as DEFAULT_TYPE_COLORS,vN as defaultTypeColor,yN as pickLeastUsedTypeColor}from"../../chunks/app-jLrVF-xn.js";

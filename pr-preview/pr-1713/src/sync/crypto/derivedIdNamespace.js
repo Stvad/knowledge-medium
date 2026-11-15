@@ -1,1 +1,0 @@
-export{vot as deriveWorkspaceIdNamespace}from"../../../chunks/app-jLrVF-xn.js";

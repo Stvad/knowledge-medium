@@ -1,1 +1,0 @@
-export{qz as ExtensionRenderBoundary}from"../../chunks/app-jLrVF-xn.js";

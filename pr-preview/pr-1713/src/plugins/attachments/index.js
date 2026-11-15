@@ -1,1 +1,0 @@
-export{Yb as attachmentsPlugin}from"../../../chunks/app-jLrVF-xn.js";

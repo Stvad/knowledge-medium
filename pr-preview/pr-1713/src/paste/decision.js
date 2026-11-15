@@ -1,1 +1,0 @@
-export{LR as defaultPasteDecision,RR as pasteDecisionVerb}from"../../chunks/app-jLrVF-xn.js";

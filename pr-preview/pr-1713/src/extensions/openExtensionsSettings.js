@@ -1,1 +1,0 @@
-export{EI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,DI as openExtensionsSettings}from"../../chunks/app-jLrVF-xn.js";

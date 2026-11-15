@@ -1,1 +1,0 @@
-export{Iat as getOrCreatePropertiesPage,Lat as propertiesPageBlockId,Rat as propertiesPageSpec}from"../../chunks/app-jLrVF-xn.js";

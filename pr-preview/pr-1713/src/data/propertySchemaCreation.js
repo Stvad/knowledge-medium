@@ -1,1 +1,0 @@
-export{lK as adoptOrCreatePropertySchema}from"../../chunks/app-jLrVF-xn.js";

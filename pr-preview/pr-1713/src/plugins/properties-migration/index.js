@@ -1,1 +1,0 @@
-export{Ao as migratePropertiesToBlocksAction,Eo as propertiesMigrationPlugin}from"../../../chunks/app-jLrVF-xn.js";

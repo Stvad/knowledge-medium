@@ -1,1 +1,0 @@
-export{HP as checkForAppUpdate,UP as registerServiceWorker}from"../chunks/app-jLrVF-xn.js";

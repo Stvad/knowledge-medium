@@ -1,1 +1,0 @@
-export{VC as COLEMAK_KEYBINDINGS_PLUGIN_ID,HC as colemakKeybindingsPlugin,UC as colemakMovementKeybindingOverrides}from"../../../chunks/app-jLrVF-xn.js";

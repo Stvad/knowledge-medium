@@ -1,1 +1,0 @@
-export{Q2 as ProjectorRuntime}from"../../chunks/app-jLrVF-xn.js";

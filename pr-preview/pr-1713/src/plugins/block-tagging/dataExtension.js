@@ -1,1 +1,0 @@
-export{Lu as blockTaggingDataExtension}from"../../../chunks/app-jLrVF-xn.js";

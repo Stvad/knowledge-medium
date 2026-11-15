@@ -1,1 +1,0 @@
-export{ST as usePromotableBreadcrumb}from"../../../chunks/app-jLrVF-xn.js";

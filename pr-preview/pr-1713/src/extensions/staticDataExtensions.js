@@ -1,1 +1,0 @@
-export{pq as staticDataExtensions}from"../../chunks/app-jLrVF-xn.js";

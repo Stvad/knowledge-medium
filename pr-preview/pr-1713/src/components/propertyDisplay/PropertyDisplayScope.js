@@ -1,1 +1,0 @@
-export{GI as PropertyDisplayScope}from"../../../chunks/app-jLrVF-xn.js";

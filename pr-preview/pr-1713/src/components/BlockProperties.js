@@ -1,1 +1,0 @@
-export{pV as BlockProperties}from"../../chunks/app-jLrVF-xn.js";

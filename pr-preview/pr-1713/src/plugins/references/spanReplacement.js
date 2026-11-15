@@ -1,1 +1,0 @@
-export{lJ as preferredSpanReplacement}from"../../../chunks/app-jLrVF-xn.js";

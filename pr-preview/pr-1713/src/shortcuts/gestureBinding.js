@@ -1,1 +1,0 @@
-export{tF as gestureBindingDescriptor,nF as matchesGestureEvent}from"../../chunks/app-jLrVF-xn.js";

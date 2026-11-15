@@ -1,1 +1,0 @@
-export{yP as ExtensionPromptSurface,bP as extensionPromptsExtension}from"../../../chunks/app-jLrVF-xn.js";

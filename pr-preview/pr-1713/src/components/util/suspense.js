@@ -1,1 +1,0 @@
-export{GK as SuspenseFallback}from"../../../chunks/app-jLrVF-xn.js";

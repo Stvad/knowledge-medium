@@ -1,1 +1,0 @@
-export{Qh as lintExtensionSource}from"../../../chunks/app-jLrVF-xn.js";

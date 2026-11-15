@@ -1,1 +1,0 @@
-export{_v as BlockMetaCard}from"../../../chunks/app-jLrVF-xn.js";

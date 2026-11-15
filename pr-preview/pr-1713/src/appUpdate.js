@@ -1,1 +1,0 @@
-export{WP as appUpdate,GP as useAppUpdateAvailable}from"../chunks/app-jLrVF-xn.js";

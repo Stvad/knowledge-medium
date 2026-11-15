@@ -1,1 +1,0 @@
-export{GW as isIOS,KW as isMacPlatform}from"../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{wj as adoptTypedBlock,Tj as createTypedChild,qot as derivedBlockId,Ej as getOrCreateTypedChild}from"../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{e5 as NAMES_IN_A_SENTENCE,t5 as describeNames,n5 as firstFew}from"../../chunks/app-jLrVF-xn.js";

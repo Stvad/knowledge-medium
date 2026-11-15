@@ -1,1 +1,0 @@
-export{QJ as geoDataExtension}from"../../../chunks/app-jLrVF-xn.js";

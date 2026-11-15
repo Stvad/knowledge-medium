@@ -1,1 +1,0 @@
-"use client";export{lV as Collapsible,uV as CollapsibleContent,dV as CollapsibleTrigger}from"../../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{IO as CRUMB_ELLIPSIS,LO as CRUMB_MAX_CHARS,RO as CRUMB_MAX_SEGMENTS,zO as collapseCrumbs,BO as crumbsFromAncestors}from"../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{Vc as appVersion}from"../chunks/app-jLrVF-xn.js";

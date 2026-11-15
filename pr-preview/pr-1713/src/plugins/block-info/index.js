@@ -1,1 +1,0 @@
-export{gv as blockInfoPlugin}from"../../../chunks/app-jLrVF-xn.js";

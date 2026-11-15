@@ -1,1 +1,0 @@
-export{mV as MetadataRow,hV as PropertySectionLabel}from"../../../chunks/app-jLrVF-xn.js";

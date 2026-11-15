@@ -1,1 +1,0 @@
-export{I2 as cn}from"../../chunks/app-jLrVF-xn.js";

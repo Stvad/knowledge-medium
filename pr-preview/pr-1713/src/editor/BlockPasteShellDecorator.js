@@ -1,1 +1,0 @@
-export{oP as BlockPasteShellDecorator,sP as blockPasteShellDecorator}from"../../chunks/app-jLrVF-xn.js";

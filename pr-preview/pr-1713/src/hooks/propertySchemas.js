@@ -1,1 +1,0 @@
-export{iK as usePropertySchemas}from"../../chunks/app-jLrVF-xn.js";

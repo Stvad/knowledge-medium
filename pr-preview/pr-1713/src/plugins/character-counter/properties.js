@@ -1,1 +1,0 @@
-export{uQ as RAW_CHARACTER_COUNT_PROFILE_ID,dQ as WORDS_COUNT_PROFILE_ID,fQ as charLimitProp,pQ as charProfileProp,mQ as charScopeProp}from"../../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{Nat as getOrCreateTypesPage,Pat as typesPageBlockId,Fat as typesPageSpec}from"../../chunks/app-jLrVF-xn.js";

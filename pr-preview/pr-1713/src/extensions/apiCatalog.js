@@ -1,1 +1,0 @@
-export{Eh as extensionApiCatalog,Dh as extensionApiRuntimeExports}from"../../chunks/app-jLrVF-xn.js";

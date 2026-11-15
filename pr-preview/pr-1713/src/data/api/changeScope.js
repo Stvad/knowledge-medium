@@ -1,1 +1,0 @@
-export{sdt as CHANGE_SCOPE_POLICIES,cdt as ChangeScope,ldt as isChangeScope,udt as policyForScope,ddt as scopeAllowedInReadOnly,fdt as scopeIsUndoable,pdt as scopePoliciesEquivalent,mdt as scopeUploadsToServer,hdt as sourceForScope}from"../../../chunks/app-jLrVF-xn.js";

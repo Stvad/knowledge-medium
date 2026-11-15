@@ -1,1 +1,0 @@
-export{J2 as TypeTagger,Y2 as applyTypeTagInTx}from"../../chunks/app-jLrVF-xn.js";

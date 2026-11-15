@@ -1,1 +1,0 @@
-export{iQ as characterCounterDataExtension}from"../../../chunks/app-jLrVF-xn.js";

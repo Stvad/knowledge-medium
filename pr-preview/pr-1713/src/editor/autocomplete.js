@@ -1,1 +1,0 @@
-export{gP as editorAutocompleteExtension}from"../../chunks/app-jLrVF-xn.js";

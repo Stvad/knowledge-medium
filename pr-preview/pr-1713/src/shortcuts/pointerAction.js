@@ -1,1 +1,0 @@
-export{rF as dispatchPointerAction,iF as setPointerActionDispatcher}from"../../chunks/app-jLrVF-xn.js";

@@ -1,1 +1,0 @@
-export{Eo as propertiesMigrationPlugin}from"../../../chunks/app-jLrVF-xn.js";

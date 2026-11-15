@@ -1,1 +1,0 @@
-export{Ny as wikilinkMarkdownExtension}from"../../../../../chunks/app-jLrVF-xn.js";
