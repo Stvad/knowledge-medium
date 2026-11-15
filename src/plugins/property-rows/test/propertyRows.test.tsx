@@ -578,6 +578,21 @@ describe('a field row whose definition registers after it renders', () => {
   })
 })
 
+it('keeps the same ordinary editor when a value changes validity', async () => {
+  await repo.block(OWNER).set(ratingProp, 5)
+  const field = await fieldRow(ratingProp.name)
+  const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+  mount({workspace: 'non-hidden'})
+  await act(async () => { await focusBlock(repo.block(PANEL), value.id, {edit: true}) })
+  const view = await editorFor(value.id)
+  writeInEditor(view, 'not a number')
+  await waitFor(async () => expect(await repo.block(OWNER).get(ratingProp)).toBeUndefined())
+  expect(await editorFor(value.id)).toBe(view)
+  writeInEditor(view, '7')
+  await waitFor(async () => expect(await repo.block(OWNER).get(ratingProp)).toBe(7))
+  expect(await editorFor(value.id)).toBe(view)
+})
+
 describe('a field row shown by id, not as a listed child', () => {
   beforeEach(async () => { await repo.block(OWNER).set(readyProp, true) })
 
@@ -638,6 +653,8 @@ describe('a list property', () => {
     expect(alpha).not.toBe(beta)
     expect(alpha.querySelector('input, textarea')).toBeNull()
     expect(beta.querySelector('input, textarea')).toBeNull()
+    expect(alpha.querySelector('[data-invalid-property-value]')).toBeNull()
+    expect(beta.querySelector('[data-invalid-property-value]')).toBeNull()
     // The scalar beside it still gets its editor (the positive control).
     expect(await screen.findByRole('checkbox', {name: 'Toggle rows:ready'})).toBeChecked()
   })

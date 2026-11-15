@@ -29,6 +29,8 @@ import {CompletionContext} from '@codemirror/autocomplete'
 import {flushEditorContent} from '@/editor/contentFlush'
 import {propertyCompletionSource} from '../autocomplete'
 import {choosePropertyField} from '@/data/propertyRowCreation'
+import * as propertyRowCreation from '@/data/propertyRowCreation'
+import * as blockInteraction from '@/extensions/blockInteraction'
 import {propertyRowsPlugin} from '../index'
 import {editorAutocompleteExtension} from '@/editor/autocomplete'
 import {acceptCompletion} from '@codemirror/autocomplete'
@@ -364,16 +366,31 @@ describe('expected property placeholders in the outline', () => {
     const second = await screen.findByLabelText(`Enter ${list.name}`)
     let release!: () => void
     let signalEntered!: () => void
-    let signalFinished!: () => void
+    let signalCallbackDone!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     const entered = new Promise<void>(resolve => { signalEntered = resolve })
-    const finished = new Promise<void>(resolve => { signalFinished = resolve })
+    const callbackDone = new Promise<void>(resolve => { signalCallbackDone = resolve })
     const original = repo.tx.bind(repo)
+    const enterEditSpy = vi.spyOn(blockInteraction, 'enterEditModeForBlock')
+    const originalInsert = propertyRowCreation.insertPropertyValue
+    const insertSpy = vi.spyOn(propertyRowCreation, 'insertPropertyValue').mockImplementation((...args) => {
+      const promise = originalInsert(...args)
+      const then = promise.then.bind(promise)
+      Object.defineProperty(promise, 'then', {
+        configurable: true,
+        value: ((...thenArgs: Parameters<typeof promise.then>) => {
+          const callbackPromise = then(...thenArgs)
+          void callbackPromise.then(signalCallbackDone, signalCallbackDone)
+          return callbackPromise
+        }) as typeof promise.then,
+      })
+      return promise
+    })
     const spy = vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
       const result = await original(...args)
       if (args[1]?.description === 'Enter property value') {
         signalEntered()
-        try { await gate } finally { signalFinished() }
+        await gate
       }
       return result
     })
@@ -384,13 +401,16 @@ describe('expected property placeholders in the outline', () => {
       await act(async () => { second.focus() })
       expect(document.activeElement).toBe(second)
       release()
-      await act(async () => { await finished; await Promise.resolve(); await Promise.resolve() })
+      await act(async () => { await callbackDone })
+      expect(enterEditSpy).not.toHaveBeenCalled()
       expect(document.activeElement).toBe(second)
       expect(await repo.block(PANEL).get(isEditingProp)).toBe(false)
       expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(OWNER)
     } finally {
       release()
       spy.mockRestore()
+      insertSpy.mockRestore()
+      enterEditSpy.mockRestore()
     }
   })
 
@@ -464,4 +484,19 @@ describe('expected property placeholders in the outline', () => {
     expect(await repo.block(OWNER).get(list)).toEqual(['saved'])
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
   })
+  it.each([
+    {key: 'ArrowDown', isComposing: true}, {key: 'ArrowUp', isComposing: true},
+    {key: 'Enter', isComposing: true}, {key: 'Enter', keyCode: 229},
+  ])('leaves $key to the active input method', async options => {
+    mount('all')
+    const placeholder = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
+    await act(async () => { placeholder.focus() })
+    const before = await ownerDescendants()
+    const event = new KeyboardEvent('keydown', {bubbles: true, cancelable: true, ...options})
+    act(() => { placeholder.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(placeholder)
+    expect(await ownerDescendants()).toEqual(before)
+  })
+
 })

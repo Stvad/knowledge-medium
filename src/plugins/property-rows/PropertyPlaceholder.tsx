@@ -1,3 +1,4 @@
+import {isImeKeyEvent} from '@/shortcuts/utils'
 import {usePropertyEditingActivation} from '@/components/propertyPanel/usePropertyEditingActivation'
 import {useEffect, useRef} from 'react'
 import type {Block} from '@/data/block'
@@ -58,6 +59,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId}: {owner: Block; 
     onFocus={event => { editing.onFocus(event); void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope}) }}
     onPaste={event => { event.preventDefault(); event.stopPropagation(); input(event.clipboardData.getData('text/plain')) }}
     onKeyDown={event => {
+      if (isImeKeyEvent(event.nativeEvent)) return
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault(); event.stopPropagation()
         void navigatePlaceholder(event.currentTarget, scope, event.key === 'ArrowDown' ? 1 : -1, ui)

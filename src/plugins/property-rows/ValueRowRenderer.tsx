@@ -68,7 +68,8 @@ const PropertyReadContent = ({block, Inner}: {block: Block; Inner: BlockRenderer
 
 const decoratePropertyContent = cachedContentDecorator(PropertyReadContent, 'PropertyReadContent')
 
-/** Controls specialize ordinary Markdown; validation never replaces the chosen renderer. */
+/** Read-side only: wrapping edit content would remount it when validity changes.
+ * Controls specialize ordinary Markdown; validation retains the chosen renderer. */
 export const propertyReadContentContribution: BlockContentDecoratorContribution = context =>
   drawsPropertyRows(context.blockContext)
     ? decoratePropertyContent
