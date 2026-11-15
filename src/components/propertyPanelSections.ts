@@ -2,6 +2,7 @@ import {
   type AnyPropertySchema,
   type TypeContribution,
 } from '@/data/api'
+import {typePropertyGroups} from '@/data/typePropertyGroups'
 
 export interface PropertyPanelRow {
   readonly name: string
@@ -27,20 +28,10 @@ export const buildPropertyPanelSections = (args: {
   const assigned = new Set<string>()
   const sections: PropertyPanelSection[] = []
 
-  const seenTypeIds = new Set<string>()
-  for (const typeId of args.blockTypes) {
-    if (seenTypeIds.has(typeId)) continue
-    seenTypeIds.add(typeId)
-
-    const contribution = args.typesRegistry.get(typeId)
-    if (!contribution) continue
-
+  for (const {typeId, contribution, fields} of typePropertyGroups(args.blockTypes, args.typesRegistry, args.schemas)) {
     const rows: PropertyPanelRow[] = []
-    for (const declared of contribution.properties ?? []) {
+    for (const {declaration: declared, schema: active} of fields) {
       if (assigned.has(declared.name)) continue
-
-      const active = args.schemas.get(declared.name)
-      if (!active) continue
 
       assigned.add(declared.name)
       const isSet = hasProperty(active.name)

@@ -1,4 +1,5 @@
 import {fieldRowsFor} from '@/data/propertyRowCreation'
+import {typePropertyGroups} from '@/data/typePropertyGroups'
 import {useIsFocalRender} from '@/hooks/useIsFocalRender'
 import {useContext, useMemo, useState} from 'react'
 import type {Block} from '@/data/block'
@@ -33,9 +34,7 @@ function TypedExpectedFields({owner, mode, typeIds}: {owner: Block; mode: 'all' 
   if (!data || !stored) return null
   const resolver = owner.repo.propertySchemaResolverFor(data.workspaceId)
   const seen = new Set<string>()
-  return typeIds.flatMap(typeId => (types.get(typeId)?.properties ?? []).flatMap(declaration => {
-    const active = schemas.get(declaration.name)
-    if (!active) return []
+  return [...typePropertyGroups(typeIds, types, schemas)].flatMap(({fields}) => fields.flatMap(({schema: active}) => {
     const result = resolver.resolve(active.name)
     if (result.status !== 'resolved') return []
     const schema = result.schema

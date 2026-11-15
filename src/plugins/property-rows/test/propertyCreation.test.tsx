@@ -272,6 +272,14 @@ describe('expected property placeholders in the outline', () => {
     await waitFor(() => expect(repo.block(NOTE).peek()?.content).toBe('Changed note'))
   })
 
+  it('a blocked Tab command also prevents native focus traversal', async () => {
+    mount('all')
+    const target = await screen.findByLabelText(`Enter ${plain.name}`)
+    await act(async () => { focusPlaceholder(target, false) })
+    expect(fireEvent.keyDown(target, {key: 'Tab', code: 'Tab'})).toBe(false)
+    expect(document.activeElement).toBe(target)
+  })
+
   it('a landed placeholder leaves unhandled browser shortcuts unprevented', async () => {
     mount('all')
     const target = await screen.findByLabelText(`Enter ${plain.name}`)
@@ -289,6 +297,7 @@ describe('expected property placeholders in the outline', () => {
     const target = await screen.findByLabelText(`Enter ${plain.name}`)
     await act(async () => { focusPlaceholder(target, false) })
     await waitFor(() => expect(activeContexts.has(ActionContextTypes.GLOBAL)).toBe(true))
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(OWNER))
     expect(fireEvent.keyDown(target, {key: 'x', code: 'KeyX', ctrlKey: true})).toBe(true)
     expect(normalCommand).not.toHaveBeenCalled()
   })

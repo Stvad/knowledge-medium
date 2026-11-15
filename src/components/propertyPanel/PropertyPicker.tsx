@@ -43,14 +43,8 @@ export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
 const MAX_SUGGESTIONS = 8
 
-export interface AddPropertyArgs {
-  /** Existing registered schema the user picked from autocomplete (if any). */
-  adopted?: AnyPropertySchema
-  /** Property name. If `adopted` is set, this equals `adopted.name`. */
-  name: string
-  /** Preset id. If `adopted` is set, this equals `adopted.codec.type`. */
-  presetId: string
-}
+export type {PropertySchemaChoice as AddPropertyArgs} from '@/data/propertySchemaCreation'
+import type {PropertySchemaChoice as AddPropertyArgs} from '@/data/propertySchemaCreation'
 
 export interface ConfigureNewSchemaArgs {
   name: string

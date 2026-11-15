@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from './propertySchemaCreation'
 import type {Block} from './block'
 import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema, type BlockData} from './api'
 import {fieldValueChildren, propertyFieldContent, scalarValueRow, memberKeysFor} from './propertyChildren'
@@ -77,7 +78,7 @@ export const insertPropertyValue = async (owner: Block, requested: AnyPropertySc
 export const createPropertyField = async (owner: Block, source: Block, name: string, presetId: string, content: string, isCurrent: () => boolean) => {
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
   name = name.trim()
-  const schema = await owner.repo.userSchemas.addSchema({name, presetId}, async (tx, fieldId) => {
+  const result = await adoptOrCreatePropertySchema(owner.repo, {name, presetId}, async (tx, fieldId) => {
     await validateScaffold(tx, owner, source, content, isCurrent)
     const parent = await tx.get(owner.id)
     if (!parent || parent.deleted || !await tx.isPropertyChildBackedWorkspace(parent.workspaceId) || storedPropertyValue(parent.properties, name) !== undefined) {
@@ -85,5 +86,7 @@ export const createPropertyField = async (owner: Block, source: Block, name: str
     }
     await tx.update(source.id, {content: propertyFieldContent(fieldId)})
   })
-  return {schema, fieldRowId: source.id, valueId: undefined}
+  return result.kind === 'adopted'
+    ? choosePropertyField(owner, result.schema, source, content, isCurrent)
+    : {schema: result.schema, fieldRowId: source.id, valueId: undefined}
 }

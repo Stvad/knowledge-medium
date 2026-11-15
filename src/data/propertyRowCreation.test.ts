@@ -60,6 +60,17 @@ describe('property rows created as blocks', () => {
     expect(repo.propertySchemas.has('pending field')).toBe(false)
   })
 
+  it('adopts a registered definition instead of creating a duplicate through the shared creation path', async () => {
+    await getOrCreatePropertiesPage(repo, 'ws')
+    await repo.awaitSeedMaterialization()
+    const before = await h.db.getAll('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [repo.propertiesPageId])
+    const result = await createPropertyField(repo.block('owner'), repo.block('source'), note.name, 'string', '::', () => true)
+    expect(result.schema.name).toBe(note.name)
+    expect((await repo.load('source'))?.isFieldForm).toBe(true)
+    expect(await h.db.getAll('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY id', [repo.propertiesPageId])).toEqual(before)
+    expect(await children('source')).toEqual([])
+  })
+
   it('converts the scaffold in place without an empty value; undo restores the marker', async () => {
     const target = await choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)
     expect(target.fieldRowId).toBe('source')
