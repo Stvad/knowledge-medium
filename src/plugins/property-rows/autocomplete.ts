@@ -12,6 +12,7 @@ import {exitEditModeForBlock, peekFocusedBlockLocation, focusBlock} from '@/data
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {DEFAULT_PRESET_ID} from '@/components/propertyPanel/PropertyPicker'
 import {showError} from '@/utils/toast'
+import {isVisibleElement} from '@/utils/propertyNavigation'
 
 export const propertyCompletionSource = ({repo, block, uiStateBlock, renderScopeId}: CodeMirrorExtensionContext): CompletionSource => async context => {
   const text = context.state.doc.toString()
@@ -48,8 +49,12 @@ export const handlePropertyValueEnter = (context: CodeMirrorExtensionContext, ev
     const parent = repo.cache.getSnapshot(block!.peek()?.parentId ?? '')
     const field = fieldRowDefinition(repo, repo.propertyDefinitions, parent)
     if (!field?.schema || !memberCodecOf(field.schema.codec)) return false
+    const placeholder = [...view.dom.ownerDocument.querySelectorAll<HTMLElement>('[data-property-placeholder]')]
+      .find(element => element.dataset.propertyPlaceholder === parent!.id &&
+        element.dataset.outlinePlaceholderScope === renderScopeId && isVisibleElement(element))
+    if (!placeholder) return false
     event.preventDefault(); event.stopPropagation(); flushEditorContent(view)
-    void focusBlock(uiStateBlock, parent!.id, {edit: false, renderScopeId})
+    placeholder.focus()
     return true
 }
 export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {

@@ -27,7 +27,7 @@ import {editorSelection, focusBlock, isCollapsedProp, isEditingProp, peekFocused
 import {EditorView} from '@codemirror/view'
 import {CompletionContext} from '@codemirror/autocomplete'
 import {flushEditorContent} from '@/editor/contentFlush'
-import {propertyCompletionSource} from '../autocomplete'
+import {handlePropertyValueEnter, propertyCompletionSource} from '../autocomplete'
 import {choosePropertyField} from '@/data/propertyRowCreation'
 import * as propertyRowCreation from '@/data/propertyRowCreation'
 import * as blockInteraction from '@/extensions/blockInteraction'
@@ -108,14 +108,14 @@ beforeEach(async () => {
   repo.undoManager.clear()
 })
 
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden') => render(
+const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <Suspense fallback={null}>
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test'}}>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
-              <BlockComponent blockId={OWNER}/>
+              <BlockComponent blockId={root}/>
             </PropertyDisplayScopeContext>
           </BlockContextProvider>
         </Suspense>
@@ -468,6 +468,37 @@ describe('expected property placeholders in the outline', () => {
     await waitFor(() => expect(document.activeElement).toBe(placeholder))
     expect((await repo.load(id))?.isFieldForm).toBe(true)
     expect(await repo.query.children({id, propertyChildren: 'all'}).load()).toEqual([])
+  })
+
+  it.each([false, true])('only hands list Enter to a placeholder in the rendered document (member root: %s)', async memberRoot => {
+    await repo.block(OWNER).set(list, ['saved'])
+    const definition = repo.propertySchemaResolverFor(WS).resolve(list.name)
+    if (definition.status !== 'resolved') throw new Error('Missing definition')
+    const fields = await repo.query.children({id: OWNER, propertyChildren: 'all'}).load()
+    const field = fields.find(row => row.referenceTargetId === definition.schema.fieldId)!
+    const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    await repo.block(PANEL).set(topLevelBlockIdProp, memberRoot ? value.id : OWNER)
+    mount('all', memberRoot ? value.id : OWNER)
+    await act(async () => { await focusBlock(repo.block(PANEL), value.id, {edit: true, renderScopeId: 'creation-test'}) })
+    const view = await waitFor(() => {
+      const dom = document.querySelector<HTMLElement>(`[data-block-id="${value.id}"] .cm-editor`)
+      expect(dom).not.toBeNull()
+      return EditorView.findFromDOM(dom!)!
+    })
+    act(() => { view.dispatch({selection: {anchor: view.state.doc.length}}) })
+    const placeholder = screen.queryByLabelText(`Enter ${list.name}`)
+    expect(Boolean(placeholder)).toBe(!memberRoot)
+    const before = await ownerDescendants()
+    const event = new KeyboardEvent('keydown', {key: 'Enter', cancelable: true})
+    let handled = false
+    await act(async () => {
+      handled = handlePropertyValueEnter({repo, block: repo.block(value.id), uiStateBlock: repo.block(PANEL), renderScopeId: 'creation-test'}, event, view)
+    })
+    expect(handled).toBe(!memberRoot)
+    expect(event.defaultPrevented).toBe(!memberRoot)
+    expect(await ownerDescendants()).toEqual(before)
+    if (memberRoot) expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(value.id)
+    else await waitFor(() => expect(document.activeElement).toBe(placeholder))
   })
 
   it('keeps selection of an existing list field from writing or appending an empty member', async () => {
