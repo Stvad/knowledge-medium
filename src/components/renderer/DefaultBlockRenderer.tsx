@@ -726,7 +726,7 @@ export function DefaultBlockRenderer(
         () => resolveBlockContentRenderer(resolveContext).last,
         [resolveBlockContentRenderer],
       )
-      const baseContentRenderer = contentVariant?.render ?? DefaultContentRenderer
+      const baseContentRenderer = contentVariant?.render ?? RawContentSlot
       // Is this slot filled with other blocks' rows (a review backlog, a deck,
       // a recents list) rather than the block itself? Read from whoever CHOSE
       // the renderer, never from the resolved component — that is a wrapper as
@@ -782,7 +782,7 @@ export function DefaultBlockRenderer(
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef, gutterControls,
+    RawContentSlot, contentShowsOtherBlocks, contentContainerRef, gutterControls,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {

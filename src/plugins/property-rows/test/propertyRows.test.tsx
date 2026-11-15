@@ -90,7 +90,12 @@ const readyProp = seedProperty({
   preset: 'boolean', changeScope: ChangeScope.BlockDefault,
 })
 
-const rowSeeds = [statusProp, secretProp, tagsProp, ratingProp, sourceProp, readyProp]
+const requiredSourceProp = seedProperty({
+  seedKey: 'test/property/rows-required-source', revision: 1, name: 'rows:required-source',
+  preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
+})
+
+const rowSeeds = [statusProp, secretProp, tagsProp, ratingProp, sourceProp, requiredSourceProp, readyProp]
 
 let sharedDb: TestDb
 let repo: Repo
@@ -311,6 +316,16 @@ describe('the property display mode', () => {
 })
 
 describe('ordinary property value content', () => {
+  it('keeps read controls and compact names without the editing dispatcher', async () => {
+    await repo.block(OWNER).set(readyProp, true)
+    runtime = resolveFacetRuntimeSync(testExtensions().filter(extension => extension !== plainOutlinerPlugin))
+    repo.setFacetRuntime(runtime)
+    mount({workspace: 'non-hidden'})
+    expect(await screen.findByRole('checkbox', {name: 'Toggle rows:ready'})).toBeChecked()
+    expect(shownRows()).toContain('rows:status')
+    expect(await screen.findByText('draft')).toBeTruthy()
+  })
+
   it('renders string Markdown without a panel input', async () => {
     await repo.block(OWNER).set(statusProp, '**draft**')
     mount({workspace: 'non-hidden'})
@@ -645,14 +660,17 @@ describe('a list property', () => {
 })
 
 describe('a reference value', () => {
-  it.each([false, true])('renders an ordinary reference link (read-only: %s)', async readOnly => {
+  it.each([
+    {prop: sourceProp, readOnly: false}, {prop: sourceProp, readOnly: true},
+    {prop: requiredSourceProp, readOnly: false}, {prop: requiredSourceProp, readOnly: true},
+  ])('renders $prop.name as an ordinary reference link (read-only: $readOnly)', async ({prop, readOnly}) => {
     const cited = '22222222-2222-4222-8222-222222222222'
     await repo.tx(tx => tx.create({id: cited, workspaceId: WS, parentId: null, orderKey: 'a5', content: 'the cited block'}),
       {scope: ChangeScope.BlockDefault})
-    await repo.block(OWNER).set(sourceProp, cited)
+    await repo.block(OWNER).set(prop, cited)
     repo.setReadOnly(readOnly)
     mount({workspace: 'non-hidden'})
-    await waitFor(() => expect(shownRows()).toContain('rows:source'))
+    await waitFor(() => expect(shownRows()).toContain(prop.name))
     const link = await screen.findByRole('link', {name: 'the cited block'})
     expect(link).toHaveClass('blockref')
     expect(link).toHaveAttribute('data-block-id', cited)

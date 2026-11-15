@@ -39,6 +39,7 @@ type Answer<P extends Projection> = P extends 'ids' ? readonly string[] : number
  *  0` (the references trigger already keeps `block_references` to live
  *  sources) and the `b.id` tiebreak (a seeded `created_at` tie came out in id
  *  order without it). */
+// Each source block keeps its backlink, including a value whose owner projects the same target.
 const backlinkSourcesSql = (
   targetCount: number,
   projection: Projection,
