@@ -1601,11 +1601,12 @@ describe('live progress streaming', () => {
 
   it('debounces Thinking and skips its write when a new step starts in the window', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     try {
-      const {graph, activityWrites} = fakeGraph({
+      const {graph, activityWrites, propWrites} = fakeGraph({
         backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
       })
-      const engine = engineWith({graph, runTask: async options => {
+      const engine = engineWith({graph, now: Date.now, runTask: async options => {
         options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
         options.onEvent?.({kind: 'activity-end', stepId: 'first'})
         await vi.advanceTimersByTimeAsync(2_999)
@@ -1626,6 +1627,8 @@ describe('live progress streaming', () => {
       await engine.drain()
       await vi.advanceTimersByTimeAsync(10_000)
       expect(activityWrites).toHaveLength(3)
+      expect(activityWrites.at(-1)?.nowMs).toBe(NOW + 6_000)
+      expect(propWrites.at(-1)?.status).toBe('done')
     } finally {
       vi.useRealTimers()
     }

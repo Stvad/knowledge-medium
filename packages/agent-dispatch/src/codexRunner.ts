@@ -163,8 +163,8 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
 
   const activityForItem = (item: Record<string, unknown>, eventType: 'item.started' | 'item.updated' | 'item.completed') => {
     const type = item.type
-    const stepId = typeof item.id === 'string' && item.id.length > 0 ? item.id : null
-    if (!stepId || (type !== 'command_execution' && type !== 'web_search' && type !== 'mcp_tool_call')) return
+    const stepId = item.id
+    if (typeof stepId !== 'string' || !stepId || (type !== 'command_execution' && type !== 'web_search' && type !== 'mcp_tool_call')) return
     if (eventType === 'item.completed') {
       emit({kind: 'activity-end', stepId})
       return

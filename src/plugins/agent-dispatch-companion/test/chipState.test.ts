@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { activityStateFor, chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
 import { contentWithAgentMention } from '../askAgent.ts'
 
+const chipTitleFor = (properties: Record<string, unknown>, nowMs = 1_000_000): string => {
+  const chip = chipStateFor(properties)!
+  return chipTitle(chip, activityStateFor(chip, nowMs))
+}
+
 describe('chipStateFor', () => {
   it('returns null without a agent:status (including reply blocks and junk values)', () => {
     expect(chipStateFor(undefined)).toBeNull()
@@ -43,7 +48,7 @@ describe('chipStateFor', () => {
   it('uses the persisted executor to label non-Claude runs', () => {
     expect(chipStateFor({'agent:status': 'running', 'agent:executor': 'codex'}))
       .toMatchObject({executor: 'codex', executorLabel: 'Codex'})
-    expect(chipTitle(chipStateFor({'agent:status': 'done', 'agent:executor': 'codex'})!))
+    expect(chipTitleFor({'agent:status': 'done', 'agent:executor': 'codex'}))
       .toContain('Codex replied')
   })
 
@@ -75,7 +80,7 @@ describe('activityStateFor', () => {
     })!
     expect(activityStateFor(other, now)).toMatchObject({ageLabel: '10m', stalled: false})
     expect(activityStateFor(other, now + 1)).toMatchObject({stalled: false})
-    expect(chipTitle(other, now + 1)).not.toContain('No progress')
+    expect(chipTitle(other, activityStateFor(other, now + 1))).not.toContain('No progress')
   })
 
   it('returns no step age for missing, invalid, zero, or empty activity', () => {
@@ -117,27 +122,27 @@ describe('activityStateFor', () => {
 
 describe('chipTitle', () => {
   it('surfaces the error message and retry attempts', () => {
-    expect(chipTitle(chipStateFor({'agent:status': 'error', 'agent:error': 'exit 1: boom'})!))
+    expect(chipTitleFor({'agent:status': 'error', 'agent:error': 'exit 1: boom'}))
       .toContain('exit 1: boom')
-    expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:attempts': 3})!))
+    expect(chipTitleFor({'agent:status': 'running', 'agent:attempts': 3}))
       .toContain('attempt 3')
   })
 
   it('appends the activity label for a running chip when present', () => {
-    const withActivity = chipTitle(chipStateFor({'agent:status': 'running', 'agent:activity': 'Searching the web'})!)
+    const withActivity = chipTitleFor({'agent:status': 'running', 'agent:activity': 'Searching the web'})
     expect(withActivity).toContain('Searching the web')
-    const withoutActivity = chipTitle(chipStateFor({'agent:status': 'running'})!)
+    const withoutActivity = chipTitleFor({'agent:status': 'running'})
     expect(withoutActivity).not.toContain('—')
   })
 
   it('says why a queued chip is waiting when the daemon gave a reason', () => {
-    expect(chipTitle(chipStateFor({'agent:status': 'queued', 'agent:activity': 'waiting for the run already going in this thread'})!))
+    expect(chipTitleFor({'agent:status': 'queued', 'agent:activity': 'waiting for the run already going in this thread'}))
       .toBe('Queued for Claude — waiting for the run already going in this thread')
-    expect(chipTitle(chipStateFor({'agent:status': 'queued'})!)).toBe('Queued for Claude')
+    expect(chipTitleFor({'agent:status': 'queued'})).toBe('Queued for Claude')
   })
 
   it('says a running chip is being cancelled, since the pill has no room for the executor then', () => {
-    expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:cancel': 1})!))
+    expect(chipTitleFor({'agent:status': 'running', 'agent:cancel': 1}))
       .toBe('Cancelling the Claude run')
   })
 })

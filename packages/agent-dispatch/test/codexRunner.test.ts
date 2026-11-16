@@ -112,6 +112,26 @@ describe('scrubCodexEnv', () => {
 describe('createCodexJsonlParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('preserves MCP server labels and fallback tool names for active items', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    const fields = [
+      {tool: 'mcp__km__comments'},
+      {server: '', tool: 'mcp__km__comments'},
+      {server: 'km', toolName: 'comments'},
+      {server: 'km', tool: ''},
+      {server: 'km', tool: ['comments']},
+      {server: 'km'},
+      {server: 42, tool: 'mcp__km__comments'},
+      {name: 'mcp__km__comments'},
+      {},
+    ]
+    fields.forEach((fields, index) => parser.feed(line({type: 'item.started', item: {id: `step-${index}`, type: 'mcp_tool_call', ...fields}})))
+    expect(events.map(event => event.kind === 'activity' ? event.label : null)).toEqual([
+      'km: comments', 'km: comments', 'km: comments', 'km', 'km', 'km', 'km: comments', 'km: comments', 'Using a tool',
+    ])
+  })
+
   it('does not start completed tool items and ignores invalid step ids', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))

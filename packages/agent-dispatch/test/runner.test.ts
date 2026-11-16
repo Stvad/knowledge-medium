@@ -107,6 +107,7 @@ describe('createStreamJsonParser', () => {
     parser.feed(line({type: 'user', message: {content: [
       null,
       {type: 'tool_result', tool_use_id: 42, content: 'bad id'},
+      {type: 'tool_result', tool_use_id: ['tool-1'], content: 'bad id'},
       {type: 'tool_result', tool_use_id: '', content: 'empty id'},
       {type: 'text', tool_use_id: 'tool-1'},
       {type: 'tool_result', content: 'missing id'},

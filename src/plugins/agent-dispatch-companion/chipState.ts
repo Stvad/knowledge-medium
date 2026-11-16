@@ -103,23 +103,22 @@ export interface ActivityState {
   stalled: boolean
 }
 
+const KM_ACTIVITY_PREFIX = 'km:'
 const KM_STALLED_THRESHOLD_MS = BRIDGE_COMMAND_TIMEOUT_MS / 3
 
-/** The current step's age and warning state; only timestamped running work
- *  with a non-empty activity label has a visible age. Consumers recompute this
- *  small value to avoid threading derived state through the menu. */
+/** Current step age and warning for timestamped running work. */
 export const activityStateFor = (chip: ChipState, nowMs: number): ActivityState | null => {
   if (chip.kind !== 'running' || chip.cancelling || !chip.activity || chip.activityAtMs === null) return null
   // Device clock skew can make activity age approximate; future timestamps are clamped below.
   const ageMs = Math.max(0, nowMs - chip.activityAtMs)
-  const stalled = chip.activity.startsWith('km:') && ageMs > KM_STALLED_THRESHOLD_MS
+  const stalled = chip.activity.startsWith(KM_ACTIVITY_PREFIX) && ageMs > KM_STALLED_THRESHOLD_MS
   return {
     ageLabel: elapsedLabel(Math.ceil(ageMs / 1_000)),
     stalled,
   }
 }
 
-export const chipTitle = (chip: ChipState, nowMs = Date.now()): string => {
+export const chipTitle = (chip: ChipState, activity: ActivityState | null): string => {
   switch (chip.kind) {
     case 'queued':
       return chip.activity ? `Queued for ${chip.executorLabel} — ${chip.activity}` : `Queued for ${chip.executorLabel}`
@@ -129,7 +128,6 @@ export const chipTitle = (chip: ChipState, nowMs = Date.now()): string => {
         ? `${chip.executorLabel} is working (attempt ${chip.attempts})`
         : `${chip.executorLabel} is working`
       if (!chip.activity) return base
-      const activity = activityStateFor(chip, nowMs)
       const detail = `${base} — ${chip.activity}`
       if (!activity?.stalled) return detail
       return `${detail} · No progress for ${activity.ageLabel}; the app tab may not be answering`

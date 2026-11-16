@@ -43,9 +43,9 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 ## Upgrade to 0.9.3
 
-Activity writes now include `agent:activity-at`, the current step's start time in epoch milliseconds, in the same write as `agent:activity`. Consecutive calls to the same tool each start a new step; repeated reports of the same finalized tool call do not reset its age. Streamed arguments do not start a step. The engine tracks outstanding steps for both runners: it shows the oldest outstanding step with its original start time, then moves to `Thinking` after three seconds with no outstanding tools. A new step in that window cancels the Thinking write. Subsequent reasoning cannot make a completed bridge call look stuck. Restart the daemon and reload the app to see step age in a fixed-width status chip, with a warning after 20 seconds on `km:` tools. This means the call has been outstanding for 20 seconds; a slow call can still succeed. Other activities show age without warnings. The tooltip explains the warning. The clock runs in the app; there are no heartbeat writes. Restart with `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+0.9.3 requires `@knowledge-medium/agent-cli` 0.14.1. The status chip shows the oldest outstanding tool's age, with a warning when a `km:` call has waited more than 20 seconds. Other activities show age without warnings. Activity details remain in the title and menu, and the pill keeps the same width in every state.
 
-An older daemon leaves the new app's chip unchanged. A new daemon can write to an older app: the unknown property is accepted, and that app keeps its existing chip until it reloads. Activity and its timestamp are cleared together at claim and terminal writes.
+Upgrade both packages, reload the app, and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`. Older daemons retain the existing chip behavior without step ages.
 
 ## Upgrade to 0.9.2
 

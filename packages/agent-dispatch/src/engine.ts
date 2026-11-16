@@ -10,7 +10,7 @@ import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
 import type { Graph, ReplyWriter } from './graph.js'
-import { formatRunUsage, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
+import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
@@ -526,7 +526,7 @@ export const createEngine = (deps: EngineDeps) => {
             writeActivity(next)
           } else {
             const endedAt = now()
-            thinkingTimer = setTimeout(() => writeActivity({label: 'Thinking', startedAt: endedAt}), THINKING_DEBOUNCE_MS)
+            thinkingTimer = setTimeout(() => writeActivity({label: THINKING_ACTIVITY, startedAt: endedAt}), THINKING_DEBOUNCE_MS)
           }
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return

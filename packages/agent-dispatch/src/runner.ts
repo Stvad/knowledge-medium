@@ -16,6 +16,8 @@
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
+export const THINKING_ACTIVITY = 'Thinking'
+
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
  *  carries the full in-progress reply text so far, not a delta, which
@@ -251,9 +253,8 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   }
 
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
-    const id = typeof toolUse.id === 'string' && toolUse.id.length > 0 ? toolUse.id : null
-    const name = typeof toolUse.name === 'string' ? toolUse.name : null
-    if (!id || !name) return
+    const {id, name} = toolUse
+    if (typeof id !== 'string' || !id || typeof name !== 'string' || !name) return
     emit({kind: 'activity', label: humanizeToolName(name), stepId: id})
   }
 
@@ -314,9 +315,6 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
 
       if (eventType === 'message_start') {
         textAccumulator = ''
-        return
-      }
-      if (eventType === 'content_block_start') {
         return
       }
       if (eventType === 'content_block_delta') {
