@@ -7,7 +7,7 @@
 import { Suspense, useEffect } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, definePresetCore, definePropertyEditorOverride, seedProperty, type PropertyEditorProps, type User } from '@/data/api'
+import { ChangeScope, codecs, definePresetCore, definePropertyEditorOverride, seedProperty, type AnyPropertySchema, type PropertyEditorProps, type User } from '@/data/api'
 import { Block } from '@/data/block'
 import { materializePropertySeeds } from '@/data/definitionSeeds'
 import { definitionSeedsFacet, propertyEditorOverridesFacet, valuePresetCoresFacet, valuePresetPresentationsFacet } from '@/data/facets'
@@ -43,6 +43,7 @@ import { EditorView } from '@codemirror/view'
 import { flushEditorContent } from '@/editor/contentFlush'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import {
+  aliasesProp,
   focusBlock,
   isCollapsedProp,
   isEditingProp,
@@ -99,7 +100,12 @@ const requiredSourceProp = seedProperty({
   preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const rowSeeds = [statusProp, secretProp, tagsProp, jsonListProp, ratingProp, sourceProp, requiredSourceProp, readyProp]
+const relatedSourcesProp = seedProperty({
+  seedKey: 'test/property/rows-related-sources', revision: 1, name: 'rows:related-sources',
+  preset: 'refList', defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+const rowSeeds = [statusProp, secretProp, tagsProp, jsonListProp, ratingProp, sourceProp, requiredSourceProp, relatedSourcesProp, readyProp]
 
 let sharedDb: TestDb
 let repo: Repo
@@ -698,6 +704,64 @@ describe('a reference value', () => {
     const cell = link.closest<HTMLElement>('[data-property-value-cell]')!
     expect(cell.querySelector('.blockembed, input')).toBeNull()
     expect(within(cell).queryByRole('button', {name: 'Remove block reference'})).toBeNull()
+  })
+
+  it.each([
+    {prop: sourceProp, list: false},
+    {prop: requiredSourceProp, list: false},
+    {prop: relatedSourcesProp, list: true},
+  ] as {prop: AnyPropertySchema; list: boolean}[])('reads a named link value child for $prop.name and projects its target id', async ({prop, list}) => {
+    const cited = '33333333-3333-4333-8333-333333333333'
+    await repo.tx(tx => tx.create({id: cited, workspaceId: WS, parentId: null, orderKey: 'a5', content: 'the cited block',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode(['the cited block'])}}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.block(OWNER).set(prop, list ? [cited] : cited)
+    const field = await fieldRow(prop.name)
+    const values = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    const value = values.find(row => row?.isFieldForm !== true)
+    expect(value).toBeDefined()
+    await repo.block(value!.id).setContent('[[the cited block]]')
+
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain(prop.name))
+    const link = await screen.findByRole('link', {name: 'the cited block'})
+    expect(link).toHaveClass('wikilink')
+    expect(blockRow(link).querySelector('[data-invalid-property-value]')).toBeNull()
+    expect(repo.block(OWNER).peekProperty(prop)).toEqual(list ? [cited] : cited)
+  })
+
+  it('projects a new named reference after its alias target is created', async () => {
+    await repo.whenPropertyDefinitionsReady(WS)
+    vi.useFakeTimers()
+    repo.scheduleReferenceTargetDerivePass(WS)
+    await vi.runAllTimersAsync()
+    await repo.awaitReferenceTargetDerive()
+    vi.useRealTimers()
+    const original = '44444444-4444-4444-8444-444444444444'
+    await repo.tx(tx => tx.create({id: original, workspaceId: WS, parentId: null, orderKey: 'a5', content: 'original target'}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.block(OWNER).set(sourceProp, original)
+    const field = await fieldRow(sourceProp.name)
+    const values = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+    const value = values.find(row => row?.isFieldForm !== true)
+    expect(value).toBeDefined()
+    const existingAlias = await sharedDb.db.get<{count: number}>(
+      'SELECT count(*) AS count FROM block_aliases WHERE workspace_id = ? AND alias_lower = ?', [WS, 'new referenced page'])
+    expect(existingAlias.count).toBe(0)
+
+    mount({workspace: 'non-hidden'})
+    await waitFor(() => expect(shownRows()).toContain(sourceProp.name))
+    await act(() => repo.block(value!.id).setContent('[[new referenced page]]'))
+    const link = await screen.findByRole('link', {name: 'new referenced page'})
+    expect(link).toHaveClass('wikilink')
+    await waitFor(async () => {
+      const current = await repo.load(value!.id)
+      expect(current?.referenceTargetId).toBeTruthy()
+      expect(repo.block(OWNER).peekProperty(sourceProp)).toBe(current?.referenceTargetId)
+      expect(blockRow(screen.getByRole('link', {name: 'new referenced page'}))
+        .querySelector('[data-invalid-property-value]')).toBeNull()
+    })
+    expect(repo.block(OWNER).peekProperty(sourceProp)).not.toBe(original)
   })
 })
 

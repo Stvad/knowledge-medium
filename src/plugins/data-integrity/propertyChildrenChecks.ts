@@ -126,12 +126,12 @@ const OWNERS_WITH_FIELD_ROWS_SQL = `
  *  direct children, in `(order_key, id)` order. The ORDER BY is the contract
  *  even though no test can see it go: the parent index returns this order. */
 const valueChildrenSql = (count: number): string => `
-  SELECT id, parent_id AS parentId, content FROM blocks
+  SELECT id, parent_id AS parentId, content, reference_target_id AS referenceTargetId FROM blocks
    WHERE parent_id IN (${buildInClause(count)}) AND deleted = 0 AND is_field_form IS NOT 1
    ORDER BY order_key, id`
 
 interface FieldRowRow { id: string; parentId: string; fieldId: string; deleted: number }
-interface ValueRow { id: string; parentId: string; content: string }
+interface ValueRow { id: string; parentId: string; content: string; referenceTargetId: string | null }
 
 const inChunks = async <T>(
   ids: readonly string[],

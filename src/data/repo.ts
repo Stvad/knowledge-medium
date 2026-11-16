@@ -124,6 +124,7 @@ import {referenceTargetLookupsVia} from './internals/referenceTargetLookups'
 import type { BlockIdPolicy } from './blockId'
 import {
   reprojectOwnersForRowStates,
+  PROPERTY_VALUES_RESOLVED_EVENT,
   type ProjectableRow,
   type ProjectionLookups,
 } from './internals/propertyChildrenProcessor'
@@ -4484,6 +4485,17 @@ export class Repo {
     }
 
     await this.stampReferenceTargets(updates, stampContext)
+    // A resolved name can have a stale derived cell. Refresh these values
+    // on workspace open without changing their source blocks.
+    if (!this.isReadOnly && await readIsChildBackedWorkspace(this.db, workspaceId)) {
+      const namedValues = await this.db.getAll<{id: string}>(`
+        SELECT v.id FROM blocks f JOIN blocks v ON v.parent_id = f.id
+        WHERE f.workspace_id = ? AND f.is_field_form = 1 AND f.deleted = 0
+          AND v.deleted = 0 AND v.is_field_form IS NOT 1
+          AND v.reference_target_id IS NOT NULL AND v.content LIKE '%[[%'
+      `, [workspaceId])
+      await this.reprojectResolvedPropertyValues(namedValues.map(row => row.id), workspaceId)
+    }
 
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
@@ -4500,9 +4512,9 @@ export class Repo {
     return referenceTargetLookupsVia(reader)
   }
 
-  /** Chunked raw column stamps, materializer-style: source-NULL (upload
-   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
-   *  `updated_at` (the LWW row-version) for a purely local derivation.
+  /** Chunked raw column stamps without advancing `updated_at`.
+   * Field rows receive additive repair; named values dispatch settled
+   * projection so derived cell writes cannot materialize over source rows.
    *
    *  Compare-and-set per row (adversarial-review fix): callers scan/derive
    *  outside the write lock, so a concurrent local edit or sync arrival can
@@ -4590,6 +4602,10 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+      if (reproject) {
+        const valueIds = [...snapshots.values()].filter(({after}) => !after.isFieldForm).map(({after}) => after.id)
+        await this.reprojectResolvedPropertyValues(valueIds, context.workspaceId)
+      }
       if (newlyRecognized.length === 0) continue
       try {
         await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
@@ -4605,6 +4621,15 @@ export class Repo {
           + `${context.workspaceId}: ${reason}`,
         )
       }
+    }
+  }
+
+  private async reprojectResolvedPropertyValues(valueIds: readonly string[], workspaceId: string): Promise<void> {
+    for (let start = 0; start < valueIds.length; start += 200) {
+      await this.tx(async tx => {
+        if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
+        tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds: valueIds.slice(start, start + 200)}, workspaceId)
+      }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
     }
   }
 
@@ -4710,12 +4735,8 @@ export class Repo {
       // yet — a generic alias minted mid-session (referencesProcessor enqueues
       // the name when it creates the seat) repairs `[[Foo]]` rows written
       // before page Foo existed. Re-pointing an ALREADY-stamped row is
-      // deliberately NOT done: `reference_target_id`'s only consumers are
-      // property field-row recognition (is-target-a-definition), and
-      // definitions aren't name-resolvable yet, so a non-NULL re-point would
-      // change nothing any reader observes. That reclaim (with the cell
-      // reprojection a raw stamp currently skips) belongs to the auto-claim
-      // work that makes definitions name-resolvable.
+      // deliberately NOT done here: existing bindings are maintained by
+      // the ordinary rename/merge paths; this drain only fills missing targets.
       // Alias forms only (`REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL`): this
       // drain discards anything that isn't `kind === 'alias'` two lines below.
       const candidates = await this.db.getAll<{id: string; content: string}>(
