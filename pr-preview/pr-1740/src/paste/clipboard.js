@@ -1,1 +1,1 @@
-export{BR as editorPasteRequest,VR as isBlankContent,HR as readClipboardContent,UR as shellPasteRequest}from"../../chunks/app-jxDgIZ7Y.js";
+export{bR as editorPasteRequest,xR as isBlankContent,SR as readClipboardContent,CR as shellPasteRequest}from"../../chunks/app-CvUNoYOY.js";

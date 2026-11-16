@@ -1,1 +1,1 @@
-export{Vm as agentDispatchCompanionPlugin}from"../../../chunks/app-jxDgIZ7Y.js";
+export{Vm as agentDispatchCompanionPlugin}from"../../../chunks/app-CvUNoYOY.js";

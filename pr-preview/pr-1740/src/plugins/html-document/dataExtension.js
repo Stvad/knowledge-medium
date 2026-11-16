@@ -1,1 +1,1 @@
-export{wJ as htmlDocumentDataExtension}from"../../../chunks/app-jxDgIZ7Y.js";
+export{iJ as htmlDocumentDataExtension}from"../../../chunks/app-CvUNoYOY.js";

@@ -1,1 +1,1 @@
-export{Gf as DraftEditor}from"../../chunks/app-jxDgIZ7Y.js";
+export{Gf as DraftEditor}from"../../chunks/app-CvUNoYOY.js";

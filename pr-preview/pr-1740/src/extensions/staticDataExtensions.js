@@ -1,1 +1,1 @@
-export{mq as staticDataExtensions}from"../../chunks/app-jxDgIZ7Y.js";
+export{JK as staticDataExtensions}from"../../chunks/app-CvUNoYOY.js";

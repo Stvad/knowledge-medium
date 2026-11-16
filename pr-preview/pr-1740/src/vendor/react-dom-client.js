@@ -1,2 +1,2 @@
-import{i as e}from"../../chunks/rolldown-runtime-CNOWq4Kh.js";import{wdt as t}from"../../chunks/app-jxDgIZ7Y.js";var n=e(t(),1),r=n.createRoot,i=n.default,a=n.hydrateRoot,o=n.version;export{r as createRoot,i as default,a as hydrateRoot,o as version};
+import{i as e}from"../../chunks/rolldown-runtime-CNOWq4Kh.js";import{Ddt as t}from"../../chunks/app-CvUNoYOY.js";var n=e(t(),1),r=n.createRoot,i=n.default,a=n.hydrateRoot,o=n.version;export{r as createRoot,i as default,a as hydrateRoot,o as version};
 //# sourceMappingURL=react-dom-client.js.map
