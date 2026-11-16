@@ -1,1 +1,1 @@
-export{Hb as richPasteDecisionContribution}from"../../../chunks/app-nTaqbpME.js";
+export{Hb as richPasteDecisionContribution}from"../../../chunks/app-D6Zn76HA.js";
