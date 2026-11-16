@@ -154,6 +154,9 @@ export const BILLING_ENV_DENYLIST = [
   'CLAUDE_CODE_USE_FOUNDRY',
 ] as const
 
+/** Subscription sign-in a run may carry in its environment (`claude setup-token`). */
+const SUBSCRIPTION_AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN'] as const
+
 export const scrubEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   const scrubbed = {...env}
   for (const key of BILLING_ENV_DENYLIST) delete scrubbed[key]
@@ -171,6 +174,9 @@ export const envForBilling = (
 
 /** The tool a permission rule names: `Bash(git *)` is a Bash rule. */
 const ruleTool = (rule: string): string => rule.replace(/\(.*\)$/, '').trim()
+
+/** One rule, nothing Claude Code would split into more: it splits --allowedTools on commas and spaces. */
+const SINGLE_RULE = /^[A-Za-z_][\w-]*(\([^()]*\))?$/
 
 /** The built-in tools among `allowedTools`, by name. MCP tools come from
  *  --mcp-config, not --tools. */
@@ -200,7 +206,7 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
     args.push(
       '--restricted',
       '--add-dir', workspace.root,
-      '--settings', JSON.stringify(workspaceSettings(workspace, BILLING_ENV_DENYLIST)),
+      '--settings', JSON.stringify(workspaceSettings(workspace, [...BILLING_ENV_DENYLIST, ...SUBSCRIPTION_AUTH_ENV])),
       '--append-system-prompt', workspaceSystemPrompt(workspace, options.cwd ?? workspace.root),
     )
   }
@@ -212,7 +218,7 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   args.push('--disable-slash-commands', '--tools', offered.join(','))
   // A workspace's grants ride in its settings document instead (workspace.ts).
   const allowedTools = workspace
-    ? options.allowedTools.filter(rule => !WORKSPACE_APPROVED_TOOLS.includes(ruleTool(rule)))
+    ? options.allowedTools.filter(rule => SINGLE_RULE.test(rule) && !WORKSPACE_APPROVED_TOOLS.includes(ruleTool(rule)))
     : options.allowedTools
   if (allowedTools.length > 0) {
     args.push('--allowedTools', allowedTools.join(','))
@@ -433,7 +439,9 @@ export const runClaude = async (
     prompt: options.prompt,
     cwd,
     env: options.workspace
-      ? workspaceEnv(env, options.workspace.root, options.billing === 'api' ? BILLING_ENV_DENYLIST : [])
+      ? workspaceEnv(env, options.workspace.root, [
+        ...SUBSCRIPTION_AUTH_ENV, ...(options.billing === 'api' ? BILLING_ENV_DENYLIST : []),
+      ])
       : envForBilling(env, options.billing),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
@@ -442,6 +450,7 @@ export const runClaude = async (
   })
 
   const parsed = parser.finish()
+  // No stray-cwd clause: that run is killed at its init line, before its first request, so it cannot end ok.
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError
 
   return {

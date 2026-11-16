@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
+import {agentRuntimeConfigDir} from '@knowledge-medium/agent-cli/config'
 import {configSchema, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
@@ -318,6 +319,25 @@ describe('parseConfig', () => {
         workspaceId: 'ws-test',
         watchers: [{kind: 'backlinks', name: '../escape', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
       })).toThrow(/folder/)
+    })
+
+    it.each([
+      ['the home directory', () => os.homedir()],
+      ['a folder holding the bridge tokens', () => path.dirname(agentRuntimeConfigDir())],
+      ['a folder inside the bridge config', () => path.join(agentRuntimeConfigDir(), 'ws')],
+      ['Claude Code\'s own folder', () => path.join(os.homedir(), '.claude', 'ws')],
+    ])('refuses a root at or over files later runs trust: %s', (_label, root) => {
+      expect(() => withRunner({workspace: {root: root()}})).toThrow(/workspace.root/)
+    })
+
+    it('refuses watcher names that differ only in case: the disk folds them into one folder', () => {
+      expect(() => parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [
+          {kind: 'backlinks', name: 'Research', target: 'a', runner: {executor: 'claude', workspace: {}}},
+          {kind: 'backlinks', name: 'research', target: 'b'},
+        ],
+      })).toThrow(/duplicate watcher name/)
     })
 
     it('refuses channel delivery: the ambient session is not a spawned run', () => {

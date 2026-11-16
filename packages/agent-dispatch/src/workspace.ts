@@ -103,7 +103,10 @@ export const workspaceSettings = ({root, allowedDomains}: RunWorkspace, credenti
 /** Daemon environment variables a workspace run keeps: what Claude Code needs to
  *  start and sign in. Bash inherits Claude Code's environment, so the daemon's must
  *  not reach it. */
-const PASSED_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', '__CF_USER_TEXT_ENCODING']
+const PASSED_ENV = [
+  'HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', '__CF_USER_TEXT_ENCODING',
+  'CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS',
+]
 
 /** `credentialEnv`: variables to pass as well, such as an API key the run bills to. */
 export const workspaceEnv = (env: NodeJS.ProcessEnv, root: string, credentialEnv: readonly string[]): NodeJS.ProcessEnv => {

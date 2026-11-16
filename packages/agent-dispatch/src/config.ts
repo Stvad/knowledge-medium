@@ -366,6 +366,11 @@ const rawConfigSchema = z.strictObject({
     }
     if (workspace.root !== undefined && !path.isAbsolute(expandHome(workspace.root))) {
       ctx.addIssue({code: 'custom', path: [...at, 'root'], message: 'workspace.root must be an absolute path (or start with ~/)'})
+    } else if (workspace.root !== undefined && overTrustedFiles(expandHome(workspace.root))) {
+      ctx.addIssue({
+        code: 'custom', path: [...at, 'root'],
+        message: 'workspace.root cannot hold the home directory, the bridge config or ~/.claude, nor sit inside the latter two: later runs trust files there',
+      })
     }
     if (workspace.root === undefined && !FOLDER_NAME.test(watcher.name)) {
       ctx.addIssue({
@@ -387,6 +392,15 @@ export const defaultStatePath = () =>
 export const defaultWorkspacesDir = () =>
   path.join(os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch', 'workspaces')
 
+/** A root a run's writes would reach files later runs trust: the bridge tokens and the
+ *  MCP configs the daemon writes, or Claude Code's own folder (a root holding home holds both). */
+const overTrustedFiles = (root: string): boolean => {
+  const resolved = path.resolve(root)
+  const inside = (dir: string, parent: string) => dir === parent || dir.startsWith(`${parent}${path.sep}`)
+  const trusted = [agentRuntimeConfigDir(), path.join(os.homedir(), '.claude')].map(dir => path.resolve(dir))
+  return trusted.some(dir => inside(dir, resolved) || inside(resolved, dir))
+}
+
 /** One path component, never `.` or `..`. */
 const FOLDER_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/
 
@@ -396,10 +410,11 @@ const expandHome = (value: string) =>
     : value
 
 const duplicateWatcherName = (watchers: RawWatcher[]): string | null => {
+  // Folded: a workspace watcher's folder and MCP config file are named for it, on a case-insensitive disk.
   const seen = new Set<string>()
   for (const watcher of watchers) {
-    if (seen.has(watcher.name)) return watcher.name
-    seen.add(watcher.name)
+    if (seen.has(watcher.name.toLowerCase())) return watcher.name
+    seen.add(watcher.name.toLowerCase())
   }
   return null
 }

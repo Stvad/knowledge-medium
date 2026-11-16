@@ -14,7 +14,7 @@ import {
   type RunEvent,
   type SpawnImpl,
 } from '../src/runner'
-import {WORKSPACE_TOOLS, workspaceSettings, workspaceTmpDir} from '../src/workspace'
+import {WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceTmpDir} from '../src/workspace'
 
 const baseOptions: AgentRunOptions = {
   claudeBin: 'claude',
@@ -79,7 +79,14 @@ describe('buildClaudeArgs', () => {
     })
 
     it('carries the sandbox and its grants in one settings document', () => {
-      expect(JSON.parse(value('--settings'))).toEqual(workspaceSettings(workspace, BILLING_ENV_DENYLIST))
+      const settings = JSON.parse(value('--settings'))
+      expect(settings.permissions.allow).toEqual(WORKSPACE_APPROVED_TOOLS)
+      expect(settings.sandbox).toMatchObject({enabled: true, allowUnsandboxedCommands: false})
+    })
+
+    it('hides every credential Claude Code may hold from sandboxed commands', () => {
+      const names = JSON.parse(value('--settings')).sandbox.credentials.envVars.map((entry: {name: string}) => entry.name)
+      expect(names).toEqual(expect.arrayContaining([...BILLING_ENV_DENYLIST, 'CLAUDE_CODE_OAUTH_TOKEN']))
     })
 
     it('offers the workspace tools, and leaves their grants out of --allowedTools', () => {
@@ -87,6 +94,15 @@ describe('buildClaudeArgs', () => {
       expect(value('--tools').split(',')).toEqual(expect.arrayContaining(['WebFetch', ...WORKSPACE_TOOLS]))
       expect(value('--allowedTools').split(',')).toEqual(['mcp__km__search', 'WebFetch', 'Read'])
     })
+
+    it.each(['Read,Bash', 'WebFetch Bash', 'Bash(git *) ', 'Read(./a),Bash(x)'])(
+      'keeps a grant out of --allowedTools even inside a malformed rule: %j',
+      rule => {
+        // Claude Code splits --allowedTools on commas and spaces.
+        const allowed = buildClaudeArgs({...baseOptions, cwd: '/ws/notes-agent', workspace, allowedTools: [rule, 'Read']})
+        expect(allowed[allowed.indexOf('--allowedTools') + 1]).toBe('Read')
+      },
+    )
 
     it('tells the run where its workspace is', () => {
       expect(value('--append-system-prompt')).toContain('/ws/notes-agent/threads/b1')
@@ -419,12 +435,13 @@ describe('runClaude', () => {
     try {
       const cwd = path.join(root, 'threads', 'b1')
       const result = await runClaude(
-        {...baseOptions, cwd, workspace: {root, allowedDomains: []}, env: {...process.env, GITHUB_TOKEN: 'ghp-leak'}},
+        {...baseOptions, cwd, workspace: {root, allowedDomains: []}, env: {...process.env, GITHUB_TOKEN: 'ghp-leak', CLAUDE_CODE_OAUTH_TOKEN: 'oauth'}},
         fakeClaude(
-          `process.stdout.write(JSON.stringify({type: 'result', result: JSON.stringify([process.cwd(), process.env.GITHUB_TOKEN ?? null, process.env.CLAUDE_CODE_TMPDIR]), session_id: 's', is_error: false}) + '\\n')`,
+          `process.stdout.write(JSON.stringify({type: 'result', result: JSON.stringify([process.cwd(), process.env.GITHUB_TOKEN ?? null, process.env.CLAUDE_CODE_TMPDIR, process.env.CLAUDE_CODE_OAUTH_TOKEN]), session_id: 's', is_error: false}) + '\\n')`,
         ),
       )
-      expect(JSON.parse(result.resultText)).toEqual([await fs.realpath(cwd), null, workspaceTmpDir(root)])
+      // The subscription sign-in still reaches Claude Code; the settings hide it from Bash.
+      expect(JSON.parse(result.resultText)).toEqual([await fs.realpath(cwd), null, workspaceTmpDir(root), 'oauth'])
     } finally {
       await fs.rm(root, {recursive: true, force: true})
       await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
