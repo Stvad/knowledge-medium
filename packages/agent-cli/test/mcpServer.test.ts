@@ -128,6 +128,94 @@ describe('createGraphMcpServer', () => {
       await expect(call({path: file})).rejects.toThrow(new RegExp(`${MEDIA_BRIDGE_MAX_BYTES + 1} bytes`))
       expect(runCommand).not.toHaveBeenCalled()
     })
+
+    it('refuses a path and content together, or neither', async () => {
+      const {runCommand, call} = setup()
+      await expect(call({path: path.join(dir, 'a.svg'), content: '<svg/>', filename: 'a.svg'})).rejects.toThrow(/exactly one/)
+      await expect(call({filename: 'a.svg'})).rejects.toThrow(/exactly one/)
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('add_media from content', () => {
+    const setup = (guard?: (operation: GraphMcpWriteOperation) => void) => {
+      const runCommand = vi.fn<BridgeClient['runCommand']>(async () => (
+        {id: 'media-1', workspaceId: 'ws-1', deduped: false, reference: '((media-1))'} as never
+      ))
+      const server = createGraphMcpServer({
+        contributorId: null,
+        client: clientFrom(runCommand),
+        ...(guard ? {writeGuard: {beforeWrite: guard}} : {}),
+      })
+      const tool = (server as unknown as RegisteredToolHarness)._registeredTools.add_media
+      return {runCommand, tool, call: (input: Record<string, unknown>) => tool.handler(tool.inputSchema.parse(input), {})}
+    }
+
+    it('offers no path argument unless the entry point asks', () => {
+      const {tool} = setup()
+      expect(Object.keys(tool.inputSchema.shape ?? {})).not.toContain('path')
+      expect(tool.inputSchema.parse({path: '/etc/hosts', filename: 'hosts'})).not.toHaveProperty('path')
+    })
+
+    it('sends text content as its UTF-8 bytes', async () => {
+      const {runCommand, call} = setup()
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>café</text></svg>'
+      const result = await call({content: svg, filename: 'pic.svg', mime: 'image/svg+xml'})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({
+        type: 'add-media',
+        base64: Buffer.from(svg, 'utf8').toString('base64'),
+        filename: 'pic.svg',
+        mime: 'image/svg+xml',
+      })
+      expect(result.content[0]).toMatchObject({text: expect.stringContaining('((media-1))')})
+    })
+
+    it('passes base64 content through as bytes', async () => {
+      const {runCommand, call} = setup()
+      const base64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
+      await call({content: base64, encoding: 'base64', filename: 'x.png'})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({base64})
+    })
+
+    it('leaves base64 to the bridge\'s strict decoder rather than repairing it', async () => {
+      const {runCommand, call} = setup()
+      const pasted = 'data:image/png;base64,iVBORw0KGgo='
+      await call({content: pasted, encoding: 'base64', filename: 'x.png'})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({base64: pasted})
+    })
+
+    it('types an .svg as an image, which no byte sniffing recognises', async () => {
+      const {runCommand, call} = setup()
+      await call({content: '<svg/>', filename: 'Pic.SVG'})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({mime: 'image/svg+xml'})
+      await call({content: '<svg/>', filename: 'pic.svg', mime: 'text/plain'})
+      expect(runCommand.mock.calls[1]?.[0]).toMatchObject({mime: 'text/plain'})
+    })
+
+    it('needs a filename, which becomes the block\'s content', async () => {
+      const {runCommand, call} = setup()
+      await expect(call({content: '<svg/>'})).rejects.toThrow(/filename/)
+      await expect(call({content: '<svg/>', filename: ''})).rejects.toThrow(/filename/)
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
+    it('runs the write guard before sending', async () => {
+      const operations: GraphMcpWriteOperation[] = []
+      const {runCommand, call} = setup(operation => {
+        operations.push(operation)
+        throw new Error('blocked by guard')
+      })
+      await expect(call({content: '<svg/>', filename: 'a.svg'})).rejects.toThrow('blocked by guard')
+      expect(operations).toEqual([{type: 'add_media', filename: 'a.svg', mime: 'image/svg+xml', workspaceId: undefined}])
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
+    it('refuses content past the limit without sending it', async () => {
+      const {runCommand, call} = setup()
+      await expect(call({content: 'a'.repeat(MEDIA_BRIDGE_MAX_BYTES + 1), filename: 'big.txt'}))
+        .rejects.toThrow(new RegExp(`${MEDIA_BRIDGE_MAX_BYTES + 1} bytes`))
+      expect(runCommand).not.toHaveBeenCalled()
+    })
   })
 
   describe('read_media', () => {
@@ -399,15 +487,6 @@ describe('recent_changes', () => {
   it('never grants the tool that reads a local path in advance', () => {
     expect(KM_MCP_ALLOWED_TOOLS.filter(tool => tool.endsWith('add_media'))).toEqual([])
     expect(KM_MCP_ALLOWED_TOOLS).toContain('mcp__km__read_media')
-  })
-
-  it('offers no tool that reads a local path unless the entry point asks', () => {
-    const server = createGraphMcpServer({
-      client: clientFrom(vi.fn<BridgeClient['runCommand']>()),
-      serverOptions: {capabilities: {tools: {}}},
-    })
-    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
-    expect(Object.keys(tools)).not.toContain('add_media')
   })
 
   it('marks add_media for clients that decide from annotations whether to ask', () => {

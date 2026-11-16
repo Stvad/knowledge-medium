@@ -6,8 +6,9 @@
  * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
- * `add_media` is the one tool that reaches past the graph, and an entry
- * point has to ask for it (`localMediaFiles`).
+ * `add_media` takes the file's bytes from the model; reading a local path
+ * instead reaches past the graph, and an entry point has to ask for that
+ * (`localMediaFiles`).
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
@@ -19,7 +20,7 @@ import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { readMediaFileBase64 } from './mediaFile.js'
+import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
@@ -86,7 +87,8 @@ export type GraphMcpWriteOperation =
   | {type: 'edit_block', id: string, old: string, new: string}
   | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
   | {type: 'create_page', name?: string, date?: string}
-  | {type: 'add_media', path: string, filename: string, mime?: string, workspaceId?: string}
+  /** `path` is set only when the bytes come from a local file (`localMediaFiles`). */
+  | {type: 'add_media', path?: string, filename: string, mime?: string, workspaceId?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
@@ -105,7 +107,7 @@ export interface GraphMcpServerOptions {
   contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
-  /** Offer `add_media`, which reads a local path the model names. Off unless the
+  /** Let `add_media` read a local path the model names. Off unless the
    *  entry point asks: a server whose model is driven by synced notes (agent-dispatch)
    *  must not turn a note into a read of this machine's files. */
   localMediaFiles?: boolean
@@ -198,32 +200,49 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     }
   })
 
-  if (options.localMediaFiles === true) {
-    server.registerTool('add_media' satisfies KmMcpToolName, {
-      description: 'Store a local file as a media block under the workspace\'s Assets page; the same bytes added '
-      + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
-      + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
-      inputSchema: {
-        path: z.string().describe('Absolute path of the file'),
-        filename: addMediaCommandSchema.shape.filename,
-        mime: addMediaCommandSchema.shape.mime,
-        workspaceId: addMediaCommandSchema.shape.workspaceId,
-      },
-      // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
-      annotations: {destructiveHint: true, openWorldHint: true},
-    }, async ({path: filePath, filename, mime, workspaceId}) => {
-      if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
-      const name = filename ?? path.basename(filePath)
-      await beforeWrite({type: 'add_media', path: filePath, filename: name, mime, workspaceId})
-      return json(await client.runCommand({
-        type: 'add-media',
-        base64: await readMediaFileBase64(filePath),
-        filename: name,
-        ...(mime !== undefined ? {mime} : {}),
-        ...(workspaceId !== undefined ? {workspaceId} : {}),
-      }))
-    })
-  }
+  const localMediaFiles = options.localMediaFiles === true
+  server.registerTool('add_media' satisfies KmMcpToolName, {
+    description: 'Store a file as a media block under the workspace\'s Assets page; the same bytes added '
+    + 'twice are one block. Pass the file itself as `content` (text such as SVG as is, binary as base64 with encoding "base64")'
+    + (localMediaFiles ? ', or a local file\'s absolute `path`' : '')
+    + '. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
+    + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    inputSchema: {
+      ...(localMediaFiles ? {path: z.string().optional().describe('Absolute path of a local file; instead of content')} : {}),
+      content: z.string().optional().describe('The file itself: text as is, or base64 with encoding "base64"'),
+      encoding: z.enum(['utf8', 'base64']).optional().describe('How content is written. Default: utf8'),
+      filename: addMediaCommandSchema.shape.filename.describe(
+        'The block\'s content. Required with content; a path defaults to the file\'s own name',
+      ),
+      mime: addMediaCommandSchema.shape.mime.describe(
+        'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: image/svg+xml '
+        + 'for a .svg filename, else application/octet-stream, which shows as a download',
+      ),
+      workspaceId: addMediaCommandSchema.shape.workspaceId,
+    },
+    // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
+    annotations: {destructiveHint: true, openWorldHint: localMediaFiles},
+  }, async ({path: filePath, content, encoding, filename, mime, workspaceId}: {
+    path?: string, content?: string, encoding?: 'utf8' | 'base64', filename?: string, mime?: string, workspaceId?: string
+  }) => {
+    if ((filePath === undefined) === (content === undefined)) {
+      throw new Error(localMediaFiles ? 'add_media takes exactly one of path and content.' : 'add_media needs content.')
+    }
+    if (content !== undefined && !filename) throw new Error('add_media needs a filename with content.')
+    if (filePath !== undefined && !path.isAbsolute(filePath)) {
+      throw new Error(`add_media needs an absolute path; got ${filePath}.`)
+    }
+    const name = filename || path.basename(filePath!)
+    const type = mime ?? mimeFromFilename(name)
+    await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
+    return json(await client.runCommand({
+      type: 'add-media',
+      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!),
+      filename: name,
+      ...(type !== undefined ? {mime: type} : {}),
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+  })
 
   server.registerTool('list_contributors' satisfies KmMcpToolName, {
     description: 'List page-backed contributors in a workspace. Use this to find an id for contributorId configuration.',

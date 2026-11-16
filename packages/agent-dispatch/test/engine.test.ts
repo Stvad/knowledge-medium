@@ -1449,6 +1449,8 @@ describe('mention lifecycle', () => {
 
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
+    // Dispatch's km server has no path argument on add_media, so uploading is a graph write like the rest.
+    expect(tools).toContain('mcp__km__add_media')
     expect(tools).not.toContain('WebSearch')
     expect(tools).not.toContain('WebFetch')
   })

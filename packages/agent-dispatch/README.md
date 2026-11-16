@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.2
+
+0.9.2 requires `@knowledge-medium/agent-cli` 0.14.0. Runs now get `add_media`, which stores a file the run writes itself (such as an SVG) as a media block. It never reads a local path. Upgrade both packages and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
 ## Upgrade to 0.9.0
 
 Backlinks watchers now keep a memory in your notes (see [Memory](#memory)), on by default. On a watcher's first run the daemon adds a `Memory` block under its target page, for example under `[[claude]]`. Every run then sees what is in it and keeps it itself, and a run's reply ends with a `Memory changed during this run: …` line when the run changed it.
@@ -405,7 +409,7 @@ The same generic graph tools work from any MCP client — e.g. Claude Desktop / 
 
 Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). Deliberately excluded: `eval`, `sql execute`, extension lifecycle. The standalone `agent-cli` `km-mcp` server does not apply dispatch watcher-target guards; use `packages/agent-dispatch/dist/mcp.js` when the session is acting as part of an agent-dispatch watcher loop.
 
-Started this way, the server also offers `read_media`, and `add_media`, which uploads any local file the model names: keep it off your client's auto-approve list. Dispatch runs never get `add_media`. They do get `read_media`, whose images arrive inline; a non-image comes back as a file a run can open only if it has a tool for that.
+The server also offers `read_media` and `add_media`, and dispatch runs get both. `read_media` images arrive inline; a non-image comes back as a file a run can open only if it has a tool for that. `add_media` here stores only bytes the run passes in (`content`, such as an SVG it wrote): dispatch's server has no `path` argument, so no note can turn it into a read of this machine's files. Uploads sync to everyone in the workspace, like any other write.
 
 ## Security posture
 
