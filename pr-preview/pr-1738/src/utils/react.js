@@ -1,1 +1,1 @@
-export{UL as useIsMobile,WL as usePointerCoarse}from"../../chunks/app-CAycEw2f.js";
+export{UL as useIsMobile,WL as usePointerCoarse}from"../../chunks/app-0PqTWmUc.js";

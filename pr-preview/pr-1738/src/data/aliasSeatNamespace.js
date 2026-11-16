@@ -1,1 +1,1 @@
-export{Oat as aliasSeatNamespacesInTx,kat as resolveAliasSeatNamespaces}from"../../chunks/app-CAycEw2f.js";
+export{Oat as aliasSeatNamespacesInTx,kat as resolveAliasSeatNamespaces}from"../../chunks/app-0PqTWmUc.js";

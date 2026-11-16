@@ -1,1 +1,1 @@
-export{wu as appendTagToBlocks,Tu as appendTagToContent}from"../../../chunks/app-CAycEw2f.js";
+export{wu as appendTagToBlocks,Tu as appendTagToContent}from"../../../chunks/app-0PqTWmUc.js";
