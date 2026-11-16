@@ -1,1 +1,0 @@
-export{R2 as FacetBridge}from"../../chunks/app-CYlwE2sN.js";

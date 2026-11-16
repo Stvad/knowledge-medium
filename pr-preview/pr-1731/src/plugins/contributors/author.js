@@ -1,1 +1,0 @@
-export{mg as authorIdOf}from"../../../chunks/app-CYlwE2sN.js";

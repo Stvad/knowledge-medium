@@ -1,1 +1,0 @@
-export{uq as staticDataExtensions}from"../../chunks/app-CYlwE2sN.js";

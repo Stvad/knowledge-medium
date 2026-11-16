@@ -1,1 +1,0 @@
-export{df as quotedInFooterContribution}from"../../../chunks/app-CYlwE2sN.js";

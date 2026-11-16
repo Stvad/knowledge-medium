@@ -1,1 +1,0 @@
-export{qS as videoPlayerMarkdownExtension}from"../../../chunks/app-CYlwE2sN.js";

@@ -1,1 +1,0 @@
-export{HW as isIOS,UW as isMacPlatform}from"../../chunks/app-CYlwE2sN.js";

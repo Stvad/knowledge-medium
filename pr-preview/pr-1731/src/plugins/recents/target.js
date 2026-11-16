@@ -1,1 +1,0 @@
-export{cO as openRecentsPage}from"../../../chunks/app-CYlwE2sN.js";

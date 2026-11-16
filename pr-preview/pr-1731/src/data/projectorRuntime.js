@@ -1,1 +1,0 @@
-export{Y2 as ProjectorRuntime}from"../../chunks/app-CYlwE2sN.js";

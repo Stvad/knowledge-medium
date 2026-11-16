@@ -1,1 +1,0 @@
-export{I2 as Repo}from"../../chunks/app-CYlwE2sN.js";

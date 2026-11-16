@@ -1,1 +1,0 @@
-export{uV as BlockProperties}from"../../chunks/app-CYlwE2sN.js";

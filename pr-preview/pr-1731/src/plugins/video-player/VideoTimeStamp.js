@@ -1,1 +1,0 @@
-export{XS as default}from"../../../chunks/app-CYlwE2sN.js";

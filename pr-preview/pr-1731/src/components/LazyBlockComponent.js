@@ -1,1 +1,0 @@
-export{XF as LazyBlockComponent}from"../../chunks/app-CYlwE2sN.js";

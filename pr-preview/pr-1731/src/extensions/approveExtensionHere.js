@@ -1,1 +1,0 @@
-export{TP as approveExtensionHere}from"../../chunks/app-CYlwE2sN.js";
