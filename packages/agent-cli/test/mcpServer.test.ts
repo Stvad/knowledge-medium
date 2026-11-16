@@ -177,9 +177,25 @@ describe('createGraphMcpServer', () => {
       expect(runCommand.mock.calls[0]?.[0]).toMatchObject({base64})
     })
 
+    it('leaves base64 to the bridge\'s strict decoder rather than repairing it', async () => {
+      const {runCommand, call} = setup()
+      const pasted = 'data:image/png;base64,iVBORw0KGgo='
+      await call({content: pasted, encoding: 'base64', filename: 'x.png'})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({base64: pasted})
+    })
+
+    it('types an .svg as an image, which no byte sniffing recognises', async () => {
+      const {runCommand, call} = setup()
+      await call({content: '<svg/>', filename: 'Pic.SVG'})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({mime: 'image/svg+xml'})
+      await call({content: '<svg/>', filename: 'pic.svg', mime: 'text/plain'})
+      expect(runCommand.mock.calls[1]?.[0]).toMatchObject({mime: 'text/plain'})
+    })
+
     it('needs a filename, which becomes the block\'s content', async () => {
       const {runCommand, call} = setup()
       await expect(call({content: '<svg/>'})).rejects.toThrow(/filename/)
+      await expect(call({content: '<svg/>', filename: ''})).rejects.toThrow(/filename/)
       expect(runCommand).not.toHaveBeenCalled()
     })
 
@@ -190,7 +206,7 @@ describe('createGraphMcpServer', () => {
         throw new Error('blocked by guard')
       })
       await expect(call({content: '<svg/>', filename: 'a.svg'})).rejects.toThrow('blocked by guard')
-      expect(operations).toEqual([{type: 'add_media', filename: 'a.svg', mime: undefined, workspaceId: undefined}])
+      expect(operations).toEqual([{type: 'add_media', filename: 'a.svg', mime: 'image/svg+xml', workspaceId: undefined}])
       expect(runCommand).not.toHaveBeenCalled()
     })
 

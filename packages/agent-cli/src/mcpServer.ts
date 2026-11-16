@@ -20,7 +20,7 @@ import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { readMediaFileBase64 } from './mediaFile.js'
+import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
@@ -214,7 +214,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       filename: addMediaCommandSchema.shape.filename.describe(
         'The block\'s content. Required with content; a path defaults to the file\'s own name',
       ),
-      mime: addMediaCommandSchema.shape.mime,
+      mime: addMediaCommandSchema.shape.mime.describe(
+        'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: image/svg+xml '
+        + 'for a .svg filename, else application/octet-stream, which shows as a download',
+      ),
       workspaceId: addMediaCommandSchema.shape.workspaceId,
     },
     // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
@@ -225,28 +228,18 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     if ((filePath === undefined) === (content === undefined)) {
       throw new Error(localMediaFiles ? 'add_media takes exactly one of path and content.' : 'add_media needs content.')
     }
-    let name: string
-    let base64: string
-    if (filePath !== undefined) {
-      if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
-      name = filename ?? path.basename(filePath)
-      await beforeWrite({type: 'add_media', path: filePath, filename: name, mime, workspaceId})
-      base64 = await readMediaFileBase64(filePath)
-    } else {
-      if (filename === undefined) throw new Error('add_media needs a filename with content.')
-      name = filename
-      const bytes = Buffer.from(content!, encoding ?? 'utf8')
-      if (bytes.length > MEDIA_BRIDGE_MAX_BYTES) {
-        throw new Error(`add_media: content is ${bytes.length} bytes; add_media carries at most ${MEDIA_BRIDGE_MAX_BYTES}.`)
-      }
-      await beforeWrite({type: 'add_media', filename: name, mime, workspaceId})
-      base64 = bytes.toString('base64')
+    if (content !== undefined && !filename) throw new Error('add_media needs a filename with content.')
+    if (filePath !== undefined && !path.isAbsolute(filePath)) {
+      throw new Error(`add_media needs an absolute path; got ${filePath}.`)
     }
+    const name = filename || path.basename(filePath!)
+    const type = mime ?? mimeFromFilename(name)
+    await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
     return json(await client.runCommand({
       type: 'add-media',
-      base64,
+      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!),
       filename: name,
-      ...(mime !== undefined ? {mime} : {}),
+      ...(type !== undefined ? {mime: type} : {}),
       ...(workspaceId !== undefined ? {workspaceId} : {}),
     }))
   })
