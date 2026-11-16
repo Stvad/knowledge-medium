@@ -1,1 +1,1 @@
-export{sO as useMinuteClock}from"../../chunks/app-DiEjfySd.js";
+export{oO as useMinuteClock}from"../../chunks/app-DMs_Devp.js";

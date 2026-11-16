@@ -1,1 +1,1 @@
-export{gP as editorAutocompleteExtension}from"../../chunks/app-DiEjfySd.js";
+export{pP as editorAutocompleteExtension}from"../../chunks/app-DMs_Devp.js";

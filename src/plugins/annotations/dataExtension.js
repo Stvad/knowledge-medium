@@ -1,1 +1,1 @@
-export{DX as annotationsDataExtension}from"../../../chunks/app-DiEjfySd.js";
+export{wX as annotationsDataExtension}from"../../../chunks/app-DMs_Devp.js";

@@ -1,1 +1,1 @@
-export{Fy as remarkWikilinks}from"../../../../../chunks/app-DiEjfySd.js";
+export{Py as remarkWikilinks}from"../../../../../chunks/app-DMs_Devp.js";

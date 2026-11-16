@@ -1,1 +1,1 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-DiEjfySd.js";
+export{Kr as ExtensionsSettings}from"../../../chunks/app-DMs_Devp.js";

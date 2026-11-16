@@ -1,1 +1,1 @@
-export{gb as useIsReadOnly}from"../../chunks/app-DiEjfySd.js";
+export{hb as useIsReadOnly}from"../../chunks/app-DMs_Devp.js";

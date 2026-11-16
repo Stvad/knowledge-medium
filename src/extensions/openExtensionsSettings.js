@@ -1,1 +1,1 @@
-export{EI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,DI as openExtensionsSettings}from"../../chunks/app-DiEjfySd.js";
+export{CI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,wI as openExtensionsSettings}from"../../chunks/app-DMs_Devp.js";

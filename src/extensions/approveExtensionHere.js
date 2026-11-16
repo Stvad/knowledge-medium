@@ -1,1 +1,1 @@
-export{OP as approveExtensionHere}from"../../chunks/app-DiEjfySd.js";
+export{TP as approveExtensionHere}from"../../chunks/app-DMs_Devp.js";

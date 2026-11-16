@@ -1,1 +1,1 @@
-export{iK as usePropertySchemas}from"../../chunks/app-DiEjfySd.js";
+export{tK as usePropertySchemas}from"../../chunks/app-DMs_Devp.js";

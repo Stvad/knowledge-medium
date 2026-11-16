@@ -1,1 +1,1 @@
-export{pM as CommandPaletteHeaderItem}from"../../../chunks/app-DiEjfySd.js";
+export{fM as CommandPaletteHeaderItem}from"../../../chunks/app-DMs_Devp.js";

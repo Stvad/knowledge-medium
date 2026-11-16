@@ -1,1 +1,1 @@
-export{qQ as pluginPrefsExtension,JQ as pluginUIStateExtension}from"../../chunks/app-DiEjfySd.js";
+export{WQ as pluginPrefsExtension,GQ as pluginUIStateExtension}from"../../chunks/app-DMs_Devp.js";

@@ -1,1 +1,1 @@
-export{pV as BlockProperties}from"../../chunks/app-DiEjfySd.js";
+export{uV as BlockProperties}from"../../chunks/app-DMs_Devp.js";

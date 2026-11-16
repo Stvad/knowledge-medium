@@ -1,1 +1,1 @@
-export{fk as Label}from"../../../chunks/app-DiEjfySd.js";
+export{dk as Label}from"../../../chunks/app-DMs_Devp.js";

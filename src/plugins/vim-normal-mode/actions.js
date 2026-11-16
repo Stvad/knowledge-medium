@@ -1,1 +1,1 @@
-export{LC as JUMP_BLOCK_COUNT,RC as getVimNormalModeActions,zC as jumpVisibleBlocks,BC as vimNormalModeActionsExtension}from"../../../chunks/app-DiEjfySd.js";
+export{IC as JUMP_BLOCK_COUNT,LC as getVimNormalModeActions,RC as jumpVisibleBlocks,zC as vimNormalModeActionsExtension}from"../../../chunks/app-DMs_Devp.js";

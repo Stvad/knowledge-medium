@@ -1,1 +1,1 @@
-export{NP as appUpdatePromptExtension}from"../../../chunks/app-DiEjfySd.js";
+export{AP as appUpdatePromptExtension}from"../../../chunks/app-DMs_Devp.js";

@@ -1,1 +1,1 @@
-export{Cut as defineMutator}from"../../../chunks/app-DiEjfySd.js";
+export{but as defineMutator}from"../../../chunks/app-DMs_Devp.js";

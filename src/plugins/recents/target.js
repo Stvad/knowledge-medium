@@ -1,1 +1,1 @@
-export{lO as openRecentsPage}from"../../../chunks/app-DiEjfySd.js";
+export{cO as openRecentsPage}from"../../../chunks/app-DMs_Devp.js";

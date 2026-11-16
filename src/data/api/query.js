@@ -1,1 +1,1 @@
-export{mut as defineQuery}from"../../../chunks/app-DiEjfySd.js";
+export{dut as defineQuery}from"../../../chunks/app-DMs_Devp.js";
