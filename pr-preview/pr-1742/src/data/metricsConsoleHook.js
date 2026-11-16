@@ -1,1 +1,1 @@
-export{kN as ensureMetricsConsoleHook}from"../../chunks/app-bid4cPe4.js";
+export{kN as ensureMetricsConsoleHook}from"../../chunks/app-BoICSmRg.js";

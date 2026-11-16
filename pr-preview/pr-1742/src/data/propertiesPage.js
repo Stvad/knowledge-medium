@@ -1,1 +1,1 @@
-export{kat as getOrCreatePropertiesPage,Aat as propertiesPageBlockId,jat as propertiesPageSpec}from"../../chunks/app-bid4cPe4.js";
+export{kat as getOrCreatePropertiesPage,Aat as propertiesPageBlockId,jat as propertiesPageSpec}from"../../chunks/app-BoICSmRg.js";

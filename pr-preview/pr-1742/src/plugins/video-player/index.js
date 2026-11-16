@@ -1,1 +1,1 @@
-export{US as videoPlayerPlugin}from"../../../chunks/app-bid4cPe4.js";
+export{US as videoPlayerPlugin}from"../../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,1 @@
-export{d1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-bid4cPe4.js";
+export{d1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BoICSmRg.js";

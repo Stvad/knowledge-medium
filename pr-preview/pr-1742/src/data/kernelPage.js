@@ -1,1 +1,1 @@
-export{Cit as getOrCreateKernelPage,wit as kernelPageBlockId}from"../../chunks/app-bid4cPe4.js";
+export{Cit as getOrCreateKernelPage,wit as kernelPageBlockId}from"../../chunks/app-BoICSmRg.js";

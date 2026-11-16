@@ -1,1 +1,1 @@
-export{oP as editorAutocompleteExtension}from"../../chunks/app-bid4cPe4.js";
+export{oP as editorAutocompleteExtension}from"../../chunks/app-BoICSmRg.js";

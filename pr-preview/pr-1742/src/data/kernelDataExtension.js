@@ -1,1 +1,1 @@
-export{b6 as kernelDataExtension}from"../../chunks/app-bid4cPe4.js";
+export{b6 as kernelDataExtension}from"../../chunks/app-BoICSmRg.js";

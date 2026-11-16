@@ -1,1 +1,1 @@
-export{ST as Breadcrumbs}from"../../../chunks/app-bid4cPe4.js";
+export{ST as Breadcrumbs}from"../../../chunks/app-BoICSmRg.js";

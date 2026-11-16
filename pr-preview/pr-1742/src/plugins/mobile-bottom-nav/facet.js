@@ -1,1 +1,1 @@
-export{pT as mobileBottomNavItemsFacet}from"../../../chunks/app-bid4cPe4.js";
+export{pT as mobileBottomNavItemsFacet}from"../../../chunks/app-BoICSmRg.js";

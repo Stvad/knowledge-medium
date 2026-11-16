@@ -1,1 +1,1 @@
-export{vq as referencesDataExtension}from"../../../chunks/app-bid4cPe4.js";
+export{vq as referencesDataExtension}from"../../../chunks/app-BoICSmRg.js";

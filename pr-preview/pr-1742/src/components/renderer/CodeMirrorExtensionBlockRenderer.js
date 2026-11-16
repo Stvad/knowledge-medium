@@ -1,1 +1,1 @@
-export{GI as CodeMirrorExtensionBlockRenderer,KI as ExtensionEditor}from"../../../chunks/app-bid4cPe4.js";
+export{GI as CodeMirrorExtensionBlockRenderer,KI as ExtensionEditor}from"../../../chunks/app-BoICSmRg.js";

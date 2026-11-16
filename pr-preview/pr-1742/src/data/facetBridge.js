@@ -1,1 +1,1 @@
-export{M2 as FacetBridge}from"../../chunks/app-bid4cPe4.js";
+export{M2 as FacetBridge}from"../../chunks/app-BoICSmRg.js";

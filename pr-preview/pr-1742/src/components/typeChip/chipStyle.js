@@ -1,1 +1,1 @@
-export{fN as chipStyle}from"../../../chunks/app-bid4cPe4.js";
+export{fN as chipStyle}from"../../../chunks/app-BoICSmRg.js";

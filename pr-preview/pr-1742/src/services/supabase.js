@@ -1,1 +1,1 @@
-export{bat as hasSupabaseAuthConfig,xat as isAuthCallbackUrl,Sat as readPersistedSession,Cat as sessionUserToAppUser,wat as supabase}from"../../chunks/app-bid4cPe4.js";
+export{bat as hasSupabaseAuthConfig,xat as isAuthCallbackUrl,Sat as readPersistedSession,Cat as sessionUserToAppUser,wat as supabase}from"../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,1 @@
-export{VF as BlockChildren,HF as BlockComponent}from"../../chunks/app-bid4cPe4.js";
+export{VF as BlockChildren,HF as BlockComponent}from"../../chunks/app-BoICSmRg.js";

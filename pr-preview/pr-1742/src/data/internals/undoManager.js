@@ -1,1 +1,1 @@
-export{Q2 as UndoManager}from"../../../chunks/app-bid4cPe4.js";
+export{Q2 as UndoManager}from"../../../chunks/app-BoICSmRg.js";

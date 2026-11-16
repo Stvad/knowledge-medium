@@ -1,1 +1,1 @@
-export{dot as deriveWorkspaceIdNamespace}from"../../../chunks/app-bid4cPe4.js";
+export{dot as deriveWorkspaceIdNamespace}from"../../../chunks/app-BoICSmRg.js";

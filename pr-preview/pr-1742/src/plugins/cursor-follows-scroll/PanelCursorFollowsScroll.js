@@ -1,1 +1,1 @@
-export{VC as PanelCursorFollowsScroll}from"../../../chunks/app-bid4cPe4.js";
+export{VC as PanelCursorFollowsScroll}from"../../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,1 @@
-export{QI as BlockTypeBlockRenderer,$I as BlockTypeContentRenderer,eL as writeBlockTypeLabel}from"../../../chunks/app-bid4cPe4.js";
+export{QI as BlockTypeBlockRenderer,$I as BlockTypeContentRenderer,eL as writeBlockTypeLabel}from"../../../chunks/app-BoICSmRg.js";

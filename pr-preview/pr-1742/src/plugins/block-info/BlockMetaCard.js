@@ -1,1 +1,1 @@
-export{pv as BlockMetaCard}from"../../../chunks/app-bid4cPe4.js";
+export{pv as BlockMetaCard}from"../../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,1 @@
-export{Rot as isChildBackedPropertiesWorkspace}from"../chunks/app-bid4cPe4.js";
+export{Rot as isChildBackedPropertiesWorkspace}from"../chunks/app-BoICSmRg.js";

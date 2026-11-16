@@ -1,1 +1,1 @@
-export{Eat as getOrCreateTypesPage,Dat as typesPageBlockId,Oat as typesPageSpec}from"../../chunks/app-bid4cPe4.js";
+export{Eat as getOrCreateTypesPage,Dat as typesPageBlockId,Oat as typesPageSpec}from"../../chunks/app-BoICSmRg.js";

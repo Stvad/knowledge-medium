@@ -1,1 +1,1 @@
-export{Ch as extensionsOverridesProp,wh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-bid4cPe4.js";
+export{Ch as extensionsOverridesProp,wh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-BoICSmRg.js";

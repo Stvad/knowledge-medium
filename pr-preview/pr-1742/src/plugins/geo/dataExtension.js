@@ -1,1 +1,1 @@
-export{HJ as geoDataExtension}from"../../../chunks/app-bid4cPe4.js";
+export{HJ as geoDataExtension}from"../../../chunks/app-BoICSmRg.js";
