@@ -27,8 +27,12 @@ describe('placeCards', () => {
     expect(placeCards(cards([-900, 40], [-500, 300], [-100, 40]), 1, 8, 1000)).toEqual([-900, 0, 308])
   })
 
-  it('tops a focused card taller than the view at the view’s top', () => {
-    expect(placeCards(cards([200, 1500]), 0, 8, 1000)).toEqual([0])
+  it('tops a focused card taller than the view at the view’s top once its row is above it', () => {
+    expect(placeCards(cards([-200, 1500]), 0, 8, 1000)).toEqual([0])
+  })
+
+  it('leaves a focused card whose row is in view at its row, so activating it never moves it', () => {
+    expect(placeCards(cards([600, 900]), 0, 8, 1000)).toEqual([600])
   })
 
   it('places nothing for no cards', () => {

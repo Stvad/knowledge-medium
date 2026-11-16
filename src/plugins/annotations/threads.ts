@@ -209,15 +209,52 @@ export const createThread = async (
   })
 }
 
-/** The thread root `id` is a comment in: its nearest thread ancestor. */
-const enclosingThread = async (tx: Tx, id: string): Promise<BlockData | null> => {
-  for (let at = (await tx.get(id))?.parentId ?? null; at !== null;) {
-    const block = await tx.get(at)
-    if (!block) return null
-    if (hasBlockType(block, THREAD_TYPE)) return block
-    at = block.parentId
+/** The thread `block` is a comment in, given its ancestors nearest first:
+ *  the nearest thread root above it. Null for a thread root itself, a block
+ *  in no thread, and a property row (or a block inside one), which belongs to
+ *  its owner rather than being a comment. */
+export const commentThreadOf = (block: BlockData, ancestors: readonly BlockData[]): BlockData | null => {
+  if (hasBlockType(block, THREAD_TYPE)) return null
+  for (const at of [block, ...ancestors]) {
+    if (at.isFieldForm === true) return null
+    if (hasBlockType(at, THREAD_TYPE)) return at
   }
   return null
+}
+
+/** `commentThreadOf` as of `tx`. */
+const commentThreadInTx = async (tx: Tx, id: string): Promise<BlockData | null> => {
+  const block = await tx.get(id)
+  if (!block || block.deleted) return null
+  const ancestors: BlockData[] = []
+  for (let at = block.parentId; at !== null && ancestors.length < 100;) {
+    const parent = await tx.get(at)
+    if (!parent) break
+    ancestors.push(parent)
+    if (hasBlockType(parent, THREAD_TYPE)) break
+    at = parent.parentId
+  }
+  return commentThreadOf(block, ancestors)
+}
+
+/** The blocks a comment links by its content. Property edges (credit, typed
+ *  pointers) are not links. */
+export const linkedBlockIds = (comment: Pick<BlockData, 'references'>): string[] =>
+  [...new Set(comment.references.filter(ref => !ref.sourceField).map(ref => ref.id))]
+
+/** Would a thread on `targetId` render inside `commentId`'s own subtree? A
+ *  thread's card renders inside the card of every thread its target is in,
+ *  out to the page, so any hop of that chain inside the comment would put the
+ *  comment inside itself. */
+const rendersInside = async (tx: Tx, targetId: string, commentId: string): Promise<boolean> => {
+  const seen = new Set<string>()
+  for (let at: string | undefined = targetId; at !== undefined && !seen.has(at);) {
+    if (await tx.isDescendantOf(at, commentId)) return true
+    seen.add(at)
+    const thread = await commentThreadInTx(tx, at)
+    at = thread ? threadTargetIdOf(thread) : undefined
+  }
+  return false
 }
 
 export interface MoveToOwnThreadArgs {
@@ -234,19 +271,17 @@ export const moveToOwnThread = async (repo: Repo, {commentId, targetId}: MoveToO
   if (!target) throw missingTarget(targetId)
   const container = await getOrCreateCommentsPage(repo, target.workspaceId)
   return repo.tx(async tx => {
-    const comment = await tx.get(commentId)
-    const thread = comment && !comment.deleted && !hasBlockType(comment, THREAD_TYPE)
-      ? await enclosingThread(tx, commentId)
-      : null
-    if (!comment || !thread) throw new ThreadRefusal('Only a comment in a thread can move to a thread of its own.')
+    const thread = await commentThreadInTx(tx, commentId)
+    if (!thread) throw new ThreadRefusal('Only a comment in a thread can move to a thread of its own.')
     // Its thread would be left with nothing in it. The root's own property
     // rows are not comments.
+    const comment = (await tx.get(commentId))!
     if (comment.parentId === thread.id && (await tx.childrenOf(thread.id, undefined, {propertyChildren: 'none'})).length === 1) {
       throw new ThreadRefusal('This is its thread’s only comment, so it is a thread of its own already.')
     }
     await annotatableTarget(tx, targetId)
-    if (await tx.isDescendantOf(targetId, commentId)) {
-      throw new UnannotatableTargetError('A comment can’t move to a thread on itself or its replies.')
+    if (await rendersInside(tx, targetId, commentId)) {
+      throw new UnannotatableTargetError('A comment can’t move to a thread shown inside itself or its replies.')
     }
     const threadId = await writeThreadRoot(repo, tx, container.id, {targetId, anchor: null})
     await tx.run(move, {id: commentId, parentId: threadId, position: {kind: 'first'}})
@@ -254,18 +289,18 @@ export const moveToOwnThread = async (repo: Repo, {commentId, targetId}: MoveToO
   }, {scope: ChangeScope.BlockDefault, description: 'move comment to its own thread'})
 }
 
-/** The blocks a comment links, by content, on the page its thread is on: the
- *  likely targets for `moveToOwnThread`, in link order. */
+/** The blocks a comment links on the page its thread is on: the likely
+ *  targets for `moveToOwnThread`, in link order. */
 export const ownThreadTargets = async (repo: Repo, commentId: string): Promise<string[]> => {
   const comment = await repo.load(commentId)
   if (!comment) return []
-  const {ancestors} = await repo.query.ancestors({id: commentId}).load()
-  const root = ancestors.find(ancestor => hasBlockType(ancestor, THREAD_TYPE))
-  const threadTarget = root && threadTargetIdOf(root)
+  const pathOf = async (id: string) => (await repo.query.ancestors({id}).load()).ancestors
+  const thread = commentThreadOf(comment, await pathOf(commentId))
+  const threadTarget = thread && threadTargetIdOf(thread)
   if (!threadTarget) return []
-  const pageOf = async (id: string) => (await repo.query.ancestors({id}).load()).ancestors.at(-1)?.id ?? id
+  const pageOf = async (id: string) => (await pathOf(id)).at(-1)?.id ?? id
   const page = await pageOf(threadTarget)
-  const linked = [...new Set(comment.references.filter(ref => !ref.sourceField).map(ref => ref.id))]
+  const linked = linkedBlockIds(comment)
   const onPage = await Promise.all(linked.map(async id => {
     const block = await repo.load(id)
     return !!block && !block.deleted && !hasBlockType(block, THREAD_TYPE) && await pageOf(id) === page

@@ -13,9 +13,11 @@ import {navigate, type NavigatePanelInput} from '@/utils/navigation'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {goToComment} from './commentLinks'
+import {contributorsDataExtension} from '@/plugins/contributors/dataExtension'
+import {attributionCreatorsProp} from '@/plugins/contributors/schema'
 import {annotationsPlugin} from './index'
 import {COMMENT_LINKS_FOR_BLOCK_QUERY} from './queries'
-import {createThread, setThreadStatus} from './threads'
+import {createThread, moveToOwnThread, setThreadStatus} from './threads'
 import {cardRenderScopeId} from './uiStore'
 
 const WS = 'ws'
@@ -31,7 +33,7 @@ afterAll(async () => { await db.cleanup() })
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   await resetTestDb(db.db)
-  repo = createTestRepo({db: db.db, user: USER, extensions: [referencesDataExtension, annotationsPlugin]}).repo
+  repo = createTestRepo({db: db.db, user: USER, extensions: [referencesDataExtension, contributorsDataExtension, annotationsPlugin]}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Draft',
@@ -129,6 +131,10 @@ describe('the comments that link a block', () => {
     await createThread(repo, {targetId: LINKED, anchor: null, comment: `This, ${link}`})
     await repo.mutate.createChild({parentId: 'page', content: `Not a comment: ${link}`})
 
+    // Credit is a property edge, not a link.
+    const credited = await repo.mutate.createChild({parentId: first.commentId!, content: 'plain words'})
+    await repo.tx(tx => tx.setProperty(credited, attributionCreatorsProp, [LINKED]), opts)
+
     await vi.waitFor(async () => expect(await linksOf()).toHaveLength(2))
     expect(new Set(await linksOf())).toEqual(new Set([
       {commentId: reply, threadId: onPage.threadId},
@@ -167,5 +173,48 @@ describe('goToComment', () => {
     await goToComment(repo, panelId, commentId!)
 
     expect(await shownBlocks()).toEqual(['elsewhere'])
+  })
+})
+
+describe('the comments that link a block, as threads change', () => {
+  const LINKED = '6d1f3e0a-2b7c-4c1e-9a55-0f1d2c3b4a59'
+
+  beforeEach(async () => {
+    await repo.tx(tx => tx.create({id: LINKED, workspaceId: WS, parentId: 'page', orderKey: 'a1', content: 'Linked'}), opts)
+  })
+
+  it('follows a reply whose parent comment moves to an open thread', async () => {
+    const resolved = await createThread(repo, {targetId: 'point', anchor: null, comment: 'Parent'})
+    const reply = await repo.mutate.createChild({parentId: resolved.commentId!, content: `See [it](((${LINKED})))`})
+    await repo.mutate.createChild({parentId: resolved.threadId, content: 'Another'})
+    await setThreadStatus(repo, resolved.threadId, 'resolved')
+    const handle = repo.query[COMMENT_LINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: LINKED})
+    const seen: unknown[] = []
+    const stop = handle.subscribe(value => { seen.push(value) })
+    await vi.waitFor(async () => expect(await handle.load()).toEqual([]))
+
+    const moved = await moveToOwnThread(repo, {commentId: resolved.commentId!, targetId: 'elsewhere'})
+
+    await vi.waitFor(() => expect(seen.at(-1)).toEqual([{commentId: reply, threadId: moved}]))
+    stop()
+  })
+})
+
+describe('goToComment in a read-only workspace', () => {
+  it('opens a comment hidden under a collapsed comment instead of expanding it', async () => {
+    await navigate(repo, {blockId: 'page', target: 'main'})
+    const panelId = await shownPanel()
+    // On the page itself, which shows: only the comment above the reply hides it.
+    const {commentId} = await createThread(repo, {targetId: 'page', anchor: null, comment: 'Parent'})
+    const reply = await repo.mutate.createChild({parentId: commentId!, content: 'Reply'})
+    await repo.tx(tx => tx.setProperty(commentId!, isCollapsedProp, true), opts)
+    repo.setReadOnly(true)
+    try {
+      await goToComment(repo, panelId, reply)
+    } finally {
+      repo.setReadOnly(false)
+    }
+    expect((await repo.load(commentId!))!.properties[isCollapsedProp.name]).toBe(true)
+    expect(await shownBlocks()).toEqual([reply])
   })
 })

@@ -25,7 +25,7 @@
  * inline.
  */
 
-import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type RefObject, type WheelEvent} from 'react'
+import {createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode, type RefObject, type SyntheticEvent, type WheelEvent} from 'react'
 import {isEqual} from 'lodash-es'
 import {MessageSquare, X} from 'lucide-react'
 import {EditorView, repositionTooltips} from '@codemirror/view'
@@ -41,6 +41,7 @@ import {PANEL_CONTENT_RIGHT_INSET, PANEL_RIGHT_CLEARANCE, PANEL_TEXT_MIN_WIDTH_P
 import {PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE, PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE, PANEL_LANE_ATTRIBUTE} from '@/utils/panelLanes.js'
 import {DIVIDER_HANDLE_WIDTH_PX, DividerHandle} from '@/components/DividerHandle.js'
 import {shouldScrollFocusedBlockIntoView} from '@/extensions/BlockFocusShellDecorator.js'
+import {isEditorElement} from '@/utils/dom.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
 import {byPlacement, fitColumn, placeCards, scrollToShow} from './placement.ts'
@@ -66,6 +67,8 @@ import {
 const COLUMN_BOUNDS = {min: 240, max: 520}
 const EDGE_PX = 16
 const CARD_GAP_PX = 8
+/** Kept clear at the column's foot for `MarginFooter`'s buttons. */
+const FOOTER_PX = 28
 /** The tallest a card's scrolling body grows, set on the column. */
 const CARD_MAX_HEIGHT_VAR = '--margin-card-max-height'
 
@@ -243,7 +246,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       const style = frameStyle(nextFrame)
       const columnMoved = column.style.left !== style.left || column.style.top !== style.top
       Object.assign(column.style, style)
-      column.style.setProperty(CARD_MAX_HEIGHT_VAR, `${Math.max(0, nextFrame.height - 2 * CARD_GAP_PX)}px`)
+      column.style.setProperty(CARD_MAX_HEIGHT_VAR, `${Math.max(0, nextFrame.height - 2 * CARD_GAP_PX - FOOTER_PX)}px`)
       const columnTop = column.getBoundingClientRect().top
       const anchorTop = (entry: CardEntry, row: Element): number => {
         const rowTop = row.getBoundingClientRect().top
@@ -275,9 +278,10 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         const previousTop = placedTops.get(key)
         placedTops.set(key, tops[i])
         // A card that just became active moves into view; its body scrolls
-        // the other way, so what the pointer was on stays under it.
+        // the other way, as far as it can, to keep what the pointer was on
+        // under it.
         if (key === active && active !== placedActive && previousTop !== undefined) {
-          const body = entry.el.querySelector<HTMLElement>(`[${CARD_BODY_ATTRIBUTE}]`)
+          const body = entry.el.querySelector<HTMLElement>(CARD_BODY_SELECTOR)
           if (body) body.scrollTop += tops[i] - previousTop
         }
         const transform = `translateY(${Math.round(tops[i])}px)`
@@ -374,7 +378,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   // nothing; hand it to the outline, unless a card scrolls it itself.
   const forwardWheel = (event: WheelEvent) => {
     if (event.ctrlKey) return
-    const body = (event.target as Element).closest<HTMLElement>(`[${CARD_BODY_ATTRIBUTE}]`)
+    const body = (event.target as Element).closest<HTMLElement>(CARD_BODY_SELECTOR)
     if (body && canScrollBy(body, event.deltaY)) return
     scrollportRef.current?.scrollBy({top: event.deltaY, left: 0})
   }
@@ -448,6 +452,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
 
 /** Marks a card's scrolling body. */
 const CARD_BODY_ATTRIBUTE = 'data-margin-card-body'
+const CARD_BODY_SELECTOR = `[${CARD_BODY_ATTRIBUTE}]`
 
 /** Can `el` scroll any further `deltaY` (down when positive)? */
 const canScrollBy = (el: HTMLElement, deltaY: number): boolean =>
@@ -487,7 +492,7 @@ const FocusedCardInView = ({panelBlock, columnRef, layout}: {
     if (!shouldScrollFocusedBlockIntoView(content.parentElement, content)) return
     activateThread(panelBlock.id, card.dataset.marginCard)
     layout.current.flush()
-    const body = card.querySelector<HTMLElement>(`[${CARD_BODY_ATTRIBUTE}]`)
+    const body = card.querySelector<HTMLElement>(CARD_BODY_SELECTOR)
     if (body) body.scrollTop += scrollToShow(contentBox(shell), body.getBoundingClientRect(), CARD_GAP_PX)
   }, [focused, panelBlock, columnRef, layout])
   return null
@@ -550,6 +555,11 @@ const MarginRow = ({blockId}: {blockId: string}) => {
   ))
 }
 
+/** Did the event start inside the element handling it, not in a portal of
+ *  one of its descendants? */
+const ownEvent = (event: SyntheticEvent<HTMLElement>): boolean =>
+  event.currentTarget.contains(event.target as Node)
+
 /** Keyboard focus, which can't be aimed at a card that is about to move. A
  *  pointer press can, so it activates on the click, after the press has
  *  landed: pinning on press would move the card out from under it. */
@@ -563,6 +573,8 @@ const isKeyboardFocus = (event: FocusEvent): boolean => {
 
 interface CardSlotProps {
   slotKey: string
+  /** False for a card that only stands in for others, which never sticks. */
+  activates?: boolean
   blockId: string
   order: number
   quote?: RangeAnchor
@@ -570,7 +582,7 @@ interface CardSlotProps {
   children: ReactNode
 }
 
-const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlotProps) => {
+const CardSlot = ({slotKey, activates = true, blockId, order, quote, trailing, children}: CardSlotProps) => {
   const registry = useContext(MarginRegistryContext)!
   // The panel's scope, which the column renders in: the scope of the row.
   const {renderScopeId: rowScope} = useBlockContext()
@@ -585,11 +597,14 @@ const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlot
       ref={ref}
       data-margin-card={slotKey}
       {...{[PANEL_LANE_ANCHOR_BLOCK_ATTRIBUTE]: blockId, [PANEL_LANE_ANCHOR_SCOPE_ATTRIBUTE]: rowScope}}
-      onClick={() => activateThread(registry.panelId, slotKey)}
-      onFocus={event => { if (isKeyboardFocus(event)) activateThread(registry.panelId, slotKey) }}
+      // Only for what is in the card itself: a menu portalled out of it
+      // reaches these handlers through React too.
+      onClick={event => { if (activates && ownEvent(event)) activateThread(registry.panelId, slotKey) }}
+      onFocus={event => { if (activates && ownEvent(event) && isKeyboardFocus(event)) activateThread(registry.panelId, slotKey) }}
       onKeyDown={event => {
-        // Not from an editor, where Escape leaves editing first.
-        if (active && event.key === 'Escape' && !(event.target as Element).closest('.cm-editor')) {
+        // Not one a menu or an editor took, where Escape closes that first.
+        if (active && event.key === 'Escape' && ownEvent(event) && !event.defaultPrevented &&
+          !isEditorElement(event.target as Element)) {
           deactivateThread(registry.panelId)
         }
       }}
@@ -603,7 +618,7 @@ const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlot
     >
       <div
         {...{[CARD_BODY_ATTRIBUTE]: ''}}
-        className="overflow-y-auto overscroll-contain rounded-md"
+        className="overflow-y-auto overflow-x-hidden overscroll-contain rounded-md"
         style={{maxHeight: `var(${CARD_MAX_HEIGHT_VAR})`}}
       >
         {children}
@@ -615,7 +630,7 @@ const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlot
             event.stopPropagation()
             deactivateThread(registry.panelId)
           }}
-          className="absolute -right-1.5 -top-1.5 rounded-full border bg-background p-0.5 text-muted-foreground shadow-sm hover:text-foreground"
+          className="absolute right-1 top-1 z-10 rounded-full border bg-background p-0.5 text-muted-foreground shadow-sm hover:text-foreground"
           aria-label="Release this card to its block"
           title="Release this card to its block (Esc)"
         >
@@ -631,7 +646,7 @@ const CardSlot = ({slotKey, blockId, order, quote, trailing, children}: CardSlot
 const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) => {
   const block = useRepo().block(blockId)
   return (
-    <CardSlot slotKey={`hidden:${blockId}`} blockId={blockId} order={0} trailing>
+    <CardSlot slotKey={`hidden:${blockId}`} activates={false} blockId={blockId} order={0} trailing>
       <button
         type="button"
         onClick={() => { if (block.peekProperty(isCollapsedProp)) void block.set(isCollapsedProp, false) }}

@@ -113,7 +113,7 @@ const useReadOnly = (repo: Repo): boolean =>
 
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
-const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
+export const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
 
 const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
 
@@ -680,8 +680,15 @@ const useOutlineLinked = (block: Block) => {
 
 const decorateComment = cachedContentDecorator(CommentActions, 'WithCommentActions')
 
+/** A property row, or a value row under one, belongs to its owner, not the
+ *  thread: it is not a comment to reply to, delete or move. */
+const isPropertyRow = (ctx: BlockResolveContext): boolean => {
+  const data = ctx.block.peek()
+  return data?.isFieldForm === true || (!!data?.parentId && ctx.repo.block(data.parentId).peek()?.isFieldForm === true)
+}
+
 export const commentActionsContribution: BlockContentDecoratorContribution = ctx =>
-  inCard(ctx.blockContext) && !ctx.types.includes(THREAD_TYPE) ? decorateComment : null
+  inCard(ctx.blockContext) && !ctx.types.includes(THREAD_TYPE) && !isPropertyRow(ctx) ? decorateComment : null
 
 // ──── Bullet menu ────
 

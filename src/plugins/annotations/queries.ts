@@ -1,10 +1,10 @@
 import {z} from 'zod'
-import {defineQuery, type Schema} from '@/data/api'
+import {defineQuery, type Query, type Schema} from '@/data/api'
 import {TYPED_BLOCKS_STRUCTURE_CHANNEL, typedBlocksStructureKey} from '@/data/invalidation'
 import {backlinkSourceIds} from '@/plugins/backlinks/sourceBatch.js'
-import {buildQualifiedBlockColumnsSql} from '@/data/blockSchema'
-import {hasBlockType} from '@/data/properties'
-import {annotationTargetProp, THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
+import {annotationTargetProp, threadIsOpen, threadTargetIdOf} from './schema.ts'
+import {SELECT_LIVE_BLOCKS_SQL} from './scopeThreads.ts'
+import {commentThreadOf, linkedBlockIds} from './threads.ts'
 
 export const THREAD_IDS_FOR_BLOCK_QUERY = 'annotations.threadIdsForBlock'
 
@@ -28,10 +28,9 @@ export const threadIdsForBlockQuery = defineQuery<{workspaceId: string; id: stri
   },
 })
 
-
 export const COMMENT_LINKS_FOR_BLOCK_QUERY = 'annotations.commentLinksForBlock'
 
-/** A comment, in an open thread, that links a block by its content. */
+/** A comment, in an open thread, that links a block. */
 export interface CommentLink {
   commentId: string
   threadId: string
@@ -39,32 +38,13 @@ export interface CommentLink {
 
 const commentLinksSchema: Schema<CommentLink[]> = {parse: input => input as CommentLink[]}
 
-/** From each source up to its nearest thread root, if it has one. Binds the
- *  sources as JSON, then the thread type. */
-const NEAREST_THREAD_SQL = `
-  WITH RECURSIVE up(source_id, id, parent_id, depth) AS (
-    SELECT b.id, b.id, b.parent_id, 0 FROM json_each(?) j JOIN blocks b ON b.id = j.value AND b.deleted = 0
-    UNION ALL
-    SELECT up.source_id, p.id, p.parent_id, up.depth + 1
-      FROM up JOIN blocks p ON p.id = up.parent_id AND p.deleted = 0
-     WHERE up.depth < 100
-  )
-  SELECT up.source_id, up.id AS thread_id, MIN(up.depth) AS depth
-    FROM up JOIN block_types t ON t.block_id = up.id AND t.type = ?
-   GROUP BY up.source_id
-`
-
-const SELECT_LIVE_BLOCKS_SQL = `
-  SELECT ${buildQualifiedBlockColumnsSql('b')}
-    FROM json_each(?) j
-    JOIN blocks b ON b.id = j.value
-   WHERE b.deleted = 0
-`
-
-/** The comments in open threads that link `id`, newest first, except those
- *  in `id`'s own threads, which its comment pill already shows. The block's
- *  mention sources (the backlinks batch), narrowed to comments. */
-export const commentLinksForBlockQuery = defineQuery<{workspaceId: string; id: string}, CommentLink[]>({
+/** The comments in open threads that link `id` (`linkedBlockIds`), newest
+ *  first, except those in `id`'s own threads, which its comment pill already
+ *  shows. The block's mention sources (the backlinks batch), narrowed to
+ *  comments; each one's thread comes from its `core.ancestors`, which keeps
+ *  the walk's invalidation (a comment above it moving, a root resolved). */
+export const commentLinksForBlockQuery: Query<{workspaceId: string; id: string}, CommentLink[]> =
+  defineQuery<{workspaceId: string; id: string}, CommentLink[]>({
   name: COMMENT_LINKS_FOR_BLOCK_QUERY,
   argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
   resultSchema: commentLinksSchema,
@@ -72,27 +52,20 @@ export const commentLinksForBlockQuery = defineQuery<{workspaceId: string; id: s
     if (!workspaceId || !id) return []
     const sources = await backlinkSourceIds(ctx, workspaceId, id)
     if (sources.length === 0) return []
-    for (const source of sources) {
-      // A comment moved into or out of a thread.
-      ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_STRUCTURE_CHANNEL, key: typedBlocksStructureKey(workspaceId, source)})
-    }
-    const nearest = await ctx.db.getAll<{source_id: string; thread_id: string}>(
-      NEAREST_THREAD_SQL, [JSON.stringify(sources), THREAD_TYPE],
-    )
-    if (nearest.length === 0) return []
-    const threadOf = new Map(nearest.map(row => [row.source_id, row.thread_id]))
-    // Its status and target.
-    for (const threadId of threadOf.values()) ctx.depend({kind: 'row', id: threadId})
-    const roots = ctx.hydrateBlocks(await ctx.db.getAll<Record<string, unknown>>(
-      SELECT_LIVE_BLOCKS_SQL, [JSON.stringify([...new Set(threadOf.values())])],
-    ))
-    const shown = new Set(roots
-      .filter(root => hasBlockType(root, THREAD_TYPE) && threadIsOpen(root) && threadTargetIdOf(root) !== id)
-      .map(root => root.id))
-    return sources.flatMap(commentId => {
-      const threadId = threadOf.get(commentId)
-      return threadId !== undefined && commentId !== threadId && shown.has(threadId) ? [{commentId, threadId}] : []
-    })
+    const linking = ctx.hydrateBlocks(await ctx.db.getAll<Record<string, unknown>>(
+      SELECT_LIVE_BLOCKS_SQL, [JSON.stringify(sources)],
+    )).filter(source => linkedBlockIds(source).includes(id))
+    const order = new Map(sources.map((source, i) => [source, i]))
+    const links = await Promise.all(linking.map(async source => {
+      const {ancestors} = await ctx.run('core.ancestors', {id: source.id})
+      const thread = commentThreadOf(source, ancestors)
+      return thread && threadIsOpen(thread) && threadTargetIdOf(thread) !== id
+        ? {commentId: source.id, threadId: thread.id}
+        : null
+    }))
+    return links
+      .filter((link): link is CommentLink => link !== null)
+      .sort((a, b) => order.get(a.commentId)! - order.get(b.commentId)!)
   },
 })
 

@@ -24,10 +24,10 @@ export interface CardBox {
 /** Card tops for `cards`, given in document order, in a view `viewHeight`
  *  tall. Each card sits at its anchor or just below the card above, whichever
  *  is lower. The focused card (an index; -1 for none) stays at its anchor
- *  instead, held inside the view when its row is scrolled away, so it can be
- *  read while the outline scrolls on its own: the cards below it are pushed
- *  down from it, and the cards above it are pushed up, each to just above the
- *  next, so none overlaps it. */
+ *  instead while its row is in view, and at the view's edge once the row is
+ *  scrolled past it, so it can be read while the outline scrolls on its own:
+ *  the cards below it are pushed down from it, and the cards above it are
+ *  pushed up, each to just above the next, so none overlaps it. */
 export const placeCards = (cards: readonly CardBox[], focused: number, gap: number, viewHeight: number): number[] => {
   const tops: number[] = []
   for (const [i, card] of cards.entries()) {
@@ -35,7 +35,7 @@ export const placeCards = (cards: readonly CardBox[], focused: number, gap: numb
   }
   const pinned = cards[focused]
   if (pinned === undefined) return tops
-  tops[focused] = Math.max(0, Math.min(pinned.anchor, viewHeight - pinned.height))
+  tops[focused] = pinned.anchor < 0 ? 0 : pinned.anchor >= viewHeight ? viewHeight - pinned.height : pinned.anchor
   for (let i = focused + 1; i < cards.length; i++) {
     tops[i] = Math.max(cards[i].anchor, tops[i - 1] + cards[i - 1].height + gap)
   }

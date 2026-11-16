@@ -305,6 +305,26 @@ describe('moveToOwnThread', () => {
     await expect(moveToOwnThread(repo, {commentId: commentId!, targetId: C})).rejects.toThrow(ThreadRefusal)
   })
 
+  it('refuses a property row of the thread root, which is not a comment', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    const {threadId} = await reviewThread()
+    const field = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND is_field_form = 1 AND deleted = 0 LIMIT 1', [threadId])
+    const value = await db.db.get<{id: string}>('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1', [field.id])
+    await expect(moveToOwnThread(repo, {commentId: field.id, targetId: C})).rejects.toThrow(ThreadRefusal)
+    await expect(moveToOwnThread(repo, {commentId: value.id, targetId: C})).rejects.toThrow(ThreadRefusal)
+  })
+
+  it('refuses a target whose thread chain runs back inside the comment', async () => {
+    const {point, reply} = await reviewThread()
+    // A thread on the reply, holding a comment Q: a thread on Q would render
+    // inside the reply's card, inside the comment it holds.
+    const onReply = await createThread(repo, {targetId: reply, anchor: null, comment: 'Q'})
+    await expect(moveToOwnThread(repo, {commentId: point, targetId: onReply.commentId!})).rejects.toThrow(ThreadRefusal)
+  })
+
   it('refuses a target inside the comment being moved', async () => {
     const {point, reply} = await reviewThread()
     await expect(moveToOwnThread(repo, {commentId: point, targetId: reply})).rejects.toThrow(ThreadRefusal)

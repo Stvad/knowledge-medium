@@ -135,6 +135,26 @@ describe('createBlockedWikilinkWriteGuard', () => {
     await expect(guard.beforeWrite({type: 'delete_block', id: 'own-comment'})).resolves.toBeUndefined()
   })
 
+  it('lets the agent move what it wrote where credit is stored as property rows under it', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('LIMIT 1')) return [{content: 'a review point', properties_json: '{}'}]
+        if (params?.[0] === 'own-comment') {
+          return [{id: 'field', content: '::((attribution-def))', properties_json: '{}', is_field_form: 1}]
+        }
+        if (params?.[0] === 'field') return [{id: 'value', content: '((page-id-123))', properties_json: '{}'}]
+        return []
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block', id: 'own-comment', parentId: 'new-thread', position: {kind: 'first'},
+    })).resolves.toBeUndefined()
+  })
+
   it('blocks move_block when a tombstoned moved block references a blocked target', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom({
       getBlock: async id => id === 'page-id-123'

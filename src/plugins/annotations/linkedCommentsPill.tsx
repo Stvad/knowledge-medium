@@ -14,6 +14,7 @@ import type {BlockRenderer} from '@/types.js'
 import {reportFailure} from './actions.ts'
 import {goToComment} from './commentLinks.ts'
 import {COMMENT_LINKS_FOR_BLOCK_QUERY, type CommentLink} from './queries.ts'
+import {appliesToOutlineBlock} from './ui.tsx'
 
 const NO_LINKS: readonly CommentLink[] = Object.freeze([])
 
@@ -47,6 +48,6 @@ const LinkedCommentsPill: BlockRenderer = ({block}) => {
 
 const linkedCommentsPillItem: BlockGutterItem = {corner: 'top-right', component: LinkedCommentsPill}
 
-/** Outline blocks only: a comment linking a comment is part of a card. */
+/** Where the comment pill shows. */
 export const linkedCommentsPillContribution: BlockGutterItemContribution = ctx =>
-  ctx.blockContext?.isNestedSurface ? null : linkedCommentsPillItem
+  appliesToOutlineBlock(ctx) ? linkedCommentsPillItem : null

@@ -8,17 +8,17 @@
  * are outlined.
  */
 
-import {ChangeScope} from '@/data/api'
-import {revealChildren} from '@/data/mutators'
-import {focusBlock, isCollapsedProp, topLevelBlockIdProp} from '@/data/properties'
-import {decodeRowProperty} from '@/data/rowProperty'
-import type {BlockData} from '@/data/api'
+import {ChangeScope, type BlockData} from '@/data/api'
 import type {Block} from '@/data/block'
+import {revealChildren} from '@/data/mutators'
+import {focusBlock, isCollapsedProp, topLevelBlockIdProp, uiStateRenderScopeId} from '@/data/properties'
 import type {Repo} from '@/data/repo'
-import {scopeRowBlockId, scopeRowSelector} from '@/extensions/blockInteraction.js'
+import {decodeRowProperty} from '@/data/rowProperty'
 import {navigate, navigationVerb} from '@/utils/navigation'
 import {panelRenderScopeId} from '@/utils/renderScope'
+import {zoomPath} from '@/utils/surfaceZoom'
 import {revealLanding, threadLanding} from './threadNavigation.ts'
+import {linkedBlockIds} from './threads.ts'
 import {isCardRenderScopeId} from './uiStore.ts'
 
 /** Expand what hides `blockId` in the page `panel` shows. False, with
@@ -29,10 +29,9 @@ const revealInPage = async (repo: Repo, panel: Block, blockId: string): Promise<
   const topLevelBlockId = panel.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return false
   if (topLevelBlockId === blockId) return true
-  const {ancestors} = await repo.query.ancestors({id: blockId}).load()
-  const at = ancestors.findIndex(ancestor => ancestor.id === topLevelBlockId)
-  if (at < 0) return false
-  const collapsed = ancestors.slice(0, at).filter(ancestor => decodeRowProperty(ancestor, isCollapsedProp))
+  const path = zoomPath((await repo.query.ancestors({id: blockId}).load()).ancestors, topLevelBlockId)
+  if (!path) return false
+  const collapsed = path.filter(ancestor => decodeRowProperty(ancestor, isCollapsedProp))
   if (collapsed.length === 0) return true
   if (repo.isReadOnly) return false
   await repo.tx(async tx => {
@@ -41,28 +40,30 @@ const revealInPage = async (repo: Repo, panel: Block, blockId: string): Promise<
   return true
 }
 
-const pageScopeOf = (panel: Block): string => panelRenderScopeId(panel.id, panel.peekProperty(topLevelBlockIdProp)!)
-
 export const commentLinkNavigationContribution = navigationVerb.decorator(next => async request => {
   const {repo, input} = request
   if (input.target !== 'panel' || input.origin !== 'follow-link' || !isCardRenderScopeId(input.sourceRenderScopeId)) {
     return next(request)
   }
   const panel = repo.block(input.panelId)
-  // The page itself is a navigation as before: it lands at the top.
-  if (await panel.load() && panel.peekProperty(topLevelBlockIdProp) === input.blockId) return next(request)
+  await panel.load()
+  // A link to the page itself navigates, landing at its top.
+  if (panel.peekProperty(topLevelBlockIdProp) === input.blockId) return next(request)
   if (!await revealInPage(repo, panel, input.blockId)) return next(request)
-  await focusBlock(panel, input.blockId, {renderScopeId: pageScopeOf(panel)})
+  await focusBlock(panel, input.blockId, {renderScopeId: uiStateRenderScopeId(panel, input.blockId)})
   return {panelId: input.panelId, blockId: input.blockId, workspaceId: input.workspaceId}
 }, {source: 'annotations'})
 
 /** Show `commentId` in its card, focused, keeping the page `panelId` shows
- *  when the card's target is on it, else navigating there. */
+ *  when the card's target is on it, else navigating there. A viewer can't
+ *  expand the comments that hide it, so then it opens the comment itself, as
+ *  thread navigation does. */
 export const goToComment = async (repo: Repo, panelId: string, commentId: string): Promise<void> => {
   const landing = await threadLanding(repo, commentId)
   const panel = repo.block(panelId)
-  if (landing && await revealInPage(repo, panel, landing.targetId)) {
-    await revealLanding(repo, panelId, pageScopeOf(panel), landing, commentId)
+  const viewerBlocked = repo.isReadOnly && (landing?.collapsed.length ?? 0) > 0
+  if (landing && !viewerBlocked && await revealInPage(repo, panel, landing.targetId)) {
+    await revealLanding(repo, panelId, uiStateRenderScopeId(panel, landing.targetId), landing, commentId)
     return
   }
   await navigate(repo, {blockId: commentId, target: 'panel', panelId})
@@ -70,24 +71,32 @@ export const goToComment = async (repo: Repo, panelId: string, commentId: string
 
 const LINKED_ATTRIBUTE = 'data-comment-linked'
 
-/** The blocks `comment` links by its content. */
-export const linkedBlockIds = (comment: BlockData): ReadonlySet<string> =>
-  new Set(comment.references.filter(ref => !ref.sourceField).map(ref => ref.id))
+/** How many hovered comments outline each row: a reply's card renders inside
+ *  its parent comment, so both are hovered at once, and they can link the
+ *  same row. */
+const outlinedBy = new WeakMap<Element, number>()
+
+const outline = (el: Element, delta: 1 | -1): void => {
+  const count = (outlinedBy.get(el) ?? 0) + delta
+  outlinedBy.set(el, count)
+  if (count > 0) el.setAttribute(LINKED_ATTRIBUTE, '')
+  else el.removeAttribute(LINKED_ATTRIBUTE)
+}
 
 /** Outline the rows of `panelEl`'s page that `comment` links; returns the
  *  undo. A row's own content is outlined, not its subtree. */
 export const outlineLinkedBlocks = (repo: Repo, panelEl: HTMLElement, comment: BlockData): (() => void) => {
   const panelId = panelEl.dataset.panelId
   const topLevelBlockId = panelId && repo.block(panelId).peekProperty(topLevelBlockIdProp)
-  const linked = linkedBlockIds(comment)
-  if (!panelId || !topLevelBlockId || linked.size === 0) return () => {}
+  if (!panelId || !topLevelBlockId) return () => {}
+  const scope = CSS.escape(panelRenderScopeId(panelId, topLevelBlockId))
   const outlined: Element[] = []
-  for (const row of panelEl.querySelectorAll<HTMLElement>(scopeRowSelector(panelRenderScopeId(panelId, topLevelBlockId)))) {
-    const id = scopeRowBlockId(row)
-    if (!id || !linked.has(id)) continue
+  for (const id of linkedBlockIds(comment)) {
+    const row = panelEl.querySelector(`[data-block-shell][data-block-id="${CSS.escape(id)}"][data-render-scope-id="${scope}"]`)
+    if (!row) continue
     const content = row.querySelector('[data-block-visibility-target="true"]') ?? row
-    content.setAttribute(LINKED_ATTRIBUTE, '')
+    outline(content, 1)
     outlined.push(content)
   }
-  return () => { for (const el of outlined) el.removeAttribute(LINKED_ATTRIBUTE) }
+  return () => { for (const el of outlined) outline(el, -1) }
 }

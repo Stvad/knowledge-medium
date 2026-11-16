@@ -128,10 +128,13 @@ interface DeleteGuardRow {
   properties?: Record<string, unknown>
 }
 
+/** A descendant row to check, or null for none: a property row and its
+ *  values are not checked, since its owner's properties hold the same value
+ *  and are checked there, attribution left out. */
 const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
   if (!row || typeof row !== 'object') return null
-  const {id} = row as {id?: unknown}
-  if (typeof id !== 'string') return null
+  const {id, is_field_form} = row as {id?: unknown, is_field_form?: unknown}
+  if (typeof id !== 'string' || is_field_form === 1) return null
   return {id, ...refsFromSqlRow(row)}
 }
 
@@ -312,7 +315,7 @@ export const createBlockedWikilinkWriteGuard = (
 
     const assertNoBlockedRefsInLiveDescendants = async (rootId: string): Promise<void> => {
       const childRows = await graph.sqlAll(
-        `SELECT id, content, properties_json
+        `SELECT id, content, properties_json, is_field_form
          FROM blocks
         WHERE parent_id = ?
           AND deleted = 0
@@ -331,7 +334,7 @@ export const createBlockedWikilinkWriteGuard = (
         await assertNoBlockedRefs(row.content, row.properties)
 
         const grandchildRows = await graph.sqlAll(
-          `SELECT id, content, properties_json
+          `SELECT id, content, properties_json, is_field_form
              FROM blocks
             WHERE parent_id = ?
               AND deleted = 0
