@@ -1,0 +1,1 @@
+export{$G as adoptOrCreatePropertySchema}from"../../chunks/app-BHYeTG6_.js";

@@ -1,0 +1,1 @@
+export{Pat as DerivedIdNamespaceUnavailableError,Fat as derivedIdNamespaceInTx,Iat as resolveDerivedIdNamespace}from"../../chunks/app-BHYeTG6_.js";

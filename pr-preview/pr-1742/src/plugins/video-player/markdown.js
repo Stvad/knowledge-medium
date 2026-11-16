@@ -1,0 +1,1 @@
+export{WS as videoPlayerMarkdownExtension}from"../../../chunks/app-BHYeTG6_.js";

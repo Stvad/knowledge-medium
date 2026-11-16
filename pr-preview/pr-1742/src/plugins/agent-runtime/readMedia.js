@@ -1,0 +1,1 @@
+export{Sg as readMedia}from"../../../chunks/app-BHYeTG6_.js";

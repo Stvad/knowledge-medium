@@ -1,0 +1,1 @@
+export{cF as dynamicExtensionsExtension}from"../../chunks/app-BHYeTG6_.js";

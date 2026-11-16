@@ -1,0 +1,1 @@
+export{Rot as isChildBackedPropertiesWorkspace}from"../chunks/app-BHYeTG6_.js";

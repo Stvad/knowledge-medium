@@ -1,0 +1,1 @@
+export{my as geoPlugin}from"../../../chunks/app-BHYeTG6_.js";
