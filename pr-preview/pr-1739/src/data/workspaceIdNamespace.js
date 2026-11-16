@@ -1,1 +1,1 @@
-export{Mat as DerivedIdNamespaceUnavailableError,Nat as derivedIdNamespaceInTx,Pat as resolveDerivedIdNamespace}from"../../chunks/app-B5jc0kAM.js";
+export{Mat as DerivedIdNamespaceUnavailableError,Nat as derivedIdNamespaceInTx,Pat as resolveDerivedIdNamespace}from"../../chunks/app-DSLUEkQ2.js";
