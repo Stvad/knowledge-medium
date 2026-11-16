@@ -1,1 +1,0 @@
-export{FK as SuspenseFallback}from"../../../chunks/app-BoICSmRg.js";

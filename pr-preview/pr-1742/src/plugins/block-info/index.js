@@ -1,1 +1,0 @@
-export{fv as blockInfoPlugin}from"../../../chunks/app-BoICSmRg.js";

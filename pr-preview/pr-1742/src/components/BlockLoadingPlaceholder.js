@@ -1,1 +1,0 @@
-export{YF as BlockLoadingPlaceholder}from"../../chunks/app-BoICSmRg.js";

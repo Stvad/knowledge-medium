@@ -1,1 +1,0 @@
-export{D1 as SYNCED_TABLES,O1 as syncedWriteTarget,k1 as writeTargets}from"../../chunks/app-BoICSmRg.js";

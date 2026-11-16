@@ -1,1 +1,0 @@
-export{Vb as richPastePlugin}from"../../../chunks/app-BoICSmRg.js";

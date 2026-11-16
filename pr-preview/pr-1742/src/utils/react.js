@@ -1,1 +1,0 @@
-export{GL as useIsMobile,KL as usePointerCoarse}from"../../chunks/app-BoICSmRg.js";

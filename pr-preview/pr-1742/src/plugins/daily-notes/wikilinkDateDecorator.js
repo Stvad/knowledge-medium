@@ -1,1 +1,0 @@
-export{Gk as dailyDateWikilinkDecorator}from"../../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,0 @@
-export{wT as plainOutlinerPlugin}from"../../../chunks/app-BoICSmRg.js";

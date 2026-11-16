@@ -1,1 +1,0 @@
-export{zH as MOBILE_BREAKPOINT_QUERY,BH as POINTER_COARSE_QUERY,VH as isMobileViewport,HH as isPointerCoarse}from"../../chunks/app-BoICSmRg.js";

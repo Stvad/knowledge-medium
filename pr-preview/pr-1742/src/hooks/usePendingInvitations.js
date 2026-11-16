@@ -1,1 +1,0 @@
-export{oD as usePendingInvitations}from"../../chunks/app-BoICSmRg.js";

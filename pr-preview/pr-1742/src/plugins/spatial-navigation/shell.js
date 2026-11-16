@@ -1,1 +1,0 @@
-export{QC as spatialNavigationShellDecorator}from"../../../chunks/app-BoICSmRg.js";

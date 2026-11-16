@@ -1,1 +1,0 @@
-export{Wj as COMMAND_PALETTE_ACTION_ID,Gj as COMMAND_PALETTE_CONTEXT,Kj as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,qj as commandPaletteActionContext}from"../../../chunks/app-BoICSmRg.js";

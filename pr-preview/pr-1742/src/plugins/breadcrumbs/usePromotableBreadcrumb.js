@@ -1,1 +1,0 @@
-export{vT as usePromotableBreadcrumb}from"../../../chunks/app-BoICSmRg.js";

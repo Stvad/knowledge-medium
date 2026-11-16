@@ -1,1 +1,0 @@
-export{QG as propertyShapeLabel}from"../../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,0 @@
-export{Mat as aliasSeatNamespacesInTx,Nat as resolveAliasSeatNamespaces}from"../../chunks/app-BoICSmRg.js";

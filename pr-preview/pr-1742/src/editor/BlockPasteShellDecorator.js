@@ -1,1 +1,0 @@
-export{XN as BlockPasteShellDecorator,ZN as blockPasteShellDecorator}from"../../chunks/app-BoICSmRg.js";

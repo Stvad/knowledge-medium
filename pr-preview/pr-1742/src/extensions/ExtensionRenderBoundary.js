@@ -1,1 +1,0 @@
-export{Lz as ExtensionRenderBoundary}from"../../chunks/app-BoICSmRg.js";

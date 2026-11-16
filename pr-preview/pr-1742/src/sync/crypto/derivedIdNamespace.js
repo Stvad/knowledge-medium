@@ -1,1 +1,0 @@
-export{dot as deriveWorkspaceIdNamespace}from"../../../chunks/app-BoICSmRg.js";

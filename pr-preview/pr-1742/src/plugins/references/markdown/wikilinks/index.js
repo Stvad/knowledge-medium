@@ -1,1 +1,0 @@
-export{ky as wikilinkMarkdownExtension}from"../../../../../chunks/app-BoICSmRg.js";

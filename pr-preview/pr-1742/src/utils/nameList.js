@@ -1,1 +1,0 @@
-export{G8 as NAMES_IN_A_SENTENCE,K8 as describeNames,q8 as firstFew}from"../../chunks/app-BoICSmRg.js";

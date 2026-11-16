@@ -1,1 +1,0 @@
-export{I1 as omnilinerNamespace}from"../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,0 @@
-export{KG as floatingAnchorFromRect,qG as useAnchoredFloating}from"../../../chunks/app-BoICSmRg.js";

@@ -1,1 +1,0 @@
-export{rq as staticDataExtensions}from"../../chunks/app-BoICSmRg.js";
