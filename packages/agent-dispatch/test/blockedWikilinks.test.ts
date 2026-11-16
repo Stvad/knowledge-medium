@@ -155,6 +155,27 @@ describe('createBlockedWikilinkWriteGuard', () => {
     })).resolves.toBeUndefined()
   })
 
+  it('still blocks a mention written under a property value of a moved block', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('LIMIT 1')) return [{content: 'a review point', properties_json: '{}'}]
+        if (params?.[0] === 'own-comment') {
+          return [{id: 'field', content: '::((some-def))', properties_json: '{}', is_field_form: 1}]
+        }
+        if (params?.[0] === 'field') return [{id: 'value', content: 'a value', properties_json: '{}'}]
+        if (params?.[0] === 'value') return [{id: 'note', content: 'ask [[claude]]', properties_json: '{}'}]
+        return []
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block', id: 'own-comment', parentId: 'new-thread', position: {kind: 'first'},
+    })).rejects.toThrow('references a blocked page')
+  })
+
   it('blocks move_block when a tombstoned moved block references a blocked target', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom({
       getBlock: async id => id === 'page-id-123'

@@ -126,16 +126,20 @@ interface DeleteGuardRow {
   id: string
   content?: string
   properties?: Record<string, unknown>
+  /** A property row, whose children are its values. */
+  fieldForm: boolean
+  /** Not checked: a property row, or a value under one. Its owner's
+   *  properties hold the same value and are checked there, attribution left
+   *  out. What is written under a value is checked like any block. */
+  skip: boolean
 }
 
-/** A descendant row to check, or null for none: a property row and its
- *  values are not checked, since its owner's properties hold the same value
- *  and are checked there, attribution left out. */
-const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
+const deleteGuardRowFromSqlRow = (row: unknown, underFieldRow: boolean): DeleteGuardRow | null => {
   if (!row || typeof row !== 'object') return null
   const {id, is_field_form} = row as {id?: unknown, is_field_form?: unknown}
-  if (typeof id !== 'string' || is_field_form === 1) return null
-  return {id, ...refsFromSqlRow(row)}
+  if (typeof id !== 'string') return null
+  const fieldForm = is_field_form === 1
+  return {id, ...refsFromSqlRow(row), fieldForm, skip: fieldForm || underFieldRow}
 }
 
 export const createBlockedWikilinkWriteGuard = (
@@ -323,7 +327,7 @@ export const createBlockedWikilinkWriteGuard = (
         [rootId],
       )
       const stack = childRows.flatMap(row => {
-        const child = deleteGuardRowFromSqlRow(row)
+        const child = deleteGuardRowFromSqlRow(row, false)
         return child ? [child] : []
       })
       const seen = new Set<string>()
@@ -331,7 +335,7 @@ export const createBlockedWikilinkWriteGuard = (
         const row = stack.pop()!
         if (seen.has(row.id)) continue
         seen.add(row.id)
-        await assertNoBlockedRefs(row.content, row.properties)
+        if (!row.skip) await assertNoBlockedRefs(row.content, row.properties)
 
         const grandchildRows = await graph.sqlAll(
           `SELECT id, content, properties_json, is_field_form
@@ -342,7 +346,7 @@ export const createBlockedWikilinkWriteGuard = (
           [row.id],
         )
         for (const grandchildRow of grandchildRows) {
-          const grandchild = deleteGuardRowFromSqlRow(grandchildRow)
+          const grandchild = deleteGuardRowFromSqlRow(grandchildRow, row.fieldForm)
           if (grandchild) stack.push(grandchild)
         }
       }
