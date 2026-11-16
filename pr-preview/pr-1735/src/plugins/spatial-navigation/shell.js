@@ -1,1 +1,1 @@
-export{XC as spatialNavigationShellDecorator}from"../../../chunks/app-DPTNldf4.js";
+export{ZC as spatialNavigationShellDecorator}from"../../../chunks/app-DN13HoeE.js";

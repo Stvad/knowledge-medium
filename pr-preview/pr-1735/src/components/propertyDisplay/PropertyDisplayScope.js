@@ -1,1 +1,1 @@
-export{NI as PropertyDisplayScope}from"../../../chunks/app-DPTNldf4.js";
+export{PI as PropertyDisplayScope}from"../../../chunks/app-DN13HoeE.js";

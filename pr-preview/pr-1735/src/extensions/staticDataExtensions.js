@@ -1,1 +1,1 @@
-export{tq as staticDataExtensions}from"../../chunks/app-DPTNldf4.js";
+export{nq as staticDataExtensions}from"../../chunks/app-DN13HoeE.js";

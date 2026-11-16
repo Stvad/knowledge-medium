@@ -1,1 +1,1 @@
-export{sP as ExtensionPromptSurface,cP as extensionPromptsExtension}from"../../../chunks/app-DPTNldf4.js";
+export{cP as ExtensionPromptSurface,lP as extensionPromptsExtension}from"../../../chunks/app-DN13HoeE.js";

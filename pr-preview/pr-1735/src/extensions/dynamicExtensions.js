@@ -1,1 +1,1 @@
-export{oF as dynamicExtensionsExtension}from"../../chunks/app-DPTNldf4.js";
+export{sF as dynamicExtensionsExtension}from"../../chunks/app-DN13HoeE.js";

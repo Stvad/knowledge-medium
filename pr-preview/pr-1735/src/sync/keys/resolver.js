@@ -1,1 +1,1 @@
-export{Mat as createSyncResolver,Nat as uploadModeFor}from"../../../chunks/app-DPTNldf4.js";
+export{Nat as createSyncResolver,Pat as uploadModeFor}from"../../../chunks/app-DN13HoeE.js";

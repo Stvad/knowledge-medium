@@ -1,1 +1,1 @@
-export{eo as propertyRowsPlugin}from"../../../chunks/app-DPTNldf4.js";
+export{eo as propertyRowsPlugin}from"../../../chunks/app-DN13HoeE.js";

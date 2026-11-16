@@ -1,1 +1,1 @@
-export{Ub as attachmentsPlugin}from"../../../chunks/app-DPTNldf4.js";
+export{Wb as attachmentsPlugin}from"../../../chunks/app-DN13HoeE.js";

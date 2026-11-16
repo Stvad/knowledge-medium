@@ -1,1 +1,1 @@
-export{wC as onboardingLanding}from"../../../chunks/app-DPTNldf4.js";
+export{TC as onboardingLanding}from"../../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,1 @@
-export{pP as ExtensionPromptDismissalStore,mP as extensionPromptDismissals,hP as useExtensionPromptDismissals}from"../../../chunks/app-DPTNldf4.js";
+export{mP as ExtensionPromptDismissalStore,hP as extensionPromptDismissals,gP as useExtensionPromptDismissals}from"../../../chunks/app-DN13HoeE.js";

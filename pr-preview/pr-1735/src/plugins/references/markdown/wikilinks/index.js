@@ -1,1 +1,1 @@
-export{Dy as wikilinkMarkdownExtension}from"../../../../../chunks/app-DPTNldf4.js";
+export{Oy as wikilinkMarkdownExtension}from"../../../../../chunks/app-DN13HoeE.js";

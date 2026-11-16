@@ -1,1 +1,1 @@
-export{hX as annotationsDataExtension}from"../../../chunks/app-DPTNldf4.js";
+export{gX as annotationsDataExtension}from"../../../chunks/app-DN13HoeE.js";

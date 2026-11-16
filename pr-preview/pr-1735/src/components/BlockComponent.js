@@ -1,1 +1,1 @@
-export{zF as BlockChildren,BF as BlockComponent}from"../../chunks/app-DPTNldf4.js";
+export{BF as BlockChildren,VF as BlockComponent}from"../../chunks/app-DN13HoeE.js";

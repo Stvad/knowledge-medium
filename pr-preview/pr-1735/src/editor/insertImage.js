@@ -1,1 +1,1 @@
-export{Sx as INSERT_IMAGE_ACTION_ID,Cx as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,wx as insertReferences,Tx as pickAndInsertImages,Ex as pickImagesIntoBlock}from"../../chunks/app-DPTNldf4.js";
+export{Cx as INSERT_IMAGE_ACTION_ID,wx as INSERT_IMAGE_NORMAL_MODE_ACTION_ID,Tx as insertReferences,Ex as pickAndInsertImages,Dx as pickImagesIntoBlock}from"../../chunks/app-DN13HoeE.js";

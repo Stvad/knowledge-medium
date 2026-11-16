@@ -1,1 +1,1 @@
-export{qF as BlockLoadingPlaceholder}from"../../chunks/app-DPTNldf4.js";
+export{JF as BlockLoadingPlaceholder}from"../../chunks/app-DN13HoeE.js";

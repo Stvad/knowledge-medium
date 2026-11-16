@@ -1,1 +1,1 @@
-export{ZC as SpatialNavigationShellDecorator}from"../../../chunks/app-DPTNldf4.js";
+export{QC as SpatialNavigationShellDecorator}from"../../../chunks/app-DN13HoeE.js";

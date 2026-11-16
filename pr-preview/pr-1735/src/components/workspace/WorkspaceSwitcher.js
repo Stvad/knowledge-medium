@@ -1,1 +1,1 @@
-export{YT as WorkspaceSwitcher}from"../../../chunks/app-DPTNldf4.js";
+export{XT as WorkspaceSwitcher}from"../../../chunks/app-DN13HoeE.js";

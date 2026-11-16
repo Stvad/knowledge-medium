@@ -1,1 +1,1 @@
-export{Sn as useFrameThemeCss}from"../../../chunks/app-DPTNldf4.js";
+export{Sn as useFrameThemeCss}from"../../../chunks/app-DN13HoeE.js";

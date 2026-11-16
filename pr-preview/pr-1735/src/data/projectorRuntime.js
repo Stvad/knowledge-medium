@@ -1,1 +1,1 @@
-export{B2 as ProjectorRuntime}from"../../chunks/app-DPTNldf4.js";
+export{V2 as ProjectorRuntime}from"../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,1 @@
-export{ub as useIsReadOnly}from"../../chunks/app-DPTNldf4.js";
+export{db as useIsReadOnly}from"../../chunks/app-DN13HoeE.js";

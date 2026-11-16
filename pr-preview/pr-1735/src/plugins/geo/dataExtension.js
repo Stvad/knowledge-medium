@@ -1,1 +1,1 @@
-export{BJ as geoDataExtension}from"../../../chunks/app-DPTNldf4.js";
+export{VJ as geoDataExtension}from"../../../chunks/app-DN13HoeE.js";

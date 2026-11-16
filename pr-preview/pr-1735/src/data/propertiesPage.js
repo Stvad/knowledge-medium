@@ -1,1 +1,1 @@
-export{wat as getOrCreatePropertiesPage,Tat as propertiesPageBlockId,Eat as propertiesPageSpec}from"../../chunks/app-DPTNldf4.js";
+export{Tat as getOrCreatePropertiesPage,Eat as propertiesPageBlockId,Dat as propertiesPageSpec}from"../../chunks/app-DN13HoeE.js";

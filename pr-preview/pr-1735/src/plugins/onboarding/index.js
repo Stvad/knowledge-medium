@@ -1,1 +1,1 @@
-export{qA as EXTENSIONS_PAGE_TITLE,JA as TUTORIAL_DEFAULT_TITLE,YA as TUTORIAL_VIM_TITLE,_C as onboardingPlugin,KA as seedTutorial}from"../../../chunks/app-DPTNldf4.js";
+export{JA as EXTENSIONS_PAGE_TITLE,YA as TUTORIAL_DEFAULT_TITLE,XA as TUTORIAL_VIM_TITLE,vC as onboardingPlugin,qA as seedTutorial}from"../../../chunks/app-DN13HoeE.js";
