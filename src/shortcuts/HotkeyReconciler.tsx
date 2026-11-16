@@ -222,17 +222,20 @@ export function HotkeyReconciler(): null {
     return () => setRunActionDispatcher(null)
   }, [runtime])
 
-  // By-id dispatch shares keyboard/pointer resolution. Supplied dependencies
-  // allow inactive contexts; omitted dependencies use the active contexts.
-  // A requested context restricts every fallback. Callers own native defaults.
+  // Install the supplied-deps by-id dispatcher. Same resolve + run-until-handled
+  // path as keyboard/pointer, but candidates are matched by action id and deps
+  // are SUPPLIED by the caller (the swipe gesture / quick-action menu), so the
+  // action's context need not be keyboard-active. The caller owns native
+  // default-handling (swipe preventDefaults off the boolean return), so no event
+  // options are applied here.
   useEffect(() => {
-    setActionWithDepsDispatcher((actionId, supplied, trigger, context) => {
+    setActionWithDepsDispatcher((actionId, supplied, trigger) => {
       const active = activeRef.current
       const contextConfigsByType = contextConfigsByTypeRef.current
       const ordered = resolve(
-        getEffectiveActions(runtime).filter(action => context === undefined || action.context === context),
+        getEffectiveActions(runtime),
         {active, contextConfigsByType},
-        {kind: supplied === undefined ? 'action' : 'supplied', actionId},
+        {kind: 'supplied', actionId},
       )
       return runOrderedCandidates(
         ordered,

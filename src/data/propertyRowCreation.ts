@@ -1,11 +1,8 @@
 import {adoptOrCreatePropertySchema} from './propertySchemaCreation'
 import type {Block} from './block'
 import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema, type BlockData} from './api'
-import {fieldValueChildren, propertyFieldContent, scalarValueRow, memberKeysFor} from './propertyChildren'
+import {fieldValueChildren, propertyFieldContent, scalarValueRow} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
-import {keyBetween} from './orderKey'
-import type {PropertyChildSlot} from './derivedIds'
-import {mintPropertyChildRow} from './internals/propertyChildMint'
 
 export const fieldRowsFor = (rows: readonly BlockData[], fieldId: string) =>
   rows.filter(row => row.isFieldForm && row.referenceTargetId === fieldId)
@@ -49,29 +46,6 @@ export const choosePropertyField = async (owner: Block, schema: AnyPropertySchem
     const value = memberCodecOf(resolved.codec) ? undefined : scalarValueRow(resolved, values) ?? values[0]
     return {schema: resolved, fieldRowId: field?.id ?? source.id, valueId: value?.id}
   }, {scope: schema.changeScope, description: 'Choose property field'})
-}
-
-/** Both ghost fields and new members appear after the parent's existing children. */
-const appendPropertyRow = async (tx: Tx, parent: Pick<BlockData, 'id' | 'workspaceId'>, content: string, slot: PropertyChildSlot) => {
-  const siblings = await tx.childrenOf(parent.id)
-  return mintPropertyChildRow(tx, {workspaceId: parent.workspaceId, parentId: parent.id,
-    orderKey: keyBetween(siblings.at(-1)?.orderKey ?? null, null), content,
-    references: tx.derivedReferencesFor(content)}, slot)
-}
-
-/** First input is raw block text, including undecodable text. Never rewrite a list cell to append. */
-export const insertPropertyValue = async (owner: Block, requested: AnyPropertySchema, content: string) => {
-  if (content === '') return null
-  if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
-  return owner.repo.tx(async tx => {
-    const {parent, schema, field: existing, values} = await fieldContext(tx, owner, requested)
-    if (!memberCodecOf(schema.codec) && values.length) throw new Error('This property now has a value. Edit its existing row instead.')
-    const field = existing ?? {workspaceId: parent.workspaceId, id: await appendPropertyRow(tx, parent, propertyFieldContent(schema.fieldId), {kind: 'field', fieldId: schema.fieldId})}
-    const keys = memberKeysFor(schema)
-    const valueKey = keys.content(content)
-    const valueId = await appendPropertyRow(tx, field, content, {kind: 'value', valueKey, occurrence: values.filter(row => keys.row(row).key === valueKey).length})
-    return {fieldRowId: field.id, valueId}
-  }, {scope: requested.changeScope, description: 'Enter property value'})
 }
 
 /** Definition and scaffold commit together; a refused conversion leaves no definition. */

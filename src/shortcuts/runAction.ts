@@ -146,9 +146,8 @@ export const runActionByIdSafely = async (
 
 export type DispatchActionWithDepsFn = (
   actionId: string,
-  deps: Partial<BaseShortcutDependencies> | undefined,
+  deps: Partial<BaseShortcutDependencies>,
   trigger: ActionTrigger,
-  context?: ActionContextType,
 ) => boolean
 
 let withDepsDispatcher: DispatchActionWithDepsFn | null = null
@@ -162,7 +161,7 @@ export function setActionWithDepsDispatcher(next: DispatchActionWithDepsFn | nul
 }
 
 /**
- * Run a known action by id with supplied deps (or current active deps when omitted), through the same
+ * Run a known action by id with caller-SUPPLIED deps, through the same
  * `resolve` + run-until-handled path the keyboard and pointer coordinators
  * use. Unlike `runActionById`, the action's context need NOT be keyboard-active
  * — the caller (the swipe gesture, a quick-action menu button) holds the deps,
@@ -170,13 +169,12 @@ export function setActionWithDepsDispatcher(next: DispatchActionWithDepsFn | nul
  * the dispatch boundary (`resolveDeps`); a declining `canDispatch` or a synchronous
  * `false` return falls through like any other candidate.
  *
- * An optional context restricts dispatch and every fallback to that context.
  * Returns true when a candidate handled (or threw), false when none matched or
  * every candidate declined — so the caller can fall back to a default. No-op
  * returning false before the coordinator mounts.
  */
-export const dispatchActionWithDeps: DispatchActionWithDepsFn = (actionId, deps, trigger, context) =>
-  withDepsDispatcher ? withDepsDispatcher(actionId, deps, trigger, context) : false
+export const dispatchActionWithDeps: DispatchActionWithDepsFn = (actionId, deps, trigger) =>
+  withDepsDispatcher ? withDepsDispatcher(actionId, deps, trigger) : false
 
 /**
  * Hook variant for React callers. Re-computes on runtime/activeContexts changes
