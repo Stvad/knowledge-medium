@@ -10,7 +10,7 @@ import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
 import type { Graph, ReplyWriter } from './graph.js'
-import { formatRunUsage, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
+import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
@@ -79,6 +79,7 @@ const logPreview = (content: string | null | undefined): string => {
  *  it to `status:error`. Bounded and short so a genuinely-down bridge fails
  *  fast; retrying is safe because the reconcile is keyed (reconcileReply). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
+const THINKING_DEBOUNCE_MS = 3_000
 
 /** agent:session values are executor-scoped: codex thread ids are stored
  *  as `codex:<id>`, claude session ids bare (anything stored before
@@ -495,7 +496,13 @@ export const createEngine = (deps: EngineDeps) => {
         })
       }
 
-      let lastActivity: string | null = null
+      type Step = {label: string, startedAt: number}
+      const seenSteps = new Set<string>()
+      const pendingSteps = new Map<string, Step>()
+      const oldestPendingStep = () => pendingSteps.values().next().value
+      const writeActivity = (step: Step) => queueWrite(() => graph.setActivity(sourceId, step.label, step.startedAt))
+      let thinkingTimer: ReturnType<typeof setTimeout> | undefined
+      const cancelThinking = () => clearTimeout(thinkingTimer)
       let lastTextWriteMs = 0
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
@@ -504,9 +511,23 @@ export const createEngine = (deps: EngineDeps) => {
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
-          if (event.label === lastActivity) return
-          lastActivity = event.label
-          queueWrite(() => graph.setActivity(sourceId, event.label))
+          if (seenSteps.has(event.stepId)) return
+          seenSteps.add(event.stepId)
+          cancelThinking()
+          const step = {label: event.label, startedAt: now()}
+          pendingSteps.set(event.stepId, step)
+          if (oldestPendingStep() === step) writeActivity(step)
+        } else if (event.kind === 'activity-end') {
+          const previous = oldestPendingStep()
+          pendingSteps.delete(event.stepId)
+          const next = oldestPendingStep()
+          if (next === previous) return
+          if (next) {
+            writeActivity(next)
+          } else {
+            const endedAt = now()
+            thinkingTimer = setTimeout(() => writeActivity({label: THINKING_ACTIVITY, startedAt: endedAt}), THINKING_DEBOUNCE_MS)
+          }
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text
@@ -544,7 +565,12 @@ export const createEngine = (deps: EngineDeps) => {
       }
 
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
-      const result = await runTask(runOptions)
+      let result: AgentRunResult
+      try {
+        result = await runTask(runOptions)
+      } finally {
+        cancelThinking()
+      }
       await writes // ordering guarantee: no progress write races the final one below
       // On every terminal reply, a failed or cancelled run's too: it may have
       // written its memory before it ended.

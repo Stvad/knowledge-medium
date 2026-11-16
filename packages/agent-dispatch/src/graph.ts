@@ -59,7 +59,10 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     if (args.resumeOptions !== undefined && args.resumeOptions !== null) properties[PROPS.resumeOptions] = args.resumeOptions
     if (args.error !== undefined) properties[PROPS.error] = args.error ?? ''
     if (args.attempts !== undefined) properties[PROPS.attempts] = args.attempts
-    if (args.activity !== undefined) properties[PROPS.activity] = args.activity ?? ''
+    if (args.activity !== undefined) {
+      properties[PROPS.activity] = args.activity ?? ''
+      properties[PROPS.activityAt] = args.activity ? args.nowMs : 0
+    }
     // Clear the cancel REQUEST on terminal writes so a satisfied/stale
     // cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
@@ -67,8 +70,8 @@ export const createGraph = (bridgeClient: BridgeClient) => {
   }
 
   /** Transient "what the run is doing now" label. */
-  const setActivity = async (id: string, label: string): Promise<void> => {
-    await writeTaskProps(id, {[PROPS.activity]: label})
+  const setActivity = async (id: string, label: string, nowMs: number): Promise<void> => {
+    await writeTaskProps(id, {[PROPS.activity]: label, [PROPS.activityAt]: nowMs})
   }
 
   /** Persist the run's session id the instant it's known (mid-run). */
