@@ -1,1 +1,1 @@
-export{X2 as ClientContext}from"../../chunks/app-DMs_Devp.js";
+export{B2 as ClientContext}from"../../chunks/app-BHLCMNSw.js";

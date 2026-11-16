@@ -1,1 +1,1 @@
-export{Gb as richPasteDecisionContribution}from"../../../chunks/app-DMs_Devp.js";
+export{zb as richPasteDecisionContribution}from"../../../chunks/app-BHLCMNSw.js";

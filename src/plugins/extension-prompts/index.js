@@ -1,1 +1,1 @@
-export{gP as ExtensionPromptSurface,_P as extensionPromptsExtension}from"../../../chunks/app-DMs_Devp.js";
+export{oP as ExtensionPromptSurface,sP as extensionPromptsExtension}from"../../../chunks/app-BHLCMNSw.js";

@@ -1,1 +1,1 @@
-export{tE as WorkspaceSettingsDialog}from"../../../chunks/app-DMs_Devp.js";
+export{YT as WorkspaceSettingsDialog}from"../../../chunks/app-BHLCMNSw.js";

@@ -1,1 +1,1 @@
-export{Ny as Wikilink}from"../../../../../chunks/app-DMs_Devp.js";
+export{Dy as Wikilink}from"../../../../../chunks/app-BHLCMNSw.js";

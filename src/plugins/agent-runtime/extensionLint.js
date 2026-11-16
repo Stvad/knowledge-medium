@@ -1,1 +1,1 @@
-export{Zh as lintExtensionSource}from"../../../chunks/app-DMs_Devp.js";
+export{Gh as lintExtensionSource}from"../../../chunks/app-BHLCMNSw.js";

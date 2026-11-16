@@ -1,1 +1,1 @@
-export{iO as BlockLink}from"../../../chunks/app-DMs_Devp.js";
+export{QD as BlockLink}from"../../../chunks/app-BHLCMNSw.js";

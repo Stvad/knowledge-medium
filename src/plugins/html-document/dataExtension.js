@@ -1,1 +1,1 @@
-export{bJ as htmlDocumentDataExtension}from"../../../chunks/app-DMs_Devp.js";
+export{uJ as htmlDocumentDataExtension}from"../../../chunks/app-BHLCMNSw.js";

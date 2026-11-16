@@ -1,1 +1,1 @@
-export{ZR as useShortcutSurfaceActivations}from"../../chunks/app-DMs_Devp.js";
+export{VR as useShortcutSurfaceActivations}from"../../chunks/app-BHLCMNSw.js";

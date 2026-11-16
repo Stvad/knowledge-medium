@@ -1,1 +1,1 @@
-export{uq as staticDataExtensions}from"../../chunks/app-DMs_Devp.js";
+export{eq as staticDataExtensions}from"../../chunks/app-BHLCMNSw.js";

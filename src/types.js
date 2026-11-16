@@ -1,1 +1,1 @@
-export{Hot as isChildBackedPropertiesWorkspace}from"../chunks/app-DMs_Devp.js";
+export{Mot as isChildBackedPropertiesWorkspace}from"../chunks/app-BHLCMNSw.js";

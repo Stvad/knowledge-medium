@@ -1,1 +1,0 @@
-export{lo as PropertyPlaceholder}from"../../../chunks/app-DMs_Devp.js";

@@ -1,1 +1,1 @@
-export{hF as dynamicExtensionsExtension}from"../../chunks/app-DMs_Devp.js";
+export{aF as dynamicExtensionsExtension}from"../../chunks/app-BHLCMNSw.js";

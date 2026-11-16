@@ -1,1 +1,1 @@
-export{Ay as referencesMarkdownExtension}from"../../../../chunks/app-DMs_Devp.js";
+export{wy as referencesMarkdownExtension}from"../../../../chunks/app-BHLCMNSw.js";
