@@ -1,1 +1,0 @@
-export{Qq as preferredSpanReplacement}from"../../../chunks/app-DN13HoeE.js";

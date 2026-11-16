@@ -1,1 +1,0 @@
-export{fN as DEFAULT_TYPE_COLORS,pN as defaultTypeColor,mN as pickLeastUsedTypeColor}from"../../chunks/app-DN13HoeE.js";

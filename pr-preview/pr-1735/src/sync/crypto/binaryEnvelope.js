@@ -1,1 +1,0 @@
-export{NE as BINARY_ENVELOPE_MAGIC,PE as BINARY_ENVELOPE_MIN_BYTES,FE as BINARY_ENVELOPE_OVERHEAD_BYTES,IE as BINARY_MAGIC_BYTES,LE as decodeBinaryEnvelope,RE as encodeBinaryEnvelope,zE as hasBinaryEnvelopeMagic}from"../../../chunks/app-DN13HoeE.js";

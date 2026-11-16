@@ -1,1 +1,0 @@
-export{IC as COLEMAK_KEYBINDINGS_PLUGIN_ID,LC as colemakKeybindingsPlugin,RC as colemakMovementKeybindingOverrides}from"../../../chunks/app-DN13HoeE.js";

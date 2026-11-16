@@ -1,1 +1,0 @@
-export{Iz as ExtensionRenderBoundary}from"../../chunks/app-DN13HoeE.js";

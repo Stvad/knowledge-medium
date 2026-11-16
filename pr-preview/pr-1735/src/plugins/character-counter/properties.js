@@ -1,1 +1,0 @@
-export{$Z as RAW_CHARACTER_COUNT_PROFILE_ID,eQ as WORDS_COUNT_PROFILE_ID,tQ as charLimitProp,nQ as charProfileProp,rQ as charScopeProp}from"../../../chunks/app-DN13HoeE.js";

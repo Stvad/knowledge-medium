@@ -1,1 +1,0 @@
-export{V8 as agree,H8 as pluralize}from"../../chunks/app-DN13HoeE.js";

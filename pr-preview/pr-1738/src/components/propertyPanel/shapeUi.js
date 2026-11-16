@@ -1,1 +1,0 @@
-export{JG as PropertyShapeButton,YG as PropertyShapeGlyph}from"../../../chunks/app-CLytBxfm.js";

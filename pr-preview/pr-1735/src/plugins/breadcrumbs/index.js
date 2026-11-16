@@ -1,1 +1,0 @@
-export{ST as BreadcrumbList,yT as BreadcrumbRenderer,xT as Breadcrumbs,vT as PromotableBreadcrumbList,hT as breadcrumbRendererContribution,gT as breadcrumbsPlugin,bT as getBreadcrumbContentPreview,_T as usePromotableBreadcrumb}from"../../../chunks/app-DN13HoeE.js";

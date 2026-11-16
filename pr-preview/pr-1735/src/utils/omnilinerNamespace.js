@@ -1,1 +1,0 @@
-export{P1 as omnilinerNamespace}from"../../chunks/app-DN13HoeE.js";

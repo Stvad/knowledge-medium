@@ -1,1 +1,0 @@
-export{UP as gestureBindingDescriptor,WP as matchesGestureEvent}from"../../chunks/app-CLytBxfm.js";

@@ -1,1 +1,0 @@
-export{Uk as dailyDateWikilinkDecorator}from"../../../chunks/app-CLytBxfm.js";

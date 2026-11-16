@@ -1,1 +1,0 @@
-export{qZ as characterCounterDataExtension}from"../../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{SP as appUpdatePromptExtension}from"../../../chunks/app-DN13HoeE.js";

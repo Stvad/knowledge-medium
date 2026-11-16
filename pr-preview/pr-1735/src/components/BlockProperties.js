@@ -1,1 +1,0 @@
-export{nV as BlockProperties}from"../../chunks/app-DN13HoeE.js";

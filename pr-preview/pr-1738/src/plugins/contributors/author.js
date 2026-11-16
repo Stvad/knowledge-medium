@@ -1,1 +1,0 @@
-export{lg as authorIdOf}from"../../../chunks/app-CLytBxfm.js";

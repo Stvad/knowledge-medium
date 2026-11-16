@@ -1,1 +1,0 @@
-export{af as quotedInFooterContribution}from"../../../chunks/app-CLytBxfm.js";

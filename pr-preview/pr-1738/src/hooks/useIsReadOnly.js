@@ -1,1 +1,0 @@
-export{ub as useIsReadOnly}from"../../chunks/app-CLytBxfm.js";

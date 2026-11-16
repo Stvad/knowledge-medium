@@ -1,1 +1,0 @@
-export{AP as checkForAppUpdate,jP as registerServiceWorker}from"../chunks/app-CLytBxfm.js";

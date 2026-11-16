@@ -1,1 +1,0 @@
-export{YN as BlockPasteShellDecorator,XN as blockPasteShellDecorator}from"../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{bh as extensionApiCatalog,xh as extensionApiRuntimeExports}from"../../chunks/app-CLytBxfm.js";

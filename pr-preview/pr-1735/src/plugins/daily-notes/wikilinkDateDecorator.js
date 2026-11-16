@@ -1,1 +1,0 @@
-export{Wk as dailyDateWikilinkDecorator}from"../../../chunks/app-DN13HoeE.js";

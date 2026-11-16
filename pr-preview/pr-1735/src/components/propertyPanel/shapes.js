@@ -1,1 +1,0 @@
-export{ZG as propertyShapeLabel}from"../../../chunks/app-DN13HoeE.js";

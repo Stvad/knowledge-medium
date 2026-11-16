@@ -1,1 +1,0 @@
-export{VS as videoPlayerPlugin}from"../../../chunks/app-CLytBxfm.js";

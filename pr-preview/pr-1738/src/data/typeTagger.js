@@ -1,1 +1,0 @@
-export{L2 as TypeTagger,R2 as applyTypeTagInTx}from"../../chunks/app-CLytBxfm.js";

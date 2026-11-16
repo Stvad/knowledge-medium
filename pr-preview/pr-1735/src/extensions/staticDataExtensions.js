@@ -1,1 +1,0 @@
-export{nq as staticDataExtensions}from"../../chunks/app-DN13HoeE.js";

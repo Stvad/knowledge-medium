@@ -1,1 +1,0 @@
-export{A2 as FacetBridge}from"../../chunks/app-CLytBxfm.js";

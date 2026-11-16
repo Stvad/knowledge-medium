@@ -1,1 +1,0 @@
-export{Qy as BLOCK_HOLD_GESTURE,$y as BLOCK_HOLD_RECOGNIZER_ID,eb as blockHoldRecognizer}from"../../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{VJ as geoDataExtension}from"../../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{OS as ASSETS_ROOT,kS as InMemoryByteStore,AS as OpfsByteStore,jS as assetPathSegments,MS as createByteStore,NS as getByteStore}from"../../../chunks/app-DN13HoeE.js";

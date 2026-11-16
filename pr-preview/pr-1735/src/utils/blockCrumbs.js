@@ -1,1 +1,0 @@
-export{jO as CRUMB_ELLIPSIS,MO as CRUMB_MAX_CHARS,NO as CRUMB_MAX_SEGMENTS,PO as collapseCrumbs,FO as crumbsFromAncestors}from"../../chunks/app-DN13HoeE.js";

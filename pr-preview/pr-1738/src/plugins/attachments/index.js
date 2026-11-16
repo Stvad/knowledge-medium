@@ -1,1 +1,0 @@
-export{Ub as attachmentsPlugin}from"../../../chunks/app-CLytBxfm.js";

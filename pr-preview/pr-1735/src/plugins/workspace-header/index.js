@@ -1,1 +1,0 @@
-export{OT as WorkspaceSwitcherSidebarSection,kT as pendingInvitationsHeaderItem,AT as workspaceHeaderPlugin,jT as workspaceSwitcherSidebarSection}from"../../../chunks/app-DN13HoeE.js";

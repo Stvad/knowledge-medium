@@ -1,1 +1,0 @@
-export{v6 as kernelDataExtension}from"../../chunks/app-CLytBxfm.js";

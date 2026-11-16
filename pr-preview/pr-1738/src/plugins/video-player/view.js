@@ -1,1 +1,0 @@
-export{lC as DEFAULT_VIDEO_NOTES_PANE_RATIO,uC as VIDEO_NOTES_VIEW_MODE,dC as videoNotesPaneRatioProp}from"../../../chunks/app-CLytBxfm.js";

@@ -1,1 +1,0 @@
-export{bv as backlinksViewPlugin}from"../../../chunks/app-DN13HoeE.js";

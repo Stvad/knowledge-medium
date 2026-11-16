@@ -1,1 +1,0 @@
-export{cP as ExtensionPromptSurface,lP as extensionPromptsExtension}from"../../../chunks/app-DN13HoeE.js";

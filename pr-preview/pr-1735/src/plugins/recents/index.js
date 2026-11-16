@@ -1,1 +1,0 @@
-export{HD as OPEN_RECENTS_ACTION_ID,UD as openRecentsAction,WD as recentsHeaderItem,GD as recentsPlugin}from"../../../chunks/app-DN13HoeE.js";

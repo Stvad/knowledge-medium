@@ -1,1 +1,0 @@
-export{WP as gestureBindingDescriptor,GP as matchesGestureEvent}from"../../chunks/app-DN13HoeE.js";

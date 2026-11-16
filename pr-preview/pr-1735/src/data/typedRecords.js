@@ -1,1 +1,0 @@
-export{yj as adoptTypedBlock,bj as createTypedChild,Iot as derivedBlockId,xj as getOrCreateTypedChild}from"../../chunks/app-DN13HoeE.js";

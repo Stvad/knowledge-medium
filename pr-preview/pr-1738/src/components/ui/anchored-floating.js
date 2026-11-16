@@ -1,1 +1,0 @@
-export{WG as floatingAnchorFromRect,GG as useAnchoredFloating}from"../../../chunks/app-CLytBxfm.js";

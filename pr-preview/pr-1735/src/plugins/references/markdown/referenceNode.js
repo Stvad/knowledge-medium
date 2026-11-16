@@ -1,1 +1,0 @@
-export{My as EmbedComponent,Ny as referenceTargetOf}from"../../../../chunks/app-DN13HoeE.js";

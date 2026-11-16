@@ -1,1 +1,0 @@
-export{qA as EXTENSIONS_PAGE_TITLE,JA as TUTORIAL_DEFAULT_TITLE,YA as TUTORIAL_VIM_TITLE,_C as onboardingPlugin,KA as seedTutorial}from"../../../chunks/app-CLytBxfm.js";

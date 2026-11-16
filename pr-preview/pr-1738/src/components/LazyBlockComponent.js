@@ -1,1 +1,0 @@
-export{VF as LazyBlockComponent}from"../../chunks/app-CLytBxfm.js";

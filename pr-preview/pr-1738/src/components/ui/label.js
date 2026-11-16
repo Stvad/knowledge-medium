@@ -1,1 +1,0 @@
-export{ok as Label}from"../../../chunks/app-CLytBxfm.js";

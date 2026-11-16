@@ -1,1 +1,0 @@
-export{KG as usePropertySchemas}from"../../chunks/app-CLytBxfm.js";

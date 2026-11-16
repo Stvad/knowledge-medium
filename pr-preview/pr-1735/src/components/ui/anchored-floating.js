@@ -1,1 +1,0 @@
-export{GG as floatingAnchorFromRect,KG as useAnchoredFloating}from"../../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{RD as DEFAULT_THEME_ID_DARK,zD as DEFAULT_THEME_ID_LIGHT,CD as defaultThemeContributions,SD as defaultThemesPlugin}from"../../../chunks/app-DN13HoeE.js";

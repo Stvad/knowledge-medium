@@ -1,1 +1,0 @@
-export{_T as usePromotableBreadcrumb}from"../../../chunks/app-DN13HoeE.js";

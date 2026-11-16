@@ -1,1 +1,0 @@
-export{bZ as annotationMarginOpenProp,xZ as annotationMarginShareProp}from"../../../chunks/app-CLytBxfm.js";

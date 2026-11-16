@@ -1,1 +1,0 @@
-export{WT as getOrCreateShortcutsBlock,GT as journalShortcutBlockId,KT as shortcutsBlockId}from"../../../chunks/app-DN13HoeE.js";

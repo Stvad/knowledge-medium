@@ -1,1 +1,0 @@
-export{JN as BlockPasteShellDecorator,YN as blockPasteShellDecorator}from"../../chunks/app-CLytBxfm.js";

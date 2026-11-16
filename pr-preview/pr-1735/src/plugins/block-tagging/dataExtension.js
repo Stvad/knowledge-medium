@@ -1,1 +1,0 @@
-export{Au as blockTaggingDataExtension}from"../../../chunks/app-DN13HoeE.js";

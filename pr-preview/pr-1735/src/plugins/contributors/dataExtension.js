@@ -1,1 +1,0 @@
-export{DZ as contributorsDataExtension}from"../../../chunks/app-DN13HoeE.js";

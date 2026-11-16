@@ -1,1 +1,0 @@
-export{WL as useIsMobile,GL as usePointerCoarse}from"../../chunks/app-DN13HoeE.js";

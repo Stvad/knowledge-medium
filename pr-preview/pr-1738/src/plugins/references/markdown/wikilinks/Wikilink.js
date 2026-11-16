@@ -1,1 +1,0 @@
-export{Oy as Wikilink}from"../../../../../chunks/app-CLytBxfm.js";

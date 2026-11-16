@@ -1,1 +1,0 @@
-export{tq as staticDataExtensions}from"../../chunks/app-CLytBxfm.js";

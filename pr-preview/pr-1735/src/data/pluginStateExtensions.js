@@ -1,1 +1,0 @@
-export{IQ as pluginPrefsExtension,LQ as pluginUIStateExtension}from"../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{Kh as lintExtensionSource}from"../../../chunks/app-CLytBxfm.js";

@@ -1,1 +1,0 @@
-export{qG as usePropertySchemas}from"../../chunks/app-DN13HoeE.js";

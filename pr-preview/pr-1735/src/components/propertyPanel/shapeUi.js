@@ -1,1 +1,0 @@
-export{YG as PropertyShapeButton,XG as PropertyShapeGlyph}from"../../../chunks/app-DN13HoeE.js";

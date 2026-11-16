@@ -1,1 +1,0 @@
-export{XC as spatialNavigationShellDecorator}from"../../../chunks/app-CLytBxfm.js";

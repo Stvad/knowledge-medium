@@ -1,1 +1,0 @@
-export{Wg as buildBlockView,Gg as renderBlockView}from"../../../../chunks/app-DN13HoeE.js";

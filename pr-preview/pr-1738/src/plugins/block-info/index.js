@@ -1,1 +1,0 @@
-export{uv as blockInfoPlugin}from"../../../chunks/app-CLytBxfm.js";

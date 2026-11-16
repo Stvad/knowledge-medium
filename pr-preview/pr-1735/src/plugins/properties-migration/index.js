@@ -1,1 +1,0 @@
-export{Co as migratePropertiesToBlocksAction,yo as propertiesMigrationPlugin}from"../../../chunks/app-DN13HoeE.js";

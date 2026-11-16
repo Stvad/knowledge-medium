@@ -1,1 +1,0 @@
-export{hI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,gI as openExtensionsSettings}from"../../chunks/app-DN13HoeE.js";

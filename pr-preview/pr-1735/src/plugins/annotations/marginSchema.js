@@ -1,1 +1,0 @@
-export{xZ as annotationMarginOpenProp,SZ as annotationMarginShareProp}from"../../../chunks/app-DN13HoeE.js";

@@ -1,1 +1,0 @@
-export{vj as adoptTypedBlock,yj as createTypedChild,Iot as derivedBlockId,bj as getOrCreateTypedChild}from"../../chunks/app-CLytBxfm.js";

@@ -1,1 +1,0 @@
-"use client";export{QB as Collapsible,$B as CollapsibleContent,eV as CollapsibleTrigger}from"../../../chunks/app-DN13HoeE.js";

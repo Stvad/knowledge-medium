@@ -1,1 +1,0 @@
-export{ky as remarkWikilinks}from"../../../../../chunks/app-CLytBxfm.js";

@@ -1,1 +1,0 @@
-export{rut as defineQuery}from"../../../chunks/app-CLytBxfm.js";

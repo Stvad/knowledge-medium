@@ -1,1 +1,0 @@
-export{ky as Wikilink}from"../../../../../chunks/app-DN13HoeE.js";

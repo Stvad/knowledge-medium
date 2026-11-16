@@ -1,1 +1,0 @@
-export{bM as SWIPE_QUICK_ACTIONS_GESTURE_ID,xM as SWIPE_TRIGGER_PX,SM as swipeRecognizer}from"../../../chunks/app-DN13HoeE.js";

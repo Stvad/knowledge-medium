@@ -1,1 +1,0 @@
-export{KZ as characterCounterDataExtension}from"../../../chunks/app-CLytBxfm.js";

@@ -1,1 +1,0 @@
-export{sot as deriveWorkspaceIdNamespace}from"../../../chunks/app-CLytBxfm.js";
