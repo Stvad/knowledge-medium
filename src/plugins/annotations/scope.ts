@@ -31,11 +31,11 @@ import {annotationStatusProp, annotationTargetProp, THREAD_TYPE} from './schema.
  *
  *  The `INDEXED BY` is load-bearing, as on `SUBTREE_SQL` (treeQueries.ts):
  *  without it the workspace equality below leads the planner to scan the
- *  workspace index for every covered row. The anchor step's `CROSS JOIN`s are
- *  load-bearing the same way: they pin the order covered → edge → root, and
- *  left free a large graph's stats lead the planner to drive from `root`,
- *  building an automatic index over every live block per covered row
- *  (scopeJoinOrder.test.ts).
+ *  workspace index for every covered row. The anchor step's first `CROSS JOIN`
+ *  is load-bearing the same way: left free, a large graph's stats lead the
+ *  planner to drive from `root`, building an automatic index over every live
+ *  block per covered row (scopeJoinOrder.test.ts). DEFENCE IN DEPTH: the
+ *  second, which keeps `root` from leading the loop; no current plan needs it.
  *
  *  DEFENCE IN DEPTH: the `workspace_id` equalities. Sync applies parent ids
  *  and rewrites `workspace_id` verbatim, so a covered block's child or
