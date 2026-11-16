@@ -1,0 +1,1 @@
+export{yT as getBreadcrumbContentPreview}from"../../../chunks/app-DPTNldf4.js";

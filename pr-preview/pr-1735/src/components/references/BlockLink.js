@@ -1,0 +1,1 @@
+export{$D as BlockLink}from"../../../chunks/app-DPTNldf4.js";

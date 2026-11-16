@@ -1,0 +1,1 @@
+export{JN as BlockPasteShellDecorator,YN as blockPasteShellDecorator}from"../../chunks/app-DPTNldf4.js";

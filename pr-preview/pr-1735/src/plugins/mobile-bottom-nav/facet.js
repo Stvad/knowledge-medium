@@ -1,0 +1,1 @@
+export{dT as mobileBottomNavItemsFacet}from"../../../chunks/app-DPTNldf4.js";

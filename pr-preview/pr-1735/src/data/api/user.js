@@ -1,0 +1,1 @@
+export{Xlt as SYSTEM_AUTHOR_PREFIX,Zlt as isSystemAuthor,Qlt as systemAuthor}from"../../../chunks/app-DPTNldf4.js";

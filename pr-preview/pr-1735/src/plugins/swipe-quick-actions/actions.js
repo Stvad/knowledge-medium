@@ -1,0 +1,1 @@
+export{RM as DEFAULT_QUICK_ACTION_ITEMS,zM as SWIPE_RIGHT_BLOCK_ACTION_ID,BM as isQuickActionItem,VM as quickActionItemsFacet}from"../../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{DS as ASSETS_ROOT,OS as InMemoryByteStore,kS as OpfsByteStore,AS as assetPathSegments,jS as createByteStore,MS as getByteStore}from"../../../chunks/app-DPTNldf4.js";

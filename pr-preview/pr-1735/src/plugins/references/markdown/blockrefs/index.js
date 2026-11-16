@@ -1,0 +1,1 @@
+export{Ay as blockrefMarkdownExtension}from"../../../../../chunks/app-DPTNldf4.js";

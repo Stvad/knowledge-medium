@@ -1,0 +1,1 @@
+export{I2 as TypeTagger,L2 as applyTypeTagInTx}from"../../chunks/app-DPTNldf4.js";

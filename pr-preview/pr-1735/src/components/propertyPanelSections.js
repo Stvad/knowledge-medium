@@ -1,0 +1,1 @@
+export{TV as buildPropertyPanelSections}from"../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{rQ as backlinksDataExtension}from"../../../chunks/app-DPTNldf4.js";

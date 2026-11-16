@@ -1,0 +1,1 @@
+export{cg as authorIdOf}from"../../../chunks/app-DPTNldf4.js";

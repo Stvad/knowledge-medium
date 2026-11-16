@@ -1,0 +1,1 @@
+export{xat as getOrCreateTypesPage,Sat as typesPageBlockId,Cat as typesPageSpec}from"../../chunks/app-DPTNldf4.js";

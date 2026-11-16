@@ -1,0 +1,1 @@
+export{ZG as adoptOrCreatePropertySchema}from"../../chunks/app-DPTNldf4.js";

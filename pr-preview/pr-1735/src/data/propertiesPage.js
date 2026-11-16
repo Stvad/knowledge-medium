@@ -1,0 +1,1 @@
+export{wat as getOrCreatePropertiesPage,Tat as propertiesPageBlockId,Eat as propertiesPageSpec}from"../../chunks/app-DPTNldf4.js";

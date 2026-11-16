@@ -1,0 +1,1 @@
+export{KZ as characterCounterDataExtension}from"../../../chunks/app-DPTNldf4.js";

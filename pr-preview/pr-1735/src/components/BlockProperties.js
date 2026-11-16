@@ -1,0 +1,1 @@
+export{tV as BlockProperties}from"../../chunks/app-DPTNldf4.js";

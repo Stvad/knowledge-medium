@@ -1,0 +1,1 @@
+export{UT as getOrCreateShortcutsBlock,WT as journalShortcutBlockId,GT as shortcutsBlockId}from"../../../chunks/app-DPTNldf4.js";

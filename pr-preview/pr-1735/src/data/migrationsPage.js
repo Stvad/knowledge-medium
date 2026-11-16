@@ -1,0 +1,1 @@
+export{mit as MIGRATIONS_PAGE_ALIAS,hit as getOrCreateMigrationsPage,git as migrationsPageBlockId,_it as migrationsPageSpec}from"../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{Mat as createSyncResolver,Nat as uploadModeFor}from"../../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{dv as BlockMetaCard}from"../../../chunks/app-DPTNldf4.js";

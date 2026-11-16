@@ -1,0 +1,1 @@
+export{BJ as geoDataExtension}from"../../../chunks/app-DPTNldf4.js";

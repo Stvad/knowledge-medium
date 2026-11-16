@@ -1,0 +1,1 @@
+export{Y2 as UndoManager}from"../../../chunks/app-DPTNldf4.js";

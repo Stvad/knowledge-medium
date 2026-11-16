@@ -1,0 +1,1 @@
+export{bo as MigrationGate}from"../../../chunks/app-DPTNldf4.js";

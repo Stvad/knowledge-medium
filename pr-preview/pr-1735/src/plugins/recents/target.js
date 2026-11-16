@@ -1,0 +1,1 @@
+export{rO as openRecentsPage}from"../../../chunks/app-DPTNldf4.js";

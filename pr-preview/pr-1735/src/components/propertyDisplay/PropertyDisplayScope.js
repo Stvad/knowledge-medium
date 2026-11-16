@@ -1,0 +1,1 @@
+export{NI as PropertyDisplayScope}from"../../../chunks/app-DPTNldf4.js";

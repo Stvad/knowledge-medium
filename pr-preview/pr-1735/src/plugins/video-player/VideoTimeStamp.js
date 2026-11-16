@@ -1,0 +1,1 @@
+export{GS as default}from"../../../chunks/app-DPTNldf4.js";

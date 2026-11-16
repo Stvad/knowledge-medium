@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-DPTNldf4.js";

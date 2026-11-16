@@ -1,0 +1,1 @@
+export{Yut as CHANGE_SCOPE_POLICIES,Xut as ChangeScope,Zut as isChangeScope,Qut as policyForScope,$ut as scopeAllowedInReadOnly,edt as scopeIsUndoable,tdt as scopePoliciesEquivalent,ndt as scopeUploadsToServer,rdt as sourceForScope}from"../../../chunks/app-DPTNldf4.js";

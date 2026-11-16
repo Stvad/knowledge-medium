@@ -1,0 +1,1 @@
+export{yv as backlinksViewPlugin}from"../../../chunks/app-DPTNldf4.js";

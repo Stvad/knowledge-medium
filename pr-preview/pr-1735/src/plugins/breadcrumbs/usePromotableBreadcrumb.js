@@ -1,0 +1,1 @@
+export{gT as usePromotableBreadcrumb}from"../../../chunks/app-DPTNldf4.js";

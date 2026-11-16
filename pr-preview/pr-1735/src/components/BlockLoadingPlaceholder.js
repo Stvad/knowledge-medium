@@ -1,0 +1,1 @@
+export{qF as BlockLoadingPlaceholder}from"../../chunks/app-DPTNldf4.js";

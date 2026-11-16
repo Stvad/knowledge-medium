@@ -1,0 +1,1 @@
+export{ok as Label}from"../../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{f_ as boundDisplayId,p_ as idMark}from"../../../../chunks/app-DPTNldf4.js";

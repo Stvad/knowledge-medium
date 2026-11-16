@@ -1,0 +1,1 @@
+export{UP as gestureBindingDescriptor,WP as matchesGestureEvent}from"../../chunks/app-DPTNldf4.js";

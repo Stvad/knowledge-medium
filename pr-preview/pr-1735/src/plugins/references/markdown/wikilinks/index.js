@@ -1,0 +1,1 @@
+export{Dy as wikilinkMarkdownExtension}from"../../../../../chunks/app-DPTNldf4.js";

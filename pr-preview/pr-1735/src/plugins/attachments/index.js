@@ -1,0 +1,1 @@
+export{Ub as attachmentsPlugin}from"../../../chunks/app-DPTNldf4.js";

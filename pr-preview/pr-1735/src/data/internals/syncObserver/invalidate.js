@@ -1,0 +1,1 @@
+export{a6 as applySyncInvalidation}from"../../../../chunks/app-DPTNldf4.js";

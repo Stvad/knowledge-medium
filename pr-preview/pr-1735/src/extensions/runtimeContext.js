@@ -1,0 +1,1 @@
+export{QG as AppRuntimeContextProvider,$G as useAppRuntime}from"../../chunks/app-DPTNldf4.js";

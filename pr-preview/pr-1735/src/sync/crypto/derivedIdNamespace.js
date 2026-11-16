@@ -1,0 +1,1 @@
+export{oot as deriveWorkspaceIdNamespace}from"../../../chunks/app-DPTNldf4.js";

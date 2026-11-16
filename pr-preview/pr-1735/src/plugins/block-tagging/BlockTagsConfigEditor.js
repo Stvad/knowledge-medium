@@ -1,0 +1,1 @@
+export{Ou as BlockTagsConfigEditor}from"../../../chunks/app-DPTNldf4.js";

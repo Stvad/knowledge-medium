@@ -1,0 +1,1 @@
+export{Sp as confirmThreadDeletion}from"../../../chunks/app-DPTNldf4.js";

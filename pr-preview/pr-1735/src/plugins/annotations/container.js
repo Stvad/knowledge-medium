@@ -1,0 +1,1 @@
+export{SZ as COMMENTS_PAGE_ALIAS,CZ as commentsPageBlockId,wZ as commentsPageSpec,TZ as getOrCreateCommentsPage}from"../../../chunks/app-DPTNldf4.js";

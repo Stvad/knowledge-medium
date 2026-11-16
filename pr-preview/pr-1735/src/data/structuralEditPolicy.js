@@ -1,0 +1,1 @@
+export{RN as resolveStructuralEditPolicy,zN as structuralEditPolicyForBlock}from"../../chunks/app-DPTNldf4.js";

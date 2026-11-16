@@ -1,0 +1,1 @@
+export{Ts as dataIntegrityPlugin}from"../../../chunks/app-DPTNldf4.js";

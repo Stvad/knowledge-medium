@@ -1,0 +1,1 @@
+export{B8 as agree,V8 as pluralize}from"../../chunks/app-DPTNldf4.js";

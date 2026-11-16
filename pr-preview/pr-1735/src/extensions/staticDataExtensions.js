@@ -1,0 +1,1 @@
+export{tq as staticDataExtensions}from"../../chunks/app-DPTNldf4.js";

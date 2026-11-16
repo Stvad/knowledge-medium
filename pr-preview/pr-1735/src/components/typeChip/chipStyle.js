@@ -1,0 +1,1 @@
+export{uN as chipStyle}from"../../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{eN as BlockEmbed}from"../../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{D2 as Repo}from"../../chunks/app-DPTNldf4.js";

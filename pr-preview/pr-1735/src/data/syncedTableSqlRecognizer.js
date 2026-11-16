@@ -1,0 +1,1 @@
+export{w1 as SYNCED_TABLES,T1 as syncedWriteTarget,E1 as writeTargets}from"../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{tO as useMinuteClock}from"../../chunks/app-DPTNldf4.js";

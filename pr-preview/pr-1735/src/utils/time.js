@@ -1,0 +1,1 @@
+export{KS as hmsToSeconds}from"../../chunks/app-DPTNldf4.js";

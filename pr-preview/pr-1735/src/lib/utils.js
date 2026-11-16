@@ -1,0 +1,1 @@
+export{w2 as cn}from"../../chunks/app-DPTNldf4.js";

@@ -1,0 +1,1 @@
+export{KG as usePropertySchemas}from"../../chunks/app-DPTNldf4.js";

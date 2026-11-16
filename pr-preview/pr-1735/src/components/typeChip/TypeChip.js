@@ -1,0 +1,1 @@
+export{lN as TypeChip}from"../../../chunks/app-DPTNldf4.js";

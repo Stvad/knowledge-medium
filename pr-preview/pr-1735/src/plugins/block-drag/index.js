@@ -1,0 +1,1 @@
+export{eb as blockDragPlugin}from"../../../chunks/app-DPTNldf4.js";

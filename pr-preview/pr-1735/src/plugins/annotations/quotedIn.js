@@ -1,0 +1,1 @@
+export{af as quotedInFooterContribution}from"../../../chunks/app-DPTNldf4.js";

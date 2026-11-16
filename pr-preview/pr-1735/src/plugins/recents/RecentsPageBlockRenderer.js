@@ -1,0 +1,1 @@
+export{GD as RecentsList,KD as RecentsPageBlockRenderer}from"../../../chunks/app-DPTNldf4.js";

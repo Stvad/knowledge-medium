@@ -1,0 +1,1 @@
+export{fJ as htmlDocumentTypeSeed}from"../../../chunks/app-DPTNldf4.js";

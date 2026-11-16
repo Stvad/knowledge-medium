@@ -1,0 +1,1 @@
+export{ub as useIsReadOnly}from"../../chunks/app-DPTNldf4.js";

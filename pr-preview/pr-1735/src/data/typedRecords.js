@@ -1,0 +1,1 @@
+export{vj as adoptTypedBlock,yj as createTypedChild,Fot as derivedBlockId,bj as getOrCreateTypedChild}from"../../chunks/app-DPTNldf4.js";

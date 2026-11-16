@@ -1,0 +1,1 @@
+export{NK as SuspenseFallback}from"../../../chunks/app-DPTNldf4.js";

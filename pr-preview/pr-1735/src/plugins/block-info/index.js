@@ -1,0 +1,1 @@
+export{uv as blockInfoPlugin}from"../../../chunks/app-DPTNldf4.js";

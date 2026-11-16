@@ -1,0 +1,1 @@
+export{dJ as htmlDocumentDataExtension}from"../../../chunks/app-DPTNldf4.js";

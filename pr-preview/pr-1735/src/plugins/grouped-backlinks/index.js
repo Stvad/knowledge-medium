@@ -1,0 +1,1 @@
+export{bv as groupedBacklinksPlugin}from"../../../chunks/app-DPTNldf4.js";

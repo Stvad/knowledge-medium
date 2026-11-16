@@ -1,0 +1,1 @@
+export{Oy as Wikilink}from"../../../../../chunks/app-DPTNldf4.js";

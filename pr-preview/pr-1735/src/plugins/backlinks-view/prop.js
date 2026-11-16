@@ -1,0 +1,1 @@
+export{Iv as DEFAULT_BACKLINKS_VIEW_ID,Lv as FLAT_BACKLINKS_VIEW_ID,Rv as GROUPED_BACKLINKS_VIEW_ID,zv as backlinksViewProp,Bv as defaultBacklinksViewIdForBlock}from"../../../chunks/app-DPTNldf4.js";

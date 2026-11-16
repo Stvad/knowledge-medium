@@ -1,0 +1,1 @@
+export{NW as isIOS,PW as isMacPlatform}from"../../chunks/app-DPTNldf4.js";

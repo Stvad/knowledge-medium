@@ -1,0 +1,1 @@
+export{ky as remarkWikilinks}from"../../../../../chunks/app-DPTNldf4.js";

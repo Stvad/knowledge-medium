@@ -1,0 +1,1 @@
+export{iF as resolveAppRuntime,aF as resolveAppRuntimeSync}from"../../chunks/app-DPTNldf4.js";

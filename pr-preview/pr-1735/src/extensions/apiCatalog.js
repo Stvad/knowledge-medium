@@ -1,0 +1,1 @@
+export{yh as extensionApiCatalog,bh as extensionApiRuntimeExports}from"../../chunks/app-DPTNldf4.js";

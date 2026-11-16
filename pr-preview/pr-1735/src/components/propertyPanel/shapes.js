@@ -1,0 +1,1 @@
+export{XG as propertyShapeLabel}from"../../../chunks/app-DPTNldf4.js";

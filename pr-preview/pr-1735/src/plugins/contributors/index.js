@@ -1,0 +1,1 @@
+export{Cm as contributorsPlugin}from"../../../chunks/app-DPTNldf4.js";

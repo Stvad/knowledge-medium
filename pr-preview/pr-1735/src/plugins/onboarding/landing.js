@@ -1,0 +1,1 @@
+export{wC as onboardingLanding}from"../../../chunks/app-DPTNldf4.js";

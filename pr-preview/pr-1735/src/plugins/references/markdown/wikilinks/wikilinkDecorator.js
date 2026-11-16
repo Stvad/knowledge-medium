@@ -1,0 +1,1 @@
+export{Gk as isWikilinkDisplayParts,Kk as resolveWikilinkDisplay,qk as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-DPTNldf4.js";
