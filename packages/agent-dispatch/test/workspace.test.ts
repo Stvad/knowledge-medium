@@ -27,10 +27,12 @@ describe('workspaceTmpDir', () => {
   })
 })
 
+/** A scratch folder per test, for the tests that touch the disk. */
+let parent: string
+beforeEach(async () => { parent = await fsp.mkdtemp(path.join(os.tmpdir(), 'km-ws-')) })
+afterEach(async () => { await fsp.rm(parent, {recursive: true, force: true}) })
+
 describe('ensurePrivateDir', () => {
-  let parent: string
-  beforeEach(async () => { parent = await fsp.mkdtemp(path.join(os.tmpdir(), 'km-ws-tmp-')) })
-  afterEach(async () => { await fsp.rm(parent, {recursive: true, force: true}) })
 
   it('creates it readable by this user alone, and accepts it again', async () => {
     const dir = path.join(parent, 'kmd')
@@ -54,9 +56,6 @@ describe('ensurePrivateDir', () => {
 })
 
 describe('resolveWorkspaceCwd', () => {
-  let parent: string
-  beforeEach(async () => { parent = await fsp.mkdtemp(path.join(os.tmpdir(), 'km-ws-cwd-')) })
-  afterEach(async () => { await fsp.rm(parent, {recursive: true, force: true}) })
 
   it('creates the folder, and the root on a watcher\'s first run, and names it by its real path', async () => {
     const root = path.join(parent, 'root')

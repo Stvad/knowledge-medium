@@ -56,6 +56,13 @@ export const resolveWorkspaceCwd = async (root: string, cwd: string): Promise<st
   return fsp.realpath(cwd)
 }
 
+/** What must exist before a workspace run spawns: its private temp dir and its folder
+ *  (the root when there is no thread). Returns the folder's real path. */
+export const prepareWorkspaceRun = async ({root}: RunWorkspace, cwd?: string): Promise<string> => {
+  await ensurePrivateDir(workspaceTmpDir(root))
+  return resolveWorkspaceCwd(root, cwd ?? root)
+}
+
 /** Claude Code's temp dir for a workspace run (`CLAUDE_CODE_TMPDIR`). It must stay
  *  short: past roughly 30 characters, sandboxed commands get a temp dir under the
  *  shared `/tmp/claude-<uid>` instead, which every Claude session on the machine uses. */

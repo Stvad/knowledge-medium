@@ -17,8 +17,7 @@
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox, RunWorkspace } from './config.js'
 import {
-  ensurePrivateDir, resolveWorkspaceCwd, WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceEnv, workspaceSettings,
-  workspaceSystemPrompt, workspaceTmpDir,
+  prepareWorkspaceRun, WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceEnv, workspaceSettings, workspaceSystemPrompt,
 } from './workspace.js'
 
 export const THINKING_ACTIVITY = 'Thinking'
@@ -157,8 +156,9 @@ export const BILLING_ENV_DENYLIST = [
   'CLAUDE_CODE_USE_FOUNDRY',
 ] as const
 
-/** Subscription sign-in a run may carry in its environment (`claude setup-token`). */
-const SUBSCRIPTION_AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN'] as const
+/** Every credential Claude Code may take from its environment: the billing ones and a
+ *  subscription sign-in (`claude setup-token`). They reach Claude Code and never Bash. */
+const CLAUDE_CREDENTIAL_ENV = [...BILLING_ENV_DENYLIST, 'CLAUDE_CODE_OAUTH_TOKEN'] as const
 
 export const scrubEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   const scrubbed = {...env}
@@ -209,7 +209,7 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
     args.push(
       '--restricted',
       '--add-dir', workspace.root,
-      '--settings', JSON.stringify(workspaceSettings(workspace, [...BILLING_ENV_DENYLIST, ...SUBSCRIPTION_AUTH_ENV])),
+      '--settings', JSON.stringify(workspaceSettings(workspace, CLAUDE_CREDENTIAL_ENV)),
       '--append-system-prompt', workspaceSystemPrompt(workspace, options.cwd ?? workspace.root),
     )
   }
@@ -421,34 +421,23 @@ export const runClaude = async (
   spawnImpl?: SpawnImpl,
 ): Promise<AgentRunResult> => {
   const args = buildClaudeArgs(options)
-  const env = options.env ?? process.env
-  let cwd = options.cwd
-  // Set when a workspace run reports a working directory other than its folder.
-  let strayCwd: string | null = null
+  const env = envForBilling(options.env ?? process.env, options.billing)
+  const {workspace} = options
+  const workspaceCwd = workspace && await prepareWorkspaceRun(workspace, options.cwd)
+  // A folder swapped for a link between that check and the spawn: Claude Code reports
+  // where it really started before its first request, so stop it there.
   const stray = new AbortController()
-  if (options.workspace) {
-    await ensurePrivateDir(workspaceTmpDir(options.workspace.root))
-    cwd = await resolveWorkspaceCwd(options.workspace.root, options.cwd ?? options.workspace.root)
-  }
-  const workspaceCwd = options.workspace ? cwd : undefined
-  // A folder swapped for a link between the check above and the spawn: Claude Code
-  // reports where it really started before its first request, so stop it there.
-  const parser = createStreamJsonParser(options.onEvent, init => {
-    if (workspaceCwd === undefined || init.cwd === workspaceCwd) return
-    strayCwd = String(init.cwd)
-    stray.abort()
+  const parser = createStreamJsonParser(options.onEvent, workspaceCwd === undefined ? undefined : init => {
+    if (init.cwd !== workspaceCwd) stray.abort('workspace: the run did not start in its thread folder; stopped it')
   })
 
   const {exitCode, timedOut, stderr} = await runJsonlProcess({
     bin: options.claudeBin,
     args,
     prompt: options.prompt,
-    cwd,
-    env: options.workspace
-      ? workspaceEnv(env, options.workspace.root, [
-        ...SUBSCRIPTION_AUTH_ENV, ...(options.billing === 'api' ? BILLING_ENV_DENYLIST : []),
-      ])
-      : envForBilling(env, options.billing),
+    cwd: workspaceCwd ?? options.cwd,
+    // The billing scrub has already run, so only the credentials it kept are passed on.
+    env: workspace ? workspaceEnv(env, workspace.root, CLAUDE_CREDENTIAL_ENV) : env,
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
     signal: options.signal ? AbortSignal.any([options.signal, stray.signal]) : stray.signal,
@@ -465,7 +454,7 @@ export const runClaude = async (
     sessionId: parser.sessionId(),
     exitCode,
     timedOut,
-    stderr: strayCwd !== null ? `workspace: the run did not start in its thread folder; stopped it\n${stderr}` : stderr,
+    stderr: stray.signal.aborted ? `${String(stray.signal.reason)}\n${stderr}` : stderr,
     raw: parsed?.raw ?? null,
     usage: claudeUsageFrom(parsed?.raw ?? null),
   }

@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it} from 'vitest'
 import {spawn} from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -501,9 +501,15 @@ describe('runClaude', () => {
     expect(result.resultText).toBe('sk-live')
   })
 
-  it('in a workspace, creates its folder and passes only the workspace environment', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'km-runner-ws-'))
-    try {
+  describe('in a workspace', () => {
+    let root: string
+    beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'km-runner-ws-')) })
+    afterEach(async () => {
+      await fs.rm(root, {recursive: true, force: true})
+      await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
+    })
+
+    it('creates its folder and passes only the workspace environment', async () => {
       const cwd = path.join(root, 'threads', 'b1')
       const result = await runClaude(
         {...baseOptions, cwd, workspace: {root, allowedDomains: []}, env: {...process.env, GITHUB_TOKEN: 'ghp-leak', CLAUDE_CODE_OAUTH_TOKEN: 'oauth'}},
@@ -513,16 +519,10 @@ describe('runClaude', () => {
       )
       // The subscription sign-in still reaches Claude Code; the settings hide it from Bash.
       expect(JSON.parse(result.resultText)).toEqual([await fs.realpath(cwd), null, workspaceTmpDir(root), 'oauth'])
-    } finally {
-      await fs.rm(root, {recursive: true, force: true})
-      await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
-    }
-  })
+    })
 
-  it('in a workspace, stops a run that started anywhere but its folder', async () => {
-    // A concurrent run can swap the folder for a link between the check and the spawn.
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'km-runner-ws-'))
-    try {
+    it('stops a run that started anywhere but its folder', async () => {
+      // A concurrent run can swap the folder for a link between the check and the spawn.
       const result = await runClaude(
         {...baseOptions, cwd: path.join(root, 'threads', 'b1'), workspace: {root, allowedDomains: []}, timeoutMs: 10_000},
         fakeClaude(
@@ -533,10 +533,7 @@ describe('runClaude', () => {
       // Named without paths: the failure note is a synced reply block.
       expect(result.stderr).toContain('did not start in its thread folder')
       expect(result.stderr).not.toContain('/elsewhere')
-    } finally {
-      await fs.rm(root, {recursive: true, force: true})
-      await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
-    }
+    })
   })
 
   it('delivers the prompt over stdin, not argv', async () => {
