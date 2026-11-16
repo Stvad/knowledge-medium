@@ -1,1 +1,1 @@
-export{zP as checkForAppUpdate,BP as registerServiceWorker}from"../chunks/app-cywbLTgk.js";
+export{zP as checkForAppUpdate,BP as registerServiceWorker}from"../chunks/app-CYlwE2sN.js";

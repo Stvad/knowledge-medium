@@ -1,1 +1,1 @@
-export{CI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,wI as openExtensionsSettings}from"../../chunks/app-cywbLTgk.js";
+export{CI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,wI as openExtensionsSettings}from"../../chunks/app-CYlwE2sN.js";
