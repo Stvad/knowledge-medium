@@ -1,0 +1,1 @@
+export{kV as declarationOnlyDefinitionForName,AV as declarationOnlyStatusText}from"../../../chunks/app-CBHV7mVH.js";

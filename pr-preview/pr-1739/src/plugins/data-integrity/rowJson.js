@@ -1,0 +1,1 @@
+export{Ws as parsePropertiesJson}from"../../../chunks/app-CBHV7mVH.js";

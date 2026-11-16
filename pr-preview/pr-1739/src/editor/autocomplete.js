@@ -1,0 +1,1 @@
+export{rP as editorAutocompleteExtension}from"../../chunks/app-CBHV7mVH.js";

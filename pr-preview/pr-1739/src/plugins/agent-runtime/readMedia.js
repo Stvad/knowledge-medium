@@ -1,0 +1,1 @@
+export{xg as readMedia}from"../../../chunks/app-CBHV7mVH.js";

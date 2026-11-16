@@ -1,0 +1,1 @@
+export{WP as dispatchPointerAction,GP as setPointerActionDispatcher}from"../../chunks/app-CBHV7mVH.js";

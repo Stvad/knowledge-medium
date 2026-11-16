@@ -1,0 +1,1 @@
+export{bP as appUpdatePromptExtension}from"../../../chunks/app-CBHV7mVH.js";

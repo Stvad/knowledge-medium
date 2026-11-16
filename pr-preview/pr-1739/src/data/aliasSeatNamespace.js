@@ -1,0 +1,1 @@
+export{Eat as aliasSeatNamespacesInTx,Dat as resolveAliasSeatNamespaces}from"../../chunks/app-CBHV7mVH.js";

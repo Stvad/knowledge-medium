@@ -1,0 +1,1 @@
+export{C2 as cn}from"../../chunks/app-CBHV7mVH.js";

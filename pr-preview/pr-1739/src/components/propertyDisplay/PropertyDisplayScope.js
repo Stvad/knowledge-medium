@@ -1,0 +1,1 @@
+export{MI as PropertyDisplayScope}from"../../../chunks/app-CBHV7mVH.js";

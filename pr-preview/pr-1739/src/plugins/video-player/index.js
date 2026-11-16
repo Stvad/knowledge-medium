@@ -1,0 +1,1 @@
+export{BS as videoPlayerPlugin}from"../../../chunks/app-CBHV7mVH.js";

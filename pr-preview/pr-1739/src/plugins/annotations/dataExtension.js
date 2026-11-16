@@ -1,0 +1,1 @@
+export{mX as annotationsDataExtension}from"../../../chunks/app-CBHV7mVH.js";

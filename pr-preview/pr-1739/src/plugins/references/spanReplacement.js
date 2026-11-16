@@ -1,0 +1,1 @@
+export{Xq as preferredSpanReplacement}from"../../../chunks/app-CBHV7mVH.js";

@@ -1,0 +1,1 @@
+export{iS as runSingleOwner}from"../../../chunks/app-CBHV7mVH.js";

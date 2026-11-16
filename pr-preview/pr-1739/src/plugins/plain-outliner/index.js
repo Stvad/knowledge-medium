@@ -1,0 +1,1 @@
+export{xT as plainOutlinerPlugin}from"../../../chunks/app-CBHV7mVH.js";

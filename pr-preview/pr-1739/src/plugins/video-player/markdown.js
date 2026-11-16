@@ -1,0 +1,1 @@
+export{VS as videoPlayerMarkdownExtension}from"../../../chunks/app-CBHV7mVH.js";

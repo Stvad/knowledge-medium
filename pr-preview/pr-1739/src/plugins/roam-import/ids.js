@@ -1,0 +1,1 @@
+export{Ud as resolveDailyPage}from"../../../chunks/app-CBHV7mVH.js";

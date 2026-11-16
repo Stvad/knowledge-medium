@@ -1,0 +1,1 @@
+export{My as remarkBlockrefs}from"../../../../../chunks/app-CBHV7mVH.js";

@@ -1,0 +1,1 @@
+export{Hb as attachmentsPlugin}from"../../../chunks/app-CBHV7mVH.js";

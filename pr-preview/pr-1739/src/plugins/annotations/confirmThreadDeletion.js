@@ -1,0 +1,1 @@
+export{Sp as confirmThreadDeletion}from"../../../chunks/app-CBHV7mVH.js";

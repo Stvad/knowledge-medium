@@ -1,0 +1,1 @@
+export{Cc as aggregateDiagnostics,wc as useDiagnostics}from"../../../chunks/app-CBHV7mVH.js";

@@ -1,0 +1,1 @@
+export{l8 as KERNEL_PROCESSORS}from"../../../chunks/app-CBHV7mVH.js";

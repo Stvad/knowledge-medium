@@ -1,0 +1,1 @@
+export{EN as ensureMetricsConsoleHook}from"../../chunks/app-CBHV7mVH.js";

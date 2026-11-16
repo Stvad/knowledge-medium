@@ -1,0 +1,1 @@
+export{VR as useShortcutSurfaceActivations}from"../../chunks/app-CBHV7mVH.js";

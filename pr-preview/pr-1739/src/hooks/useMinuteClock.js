@@ -1,0 +1,1 @@
+export{eO as useMinuteClock}from"../../chunks/app-CBHV7mVH.js";

@@ -1,0 +1,1 @@
+export{lb as useIsReadOnly}from"../../chunks/app-CBHV7mVH.js";

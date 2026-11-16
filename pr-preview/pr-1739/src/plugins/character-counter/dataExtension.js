@@ -1,0 +1,1 @@
+export{GZ as characterCounterDataExtension}from"../../../chunks/app-CBHV7mVH.js";

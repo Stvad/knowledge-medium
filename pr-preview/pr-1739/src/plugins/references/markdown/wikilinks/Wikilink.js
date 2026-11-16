@@ -1,0 +1,1 @@
+export{Dy as Wikilink}from"../../../../../chunks/app-CBHV7mVH.js";

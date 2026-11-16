@@ -1,0 +1,1 @@
+export{Hk as dailyDateWikilinkDecorator}from"../../../chunks/app-CBHV7mVH.js";

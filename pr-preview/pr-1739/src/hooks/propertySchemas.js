@@ -1,0 +1,1 @@
+export{GG as usePropertySchemas}from"../../chunks/app-CBHV7mVH.js";
