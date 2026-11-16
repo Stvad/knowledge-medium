@@ -14,7 +14,7 @@
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
@@ -204,6 +204,8 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   const localMediaFiles = options.localMediaFiles === true || typeof options.localMediaFiles === 'object'
   const mediaRoot = typeof options.localMediaFiles === 'object' ? options.localMediaFiles.root : undefined
+  // Resolved once: a run that later swaps the root for a link must not move it.
+  const realMediaRoot = mediaRoot !== undefined ? realpathSync(mediaRoot) : undefined
   server.registerTool('add_media' satisfies KmMcpToolName, {
     description: 'Store a file as a media block under the workspace\'s Assets page; the same bytes added '
     + 'twice are one block. Pass the file itself as `content` (text such as SVG as is, binary as base64 with encoding "base64")'
@@ -241,7 +243,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
     return json(await client.runCommand({
       type: 'add-media',
-      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!, mediaRoot),
+      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!, realMediaRoot),
       filename: name,
       ...(type !== undefined ? {mime: type} : {}),
       ...(workspaceId !== undefined ? {workspaceId} : {}),

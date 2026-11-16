@@ -9,35 +9,37 @@ const assertMediaSize = (what: string, size: number) => {
   }
 }
 
-/** The file a path names once every link is followed, refused unless it is under `root`. */
-const resolveUnder = async (root: string, filePath: string): Promise<string> => {
-  const [realRoot, realFile] = await Promise.all([fs.realpath(root), fs.realpath(filePath)])
-  if (!realFile.startsWith(`${realRoot}${path.sep}`)) throw new Error(`add-media: ${filePath} is outside ${root}.`)
+/** The file a path names once every link is followed, refused unless it is under
+ *  `realRoot`, a path resolved once by the caller: resolving it again per call would
+ *  follow a root swapped for a link. */
+const resolveUnder = async (realRoot: string, filePath: string): Promise<string> => {
+  const realFile = await fs.realpath(filePath)
+  if (!realFile.startsWith(`${realRoot}${path.sep}`)) throw new Error(`add-media: ${filePath} is outside ${realRoot}.`)
   return realFile
 }
 
-/** Refuses an opened file unless `filePath` still names it from under `root`: a
+/** Refuses an opened file unless `filePath` still names it from under `realRoot`: a
  *  directory on the path swapped for a link between the check and the open
  *  leaves the handle on a file the path no longer resolves to. A file with a
  *  second name may have it outside the root. */
-export const assertOpenedUnder = async (opened: Stats, root: string, filePath: string): Promise<void> => {
-  const named = await fs.stat(await resolveUnder(root, filePath))
+export const assertOpenedUnder = async (opened: Stats, realRoot: string, filePath: string): Promise<void> => {
+  const named = await fs.stat(await resolveUnder(realRoot, filePath))
   if (named.dev !== opened.dev || named.ino !== opened.ino) throw new Error(`add-media: ${filePath} changed while it was read.`)
-  if (opened.nlink > 1) throw new Error(`add-media: ${filePath} has another name, which may be outside ${root}.`)
+  if (opened.nlink > 1) throw new Error(`add-media: ${filePath} has another name, which may be outside ${realRoot}.`)
 }
 
-/** A local file as `add-media` carries it, optionally only from under `root`. Checks
+/** A local file as `add-media` carries it, optionally only from under `realRoot`. Checks
  *  what the path is before reading it: a FIFO would block the read forever (hence
  *  the non-blocking open), and an oversize file would be read whole only to be refused. */
-export const readMediaFileBase64 = async (filePath: string, root?: string): Promise<string> => {
-  const target = root === undefined ? filePath : await resolveUnder(root, filePath)
+export const readMediaFileBase64 = async (filePath: string, realRoot?: string): Promise<string> => {
+  const target = realRoot === undefined ? filePath : await resolveUnder(realRoot, filePath)
   // Defence in depth: the final link was already followed, so one found now was swapped in after the check.
-  const noFollow = root === undefined ? 0 : fsConstants.O_NOFOLLOW
+  const noFollow = realRoot === undefined ? 0 : fsConstants.O_NOFOLLOW
   const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | noFollow)
   try {
     const stat = await handle.stat()
     if (!stat.isFile()) throw new Error(`add-media: ${filePath} is not a regular file.`)
-    if (root !== undefined) await assertOpenedUnder(stat, root, filePath)
+    if (realRoot !== undefined) await assertOpenedUnder(stat, realRoot, filePath)
     assertMediaSize(filePath, stat.size)
     return (await handle.readFile()).toString('base64')
   } finally {

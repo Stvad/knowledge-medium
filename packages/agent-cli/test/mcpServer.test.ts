@@ -212,7 +212,15 @@ describe('createGraphMcpServer', () => {
     it('refuses an opened file the path no longer names (a directory swapped for a link mid-read)', async () => {
       // Defence in depth: the swap lands between the containment check and the open, which no test can schedule.
       const opened = await fs.stat(path.join(outside, 'secret.png'))
-      await expect(assertOpenedUnder(opened, root, path.join(root, 'threads', 't1', 'chart.png'))).rejects.toThrow(/changed/)
+      await expect(assertOpenedUnder(opened, await fs.realpath(root), path.join(root, 'threads', 't1', 'chart.png'))).rejects.toThrow(/changed/)
+    })
+
+    it('keeps the root it started with when the root is later swapped for a link', async () => {
+      const {runCommand, call} = setup()
+      await fs.rm(root, {recursive: true})
+      await fs.symlink(outside, root)
+      await expect(call({path: path.join(root, 'secret.png')})).rejects.toThrow(/outside/)
+      expect(runCommand).not.toHaveBeenCalled()
     })
 
     it('names the root in the path argument the model sees', () => {

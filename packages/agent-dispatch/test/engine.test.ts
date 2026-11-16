@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
+import path from 'node:path'
 import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine'
-import {parseConfig, PROPS} from '../src/config'
+import {defaultWorkspacesDir, parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
@@ -174,12 +175,12 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
   })
 
 describe('workspace watchers', () => {
-  const root = '/ws/notes-agent'
+  const root = path.join(defaultWorkspacesDir(), 'mentions')
   const workspaceConfig = (watcher: Record<string, unknown> = {}) => parseConfig({
     workspaceId: 'ws-test',
     watchers: [{
       kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, memory: false,
-      runner: {executor: 'claude', workspace: {root, allowedDomains: ['pypi.org']}}, ...watcher,
+      runner: {executor: 'claude', workspace: {allowedDomains: ['pypi.org']}}, ...watcher,
     }],
   })
   const runOf = (runTask: ReturnType<typeof vi.fn>) => runTask.mock.calls[0][0] as {cwd: string, workspace?: unknown, mcpConfigPath?: string}
@@ -2194,12 +2195,13 @@ describe('query watcher lifecycle', () => {
     const state = memoryState()
     state.cursors.set('inbox', [])
     const runTask = vi.fn(async () => okRun())
-    const config = queryConfig({runner: {executor: 'claude', workspace: {root: '/ws/inbox'}}})
+    const config = queryConfig({runner: {executor: 'claude', workspace: {}}})
     const engine = engineWith({graph, runTask, state, config})
     await engine.tick()
     await engine.drain()
 
-    expect(runTask.mock.calls[0][0]).toMatchObject({cwd: '/ws/inbox', workspace: {root: '/ws/inbox', allowedDomains: []}})
+    const root = path.join(defaultWorkspacesDir(), 'inbox')
+    expect(runTask.mock.calls[0][0]).toMatchObject({cwd: root, workspace: {root, allowedDomains: []}})
   })
 
   it('advances the cursor even when the run fails (no re-bill loop)', async () => {

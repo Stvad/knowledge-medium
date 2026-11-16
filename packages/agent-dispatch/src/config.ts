@@ -73,10 +73,10 @@ const runnerBase = {
 const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
 
 /** A persistent folder the run works in (workspace.ts): its Bash, file tools and
- *  `add_media` paths reach this folder and nothing else of the user's. */
+ *  `add_media` paths reach this folder and nothing else of the user's. It is always
+ *  `<defaultWorkspacesDir>/<watcher name>`: a root chosen elsewhere could hold files
+ *  later runs trust, and no list of those is complete. */
 const workspaceSchema = z.strictObject({
-  /** Default: `<workspaces dir>/<watcher name>` (defaultWorkspacesDir). */
-  root: z.string().min(1).optional(),
   /** Hosts the run's Bash may connect to; none by default. WebFetch is a
    *  separate tool, governed by the allowed tools, not by this list. */
   allowedDomains: z.array(z.string().min(1)).default([]),
@@ -365,18 +365,10 @@ const rawConfigSchema = z.strictObject({
     if (watcher.delivery === 'channel') {
       ctx.addIssue({code: 'custom', path: at, message: 'workspace needs delivery="spawn": the channel session is not a run the daemon starts'})
     }
-    if (workspace.root !== undefined && !path.isAbsolute(expandHome(workspace.root))) {
-      ctx.addIssue({code: 'custom', path: [...at, 'root'], message: 'workspace.root must be an absolute path (or start with ~/)'})
-    } else if (workspace.root !== undefined && overTrustedFiles(expandHome(workspace.root))) {
-      ctx.addIssue({
-        code: 'custom', path: [...at, 'root'],
-        message: 'workspace.root cannot hold the home directory, the bridge config or ~/.claude, nor sit inside the latter two: later runs trust files there',
-      })
-    }
-    if (workspace.root === undefined && !FOLDER_NAME.test(watcher.name)) {
+    if (!FOLDER_NAME.test(watcher.name)) {
       ctx.addIssue({
         code: 'custom', path: at,
-        message: `the default workspace root is a folder named for the watcher, and "${watcher.name}" is not a folder name: rename the watcher or set workspace.root`,
+        message: `a workspace is a folder named for its watcher, and "${watcher.name}" is not a folder name: rename the watcher`,
       })
     }
   })
@@ -388,19 +380,10 @@ export const defaultConfigPath = () =>
 export const defaultStatePath = () =>
   path.join(agentRuntimeConfigDir(), 'agent-dispatch-state.json')
 
-/** Where watchers' workspaces live unless one names its own root. Apart from the
- *  config directory, which holds the bridge tokens. macOS only (daemon.ts). */
+/** Where watchers' workspaces live, apart from the config directory, which holds the
+ *  bridge tokens. macOS only (daemon.ts). */
 export const defaultWorkspacesDir = () =>
   path.join(os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch', 'workspaces')
-
-/** A root a run's writes would reach files later runs trust: the bridge tokens and the
- *  MCP configs the daemon writes, or Claude Code's own folder (a root holding home holds both). */
-const overTrustedFiles = (root: string): boolean => {
-  const resolved = path.resolve(root)
-  const inside = (dir: string, parent: string) => dir === parent || dir.startsWith(`${parent}${path.sep}`)
-  const trusted = [agentRuntimeConfigDir(), path.join(os.homedir(), '.claude')].map(dir => path.resolve(dir))
-  return trusted.some(dir => inside(dir, resolved) || inside(resolved, dir))
-}
 
 /** One path component, never `.` or `..`. */
 const FOLDER_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/
@@ -432,10 +415,7 @@ const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
       : {
           ...runner,
           cwd,
-          workspace: runner.workspace && {
-            ...runner.workspace,
-            root: runner.workspace.root ? expandHome(runner.workspace.root) : path.join(defaultWorkspacesDir(), watcher.name),
-          },
+          workspace: runner.workspace && {...runner.workspace, root: path.join(defaultWorkspacesDir(), watcher.name)},
         },
   }
 }

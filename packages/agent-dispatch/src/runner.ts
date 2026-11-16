@@ -465,7 +465,7 @@ export const runClaude = async (
     sessionId: parser.sessionId(),
     exitCode,
     timedOut,
-    stderr: strayCwd !== null ? `workspace: the run started in ${strayCwd}, not ${workspaceCwd}; stopped it\n${stderr}` : stderr,
+    stderr: strayCwd !== null ? `workspace: the run did not start in its thread folder; stopped it\n${stderr}` : stderr,
     raw: parsed?.raw ?? null,
     usage: claudeUsageFrom(parsed?.raw ?? null),
   }

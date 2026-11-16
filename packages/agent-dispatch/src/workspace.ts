@@ -35,17 +35,25 @@ export const workspaceThreadDir = (root: string, threadId: string): string => {
   return path.join(root, 'threads', threadId)
 }
 
-/** Creates the run's folder and returns its real path, refusing one that resolves
- *  outside the root: a run can swap its folder, or `threads/`, for a link before a
- *  later run starts there, and the working directory is what the file tools and the
- *  sandbox trust. Returns the real path so the spawn cannot follow a later swap. */
+/** Creates the run's folder one level at a time from the root down, refusing any level
+ *  that is not a real folder: a run can swap the root, `threads/` or a thread's folder
+ *  for a link before a later run starts there, and the working directory is what the
+ *  file tools and the sandbox trust. Returns the real path, for the spawn and for the
+ *  check that the run started there (runner.ts). The refusal names no local path: it
+ *  becomes a synced reply. */
 export const resolveWorkspaceCwd = async (root: string, cwd: string): Promise<string> => {
-  await fsp.mkdir(root, {recursive: true})
-  const expected = path.join(await fsp.realpath(root), path.relative(root, cwd))
-  await fsp.mkdir(cwd, {recursive: true})
-  const real = await fsp.realpath(cwd)
-  if (real !== expected) throw new Error(`workspace: ${cwd} resolves to ${real}, outside ${root}`)
-  return real
+  await fsp.mkdir(path.dirname(root), {recursive: true})
+  const levels = path.relative(root, cwd).split(path.sep).filter(Boolean)
+  for (let depth = 0; depth <= levels.length; depth += 1) {
+    const dir = path.join(root, ...levels.slice(0, depth))
+    await fsp.mkdir(dir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error
+    })
+    if (!(await fsp.lstat(dir)).isDirectory()) {
+      throw new Error(`workspace: ${path.relative(path.dirname(root), dir)} is not a real folder; a run may have replaced it with a link`)
+    }
+  }
+  return fsp.realpath(cwd)
 }
 
 /** Claude Code's temp dir for a workspace run (`CLAUDE_CODE_TMPDIR`). It must stay

@@ -66,16 +66,27 @@ describe('resolveWorkspaceCwd', () => {
   })
 
   it.each([
-    ['its thread folder', (root: string) => path.join(root, 'threads', 'b1')],
-    ['the threads folder', (root: string) => path.join(root, 'threads')],
-  ])('refuses a run whose folder an earlier run swapped for a link out of the root: %s', async (_label, swapped) => {
+    ['its thread folder', 'threads/b1'],
+    ['the threads folder', 'threads'],
+    ['the root itself', ''],
+  ])('refuses a run whose folder an earlier run swapped for a link: %s', async (_label, swapped) => {
     const root = path.join(parent, 'root')
     const outside = path.join(parent, 'outside')
-    await fsp.mkdir(path.join(outside, 'b1'), {recursive: true})
-    await fsp.mkdir(path.join(root, 'threads'), {recursive: true})
-    await fsp.rm(swapped(root), {recursive: true, force: true})
-    await fsp.symlink(swapped(root).endsWith('b1') ? path.join(outside, 'b1') : outside, swapped(root))
-    await expect(resolveWorkspaceCwd(root, workspaceThreadDir(root, 'b1'))).rejects.toThrow(/outside/)
+    await fsp.mkdir(outside)
+    await fsp.mkdir(path.join(root, 'threads', 'b1'), {recursive: true})
+    await fsp.rm(path.join(root, swapped), {recursive: true, force: true})
+    await fsp.symlink(outside, path.join(root, swapped))
+    await expect(resolveWorkspaceCwd(root, workspaceThreadDir(root, 'b1'))).rejects.toThrow(/not a real folder/)
+    // Nothing was created where the link points.
+    expect(await fsp.readdir(outside)).toEqual([])
+  })
+
+  it('names no local path in its refusal, which reaches the synced reply', async () => {
+    const root = path.join(parent, 'root')
+    await fsp.mkdir(root)
+    await fsp.symlink(parent, path.join(root, 'threads'))
+    const error = await resolveWorkspaceCwd(root, workspaceThreadDir(root, 'b1')).catch(caught => caught as Error)
+    expect(error.message).not.toContain(parent)
   })
 })
 

@@ -530,7 +530,9 @@ describe('runClaude', () => {
         ),
       )
       expect(result).toMatchObject({ok: false, timedOut: false})
-      expect(result.stderr).toContain('/elsewhere')
+      // Named without paths: the failure note is a synced reply block.
+      expect(result.stderr).toContain('did not start in its thread folder')
+      expect(result.stderr).not.toContain('/elsewhere')
     } finally {
       await fs.rm(root, {recursive: true, force: true})
       await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})

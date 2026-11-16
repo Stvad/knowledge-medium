@@ -1,7 +1,6 @@
 import {describe, expect, it} from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import {agentRuntimeConfigDir} from '@knowledge-medium/agent-cli/config'
 import {configSchema, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
@@ -301,33 +300,24 @@ describe('parseConfig', () => {
       expect(runner).toMatchObject({workspace: {root: path.join(base, 'notes-agent'), allowedDomains: []}})
     })
 
-    it('expands ~ in an explicit root and keeps the allowed hosts', () => {
-      const {runner} = withRunner({workspace: {root: '~/agent-space', allowedDomains: ['pypi.org']}}).watchers[0]
-      expect(runner).toMatchObject({workspace: {root: path.join(os.homedir(), 'agent-space'), allowedDomains: ['pypi.org']}})
+    it('keeps the hosts Bash may reach', () => {
+      expect(withRunner({workspace: {allowedDomains: ['pypi.org']}}).watchers[0].runner)
+        .toMatchObject({workspace: {allowedDomains: ['pypi.org']}})
     })
 
-    it('refuses a relative root, which would resolve against wherever the daemon started', () => {
-      expect(() => withRunner({workspace: {root: 'agent-space'}})).toThrow(/absolute/)
+    it('takes no root of its own: a folder chosen elsewhere could hold files later runs trust', () => {
+      expect(() => withRunner({workspace: {root: '/tmp/ws'}})).toThrow()
     })
 
     it('refuses a cwd beside it: the run works in its thread folder', () => {
       expect(() => withRunner({workspace: {}, cwd: '/tmp'})).toThrow(/cwd/)
     })
 
-    it('refuses a watcher name that is not one folder name when the root is defaulted', () => {
+    it('refuses a watcher name that is not one folder name', () => {
       expect(() => parseConfig({
         workspaceId: 'ws-test',
         watchers: [{kind: 'backlinks', name: '../escape', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
       })).toThrow(/folder/)
-    })
-
-    it.each([
-      ['the home directory', () => os.homedir()],
-      ['a folder holding the bridge tokens', () => path.dirname(agentRuntimeConfigDir())],
-      ['a folder inside the bridge config', () => path.join(agentRuntimeConfigDir(), 'ws')],
-      ['Claude Code\'s own folder', () => path.join(os.homedir(), '.claude', 'ws')],
-    ])('refuses a root at or over files later runs trust: %s', (_label, root) => {
-      expect(() => withRunner({workspace: {root: root()}})).toThrow(/workspace.root/)
     })
 
     it('refuses watcher names that differ only in case: the disk folds them into one folder', () => {
