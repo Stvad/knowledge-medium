@@ -1,1 +1,1 @@
-export{J2 as FacetBridge}from"../../chunks/app-C5AAV_56.js";
+export{J2 as FacetBridge}from"../../chunks/app-BtW0TaBc.js";

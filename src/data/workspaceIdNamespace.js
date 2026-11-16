@@ -1,1 +1,1 @@
-export{Xat as DerivedIdNamespaceUnavailableError,Zat as derivedIdNamespaceInTx,Qat as resolveDerivedIdNamespace}from"../../chunks/app-C5AAV_56.js";
+export{Xat as DerivedIdNamespaceUnavailableError,Zat as derivedIdNamespaceInTx,Qat as resolveDerivedIdNamespace}from"../../chunks/app-BtW0TaBc.js";
