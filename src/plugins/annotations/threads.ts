@@ -239,8 +239,9 @@ export const moveToOwnThread = async (repo: Repo, {commentId, targetId}: MoveToO
       ? await enclosingThread(tx, commentId)
       : null
     if (!comment || !thread) throw new ThreadRefusal('Only a comment in a thread can move to a thread of its own.')
-    // Its thread would be left with nothing in it.
-    if (comment.parentId === thread.id && (await tx.childrenOf(thread.id)).length === 1) {
+    // Its thread would be left with nothing in it. The root's own property
+    // rows are not comments.
+    if (comment.parentId === thread.id && (await tx.childrenOf(thread.id, undefined, {propertyChildren: 'none'})).length === 1) {
       throw new ThreadRefusal('This is its thread’s only comment, so it is a thread of its own already.')
     }
     await annotatableTarget(tx, targetId)

@@ -294,6 +294,17 @@ describe('moveToOwnThread', () => {
     await expect(moveToOwnThread(repo, {commentId: point, targetId: C})).resolves.toBeTypeOf('string')
   })
 
+  it('refuses its thread’s only comment where the root’s properties are child rows too', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    const {threadId, commentId} = await createThread(repo, {targetId: 'page', anchor: null, comment: 'Alone'})
+    // The precondition: the root carries property rows beside its comment.
+    const rows = await db.db.get<{n: number}>('SELECT count(*) AS n FROM blocks WHERE parent_id = ? AND deleted = 0', [threadId])
+    expect(rows.n).toBeGreaterThan(1)
+    await expect(moveToOwnThread(repo, {commentId: commentId!, targetId: C})).rejects.toThrow(ThreadRefusal)
+  })
+
   it('refuses a target inside the comment being moved', async () => {
     const {point, reply} = await reviewThread()
     await expect(moveToOwnThread(repo, {commentId: point, targetId: reply})).rejects.toThrow(ThreadRefusal)
