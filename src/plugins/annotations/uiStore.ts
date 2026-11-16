@@ -12,7 +12,7 @@
 
 import {useSyncExternalStore} from 'react'
 import {CallbackSet} from '@/utils/callbackSet'
-import {surfaceRenderScopeId} from '@/utils/renderScope'
+import {surfaceOfRenderScopeId, surfaceRenderScopeId} from '@/utils/renderScope'
 import {createKeyedToggleSet} from '@/utils/toggleStore'
 import type {RangeAnchor} from './anchor.ts'
 
@@ -27,6 +27,14 @@ export type CardSurface = 'comments' | 'margin'
  *  definition: a card renders in it, and a navigation focuses into it. */
 export const cardRenderScopeId = (surface: CardSurface, parentRenderScopeId: string, threadId: string): string =>
   surfaceRenderScopeId(surface, parentRenderScopeId, threadId)
+
+const CARD_SURFACES: ReadonlySet<string> = new Set<CardSurface>(['comments', 'margin'])
+
+/** Is `renderScopeId` a card's, one of `cardRenderScopeId`'s? */
+export const isCardRenderScopeId = (renderScopeId: string | undefined): boolean => {
+  const surface = renderScopeId === undefined ? undefined : surfaceOfRenderScopeId(renderScopeId)
+  return surface !== undefined && CARD_SURFACES.has(surface)
+}
 
 /** An edit suggestion being composed. A comment needs no composer: it is
  *  written at once (`startComment`). */

@@ -36,6 +36,7 @@ import {CommentMargin} from './margin.tsx'
 import {threadMarksMarkdownExtension} from './readHighlights.ts'
 import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {quotedInFooterContribution} from './quotedIn.tsx'
+import {commentLinkNavigationContribution} from './commentLinks.ts'
 import {threadNavigationContribution} from './threadNavigation.ts'
 import {nestedReadSelectionMenuContribution, readSelectionShortcutsMount} from './readSelectionUi.tsx'
 import {
@@ -62,6 +63,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   actionContextsFacet.of(readSelectionContext, {source: SOURCE}),
   annotationActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   threadNavigationContribution,
+  commentLinkNavigationContribution,
   appMountsFacet.of(readSelectionShortcutsMount, {source: SOURCE}),
   // Outside every other wrap of click-to-edit (vim's click-to-focus included).
   actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
