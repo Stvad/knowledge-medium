@@ -1,6 +1,7 @@
 import type { BridgeGraph } from '@knowledge-medium/agent-cli/graph'
 import type { GraphMcpWriteGuard } from '@knowledge-medium/agent-cli/mcpServer'
 import { createPageName, neutralizeDisplayText, pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
+import { ATTRIBUTION_FIELDS } from './watchers.js'
 
 /** Dispatch-owned MCP policy: page aliases whose wikilinks the spawned
  *  agent write tools must refuse to create. JSON-array encoded; legacy
@@ -46,7 +47,8 @@ export const findBlockedRefInProperties = (
   guard: RefGuardSet,
 ): string | null => {
   if (!properties) return null
-  const blob = JSON.stringify(properties).normalize('NFC').toLowerCase()
+  const counted = Object.fromEntries(Object.entries(properties).filter(([name]) => !ATTRIBUTION_FIELDS.has(name)))
+  const blob = JSON.stringify(counted).normalize('NFC').toLowerCase()
   const contentHit = findBlockedRef(blob, guard)
   if (contentHit) return contentHit
   for (const id of guard.ids) {
