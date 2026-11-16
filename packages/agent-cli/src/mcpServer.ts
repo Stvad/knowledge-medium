@@ -20,7 +20,7 @@ import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './mediaFile.js'
+import { addMediaMime, mediaContentBase64, readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
@@ -234,7 +234,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       throw new Error(`add_media needs an absolute path; got ${filePath}.`)
     }
     const name = filename || path.basename(filePath!)
-    const type = mime ?? mimeFromFilename(name)
+    const type = addMediaMime(name, mime)
     await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
     return json(await client.runCommand({
       type: 'add-media',

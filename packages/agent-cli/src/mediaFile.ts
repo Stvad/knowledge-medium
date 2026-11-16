@@ -30,7 +30,8 @@ export const mediaContentBase64 = (content: string, encoding: 'utf8' | 'base64')
   return bytes.toString('base64')
 }
 
-/** The one type a name must supply: an SVG is text, so the app's byte sniffing
- *  cannot recognise it, and untyped it stores as a generic file. */
-export const mimeFromFilename = (filename: string): string | undefined =>
-  filename.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : undefined
+/** The `mime` every `add-media` sender puts on the wire: the caller's own, else the
+ *  one type a name must supply. An SVG is text, so the app's byte sniffing cannot
+ *  recognise it, and untyped it stores as a generic file. */
+export const addMediaMime = (filename: string, mime: string | undefined): string | undefined =>
+  mime ?? (filename.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : undefined)

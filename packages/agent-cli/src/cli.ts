@@ -53,7 +53,7 @@ import {
 } from './kernelDts.js'
 import {cliCommandFrom, cliOptionsFor, GRAPH_READ_TOOLS, hasJsonFormat, renderToolResult} from './readTools.js'
 import {helpSections} from './cliHelp.js'
-import {readMediaFileBase64} from './mediaFile.js'
+import {addMediaMime, readMediaFileBase64} from './mediaFile.js'
 import {
   appendPositionOption,
   attributeCommandToWorkspace,
@@ -853,16 +853,19 @@ cli
 cli
   .command('add-media <path>', wireDescription('add-media'))
   .option('--filename <name>', 'The block\'s content (default: the file\'s own name)')
-  .option('--mime <type>', 'MIME type, for bytes that are no recognised image or PDF')
+  .option('--mime <type>', 'MIME type, for bytes that are no recognised image or PDF (default: image/svg+xml for a .svg '
+    + 'filename, else application/octet-stream, which shows as a download)')
   .option('--workspace <id>', 'Assert the workspace open in the app tab')
   .action(async (file: string, options: {filename?: unknown, mime?: unknown, workspace?: unknown}) => {
+    const filename = options.filename !== undefined ? stringOption('--filename', options.filename) : path.basename(file)
+    const mime = addMediaMime(filename, options.mime !== undefined ? stringOption('--mime', options.mime) : undefined)
     const encoded = await readMediaFileBase64(file)
     await ensureBridgeRunning()
     await runAndPrint({
       type: 'add-media',
       base64: encoded,
-      filename: options.filename !== undefined ? stringOption('--filename', options.filename) : path.basename(file),
-      ...(options.mime !== undefined ? {mime: stringOption('--mime', options.mime)} : {}),
+      filename,
+      ...(mime !== undefined ? {mime} : {}),
       ...workspaceAssertion(options.workspace),
     })
   })
