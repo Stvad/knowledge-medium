@@ -56,6 +56,7 @@ import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} f
 import {highlightRanges} from './highlights.ts'
 import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {moveCommentToOwnThread} from './ownThreadPicker.tsx'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
@@ -641,6 +642,9 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
         <div className="flex gap-2 pb-0.5">
           <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
           <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
+          <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.renderScopeId).catch(reportFailure)}>
+            Own thread
+          </ActionButton>
         </div>
       )}
       {threads.length > 0 && (

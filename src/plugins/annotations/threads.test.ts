@@ -22,7 +22,17 @@ import {
   threadStatusOf,
   threadTargetIdOf,
 } from './schema'
-import {AnchorChangedError, createThread, InvalidQuoteError, replyTo, setThreadStatus, UnannotatableTargetError} from './threads'
+import {
+  AnchorChangedError,
+  createThread,
+  InvalidQuoteError,
+  moveToOwnThread,
+  ownThreadTargets,
+  replyTo,
+  setThreadStatus,
+  ThreadRefusal,
+  UnannotatableTargetError,
+} from './threads'
 
 const WS = 'ws'
 const TARGET_TEXT = 'We moved the launch to Thursday because the vendor slipped.'
@@ -224,6 +234,75 @@ describe('replies and status', () => {
     expect((await repo.load(threadId))!.properties[annotationStatusProp.name]).toBe('resolved')
     await setThreadStatus(repo, threadId, 'open')
     expect(threadStatusOf((await repo.load(threadId))!)).toBe('open')
+  })
+})
+
+describe('moveToOwnThread', () => {
+  /** Block links parse only a uuid. */
+  const C = '0b3c6a52-6a43-4f39-9a4f-4f2f8f6a1c11'
+
+  beforeEach(async () => {
+    await setUp()
+    await repo.tx(async tx => {
+      await tx.create({id: C, workspaceId: WS, parentId: 'page', orderKey: 'a1', content: 'Second point'})
+      await tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Other page',
+        properties: {[typesProp.name]: [PAGE_TYPE]}})
+    }, opts)
+  })
+
+  /** A page-level thread with a review point about C, which has a reply. */
+  const reviewThread = async () => {
+    const {threadId, commentId} = await createThread(repo, {targetId: 'page', anchor: null, comment: 'Overall'})
+    const point = await replyTo(repo, commentId!)
+    await repo.mutate.setContent({id: point, content: `About [this](((${C}))) and [[Other page]]`})
+    const reply = await replyTo(repo, point)
+    await repo.mutate.setContent({id: reply, content: 'Agreed'})
+    return {threadId, overall: commentId!, point, reply}
+  }
+
+  it('moves the comment and its replies under a new thread on the whole target, in one undo step', async () => {
+    const {threadId, overall, point, reply} = await reviewThread()
+    const moved = await moveToOwnThread(repo, {commentId: point, targetId: C})
+
+    const root = (await repo.load(moved))!
+    expect(threadTargetIdOf(root)).toBe(C)
+    expect(threadAnchorOf(root)).toEqual({kind: 'block'})
+    expect(threadStatusOf(root)).toBe('open')
+    expect(await childContents(moved)).toEqual([`About [this](((${C}))) and [[Other page]]`])
+    expect((await repo.load(reply))!.parentId).toBe(point)
+    expect(await childContents(overall)).toEqual([])
+    expect(await threadsOf(C)).toEqual([moved])
+
+    expect(await repo.undo()).toBe(true)
+    expect(await repo.load(moved)).toBeNull()
+    expect((await repo.load(point))!.parentId).toBe(overall)
+    expect((await repo.load(threadId))!.deleted).toBe(false)
+  })
+
+  it('refuses a block that is not a comment, writing nothing', async () => {
+    const {threadId} = await reviewThread()
+    await expect(moveToOwnThread(repo, {commentId: threadId, targetId: C})).rejects.toThrow(ThreadRefusal)
+    await expect(moveToOwnThread(repo, {commentId: 'B', targetId: C})).rejects.toThrow(ThreadRefusal)
+    expect(await threadsOf(C)).toEqual([])
+  })
+
+  it('refuses its thread’s only comment, which would leave the thread empty', async () => {
+    const {commentId} = await createThread(repo, {targetId: 'page', anchor: null, comment: 'Alone'})
+    await expect(moveToOwnThread(repo, {commentId: commentId!, targetId: C})).rejects.toThrow(ThreadRefusal)
+    // A reply is never its thread's only comment.
+    const {point} = await reviewThread()
+    await expect(moveToOwnThread(repo, {commentId: point, targetId: C})).resolves.toBeTypeOf('string')
+  })
+
+  it('refuses a target inside the comment being moved', async () => {
+    const {point, reply} = await reviewThread()
+    await expect(moveToOwnThread(repo, {commentId: point, targetId: reply})).rejects.toThrow(ThreadRefusal)
+    await expect(moveToOwnThread(repo, {commentId: point, targetId: point})).rejects.toThrow(ThreadRefusal)
+  })
+
+  it('offers the blocks the comment links on its thread’s page, in link order', async () => {
+    const {point} = await reviewThread()
+    expect(await ownThreadTargets(repo, point)).toEqual([C])
   })
 })
 
