@@ -364,6 +364,7 @@ describe('property_cell_divergence', () => {
     expect(checks.property_cell_coverage.status).toBe('ok')
   })
 
+  // The 501-owner scan exceeded 5 s under full-suite load.
   it('reads every owner across keyset pages', async () => {
     const owners = 501
     const rows: BlockData[] = []
@@ -377,7 +378,7 @@ describe('property_cell_divergence', () => {
     expect((await audit()).property_cell_divergence).toMatchObject({
       ownersScanned: owners, divergentCells: owners,
     })
-  })
+  }, 20_000)
 
   it('waits for the registry to load before resolving field rows', async () => {
     await insertRaw(

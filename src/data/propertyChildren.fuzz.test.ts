@@ -213,12 +213,7 @@ describe('round trip: valueChildContentToEncoded(propertyValueToChildContent(v))
     )
   })
 
-  // The forms the decode must REFUSE, fuzzed over the same id alphabet: a
-  // whole-block wikilink (a name, not an identity — `reference_target_id`
-  // stamps for it and used to make it decode) and the `::`-marked span (a
-  // field row, not a value). Refusing means the row keeps its text and the
-  // owner's cell key reads unset, never re-pointed at a name's target.
-  it('ref: rejects the name form and the marked form for every id', () => {
+  it('ref: rejects unresolved names and field-form references', () => {
     fc.assert(
       fc.property(idArb, id => {
         expect(() => valueChildContentToEncoded(refSchema, `[[${id}]]`))

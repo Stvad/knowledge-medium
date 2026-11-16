@@ -378,6 +378,54 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     })
   }
 
+  it('refreshes an already-stamped named value whose old projection was empty', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-refs', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    await seedRow({id: 'named-owner', properties: {[schema.name]: [], unrelated: 'keep'}})
+    await seedRow({id: 'named-field', parentId: 'named-owner', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    await seedRow({id: 'named-value', parentId: 'named-field', content: '[[Existing name]]', referenceTargetId: 'existing-target'})
+    await seedRow({id: 'existing-target', properties: {[aliasesProp.name]: ['Existing name']}})
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    await runPass(repo)
+    expect(await cellOf('named-owner', schema.name)).toEqual(['existing-target'])
+    expect(await cellOf('named-owner', 'unrelated')).toBe('keep')
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Existing name]]', updatedAt: 1000})
+  })
+
+  it('projects a refList member when its previously missing name resolves', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-refs', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    await runPass(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'named-owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'owner'})
+      await tx.create({id: 'late-target', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target'})
+      await tx.create({id: 'named-field', workspaceId: WS, parentId: 'named-owner', orderKey: 'a0', content: '::((named-ref-field))'})
+      await tx.create({id: 'named-value', workspaceId: WS, parentId: 'named-field', orderKey: 'a0', content: '[[Late name]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('named-value')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    const before = await repo.load('named-value')
+    await repo.tx(tx => tx.setProperty('late-target', aliasesProp, ['Late name']), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('named-value')).toBe('late-target')
+      expect(await cellOf('named-owner', schema.name)).toEqual(['late-target'])
+    })
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Late name]]', updatedAt: before!.updatedAt})
+  })
+
   it('projects the owner cell when the claim turns a marked row into a field row', async () => {
     await flipWorkspace()
     const repo = setup()

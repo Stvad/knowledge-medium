@@ -1504,7 +1504,11 @@ export class TxImpl implements Tx {
     })
   }
 
-  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void {
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>, workspaceId?: string): void {
+    if (workspaceId !== undefined) {
+      this.assertWritableWorkspace(workspaceId)
+      this.pinWorkspace(workspaceId)
+    }
     if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
     this.ctx.sameTxEvents.push({name, payload})
   }
