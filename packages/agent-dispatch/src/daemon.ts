@@ -24,6 +24,7 @@ import {
   loadContributorSelection,
 } from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, watcherWorkspace, type DaemonConfig } from './config.js'
+import { cloudProviderSwitch } from './workspace.js'
 import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
@@ -92,6 +93,10 @@ const main = async () => {
     const workspaceWatcher = config.watchers.find(watcher => watcherWorkspace(watcher))
     if (workspaceWatcher && process.platform !== 'darwin') {
       throw new Error(`watcher "${workspaceWatcher.name}": runner.workspace is supported on macOS only, where its sandbox is verified`)
+    }
+    const providerSwitch = config.billing === 'api' ? cloudProviderSwitch(process.env) : null
+    if (workspaceWatcher && providerSwitch) {
+      throw new Error(`watcher "${workspaceWatcher.name}": runner.workspace bills the API through an Anthropic key only, not ${providerSwitch}; its provider credentials are not passed to the run`)
     }
     if (config.watchers.length > 0) {
       const selection = await loadContributorSelection(config.profile, config.workspaceId)

@@ -128,6 +128,12 @@ const PASSED_ENV = [
   'CLAUDE_CONFIG_DIR', 'NODE_EXTRA_CA_CERTS',
 ]
 
+/** The cloud-provider switch set in `env`, if any. A workspace run is passed only a direct
+ *  Anthropic credential, not the provider's own (AWS, Google, Azure), so the daemon refuses
+ *  the combination (daemon.ts) rather than start runs that cannot sign in. */
+export const cloudProviderSwitch = (env: NodeJS.ProcessEnv): string | null =>
+  ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].find(name => env[name]) ?? null
+
 /** `credentialEnv`: variables to pass as well, such as an API key the run bills to. */
 export const workspaceEnv = (env: NodeJS.ProcessEnv, root: string, credentialEnv: readonly string[]): NodeJS.ProcessEnv => {
   const passed = [...PASSED_ENV, ...credentialEnv]

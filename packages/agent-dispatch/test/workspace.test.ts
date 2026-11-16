@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {BILLING_ENV_DENYLIST} from '../src/runner'
 import {
+  cloudProviderSwitch,
   ensurePrivateDir,
   resolveWorkspaceCwd,
   WORKSPACE_APPROVED_TOOLS,
@@ -124,6 +125,14 @@ describe('workspaceSettings', () => {
   it('keeps the credentials Claude Code holds out of sandboxed commands', () => {
     expect(settings.sandbox.credentials.envVars.map(entry => entry.name)).toEqual([...BILLING_ENV_DENYLIST])
     expect(new Set(settings.sandbox.credentials.envVars.map(entry => entry.mode))).toEqual(new Set(['deny']))
+  })
+})
+
+describe('cloudProviderSwitch', () => {
+  it('names a cloud-provider switch, whose credentials a workspace run does not get', () => {
+    expect(cloudProviderSwitch({CLAUDE_CODE_USE_BEDROCK: '1', AWS_REGION: 'us-east-1'})).toBe('CLAUDE_CODE_USE_BEDROCK')
+    expect(cloudProviderSwitch({CLAUDE_CODE_USE_VERTEX: '1'})).toBe('CLAUDE_CODE_USE_VERTEX')
+    expect(cloudProviderSwitch({ANTHROPIC_API_KEY: 'sk-ant', CLAUDE_CODE_USE_BEDROCK: ''})).toBeNull()
   })
 })
 
