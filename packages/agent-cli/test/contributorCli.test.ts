@@ -160,7 +160,7 @@ describe('compiled CLI contributor commands', {timeout: 120_000}, () => {
     expect(stdout).toContain('((media-1))')
   })
 
-  it('add-media types an .svg as an image without --mime, which no byte sniffing recognises', async () => {
+  it('add-media types an .svg as an image without --mime', async () => {
     const file = path.join(tempDir, 'pic.svg')
     await fs.writeFile(file, '<svg/>')
     await runCli(['--contributor', 'none', 'add-media', file])

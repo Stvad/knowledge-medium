@@ -723,7 +723,8 @@ export const addMediaCommandSchema = z.looseObject({
   base64: z.string(),
   filename: z.string().optional().describe('The block\'s content; the file\'s own name by default'),
   mime: z.string().optional().describe(
-    'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: application/octet-stream',
+    'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: application/octet-stream; '
+    + 'kmagent add-media and the MCP add_media tool send image/svg+xml for a .svg filename',
   ),
   workspaceId: z.string().optional().describe('Asserts the workspace open in the app tab; a write goes nowhere else'),
   ...contributorField,
