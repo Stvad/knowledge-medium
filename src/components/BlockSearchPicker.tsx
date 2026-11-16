@@ -57,6 +57,8 @@ export interface BlockSearchPickerProps {
   /** Disables the search input and every result item — for a caller with
    *  a commit pending. Defaults to false. */
   disabled?: boolean
+  /** Blocks offered before anything is typed, under their own heading. */
+  suggestions?: {heading: string; blocks: readonly {blockId: string; content: string}[]}
   onSelect: (blockId: string) => void
   onCancel: () => void
 }
@@ -68,6 +70,7 @@ export function BlockSearchPicker({
   workspaceId,
   excludeBlockIds,
   showBlocks = true,
+  suggestions,
   disabled = false,
   onSelect,
   onCancel,
@@ -164,6 +167,21 @@ export function BlockSearchPicker({
             ? "Search failed — check the console, then edit the query to retry."
             : trimmedQuery ? 'No results.' : 'Type to search.'}
         </CommandEmpty>
+
+        {!trimmedQuery && suggestions && suggestions.blocks.length > 0 && (
+          <CommandGroup heading={suggestions.heading}>
+            {suggestions.blocks.map(match => (
+              <CommandItem
+                key={`suggested:${match.blockId}`}
+                value={`suggested:${match.blockId}`}
+                onSelect={() => onSelect(match.blockId)}
+                disabled={disabled}
+              >
+                <span className="truncate">{truncate(match.content, 80)}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
 
         {aliases.length > 0 && (
           <CommandGroup heading="Pages">

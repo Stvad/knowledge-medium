@@ -21,9 +21,18 @@ describe('placeCards', () => {
     expect(placeCards(cards([0, 40], [10, 100], [20, 40], [400, 10]), 1, 8, 1000)).toEqual([-38, 10, 118, 400])
   })
 
-  it('leaves the focused card unpinned while its row is out of view', () => {
-    expect(placeCards(cards([0, 80], [20, 40], [1200, 40]), 2, 8, 1000)).toEqual([0, 88, 1200])
-    expect(placeCards(cards([-50, 40], [20, 40]), 0, 8, 1000)).toEqual([-50, 20])
+  it('keeps the focused card in view while its row is scrolled away, the others flowing around it', () => {
+    expect(placeCards(cards([0, 80], [20, 40], [1200, 40]), 2, 8, 1000)).toEqual([0, 88, 960])
+    expect(placeCards(cards([-50, 40], [20, 40]), 0, 8, 1000)).toEqual([0, 48])
+    expect(placeCards(cards([-900, 40], [-500, 300], [-100, 40]), 1, 8, 1000)).toEqual([-900, 0, 308])
+  })
+
+  it('tops a focused card taller than the view at the view’s top once its row is above it', () => {
+    expect(placeCards(cards([-200, 1500]), 0, 8, 1000)).toEqual([0])
+  })
+
+  it('leaves a focused card whose row is in view at its row, so activating it never moves it', () => {
+    expect(placeCards(cards([600, 900]), 0, 8, 1000)).toEqual([600])
   })
 
   it('places nothing for no cards', () => {

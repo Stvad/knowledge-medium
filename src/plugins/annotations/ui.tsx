@@ -16,7 +16,7 @@
  *   comment in the root's place (`ZoomableSurface`).
  */
 
-import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type MouseEvent, type ReactNode} from 'react'
 import type {ReactCodeMirrorRef} from '@uiw/react-codemirror'
 import {MessageSquare, PanelRight} from 'lucide-react'
 import type {Block} from '@/data/block'
@@ -55,7 +55,9 @@ import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
 import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
+import {outlineLinkedBlocks} from './commentLinks.ts'
 import {deleteCommentFromCard} from './deleteComment.ts'
+import {moveCommentToOwnThread} from './ownThreadPicker.tsx'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
 import {confirmedAnchor, reanchorThread} from './reanchor.ts'
@@ -111,7 +113,7 @@ const useReadOnly = (repo: Repo): boolean =>
 
 const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
 
-const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
+export const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
 
 const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
 
@@ -632,8 +634,9 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
   const all = useThreadSummaries(block)
   const threads = useMemo(() => threadsUnderComment(all, chain), [all, chain])
   const highlights = useHighlightFeed(block, chain)
+  const outlineLinked = useOutlineLinked(block)
   return (
-    <div className="w-full">
+    <div className="w-full" {...outlineLinked}>
       <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
         <Inner block={block}/>
       </MarkdownInputProvider>
@@ -641,6 +644,9 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
         <div className="flex gap-2 pb-0.5">
           <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
           <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
+          <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.panelId).catch(reportFailure)}>
+            Own thread
+          </ActionButton>
         </div>
       )}
       {threads.length > 0 && (
@@ -652,10 +658,37 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
   )
 }
 
+/** Pointer handlers outlining the page's blocks the comment links while the
+ *  pointer is over it. */
+const useOutlineLinked = (block: Block) => {
+  const undo = useRef<(() => void) | null>(null)
+  const clear = useCallback(() => {
+    undo.current?.()
+    undo.current = null
+  }, [])
+  useEffect(() => clear, [clear])
+  return {
+    onMouseEnter: (event: MouseEvent<HTMLElement>) => {
+      clear()
+      const panelEl = event.currentTarget.closest<HTMLElement>('[data-panel-id]')
+      const comment = block.peek()
+      if (panelEl && comment) undo.current = outlineLinkedBlocks(block.repo, panelEl, comment)
+    },
+    onMouseLeave: clear,
+  }
+}
+
 const decorateComment = cachedContentDecorator(CommentActions, 'WithCommentActions')
 
+/** A property row, or a value row under one, belongs to its owner, not the
+ *  thread: it is not a comment to reply to, delete or move. */
+const isPropertyRow = (ctx: BlockResolveContext): boolean => {
+  const data = ctx.block.peek()
+  return data?.isFieldForm === true || (!!data?.parentId && ctx.repo.block(data.parentId).peek()?.isFieldForm === true)
+}
+
 export const commentActionsContribution: BlockContentDecoratorContribution = ctx =>
-  inCard(ctx.blockContext) && !ctx.types.includes(THREAD_TYPE) ? decorateComment : null
+  inCard(ctx.blockContext) && !ctx.types.includes(THREAD_TYPE) && !isPropertyRow(ctx) ? decorateComment : null
 
 // ──── Bullet menu ────
 

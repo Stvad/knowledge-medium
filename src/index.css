@@ -411,6 +411,12 @@
 }
 
 @layer components {
+  /* A block of the page that the comment under the pointer links
+     (annotations' `commentLinks.ts` sets the attribute). */
+  [data-comment-linked] {
+    @apply rounded-sm bg-yellow-400/15 ring-2 ring-yellow-500/60;
+  }
+
   /* Active-panel indicator. Marks which panel currently owns
      keystrokes (driven by `activePanelIdProp` on the layout
      session) by fading the inactive panels. The :has() guard

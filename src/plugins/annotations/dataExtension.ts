@@ -8,7 +8,7 @@ import type {AppExtension} from '@/facets/facet'
 import {backlinkEdgeExclusionsFacet} from '@/plugins/backlinks/edgeExclusions.js'
 import {commentsPageSpec} from './container.ts'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
-import {threadIdsForBlockQuery} from './queries.ts'
+import {commentLinksForBlockQuery, threadIdsForBlockQuery} from './queries.ts'
 import {threadsInScopeQuery} from './scopeThreads.ts'
 import {threadsForBlockQuery} from './summaries.ts'
 import {annotationPropertySeeds, annotationTargetProp, annotationThreadType, THREAD_TYPE} from './schema.ts'
@@ -23,6 +23,7 @@ export const annotationsDataExtension: AppExtension = [
   definitionSeedsFacet.of(annotationMarginShareProp, {source: SOURCE}),
   typeSeedsFacet.of(annotationThreadType, {source: SOURCE}),
   queriesFacet.of(threadIdsForBlockQuery, {source: SOURCE}),
+  queriesFacet.of(commentLinksForBlockQuery, {source: SOURCE}),
   queriesFacet.of(threadsForBlockQuery, {source: SOURCE}),
   queriesFacet.of(threadsInScopeQuery, {source: SOURCE}),
   sameTxProcessorsFacet.of(followSplitProcessor, {source: SOURCE}),
