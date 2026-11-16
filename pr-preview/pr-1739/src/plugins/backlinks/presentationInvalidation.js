@@ -1,1 +1,1 @@
-export{jQ as BACKLINK_PRESENTATION_CHANNEL,MQ as backlinkPresentationInvalidation,NQ as backlinkPresentationTargetKey}from"../../../chunks/app-CmHL9r1B.js";
+export{jQ as BACKLINK_PRESENTATION_CHANNEL,MQ as backlinkPresentationInvalidation,NQ as backlinkPresentationTargetKey}from"../../../chunks/app-CcgvZxwp.js";

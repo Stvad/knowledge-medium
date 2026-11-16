@@ -1,1 +1,1 @@
-export{bg as assertActiveWorkspace}from"../../../chunks/app-CmHL9r1B.js";
+export{bg as assertActiveWorkspace}from"../../../chunks/app-CcgvZxwp.js";

@@ -1,1 +1,1 @@
-export{XC as SpatialNavigationShellDecorator}from"../../../chunks/app-CmHL9r1B.js";
+export{XC as SpatialNavigationShellDecorator}from"../../../chunks/app-CcgvZxwp.js";
