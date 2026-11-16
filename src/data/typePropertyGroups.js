@@ -1,1 +1,1 @@
-export{OV as typePropertyGroups}from"../../chunks/app-DokRHCWM.js";
+export{OV as typePropertyGroups}from"../../chunks/app-DJ8i4KL6.js";

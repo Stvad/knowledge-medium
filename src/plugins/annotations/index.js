@@ -1,1 +1,1 @@
-export{tf as annotationsPlugin}from"../../../chunks/app-DokRHCWM.js";
+export{tf as annotationsPlugin}from"../../../chunks/app-DJ8i4KL6.js";

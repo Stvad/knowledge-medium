@@ -1,1 +1,1 @@
-export{Vb as richPastePlugin}from"../../../chunks/app-DokRHCWM.js";
+export{Vb as richPastePlugin}from"../../../chunks/app-DJ8i4KL6.js";

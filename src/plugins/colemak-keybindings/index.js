@@ -1,1 +1,1 @@
-export{LC as COLEMAK_KEYBINDINGS_PLUGIN_ID,RC as colemakKeybindingsPlugin,zC as colemakMovementKeybindingOverrides}from"../../../chunks/app-DokRHCWM.js";
+export{LC as COLEMAK_KEYBINDINGS_PLUGIN_ID,RC as colemakKeybindingsPlugin,zC as colemakMovementKeybindingOverrides}from"../../../chunks/app-DJ8i4KL6.js";

@@ -1,1 +1,1 @@
-export{VC as PanelCursorFollowsScroll}from"../../../chunks/app-DokRHCWM.js";
+export{VC as PanelCursorFollowsScroll}from"../../../chunks/app-DJ8i4KL6.js";

@@ -1,1 +1,1 @@
-export{Ch as extensionsOverridesProp,wh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DokRHCWM.js";
+export{Ch as extensionsOverridesProp,wh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DJ8i4KL6.js";

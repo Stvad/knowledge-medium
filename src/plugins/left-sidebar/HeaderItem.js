@@ -1,1 +1,1 @@
-export{VT as LeftSidebarHeaderItem}from"../../../chunks/app-DokRHCWM.js";
+export{VT as LeftSidebarHeaderItem}from"../../../chunks/app-DJ8i4KL6.js";

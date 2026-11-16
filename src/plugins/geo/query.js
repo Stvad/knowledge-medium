@@ -1,1 +1,1 @@
-export{UJ as PLACES_UNDER_BLOCK_QUERY,WJ as placesUnderBlockQuery}from"../../../chunks/app-DokRHCWM.js";
+export{UJ as PLACES_UNDER_BLOCK_QUERY,WJ as placesUnderBlockQuery}from"../../../chunks/app-DJ8i4KL6.js";

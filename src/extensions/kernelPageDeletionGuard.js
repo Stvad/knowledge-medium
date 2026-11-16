@@ -1,1 +1,1 @@
-export{IP as kernelPageDeletionGuard}from"../../chunks/app-DokRHCWM.js";
+export{IP as kernelPageDeletionGuard}from"../../chunks/app-DJ8i4KL6.js";
