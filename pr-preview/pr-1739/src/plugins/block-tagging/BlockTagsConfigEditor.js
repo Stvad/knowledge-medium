@@ -1,1 +1,1 @@
-export{Ou as BlockTagsConfigEditor}from"../../../chunks/app-DSLUEkQ2.js";
+export{Ou as BlockTagsConfigEditor}from"../../../chunks/app-he-oOZgA.js";

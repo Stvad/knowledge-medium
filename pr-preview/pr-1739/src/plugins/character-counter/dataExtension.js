@@ -1,1 +1,1 @@
-export{JZ as characterCounterDataExtension}from"../../../chunks/app-DSLUEkQ2.js";
+export{JZ as characterCounterDataExtension}from"../../../chunks/app-he-oOZgA.js";
