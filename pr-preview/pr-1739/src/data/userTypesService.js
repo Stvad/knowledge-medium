@@ -1,1 +1,1 @@
-export{q6 as USER_TYPES_PROJECTOR_ID,J6 as UserTypesService,Y6 as userTypesProjector}from"../../chunks/app-6U4g4b27.js";
+export{q6 as USER_TYPES_PROJECTOR_ID,J6 as UserTypesService,Y6 as userTypesProjector}from"../../chunks/app-B5jc0kAM.js";

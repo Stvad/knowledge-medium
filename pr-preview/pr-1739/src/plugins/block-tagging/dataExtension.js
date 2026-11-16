@@ -1,1 +1,1 @@
-export{Au as blockTaggingDataExtension}from"../../../chunks/app-6U4g4b27.js";
+export{Au as blockTaggingDataExtension}from"../../../chunks/app-B5jc0kAM.js";

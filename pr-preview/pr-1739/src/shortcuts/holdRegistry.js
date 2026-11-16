@@ -1,1 +1,1 @@
-export{UP as cancelArmedHolds,WP as registerArmedHold}from"../../chunks/app-6U4g4b27.js";
+export{UP as cancelArmedHolds,WP as registerArmedHold}from"../../chunks/app-B5jc0kAM.js";

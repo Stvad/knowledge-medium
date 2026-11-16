@@ -1,1 +1,1 @@
-export{GL as useIsMobile,KL as usePointerCoarse}from"../../chunks/app-6U4g4b27.js";
+export{GL as useIsMobile,KL as usePointerCoarse}from"../../chunks/app-B5jc0kAM.js";
