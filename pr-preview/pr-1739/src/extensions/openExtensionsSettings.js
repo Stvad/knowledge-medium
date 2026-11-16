@@ -1,1 +1,1 @@
-export{pI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,mI as openExtensionsSettings}from"../../chunks/app-CcgvZxwp.js";
+export{gI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,_I as openExtensionsSettings}from"../../chunks/app-6U4g4b27.js";

@@ -1,1 +1,1 @@
-export{MI as PropertyDisplayScope}from"../../../chunks/app-CcgvZxwp.js";
+export{FI as PropertyDisplayScope}from"../../../chunks/app-6U4g4b27.js";

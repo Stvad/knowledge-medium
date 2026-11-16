@@ -1,1 +1,1 @@
-export{XG as adoptOrCreatePropertySchema}from"../../chunks/app-CcgvZxwp.js";
+export{$G as adoptOrCreatePropertySchema}from"../../chunks/app-6U4g4b27.js";
