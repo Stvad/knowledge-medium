@@ -161,15 +161,18 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
     return 'Using a tool'
   }
 
-  const activityForItem = (item: Record<string, unknown>, completed: boolean) => {
+  const activityForItem = (item: Record<string, unknown>, eventType: 'item.started' | 'item.updated' | 'item.completed') => {
     const type = item.type
+    const stepId = typeof item.id === 'string' && item.id.length > 0 ? item.id : null
+    if (!stepId || (type !== 'command_execution' && type !== 'web_search' && type !== 'mcp_tool_call')) return
+    if (eventType === 'item.completed') {
+      emit({kind: 'activity-end', stepId})
+      return
+    }
     const label = type === 'command_execution' ? 'Running a command'
       : type === 'web_search' ? 'Searching the web'
-        : type === 'mcp_tool_call' ? mcpToolActivityLabel(item)
-          : type === 'reasoning' ? 'Thinking' : null
-    if (label === null) return
-    emit({kind: 'activity', label, ...(typeof item.id === 'string' ? {stepId: item.id} : {})})
-    if (completed && typeof item.id === 'string') emit({kind: 'activity-end', stepId: item.id})
+        : mcpToolActivityLabel(item)
+    emit({kind: 'activity', label, stepId})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -202,7 +205,7 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
         }
         return
       }
-      activityForItem(itemRecord, type === 'item.completed')
+      activityForItem(itemRecord, type)
       return
     }
 

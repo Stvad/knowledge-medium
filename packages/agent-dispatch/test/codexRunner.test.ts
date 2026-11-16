@@ -112,30 +112,17 @@ describe('scrubCodexEnv', () => {
 describe('createCodexJsonlParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
-  it('preserves MCP server labels and handles fallback name shapes without item ids', () => {
+  it('does not start completed tool items and ignores invalid step ids', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))
-    for (const fields of [
-      {tool: 'mcp__km__comments'},
-      {server: '', tool: 'mcp__km__comments'},
-      {server: 'km', toolName: 'comments'},
-      {server: 'km', tool: ''},
-      {server: 'km', tool: ['comments']},
-      {server: 'km'},
-      {server: 42, tool: 'mcp__km__comments'},
-      {id: 42, server: 'km', tool: 'comments'},
-      {},
-    ]) parser.feed(line({type: 'item.completed', item: {type: 'mcp_tool_call', ...fields}}))
+    for (const id of [undefined, '', 42]) {
+      parser.feed(line({type: 'item.started', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}}))
+      parser.feed(line({type: 'item.updated', item: {id, type: 'command_execution'}}))
+    }
+    parser.feed(line({type: 'item.completed', item: {id: 'tool-1', type: 'mcp_tool_call', server: 'km', tool: 'comments'}}))
+    parser.feed(line({type: 'item.completed', item: {id: 'tool-2', type: 'some_brand_new_type'}}))
     expect(events).toEqual([
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km'},
-      {kind: 'activity', label: 'km'},
-      {kind: 'activity', label: 'km'},
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'Using a tool'},
+      {kind: 'activity-end', stepId: 'tool-1'},
     ])
   })
 
@@ -151,9 +138,7 @@ describe('createCodexJsonlParser', () => {
     expect(events).toEqual([
       {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
       {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
-      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
       {kind: 'activity-end', stepId: 'tool-1'},
-      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
       {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
       {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
       {kind: 'activity-end', stepId: 'tool-2'},
@@ -216,7 +201,7 @@ describe('createCodexJsonlParser', () => {
     expect(result.resultText).toBe('')
   })
 
-  it('tolerates unknown/unobserved item types without throwing', () => {
+  it('starts only known tool items while active, ignores reasoning, and ends completed tools', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))
 
@@ -224,8 +209,11 @@ describe('createCodexJsonlParser', () => {
       parser.feed(line({type: 'thread.started', thread_id: 't1'}))
       parser.feed(line({type: 'item.started', item: {id: 'item_1', type: 'reasoning'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_1', type: 'reasoning'}}))
+      parser.feed(line({type: 'item.started', item: {id: 'item_2', type: 'command_execution', command: 'ls'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_2', type: 'command_execution', command: 'ls'}}))
+      parser.feed(line({type: 'item.updated', item: {id: 'item_3', type: 'web_search', query: 'foo'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_3', type: 'web_search', query: 'foo'}}))
+      parser.feed(line({type: 'item.started', item: {id: 'item_4', type: 'mcp_tool_call', tool: 'mcp__km__search'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_4', type: 'mcp_tool_call', tool: 'mcp__km__search'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_5', type: 'some_brand_new_type', whatever: true}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_6', type: 'agent_message', text: 'done'}}))
@@ -234,9 +222,6 @@ describe('createCodexJsonlParser', () => {
 
     expect(events).toEqual([
       {kind: 'session', sessionId: 't1'},
-      {kind: 'activity', label: 'Thinking', stepId: 'item_1'},
-      {kind: 'activity', label: 'Thinking', stepId: 'item_1'},
-      {kind: 'activity-end', stepId: 'item_1'},
       {kind: 'activity', label: 'Running a command', stepId: 'item_2'},
       {kind: 'activity-end', stepId: 'item_2'},
       {kind: 'activity', label: 'Searching the web', stepId: 'item_3'},

@@ -79,6 +79,7 @@ const logPreview = (content: string | null | undefined): string => {
  *  it to `status:error`. Bounded and short so a genuinely-down bridge fails
  *  fast; retrying is safe because the reconcile is keyed (reconcileReply). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
+const THINKING_DEBOUNCE_MS = 3_000
 
 /** agent:session values are executor-scoped: codex thread ids are stored
  *  as `codex:<id>`, claude session ids bare (anything stored before
@@ -498,8 +499,10 @@ export const createEngine = (deps: EngineDeps) => {
       type Step = {label: string, startedAt: number}
       const seenSteps = new Set<string>()
       const pendingSteps = new Map<string, Step>()
-      const lastPendingStep = () => [...pendingSteps.values()].at(-1)
+      const oldestPendingStep = () => pendingSteps.values().next().value
       const writeActivity = (step: Step) => queueWrite(() => graph.setActivity(sourceId, step.label, step.startedAt))
+      let thinkingTimer: ReturnType<typeof setTimeout> | undefined
+      const cancelThinking = () => clearTimeout(thinkingTimer)
       let lastTextWriteMs = 0
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
@@ -508,23 +511,23 @@ export const createEngine = (deps: EngineDeps) => {
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
+          if (seenSteps.has(event.stepId)) return
+          seenSteps.add(event.stepId)
+          cancelThinking()
           const step = {label: event.label, startedAt: now()}
-          // One owner for both runners: duplicate reports cannot restart a
-          // step, and completing a parallel call cannot age another from zero.
-          if (event.stepId === undefined) {
-            if (pendingSteps.size > 0) return
-          } else {
-            if (seenSteps.has(event.stepId)) return
-            seenSteps.add(event.stepId)
-            pendingSteps.set(event.stepId, step)
-          }
-          writeActivity(step)
+          pendingSteps.set(event.stepId, step)
+          if (oldestPendingStep() === step) writeActivity(step)
         } else if (event.kind === 'activity-end') {
-          const previous = lastPendingStep()
+          const previous = oldestPendingStep()
           pendingSteps.delete(event.stepId)
-          const next = lastPendingStep()
+          const next = oldestPendingStep()
           if (next === previous) return
-          writeActivity(next ?? {label: 'Thinking', startedAt: now()})
+          if (next) {
+            writeActivity(next)
+          } else {
+            const endedAt = now()
+            thinkingTimer = setTimeout(() => writeActivity({label: 'Thinking', startedAt: endedAt}), THINKING_DEBOUNCE_MS)
+          }
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text
@@ -562,7 +565,12 @@ export const createEngine = (deps: EngineDeps) => {
       }
 
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
-      const result = await runTask(runOptions)
+      let result: AgentRunResult
+      try {
+        result = await runTask(runOptions)
+      } finally {
+        cancelThinking()
+      }
       await writes // ordering guarantee: no progress write races the final one below
       // On every terminal reply, a failed or cancelled run's too: it may have
       // written its memory before it ended.

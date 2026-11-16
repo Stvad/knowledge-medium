@@ -59,15 +59,7 @@ const RunningChip = ({ chip, nowMs }: { chip: ChipState; nowMs: number }) => {
       ) : (
         <>
           <ChipLabel>{chip.executorLabel}</ChipLabel>
-          {elapsed && <span className="shrink-0 tabular-nums">{elapsed}</span>}
-          {activity && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="min-w-0 flex-[2] truncate text-left leading-4">{chip.activity}</span>
-              <span aria-hidden="true">·</span>
-              <span className="shrink-0 tabular-nums">{activity.ageLabel}</span>
-            </>
-          )}
+          {(activity?.ageLabel ?? elapsed) && <span className="shrink-0 tabular-nums">{activity?.ageLabel ?? elapsed}</span>}
         </>
       )}
     </>
@@ -113,9 +105,9 @@ const AgentStatusChipMenu = ({
   chip: ChipViewState
   block: Block
 }) => {
-  const nowMs = useRunningClock(chip.kind === 'running')
+  const nowMs = useRunningClock(chip.kind === 'running' && !chip.cancelling)
   const activity = activityStateFor(chip, nowMs)
-  const className = `${CHIP_CLASS} ${activity ? 'w-72 max-w-[50vw]' : 'w-24'}${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
+  const className = `${CHIP_CLASS} w-24${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
   const canStop = chip.kind === 'running' && !chip.cancelling
   if (!chip.resumeCommand && !canStop) {
     return (
@@ -135,7 +127,7 @@ const AgentStatusChipMenu = ({
         <button
           type="button"
           title={chipTitle(chip, nowMs)}
-          aria-label={`${chip.executorLabel} task actions`}
+          aria-label={`${chip.executorLabel} task actions${activity?.stalled ? `; warning: no progress for ${activity.ageLabel}` : ''}`}
           data-agent-dispatch-chip={chip.kind}
           onClick={event => event.stopPropagation()}
           className={`${className} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
@@ -188,7 +180,7 @@ const AgentStatusChipItem: BlockRenderer = ({block}) => {
   const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
   if (!chip) return null
 
-  return <AgentStatusChipMenu chip={chip} block={block} />
+  return <AgentStatusChipMenu key={`${chip.kind}:${chip.cancelling}`} chip={chip} block={block} />
 }
 
 const statusChipItem: BlockGutterItem = {corner: 'top-right', component: AgentStatusChipItem}

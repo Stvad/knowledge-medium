@@ -23,7 +23,7 @@ import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSa
  *  they last saw. */
 export type RunEvent =
   | {kind: 'session', sessionId: string}
-  | {kind: 'activity', label: string, stepId?: string}
+  | {kind: 'activity', label: string, stepId: string}
   | {kind: 'activity-end', stepId: string}
   | {kind: 'text', text: string}
 
@@ -251,10 +251,10 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   }
 
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
+    const id = typeof toolUse.id === 'string' && toolUse.id.length > 0 ? toolUse.id : null
     const name = typeof toolUse.name === 'string' ? toolUse.name : null
-    if (!name) return
-    emit({kind: 'activity', label: humanizeToolName(name),
-      ...(typeof toolUse.id === 'string' ? {stepId: toolUse.id} : {})})
+    if (!id || !name) return
+    emit({kind: 'activity', label: humanizeToolName(name), stepId: id})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -274,7 +274,7 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       const content = Array.isArray(message?.content) ? message?.content : []
       if (type === 'user') {
         for (const item of content) {
-          if (isRecord(item) && item.type === 'tool_result' && typeof item.tool_use_id === 'string') {
+          if (isRecord(item) && item.type === 'tool_result' && typeof item.tool_use_id === 'string' && item.tool_use_id.length > 0) {
             emit({kind: 'activity-end', stepId: item.tool_use_id})
           }
         }
@@ -317,8 +317,6 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
         return
       }
       if (eventType === 'content_block_start') {
-        const contentBlock = streamEvent.content_block as Record<string, unknown> | undefined
-        if (contentBlock?.type === 'tool_use') activityForToolUse(contentBlock)
         return
       }
       if (eventType === 'content_block_delta') {

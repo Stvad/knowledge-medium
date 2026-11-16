@@ -131,7 +131,7 @@ describe('dispatch attribution', () => {
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
     const engine = engineFor(async options => {
       options.onEvent?.({kind: 'session', sessionId: 'sess-1'})
-      options.onEvent?.({kind: 'activity', label: 'Reading the page'})
+      options.onEvent?.({kind: 'activity', label: 'Reading the page', stepId: 'read-page'})
       options.onEvent?.({kind: 'text', text: 'Half an answer'})
       // The progress writes land while the run is live, not only at its end.
       await vi.waitFor(async () => expect((await repo.load(MENTION))?.properties)
@@ -358,7 +358,7 @@ describe('dispatch writes and the person\'s undo stack', () => {
   it('keeps a run\'s writes off it, so undoing an edit made mid-run keeps the run done and its reply', async () => {
     repo.undoManager.clear()
     const engine = engineFor(async options => {
-      options.onEvent?.({kind: 'activity', label: 'Reading the page'})
+      options.onEvent?.({kind: 'activity', label: 'Reading the page', stepId: 'read-page'})
       options.onEvent?.({kind: 'text', text: 'Half an answer'})
       // The person keeps typing into the mention while the run is live.
       await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this, briefly'}) }, opts)

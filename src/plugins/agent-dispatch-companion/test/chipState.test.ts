@@ -59,23 +59,23 @@ describe('chipStateFor', () => {
 describe('activityStateFor', () => {
   const now = 1_000_000
 
-  it('warns only after the strict threshold, with a shorter threshold for km steps', () => {
+  it('warns only for km steps after the strict bridge-relative threshold', () => {
     const km = chipStateFor({
       'agent:status': 'running',
       'agent:activity': 'km: comments',
-      'agent:activity-at': now - 60_000,
+      'agent:activity-at': now - 20_000,
     })!
-    expect(activityStateFor(km, now)).toMatchObject({ageLabel: '60s', stalled: false})
-    expect(activityStateFor(km, now + 1)).toMatchObject({ageLabel: '61s', stalled: true})
+    expect(activityStateFor(km, now)).toMatchObject({ageLabel: '20s', stalled: false})
+    expect(activityStateFor(km, now + 1)).toMatchObject({ageLabel: '21s', stalled: true})
 
     const other = chipStateFor({
       'agent:status': 'running',
       'agent:activity': 'Searching the web',
-      'agent:activity-at': now - 300_000,
+      'agent:activity-at': now - 10 * 60_000,
     })!
-    expect(activityStateFor(other, now)).toMatchObject({ageLabel: '5m', stalled: false})
-    expect(activityStateFor(other, now + 1)).toMatchObject({stalled: true})
-    expect(chipTitle(other, now + 1)).toContain('Long-running step with no progress for 5m')
+    expect(activityStateFor(other, now)).toMatchObject({ageLabel: '10m', stalled: false})
+    expect(activityStateFor(other, now + 1)).toMatchObject({stalled: false})
+    expect(chipTitle(other, now + 1)).not.toContain('No progress')
   })
 
   it('returns no step age for missing, invalid, zero, or empty activity', () => {

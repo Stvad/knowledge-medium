@@ -1,10 +1,11 @@
 /**
  * Pure decision logic for the Agent status chip: block properties →
  * chip descriptor. The property protocol is owned by the agent-dispatch
- * daemon (packages/agent-dispatch/src/config.ts PROPS) — names are
- * duplicated here because the app bundle can't depend on that node
- * package; keep the two in sync.
+ * daemon (packages/agent-dispatch/src/config.ts PROPS) — property names
+ * are duplicated here because this browser-side projection consumes the
+ * daemon-owned graph fields.
  */
+import { BRIDGE_COMMAND_TIMEOUT_MS } from '@knowledge-medium/agent-cli/protocol'
 
 export const AGENT_PROPS = {
   status: 'agent:status',
@@ -102,16 +103,19 @@ export interface ActivityState {
   stalled: boolean
 }
 
+const KM_STALLED_THRESHOLD_MS = BRIDGE_COMMAND_TIMEOUT_MS / 3
+
 /** The current step's age and warning state; only timestamped running work
  *  with a non-empty activity label has a visible age. Consumers recompute this
  *  small value to avoid threading derived state through the menu. */
 export const activityStateFor = (chip: ChipState, nowMs: number): ActivityState | null => {
   if (chip.kind !== 'running' || chip.cancelling || !chip.activity || chip.activityAtMs === null) return null
+  // Device clock skew can make activity age approximate; future timestamps are clamped below.
   const ageMs = Math.max(0, nowMs - chip.activityAtMs)
-  const thresholdMs = chip.activity.startsWith('km:') ? 60_000 : 300_000
+  const stalled = chip.activity.startsWith('km:') && ageMs > KM_STALLED_THRESHOLD_MS
   return {
     ageLabel: elapsedLabel(Math.ceil(ageMs / 1_000)),
-    stalled: ageMs > thresholdMs,
+    stalled,
   }
 }
 
@@ -128,9 +132,7 @@ export const chipTitle = (chip: ChipState, nowMs = Date.now()): string => {
       const activity = activityStateFor(chip, nowMs)
       const detail = `${base} — ${chip.activity}`
       if (!activity?.stalled) return detail
-      return chip.activity.startsWith('km:')
-        ? `${detail} · No progress for ${activity.ageLabel} on ${chip.activity}; the app tab may not be answering`
-        : `${detail} · Long-running step with no progress for ${activity.ageLabel}`
+      return `${detail} · No progress for ${activity.ageLabel}; the app tab may not be answering`
     }
     case 'done':
       return chip.updatedAtMs

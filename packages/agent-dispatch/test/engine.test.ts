@@ -1542,7 +1542,7 @@ describe('mention lifecycle', () => {
 })
 
 describe('live progress streaming', () => {
-  it.each(['claude', 'codex'] as const)('%s restores an outstanding parallel tool with its original age', async executor => {
+  it.each(['claude', 'codex'] as const)('%s keeps the oldest outstanding tool visible with its original age', async executor => {
     const {graph, activityWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
     })
@@ -1557,13 +1557,12 @@ describe('live progress streaming', () => {
         : {type: 'item.completed', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
       start('slow-tool')
       clock += 5_000
-      start('slow-tool') // A repeated report is not a new start.
+      start('slow-tool')
       clock += 5_000
       start('quick-tool')
       clock += 2_000
       end('quick-tool')
       end('quick-tool')
-      options.onEvent?.({kind: 'activity', label: 'Thinking'})
       clock += 70_000
       end('slow-tool')
       end('slow-tool')
@@ -1571,18 +1570,13 @@ describe('live progress streaming', () => {
     }})
     await engine.tick()
     await engine.drain()
-    expect(activityWrites).toEqual([
-      {id: 'b-1', label: 'km: comments', nowMs: NOW},
-      {id: 'b-1', label: 'km: comments', nowMs: NOW + 10_000},
-      {id: 'b-1', label: 'km: comments', nowMs: NOW},
-      {id: 'b-1', label: 'Thinking', nowMs: NOW + 82_000},
-    ])
-    const restored = activityWrites[2]
-    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': restored.label, 'agent:activity-at': restored.nowMs})!
+    expect(activityWrites).toEqual([{id: 'b-1', label: 'km: comments', nowMs: NOW}])
+    const oldest = activityWrites[0]
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': oldest.label, 'agent:activity-at': oldest.nowMs})!
     expect(activityStateFor(chip, NOW + 70_000)).toMatchObject({stalled: true})
   })
 
-  it('keeps the latest tool age when an earlier parallel tool completes first', async () => {
+  it('advances to the next oldest tool at its original start when the oldest completes', async () => {
     const {graph, activityWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
     })
@@ -1602,66 +1596,137 @@ describe('live progress streaming', () => {
     expect(activityWrites).toEqual([
       {id: 'b-1', label: 'km: comments', nowMs: NOW},
       {id: 'b-1', label: 'km: search', nowMs: NOW + 10_000},
-      {id: 'b-1', label: 'Thinking', nowMs: NOW + 30_000},
     ])
   })
 
-  it('does not warn of bridge trouble after a completed tool while Claude thinks', async () => {
+  it('debounces Thinking and skips its write when a new step starts in the window', async () => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+        await vi.advanceTimersByTimeAsync(2_999)
+        expect(activityWrites).toHaveLength(1)
+        options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+        await vi.advanceTimersByTimeAsync(1)
+        expect(activityWrites).toHaveLength(2)
+        options.onEvent?.({kind: 'activity-end', stepId: 'unknown'})
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(activityWrites).toHaveLength(2)
+        options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(activityWrites.map(w => w.label)).toEqual(['km: comments', 'km: search', 'Thinking'])
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(activityWrites).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([false, true])('cancels the pending Thinking write when a run terminates (throws: %s)', async throws => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+        if (throws) throw new Error('runner failed')
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      const writeCount = activityWrites.length
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(activityWrites).toHaveLength(writeCount)
+      expect(propWrites.at(-1)?.status).toBe(throws ? 'error' : 'done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('timestamps consecutive same-label starts before queued writes and clears activity at termination', async () => {
+    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'first'})
+      clock += 30_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+      options.onEvent?.({kind: 'activity', label: 'Searching the web', stepId: 'third'})
+      clock += 90_000
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: search', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 30_000},
+      {id: 'b-1', label: 'Searching the web', nowMs: NOW + 40_000},
+    ])
+    expect(propWrites.at(-1)).toMatchObject({status: 'done', activity: null})
+    expect(blocks.get('b-1')?.properties?.[PROPS.activity]).toBe('')
+  })
+
+  it('starts the step clock only after streamed arguments finalize', async () => {
     const {graph, activityWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
     })
     let clock = NOW
     const engine = engineWith({graph, now: () => clock, runTask: async options => {
       const parser = createStreamJsonParser(options.onEvent)
-      parser.feed(`${JSON.stringify({type: 'assistant', message: {content: [
-        {type: 'tool_use', id: 'tool-1', name: 'mcp__km__comments'},
-      ]}})}\n`)
-      clock += 2_000
-      parser.feed(`${JSON.stringify({type: 'user', message: {content: [
-        {type: 'tool_result', tool_use_id: 'tool-1', content: 'result'},
-      ]}})}\n`)
-      clock += 70_000
+      const feed = (line: unknown) => parser.feed(`${JSON.stringify(line)}\n`)
+      feed({type: 'stream_event', event: {type: 'content_block_start', content_block: {type: 'tool_use', id: 'call', name: 'mcp__km__append_markdown'}}})
+      clock += 50_000
+      feed({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: 'long argument'}}})
+      feed({type: 'assistant', message: {content: [{type: 'tool_use', id: 'call', name: 'mcp__km__append_markdown'}]}})
+      clock += 15_000
+      feed({type: 'user', message: {content: [{type: 'tool_result', tool_use_id: 'call'}]}})
       return okRun()
     }})
     await engine.tick()
     await engine.drain()
-    expect(activityWrites).toEqual([
-      {id: 'b-1', label: 'km: comments', nowMs: NOW},
-      {id: 'b-1', label: 'Thinking', nowMs: NOW + 2_000},
-    ])
-    const last = activityWrites.at(-1)!
-    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': last.label, 'agent:activity-at': last.nowMs})!
-    expect(activityStateFor(chip, clock)).toMatchObject({stalled: false})
+    expect(activityWrites).toEqual([{id: 'b-1', label: 'km: append_markdown', nowMs: NOW + 50_000}])
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': activityWrites[0].label, 'agent:activity-at': activityWrites[0].nowMs})!
+    expect(activityStateFor(chip, clock)).toMatchObject({ageLabel: '15s', stalled: false})
   })
 
-  it('timestamps every activity start before queued writes, including repeated labels, then clears activity', async () => {
-    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] research this'}},
-    })
-    let clock = NOW
-    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
-      options.onEvent?.({kind: 'activity', label: 'km: search'})
-      clock += 30_000
-      options.onEvent?.({kind: 'activity', label: 'km: search'})
-      clock += 10_000
-      options.onEvent?.({kind: 'activity', label: 'Searching the web'})
-      clock += 90_000 // writes run later; their timestamps must remain the event times
-      return okRun()
-    })
-    const engine = engineWith({graph, runTask, now: () => clock})
-
-    await engine.tick()
-    await engine.drain()
-
-    expect(activityWrites).toEqual([
-      {id: 'b-1', label: 'km: search', nowMs: NOW},
-      {id: 'b-1', label: 'km: search', nowMs: NOW + 30_000},
-      {id: 'b-1', label: 'Searching the web', nowMs: NOW + 40_000},
-    ])
-    // Terminal write clears the transient label so it never outlives the run.
-    expect(propWrites.at(-1)).toMatchObject({status: 'done', activity: null})
-    expect(blocks.get('b-1')?.properties?.[PROPS.activity]).toBe('')
+  it('writes each of twenty consecutive same-label starts without intermediate Thinking writes', async () => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        for (let n = 0; n < 20; n++) {
+          options.onEvent?.({kind: 'activity', label: 'km: search', stepId: `step-${n}`})
+          await vi.advanceTimersByTimeAsync(500)
+          options.onEvent?.({kind: 'activity-end', stepId: `step-${n}`})
+          await vi.advanceTimersByTimeAsync(500)
+        }
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      expect(propWrites.at(-1)?.status).toBe('done')
+      expect(activityWrites).toHaveLength(20)
+      expect(activityWrites.every(write => write.label === 'km: search')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('streamReply: placeholder, throttled text reconciles, then the terminal reconcile — all one keyed subtree', async () => {
