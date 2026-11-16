@@ -1,1 +1,0 @@
-export{rN as chipStyle}from"../../../chunks/app-CvUNoYOY.js";

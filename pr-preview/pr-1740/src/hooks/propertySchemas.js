@@ -1,1 +1,0 @@
-export{zG as usePropertySchemas}from"../../chunks/app-CvUNoYOY.js";

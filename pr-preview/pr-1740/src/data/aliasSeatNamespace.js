@@ -1,1 +1,0 @@
-export{Kat as aliasSeatNamespacesInTx,qat as resolveAliasSeatNamespaces}from"../../chunks/app-CvUNoYOY.js";

@@ -1,1 +1,0 @@
-export{lP as approveExtensionHere}from"../../chunks/app-CvUNoYOY.js";

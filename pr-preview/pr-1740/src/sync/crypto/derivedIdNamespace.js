@@ -1,1 +1,0 @@
-export{Tot as deriveWorkspaceIdNamespace}from"../../../chunks/app-CvUNoYOY.js";

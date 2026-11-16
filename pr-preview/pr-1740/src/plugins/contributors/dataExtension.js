@@ -1,1 +1,0 @@
-export{WZ as contributorsDataExtension}from"../../../chunks/app-CvUNoYOY.js";

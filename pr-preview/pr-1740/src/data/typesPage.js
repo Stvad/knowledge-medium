@@ -1,1 +1,0 @@
-export{Bat as getOrCreateTypesPage,Vat as typesPageBlockId,Hat as typesPageSpec}from"../../chunks/app-CvUNoYOY.js";

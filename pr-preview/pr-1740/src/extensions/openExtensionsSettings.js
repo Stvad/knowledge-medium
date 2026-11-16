@@ -1,1 +1,0 @@
-export{sI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,cI as openExtensionsSettings}from"../../chunks/app-CvUNoYOY.js";

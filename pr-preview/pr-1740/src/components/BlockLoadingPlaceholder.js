@@ -1,1 +1,0 @@
-export{BF as BlockLoadingPlaceholder}from"../../chunks/app-CvUNoYOY.js";

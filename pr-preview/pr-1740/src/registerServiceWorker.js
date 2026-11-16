@@ -1,1 +1,0 @@
-export{CP as checkForAppUpdate,wP as registerServiceWorker}from"../chunks/app-CvUNoYOY.js";

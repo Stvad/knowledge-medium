@@ -1,1 +1,0 @@
-export{a5 as agree,o5 as pluralize}from"../../chunks/app-CvUNoYOY.js";

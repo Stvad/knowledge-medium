@@ -1,1 +1,0 @@
-export{Ry as wikilinkMarkdownExtension}from"../../../../../chunks/app-CvUNoYOY.js";

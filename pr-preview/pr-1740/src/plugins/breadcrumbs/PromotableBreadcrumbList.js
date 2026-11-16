@@ -1,1 +1,0 @@
-export{OT as PromotableBreadcrumbList}from"../../../chunks/app-CvUNoYOY.js";

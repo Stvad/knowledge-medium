@@ -1,1 +1,0 @@
-export{Sv as BlockMetaCard}from"../../../chunks/app-CvUNoYOY.js";

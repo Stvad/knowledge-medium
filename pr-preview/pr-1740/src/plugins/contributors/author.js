@@ -1,1 +1,0 @@
-export{vg as authorIdOf}from"../../../chunks/app-CvUNoYOY.js";

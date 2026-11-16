@@ -1,1 +1,0 @@
-export{Sut as defineQuery}from"../../../chunks/app-CvUNoYOY.js";

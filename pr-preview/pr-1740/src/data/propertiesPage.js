@@ -1,1 +1,0 @@
-export{Uat as getOrCreatePropertiesPage,Wat as propertiesPageBlockId,Gat as propertiesPageSpec}from"../../chunks/app-CvUNoYOY.js";

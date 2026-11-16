@@ -1,1 +1,0 @@
-export{xb as useIsReadOnly}from"../../chunks/app-CvUNoYOY.js";

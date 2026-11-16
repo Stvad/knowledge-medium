@@ -1,1 +1,0 @@
-export{DT as usePromotableBreadcrumb}from"../../../chunks/app-CvUNoYOY.js";

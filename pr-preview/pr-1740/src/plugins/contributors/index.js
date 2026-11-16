@@ -1,1 +1,0 @@
-export{Mm as contributorsPlugin}from"../../../chunks/app-CvUNoYOY.js";
