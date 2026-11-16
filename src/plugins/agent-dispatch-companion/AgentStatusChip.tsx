@@ -23,50 +23,49 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { chipStateFor, chipTitle, elapsedLabel, type ChipState } from './chipState.ts'
+import { activityStateFor, chipStateFor, chipTitle, elapsedLabel, type ActivityState, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
 
-/** Ticks once a second while mounted — only running chips mount it. */
-const useElapsedLabel = (sinceMs: number | null): string | null => {
+/** One clock serves the elapsed run time and activity age. */
+const useRunningClock = (running: boolean): number => {
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
+    if (!running) return
     const timer = setInterval(() => setNowMs(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [])
-  if (sinceMs === null) return null
-  return elapsedLabel(Math.max(0, Math.round((nowMs - sinceMs) / 1_000)))
+  }, [running])
+  return nowMs
 }
 
-/** One width for every state and every tick: the pill sits in the block's
- *  gutter, so any change in its width re-wraps the block's text. Anything
- *  variable (the run's activity, a long executor name) goes in the title and
- *  the menu. */
+/** Keep every lifecycle state the same width so age and warning changes never rewrap the gutter. */
 const CHIP_CLASS = `group ${GUTTER_PILL_CLASS} w-24 gap-1 bg-muted px-1 text-muted-foreground`
 
 const ChipLabel = ({children}: {children: ReactNode}) => (
   <span className="min-w-0 flex-1 truncate text-left leading-4">{children}</span>
 )
 
-const RunningChip = ({ chip }: { chip: ChipState }) => {
-  const elapsed = useElapsedLabel(chip.updatedAtMs)
+const RunningChip = ({ chip, activity, nowMs }: { chip: ChipState; activity: ActivityState | null; nowMs: number }) => {
+  const elapsed = chip.updatedAtMs === null
+    ? null
+    : elapsedLabel(Math.max(0, Math.round((nowMs - chip.updatedAtMs) / 1_000)))
   return (
     <>
-      <span className="animate-pulse text-amber-600">●</span>
+      <span className={activity?.stalled ? 'text-amber-600' : 'animate-pulse text-amber-600'}>{activity?.stalled ? '⚠' : '●'}</span>
       {chip.cancelling ? (
         <ChipLabel>cancelling…</ChipLabel>
       ) : (
         <>
           <ChipLabel>{chip.executorLabel}</ChipLabel>
-          {elapsed && <span className="shrink-0 tabular-nums">{elapsed}</span>}
+          {(activity?.ageLabel ?? elapsed) && <span className="shrink-0 tabular-nums">{activity?.ageLabel ?? elapsed}</span>}
         </>
       )}
     </>
   )
 }
 
-const chipBody = (chip: ChipState) => {
+const chipBody = (chip: ChipState, activity: ActivityState | null, nowMs: number) => {
   switch (chip.kind) {
     case 'queued':
       return (
@@ -76,7 +75,7 @@ const chipBody = (chip: ChipState) => {
         </>
       )
     case 'running':
-      return <RunningChip chip={chip} />
+      return <RunningChip chip={chip} activity={activity} nowMs={nowMs} />
     case 'done':
       return (
         <>
@@ -105,15 +104,19 @@ const AgentStatusChipMenu = ({
   chip: ChipViewState
   block: Block
 }) => {
+  const nowMs = useRunningClock(chip.kind === 'running' && !chip.cancelling)
+  const activity = activityStateFor(chip, nowMs)
+  const title = chipTitle(chip, activity)
+  const className = `${CHIP_CLASS}${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
   const canStop = chip.kind === 'running' && !chip.cancelling
   if (!chip.resumeCommand && !canStop) {
     return (
       <span
-        title={chipTitle(chip)}
+        title={title}
         data-agent-dispatch-chip={chip.kind}
-        className={CHIP_CLASS}
+        className={className}
       >
-        {chipBody(chip)}
+        {chipBody(chip, activity, nowMs)}
       </span>
     )
   }
@@ -123,13 +126,13 @@ const AgentStatusChipMenu = ({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          title={chipTitle(chip)}
-          aria-label={`${chip.executorLabel} task actions`}
+          title={title}
+          aria-label={`${chip.executorLabel} task actions${activity?.stalled ? `; warning: no progress for ${activity.ageLabel}` : ''}`}
           data-agent-dispatch-chip={chip.kind}
           onClick={event => event.stopPropagation()}
-          className={`${CHIP_CLASS} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+          className={`${className} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
-          {chipBody(chip)}
+          {chipBody(chip, activity, nowMs)}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
@@ -157,7 +160,7 @@ const AgentStatusChipMenu = ({
 
 /** Optimistic "queued" shown between the Ask Agent action and the
  *  daemon's claim writing real props. */
-const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
+const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', activityAtMs: null, cancelling: false}
 
 const AgentStatusChipItem: BlockRenderer = ({block}) => {
   const propsChip = useHandle(block, {
@@ -177,7 +180,7 @@ const AgentStatusChipItem: BlockRenderer = ({block}) => {
   const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
   if (!chip) return null
 
-  return <AgentStatusChipMenu chip={chip} block={block} />
+  return <AgentStatusChipMenu key={`${chip.kind}:${chip.cancelling}`} chip={chip} block={block} />
 }
 
 const statusChipItem: BlockGutterItem = {corner: 'top-right', component: AgentStatusChipItem}

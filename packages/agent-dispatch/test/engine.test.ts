@@ -3,7 +3,9 @@ import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine
 import {parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
-import type {AgentRunResult} from '../src/runner'
+import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
+import {createCodexJsonlParser} from '../src/codexRunner'
+import {activityStateFor, chipStateFor} from '../../../src/plugins/agent-dispatch-companion/chipState'
 import type {StateStore} from '../src/state'
 import type {MemoryEntry} from '../src/memory'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
@@ -32,7 +34,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   )
   const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
-  const activityWrites: Array<{id: string, label: string}> = []
+  const activityWrites: Array<{id: string, label: string, nowMs: number}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
   const cancelClears: string[] = []
 
@@ -83,11 +85,11 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     reconcileReplyTree: async (parentId, markdown, {replyKey, shape, final}) => {
       reconciles.push({parentId, markdown, replyKey, shape, final: final ?? false})
     },
-    setActivity: async (id, label) => {
+    setActivity: async (id, label, nowMs) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.properties = {...target.properties, [PROPS.activity]: label}
       blocks.set(id, target)
-      activityWrites.push({id, label})
+      activityWrites.push({id, label, nowMs})
     },
     setSession: async (id, session, resumeOptions) => {
       const target = blocks.get(id) ?? {id, properties: {}}
@@ -1600,29 +1602,194 @@ describe('mention lifecycle', () => {
 })
 
 describe('live progress streaming', () => {
-  it('activity events write setActivity on label CHANGE only, and the terminal write clears it', async () => {
-    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] research this'}},
+  it.each(['claude', 'codex'] as const)('%s keeps the oldest outstanding tool visible with its original age', async executor => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
     })
-    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
-      options.onEvent?.({kind: 'activity', label: 'km: search'})
-      options.onEvent?.({kind: 'activity', label: 'km: search'}) // duplicate — must not re-write
-      options.onEvent?.({kind: 'activity', label: 'Searching the web'})
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      const parser = executor === 'claude' ? createStreamJsonParser(options.onEvent) : createCodexJsonlParser(options.onEvent)
+      const start = (id: string) => parser.feed(`${JSON.stringify(executor === 'claude'
+        ? {type: 'assistant', message: {content: [{type: 'tool_use', id, name: 'mcp__km__comments'}]}}
+        : {type: 'item.started', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
+      const end = (id: string) => parser.feed(`${JSON.stringify(executor === 'claude'
+        ? {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: id, content: 'result'}]}}
+        : {type: 'item.completed', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
+      start('slow-tool')
+      clock += 5_000
+      start('slow-tool')
+      clock += 5_000
+      start('quick-tool')
+      clock += 2_000
+      end('quick-tool')
+      end('quick-tool')
+      clock += 70_000
+      end('slow-tool')
+      end('slow-tool')
       return okRun()
-    })
-    const engine = engineWith({graph, runTask})
-
+    }})
     await engine.tick()
     await engine.drain()
+    expect(activityWrites).toEqual([{id: 'b-1', label: 'km: comments', nowMs: NOW}])
+    const oldest = activityWrites[0]
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': oldest.label, 'agent:activity-at': oldest.nowMs})!
+    expect(activityStateFor(chip, NOW + 70_000)).toMatchObject({stalled: true})
+  })
 
+  it('advances to the next oldest tool at its original start when the oldest completes', async () => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
     expect(activityWrites).toEqual([
-      {id: 'b-1', label: 'km: search'},
-      {id: 'b-1', label: 'Searching the web'},
+      {id: 'b-1', label: 'km: comments', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 10_000},
     ])
-    // Terminal write clears the transient label so it never outlives the run.
+  })
+
+  it('debounces Thinking and skips its write when a new step starts in the window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, now: Date.now, runTask: async options => {
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+        await vi.advanceTimersByTimeAsync(2_999)
+        expect(activityWrites).toHaveLength(1)
+        options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+        await vi.advanceTimersByTimeAsync(1)
+        expect(activityWrites).toHaveLength(2)
+        options.onEvent?.({kind: 'activity-end', stepId: 'unknown'})
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(activityWrites).toHaveLength(2)
+        options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(activityWrites.map(w => w.label)).toEqual(['km: comments', 'km: search', 'Thinking'])
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(activityWrites).toHaveLength(3)
+      expect(activityWrites.at(-1)?.nowMs).toBe(NOW + 6_000)
+      expect(propWrites.at(-1)?.status).toBe('done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([false, true])('cancels the pending Thinking write when a run terminates (throws: %s)', async throws => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+        if (throws) throw new Error('runner failed')
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      const writeCount = activityWrites.length
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(activityWrites).toHaveLength(writeCount)
+      expect(propWrites.at(-1)?.status).toBe(throws ? 'error' : 'done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('timestamps consecutive same-label starts before queued writes and clears activity at termination', async () => {
+    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'first'})
+      clock += 30_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+      options.onEvent?.({kind: 'activity', label: 'Searching the web', stepId: 'third'})
+      clock += 90_000
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: search', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 30_000},
+      {id: 'b-1', label: 'Searching the web', nowMs: NOW + 40_000},
+    ])
     expect(propWrites.at(-1)).toMatchObject({status: 'done', activity: null})
     expect(blocks.get('b-1')?.properties?.[PROPS.activity]).toBe('')
+  })
+
+  it('starts the step clock only after streamed arguments finalize', async () => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      const parser = createStreamJsonParser(options.onEvent)
+      const feed = (line: unknown) => parser.feed(`${JSON.stringify(line)}\n`)
+      feed({type: 'stream_event', event: {type: 'content_block_start', content_block: {type: 'tool_use', id: 'call', name: 'mcp__km__append_markdown'}}})
+      clock += 50_000
+      feed({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: 'long argument'}}})
+      feed({type: 'assistant', message: {content: [{type: 'tool_use', id: 'call', name: 'mcp__km__append_markdown'}]}})
+      clock += 15_000
+      feed({type: 'user', message: {content: [{type: 'tool_result', tool_use_id: 'call'}]}})
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([{id: 'b-1', label: 'km: append_markdown', nowMs: NOW + 50_000}])
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': activityWrites[0].label, 'agent:activity-at': activityWrites[0].nowMs})!
+    expect(activityStateFor(chip, clock)).toMatchObject({ageLabel: '15s', stalled: false})
+  })
+
+  it('writes each of twenty consecutive same-label starts without intermediate Thinking writes', async () => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        for (let n = 0; n < 20; n++) {
+          options.onEvent?.({kind: 'activity', label: 'km: search', stepId: `step-${n}`})
+          await vi.advanceTimersByTimeAsync(500)
+          options.onEvent?.({kind: 'activity-end', stepId: `step-${n}`})
+          await vi.advanceTimersByTimeAsync(500)
+        }
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      expect(propWrites.at(-1)?.status).toBe('done')
+      expect(activityWrites).toHaveLength(20)
+      expect(activityWrites.every(write => write.label === 'km: search')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('streamReply: placeholder, throttled text reconciles, then the terminal reconcile — all one keyed subtree', async () => {

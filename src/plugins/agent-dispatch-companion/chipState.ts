@@ -1,10 +1,11 @@
 /**
  * Pure decision logic for the Agent status chip: block properties →
  * chip descriptor. The property protocol is owned by the agent-dispatch
- * daemon (packages/agent-dispatch/src/config.ts PROPS) — names are
- * duplicated here because the app bundle can't depend on that node
- * package; keep the two in sync.
+ * daemon (packages/agent-dispatch/src/config.ts PROPS) — property names
+ * are duplicated here because this browser-side projection consumes the
+ * daemon-owned graph fields.
  */
+import { BRIDGE_COMMAND_TIMEOUT_MS } from '@knowledge-medium/agent-cli/protocol'
 
 export const AGENT_PROPS = {
   status: 'agent:status',
@@ -21,6 +22,8 @@ export const AGENT_PROPS = {
   /** Transient "what the run is doing now" label (on a queued task, why it
    *  waits); empty/absent when idle. */
   activity: 'agent:activity',
+  /** Timestamp when the current activity began, ms since epoch. */
+  activityAt: 'agent:activity-at',
   /** Written by the Ask Agent action (companion-owned, daemon-inert). */
   askedAt: 'agent:asked-at',
   /** Written by the Stop Agent action; the daemon clears it once the
@@ -41,6 +44,8 @@ export interface ChipState {
   errorMessage: string
   /** "What the run is doing now" — empty when absent/non-string. */
   activity: string
+  /** Start of the current activity, ms — null if absent or invalid. */
+  activityAtMs: number | null
   /** True while a running task has a pending `agent:cancel` the daemon
    *  hasn't acted on yet. */
   cancelling: boolean
@@ -69,6 +74,7 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
   const attempts = properties?.[AGENT_PROPS.attempts]
   const error = properties?.[AGENT_PROPS.error]
   const activity = properties?.[AGENT_PROPS.activity]
+  const activityAt = properties?.[AGENT_PROPS.activityAt]
   const cancel = properties?.[AGENT_PROPS.cancel]
   return {
     kind: status,
@@ -78,6 +84,7 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
     attempts: typeof attempts === 'number' && attempts > 0 ? Math.floor(attempts) : 1,
     errorMessage: typeof error === 'string' ? error : '',
     activity: typeof activity === 'string' ? activity : '',
+    activityAtMs: typeof activityAt === 'number' && activityAt > 0 && activityAt < Infinity ? activityAt : null,
     cancelling: status === 'running' && Boolean(cancel),
   }
 }
@@ -91,7 +98,27 @@ export const elapsedLabel = (seconds: number): string => {
   return `${Math.round(seconds / 3_600)}h`
 }
 
-export const chipTitle = (chip: ChipState): string => {
+export interface ActivityState {
+  ageLabel: string
+  stalled: boolean
+}
+
+const KM_ACTIVITY_PREFIX = 'km:'
+const KM_STALLED_THRESHOLD_MS = BRIDGE_COMMAND_TIMEOUT_MS / 3
+
+/** Current step age and warning for timestamped running work. */
+export const activityStateFor = (chip: ChipState, nowMs: number): ActivityState | null => {
+  if (chip.kind !== 'running' || chip.cancelling || !chip.activity || chip.activityAtMs === null) return null
+  // Device clock skew can make activity age approximate; future timestamps are clamped below.
+  const ageMs = Math.max(0, nowMs - chip.activityAtMs)
+  const stalled = chip.activity.startsWith(KM_ACTIVITY_PREFIX) && ageMs > KM_STALLED_THRESHOLD_MS
+  return {
+    ageLabel: elapsedLabel(Math.ceil(ageMs / 1_000)),
+    stalled,
+  }
+}
+
+export const chipTitle = (chip: ChipState, activity: ActivityState | null): string => {
   switch (chip.kind) {
     case 'queued':
       return chip.activity ? `Queued for ${chip.executorLabel} — ${chip.activity}` : `Queued for ${chip.executorLabel}`
@@ -100,7 +127,10 @@ export const chipTitle = (chip: ChipState): string => {
       const base = chip.attempts > 1
         ? `${chip.executorLabel} is working (attempt ${chip.attempts})`
         : `${chip.executorLabel} is working`
-      return chip.activity ? `${base} — ${chip.activity}` : base
+      if (!chip.activity) return base
+      const detail = `${base} — ${chip.activity}`
+      if (!activity?.stalled) return detail
+      return `${detail} · No progress for ${activity.ageLabel}; the app tab may not be answering`
     }
     case 'done':
       return chip.updatedAtMs

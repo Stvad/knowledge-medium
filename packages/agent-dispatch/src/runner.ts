@@ -21,6 +21,8 @@ import {
   workspaceSystemPrompt, workspaceTmpDir,
 } from './workspace.js'
 
+export const THINKING_ACTIVITY = 'Thinking'
+
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
  *  carries the full in-progress reply text so far, not a delta, which
@@ -28,7 +30,8 @@ import {
  *  they last saw. */
 export type RunEvent =
   | {kind: 'session', sessionId: string}
-  | {kind: 'activity', label: string}
+  | {kind: 'activity', label: string, stepId: string}
+  | {kind: 'activity-end', stepId: string}
   | {kind: 'text', text: string}
 
 /** What the engine sets for a run whichever executor it dispatches to.
@@ -282,9 +285,9 @@ export const createStreamJsonParser = (
   }
 
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
-    const name = typeof toolUse.name === 'string' ? toolUse.name : null
-    if (!name) return
-    emit({kind: 'activity', label: humanizeToolName(name)})
+    const {id, name} = toolUse
+    if (typeof id !== 'string' || !id || typeof name !== 'string' || !name) return
+    emit({kind: 'activity', label: humanizeToolName(name), stepId: id})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -300,9 +303,17 @@ export const createStreamJsonParser = (
       return
     }
 
-    if (type === 'assistant') {
+    if (type === 'user' || type === 'assistant') {
       const message = line.message as {content?: unknown} | undefined
       const content = Array.isArray(message?.content) ? message?.content : []
+      if (type === 'user') {
+        for (const item of content) {
+          if (isRecord(item) && item.type === 'tool_result' && typeof item.tool_use_id === 'string' && item.tool_use_id.length > 0) {
+            emit({kind: 'activity-end', stepId: item.tool_use_id})
+          }
+        }
+        return
+      }
       // Concatenate ALL text blocks in this finalized message (a single
       // message can carry more than one — e.g. a web-search turn is
       // [text, server_tool_use, web_search_result, text]), matching how
@@ -337,11 +348,6 @@ export const createStreamJsonParser = (
 
       if (eventType === 'message_start') {
         textAccumulator = ''
-        return
-      }
-      if (eventType === 'content_block_start') {
-        const contentBlock = streamEvent.content_block as Record<string, unknown> | undefined
-        if (contentBlock?.type === 'tool_use') activityForToolUse(contentBlock)
         return
       }
       if (eventType === 'content_block_delta') {

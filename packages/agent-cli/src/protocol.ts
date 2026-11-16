@@ -73,6 +73,9 @@ export type TokenAudience = z.infer<typeof tokenAudienceSchema>
 
 // ---------- Command envelopes ----------
 
+/** Default wait for one browser bridge command, not an entire MCP tool call. */
+export const BRIDGE_COMMAND_TIMEOUT_MS = 60_000
+
 /**
  * Wire envelope for every command body POSTed to /runtime/commands: only
  * the `type` discriminator is mandatory, and the other keys pass through to

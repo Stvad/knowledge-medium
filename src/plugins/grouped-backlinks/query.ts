@@ -245,7 +245,10 @@ export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
     refs.source_id AS source_id,
     refs.source_field AS source_field
   FROM source_ids s
-  JOIN block_references refs ON refs.source_id = s.id
+  -- CROSS JOIN keeps the id list outer, probing the (source_id, ...) primary
+  -- key per source. Left free, the planner drives from the target's edges and
+  -- rescans the whole list per edge: quadratic in a hub's backlink count.
+  CROSS JOIN block_references refs ON refs.source_id = s.id
   WHERE refs.workspace_id = ?
     AND refs.target_id = ?
     AND refs.source_field != ''

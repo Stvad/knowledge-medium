@@ -95,6 +95,7 @@ export type FrozenTypeSeed = readonly [seedKey: string, id: string]
 
 export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:agent-dispatch-companion/property/activity', 'agent:activity', 'string', 'string'],
+  ['system:agent-dispatch-companion/property/activity-at', 'agent:activity-at', 'number', 'number'],
   ['system:agent-dispatch-companion/property/asked-at', 'agent:asked-at', 'number', 'number'],
   ['system:agent-dispatch-companion/property/attempts', 'agent:attempts', 'number', 'number'],
   ['system:agent-dispatch-companion/property/cancel', 'agent:cancel', 'raw-json', 'object'],

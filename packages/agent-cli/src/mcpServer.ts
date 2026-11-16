@@ -24,6 +24,7 @@ import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './med
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
+  BRIDGE_COMMAND_TIMEOUT_MS,
   createContributorCommandSchema,
   listContributorsCommandSchema,
   addMediaCommandSchema,
@@ -121,7 +122,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     : parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
   const baseClient = options.client ?? createBridgeClient({
     profile: options.profile ?? process.env.AGENT_RUNTIME_PROFILE,
-    timeoutMs: options.timeoutMs ?? 60_000,
+    timeoutMs: options.timeoutMs ?? BRIDGE_COMMAND_TIMEOUT_MS,
   })
   const client = withContributorId(baseClient, configuredContributorId)
   const graph = createBridgeGraph(client)

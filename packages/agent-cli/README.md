@@ -284,6 +284,10 @@ kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)
 
 Use the port from `AGENT_RUNTIME_URL` if you set one. Restart MCP clients that launch `km-mcp` too; an `npx` launch can reuse a cached copy, so name the version to be sure (`npx -y -p @knowledge-medium/agent-cli@0.9.0 km-mcp`).
 
+### Upgrade to 0.14.1
+
+0.14.1 exports the MCP bridge command timeout for companion UI warnings. The default remains 60 seconds per bridge command; one MCP tool can perform several commands.
+
 ### Upgrade to 0.12.0
 
 0.12.0 adds media: the `read_media` and `add_media` tools and their `kmagent read-media` and `kmagent add-media` verbs. Upgrade `agent-cli`, restart the bridge using the steps above (an older bridge treats `read-media` as a write and refuses it to a read-only token; `add-media` is a write and needs a read-write token), and restart every MCP client that launches `km-mcp`. Both need an app build that has the verb; an older app tab fails them with `Invalid command body`.

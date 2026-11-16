@@ -42,6 +42,8 @@ export const PROPS = {
    *  (written as '') on every terminal status write so a stale label
    *  never outlives the run. */
   activity: 'agent:activity',
+  /** Current activity start (ms epoch); 0 when activity is cleared. */
+  activityAt: 'agent:activity-at',
   /** Cancellation REQUEST written by the UI (companion Stop action) on a
    *  running block. The daemon owns the child process, so it can't be
    *  killed from the app — this is the graph signal: the daemon sees it,

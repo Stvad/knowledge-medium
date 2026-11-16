@@ -45,6 +45,12 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 0.10.0 requires `@knowledge-medium/agent-cli` 0.15.0. A claude watcher can now work in a persistent folder with sandboxed Bash and file tools: add `"workspace": {}` to its `runner` (see [Workspace](#workspace)). Watchers without it run as before. A thread that started before its watcher had a workspace keeps resuming its session, now from a new folder, so paths in its earlier turns point outside the workspace and are unreachable. Upgrade both packages and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
 
+## Upgrade to 0.9.3
+
+0.9.3 requires `@knowledge-medium/agent-cli` 0.14.1. The status chip shows the oldest outstanding tool's age, with a warning when a `km:` call has waited more than 20 seconds. Other activities show age without warnings. Activity details remain in the title and menu, and the pill keeps the same width in every state.
+
+Upgrade both packages, reload the app, and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`. Older daemons retain the existing chip behavior without step ages.
+
 ## Upgrade to 0.9.2
 
 0.9.2 requires `@knowledge-medium/agent-cli` 0.14.0. Runs now get `add_media`, which stores a file the run writes itself (such as an SVG) as a media block. It never reads a local path. Upgrade both packages and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
@@ -393,7 +399,7 @@ A `[[claude]]` you write inside the memory starts a run like anywhere else; chil
 
 ## Live progress
 
-Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …). The companion UI's status chip shows the persisted runner label next to elapsed time (`Claude · 12s · Searching the web`, `Codex · 12s · km: search`); the label is cleared the moment the run reaches a terminal state, so it never goes stale.
+Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …) — and `agent:activity-at`, its start time in epoch milliseconds. The companion UI's fixed-width status chip shows the runner and current step age; its title and menu name the activity. A `km:` step outstanding for more than 20 seconds gets a warning; this is an early indication of a long wait, not proof of a bridge failure. Other steps show age without warnings. It uses a client-side clock, with no heartbeat writes. The label and timestamp clear together at a terminal state (`''` and `0` respectively). Without a timestamp, older daemons retain the previous chip behavior.
 
 Set `"streamReply": true` on a backlinks watcher to also show the reply being **built live** as the run streams, instead of posting it once at the end. Each tick reconciles the reply to the growing text (throttled to roughly one write per 1.5s, writing only the diff), so leave it off for watchers where that write churn matters — the default (`false`) posts the whole reply in one shot when the run finishes.
 
