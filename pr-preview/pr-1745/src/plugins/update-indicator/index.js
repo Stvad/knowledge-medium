@@ -1,0 +1,1 @@
+export{Cv as updateIndicatorPlugin}from"../../../chunks/app-CQNrW0b6.js";

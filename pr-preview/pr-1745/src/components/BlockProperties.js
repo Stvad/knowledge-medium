@@ -1,0 +1,1 @@
+export{JB as BlockProperties}from"../../chunks/app-CQNrW0b6.js";

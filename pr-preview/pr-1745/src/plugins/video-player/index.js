@@ -1,0 +1,1 @@
+export{QS as videoPlayerPlugin}from"../../../chunks/app-CQNrW0b6.js";

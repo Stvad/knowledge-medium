@@ -1,0 +1,1 @@
+export{CV as declarationOnlyDefinitionForName,wV as declarationOnlyStatusText}from"../../../chunks/app-CQNrW0b6.js";

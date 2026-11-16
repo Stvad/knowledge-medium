@@ -1,0 +1,1 @@
+export{vut as SYSTEM_AUTHOR_PREFIX,yut as isSystemAuthor,but as systemAuthor}from"../../../chunks/app-CQNrW0b6.js";

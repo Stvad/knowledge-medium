@@ -1,0 +1,1 @@
+export{Pc as appVersion}from"../chunks/app-CQNrW0b6.js";
