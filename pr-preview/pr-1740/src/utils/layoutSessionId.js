@@ -1,1 +1,1 @@
-export{iit as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,ait as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,oit as __resetLayoutSessionIdForTesting,sit as getLayoutSessionId,cit as isInstalledAppDisplayMode,lit as readOrCreateLayoutSessionId}from"../../chunks/app-BHav4QzV.js";
+export{mit as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,hit as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,git as __resetLayoutSessionIdForTesting,_it as getLayoutSessionId,vit as isInstalledAppDisplayMode,yit as readOrCreateLayoutSessionId}from"../../chunks/app-jxDgIZ7Y.js";

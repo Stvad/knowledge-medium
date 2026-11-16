@@ -1,1 +1,1 @@
-export{Py as EmbedComponent,Fy as referenceTargetOf}from"../../../../chunks/app-BHav4QzV.js";
+export{Hy as EmbedComponent,Uy as referenceTargetOf}from"../../../../chunks/app-jxDgIZ7Y.js";
