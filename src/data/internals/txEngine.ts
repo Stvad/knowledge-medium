@@ -1506,7 +1506,6 @@ export class TxImpl implements Tx {
 
   emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>, workspaceId?: string): void {
     if (workspaceId !== undefined) {
-      this.checkWorkspace(workspaceId)
       this.assertWritableWorkspace(workspaceId)
       this.pinWorkspace(workspaceId)
     }
