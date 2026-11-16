@@ -1,1 +1,1 @@
-export{yot as isChildBackedPropertiesWorkspace}from"../chunks/app-CqQBZxNH.js";
+export{Iot as isChildBackedPropertiesWorkspace}from"../chunks/app-BFOaP4YV.js";

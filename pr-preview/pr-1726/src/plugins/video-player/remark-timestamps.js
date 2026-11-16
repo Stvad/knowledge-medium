@@ -1,1 +1,1 @@
-export{LS as TS_RE,RS as remarkTimestamps}from"../../../chunks/app-CqQBZxNH.js";
+export{GS as TS_RE,KS as remarkTimestamps}from"../../../chunks/app-BFOaP4YV.js";

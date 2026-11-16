@@ -1,0 +1,1 @@
+export{OV as typePropertyGroups}from"../../chunks/app-BFOaP4YV.js";

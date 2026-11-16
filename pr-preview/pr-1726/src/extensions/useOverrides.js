@@ -1,1 +1,1 @@
-export{WP as useOverrides}from"../../chunks/app-CqQBZxNH.js";
+export{$P as useOverrides}from"../../chunks/app-BFOaP4YV.js";

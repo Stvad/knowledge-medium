@@ -1,1 +1,1 @@
-export{$O as Label}from"../../../chunks/app-CqQBZxNH.js";
+export{ck as Label}from"../../../chunks/app-BFOaP4YV.js";

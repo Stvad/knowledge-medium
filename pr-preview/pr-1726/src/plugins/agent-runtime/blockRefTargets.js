@@ -1,1 +1,1 @@
-export{vg as refuseDanglingBlockRefs}from"../../../chunks/app-CqQBZxNH.js";
+export{wg as refuseDanglingBlockRefs}from"../../../chunks/app-BFOaP4YV.js";

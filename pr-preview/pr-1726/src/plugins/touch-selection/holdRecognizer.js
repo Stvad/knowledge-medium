@@ -1,1 +1,1 @@
-export{Gy as BLOCK_HOLD_GESTURE,Ky as BLOCK_HOLD_RECOGNIZER_ID,qy as blockHoldRecognizer}from"../../../chunks/app-CqQBZxNH.js";
+export{$y as BLOCK_HOLD_GESTURE,eb as BLOCK_HOLD_RECOGNIZER_ID,tb as blockHoldRecognizer}from"../../../chunks/app-BFOaP4YV.js";

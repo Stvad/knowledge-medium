@@ -1,1 +1,1 @@
-export{kN as exampleExtensions,AN as insertExampleExtensionsUnder}from"../../chunks/app-CqQBZxNH.js";
+export{RN as exampleExtensions,zN as insertExampleExtensionsUnder}from"../../chunks/app-BFOaP4YV.js";
