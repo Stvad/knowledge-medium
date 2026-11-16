@@ -104,6 +104,5 @@ source; no patch size or integration effort was measured.
 Still unverified: deadline propagation through the bridge and Repo; a clear
 budget error reaching the caller before its timeout; OPFS pool recovery after
 a progress-handler interruption; statement-cache reuse after interruption;
-write-transaction exclusion; other VFSes and browsers. No runtime guard was
-added, so there is no guard to mutation-check. The raw browser probe proves the
-SQLite primitive, not the requested bridge-level regression test.
+write-transaction exclusion; other VFSes and browsers. The raw browser probe
+proves the SQLite primitive, not the requested bridge-level regression test.
