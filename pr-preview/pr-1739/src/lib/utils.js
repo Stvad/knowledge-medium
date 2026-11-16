@@ -1,1 +1,1 @@
-export{C2 as cn}from"../../chunks/app-CBHV7mVH.js";
+export{C2 as cn}from"../../chunks/app-CmHL9r1B.js";

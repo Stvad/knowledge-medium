@@ -1,1 +1,1 @@
-export{Pz as ExtensionRenderBoundary}from"../../chunks/app-CBHV7mVH.js";
+export{Pz as ExtensionRenderBoundary}from"../../chunks/app-CmHL9r1B.js";
