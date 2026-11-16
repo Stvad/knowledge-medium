@@ -1,0 +1,1 @@
+export{Jb as attachmentsPlugin}from"../../../chunks/app-cywbLTgk.js";

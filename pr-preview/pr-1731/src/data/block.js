@@ -1,0 +1,1 @@
+export{C6 as Block,w6 as requireLoadedBlock}from"../../chunks/app-cywbLTgk.js";

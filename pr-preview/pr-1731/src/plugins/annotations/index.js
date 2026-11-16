@@ -1,0 +1,1 @@
+export{sf as annotationsPlugin}from"../../../chunks/app-cywbLTgk.js";

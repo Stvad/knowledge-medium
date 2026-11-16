@@ -1,0 +1,1 @@
+export{YJ as geoDataExtension}from"../../../chunks/app-cywbLTgk.js";

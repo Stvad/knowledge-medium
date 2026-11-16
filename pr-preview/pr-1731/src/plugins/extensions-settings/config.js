@@ -1,0 +1,1 @@
+export{Dh as extensionsOverridesPresetCore,Oh as extensionsOverridesProp,kh as extensionsPrefsType,Ah as overridesCodec}from"../../../chunks/app-cywbLTgk.js";

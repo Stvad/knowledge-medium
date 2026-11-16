@@ -1,0 +1,1 @@
+export{fM as CommandPaletteHeaderItem}from"../../../chunks/app-cywbLTgk.js";

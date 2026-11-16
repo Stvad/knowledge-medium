@@ -1,0 +1,1 @@
+export{HW as isIOS,UW as isMacPlatform}from"../../chunks/app-cywbLTgk.js";

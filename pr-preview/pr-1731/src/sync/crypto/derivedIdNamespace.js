@@ -1,0 +1,1 @@
+export{hot as deriveWorkspaceIdNamespace}from"../../../chunks/app-cywbLTgk.js";

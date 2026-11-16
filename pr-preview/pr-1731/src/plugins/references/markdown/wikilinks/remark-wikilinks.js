@@ -1,0 +1,1 @@
+export{Py as remarkWikilinks}from"../../../../../chunks/app-cywbLTgk.js";

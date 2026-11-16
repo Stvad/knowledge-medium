@@ -1,0 +1,1 @@
+export{BR as captureMediaVerb}from"../../chunks/app-cywbLTgk.js";

@@ -1,0 +1,1 @@
+export{mN as TypeChip}from"../../../chunks/app-cywbLTgk.js";

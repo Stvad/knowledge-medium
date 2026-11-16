@@ -1,0 +1,1 @@
+export{oJ as preferredSpanReplacement}from"../../../chunks/app-cywbLTgk.js";

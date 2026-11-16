@@ -1,0 +1,1 @@
+export{VK as BootFallback}from"../../../chunks/app-cywbLTgk.js";

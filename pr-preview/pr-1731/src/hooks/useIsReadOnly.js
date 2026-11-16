@@ -1,0 +1,1 @@
+export{hb as useIsReadOnly}from"../../chunks/app-cywbLTgk.js";

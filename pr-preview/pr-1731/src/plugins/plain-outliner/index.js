@@ -1,0 +1,1 @@
+export{DT as plainOutlinerPlugin}from"../../../chunks/app-cywbLTgk.js";

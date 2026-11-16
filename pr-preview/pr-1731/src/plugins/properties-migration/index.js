@@ -1,0 +1,1 @@
+export{ko as migratePropertiesToBlocksAction,To as propertiesMigrationPlugin}from"../../../chunks/app-cywbLTgk.js";

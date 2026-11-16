@@ -1,0 +1,1 @@
+export{tK as usePropertySchemas}from"../../chunks/app-cywbLTgk.js";

@@ -1,0 +1,1 @@
+export{oO as useMinuteClock}from"../../chunks/app-cywbLTgk.js";

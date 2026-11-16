@@ -1,0 +1,1 @@
+export{wX as annotationsDataExtension}from"../../../chunks/app-cywbLTgk.js";

@@ -1,0 +1,1 @@
+export{H1 as omnilinerNamespace}from"../../chunks/app-cywbLTgk.js";

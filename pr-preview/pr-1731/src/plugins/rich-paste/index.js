@@ -1,0 +1,1 @@
+export{Wb as richPastePlugin}from"../../../chunks/app-cywbLTgk.js";

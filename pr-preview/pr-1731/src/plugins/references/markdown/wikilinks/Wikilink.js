@@ -1,0 +1,1 @@
+export{Ny as Wikilink}from"../../../../../chunks/app-cywbLTgk.js";

@@ -1,0 +1,1 @@
+export{F$ as aliasDataExtension}from"../../../chunks/app-cywbLTgk.js";

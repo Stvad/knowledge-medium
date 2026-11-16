@@ -1,0 +1,1 @@
+export{Wz as ExtensionRenderBoundary}from"../../chunks/app-cywbLTgk.js";
