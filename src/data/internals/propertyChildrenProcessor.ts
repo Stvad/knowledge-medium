@@ -1327,8 +1327,8 @@ declare module '../api/sameTxProcessor' {
   }
 }
 
-/** Raw target derivation and workspace-open catch-up need the same settled
- * projection as an ordinary value edit, without rewriting source content. */
+/** A reference target can become available after its value row was written;
+ * project that value without rewriting its source content. */
 export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor({
   name: 'core.projectResolvedPropertyValues',
   watches: {kind: 'event', events: [PROPERTY_VALUES_RESOLVED_EVENT]},

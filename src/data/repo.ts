@@ -908,12 +908,9 @@ export class Repo {
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
    *  (a durable once-ever marker permanently missed definitions/aliases
-   *  that arrived while the app was closed or
-   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
-   *  the first run, but the LIKE prefilter itself is an O(table) scan on
-   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
-   *  deep idle, once per workspace open; a partial expression index on the
-   *  content-shape predicate is the escape hatch if it ever matters. */
+   *  that arrived while the app was closed or the workspace inactive).
+   *  Candidates are unresolved reference rows selected through the partial
+   *  reference-candidate index; the sweep runs once per workspace per session. */
   private readonly referenceTargetSweepDone = new Set<string>()
   /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
    *  in ONE batched scan per drain (never one scan per name). Names only
@@ -4485,18 +4482,6 @@ export class Repo {
     }
 
     await this.stampReferenceTargets(updates, stampContext)
-    // A resolved name can have a stale derived cell. Refresh these values
-    // on workspace open without changing their source blocks.
-    if (!this.isReadOnly && await readIsChildBackedWorkspace(this.db, workspaceId)) {
-      const namedValues = await this.db.getAll<{id: string}>(`
-        SELECT v.id FROM blocks f JOIN blocks v ON v.parent_id = f.id
-        WHERE f.workspace_id = ? AND f.is_field_form = 1 AND f.deleted = 0
-          AND v.deleted = 0 AND v.is_field_form IS NOT 1
-          AND v.reference_target_id IS NOT NULL AND v.content LIKE '%[[%'
-      `, [workspaceId])
-      await this.reprojectResolvedPropertyValues(namedValues.map(row => row.id), workspaceId)
-    }
-
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
     // narrow accepted window: an alias/definition arriving between this
@@ -4625,12 +4610,11 @@ export class Repo {
   }
 
   private async reprojectResolvedPropertyValues(valueIds: readonly string[], workspaceId: string): Promise<void> {
-    for (let start = 0; start < valueIds.length; start += 200) {
-      await this.tx(async tx => {
-        if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
-        tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds: valueIds.slice(start, start + 200)}, workspaceId)
-      }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
-    }
+    if (valueIds.length === 0) return
+    await this.tx(async tx => {
+      if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
+      tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds}, workspaceId)
+    }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into

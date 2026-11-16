@@ -378,7 +378,7 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     })
   }
 
-  it('refreshes an already-stamped named value whose old projection was empty', async () => {
+  it('leaves an old named-value projection alone on open, then refreshes on content edit', async () => {
     await flipWorkspace()
     const repo = setup()
     const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
@@ -393,9 +393,13 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     await seedRow({id: 'existing-target', properties: {[aliasesProp.name]: ['Existing name']}})
     expect(await cellOf('named-owner', schema.name)).toEqual([])
     await runPass(repo)
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    await repo.tx(tx => tx.update('named-value', {content: '[[Existing name]] '}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
     expect(await cellOf('named-owner', schema.name)).toEqual(['existing-target'])
     expect(await cellOf('named-owner', 'unrelated')).toBe('keep')
-    expect(await repo.load('named-value')).toMatchObject({content: '[[Existing name]]', updatedAt: 1000})
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Existing name]] '})
   })
 
   it('projects a refList member when its previously missing name resolves', async () => {
