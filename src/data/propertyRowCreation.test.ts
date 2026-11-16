@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
+import {Block} from '@/data/block'
 import {definitionSeedsFacet} from '@/data/facets'
 import {propertyChangeScopeProp} from '@/data/properties'
 import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
@@ -7,7 +8,7 @@ import {seedProperty} from '@/data/propertySeeds'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import {choosePropertyField, createPropertyField, insertPropertyValue} from '@/data/propertyRowCreation'
+import {choosePropertyField, createPropertyField} from '@/data/propertyRowCreation'
 
 const note = seedProperty({seedKey: 'test/property/note', revision: 1, name: 'test:note', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const preference = seedProperty({seedKey: 'test/property/preference', revision: 1, name: 'test:preference', preset: 'string', changeScope: ChangeScope.UserPrefs})
@@ -83,20 +84,6 @@ describe('property rows created as blocks', () => {
     expect(await children('source')).toEqual([])
   })
 
-  it('first input on a ghost creates field and nonempty value in one undo step', async () => {
-    const target = await insertPropertyValue(repo.block('owner'), note, 'x')
-    expect((await children(target!.fieldRowId)).map(row => row.content)).toEqual(['x'])
-    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
-    await repo.undo()
-    expect((await children('owner')).map(row => row.id)).toEqual(['source'])
-  })
-
-  it('empty first input writes nothing', async () => {
-    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    expect(await insertPropertyValue(repo.block('owner'), note, '')).toBeNull()
-    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
-  })
-
   it('existing scalar navigation deletes the scaffold and preserves the value', async () => {
     await repo.block('owner').set(note, 'saved')
     const fields = (await children('owner')).filter(row => row.isFieldForm)
@@ -115,14 +102,16 @@ describe('property rows created as blocks', () => {
     expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
     expect(await repo.block('owner').get(tags)).toEqual(['saved'])
     expect(await children(result.fieldRowId!)).toHaveLength(1)
-    await insertPropertyValue(repo.block('owner'), result.schema, 'new')
+    await repo.mutate.createChild({parentId: result.fieldRowId, content: 'new'})
     expect(await repo.block('owner').get(tags)).toEqual(['saved', 'new'])
     expect(await children(result.fieldRowId!)).toHaveLength(2)
   })
 
   it.each(['lagging member', 'duplicate fields without a cell'])('appends from live rows without changing existing members: %s', async setup => {
     await repo.block('owner').set(tags, [setup === 'lagging member' ? 'a' : 'one'])
-    const selected = await choosePropertyField(repo.block('owner'), tags, repo.block('source'), '::', () => true)
+    const resolution = repo.propertySchemaResolverFor('ws').resolve(tags.name)
+    if (resolution.status !== 'resolved') throw new Error('Missing definition')
+    const selected = {schema: resolution.schema, fieldRowId: (await children('owner')).find(row => row.isFieldForm)!.id}
     const first = (await children(selected.fieldRowId!))[0]!
     await h.db.writeTransaction(async tx => {
       const insert = (id: string, parentId: string, orderKey: string, content: string, fieldId: string | null = null) => tx.execute(
@@ -148,16 +137,20 @@ describe('property rows created as blocks', () => {
     expect(bag[tags.name]).toEqual(setup === 'lagging member' ? ['a'] : undefined)
     repo.undoManager.clear()
 
-    const target = await insertPropertyValue(repo.block('owner'), selected.schema, 'new')
+    const target = await repo.undoGroup(async grouped => {
+      const choice = await choosePropertyField(new Block(grouped, 'owner'), tags, new Block(grouped, 'source'), '::', () => true)
+      const valueId = await grouped.mutate.createChild({parentId: choice.fieldRowId, content: 'new'})
+      return {...choice, valueId}
+    })
 
     expect(await held()).toEqual(before)
-    expect((await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n).toBe(count + 1)
+    expect((await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n).toBe(count)
     expect(await repo.block('owner').get(tags)).toEqual(setup === 'lagging member' ? ['a', 'from other device', 'new'] : ['one', 'two', 'new'])
-    expect((await children(target!.fieldRowId)).at(-1)?.id).toBe(target!.valueId)
+    expect((await children(target.fieldRowId)).at(-1)?.id).toBe(target.valueId)
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
     await repo.undo()
     expect(await held()).toEqual(before)
-    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', [target!.valueId])).toBeNull()
+    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', [target.valueId])).toBeNull()
   })
 
   it.each(['cell', 'missing owner', 'deleted owner', 'missing source', 'read-only'])('refuses an unavailable target: %s', async kind => {
@@ -188,24 +181,11 @@ describe('property rows created as blocks', () => {
     await expect(choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)).rejects.toThrow('The input block changed.')
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
-  it('materializes a ghost after existing children at their current order keys', async () => {
-    await repo.tx(tx => tx.move('source', {parentId: 'owner', orderKey: 'a2'}), {scope: ChangeScope.BlockDefault})
-    const target = await insertPropertyValue(repo.block('owner'), note, 'x')
-    expect((await children('owner')).map(row => row.id)).toEqual(['source', target!.fieldRowId])
-  })
-
   it.each([note, tags])('preserves a stored cell awaiting its field row: $name', async schema => {
     await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
       [JSON.stringify({[schema.name]: schema === tags ? ['stored'] : ''}), 'owner']))
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
     await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/stored value/)
-    await expect(insertPropertyValue(repo.block('owner'), schema, 'x')).rejects.toThrow(/stored value/)
-    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
-  })
-  it('refuses a scalar placeholder when a value row has appeared', async () => {
-    await repo.block('owner').set(note, 'saved')
-    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(insertPropertyValue(repo.block('owner'), note, 'x')).rejects.toThrow(/now has a value/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
   it('refuses stale definition scope before touching the scaffold', async () => {
@@ -217,14 +197,6 @@ describe('property rows created as blocks', () => {
     await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/scope/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
-  it('refuses read-only first input before opening a transaction', async () => {
-    Object.defineProperty(repo, 'isReadOnly', {value: true})
-    const spy = vi.spyOn(repo, 'tx')
-    await expect(insertPropertyValue(repo.block('owner'), note, 'x')).rejects.toThrow(/read-only/)
-    expect(spy).not.toHaveBeenCalled()
-    spy.mockRestore()
-  })
-
   it('only reuses a marked row for the chosen definition', async () => {
     await repo.block('owner').set(tags, ['keep'])
     const resolution = repo.propertySchemaResolverFor('ws').resolve(note.name)

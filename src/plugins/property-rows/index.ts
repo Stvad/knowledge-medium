@@ -1,12 +1,5 @@
-import {drawsPropertyRows} from './fieldRow'
-import {actionDispatchWrap} from '@/shortcuts/actionDispatch'
-import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
-import {navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
-import {placeholderMoves} from './placeholderKeys'
-import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
 import {propertyAutocomplete} from './autocomplete'
-import {ExpectedPropertyRows} from './ExpectedPropertyRows'
 /** Property rows in the outline (issue #1674): on a child-backed workspace a
  *  block's property field rows render in place as name/value rows, filtered by
  *  the property display mode (`@/data/propertyDisplayMode`), with commands and
@@ -41,14 +34,7 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   name: 'Property rows',
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
-  Object.entries(placeholderMoves).map(([actionId, direction]) => actionDispatchWrap({actionId, context: ActionContextTypes.NORMAL_MODE,
-    wrap: async (deps, trigger, next) => {
-      const {block, renderScopeId, uiStateBlock} = deps as BlockShortcutDependencies
-      if (!await navigatePlaceholder(block.id, renderScopeId, direction, uiStateBlock, false)) await next(deps, trigger)
-    },
-  }, {source: SOURCE})),
   codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
-  blockChildrenFooterFacet.of(context => drawsPropertyRows(context.blockContext) ? ExpectedPropertyRows : null, {source: SOURCE, precedence: -100}),
   blockLayoutFacet.of(fieldRowLayoutContribution, {source: SOURCE, precedence: -100}),
   blockReadContentDecoratorsFacet.of(propertyReadContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),

@@ -171,8 +171,12 @@ export interface CodeMirrorEditModeDependencies extends BlockShortcutDependencie
   editorView: EditorView;
 }
 
-/** A focused native form control or an opted-in editable element. Actions only focus/blur it. */
-export type PropertyEditingField = HTMLElement
+/** The focused field element of a property editor. A union rather than
+ *  `HTMLInputElement` because not every property shape edits through a text
+ *  input — `enum` ("Choice") properties render a native `<select>`, which
+ *  `hasEditableTarget` likewise treats as editable, so it needs the same
+ *  Escape-exits behaviour. Actions here only focus/blur it. */
+export type PropertyEditingField = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
 
 export interface PropertyEditingDependencies extends BlockShortcutDependencies {
   input: PropertyEditingField;
