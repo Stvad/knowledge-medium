@@ -7,7 +7,7 @@
 
 import {useEffect, useRef, useState} from 'react'
 import type {Block} from '@/data/block'
-import {topLevelBlockIdProp} from '@/data/properties'
+import {focusBlock, topLevelBlockIdProp} from '@/data/properties'
 import {BlockSearchPicker} from '@/components/BlockSearchPicker.tsx'
 import {useRepo} from '@/context/repo.js'
 import {openDialog, type DialogContextProps} from '@/utils/dialogs.js'
@@ -16,7 +16,7 @@ import {firstLine, truncate} from '@/utils/string.js'
 import {showInfo} from '@/utils/toast.js'
 import {reportFailure} from './actions.ts'
 import {moveToOwnThread, ownThreadTargets} from './threads.ts'
-import {revealThread, viewKey} from './uiStore.ts'
+import {cardRenderScopeId, outerCardSurface, revealThread, viewKey} from './uiStore.ts'
 
 interface Session {
   suggested: {blockId: string; content: string}[]
@@ -68,16 +68,22 @@ const OwnThreadPicker = ({commentId, workspaceId, resolve, cancel}: DialogContex
   )
 }
 
-/** Ask where, move, and reveal the new thread in the panel the comment was
- *  shown in. */
+/** Ask where, move, and show the comment in its new thread's card, focused,
+ *  in the panel it was shown in. */
 export const moveCommentToOwnThread = async (comment: Block, panelId: string | undefined): Promise<void> => {
   const repo = comment.repo
+  // The dialog hands focus back on close, which would make the card the
+  // comment left the active one again.
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
   const targetId = await openDialog(OwnThreadPicker, {commentId: comment.id, workspaceId: comment.peek()?.workspaceId ?? ''})
   if (targetId === null) return
   const threadId = await moveToOwnThread(repo, {commentId: comment.id, targetId})
-  const topLevelBlockId = panelId && repo.block(panelId).peekProperty(topLevelBlockIdProp)
-  if (panelId && topLevelBlockId) {
-    revealThread(panelId, viewKey(panelRenderScopeId(panelId, topLevelBlockId), targetId), threadId, true)
+  const panel = panelId === undefined ? undefined : repo.block(panelId)
+  const topLevelBlockId = panel?.peekProperty(topLevelBlockIdProp)
+  if (panel && topLevelBlockId) {
+    const rowScope = panelRenderScopeId(panel.id, topLevelBlockId)
+    revealThread(panel.id, viewKey(rowScope, targetId), threadId, true)
+    await focusBlock(panel, comment.id, {renderScopeId: cardRenderScopeId(outerCardSurface(panel.id), rowScope, threadId)})
   }
   const excerpt = truncate(firstLine((await repo.load(targetId))?.content ?? ''), 60)
   showInfo(`Moved to its own thread on “${excerpt}”.`)
