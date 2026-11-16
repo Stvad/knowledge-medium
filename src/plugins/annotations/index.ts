@@ -37,6 +37,7 @@ import {threadMarksMarkdownExtension} from './readHighlights.ts'
 import {quotedRangeLayoutContribution} from './quotedRange.tsx'
 import {quotedInFooterContribution} from './quotedIn.tsx'
 import {commentLinkNavigationContribution} from './commentLinks.ts'
+import {linkedCommentsPillContribution} from './linkedCommentsPill.tsx'
 import {threadNavigationContribution} from './threadNavigation.ts'
 import {nestedReadSelectionMenuContribution, readSelectionShortcutsMount} from './readSelectionUi.tsx'
 import {
@@ -69,6 +70,7 @@ export const annotationsPlugin: AppExtension = systemToggle({
   actionDispatchWrap(keepSelectionOnClick, {source: SOURCE, precedence: 100}),
   blockContentDecoratorsFacet.of(commentSurfaceContribution, {source: SOURCE}),
   blockGutterItemsFacet.of(commentPillContribution, {source: SOURCE}),
+  blockGutterItemsFacet.of(linkedCommentsPillContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(nestedReadSelectionMenuContribution, {source: SOURCE}),
   blockContentDecoratorsFacet.of(commentActionsContribution, {source: SOURCE}),
   blockBelowContentFacet.of(commentsBelowContentContribution, {source: SOURCE}),

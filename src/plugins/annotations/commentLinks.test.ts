@@ -1,5 +1,5 @@
 // @vitest-environment node
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope, type User} from '@/data/api'
 import {PAGE_TYPE} from '@/data/blockTypes'
 import {isCollapsedProp, peekFocusedBlockLocation, typesProp} from '@/data/properties'
@@ -12,8 +12,10 @@ import {__resetLayoutSessionIdForTesting} from '@/utils/layoutSessionId'
 import {navigate, type NavigatePanelInput} from '@/utils/navigation'
 import {panelBlockIds} from '@/utils/panelLayoutProjection'
 import {panelRenderScopeId} from '@/utils/renderScope'
+import {goToComment} from './commentLinks'
 import {annotationsPlugin} from './index'
-import {createThread} from './threads'
+import {COMMENT_LINKS_FOR_BLOCK_QUERY} from './queries'
+import {createThread, setThreadStatus} from './threads'
 import {cardRenderScopeId} from './uiStore'
 
 const WS = 'ws'
@@ -104,5 +106,66 @@ describe('a link outside a comment', () => {
       sourceRenderScopeId: panelRenderScopeId(panelId, 'page'),
     })
     expect(await shownBlocks()).toEqual(['point'])
+  })
+})
+
+describe('the comments that link a block', () => {
+  /** Block links parse only a uuid. */
+  const LINKED = '6d1f3e0a-2b7c-4c1e-9a55-0f1d2c3b4a59'
+  const link = `[the point](((${LINKED})))`
+
+  beforeEach(async () => {
+    await repo.tx(tx => tx.create({id: LINKED, workspaceId: WS, parentId: 'page', orderKey: 'a1', content: 'Linked'}), opts)
+  })
+
+  const linksOf = () => repo.query[COMMENT_LINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: LINKED}).load()
+
+  it('are the comments, replies included, of open threads elsewhere', async () => {
+    const onPage = await createThread(repo, {targetId: 'page', anchor: null, comment: 'Overall'})
+    const reply = await repo.mutate.createChild({parentId: onPage.commentId!, content: `See ${link}`})
+    const first = await createThread(repo, {targetId: 'point', anchor: null, comment: `Like ${link}`})
+    const resolved = await createThread(repo, {targetId: 'point', anchor: null, comment: `Also ${link}`})
+    await setThreadStatus(repo, resolved.threadId, 'resolved')
+    await createThread(repo, {targetId: LINKED, anchor: null, comment: `This, ${link}`})
+    await repo.mutate.createChild({parentId: 'page', content: `Not a comment: ${link}`})
+
+    await vi.waitFor(async () => expect(await linksOf()).toHaveLength(2))
+    expect(new Set(await linksOf())).toEqual(new Set([
+      {commentId: reply, threadId: onPage.threadId},
+      {commentId: first.commentId, threadId: first.threadId},
+    ]))
+  })
+})
+
+describe('goToComment', () => {
+  const focusIn = async (panelId: string) => {
+    const panel = repo.block(panelId)
+    await panel.load()
+    return peekFocusedBlockLocation(panel)
+  }
+
+  it('shows a comment of a thread on the page in its card, keeping the page', async () => {
+    await navigate(repo, {blockId: 'page', target: 'main'})
+    const panelId = await shownPanel()
+    const {threadId, commentId} = await createThread(repo, {targetId: 'point', anchor: null, comment: 'Hm'})
+
+    await goToComment(repo, panelId, commentId!)
+
+    expect(await shownBlocks()).toEqual(['page'])
+    expect((await repo.load('section'))!.properties[isCollapsedProp.name]).toBe(false)
+    expect(await focusIn(panelId)).toEqual({
+      blockId: commentId,
+      renderScopeId: cardRenderScopeId('comments', panelRenderScopeId(panelId, 'page'), threadId),
+    })
+  })
+
+  it('navigates to a comment of a thread on another page', async () => {
+    await navigate(repo, {blockId: 'page', target: 'main'})
+    const panelId = await shownPanel()
+    const {commentId} = await createThread(repo, {targetId: 'elsewhere', anchor: null, comment: 'Hm'})
+
+    await goToComment(repo, panelId, commentId!)
+
+    expect(await shownBlocks()).toEqual(['elsewhere'])
   })
 })
