@@ -1,1 +1,0 @@
-export{yZ as annotationMarginOpenProp,bZ as annotationMarginShareProp}from"../../../chunks/app-CPY_PfvJ.js";

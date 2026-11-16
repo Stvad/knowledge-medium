@@ -1,1 +1,0 @@
-export{PC as COLEMAK_KEYBINDINGS_PLUGIN_ID,FC as colemakKeybindingsPlugin,IC as colemakMovementKeybindingOverrides}from"../../../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,0 @@
-export{Gh as lintExtensionSource}from"../../../chunks/app-CPY_PfvJ.js";

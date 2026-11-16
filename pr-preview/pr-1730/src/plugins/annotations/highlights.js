@@ -1,1 +1,0 @@
-export{pm as HIGHLIGHT_CLASS,mm as MOVED_HIGHLIGHT_CLASS,hm as SUGGESTION_HIGHLIGHT_CLASS,gm as coveringStyle,_m as highlightClasses,vm as highlightField,ym as highlightRange,bm as highlightRanges,xm as threadHighlights,Sm as threadHighlightsContribution}from"../../../chunks/app-CPY_PfvJ.js";

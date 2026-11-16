@@ -1,1 +1,0 @@
-export{yh as extensionApiCatalog,bh as extensionApiRuntimeExports}from"../../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,0 @@
-export{uv as BlockMetaCard}from"../../../chunks/app-CPY_PfvJ.js";

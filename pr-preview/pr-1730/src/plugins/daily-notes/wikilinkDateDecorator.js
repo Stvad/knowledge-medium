@@ -1,1 +1,0 @@
-export{Hk as dailyDateWikilinkDecorator}from"../../../chunks/app-CPY_PfvJ.js";

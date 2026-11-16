@@ -1,1 +1,0 @@
-export{BF as LazyBlockComponent}from"../../chunks/app-CPY_PfvJ.js";

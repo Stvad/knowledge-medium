@@ -1,1 +1,0 @@
-export{uT as mobileBottomNavItemsFacet}from"../../../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,0 @@
-export{eV as BlockProperties}from"../../chunks/app-CPY_PfvJ.js";

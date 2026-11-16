@@ -1,1 +1,0 @@
-export{lb as useIsReadOnly}from"../../chunks/app-CPY_PfvJ.js";

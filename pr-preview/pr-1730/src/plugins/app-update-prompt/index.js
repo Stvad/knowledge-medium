@@ -1,1 +1,0 @@
-export{bP as appUpdatePromptExtension}from"../../../chunks/app-CPY_PfvJ.js";

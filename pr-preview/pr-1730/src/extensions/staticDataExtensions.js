@@ -1,1 +1,0 @@
-export{eq as staticDataExtensions}from"../../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,0 @@
-export{hT as usePromotableBreadcrumb}from"../../../chunks/app-CPY_PfvJ.js";

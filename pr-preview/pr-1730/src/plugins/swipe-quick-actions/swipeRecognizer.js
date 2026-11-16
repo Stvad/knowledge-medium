@@ -1,1 +1,0 @@
-export{vM as SWIPE_QUICK_ACTIONS_GESTURE_ID,yM as SWIPE_TRIGGER_PX,bM as swipeRecognizer}from"../../../chunks/app-CPY_PfvJ.js";

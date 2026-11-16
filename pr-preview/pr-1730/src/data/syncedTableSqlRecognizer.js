@@ -1,1 +1,0 @@
-export{C1 as SYNCED_TABLES,w1 as syncedWriteTarget,T1 as writeTargets}from"../../chunks/app-CPY_PfvJ.js";

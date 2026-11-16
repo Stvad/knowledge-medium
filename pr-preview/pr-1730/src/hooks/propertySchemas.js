@@ -1,1 +1,0 @@
-export{GG as usePropertySchemas}from"../../chunks/app-CPY_PfvJ.js";

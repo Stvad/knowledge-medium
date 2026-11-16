@@ -1,1 +1,0 @@
-export{PQ as pluginPrefsExtension,FQ as pluginUIStateExtension}from"../../chunks/app-CPY_PfvJ.js";

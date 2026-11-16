@@ -1,1 +1,0 @@
-export{wR as defaultPasteDecision,TR as pasteDecisionVerb}from"../../chunks/app-CPY_PfvJ.js";

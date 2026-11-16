@@ -1,1 +1,0 @@
-export{kP as checkForAppUpdate,AP as registerServiceWorker}from"../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,0 @@
-export{C2 as cn}from"../../chunks/app-CPY_PfvJ.js";

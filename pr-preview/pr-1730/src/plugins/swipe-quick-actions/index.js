@@ -1,1 +1,0 @@
-export{vM as SWIPE_QUICK_ACTIONS_GESTURE_ID,RM as SWIPE_RIGHT_BLOCK_ACTION_ID,_M as SwipeActionMenu,BM as quickActionItemsFacet,fM as swipeQuickActionsPlugin}from"../../../chunks/app-CPY_PfvJ.js";

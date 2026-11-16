@@ -1,1 +1,0 @@
-export{BS as videoPlayerPlugin}from"../../../chunks/app-CPY_PfvJ.js";

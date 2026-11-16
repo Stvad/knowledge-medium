@@ -1,1 +1,0 @@
-export{ak as Label}from"../../../chunks/app-CPY_PfvJ.js";

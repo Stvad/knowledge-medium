@@ -1,1 +1,0 @@
-export{YC as spatialNavigationShellDecorator}from"../../../chunks/app-CPY_PfvJ.js";

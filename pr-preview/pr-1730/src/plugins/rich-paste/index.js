@@ -1,1 +1,0 @@
-export{Rb as richPastePlugin}from"../../../chunks/app-CPY_PfvJ.js";

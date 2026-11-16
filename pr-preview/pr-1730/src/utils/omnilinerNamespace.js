@@ -1,1 +1,0 @@
-export{M1 as omnilinerNamespace}from"../../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,0 @@
-export{$M as BlockEmbed}from"../../../chunks/app-CPY_PfvJ.js";

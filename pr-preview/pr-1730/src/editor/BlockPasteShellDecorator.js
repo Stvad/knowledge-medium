@@ -1,1 +1,0 @@
-export{qN as BlockPasteShellDecorator,JN as blockPasteShellDecorator}from"../../chunks/app-CPY_PfvJ.js";

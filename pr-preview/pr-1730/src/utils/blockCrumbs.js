@@ -1,1 +1,0 @@
-export{kO as CRUMB_ELLIPSIS,AO as CRUMB_MAX_CHARS,jO as CRUMB_MAX_SEGMENTS,MO as collapseCrumbs,NO as crumbsFromAncestors}from"../../chunks/app-CPY_PfvJ.js";

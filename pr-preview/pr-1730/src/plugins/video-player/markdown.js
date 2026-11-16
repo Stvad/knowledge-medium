@@ -1,1 +1,0 @@
-export{VS as videoPlayerMarkdownExtension}from"../../../chunks/app-CPY_PfvJ.js";

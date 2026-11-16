@@ -1,1 +1,0 @@
-export{tut as defineQuery}from"../../../chunks/app-CPY_PfvJ.js";

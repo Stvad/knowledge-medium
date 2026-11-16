@@ -1,1 +1,0 @@
-export{WD as RecentsList,GD as RecentsPageBlockRenderer}from"../../../chunks/app-CPY_PfvJ.js";

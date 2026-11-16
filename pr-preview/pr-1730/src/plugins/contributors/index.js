@@ -1,1 +1,0 @@
-export{Cm as contributorsPlugin}from"../../../chunks/app-CPY_PfvJ.js";

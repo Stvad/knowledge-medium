@@ -1,1 +1,0 @@
-export{HP as gestureBindingDescriptor,UP as matchesGestureEvent}from"../../chunks/app-CPY_PfvJ.js";

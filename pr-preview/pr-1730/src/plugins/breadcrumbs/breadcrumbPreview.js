@@ -1,1 +1,0 @@
-export{vT as getBreadcrumbContentPreview}from"../../../chunks/app-CPY_PfvJ.js";

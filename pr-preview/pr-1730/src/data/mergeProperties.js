@@ -1,1 +1,0 @@
-export{P5 as mergeProperties}from"../../chunks/app-CPY_PfvJ.js";

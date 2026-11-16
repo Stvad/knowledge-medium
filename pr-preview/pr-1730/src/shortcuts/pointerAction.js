@@ -1,1 +1,0 @@
-export{WP as dispatchPointerAction,GP as setPointerActionDispatcher}from"../../chunks/app-CPY_PfvJ.js";

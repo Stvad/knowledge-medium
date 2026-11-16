@@ -1,1 +1,0 @@
-export{gT as PromotableBreadcrumbList}from"../../../chunks/app-CPY_PfvJ.js";

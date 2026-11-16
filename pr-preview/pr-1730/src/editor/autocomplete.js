@@ -1,1 +1,0 @@
-export{rP as editorAutocompleteExtension}from"../../chunks/app-CPY_PfvJ.js";

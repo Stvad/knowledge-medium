@@ -1,1 +1,0 @@
-export{LN as resolveStructuralEditPolicy,RN as structuralEditPolicyForBlock}from"../../chunks/app-CPY_PfvJ.js";

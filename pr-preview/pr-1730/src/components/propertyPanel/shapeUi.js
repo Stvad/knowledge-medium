@@ -1,1 +1,0 @@
-export{qG as PropertyShapeButton,JG as PropertyShapeGlyph}from"../../../chunks/app-CPY_PfvJ.js";

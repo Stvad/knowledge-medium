@@ -1,1 +1,0 @@
-export{XG as adoptOrCreatePropertySchema}from"../../chunks/app-CPY_PfvJ.js";
