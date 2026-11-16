@@ -11,7 +11,7 @@ import {topLevelBlockIdProp} from '@/data/properties'
 import {BlockSearchPicker} from '@/components/BlockSearchPicker.tsx'
 import {useRepo} from '@/context/repo.js'
 import {openDialog, type DialogContextProps} from '@/utils/dialogs.js'
-import {panelIdOfRenderScopeId, panelRenderScopeId} from '@/utils/renderScope'
+import {panelRenderScopeId} from '@/utils/renderScope'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showInfo} from '@/utils/toast.js'
 import {reportFailure} from './actions.ts'
@@ -70,12 +70,11 @@ const OwnThreadPicker = ({commentId, workspaceId, resolve, cancel}: DialogContex
 
 /** Ask where, move, and reveal the new thread in the panel the comment was
  *  shown in. */
-export const moveCommentToOwnThread = async (comment: Block, renderScopeId: string | undefined): Promise<void> => {
+export const moveCommentToOwnThread = async (comment: Block, panelId: string | undefined): Promise<void> => {
   const repo = comment.repo
   const targetId = await openDialog(OwnThreadPicker, {commentId: comment.id, workspaceId: comment.peek()?.workspaceId ?? ''})
   if (targetId === null) return
   const threadId = await moveToOwnThread(repo, {commentId: comment.id, targetId})
-  const panelId = renderScopeId === undefined ? undefined : panelIdOfRenderScopeId(renderScopeId)
   const topLevelBlockId = panelId && repo.block(panelId).peekProperty(topLevelBlockIdProp)
   if (panelId && topLevelBlockId) {
     revealThread(panelId, viewKey(panelRenderScopeId(panelId, topLevelBlockId), targetId), threadId, true)

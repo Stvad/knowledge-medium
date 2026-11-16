@@ -111,7 +111,7 @@ export const useComposer = (key: string): ComposerState | undefined =>
 /** Panels whose margin is drawn right now: switched on AND wide enough. Their
  *  pills hand threads to the margin instead of expanding them inline. */
 const marginShowing = new Set<string>()
-/** The thread whose card is pinned to its anchor in each panel's margin. */
+/** The thread whose card each panel's margin keeps in view (`placeCards`). */
 const activeThreads = new Map<string, string>()
 const showingClosed = createKeyedToggleSet('annotations-show-closed')
 
@@ -129,6 +129,11 @@ export const activateThread = (panelId: string, threadId: string): void => {
   if (activeThreads.get(panelId) === threadId) return
   activeThreads.set(panelId, threadId)
   listeners.notify()
+}
+
+/** Release the panel's active card back to its row. */
+export const deactivateThread = (panelId: string): void => {
+  if (activeThreads.delete(panelId)) listeners.notify()
 }
 
 export const peekActiveThread = (panelId: string): string | undefined => activeThreads.get(panelId)

@@ -644,7 +644,7 @@ const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) =>
         <div className="flex gap-2 pb-0.5">
           <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
           <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
-          <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.renderScopeId).catch(reportFailure)}>
+          <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.panelId).catch(reportFailure)}>
             Own thread
           </ActionButton>
         </div>
