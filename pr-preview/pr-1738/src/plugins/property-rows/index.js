@@ -1,0 +1,1 @@
+export{eo as propertyRowsPlugin}from"../../../chunks/app-Qy__5D9g.js";

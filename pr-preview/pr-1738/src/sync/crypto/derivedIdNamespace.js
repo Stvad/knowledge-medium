@@ -1,0 +1,1 @@
+export{sot as deriveWorkspaceIdNamespace}from"../../../chunks/app-Qy__5D9g.js";

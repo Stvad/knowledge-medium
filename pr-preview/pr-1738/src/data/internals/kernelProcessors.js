@@ -1,0 +1,1 @@
+export{d8 as KERNEL_PROCESSORS}from"../../../chunks/app-Qy__5D9g.js";

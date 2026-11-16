@@ -1,0 +1,1 @@
+export{Ou as BlockTagsConfigEditor}from"../../../chunks/app-Qy__5D9g.js";
