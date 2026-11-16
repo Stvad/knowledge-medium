@@ -1,1 +1,0 @@
-export{VG as PropertyShapeButton,HG as PropertyShapeGlyph}from"../../../chunks/app-CgiOJfX4.js";

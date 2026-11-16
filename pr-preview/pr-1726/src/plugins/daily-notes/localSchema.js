@@ -1,1 +1,0 @@
-export{UY as dailyNotesLocalSchema}from"../../../chunks/app-CgiOJfX4.js";

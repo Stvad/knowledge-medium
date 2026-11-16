@@ -1,1 +1,0 @@
-export{JB as BlockProperties}from"../../chunks/app-CgiOJfX4.js";

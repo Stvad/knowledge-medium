@@ -1,1 +1,0 @@
-export{Xb as richPastePlugin}from"../../../chunks/app-CgiOJfX4.js";

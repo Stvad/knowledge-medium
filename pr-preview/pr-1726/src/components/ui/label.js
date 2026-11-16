@@ -1,1 +1,0 @@
-export{_k as Label}from"../../../chunks/app-CgiOJfX4.js";

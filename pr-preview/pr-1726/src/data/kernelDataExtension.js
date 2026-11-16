@@ -1,1 +1,0 @@
-export{I6 as kernelDataExtension}from"../../chunks/app-CgiOJfX4.js";

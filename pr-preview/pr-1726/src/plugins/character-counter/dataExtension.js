@@ -1,1 +1,0 @@
-export{uQ as characterCounterDataExtension}from"../../../chunks/app-CgiOJfX4.js";

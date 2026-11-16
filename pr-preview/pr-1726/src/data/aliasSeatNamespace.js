@@ -1,1 +1,0 @@
-export{Jat as aliasSeatNamespacesInTx,Yat as resolveAliasSeatNamespaces}from"../../chunks/app-CgiOJfX4.js";

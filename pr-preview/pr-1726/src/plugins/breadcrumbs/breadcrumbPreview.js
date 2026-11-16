@@ -1,1 +1,0 @@
-export{AT as getBreadcrumbContentPreview}from"../../../chunks/app-CgiOJfX4.js";

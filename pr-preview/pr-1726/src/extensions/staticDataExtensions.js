@@ -1,1 +1,0 @@
-export{JK as staticDataExtensions}from"../../chunks/app-CgiOJfX4.js";

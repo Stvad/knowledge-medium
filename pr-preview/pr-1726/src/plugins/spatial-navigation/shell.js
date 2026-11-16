@@ -1,1 +1,0 @@
-export{sw as spatialNavigationShellDecorator}from"../../../chunks/app-CgiOJfX4.js";

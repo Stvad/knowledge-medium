@@ -1,1 +1,0 @@
-export{ir as birthdayPlugin}from"../../../chunks/app-CgiOJfX4.js";

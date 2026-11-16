@@ -1,1 +1,0 @@
-export{Ou as BlockTagsConfigEditor}from"../../../chunks/app-CgiOJfX4.js";

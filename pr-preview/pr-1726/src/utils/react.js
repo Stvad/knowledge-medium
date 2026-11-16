@@ -1,1 +1,0 @@
-export{IL as useIsMobile,LL as usePointerCoarse}from"../../chunks/app-CgiOJfX4.js";

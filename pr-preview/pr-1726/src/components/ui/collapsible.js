@@ -1,1 +1,0 @@
-"use client";export{WB as Collapsible,GB as CollapsibleContent,KB as CollapsibleTrigger}from"../../../chunks/app-CgiOJfX4.js";

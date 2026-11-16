@@ -1,1 +1,0 @@
-export{LG as floatingAnchorFromRect,RG as useAnchoredFloating}from"../../../chunks/app-CgiOJfX4.js";

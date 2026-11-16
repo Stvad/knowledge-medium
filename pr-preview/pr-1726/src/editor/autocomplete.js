@@ -1,1 +1,0 @@
-export{ZN as editorAutocompleteExtension}from"../../chunks/app-CgiOJfX4.js";

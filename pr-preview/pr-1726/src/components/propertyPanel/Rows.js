@@ -1,1 +1,0 @@
-export{YB as MetadataRow,XB as PropertySectionLabel}from"../../../chunks/app-CgiOJfX4.js";

@@ -1,1 +1,0 @@
-export{tg as lintExtensionSource}from"../../../chunks/app-CgiOJfX4.js";

@@ -1,1 +1,0 @@
-export{zy as Wikilink}from"../../../../../chunks/app-CgiOJfX4.js";

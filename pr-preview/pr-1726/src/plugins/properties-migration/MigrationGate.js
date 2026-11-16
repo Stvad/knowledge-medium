@@ -1,1 +1,0 @@
-export{bo as MigrationGate}from"../../../chunks/app-CgiOJfX4.js";

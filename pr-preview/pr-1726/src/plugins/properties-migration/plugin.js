@@ -1,1 +1,0 @@
-export{yo as propertiesMigrationPlugin}from"../../../chunks/app-CgiOJfX4.js";

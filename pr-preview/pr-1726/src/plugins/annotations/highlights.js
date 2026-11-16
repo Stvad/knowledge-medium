@@ -1,1 +1,0 @@
-export{Sm as HIGHLIGHT_CLASS,Cm as MOVED_HIGHLIGHT_CLASS,wm as SUGGESTION_HIGHLIGHT_CLASS,Tm as coveringStyle,Em as highlightClasses,Dm as highlightField,Om as highlightRange,km as highlightRanges,Am as threadHighlights,jm as threadHighlightsContribution}from"../../../chunks/app-CgiOJfX4.js";

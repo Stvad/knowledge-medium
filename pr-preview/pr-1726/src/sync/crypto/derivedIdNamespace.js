@@ -1,1 +1,0 @@
-export{Dot as deriveWorkspaceIdNamespace}from"../../../chunks/app-CgiOJfX4.js";

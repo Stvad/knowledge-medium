@@ -1,1 +1,0 @@
-export{xv as blockInfoPlugin}from"../../../chunks/app-CgiOJfX4.js";

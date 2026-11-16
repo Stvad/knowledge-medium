@@ -1,1 +1,0 @@
-export{mP as appUpdatePromptExtension}from"../../../chunks/app-CgiOJfX4.js";

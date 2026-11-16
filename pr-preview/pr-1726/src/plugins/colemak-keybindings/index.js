@@ -1,1 +1,0 @@
-export{KC as COLEMAK_KEYBINDINGS_PLUGIN_ID,qC as colemakKeybindingsPlugin,JC as colemakMovementKeybindingOverrides}from"../../../chunks/app-CgiOJfX4.js";
