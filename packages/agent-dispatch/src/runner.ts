@@ -214,7 +214,7 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
   // anyway, so the offered set is the boundary. Offer only the built-ins the
   // allow list names, and no skills: every request carries each one offered.
-  const offered = [...new Set([...builtInToolsAllowed(options.allowedTools), ...(workspace ? WORKSPACE_TOOLS : [])])]
+  const offered = builtInToolsAllowed([...options.allowedTools, ...(workspace ? WORKSPACE_TOOLS : [])])
   args.push('--disable-slash-commands', '--tools', offered.join(','))
   // A workspace's grants ride in its settings document instead (workspace.ts).
   const allowedTools = workspace

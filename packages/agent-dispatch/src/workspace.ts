@@ -117,7 +117,7 @@ export const workspaceEnv = (env: NodeJS.ProcessEnv, root: string, credentialEnv
     // The user's global git config is unreadable in the sandbox, and git refuses to run when it cannot read it.
     GIT_CONFIG_GLOBAL: '/dev/null',
     // A CLAUDE.md a run writes into the workspace must not become a later run's instructions.
-    // Defence in depth: `--restricted` already skips the folder's, as measured on 2.1.308.
+    // Defence in depth: `--restricted` already skips the folder's.
     CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
   }
 }

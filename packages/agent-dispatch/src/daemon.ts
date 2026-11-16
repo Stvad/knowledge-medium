@@ -23,7 +23,7 @@ import {
   isLocalBridgeUrl,
   loadContributorSelection,
 } from '@knowledge-medium/agent-cli/config'
-import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
+import { defaultStatePath, loadConfig, watcherWorkspace, type DaemonConfig } from './config.js'
 import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
@@ -89,7 +89,7 @@ const main = async () => {
     if (config.configuredWatcherCount === 0) {
       throw new Error('No watchers configured — nothing to do. Add watchers to the config file.')
     }
-    const workspaceWatcher = config.watchers.find(watcher => watcher.runner.executor === 'claude' && watcher.runner.workspace)
+    const workspaceWatcher = config.watchers.find(watcher => watcherWorkspace(watcher))
     if (workspaceWatcher && process.platform !== 'darwin') {
       throw new Error(`watcher "${workspaceWatcher.name}": runner.workspace is supported on macOS only, where its sandbox is verified`)
     }
@@ -213,8 +213,8 @@ const main = async () => {
   // A workspace watcher's server reads media files under its own root, so it gets its own config.
   const workspaceMcpConfigPaths = new Map<string, string>()
   for (const watcher of config.watchers) {
-    if (watcher.runner.executor !== 'claude' || !watcher.runner.workspace) continue
-    const {root} = watcher.runner.workspace
+    const root = watcherWorkspace(watcher)?.root
+    if (root === undefined) continue
     workspaceMcpConfigPaths.set(watcher.name, await writeMcpConfig(
       config, contributorId, `agent-dispatch-mcp-${encodeURIComponent(watcher.name)}.json`, root,
     ))

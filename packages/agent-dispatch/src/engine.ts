@@ -8,7 +8,7 @@ import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
-import { PROPS } from './config.js'
+import { PROPS, watcherWorkspace } from './config.js'
 import type { Graph, ReplyWriter } from './graph.js'
 import { formatRunUsage, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
@@ -219,7 +219,7 @@ export const createEngine = (deps: EngineDeps) => {
   ): AgentRunOptions => {
     const {runner} = watcher
     const mcpConfigPath = mcpConfigPathFor(watcher)
-    const workspace = runner.executor === 'claude' ? runner.workspace : undefined
+    const workspace = watcherWorkspace(watcher)
     return {
       claudeBin: config.claudeBin,
       prompt,

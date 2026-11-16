@@ -256,12 +256,11 @@ export interface RunWorkspace {
   allowedDomains: string[]
 }
 
-type ActiveRunner<R extends Runner> = R extends {executor: 'claude'}
-  ? Omit<R, 'workspace'> & {workspace?: RunWorkspace}
-  : R
+type ActiveRunner =
+  | (Omit<Extract<Runner, {executor: 'claude'}>, 'workspace'> & {workspace?: RunWorkspace})
+  | Exclude<Runner, {executor: 'claude'}>
 
-type ActiveWatcher<T extends {disabled: boolean, runner: Runner}> =
-  Omit<T, 'disabled' | 'runner'> & {runner: ActiveRunner<T['runner']>}
+type ActiveWatcher<T extends {disabled: boolean}> = Omit<T, 'disabled' | 'runner'> & {runner: ActiveRunner}
 
 export type BacklinksWatcher = ActiveWatcher<RawBacklinksWatcher>
 export type QueryWatcher = ActiveWatcher<RawQueryWatcher>
@@ -432,8 +431,8 @@ const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
           ...runner,
           cwd,
           workspace: runner.workspace && {
+            ...runner.workspace,
             root: runner.workspace.root ? expandHome(runner.workspace.root) : path.join(defaultWorkspacesDir(), watcher.name),
-            allowedDomains: runner.workspace.allowedDomains,
           },
         },
   }
@@ -454,6 +453,10 @@ export const configSchema = rawConfigSchema.transform(config => {
 })
 
 export type DaemonConfig = z.infer<typeof configSchema>
+
+/** The watcher's workspace; only a claude runner has one. */
+export const watcherWorkspace = (watcher: Watcher): RunWorkspace | undefined =>
+  watcher.runner.executor === 'claude' ? watcher.runner.workspace : undefined
 
 export const parseConfig = (raw: unknown): DaemonConfig =>
   configSchema.parse(raw)
