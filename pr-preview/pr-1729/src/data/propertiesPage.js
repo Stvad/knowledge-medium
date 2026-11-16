@@ -1,0 +1,1 @@
+export{Nat as getOrCreatePropertiesPage,Pat as propertiesPageBlockId,Fat as propertiesPageSpec}from"../../chunks/app-OEsEAncQ.js";

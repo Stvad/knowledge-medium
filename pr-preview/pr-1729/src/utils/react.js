@@ -1,0 +1,1 @@
+export{QL as useIsMobile,$L as usePointerCoarse}from"../../chunks/app-OEsEAncQ.js";

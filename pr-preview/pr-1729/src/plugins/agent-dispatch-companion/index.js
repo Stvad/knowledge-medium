@@ -1,0 +1,1 @@
+export{Rm as agentDispatchCompanionPlugin}from"../../../chunks/app-OEsEAncQ.js";

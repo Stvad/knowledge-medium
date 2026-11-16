@@ -1,0 +1,1 @@
+export{xT as usePromotableBreadcrumb}from"../../../chunks/app-OEsEAncQ.js";

@@ -1,0 +1,1 @@
+export{uq as staticDataExtensions}from"../../chunks/app-OEsEAncQ.js";

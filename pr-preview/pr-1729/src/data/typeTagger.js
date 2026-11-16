@@ -1,0 +1,1 @@
+export{G2 as TypeTagger,K2 as applyTypeTagInTx}from"../../chunks/app-OEsEAncQ.js";

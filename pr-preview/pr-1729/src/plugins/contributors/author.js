@@ -1,0 +1,1 @@
+export{mg as authorIdOf}from"../../../chunks/app-OEsEAncQ.js";

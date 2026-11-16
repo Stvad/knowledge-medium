@@ -1,0 +1,1 @@
+export{Z8 as NAMES_IN_A_SENTENCE,Q8 as describeNames,$8 as firstFew}from"../../chunks/app-OEsEAncQ.js";

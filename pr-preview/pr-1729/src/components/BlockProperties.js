@@ -1,0 +1,1 @@
+export{uV as BlockProperties}from"../../chunks/app-OEsEAncQ.js";

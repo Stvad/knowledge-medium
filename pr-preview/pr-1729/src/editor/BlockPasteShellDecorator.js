@@ -1,0 +1,1 @@
+export{rP as BlockPasteShellDecorator,iP as blockPasteShellDecorator}from"../../chunks/app-OEsEAncQ.js";

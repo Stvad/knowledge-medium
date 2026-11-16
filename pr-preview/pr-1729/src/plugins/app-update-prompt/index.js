@@ -1,0 +1,1 @@
+export{AP as appUpdatePromptExtension}from"../../../chunks/app-OEsEAncQ.js";

@@ -1,0 +1,1 @@
+export{gT as mobileBottomNavItemsFacet}from"../../../chunks/app-OEsEAncQ.js";

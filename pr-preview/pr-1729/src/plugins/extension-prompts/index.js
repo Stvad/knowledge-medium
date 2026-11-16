@@ -1,0 +1,1 @@
+export{gP as ExtensionPromptSurface,_P as extensionPromptsExtension}from"../../../chunks/app-OEsEAncQ.js";

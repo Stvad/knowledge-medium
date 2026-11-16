@@ -1,0 +1,1 @@
+export{zP as checkForAppUpdate,BP as registerServiceWorker}from"../chunks/app-OEsEAncQ.js";

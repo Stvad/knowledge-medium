@@ -1,0 +1,1 @@
+export{QP as gestureBindingDescriptor,$P as matchesGestureEvent}from"../../chunks/app-OEsEAncQ.js";

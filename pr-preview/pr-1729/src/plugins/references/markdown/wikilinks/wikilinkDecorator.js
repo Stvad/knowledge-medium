@@ -1,0 +1,1 @@
+export{Xk as isWikilinkDisplayParts,Zk as resolveWikilinkDisplay,Qk as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-OEsEAncQ.js";

@@ -1,0 +1,1 @@
+export{dk as Label}from"../../../chunks/app-OEsEAncQ.js";

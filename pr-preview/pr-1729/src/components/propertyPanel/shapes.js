@@ -1,0 +1,1 @@
+export{aK as propertyShapeLabel}from"../../../chunks/app-OEsEAncQ.js";
