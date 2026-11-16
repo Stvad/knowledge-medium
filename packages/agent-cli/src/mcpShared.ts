@@ -1,7 +1,7 @@
 /** Names shared by the generic Knowledge Medium graph MCP server and
  * callers that need to construct MCP tool allowlists/config. Every tool a
- * server may register (`add_media` only with `localMediaFiles`); allowlists
- * derive from it, so they cannot name a tool the server does not know. */
+ * server registers; allowlists derive from it, so they cannot name a tool
+ * the server does not know. */
 export const MCP_SERVER_NAME = 'km'
 
 export const KM_MCP_TOOL_NAMES = [
@@ -34,8 +34,8 @@ export const KM_MCP_TOOL_NAMES = [
 
 export type KmMcpToolName = (typeof KM_MCP_TOOL_NAMES)[number]
 
-/** Fully-qualified tool ids as they appear to `claude --allowedTools`. `add_media`
- *  uploads any local file the model names, so a run granted this list never gets it. */
+/** Fully-qualified tool ids as they appear to `claude --allowedTools`. `add_media` is left
+ *  out: on a server with `localMediaFiles` it uploads any local file the model names. */
 export const KM_MCP_ALLOWED_TOOLS = KM_MCP_TOOL_NAMES.filter(name => name !== 'add_media').map(
   name => `mcp__${MCP_SERVER_NAME}__${name}`,
 )

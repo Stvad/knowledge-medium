@@ -18,7 +18,11 @@ import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt 
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
 import { MEMORY_DIFF_LIMIT } from './graph.js'
-import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+import { KM_MCP_ALLOWED_TOOLS, MCP_SERVER_NAME } from '@knowledge-medium/agent-cli/mcpShared'
+
+/** Dispatch's km server (`./mcp.ts`) never sets `localMediaFiles`, so its `add_media`
+ *  stores only bytes the run passes in, and is safe to pre-approve. */
+const DISPATCH_MCP_ALLOWED_TOOLS = [...KM_MCP_ALLOWED_TOOLS, `mcp__${MCP_SERVER_NAME}__add_media`]
 
 export interface ChannelEvent {
   content: string
@@ -218,7 +222,7 @@ export const createEngine = (deps: EngineDeps) => {
       cwd: runner.cwd ?? os.homedir(),
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
-          ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
+          ...(mcpConfigPath ? DISPATCH_MCP_ALLOWED_TOOLS : []),
           ...config.defaultAllowedTools,
           ...runner.allowedTools,
         ])]
