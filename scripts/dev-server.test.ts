@@ -203,7 +203,7 @@ const freePort = () => new Promise<number>((resolve, reject) => {
 describe.skipIf(!hasLsof)('whoHolds', { timeout: SPAWNING_TEST_TIMEOUT }, () => {
   it('names the holder and the checkout it runs in', async () => {
     const { pid, port } = await holdPort(LOOPBACK)
-    const [line] = await whoHolds([port])
+    const line = (await whoHolds([port])).find(value => value.includes(`(pid ${pid},`))
     expect(line).toContain(`port ${port}: node (pid ${pid}, up `)
     expect(line).toContain(`in ${ROOT} on `)
     expect(line).toMatch(/\(this worktree\)$/)
