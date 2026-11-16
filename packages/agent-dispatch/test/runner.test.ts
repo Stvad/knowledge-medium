@@ -92,6 +92,20 @@ describe('scrubEnv', () => {
 describe('createStreamJsonParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('emits distinct same-label tool starts once each across partial and finalized messages', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+    for (const id of ['tool-1', 'tool-2']) {
+      const tool = {type: 'tool_use', id, name: 'mcp__km__comments'}
+      parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: tool}}))
+      parser.feed(line({type: 'assistant', message: {content: [tool]}}))
+    }
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments'},
+    ])
+  })
+
   it('full happy path: init -> tool_use activity -> text deltas cumulative -> result', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))

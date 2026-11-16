@@ -11,6 +11,9 @@ import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
+import {agentDispatchCompanionDataExtension} from '@/plugins/agent-dispatch-companion/dataExtension'
+import {agentProtocolSeeds, agentActivityAtProp} from '@/plugins/agent-dispatch-companion/schema'
+import {definitionSeedsFacet} from '@/data/facets'
 import {createTestAgentContext} from '@/plugins/agent-runtime/test/createTestAgentContext'
 import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
@@ -108,6 +111,22 @@ const result = (overrides: Partial<AgentRunResult>): AgentRunResult => ({
 })
 
 describe('dispatch attribution', () => {
+  it('accepts activity writes when the app has no activity timestamp seed', async () => {
+    context = createTestAgentContext(repo, WS, [
+      staticDataExtensions.filter(extension => extension !== agentDispatchCompanionDataExtension),
+      agentProtocolSeeds.filter(seed => seed !== agentActivityAtProp).map(seed => definitionSeedsFacet.of(seed)),
+    ])
+    expect(repo.propertySchemas.get(PROPS.activityAt)).toBeUndefined()
+    const graph = createGraph(inProcessClient())
+    await graph.setActivity(MENTION, 'km: comments', 123_000)
+    const row = await repo.load(MENTION)
+    expect(row?.properties).toMatchObject({[PROPS.activity]: 'km: comments', [PROPS.activityAt]: 123_000})
+    await graph.setTaskProps(MENTION, {status: 'done', activity: null, nowMs: 124_000})
+    expect((await repo.load(MENTION))?.properties).toMatchObject({
+      [PROPS.status]: 'done', [PROPS.activity]: '', [PROPS.activityAt]: 0,
+    })
+  })
+
   it('leaves the mentioning block\'s authors untouched through a whole run, and attributes the reply', async () => {
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
     const engine = engineFor(async options => {

@@ -112,6 +112,21 @@ describe('scrubCodexEnv', () => {
 describe('createCodexJsonlParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('emits consecutive same-label tool starts once per item, ignoring updates and completions', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    for (const id of ['tool-1', 'tool-2']) {
+      const item = {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}
+      for (const type of ['item.started', 'item.updated', 'item.completed']) {
+        parser.feed(line({type, item}))
+      }
+    }
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments'},
+    ])
+  })
+
   it('replays the REAL success transcript verbatim', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))
@@ -184,12 +199,8 @@ describe('createCodexJsonlParser', () => {
       parser.feed(line({type: 'turn.completed', usage: {}}))
     }).not.toThrow()
 
-    // Dedup is the ENGINE's job (see engine.ts's `lastActivity` gate) —
-    // the parser just emits, so item.started + item.completed for the
-    // SAME reasoning item both surface as an activity event here.
     expect(events).toEqual([
       {kind: 'session', sessionId: 't1'},
-      {kind: 'activity', label: 'Thinking'},
       {kind: 'activity', label: 'Thinking'},
       {kind: 'activity', label: 'Running a command'},
       {kind: 'activity', label: 'Searching the web'},

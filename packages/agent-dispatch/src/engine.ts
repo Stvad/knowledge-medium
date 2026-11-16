@@ -495,7 +495,6 @@ export const createEngine = (deps: EngineDeps) => {
         })
       }
 
-      let lastActivity: string | null = null
       let lastTextWriteMs = 0
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
@@ -504,9 +503,8 @@ export const createEngine = (deps: EngineDeps) => {
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
-          if (event.label === lastActivity) return
-          lastActivity = event.label
-          queueWrite(() => graph.setActivity(sourceId, event.label))
+          const startedAt = now()
+          queueWrite(() => graph.setActivity(sourceId, event.label, startedAt))
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text

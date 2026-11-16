@@ -32,7 +32,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   )
   const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
-  const activityWrites: Array<{id: string, label: string}> = []
+  const activityWrites: Array<{id: string, label: string, nowMs: number}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
   const cancelClears: string[] = []
 
@@ -83,11 +83,11 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     reconcileReplyTree: async (parentId, markdown, {replyKey, shape, final}) => {
       reconciles.push({parentId, markdown, replyKey, shape, final: final ?? false})
     },
-    setActivity: async (id, label) => {
+    setActivity: async (id, label, nowMs) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.properties = {...target.properties, [PROPS.activity]: label}
       blocks.set(id, target)
-      activityWrites.push({id, label})
+      activityWrites.push({id, label, nowMs})
     },
     setSession: async (id, session, resumeOptions) => {
       const target = blocks.get(id) ?? {id, properties: {}}
@@ -1540,25 +1540,30 @@ describe('mention lifecycle', () => {
 })
 
 describe('live progress streaming', () => {
-  it('activity events write setActivity on label CHANGE only, and the terminal write clears it', async () => {
+  it('timestamps every activity start before queued writes, including repeated labels, then clears activity', async () => {
     const {graph, blocks, activityWrites, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] research this'}},
     })
+    let clock = NOW
     const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
       options.onEvent?.({kind: 'activity', label: 'km: search'})
-      options.onEvent?.({kind: 'activity', label: 'km: search'}) // duplicate — must not re-write
+      clock += 30_000
+      options.onEvent?.({kind: 'activity', label: 'km: search'})
+      clock += 10_000
       options.onEvent?.({kind: 'activity', label: 'Searching the web'})
+      clock += 90_000 // writes run later; their timestamps must remain the event times
       return okRun()
     })
-    const engine = engineWith({graph, runTask})
+    const engine = engineWith({graph, runTask, now: () => clock})
 
     await engine.tick()
     await engine.drain()
 
     expect(activityWrites).toEqual([
-      {id: 'b-1', label: 'km: search'},
-      {id: 'b-1', label: 'Searching the web'},
+      {id: 'b-1', label: 'km: search', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 30_000},
+      {id: 'b-1', label: 'Searching the web', nowMs: NOW + 40_000},
     ])
     // Terminal write clears the transient label so it never outlives the run.
     expect(propWrites.at(-1)).toMatchObject({status: 'done', activity: null})

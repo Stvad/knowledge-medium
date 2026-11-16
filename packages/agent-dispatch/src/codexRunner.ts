@@ -146,24 +146,29 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
     }
   }
 
-  /** Best-effort tool name for an mcp_tool_call item — the shape wasn't
-   *  observed live, so try a few plausible string fields before
-   *  falling back to a generic label. */
+  /** Preserve the server prefix so km tools use the bridge timeout in the chip. */
   const mcpToolActivityLabel = (item: Record<string, unknown>): string => {
+    const server = item.server
+    if (typeof server === 'string' && server.length > 0) {
+      const toolField = item.tool ?? item.toolName
+      const suffix = typeof toolField === 'string' && toolField.length > 0 ? `: ${toolField}` : ''
+      return `${server}${suffix}`
+    }
     const tool = item.tool
     if (typeof tool === 'string' && tool.length > 0) return humanizeToolName(tool)
     const name = item.name
     if (typeof name === 'string' && name.length > 0) return humanizeToolName(name)
-    const server = item.server
-    if (typeof server === 'string' && server.length > 0) {
-      const toolField = item.toolName
-      const suffix = typeof toolField === 'string' && toolField.length > 0 ? `: ${toolField}` : ''
-      return `${server}${suffix}`
-    }
     return 'Using a tool'
   }
 
+  const seenActivityItems = new Set<string>()
   const activityForItem = (item: Record<string, unknown>) => {
+    // Updates and completions must not restart an item's age.
+    const id = item.id
+    if (typeof id === 'string') {
+      if (seenActivityItems.has(id)) return
+      seenActivityItems.add(id)
+    }
     const type = item.type
     if (type === 'command_execution') emit({kind: 'activity', label: 'Running a command'})
     else if (type === 'web_search') emit({kind: 'activity', label: 'Searching the web'})

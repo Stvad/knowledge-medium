@@ -21,6 +21,8 @@ export const AGENT_PROPS = {
   /** Transient "what the run is doing now" label (on a queued task, why it
    *  waits); empty/absent when idle. */
   activity: 'agent:activity',
+  /** Timestamp when the current activity began, ms since epoch. */
+  activityAt: 'agent:activity-at',
   /** Written by the Ask Agent action (companion-owned, daemon-inert). */
   askedAt: 'agent:asked-at',
   /** Written by the Stop Agent action; the daemon clears it once the
@@ -41,6 +43,8 @@ export interface ChipState {
   errorMessage: string
   /** "What the run is doing now" — empty when absent/non-string. */
   activity: string
+  /** Start of the current activity, ms — null if absent or invalid. */
+  activityAtMs: number | null
   /** True while a running task has a pending `agent:cancel` the daemon
    *  hasn't acted on yet. */
   cancelling: boolean
@@ -69,6 +73,7 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
   const attempts = properties?.[AGENT_PROPS.attempts]
   const error = properties?.[AGENT_PROPS.error]
   const activity = properties?.[AGENT_PROPS.activity]
+  const activityAt = properties?.[AGENT_PROPS.activityAt]
   const cancel = properties?.[AGENT_PROPS.cancel]
   return {
     kind: status,
@@ -78,6 +83,7 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
     attempts: typeof attempts === 'number' && attempts > 0 ? Math.floor(attempts) : 1,
     errorMessage: typeof error === 'string' ? error : '',
     activity: typeof activity === 'string' ? activity : '',
+    activityAtMs: typeof activityAt === 'number' && Number.isFinite(activityAt) && activityAt > 0 ? activityAt : null,
     cancelling: status === 'running' && Boolean(cancel),
   }
 }
@@ -91,7 +97,24 @@ export const elapsedLabel = (seconds: number): string => {
   return `${Math.round(seconds / 3_600)}h`
 }
 
-export const chipTitle = (chip: ChipState): string => {
+export interface ActivityState {
+  ageLabel: string
+  stalled: boolean
+}
+
+/** The current step's age and warning state; only timestamped running work
+ *  with a non-empty activity label has a visible age. */
+export const activityStateFor = (chip: ChipState, nowMs: number): ActivityState | null => {
+  if (chip.kind !== 'running' || chip.cancelling || !chip.activity || chip.activityAtMs === null) return null
+  const ageMs = Math.max(0, nowMs - chip.activityAtMs)
+  const thresholdMs = chip.activity.startsWith('km:') ? 60_000 : 300_000
+  return {
+    ageLabel: elapsedLabel(Math.ceil(ageMs / 1_000)),
+    stalled: ageMs > thresholdMs,
+  }
+}
+
+export const chipTitle = (chip: ChipState, nowMs = Date.now()): string => {
   switch (chip.kind) {
     case 'queued':
       return chip.activity ? `Queued for ${chip.executorLabel} — ${chip.activity}` : `Queued for ${chip.executorLabel}`
@@ -100,7 +123,13 @@ export const chipTitle = (chip: ChipState): string => {
       const base = chip.attempts > 1
         ? `${chip.executorLabel} is working (attempt ${chip.attempts})`
         : `${chip.executorLabel} is working`
-      return chip.activity ? `${base} — ${chip.activity}` : base
+      if (!chip.activity) return base
+      const activity = activityStateFor(chip, nowMs)
+      const detail = `${base} — ${chip.activity}`
+      if (!activity?.stalled) return detail
+      return chip.activity.startsWith('km:')
+        ? `${detail} · No progress for ${activity.ageLabel} on ${chip.activity}; the app tab may not be answering`
+        : `${detail} · Long-running step with no progress for ${activity.ageLabel}`
     }
     case 'done':
       return chip.updatedAtMs

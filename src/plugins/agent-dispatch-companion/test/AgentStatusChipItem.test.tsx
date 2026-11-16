@@ -27,6 +27,7 @@ afterEach(() => {
   cleanup()
   clearAskedAgent(block.id)
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe('AgentStatusChipItem', () => {
@@ -41,6 +42,37 @@ describe('AgentStatusChipItem', () => {
     const { container } = render(<Chip block={block} />)
     expect(chipNode(container)?.getAttribute('data-agent-dispatch-chip')).toBe('done')
     expect(container.textContent).toContain('Codex')
+  })
+
+  it('updates the running activity age and warning on the mounted chip', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    withProperties({
+      'agent:status': 'running',
+      'agent:updated-at': 10_000,
+      'agent:activity': 'km: comments',
+      'agent:activity-at': 40_000,
+    })
+    const { container } = render(<Chip block={block} />)
+    const chip = chipNode(container)!
+    expect(chip.textContent).toContain('km: comments')
+    expect(chip.textContent).toContain('60s')
+    expect(chip.getAttribute('title')).not.toContain('No progress')
+    expect(chip.className).toContain('w-72')
+
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(chip.getAttribute('title')).toContain('No progress for 61s on km: comments')
+    expect(chip.getAttribute('title')).toContain('the app tab may not be answering')
+    expect(chip.className).toContain('text-amber-700')
+  })
+
+  it('keeps the existing compact pill when activity has no valid start timestamp', () => {
+    withProperties({ 'agent:status': 'running', 'agent:activity': 'km: comments' })
+    const { container } = render(<Chip block={block} />)
+    const chip = chipNode(container)!
+    expect(chip.className).toContain('w-24')
+    expect(chip.className).not.toContain('w-72')
+    expect(chip.textContent).not.toContain('km: comments')
   })
 
   it('shows the optimistic queued mark, and real lifecycle props supersede it', () => {

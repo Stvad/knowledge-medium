@@ -41,6 +41,12 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.3
+
+Activity writes now include `agent:activity-at`, the current step's start time in epoch milliseconds, in the same write as `agent:activity`. Consecutive calls to the same tool each start a new step; partial, updated, and finalized reports of the same tool call do not reset its age. Restart the daemon and reload the app to see step age beside the activity in the status chip, with a warning after 60 seconds on `km:` tools (the bridge command timeout), or 5 minutes on other activities (a long-step warning, since those tools can legitimately take longer). The tooltip explains the warning. The clock runs in the app; there are no heartbeat writes.
+
+An older daemon leaves the new app's chip unchanged. A new daemon can write to an older app: the unknown property is accepted, and that app keeps its existing chip until it reloads. Activity and its timestamp are cleared together at claim and terminal writes.
+
 ## Upgrade to 0.9.2
 
 0.9.2 requires `@knowledge-medium/agent-cli` 0.14.0. Runs now get `add_media`, which stores a file the run writes itself (such as an SVG) as a media block. It never reads a local path. Upgrade both packages and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
@@ -363,7 +369,7 @@ A `[[claude]]` you write inside the memory starts a run like anywhere else; chil
 
 ## Live progress
 
-Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …). The companion UI's status chip shows the persisted runner label next to elapsed time (`Claude · 12s · Searching the web`, `Codex · 12s · km: search`); the label is cleared the moment the run reaches a terminal state, so it never goes stale.
+Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …) — and `agent:activity-at`, its start time in epoch milliseconds. The companion UI's status chip shows the runner, total run time, activity, and current step age (for example `Codex · 3m · km: comments · 2m`). After 60 seconds on a `km:` tool or 5 minutes on another activity, it warns that the step has not advanced. It uses a client-side clock, with no heartbeat writes. The label and timestamp clear together at a terminal state (`''` and `0` respectively). Without a timestamp, older daemons retain the previous chip behavior.
 
 Set `"streamReply": true` on a backlinks watcher to also show the reply being **built live** as the run streams, instead of posting it once at the end. Each tick reconciles the reply to the growing text (throttled to roughly one write per 1.5s, writing only the diff), so leave it off for watchers where that write churn matters — the default (`false`) posts the whole reply in one shot when the run finishes.
 

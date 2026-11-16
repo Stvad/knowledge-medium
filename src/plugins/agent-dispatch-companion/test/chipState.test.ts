@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
+import { activityStateFor, chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
 import { contentWithAgentMention } from '../askAgent.ts'
 
 describe('chipStateFor', () => {
@@ -17,7 +17,7 @@ describe('chipStateFor', () => {
       'agent:status': 'running',
       'agent:updated-at': 1_000,
       'agent:attempts': 2,
-    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', cancelling: false})
+    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', activityAtMs: null, cancelling: false})
 
     expect(chipStateFor({'agent:status': 'done'})).toMatchObject({kind: 'done', attempts: 1})
     expect(chipStateFor({
@@ -27,7 +27,8 @@ describe('chipStateFor', () => {
     expect(chipStateFor({
       'agent:status': 'running',
       'agent:activity': 'km: search',
-    })).toMatchObject({kind: 'running', activity: 'km: search'})
+      'agent:activity-at': 2_000,
+    })).toMatchObject({kind: 'running', activity: 'km: search', activityAtMs: 2_000})
   })
 
   it('sanitizes malformed metadata instead of propagating it', () => {
@@ -36,7 +37,7 @@ describe('chipStateFor', () => {
       'agent:updated-at': 'yesterday',
       'agent:attempts': -3,
       'agent:activity': 42,
-    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false})
+    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', activityAtMs: null, cancelling: false})
   })
 
   it('uses the persisted executor to label non-Claude runs', () => {
@@ -52,6 +53,65 @@ describe('chipStateFor', () => {
     // A leftover agent:cancel on a non-running block must not be surfaced —
     // the daemon only honors it while status is 'running'.
     expect(chipStateFor({'agent:status': 'done', 'agent:cancel': Date.now()})).toMatchObject({cancelling: false})
+  })
+})
+
+describe('activityStateFor', () => {
+  const now = 1_000_000
+
+  it('warns only after the strict threshold, with a shorter threshold for km steps', () => {
+    const km = chipStateFor({
+      'agent:status': 'running',
+      'agent:activity': 'km: comments',
+      'agent:activity-at': now - 60_000,
+    })!
+    expect(activityStateFor(km, now)).toMatchObject({ageLabel: '60s', stalled: false})
+    expect(activityStateFor(km, now + 1)).toMatchObject({ageLabel: '61s', stalled: true})
+
+    const other = chipStateFor({
+      'agent:status': 'running',
+      'agent:activity': 'Searching the web',
+      'agent:activity-at': now - 300_000,
+    })!
+    expect(activityStateFor(other, now)).toMatchObject({ageLabel: '5m', stalled: false})
+    expect(activityStateFor(other, now + 1)).toMatchObject({stalled: true})
+    expect(chipTitle(other, now + 1)).toContain('Long-running step with no progress for 5m')
+  })
+
+  it('returns no step age for missing, invalid, zero, or empty activity', () => {
+    for (const activityAt of [undefined, 'now', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+      const chip = chipStateFor({
+        'agent:status': 'running',
+        'agent:activity': 'km: comments',
+        ...(activityAt === undefined ? {} : {'agent:activity-at': activityAt}),
+      })!
+      expect(chip.activityAtMs).toBeNull()
+      expect(activityStateFor(chip, now)).toBeNull()
+    }
+    const noActivity = chipStateFor({'agent:status': 'running', 'agent:activity-at': now - 90_000})!
+    expect(activityStateFor(noActivity, now)).toBeNull()
+  })
+
+  it('clamps future timestamps to zero age and suppresses warnings while cancelling or not running', () => {
+    const future = chipStateFor({
+      'agent:status': 'running',
+      'agent:activity': 'km: comments',
+      'agent:activity-at': now + 90_000,
+    })!
+    expect(activityStateFor(future, now)).toMatchObject({ageLabel: '0s', stalled: false})
+
+    const cancelling = chipStateFor({
+      'agent:status': 'running', 'agent:activity': 'km: comments',
+      'agent:activity-at': now - 120_000, 'agent:cancel': true,
+    })!
+    expect(activityStateFor(cancelling, now)).toBeNull()
+    for (const status of ['queued', 'done', 'error'] as const) {
+      const chip = chipStateFor({
+        'agent:status': status, 'agent:activity': 'km: comments',
+        'agent:activity-at': now - 120_000,
+      })!
+      expect(activityStateFor(chip, now)).toBeNull()
+    }
   })
 })
 

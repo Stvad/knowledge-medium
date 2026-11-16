@@ -249,9 +249,17 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
     }
   }
 
+  const seenToolUses = new Set<string>()
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
     const name = typeof toolUse.name === 'string' ? toolUse.name : null
     if (!name) return
+    // Partial and finalized messages describe the same tool use; only a new
+    // tool id starts a step, even when consecutive tools share a name.
+    const id = toolUse.id
+    if (typeof id === 'string') {
+      if (seenToolUses.has(id)) return
+      seenToolUses.add(id)
+    }
     emit({kind: 'activity', label: humanizeToolName(name)})
   }
 
