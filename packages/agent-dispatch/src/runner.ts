@@ -11,10 +11,16 @@
  * Permissions: no permission-mode bypass. Print mode fails closed —
  * anything outside --allowedTools is denied. Graph access comes from
  * the km MCP tools; per-watcher config can add more (e.g. Bash for a
- * repo-scoped watcher), which is a deliberate opt-in.
+ * repo-scoped watcher), which is a deliberate opt-in, or confine Bash and
+ * the file tools to a workspace folder (workspace.ts).
  */
+import fs from 'node:fs/promises'
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
-import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
+import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox, RunWorkspace } from './config.js'
+import {
+  ensurePrivateDir, WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceEnv, workspaceSettings, workspaceSystemPrompt,
+  workspaceTmpDir,
+} from './workspace.js'
 
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
@@ -56,6 +62,8 @@ export interface AgentRunOptions extends CommonRunOptions {
   allowedTools: string[]
   effort?: ClaudeEffort
   mcpConfigPath?: string
+  /** Run sandboxed in this workspace (workspace.ts), in `cwd`, a folder under its root. */
+  workspace?: RunWorkspace
   /** Which CLI the engine should dispatch this run to (daemon.ts's
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
@@ -162,12 +170,13 @@ export const envForBilling = (
   scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
 ): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
-/** The built-in tools among `allowedTools`, by name: `Bash(git *)` allows
- *  Bash. MCP tools come from --mcp-config, not --tools. */
+/** The tool a permission rule names: `Bash(git *)` is a Bash rule. */
+const ruleTool = (rule: string): string => rule.replace(/\(.*\)$/, '').trim()
+
+/** The built-in tools among `allowedTools`, by name. MCP tools come from
+ *  --mcp-config, not --tools. */
 const builtInToolsAllowed = (allowedTools: readonly string[]): string[] => [
-  ...new Set(allowedTools
-    .filter(rule => !rule.startsWith('mcp__'))
-    .map(rule => rule.replace(/\(.*\)$/, '').trim())),
+  ...new Set(allowedTools.filter(rule => !rule.startsWith('mcp__')).map(ruleTool)),
 ]
 
 /** The prompt is deliberately NOT an argv element — it goes via stdin
@@ -187,13 +196,27 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
     // globally-registered servers.
     args.push('--mcp-config', options.mcpConfigPath, '--strict-mcp-config')
   }
+  const {workspace} = options
+  if (workspace) {
+    args.push(
+      '--restricted',
+      '--add-dir', workspace.root,
+      '--settings', JSON.stringify(workspaceSettings(workspace, BILLING_ENV_DENYLIST)),
+      '--append-system-prompt', workspaceSystemPrompt(workspace, options.cwd ?? workspace.root),
+    )
+  }
   // --allowedTools only pre-approves: an offered tool that needs no approval
   // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
   // anyway, so the offered set is the boundary. Offer only the built-ins the
   // allow list names, and no skills: every request carries each one offered.
-  args.push('--disable-slash-commands', '--tools', builtInToolsAllowed(options.allowedTools).join(','))
-  if (options.allowedTools.length > 0) {
-    args.push('--allowedTools', options.allowedTools.join(','))
+  const offered = [...new Set([...builtInToolsAllowed(options.allowedTools), ...(workspace ? WORKSPACE_TOOLS : [])])]
+  args.push('--disable-slash-commands', '--tools', offered.join(','))
+  // A workspace's grants ride in its settings document instead (workspace.ts).
+  const allowedTools = workspace
+    ? options.allowedTools.filter(rule => !WORKSPACE_APPROVED_TOOLS.includes(ruleTool(rule)))
+    : options.allowedTools
+  if (allowedTools.length > 0) {
+    args.push('--allowedTools', allowedTools.join(','))
   }
   return args
 }
@@ -383,13 +406,20 @@ export const runClaude = async (
 ): Promise<AgentRunResult> => {
   const args = buildClaudeArgs(options)
   const parser = createStreamJsonParser(options.onEvent)
+  const env = options.env ?? process.env
+  if (options.workspace) {
+    await ensurePrivateDir(workspaceTmpDir(options.workspace.root))
+    if (options.cwd) await fs.mkdir(options.cwd, {recursive: true})
+  }
 
   const {exitCode, timedOut, stderr} = await runJsonlProcess({
     bin: options.claudeBin,
     args,
     prompt: options.prompt,
     cwd: options.cwd,
-    env: envForBilling(options.env ?? process.env, options.billing),
+    env: options.workspace
+      ? workspaceEnv(env, options.workspace.root, options.billing === 'api' ? BILLING_ENV_DENYLIST : [])
+      : envForBilling(env, options.billing),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
     signal: options.signal,

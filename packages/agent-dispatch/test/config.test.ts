@@ -288,6 +288,43 @@ describe('parseConfig', () => {
     }).watchers[0]).toMatchObject({delivery: 'channel', runner: {executor: 'claude'}})
   })
 
+  describe('runner.workspace', () => {
+    const withRunner = (runner: Record<string, unknown>, extra: Record<string, unknown> = {}) => parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'backlinks', name: 'notes-agent', target: 'claude', runner: {executor: 'claude', ...runner}, ...extra}],
+    })
+
+    it('roots a workspace in a per-watcher folder under the default directory', () => {
+      const {runner} = withRunner({workspace: {}}).watchers[0]
+      const base = path.join(os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch', 'workspaces')
+      expect(runner).toMatchObject({workspace: {root: path.join(base, 'notes-agent'), allowedDomains: []}})
+    })
+
+    it('expands ~ in an explicit root and keeps the allowed hosts', () => {
+      const {runner} = withRunner({workspace: {root: '~/agent-space', allowedDomains: ['pypi.org']}}).watchers[0]
+      expect(runner).toMatchObject({workspace: {root: path.join(os.homedir(), 'agent-space'), allowedDomains: ['pypi.org']}})
+    })
+
+    it('refuses a relative root, which would resolve against wherever the daemon started', () => {
+      expect(() => withRunner({workspace: {root: 'agent-space'}})).toThrow(/absolute/)
+    })
+
+    it('refuses a cwd beside it: the run works in its thread folder', () => {
+      expect(() => withRunner({workspace: {}, cwd: '/tmp'})).toThrow(/cwd/)
+    })
+
+    it('refuses a watcher name that is not one folder name when the root is defaulted', () => {
+      expect(() => parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: '../escape', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
+      })).toThrow(/folder/)
+    })
+
+    it('refuses channel delivery: the ambient session is not a spawned run', () => {
+      expect(() => withRunner({workspace: {}}, {delivery: 'channel'})).toThrow(/channel/)
+    })
+  })
+
   it('accepts an explicit opt-in to usage-based billing', () => {
     expect(parseConfig({workspaceId: 'ws-test', billing: 'api', watchers: []}).billing).toBe('api')
     expect(() => parseConfig({workspaceId: 'ws-test', billing: 'wallet', watchers: []})).toThrow()

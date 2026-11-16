@@ -11,9 +11,11 @@ import { createGraphMcpServer } from '@knowledge-medium/agent-cli/mcpServer'
 import { loadContributorSelection, parseContributorSelection } from '@knowledge-medium/agent-cli/config'
 import { BLOCKED_WIKILINKS_ENV, createBlockedWikilinkWriteGuard, decodeBlockedWikilinks } from './blockedWikilinks.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
+import { MEDIA_ROOT_ENV } from './mcpServerDef.js'
 
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
 const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
+const mediaRoot = process.env[MEDIA_ROOT_ENV] || undefined
 const profile = process.env.AGENT_RUNTIME_PROFILE ?? 'default'
 const workspaceId = process.env.AGENT_RUNTIME_WORKSPACE?.trim()
 if (!workspaceId) {
@@ -31,8 +33,8 @@ if (contributorId === undefined) {
 }
 
 const server = createGraphMcpServer({
-  // Never true: engine.ts pre-approves add_media for every run, which a local path would turn into a file read.
-  localMediaFiles: false,
+  // Never `true`: engine.ts pre-approves add_media for every run. A workspace run may read its root anyway.
+  localMediaFiles: mediaRoot !== undefined ? {root: mediaRoot} : false,
   profile,
   contributorId,
   writeGuard: ({graph}) => createBlockedWikilinkWriteGuard(graph, blockedWikilinks),

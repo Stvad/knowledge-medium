@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest'
 import path from 'node:path'
 import {parseConfig} from '../src/config'
 import {BLOCKED_WIKILINKS_ENV, decodeBlockedWikilinks} from '../src/blockedWikilinks'
-import {buildMcpServerDef} from '../src/mcpServerDef'
+import {buildMcpServerDef, MEDIA_ROOT_ENV} from '../src/mcpServerDef'
 
 describe('buildMcpServerDef', () => {
   it('uses the dispatch MCP wrapper, contributor identity, and active backlink watcher targets', () => {
@@ -34,6 +34,12 @@ describe('buildMcpServerDef', () => {
     expect(serverDef.args[0]).toContain(`${path.sep}packages${path.sep}agent-dispatch${path.sep}`)
     expect(serverDef.args[0]).not.toContain(`${path.sep}packages${path.sep}agent-cli${path.sep}`)
     expect(decodeBlockedWikilinks(serverDef.env[BLOCKED_WIKILINKS_ENV])).toEqual(['claude', 'codex'])
+  })
+
+  it('names a workspace watcher\'s root for add_media, and no root otherwise', () => {
+    const config = parseConfig({workspaceId: 'ws-dispatch', watchers: [{name: 'claude mentions', kind: 'backlinks', target: 'claude'}]})
+    expect(buildMcpServerDef(config, null, '/ws/notes-agent').env).toMatchObject({[MEDIA_ROOT_ENV]: '/ws/notes-agent'})
+    expect(buildMcpServerDef(config, null).env).not.toHaveProperty(MEDIA_ROOT_ENV)
   })
 
   it('encodes explicit null as an unattributed dispatch MCP setting', () => {

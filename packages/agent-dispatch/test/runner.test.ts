@@ -1,5 +1,8 @@
 import {describe, expect, it} from 'vitest'
 import {spawn} from 'node:child_process'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import {
   BILLING_ENV_DENYLIST,
   buildClaudeArgs,
@@ -11,6 +14,7 @@ import {
   type RunEvent,
   type SpawnImpl,
 } from '../src/runner'
+import {WORKSPACE_TOOLS, workspaceSettings, workspaceTmpDir} from '../src/workspace'
 
 const baseOptions: AgentRunOptions = {
   claudeBin: 'claude',
@@ -57,6 +61,36 @@ describe('buildClaudeArgs', () => {
     })
     expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2))
       .toEqual(['--tools', 'WebSearch,Bash,Read'])
+  })
+
+  describe('in a workspace', () => {
+    const workspace = {root: '/ws/notes-agent', allowedDomains: []}
+    const args = buildClaudeArgs({
+      ...baseOptions,
+      cwd: '/ws/notes-agent/threads/b1',
+      workspace,
+      allowedTools: ['mcp__km__search', 'WebFetch', 'Bash(git *)', 'Write', 'Read'],
+    })
+    const value = (flag: string) => args[args.indexOf(flag) + 1]
+
+    it('confines the file tools and ignores settings files the run could write', () => {
+      expect(args).toContain('--restricted')
+      expect(value('--add-dir')).toBe('/ws/notes-agent')
+    })
+
+    it('carries the sandbox and its grants in one settings document', () => {
+      expect(JSON.parse(value('--settings'))).toEqual(workspaceSettings(workspace, BILLING_ENV_DENYLIST))
+    })
+
+    it('offers the workspace tools, and leaves their grants out of --allowedTools', () => {
+      // A grant there would survive a dropped settings document and run Bash unsandboxed.
+      expect(value('--tools').split(',')).toEqual(expect.arrayContaining(['WebFetch', ...WORKSPACE_TOOLS]))
+      expect(value('--allowedTools').split(',')).toEqual(['mcp__km__search', 'WebFetch', 'Read'])
+    })
+
+    it('tells the run where its workspace is', () => {
+      expect(value('--append-system-prompt')).toContain('/ws/notes-agent/threads/b1')
+    })
   })
 })
 
@@ -378,6 +412,23 @@ describe('runClaude', () => {
       ),
     )
     expect(result.resultText).toBe('sk-live')
+  })
+
+  it('in a workspace, creates its folder and passes only the workspace environment', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'km-runner-ws-'))
+    try {
+      const cwd = path.join(root, 'threads', 'b1')
+      const result = await runClaude(
+        {...baseOptions, cwd, workspace: {root, allowedDomains: []}, env: {...process.env, GITHUB_TOKEN: 'ghp-leak'}},
+        fakeClaude(
+          `process.stdout.write(JSON.stringify({type: 'result', result: JSON.stringify([process.cwd(), process.env.GITHUB_TOKEN ?? null, process.env.CLAUDE_CODE_TMPDIR]), session_id: 's', is_error: false}) + '\\n')`,
+        ),
+      )
+      expect(JSON.parse(result.resultText)).toEqual([await fs.realpath(cwd), null, workspaceTmpDir(root)])
+    } finally {
+      await fs.rm(root, {recursive: true, force: true})
+      await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
+    }
   })
 
   it('delivers the prompt over stdin, not argv', async () => {

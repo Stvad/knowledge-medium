@@ -57,8 +57,10 @@ const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid
  *  `alwaysLoad` puts its tools in the first prompt instead of behind
  *  claude's tool search: every run uses them, so deferring them only
  *  costs each run a lookup turn. */
-const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null): Promise<string> => {
-  const serverDef = buildMcpServerDef(config, contributorId)
+const writeMcpConfig = async (
+  config: DaemonConfig, contributorId: string | null, fileName: string, mediaRoot?: string,
+): Promise<string> => {
+  const serverDef = buildMcpServerDef(config, contributorId, mediaRoot)
   const mcpConfig = {
     mcpServers: {
       [serverDef.name]: {
@@ -70,7 +72,7 @@ const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null
     },
   }
 
-  const configPath = path.join(agentRuntimeConfigDir(), 'agent-dispatch-mcp.json')
+  const configPath = path.join(agentRuntimeConfigDir(), fileName)
   await fs.mkdir(path.dirname(configPath), {recursive: true})
   await fs.writeFile(configPath, `${JSON.stringify(mcpConfig, null, 2)}\n`)
   return configPath
@@ -86,6 +88,10 @@ const main = async () => {
     config = await loadConfig(args.config)
     if (config.configuredWatcherCount === 0) {
       throw new Error('No watchers configured — nothing to do. Add watchers to the config file.')
+    }
+    const workspaceWatcher = config.watchers.find(watcher => watcher.runner.executor === 'claude' && watcher.runner.workspace)
+    if (workspaceWatcher && process.platform !== 'darwin') {
+      throw new Error(`watcher "${workspaceWatcher.name}": runner.workspace is supported on macOS only, where its sandbox is verified`)
     }
     if (config.watchers.length > 0) {
       const selection = await loadContributorSelection(config.profile, config.workspaceId)
@@ -202,8 +208,18 @@ const main = async () => {
     }
   }
 
-  const mcpConfigPath = await writeMcpConfig(config, contributorId)
+  const mcpConfigPath = await writeMcpConfig(config, contributorId, 'agent-dispatch-mcp.json')
   log(`mcp config: ${mcpConfigPath}`)
+  // A workspace watcher's server reads media files under its own root, so it gets its own config.
+  const workspaceMcpConfigPaths = new Map<string, string>()
+  for (const watcher of config.watchers) {
+    if (watcher.runner.executor !== 'claude' || !watcher.runner.workspace) continue
+    const {root} = watcher.runner.workspace
+    workspaceMcpConfigPaths.set(watcher.name, await writeMcpConfig(
+      config, contributorId, `agent-dispatch-mcp-${encodeURIComponent(watcher.name)}.json`, root,
+    ))
+    log(`[${watcher.name}] workspace: ${root}`)
+  }
   const mcpServerDef = buildMcpServerDef(config, contributorId)
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
@@ -250,7 +266,7 @@ const main = async () => {
         throw new Error(`channel listener replied ${response.status} — is the ambient session running? (claude --dangerously-load-development-channels server:km, ${CHANNEL_PORT_ENV}=${config.channelPort})`)
       }
     },
-    mcpConfigPath,
+    mcpConfigPathFor: watcher => workspaceMcpConfigPaths.get(watcher.name) ?? mcpConfigPath,
     log,
   })
 

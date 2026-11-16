@@ -13,13 +13,14 @@ import type { Graph, ReplyWriter } from './graph.js'
 import { formatRunUsage, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts, threadRootId } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
 import { MEMORY_DIFF_LIMIT } from './graph.js'
-// Dispatch's km server (`./mcp.ts`) must never set `localMediaFiles`: this list pre-approves its add_media.
-import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+// Pre-approves add_media: dispatch's km server (`./mcp.ts`) reads local files only under the run's own workspace.
+import { KM_MCP_ALLOWED_TOOLS_WITH_ADD_MEDIA as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+import { workspaceThreadDir } from './workspace.js'
 
 export interface ChannelEvent {
   content: string
@@ -37,8 +38,9 @@ export interface EngineDeps {
   /** EXPERIMENTAL: push an event into the ambient channel session
    *  (delivery: 'channel' watchers). Throws if unreachable. */
   deliverToChannel: (event: ChannelEvent) => Promise<void>
-  /** Generated --mcp-config path; null disables graph tools for runs. */
-  mcpConfigPath: string | null
+  /** The generated --mcp-config for a watcher's runs (a workspace watcher's server
+   *  reads media files from its workspace); null disables graph tools for runs. */
+  mcpConfigPathFor: (watcher: Watcher) => string | null
   log: (message: string) => void
   now?: () => number
   /** Sleep between terminal reply-reconcile retries — injected so tests run
@@ -119,7 +121,7 @@ const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null
 }
 
 export const createEngine = (deps: EngineDeps) => {
-  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
+  const {config, graph, replies, state, runTask, deliverToChannel, mcpConfigPathFor, log} = deps
   const now = deps.now ?? Date.now
   const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
@@ -208,15 +210,23 @@ export const createEngine = (deps: EngineDeps) => {
     running.set(key, promise)
   }
 
+  /** `threadId` places a workspace run in its thread's folder; without one it works in the root. */
   const runOptionsFor = (
-    watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
-    signal?: AbortSignal,
+    watcher: Watcher, prompt: string,
+    {resumeSessionId, onEvent, signal, threadId}: {
+      resumeSessionId?: string, onEvent?: (event: RunEvent) => void, signal?: AbortSignal, threadId?: string
+    } = {},
   ): AgentRunOptions => {
     const {runner} = watcher
+    const mcpConfigPath = mcpConfigPathFor(watcher)
+    const workspace = runner.executor === 'claude' ? runner.workspace : undefined
     return {
       claudeBin: config.claudeBin,
       prompt,
-      cwd: runner.cwd ?? os.homedir(),
+      cwd: workspace
+        ? (threadId !== undefined ? workspaceThreadDir(workspace.root, threadId) : workspace.root)
+        : runner.cwd ?? os.homedir(),
+      workspace,
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
           ...(mcpConfigPath ? DISPATCH_MCP_ALLOWED_TOOLS : []),
@@ -313,9 +323,9 @@ export const createEngine = (deps: EngineDeps) => {
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
-    const session = watcher.resume
-      ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
-      : null
+    const storedSession = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
+    const session = resumableSessionFor(runner.executor, storedSession)
+    const threadId = threadRootId(block, ancestorBlocks, session ? storedSession : null)
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) {
       refundLaunch(launchStamp)
@@ -500,7 +510,7 @@ export const createEngine = (deps: EngineDeps) => {
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
         sessionId
-          ? resumeOptionsForRun(runOptionsFor(watcher, prompt, sessionId, undefined, abortController.signal))
+          ? resumeOptionsForRun(runOptionsFor(watcher, prompt, {resumeSessionId: sessionId, signal: abortController.signal, threadId}))
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
@@ -543,7 +553,9 @@ export const createEngine = (deps: EngineDeps) => {
         }
       }
 
-      const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
+      const runOptions = runOptionsFor(watcher, prompt, {
+        resumeSessionId: session ?? undefined, onEvent, signal: abortController.signal, threadId,
+      })
       const result = await runTask(runOptions)
       await writes // ordering guarantee: no progress write races the final one below
       // On every terminal reply, a failed or cancelled run's too: it may have
@@ -785,12 +797,12 @@ export const createEngine = (deps: EngineDeps) => {
       // session id to — logging it as it streams is the only record, and
       // the only way to inspect a run while it is live.
       let loggedSession: string | null = null
-      const result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
+      const result = await runTask(runOptionsFor(watcher, prompt, {onEvent: event => {
         if (event.kind === 'session' && !loggedSession) {
           loggedSession = event.sessionId
           log(`[${watcher.name}] session ${event.sessionId}`)
         }
-      }))
+      }}))
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
         log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}${usageNote(result)}: ${truncate(result.resultText.trim(), 200)}`)

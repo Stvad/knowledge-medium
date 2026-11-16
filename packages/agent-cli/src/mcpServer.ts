@@ -107,10 +107,11 @@ export interface GraphMcpServerOptions {
   contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
-  /** Let `add_media` read a local path the model names. Off unless the
-   *  entry point asks: a server whose model is driven by synced notes (agent-dispatch)
-   *  must not turn a note into a read of this machine's files. */
-  localMediaFiles?: boolean
+  /** Let `add_media` read a local path the model names: anywhere (`true`), or only
+   *  a file under `root` once links are followed. Off unless the entry point asks: a
+   *  server whose model is driven by synced notes (agent-dispatch) must not turn a
+   *  note into a read of files its run could not already read. */
+  localMediaFiles?: boolean | {root: string}
   serverOptions?: ConstructorParameters<typeof McpServer>[1]
 }
 
@@ -200,11 +201,13 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     }
   })
 
-  const localMediaFiles = options.localMediaFiles === true
+  const localMediaFiles = options.localMediaFiles === true || typeof options.localMediaFiles === 'object'
+  const mediaRoot = typeof options.localMediaFiles === 'object' ? options.localMediaFiles.root : undefined
   server.registerTool('add_media' satisfies KmMcpToolName, {
     description: 'Store a file as a media block under the workspace\'s Assets page; the same bytes added '
     + 'twice are one block. Pass the file itself as `content` (text such as SVG as is, binary as base64 with encoding "base64")'
-    + (localMediaFiles ? ', or a local file\'s absolute `path`' : '')
+    + (mediaRoot !== undefined ? `, or the absolute \`path\` of a local file under ${mediaRoot}`
+      : localMediaFiles ? ', or a local file\'s absolute `path`' : '')
     + '. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
     + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
     inputSchema: {
@@ -237,7 +240,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
     return json(await client.runCommand({
       type: 'add-media',
-      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!),
+      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!, mediaRoot),
       filename: name,
       ...(type !== undefined ? {mime: type} : {}),
       ...(workspaceId !== undefined ? {workspaceId} : {}),

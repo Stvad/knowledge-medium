@@ -1,11 +1,13 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js'
+import {execFileSync} from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import type {BridgeClient} from '../src/client'
 import {MEDIA_BRIDGE_MAX_BYTES, type KnownCommand} from '../src/protocol'
+import {assertOpenedUnder} from '../src/mediaFile'
 import {createGraphMcpServer, KM_MCP_INSTRUCTIONS, type GraphMcpWriteOperation} from '../src/mcpServer'
 import {KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES} from '../src/mcpShared'
 import {GRAPH_READ_TOOLS} from '../src/readTools'
@@ -111,6 +113,14 @@ describe('createGraphMcpServer', () => {
       expect(runCommand).not.toHaveBeenCalled()
     })
 
+    it('refuses a FIFO without waiting for a writer', async () => {
+      const fifo = path.join(dir, 'pipe')
+      execFileSync('mkfifo', [fifo])
+      const {runCommand, call} = setup()
+      await expect(call({path: fifo})).rejects.toThrow(/not a regular file/)
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
     it('sends a file exactly at the limit', async () => {
       const file = path.join(dir, 'limit.bin')
       await fs.writeFile(file, '')
@@ -134,6 +144,81 @@ describe('createGraphMcpServer', () => {
       await expect(call({path: path.join(dir, 'a.svg'), content: '<svg/>', filename: 'a.svg'})).rejects.toThrow(/exactly one/)
       await expect(call({filename: 'a.svg'})).rejects.toThrow(/exactly one/)
       expect(runCommand).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('add_media under a root', () => {
+    let root: string
+    let outside: string
+    beforeEach(async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), 'km-media-root-'))
+      outside = await fs.mkdtemp(path.join(os.tmpdir(), 'km-media-outside-'))
+      await fs.writeFile(path.join(outside, 'secret.png'), 'outside')
+      await fs.mkdir(path.join(root, 'threads', 't1'), {recursive: true})
+      await fs.writeFile(path.join(root, 'threads', 't1', 'chart.png'), 'inside')
+    })
+    afterEach(async () => {
+      await fs.rm(root, {recursive: true, force: true})
+      await fs.rm(outside, {recursive: true, force: true})
+    })
+
+    const setup = () => {
+      const runCommand = vi.fn<BridgeClient['runCommand']>(async () => (
+        {id: 'media-1', workspaceId: 'ws-1', deduped: false, reference: '((media-1))'} as never
+      ))
+      const server = createGraphMcpServer({contributorId: null, localMediaFiles: {root}, client: clientFrom(runCommand)})
+      const tool = (server as unknown as RegisteredToolHarness)._registeredTools.add_media
+      return {runCommand, call: (input: Record<string, unknown>) => tool.handler(tool.inputSchema.parse(input), {})}
+    }
+
+    it('sends a file under the root', async () => {
+      const {runCommand, call} = setup()
+      await call({path: path.join(root, 'threads', 't1', 'chart.png')})
+      expect(runCommand.mock.calls[0]?.[0]).toMatchObject({base64: Buffer.from('inside').toString('base64'), filename: 'chart.png'})
+    })
+
+    it('follows a link that stays under the root', async () => {
+      await fs.symlink(path.join(root, 'threads', 't1'), path.join(root, 'latest'))
+      const {runCommand, call} = setup()
+      await call({path: path.join(root, 'latest', 'chart.png')})
+      expect(runCommand).toHaveBeenCalledOnce()
+    })
+
+    it.each([
+      ['a file outside it', () => path.join(outside, 'secret.png')],
+      ['a .. path out of it', () => path.join(root, 'threads', '..', '..', path.basename(outside), 'secret.png')],
+      ['a link inside it that points out', () => path.join(root, 'threads', 't1', 'escape', 'secret.png')],
+      ['a sibling whose name starts with the root\'s', () => `${root}-sibling/secret.png`],
+    ])('refuses %s without reading it', async (_label, target) => {
+      await fs.symlink(outside, path.join(root, 'threads', 't1', 'escape'))
+      await fs.mkdir(`${root}-sibling`)
+      await fs.writeFile(`${root}-sibling/secret.png`, 'sibling')
+      try {
+        const {runCommand, call} = setup()
+        await expect(call({path: target()})).rejects.toThrow(/outside/)
+        expect(runCommand).not.toHaveBeenCalled()
+      } finally {
+        await fs.rm(`${root}-sibling`, {recursive: true, force: true})
+      }
+    })
+
+    it('refuses a file with a second name, which may be outside the root', async () => {
+      await fs.link(path.join(outside, 'secret.png'), path.join(root, 'threads', 't1', 'linked.png'))
+      const {runCommand, call} = setup()
+      await expect(call({path: path.join(root, 'threads', 't1', 'linked.png')})).rejects.toThrow(/another name/)
+      expect(runCommand).not.toHaveBeenCalled()
+    })
+
+    it('refuses an opened file the path no longer names (a directory swapped for a link mid-read)', async () => {
+      // Defence in depth: the swap lands between the containment check and the open, which no test can schedule.
+      const opened = await fs.stat(path.join(outside, 'secret.png'))
+      await expect(assertOpenedUnder(opened, root, path.join(root, 'threads', 't1', 'chart.png'))).rejects.toThrow(/changed/)
+    })
+
+    it('names the root in the path argument the model sees', () => {
+      const server = createGraphMcpServer({contributorId: null, localMediaFiles: {root}, client: clientFrom(vi.fn())})
+      const tool = (server as unknown as {_registeredTools: Record<string, {description?: string}>})._registeredTools.add_media
+      expect(tool.description).toContain(root)
     })
   })
 

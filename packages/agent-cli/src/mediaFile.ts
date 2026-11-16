@@ -1,4 +1,6 @@
+import {constants as fsConstants, type Stats} from 'node:fs'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import {MEDIA_BRIDGE_MAX_BYTES} from './protocol.js'
 
 const assertMediaSize = (what: string, size: number) => {
@@ -7,14 +9,40 @@ const assertMediaSize = (what: string, size: number) => {
   }
 }
 
-/** A local file as `add-media` carries it. Checks what the path is before reading
- *  it: a FIFO would block the read forever, and an oversize file would be read
- *  whole only to be refused. */
-export const readMediaFileBase64 = async (filePath: string): Promise<string> => {
-  const stat = await fs.stat(filePath)
-  if (!stat.isFile()) throw new Error(`add-media: ${filePath} is not a regular file.`)
-  assertMediaSize(filePath, stat.size)
-  return (await fs.readFile(filePath)).toString('base64')
+/** The file a path names once every link is followed, refused unless it is under `root`. */
+const resolveUnder = async (root: string, filePath: string): Promise<string> => {
+  const [realRoot, realFile] = await Promise.all([fs.realpath(root), fs.realpath(filePath)])
+  if (!realFile.startsWith(`${realRoot}${path.sep}`)) throw new Error(`add-media: ${filePath} is outside ${root}.`)
+  return realFile
+}
+
+/** Refuses an opened file unless `filePath` still names it from under `root`: a
+ *  directory on the path swapped for a link between the check and the open
+ *  leaves the handle on a file the path no longer resolves to. A file with a
+ *  second name may have it outside the root. */
+export const assertOpenedUnder = async (opened: Stats, root: string, filePath: string): Promise<void> => {
+  const named = await fs.stat(await resolveUnder(root, filePath))
+  if (named.dev !== opened.dev || named.ino !== opened.ino) throw new Error(`add-media: ${filePath} changed while it was read.`)
+  if (opened.nlink > 1) throw new Error(`add-media: ${filePath} has another name, which may be outside ${root}.`)
+}
+
+/** A local file as `add-media` carries it, optionally only from under `root`. Checks
+ *  what the path is before reading it: a FIFO would block the read forever (hence
+ *  the non-blocking open), and an oversize file would be read whole only to be refused. */
+export const readMediaFileBase64 = async (filePath: string, root?: string): Promise<string> => {
+  const target = root === undefined ? filePath : await resolveUnder(root, filePath)
+  // Defence in depth: the final link was already followed, so one found now was swapped in after the check.
+  const noFollow = root === undefined ? 0 : fsConstants.O_NOFOLLOW
+  const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | noFollow)
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile()) throw new Error(`add-media: ${filePath} is not a regular file.`)
+    if (root !== undefined) await assertOpenedUnder(stat, root, filePath)
+    assertMediaSize(filePath, stat.size)
+    return (await handle.readFile()).toString('base64')
+  } finally {
+    await handle.close()
+  }
 }
 
 /** Content a model wrote, as `add-media` carries it. Base64 goes through unchanged:
