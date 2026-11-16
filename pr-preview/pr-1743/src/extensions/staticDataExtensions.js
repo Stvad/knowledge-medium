@@ -1,0 +1,1 @@
+export{rq as staticDataExtensions}from"../../chunks/app-nTaqbpME.js";

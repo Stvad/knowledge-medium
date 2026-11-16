@@ -1,0 +1,1 @@
+export{Ay as Wikilink}from"../../../../../chunks/app-nTaqbpME.js";

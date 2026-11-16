@@ -1,0 +1,1 @@
+export{Fat as createSyncResolver,Iat as uploadModeFor}from"../../../chunks/app-nTaqbpME.js";

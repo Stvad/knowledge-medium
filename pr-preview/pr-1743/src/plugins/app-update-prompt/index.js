@@ -1,0 +1,1 @@
+export{CP as appUpdatePromptExtension}from"../../../chunks/app-nTaqbpME.js";

@@ -1,0 +1,1 @@
+export{PP as appUpdate,FP as useAppUpdateAvailable}from"../chunks/app-nTaqbpME.js";

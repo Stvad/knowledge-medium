@@ -1,0 +1,1 @@
+export{Aat as aliasSeatNamespacesInTx,jat as resolveAliasSeatNamespaces}from"../../chunks/app-nTaqbpME.js";

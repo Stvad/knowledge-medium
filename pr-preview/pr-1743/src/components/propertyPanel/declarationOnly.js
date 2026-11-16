@@ -1,0 +1,1 @@
+export{MV as declarationOnlyDefinitionForName,NV as declarationOnlyStatusText}from"../../../chunks/app-nTaqbpME.js";

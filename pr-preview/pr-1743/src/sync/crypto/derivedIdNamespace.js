@@ -1,0 +1,1 @@
+export{lot as deriveWorkspaceIdNamespace}from"../../../chunks/app-nTaqbpME.js";

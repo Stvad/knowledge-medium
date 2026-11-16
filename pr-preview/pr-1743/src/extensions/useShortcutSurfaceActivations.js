@@ -1,0 +1,1 @@
+export{WR as useShortcutSurfaceActivations}from"../../chunks/app-nTaqbpME.js";

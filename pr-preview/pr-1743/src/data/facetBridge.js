@@ -1,0 +1,1 @@
+export{M2 as FacetBridge}from"../../chunks/app-nTaqbpME.js";

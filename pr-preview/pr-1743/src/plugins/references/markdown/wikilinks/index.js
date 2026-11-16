@@ -1,0 +1,1 @@
+export{ky as wikilinkMarkdownExtension}from"../../../../../chunks/app-nTaqbpME.js";

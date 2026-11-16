@@ -1,0 +1,1 @@
+export{oP as editorAutocompleteExtension}from"../../chunks/app-nTaqbpME.js";

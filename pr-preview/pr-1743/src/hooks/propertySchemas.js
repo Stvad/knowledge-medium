@@ -1,0 +1,1 @@
+export{JG as usePropertySchemas}from"../../chunks/app-nTaqbpME.js";

@@ -1,0 +1,1 @@
+export{rO as useMinuteClock}from"../../chunks/app-nTaqbpME.js";

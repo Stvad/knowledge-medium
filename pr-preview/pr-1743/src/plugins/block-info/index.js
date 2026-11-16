@@ -1,0 +1,1 @@
+export{fv as blockInfoPlugin}from"../../../chunks/app-nTaqbpME.js";

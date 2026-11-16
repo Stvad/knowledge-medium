@@ -1,0 +1,1 @@
+export{vP as approveExtensionHere}from"../../chunks/app-nTaqbpME.js";

@@ -1,0 +1,1 @@
+export{R5 as mergeProperties}from"../../chunks/app-nTaqbpME.js";

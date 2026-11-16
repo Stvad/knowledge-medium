@@ -1,0 +1,1 @@
+export{mv as updateIndicatorPlugin}from"../../../chunks/app-nTaqbpME.js";

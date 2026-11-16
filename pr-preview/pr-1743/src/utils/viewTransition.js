@@ -1,0 +1,1 @@
+export{VW as withMoveTransition}from"../../chunks/app-nTaqbpME.js";

@@ -1,0 +1,1 @@
+export{GL as useIsMobile,KL as usePointerCoarse}from"../../chunks/app-nTaqbpME.js";

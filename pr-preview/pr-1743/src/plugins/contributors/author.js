@@ -1,0 +1,1 @@
+export{lg as authorIdOf}from"../../../chunks/app-nTaqbpME.js";

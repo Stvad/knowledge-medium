@@ -1,0 +1,1 @@
+export{MP as checkForAppUpdate,NP as registerServiceWorker}from"../chunks/app-nTaqbpME.js";

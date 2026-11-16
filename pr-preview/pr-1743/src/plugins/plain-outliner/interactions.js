@@ -1,0 +1,1 @@
+export{OT as blockEditingContentRenderer}from"../../../chunks/app-nTaqbpME.js";

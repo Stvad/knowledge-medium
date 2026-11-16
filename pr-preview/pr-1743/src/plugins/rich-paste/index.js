@@ -1,0 +1,1 @@
+export{Vb as richPastePlugin}from"../../../chunks/app-nTaqbpME.js";

@@ -1,0 +1,1 @@
+export{fb as useIsReadOnly}from"../../chunks/app-nTaqbpME.js";

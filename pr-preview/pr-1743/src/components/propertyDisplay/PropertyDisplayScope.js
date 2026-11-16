@@ -1,0 +1,1 @@
+export{FI as PropertyDisplayScope}from"../../../chunks/app-nTaqbpME.js";

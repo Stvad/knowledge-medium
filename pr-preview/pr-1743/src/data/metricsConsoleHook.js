@@ -1,0 +1,1 @@
+export{kN as ensureMetricsConsoleHook}from"../../chunks/app-nTaqbpME.js";

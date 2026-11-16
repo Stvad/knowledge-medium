@@ -1,0 +1,1 @@
+export{fT as MobileBottomNavButton}from"../../../chunks/app-nTaqbpME.js";

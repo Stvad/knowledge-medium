@@ -1,0 +1,1 @@
+export{HJ as geoDataExtension}from"../../../chunks/app-nTaqbpME.js";

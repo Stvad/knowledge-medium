@@ -1,0 +1,1 @@
+export{LR as BlockEditor}from"../../chunks/app-nTaqbpME.js";

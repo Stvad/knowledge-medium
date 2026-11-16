@@ -1,0 +1,1 @@
+export{fS as useAssetObjectUrl}from"../../../chunks/app-nTaqbpME.js";

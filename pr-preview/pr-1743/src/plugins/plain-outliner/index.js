@@ -1,0 +1,1 @@
+export{wT as plainOutlinerPlugin}from"../../../chunks/app-nTaqbpME.js";

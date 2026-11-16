@@ -1,0 +1,1 @@
+export{ck as Label}from"../../../chunks/app-nTaqbpME.js";

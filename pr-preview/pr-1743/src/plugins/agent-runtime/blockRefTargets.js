@@ -1,0 +1,1 @@
+export{wg as refuseDanglingBlockRefs}from"../../../chunks/app-nTaqbpME.js";

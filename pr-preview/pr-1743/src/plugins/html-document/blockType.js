@@ -1,0 +1,1 @@
+export{mJ as htmlDocumentTypeSeed}from"../../../chunks/app-nTaqbpME.js";

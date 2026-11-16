@@ -1,0 +1,1 @@
+export{fN as chipStyle}from"../../../chunks/app-nTaqbpME.js";

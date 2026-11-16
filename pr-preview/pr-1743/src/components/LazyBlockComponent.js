@@ -1,0 +1,1 @@
+export{UF as LazyBlockComponent}from"../../chunks/app-nTaqbpME.js";
