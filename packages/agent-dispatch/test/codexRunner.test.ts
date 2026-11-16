@@ -112,6 +112,27 @@ describe('scrubCodexEnv', () => {
 describe('createCodexJsonlParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('preserves MCP server labels and handles fallback name shapes without item ids', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    for (const fields of [
+      {tool: 'mcp__km__comments'},
+      {server: '', tool: 'mcp__km__comments'},
+      {server: 'km', toolName: 'comments'},
+      {server: 'km', tool: ''},
+      {server: 42, tool: 'mcp__km__comments'},
+      {},
+    ]) parser.feed(line({type: 'item.completed', item: {type: 'mcp_tool_call', ...fields}}))
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km'},
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'Using a tool'},
+    ])
+  })
+
   it('emits consecutive same-label tool starts once per item, ignoring updates and completions', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))

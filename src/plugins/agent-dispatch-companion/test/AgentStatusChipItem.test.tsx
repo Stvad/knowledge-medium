@@ -66,6 +66,19 @@ describe('AgentStatusChipItem', () => {
     expect(chip.className).toContain('text-amber-700')
   })
 
+  it('runs the clock only while the task is running and releases it when the task ends', () => {
+    vi.useFakeTimers()
+    withProperties({ 'agent:status': 'queued' })
+    const view = render(<Chip block={block} />)
+    expect(vi.getTimerCount()).toBe(0)
+    withProperties({ 'agent:status': 'running' })
+    act(() => view.rerender(<Chip block={block} />))
+    expect(vi.getTimerCount()).toBe(1)
+    withProperties({ 'agent:status': 'done' })
+    act(() => view.rerender(<Chip block={block} />))
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('keeps the existing compact pill when activity has no valid start timestamp', () => {
     withProperties({ 'agent:status': 'running', 'agent:activity': 'km: comments' })
     const { container } = render(<Chip block={block} />)

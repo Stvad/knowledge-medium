@@ -83,7 +83,7 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
     attempts: typeof attempts === 'number' && attempts > 0 ? Math.floor(attempts) : 1,
     errorMessage: typeof error === 'string' ? error : '',
     activity: typeof activity === 'string' ? activity : '',
-    activityAtMs: typeof activityAt === 'number' && Number.isFinite(activityAt) && activityAt > 0 ? activityAt : null,
+    activityAtMs: typeof activityAt === 'number' && activityAt > 0 && activityAt < Infinity ? activityAt : null,
     cancelling: status === 'running' && Boolean(cancel),
   }
 }
@@ -103,7 +103,8 @@ export interface ActivityState {
 }
 
 /** The current step's age and warning state; only timestamped running work
- *  with a non-empty activity label has a visible age. */
+ *  with a non-empty activity label has a visible age. Consumers recompute this
+ *  small value to avoid threading derived state through the menu. */
 export const activityStateFor = (chip: ChipState, nowMs: number): ActivityState | null => {
   if (chip.kind !== 'running' || chip.cancelling || !chip.activity || chip.activityAtMs === null) return null
   const ageMs = Math.max(0, nowMs - chip.activityAtMs)

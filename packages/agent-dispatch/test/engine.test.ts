@@ -3,7 +3,8 @@ import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine
 import {parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
-import type {AgentRunResult} from '../src/runner'
+import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
+import {activityStateFor, chipStateFor} from '../../../src/plugins/agent-dispatch-companion/chipState'
 import type {StateStore} from '../src/state'
 import type {MemoryEntry} from '../src/memory'
 import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
@@ -1540,6 +1541,34 @@ describe('mention lifecycle', () => {
 })
 
 describe('live progress streaming', () => {
+  it('does not warn of bridge trouble after a completed tool while Claude thinks', async () => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      const parser = createStreamJsonParser(options.onEvent)
+      parser.feed(`${JSON.stringify({type: 'assistant', message: {content: [
+        {type: 'tool_use', id: 'tool-1', name: 'mcp__km__comments'},
+      ]}})}\n`)
+      clock += 2_000
+      parser.feed(`${JSON.stringify({type: 'user', message: {content: [
+        {type: 'tool_result', tool_use_id: 'tool-1', content: 'result'},
+      ]}})}\n`)
+      clock += 70_000
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: comments', nowMs: NOW},
+      {id: 'b-1', label: 'Thinking', nowMs: NOW + 2_000},
+    ])
+    const last = activityWrites.at(-1)!
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': last.label, 'agent:activity-at': last.nowMs})!
+    expect(activityStateFor(chip, clock)).toMatchObject({stalled: false})
+  })
+
   it('timestamps every activity start before queued writes, including repeated labels, then clears activity', async () => {
     const {graph, blocks, activityWrites, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],

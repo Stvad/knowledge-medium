@@ -79,7 +79,7 @@ describe('activityStateFor', () => {
   })
 
   it('returns no step age for missing, invalid, zero, or empty activity', () => {
-    for (const activityAt of [undefined, 'now', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+    for (const activityAt of [undefined, 'now', '1000', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
       const chip = chipStateFor({
         'agent:status': 'running',
         'agent:activity': 'km: comments',

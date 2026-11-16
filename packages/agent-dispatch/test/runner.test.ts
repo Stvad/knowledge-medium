@@ -92,6 +92,37 @@ describe('scrubEnv', () => {
 describe('createStreamJsonParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('moves from the last tool to thinking on its result, without resetting on other or repeated results', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+    const tool = (id: string) => parser.feed(line({type: 'assistant', message: {content: [
+      {type: 'tool_use', id, name: 'mcp__km__comments'},
+    ]}}))
+    const result = (id: string | null) => parser.feed(line({type: 'user', message: {content: [
+      null, {type: 'tool_result', tool_use_id: id, content: 'result'},
+    ]}}))
+    tool('tool-1')
+    tool('tool-2')
+    result('tool-1')
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments'},
+    ])
+    parser.feed(line({type: 'user', message: {content: [null, 'text', {type: 'text', tool_use_id: 'tool-2'}]}}))
+    expect(events).toHaveLength(2)
+    result('tool-2')
+    result('tool-2')
+    result(null)
+    // A replayed finalized tool message must not re-arm an already completed call.
+    tool('tool-2')
+    result('tool-2')
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'Thinking'},
+    ])
+  })
+
   it('emits distinct same-label tool starts once each across partial and finalized messages', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))

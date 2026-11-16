@@ -250,16 +250,18 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   }
 
   const seenToolUses = new Set<string>()
+  let activeToolId: string | null = null
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
     const name = typeof toolUse.name === 'string' ? toolUse.name : null
     if (!name) return
     // Partial and finalized messages describe the same tool use; only a new
     // tool id starts a step, even when consecutive tools share a name.
-    const id = toolUse.id
-    if (typeof id === 'string') {
+    const id = typeof toolUse.id === 'string' ? toolUse.id : null
+    if (id !== null) {
       if (seenToolUses.has(id)) return
       seenToolUses.add(id)
     }
+    activeToolId = id
     emit({kind: 'activity', label: humanizeToolName(name)})
   }
 
@@ -275,9 +277,17 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       return
     }
 
-    if (type === 'assistant') {
+    if (type === 'user' || type === 'assistant') {
       const message = line.message as {content?: unknown} | undefined
       const content = Array.isArray(message?.content) ? message?.content : []
+      if (type === 'user') {
+        if (activeToolId !== null && content.some(item =>
+          isRecord(item) && item.type === 'tool_result' && item.tool_use_id === activeToolId)) {
+          activeToolId = null
+          emit({kind: 'activity', label: 'Thinking'})
+        }
+        return
+      }
       // Concatenate ALL text blocks in this finalized message (a single
       // message can carry more than one — e.g. a web-search turn is
       // [text, server_tool_use, web_search_result, text]), matching how
