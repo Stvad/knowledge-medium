@@ -82,15 +82,17 @@ const VIA_NAME_HEAD = 400
 /** The first few property names each source references the target through,
  *  plus how many there are — windowed in SQL, so a source with thousands
  *  of ref fields costs its shown few. Distinctness and order use whole names;
- *  only a head of each is returned. */
-const SOURCE_FIELDS_FOR_SOURCES_SQL = `
+ *  only a head of each is returned. The `CROSS JOIN` keeps the page's ids
+ *  outer; left free, the planner drives from every edge of the target and
+ *  rescans the ids per edge. */
+export const SOURCE_FIELDS_FOR_SOURCES_SQL = `
   SELECT source_id, substr(source_field, 1, ${VIA_NAME_HEAD}) AS source_field, n FROM (
     SELECT source_id, source_field,
            ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY source_field) AS rn,
            COUNT(*) OVER (PARTITION BY source_id) AS n
       FROM (SELECT DISTINCT r.source_id AS source_id, r.source_field AS source_field
               FROM json_each(?) j
-              JOIN block_references r ON r.source_id = j.value
+              CROSS JOIN block_references r ON r.source_id = j.value
              WHERE r.workspace_id = ? AND r.target_id = ? AND r.source_field != '')
   ) WHERE rn <= ?
 `
