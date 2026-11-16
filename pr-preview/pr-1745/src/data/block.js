@@ -1,1 +1,0 @@
-export{N6 as Block,P6 as requireLoadedBlock}from"../../chunks/app-D8Pc28hl.js";

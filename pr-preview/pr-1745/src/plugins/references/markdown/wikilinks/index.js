@@ -1,1 +1,0 @@
-export{Ry as wikilinkMarkdownExtension}from"../../../../../chunks/app-D8Pc28hl.js";

@@ -1,1 +1,0 @@
-export{IP as gestureBindingDescriptor,LP as matchesGestureEvent}from"../../chunks/app-D8Pc28hl.js";

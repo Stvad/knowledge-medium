@@ -1,1 +1,0 @@
-export{K2 as Repo}from"../../chunks/app-D8Pc28hl.js";

@@ -1,1 +1,0 @@
-export{TP as appUpdate,EP as useAppUpdateAvailable}from"../chunks/app-D8Pc28hl.js";

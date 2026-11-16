@@ -1,1 +1,0 @@
-export{UG as propertyShapeLabel}from"../../../chunks/app-D8Pc28hl.js";

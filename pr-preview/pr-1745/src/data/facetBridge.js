@@ -1,1 +1,0 @@
-export{J2 as FacetBridge}from"../../chunks/app-D8Pc28hl.js";

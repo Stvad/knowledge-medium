@@ -1,1 +1,0 @@
-export{lP as approveExtensionHere}from"../../chunks/app-D8Pc28hl.js";

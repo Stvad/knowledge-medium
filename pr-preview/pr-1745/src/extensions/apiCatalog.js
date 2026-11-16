@@ -1,1 +1,0 @@
-export{kh as extensionApiCatalog,Ah as extensionApiRuntimeExports}from"../../chunks/app-D8Pc28hl.js";

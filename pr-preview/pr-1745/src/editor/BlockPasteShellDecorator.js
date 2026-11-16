@@ -1,1 +1,0 @@
-export{VN as BlockPasteShellDecorator,HN as blockPasteShellDecorator}from"../../chunks/app-D8Pc28hl.js";

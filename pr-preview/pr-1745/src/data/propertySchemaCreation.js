@@ -1,1 +1,0 @@
-export{WG as adoptOrCreatePropertySchema}from"../../chunks/app-D8Pc28hl.js";

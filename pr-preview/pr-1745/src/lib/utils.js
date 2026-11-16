@@ -1,1 +1,0 @@
-export{U2 as cn}from"../../chunks/app-D8Pc28hl.js";

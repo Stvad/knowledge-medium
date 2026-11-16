@@ -1,1 +1,0 @@
-export{JK as staticDataExtensions}from"../../chunks/app-D8Pc28hl.js";

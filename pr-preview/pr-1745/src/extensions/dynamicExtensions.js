@@ -1,1 +1,0 @@
-export{$P as dynamicExtensionsExtension}from"../../chunks/app-D8Pc28hl.js";

@@ -1,1 +1,0 @@
-export{ST as mobileBottomNavItemsFacet}from"../../../chunks/app-D8Pc28hl.js";

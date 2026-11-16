@@ -1,1 +1,0 @@
-export{Pc as appVersion}from"../chunks/app-D8Pc28hl.js";

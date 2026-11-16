@@ -1,1 +1,0 @@
-export{wut as defineQuery}from"../../../chunks/app-D8Pc28hl.js";

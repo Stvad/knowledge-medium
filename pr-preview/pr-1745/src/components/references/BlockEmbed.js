@@ -1,1 +1,0 @@
-export{qM as BlockEmbed}from"../../../chunks/app-D8Pc28hl.js";

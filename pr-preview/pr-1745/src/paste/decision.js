@@ -1,1 +1,0 @@
-export{vR as defaultPasteDecision,yR as pasteDecisionVerb}from"../../chunks/app-D8Pc28hl.js";

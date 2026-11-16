@@ -1,1 +1,0 @@
-export{Mh as extensionsOverridesProp,Nh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-D8Pc28hl.js";

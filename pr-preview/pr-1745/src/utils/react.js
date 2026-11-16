@@ -1,1 +1,0 @@
-export{IL as useIsMobile,LL as usePointerCoarse}from"../../chunks/app-D8Pc28hl.js";
