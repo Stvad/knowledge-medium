@@ -1,0 +1,1 @@
+export{GS as videoPlayerMarkdownExtension}from"../../../chunks/app-BHav4QzV.js";

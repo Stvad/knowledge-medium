@@ -1,0 +1,1 @@
+export{OC as vimNormalModeInteractionExtension,kC as vimNormalModePlugin}from"../../../chunks/app-BHav4QzV.js";

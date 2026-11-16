@@ -1,0 +1,1 @@
+export{ZG as usePropertySchemas}from"../../chunks/app-BHav4QzV.js";

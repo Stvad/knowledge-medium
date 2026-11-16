@@ -1,0 +1,1 @@
+export{C6 as kernelDataExtension}from"../../chunks/app-BHav4QzV.js";

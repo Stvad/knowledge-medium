@@ -1,0 +1,1 @@
+export{rb as blockDragPlugin}from"../../../chunks/app-BHav4QzV.js";

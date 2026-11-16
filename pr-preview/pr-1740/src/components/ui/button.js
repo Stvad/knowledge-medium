@@ -1,0 +1,1 @@
+export{T2 as Button}from"../../../chunks/app-BHav4QzV.js";

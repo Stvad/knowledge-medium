@@ -1,0 +1,1 @@
+export{aN as BlockEmbed}from"../../../chunks/app-BHav4QzV.js";

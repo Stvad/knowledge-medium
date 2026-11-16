@@ -1,0 +1,1 @@
+export{tK as propertyShapeLabel}from"../../../chunks/app-BHav4QzV.js";

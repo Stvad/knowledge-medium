@@ -1,0 +1,1 @@
+export{Kk as dailyDateWikilinkDecorator}from"../../../chunks/app-BHav4QzV.js";
