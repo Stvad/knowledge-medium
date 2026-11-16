@@ -1,1 +1,1 @@
-export{WS as default}from"../../../chunks/app-BDwk30BN.js";
+export{KS as default}from"../../../chunks/app-CSntpKO5.js";

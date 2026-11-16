@@ -1,1 +1,1 @@
-export{lb as useIsReadOnly}from"../../chunks/app-BDwk30BN.js";
+export{db as useIsReadOnly}from"../../chunks/app-CSntpKO5.js";

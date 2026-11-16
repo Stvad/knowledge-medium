@@ -1,1 +1,1 @@
-export{HP as gestureBindingDescriptor,UP as matchesGestureEvent}from"../../chunks/app-BDwk30BN.js";
+export{WP as gestureBindingDescriptor,GP as matchesGestureEvent}from"../../chunks/app-CSntpKO5.js";
