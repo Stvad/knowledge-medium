@@ -1,1 +1,1 @@
-export{Jat as aliasSeatNamespacesInTx,Yat as resolveAliasSeatNamespaces}from"../../chunks/app-BtW0TaBc.js";
+export{Jat as aliasSeatNamespacesInTx,Yat as resolveAliasSeatNamespaces}from"../../chunks/app-4FQheiWZ.js";

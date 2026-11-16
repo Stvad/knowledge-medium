@@ -1,1 +1,1 @@
-export{Hy as EmbedComponent,Uy as referenceTargetOf}from"../../../../chunks/app-BtW0TaBc.js";
+export{Hy as EmbedComponent,Uy as referenceTargetOf}from"../../../../chunks/app-4FQheiWZ.js";
