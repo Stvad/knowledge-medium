@@ -1,1 +1,1 @@
-export{WG as adoptOrCreatePropertySchema}from"../../chunks/app-CQNrW0b6.js";
+export{WG as adoptOrCreatePropertySchema}from"../../chunks/app-D8Pc28hl.js";

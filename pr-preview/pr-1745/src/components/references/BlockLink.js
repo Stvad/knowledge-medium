@@ -1,1 +1,1 @@
-export{uO as BlockLink}from"../../../chunks/app-CQNrW0b6.js";
+export{uO as BlockLink}from"../../../chunks/app-D8Pc28hl.js";
