@@ -4,7 +4,7 @@ import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError
 import {fieldValueChildren, propertyFieldContent, scalarValueRow} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
 
-export const fieldRowsFor = (rows: readonly BlockData[], fieldId: string) =>
+const fieldRowsFor = (rows: readonly BlockData[], fieldId: string) =>
   rows.filter(row => row.isFieldForm && row.referenceTargetId === fieldId)
 
 const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) => {

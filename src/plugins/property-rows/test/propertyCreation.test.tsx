@@ -3,8 +3,6 @@ import {Suspense, useEffect} from 'react'
 import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
 import {getDefaultActionGroups} from '@/shortcuts/defaultShortcuts'
 import {useActionContext} from '@/shortcuts/useActionContext'
-import {commandPaletteAction} from '@/plugins/command-palette'
-import {commandPaletteToggle} from '@/plugins/command-palette/toggleStore'
 import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
 import {vimNormalModeInteractionExtension} from '@/plugins/vim-normal-mode'
 import {vimNormalModeActionsExtension} from '@/plugins/vim-normal-mode/actions'
@@ -46,7 +44,6 @@ import {acceptCompletion, startCompletion} from '@codemirror/autocomplete'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 
-const normalCommand = vi.fn()
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
 
@@ -70,16 +67,15 @@ const TestFooter = () => <div data-testid="children-footer-marker">footer marker
 let db: TestDb
 let repo: Repo
 let runtime: FacetRuntime
-const configureRuntime = (vim = true) => {
+const configureRuntime = () => {
   const defaults = getDefaultActionGroups({repo})
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
     defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
-    ...(vim ? [vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo})] : []),
+    vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}),
     blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions, commandPaletteAction].map(action => actionsFacet.of(action)),
-    actionsFacet.of({id: 'test:normal-command', context: ActionContextTypes.NORMAL_MODE, description: 'Test normal command', defaultBinding: {keys: 'q'}, handler: normalCommand}),
+    [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions].map(action => actionsFacet.of(action)),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
     typeSeedsFacet.of(expectedType, {source: 'test'}),
   ])
@@ -90,7 +86,6 @@ beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 afterEach(() => {
   vi.restoreAllMocks()
-  commandPaletteToggle.close()
   cleanup()
   window.removeEventListener('selectionchange', swallowSelectionChange, true)
   vi.unstubAllGlobals()
@@ -98,7 +93,6 @@ afterEach(() => {
   __resetLazyMountCachesForTesting()
 })
 beforeEach(async () => {
-  normalCommand.mockClear()
   window.addEventListener('selectionchange', swallowSelectionChange, true)
   vi.stubGlobal('IntersectionObserver', undefined)
   vi.stubGlobal('matchMedia', (query: string) => ({
@@ -135,14 +129,14 @@ const ContextProbe = () => {
   return null
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, isReference = false) => render(
+const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <HotkeyReconciler/>
         <ContextProbe/>
         <Suspense fallback={null}>
-          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root, isReference}}>
+          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root}}>
             <GlobalShortcuts/>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
               <BlockComponent blockId={root}/>
