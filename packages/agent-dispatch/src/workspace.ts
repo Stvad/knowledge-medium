@@ -35,6 +35,18 @@ export const workspaceThreadDir = (root: string, threadId: string): string => {
   return path.join(root, 'threads', threadId)
 }
 
+/** Creates the run's folder and returns its real path, refusing one that resolves
+ *  outside the root: a run can swap its folder, or `threads/`, for a link before a
+ *  later run starts there, and the working directory is what the file tools and the
+ *  sandbox trust. Returns the real path so the spawn cannot follow a later swap. */
+export const resolveWorkspaceCwd = async (root: string, cwd: string): Promise<string> => {
+  const expected = path.join(await fsp.realpath(root), path.relative(root, cwd))
+  await fsp.mkdir(cwd, {recursive: true})
+  const real = await fsp.realpath(cwd)
+  if (real !== expected) throw new Error(`workspace: ${cwd} resolves to ${real}, outside ${root}`)
+  return real
+}
+
 /** Claude Code's temp dir for a workspace run (`CLAUDE_CODE_TMPDIR`). It must stay
  *  short: past roughly 30 characters, sandboxed commands get a temp dir under the
  *  shared `/tmp/claude-<uid>` instead, which every Claude session on the machine uses. */

@@ -14,12 +14,11 @@
  * repo-scoped watcher), which is a deliberate opt-in, or confine Bash and
  * the file tools to a workspace folder (workspace.ts).
  */
-import fs from 'node:fs/promises'
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox, RunWorkspace } from './config.js'
 import {
-  ensurePrivateDir, WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceEnv, workspaceSettings, workspaceSystemPrompt,
-  workspaceTmpDir,
+  ensurePrivateDir, resolveWorkspaceCwd, WORKSPACE_APPROVED_TOOLS, WORKSPACE_TOOLS, workspaceEnv, workspaceSettings,
+  workspaceSystemPrompt, workspaceTmpDir,
 } from './workspace.js'
 
 /** Progress observed while a run is in flight — fed to `onEvent` as the
@@ -249,7 +248,11 @@ export interface ParsedClaudeResult {
  *  Never throws: unparseable/unknown lines and events are silently
  *  skipped, and `onEvent` dispatch is wrapped so a broken consumer can't
  *  kill the run. */
-export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
+export const createStreamJsonParser = (
+  onEvent?: (event: RunEvent) => void,
+  /** The `system/init` line, as it arrives. */
+  onInit?: (line: Record<string, unknown>) => void,
+) => {
   let buffer = ''
   let result: ParsedClaudeResult | null = null
   let textAccumulator = ''
@@ -282,6 +285,7 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
     const type = line.type
 
     if (type === 'system' && line.subtype === 'init') {
+      onInit?.(line)
       const sessionId = line.session_id
       if (typeof sessionId === 'string') {
         initSessionId = sessionId
@@ -405,24 +409,35 @@ export const runClaude = async (
   spawnImpl?: SpawnImpl,
 ): Promise<AgentRunResult> => {
   const args = buildClaudeArgs(options)
-  const parser = createStreamJsonParser(options.onEvent)
   const env = options.env ?? process.env
+  let cwd = options.cwd
+  // Set when a workspace run reports a working directory other than its folder.
+  let strayCwd: string | null = null
+  const stray = new AbortController()
   if (options.workspace) {
     await ensurePrivateDir(workspaceTmpDir(options.workspace.root))
-    if (options.cwd) await fs.mkdir(options.cwd, {recursive: true})
+    cwd = await resolveWorkspaceCwd(options.workspace.root, options.cwd ?? options.workspace.root)
   }
+  const workspaceCwd = options.workspace ? cwd : undefined
+  // A folder swapped for a link between the check above and the spawn: Claude Code
+  // reports where it really started before its first request, so stop it there.
+  const parser = createStreamJsonParser(options.onEvent, init => {
+    if (workspaceCwd === undefined || init.cwd === workspaceCwd) return
+    strayCwd = String(init.cwd)
+    stray.abort()
+  })
 
   const {exitCode, timedOut, stderr} = await runJsonlProcess({
     bin: options.claudeBin,
     args,
     prompt: options.prompt,
-    cwd: options.cwd,
+    cwd,
     env: options.workspace
       ? workspaceEnv(env, options.workspace.root, options.billing === 'api' ? BILLING_ENV_DENYLIST : [])
       : envForBilling(env, options.billing),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
-    signal: options.signal,
+    signal: options.signal ? AbortSignal.any([options.signal, stray.signal]) : stray.signal,
     spawnImpl,
   })
 
@@ -435,7 +450,7 @@ export const runClaude = async (
     sessionId: parser.sessionId(),
     exitCode,
     timedOut,
-    stderr,
+    stderr: strayCwd !== null ? `workspace: the run started in ${strayCwd}, not ${workspaceCwd}; stopped it\n${stderr}` : stderr,
     raw: parsed?.raw ?? null,
     usage: claudeUsageFrom(parsed?.raw ?? null),
   }

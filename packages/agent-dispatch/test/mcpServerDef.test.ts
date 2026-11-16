@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import path from 'node:path'
 import {parseConfig} from '../src/config'
 import {BLOCKED_WIKILINKS_ENV, decodeBlockedWikilinks} from '../src/blockedWikilinks'
@@ -40,6 +40,21 @@ describe('buildMcpServerDef', () => {
     const config = parseConfig({workspaceId: 'ws-dispatch', watchers: [{name: 'claude mentions', kind: 'backlinks', target: 'claude'}]})
     expect(buildMcpServerDef(config, null, '/ws/notes-agent').env).toMatchObject({[MEDIA_ROOT_ENV]: '/ws/notes-agent'})
     expect(buildMcpServerDef(config, null).env).not.toHaveProperty(MEDIA_ROOT_ENV)
+  })
+
+  it('carries the daemon\'s bridge location, which a workspace run\'s environment leaves out', () => {
+    vi.stubEnv('AGENT_RUNTIME_TOKEN_FILE', '/etc/km/tokens.json')
+    vi.stubEnv('AGENT_RUNTIME_URL', 'http://127.0.0.1:9999')
+    vi.stubEnv('AGENT_RUNTIME_TOKEN', 'secret-token')
+    try {
+      const config = parseConfig({workspaceId: 'ws-dispatch', watchers: [{name: 'claude mentions', kind: 'backlinks', target: 'claude'}]})
+      const {env} = buildMcpServerDef(config, null, '/ws/notes-agent')
+      expect(env).toMatchObject({AGENT_RUNTIME_TOKEN_FILE: '/etc/km/tokens.json', AGENT_RUNTIME_URL: 'http://127.0.0.1:9999'})
+      // It is written into the MCP config file: locations only, never a credential.
+      expect(env).not.toHaveProperty('AGENT_RUNTIME_TOKEN')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('encodes explicit null as an unattributed dispatch MCP setting', () => {

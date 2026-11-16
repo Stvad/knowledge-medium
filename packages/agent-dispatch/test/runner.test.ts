@@ -431,6 +431,24 @@ describe('runClaude', () => {
     }
   })
 
+  it('in a workspace, stops a run that started anywhere but its folder', async () => {
+    // A concurrent run can swap the folder for a link between the check and the spawn.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'km-runner-ws-'))
+    try {
+      const result = await runClaude(
+        {...baseOptions, cwd: path.join(root, 'threads', 'b1'), workspace: {root, allowedDomains: []}, timeoutMs: 10_000},
+        fakeClaude(
+          `process.stdout.write(JSON.stringify({type: 'system', subtype: 'init', session_id: 's', cwd: '/elsewhere'}) + '\\n'); setTimeout(() => {}, 60_000)`,
+        ),
+      )
+      expect(result).toMatchObject({ok: false, timedOut: false})
+      expect(result.stderr).toContain('/elsewhere')
+    } finally {
+      await fs.rm(root, {recursive: true, force: true})
+      await fs.rm(workspaceTmpDir(root), {recursive: true, force: true})
+    }
+  })
+
   it('delivers the prompt over stdin, not argv', async () => {
     const result = await runClaude(
       {...baseOptions, prompt: 'secret note content'},

@@ -6,6 +6,7 @@ import path from 'node:path'
 import {BILLING_ENV_DENYLIST} from '../src/runner'
 import {
   ensurePrivateDir,
+  resolveWorkspaceCwd,
   WORKSPACE_APPROVED_TOOLS,
   workspaceEnv,
   workspaceSettings,
@@ -49,6 +50,33 @@ describe('ensurePrivateDir', () => {
     await fsp.symlink(parent, path.join(parent, 'link'))
     await expect(ensurePrivateDir(path.join(parent, 'file'))).rejects.toThrow(/not a private directory/)
     await expect(ensurePrivateDir(path.join(parent, 'link'))).rejects.toThrow(/not a private directory/)
+  })
+})
+
+describe('resolveWorkspaceCwd', () => {
+  let parent: string
+  beforeEach(async () => { parent = await fsp.mkdtemp(path.join(os.tmpdir(), 'km-ws-cwd-')) })
+  afterEach(async () => { await fsp.rm(parent, {recursive: true, force: true}) })
+
+  it('creates the folder and names it by its real path', async () => {
+    const root = path.join(parent, 'root')
+    await fsp.mkdir(root)
+    const cwd = await resolveWorkspaceCwd(root, workspaceThreadDir(root, 'b1'))
+    expect(cwd).toBe(path.join(await fsp.realpath(root), 'threads', 'b1'))
+    expect((await fsp.stat(cwd)).isDirectory()).toBe(true)
+  })
+
+  it.each([
+    ['its thread folder', (root: string) => path.join(root, 'threads', 'b1')],
+    ['the threads folder', (root: string) => path.join(root, 'threads')],
+  ])('refuses a run whose folder an earlier run swapped for a link out of the root: %s', async (_label, swapped) => {
+    const root = path.join(parent, 'root')
+    const outside = path.join(parent, 'outside')
+    await fsp.mkdir(path.join(outside, 'b1'), {recursive: true})
+    await fsp.mkdir(path.join(root, 'threads'), {recursive: true})
+    await fsp.rm(swapped(root), {recursive: true, force: true})
+    await fsp.symlink(swapped(root).endsWith('b1') ? path.join(outside, 'b1') : outside, swapped(root))
+    await expect(resolveWorkspaceCwd(root, workspaceThreadDir(root, 'b1'))).rejects.toThrow(/outside/)
   })
 })
 
