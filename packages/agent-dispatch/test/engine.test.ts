@@ -183,9 +183,10 @@ describe('workspace watchers', () => {
       runner: {executor: 'claude', workspace: {allowedDomains: ['pypi.org']}}, ...watcher,
     }],
   })
-  const runOf = (runTask: ReturnType<typeof vi.fn>) => runTask.mock.calls[0][0] as {cwd: string, workspace?: unknown, mcpConfigPath?: string}
+  const runOf = (runTask: ReturnType<typeof vi.fn>) =>
+    runTask.mock.calls[0][0] as {cwd: string, workspace?: unknown, mcpConfigPath?: string, newSessionId?: string}
 
-  it('runs a new thread in its own folder, sandboxed in the workspace, with the watcher\'s km server', async () => {
+  it('runs a new thread in a folder named for the session it starts, sandboxed, with the watcher\'s km server', async () => {
     const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] chart this'}}})
     const runTask = vi.fn(async () => okRun())
     const config = workspaceConfig()
@@ -194,13 +195,15 @@ describe('workspace watchers', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(runOf(runTask)).toMatchObject({
-      cwd: `${root}/threads/b-1`, workspace: {root, allowedDomains: ['pypi.org']}, mcpConfigPath: '/tmp/mcp-mentions.json',
+    const run = runOf(runTask)
+    expect(run.newSessionId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(run).toMatchObject({
+      cwd: `${root}/threads/${run.newSessionId}`, workspace: {root, allowedDomains: ['pypi.org']}, mcpConfigPath: '/tmp/mcp-mentions.json',
     })
     expect(mcpConfigPathFor).toHaveBeenCalledWith(config.watchers[0])
   })
 
-  it('runs a follow-up in the folder its thread started in', async () => {
+  it('runs a follow-up in its session\'s folder, however deep the thread', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-child'}],
       blocks: {
@@ -214,7 +217,8 @@ describe('workspace watchers', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(runOf(runTask)).toMatchObject({cwd: `${root}/threads/b-root`, resumeSessionId: 'sess-root'})
+    expect(runOf(runTask)).toMatchObject({cwd: `${root}/threads/sess-root`, resumeSessionId: 'sess-root'})
+    expect(runOf(runTask).newSessionId).toBeUndefined()
   })
 
   it('starts a fresh thread folder when the watcher does not resume', async () => {
@@ -230,7 +234,9 @@ describe('workspace watchers', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(runOf(runTask).cwd).toBe(`${root}/threads/b-child`)
+    const run = runOf(runTask)
+    expect(run.cwd).toBe(`${root}/threads/${run.newSessionId}`)
+    expect(run.newSessionId).not.toBe('sess-root')
   })
 })
 

@@ -3,7 +3,6 @@ import {
   decidePending,
   diffQueryRows,
   findThreadSession,
-  threadRootId,
   isMention,
   MAX_ATTEMPTS,
   MAX_CURSOR_IDS,
@@ -200,20 +199,6 @@ describe('findThreadSession', () => {
     const source = block({properties: {[PROPS.session]: ''}})
     const ancestor = block({id: 'a', properties: {[PROPS.session]: 42}})
     expect(findThreadSession(source, [ancestor])).toBeNull()
-  })
-})
-
-describe('threadRootId', () => {
-  it('is the farthest block holding the session: where its first run started', () => {
-    const source = block({id: 'child'})
-    const resumed = block({id: 'mid', properties: {[PROPS.session]: 'sess-1'}})
-    const origin = block({id: 'origin', properties: {[PROPS.session]: 'sess-1'}})
-    const other = block({id: 'top', properties: {[PROPS.session]: 'sess-0'}})
-    expect(threadRootId(source, [resumed, origin, other], 'sess-1')).toBe('origin')
-  })
-
-  it('is the source itself for a run that starts a thread', () => {
-    expect(threadRootId(block({id: 'fresh'}), [block({id: 'a', properties: {[PROPS.session]: 'sess-0'}})], null)).toBe('fresh')
   })
 })
 

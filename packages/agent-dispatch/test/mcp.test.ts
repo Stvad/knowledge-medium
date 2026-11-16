@@ -137,7 +137,8 @@ beforeEach(async () => {
   }}))
 })
 
-describe('compiled dispatch MCP add_media', {timeout: 20_000}, () => {
+// A media root needs macOS's O_NOFOLLOW_ANY (agent-cli mediaFile.ts).
+describe.runIf(process.platform === 'darwin')('compiled dispatch MCP add_media', {timeout: 20_000}, () => {
   const pathArgument = async () => {
     const {tools} = await client!.listTools()
     const addMedia = tools.find(tool => tool.name === 'add_media')!

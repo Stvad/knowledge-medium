@@ -147,14 +147,6 @@ export const findThreadSession = (source: BlockView, ancestors: BlockView[]): st
   return null
 }
 
-/** The block a thread's first run started from: the farthest in the chain that holds
- *  `session` (a resumed run records the session it continued), or the source when
- *  the run starts a thread. Its id names the thread's workspace folder. */
-export const threadRootId = (source: BlockView, ancestors: BlockView[], session: string | null): string => {
-  if (session === null) return source.id
-  return [source, ...ancestors].findLast(block => prop(block, PROPS.session) === session)?.id ?? source.id
-}
-
 // ----- query watchers -------------------------------------------------
 
 // The query-row diff (`diffQueryRows`/`MAX_CURSOR_IDS` + its `QueryRow`/

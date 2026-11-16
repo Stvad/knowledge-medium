@@ -104,6 +104,11 @@ describe('buildClaudeArgs', () => {
       },
     )
 
+    it('starts a new thread under the session id that names its folder', () => {
+      const started = buildClaudeArgs({...baseOptions, cwd: '/ws/notes-agent/threads/s1', workspace, newSessionId: 's1'})
+      expect(started[started.indexOf('--session-id') + 1]).toBe('s1')
+    })
+
     it('tells the run where its workspace is', () => {
       expect(value('--append-system-prompt')).toContain('/ws/notes-agent/threads/b1')
     })

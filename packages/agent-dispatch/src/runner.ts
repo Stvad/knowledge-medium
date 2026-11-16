@@ -65,6 +65,8 @@ export interface AgentRunOptions extends CommonRunOptions {
   mcpConfigPath?: string
   /** Run sandboxed in this workspace (workspace.ts), in `cwd`, a folder under its root. */
   workspace?: RunWorkspace
+  /** Start a new session under this id (`--session-id`): a workspace thread's folder is named for it. */
+  newSessionId?: string
   /** Which CLI the engine should dispatch this run to (daemon.ts's
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
@@ -197,6 +199,7 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // activity/text can be reported before the run finishes.
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
+  if (options.newSessionId) args.push('--session-id', options.newSessionId)
   if (options.model) args.push('--model', options.model)
   if (options.effort) args.push('--effort', options.effort)
   if (options.mcpConfigPath) {

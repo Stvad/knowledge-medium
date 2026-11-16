@@ -7,7 +7,7 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import type {BridgeClient} from '../src/client'
 import {MEDIA_BRIDGE_MAX_BYTES, type KnownCommand} from '../src/protocol'
-import {assertOpenedUnder} from '../src/mediaFile'
+import {openWithoutLinks} from '../src/mediaFile'
 import {createGraphMcpServer, KM_MCP_INSTRUCTIONS, type GraphMcpWriteOperation} from '../src/mcpServer'
 import {KM_MCP_ALLOWED_TOOLS, KM_MCP_TOOL_NAMES} from '../src/mcpShared'
 import {GRAPH_READ_TOOLS} from '../src/readTools'
@@ -147,7 +147,8 @@ describe('createGraphMcpServer', () => {
     })
   })
 
-  describe('add_media under a root', () => {
+  // A root needs macOS's O_NOFOLLOW_ANY (mediaFile.ts).
+  describe.runIf(process.platform === 'darwin')('add_media under a root', () => {
     let root: string
     let outside: string
     beforeEach(async () => {
@@ -209,18 +210,10 @@ describe('createGraphMcpServer', () => {
       expect(runCommand).not.toHaveBeenCalled()
     })
 
-    it('refuses an opened file the path no longer names (a directory swapped for a link mid-read)', async () => {
-      // Defence in depth: the swap lands between the containment check and the open, which no test can schedule.
-      const opened = await fs.stat(path.join(outside, 'secret.png'))
-      await expect(assertOpenedUnder(opened, await fs.realpath(root), path.join(root, 'threads', 't1', 'chart.png'))).rejects.toThrow(/changed/)
-    })
-
-    it('keeps the root it started with when the root is later swapped for a link', async () => {
-      const {runCommand, call} = setup()
-      await fs.rm(root, {recursive: true})
-      await fs.symlink(outside, root)
-      await expect(call({path: path.join(root, 'secret.png')})).rejects.toThrow(/outside/)
-      expect(runCommand).not.toHaveBeenCalled()
+    it('opens nothing through a link anywhere on the path, so a directory swapped mid-call is refused', async () => {
+      // The race itself cannot be scheduled; this pins the open it relies on.
+      await fs.symlink(outside, path.join(root, 'threads', 'escape'))
+      await expect(openWithoutLinks(path.join(root, 'threads', 'escape', 'secret.png'))).rejects.toThrow(/ELOOP/)
     })
 
     it('names the root in the path argument the model sees', () => {

@@ -1,4 +1,4 @@
-import {constants as fsConstants, type Stats} from 'node:fs'
+import {constants as fsConstants} from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {MEDIA_BRIDGE_MAX_BYTES} from './protocol.js'
@@ -18,28 +18,32 @@ const resolveUnder = async (realRoot: string, filePath: string): Promise<string>
   return realFile
 }
 
-/** Refuses an opened file unless `filePath` still names it from under `realRoot`: a
- *  directory on the path swapped for a link between the check and the open
- *  leaves the handle on a file the path no longer resolves to. A file with a
- *  second name may have it outside the root. */
-export const assertOpenedUnder = async (opened: Stats, realRoot: string, filePath: string): Promise<void> => {
-  const named = await fs.stat(await resolveUnder(realRoot, filePath))
-  if (named.dev !== opened.dev || named.ino !== opened.ino) throw new Error(`add-media: ${filePath} changed while it was read.`)
-  if (opened.nlink > 1) throw new Error(`add-media: ${filePath} has another name, which may be outside ${realRoot}.`)
+/** macOS's open(2) flag refusing a link anywhere on the path, not only at its end;
+ *  Node passes it through but does not export it. */
+const O_NOFOLLOW_ANY = 0x20000000
+
+const READ_FLAGS = fsConstants.O_RDONLY | fsConstants.O_NONBLOCK
+
+/** Opens `realPath` only if no component of it is a link at the moment of the open. A
+ *  check-then-open on a pathname can be raced by swapping a directory on it for a link;
+ *  this check happens inside the open. macOS only. */
+export const openWithoutLinks = (realPath: string) => {
+  if (process.platform !== 'darwin') throw new Error('add-media: a root needs macOS (O_NOFOLLOW_ANY).')
+  return fs.open(realPath, READ_FLAGS | O_NOFOLLOW_ANY)
 }
 
 /** A local file as `add-media` carries it, optionally only from under `realRoot`. Checks
  *  what the path is before reading it: a FIFO would block the read forever (hence
  *  the non-blocking open), and an oversize file would be read whole only to be refused. */
 export const readMediaFileBase64 = async (filePath: string, realRoot?: string): Promise<string> => {
-  const target = realRoot === undefined ? filePath : await resolveUnder(realRoot, filePath)
-  // Defence in depth: the final link was already followed, so one found now was swapped in after the check.
-  const noFollow = realRoot === undefined ? 0 : fsConstants.O_NOFOLLOW
-  const handle = await fs.open(target, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | noFollow)
+  const handle = realRoot === undefined
+    ? await fs.open(filePath, READ_FLAGS)
+    : await openWithoutLinks(await resolveUnder(realRoot, filePath))
   try {
     const stat = await handle.stat()
     if (!stat.isFile()) throw new Error(`add-media: ${filePath} is not a regular file.`)
-    if (realRoot !== undefined) await assertOpenedUnder(stat, realRoot, filePath)
+    // A second name may be outside the root.
+    if (realRoot !== undefined && stat.nlink > 1) throw new Error(`add-media: ${filePath} has another name, which may be outside ${realRoot}.`)
     assertMediaSize(filePath, stat.size)
     return (await handle.readFile()).toString('base64')
   } finally {

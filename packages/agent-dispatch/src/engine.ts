@@ -4,6 +4,7 @@
  * decisions live in watchers.ts and every side effect sits behind an
  * injected dependency, so the whole flow is testable with in-memory fakes.
  */
+import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
@@ -13,7 +14,7 @@ import type { Graph, ReplyWriter } from './graph.js'
 import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts, threadRootId } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
 import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
@@ -214,8 +215,8 @@ export const createEngine = (deps: EngineDeps) => {
   /** `threadId` places a workspace run in its thread's folder; without one it works in the root. */
   const runOptionsFor = (
     watcher: Watcher, prompt: string,
-    {resumeSessionId, onEvent, signal, threadId}: {
-      resumeSessionId?: string, onEvent?: (event: RunEvent) => void, signal?: AbortSignal, threadId?: string
+    {resumeSessionId, newSessionId, onEvent, signal, threadId}: {
+      resumeSessionId?: string, newSessionId?: string, onEvent?: (event: RunEvent) => void, signal?: AbortSignal, threadId?: string
     } = {},
   ): AgentRunOptions => {
     const {runner} = watcher
@@ -239,6 +240,7 @@ export const createEngine = (deps: EngineDeps) => {
       model: runner.model,
       effort: runner.executor === 'claude' ? runner.effort : undefined,
       resumeSessionId,
+      newSessionId,
       timeoutMs: runner.timeoutMs,
       onEvent,
       executor: runner.executor,
@@ -324,9 +326,12 @@ export const createEngine = (deps: EngineDeps) => {
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
-    const storedSession = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
-    const session = resumableSessionFor(runner.executor, storedSession)
-    const threadId = threadRootId(block, ancestorBlocks, session ? storedSession : null)
+    const session = watcher.resume
+      ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
+      : null
+    // A workspace thread's folder is named for its session, so a new one starts under a known id.
+    const newSessionId = !session && watcherWorkspace(watcher) ? randomUUID() : undefined
+    const threadId = session ?? newSessionId
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) {
       refundLaunch(launchStamp)
@@ -575,7 +580,7 @@ export const createEngine = (deps: EngineDeps) => {
       }
 
       const runOptions = runOptionsFor(watcher, prompt, {
-        resumeSessionId: session ?? undefined, onEvent, signal: abortController.signal, threadId,
+        resumeSessionId: session ?? undefined, newSessionId, onEvent, signal: abortController.signal, threadId,
       })
       let result: AgentRunResult
       try {
