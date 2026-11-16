@@ -134,6 +134,10 @@ describe('the comments that link a block', () => {
     // Credit is a property edge, not a link.
     const credited = await repo.mutate.createChild({parentId: first.commentId!, content: 'plain words'})
     await repo.tx(tx => tx.setProperty(credited, attributionCreatorsProp, [LINKED]), opts)
+    // The precondition: the credit is an edge to the block before the query runs.
+    await vi.waitFor(async () => expect(await db.db.getAll(
+      'SELECT 1 FROM block_references WHERE source_id = ? AND target_id = ?', [credited, LINKED],
+    )).toHaveLength(1))
 
     await vi.waitFor(async () => expect(await linksOf()).toHaveLength(2))
     expect(new Set(await linksOf())).toEqual(new Set([
