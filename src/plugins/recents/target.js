@@ -1,1 +1,1 @@
-export{nO as openRecentsPage}from"../../../chunks/app-BHLCMNSw.js";
+export{nO as openRecentsPage}from"../../../chunks/app-BDwk30BN.js";

@@ -1,1 +1,1 @@
-export{TV as typePropertyGroups}from"../../chunks/app-BHLCMNSw.js";
+export{TV as typePropertyGroups}from"../../chunks/app-BDwk30BN.js";

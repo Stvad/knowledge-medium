@@ -1,1 +1,1 @@
-export{wm as contributorsCodeMirrorExtensions}from"../../../chunks/app-BHLCMNSw.js";
+export{wm as contributorsCodeMirrorExtensions}from"../../../chunks/app-BDwk30BN.js";

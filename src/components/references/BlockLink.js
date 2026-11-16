@@ -1,1 +1,1 @@
-export{QD as BlockLink}from"../../../chunks/app-BHLCMNSw.js";
+export{QD as BlockLink}from"../../../chunks/app-BDwk30BN.js";

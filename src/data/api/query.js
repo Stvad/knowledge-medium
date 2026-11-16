@@ -1,1 +1,1 @@
-export{tut as defineQuery}from"../../../chunks/app-BHLCMNSw.js";
+export{tut as defineQuery}from"../../../chunks/app-BDwk30BN.js";

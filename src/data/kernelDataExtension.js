@@ -1,1 +1,1 @@
-export{g6 as kernelDataExtension}from"../../chunks/app-BHLCMNSw.js";
+export{g6 as kernelDataExtension}from"../../chunks/app-BDwk30BN.js";
