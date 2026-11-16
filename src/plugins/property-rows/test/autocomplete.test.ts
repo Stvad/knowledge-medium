@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import {EditorState} from '@codemirror/state'
 import {CompletionContext} from '@codemirror/autocomplete'
-import * as completion from '@codemirror/autocomplete'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty} from '@/data/api'
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
@@ -9,13 +8,7 @@ import {definitionSeedsFacet} from '@/data/facets'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import {EditorView} from '@codemirror/view'
-import {handlePropertyValueEnter, propertyCompletionSource} from '../autocomplete'
-
-vi.mock('@codemirror/autocomplete', async importOriginal => {
-  const actual = await importOriginal<typeof import('@codemirror/autocomplete')>()
-  return {...actual, completionStatus: vi.fn(actual.completionStatus)}
-})
+import {propertyCompletionSource} from '../autocomplete'
 
 const note = seedProperty({seedKey: 'test/property/completion-note', revision: 1, name: 'test:note', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const tags = seedProperty({seedKey: 'test/property/completion-tags', revision: 1, name: 'test:tags', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
@@ -111,30 +104,4 @@ it('does not replace a selected range with a property', async () => {
 it('offers nothing to an editor without a block', async () => {
   const state = EditorState.create({doc: '::', selection: {anchor: 2}})
   expect(await propertyCompletionSource({repo})(new CompletionContext(state, 2, false))).toBeNull()
-})
-it.each(['key', 'defaultPrevented', 'shiftKey', 'metaKey', 'ctrlKey', 'altKey', 'readonly', 'ui', 'selection', 'middle', 'ordinary', 'scalar', 'completion', 'missing-placeholder', 'other-field', 'other-scope', 'hidden-placeholder'])('list member Enter declines %s without changing rows', async kind => {
-  await repo.block('owner').set(tags, ['saved'])
-  await repo.block('owner').set(note, 'saved scalar')
-  const fields = await repo.query.children({id: 'owner', propertyChildren: 'all'}).load()
-  const definition = repo.propertySchemaResolverFor('ws').resolve(kind === 'scalar' ? note.name : tags.name)
-  if (definition.status !== 'resolved') throw new Error('Missing definition')
-  const field = fields.find(row => row.referenceTargetId === definition.schema.fieldId)!
-  const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
-  const placeholder = document.createElement('div')
-  placeholder.dataset.propertyPlaceholder = kind === 'other-field' ? 'other-field' : field.id
-  placeholder.dataset.outlinePlaceholderScope = kind === 'other-scope' ? 'other-scope' : 'test-scope'
-  if (kind === 'hidden-placeholder') placeholder.style.display = 'none'
-  if (kind !== 'missing-placeholder') document.body.append(placeholder)
-  if (kind === 'readonly') Object.defineProperty(repo, 'isReadOnly', {value: true})
-  if (kind === 'completion') vi.mocked(completion.completionStatus).mockReturnValueOnce('active')
-  const event = {key: kind === 'key' ? 'x' : 'Enter', [kind]: true, preventDefault: vi.fn(), stopPropagation: vi.fn()} as unknown as KeyboardEvent
-  const state = EditorState.create({doc: 'saved', selection: {anchor: kind === 'selection' ? 0 : kind === 'middle' ? 2 : 5, head: kind === 'selection' ? 5 : undefined}})
-  const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-  const view = new EditorView({state})
-  try {
-    expect(handlePropertyValueEnter({repo, block: repo.block(kind === 'ordinary' ? 'source' : value.id),
-      uiStateBlock: kind === 'ui' ? undefined : repo.block('owner'), renderScopeId: 'test-scope'}, event, view)).toBe(false)
-  } finally { view.destroy() }
-  expect(event.preventDefault).not.toHaveBeenCalled()
-  expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
 })

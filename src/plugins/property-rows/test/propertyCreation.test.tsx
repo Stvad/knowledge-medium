@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import {Suspense, useEffect} from 'react'
-import {focusAdjacentPlaceholder, focusPlaceholder, focusPickedPlaceholder, navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {focusAdjacentPlaceholder, focusPlaceholder, navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
 import {keybindingOverridesFacet} from '@/shortcuts/keybindingOverrides'
 import {getDefaultActionGroups} from '@/shortcuts/defaultShortcuts'
@@ -38,7 +38,7 @@ import {editorSelection, focusBlock, isCollapsedProp, isEditingProp, peekFocused
 import {EditorView} from '@codemirror/view'
 import {CompletionContext} from '@codemirror/autocomplete'
 import {flushEditorContent} from '@/editor/contentFlush'
-import {handlePropertyValueEnter, propertyCompletionSource} from '../autocomplete'
+import {propertyCompletionSource} from '../autocomplete'
 import * as propertyCreation from '@/data/propertyRowCreation'
 import * as toast from '@/utils/toast'
 import * as properties from '@/data/properties'
@@ -82,7 +82,7 @@ const configureRuntime = (vim = true) => {
     ...(vim ? [vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo})] : []),
     blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [...defaults.globalActions, ...defaults.normalModeActions, commandPaletteAction].map(action => actionsFacet.of(action)),
+    [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions, commandPaletteAction].map(action => actionsFacet.of(action)),
     actionsFacet.of({id: 'test:normal-command', context: ActionContextTypes.NORMAL_MODE, description: 'Test normal command', defaultBinding: {keys: 'q'}, handler: normalCommand}),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
     typeSeedsFacet.of(expectedType, {source: 'test'}),
@@ -202,31 +202,27 @@ describe('expected property placeholders in the outline', () => {
     await screen.findByText('Below fields')
     await act(async () => { await focusBlock(repo.block(PANEL), scalar, {renderScopeId: 'creation-test'}) })
     const before = await ownerDescendants()
-    const placeholders = await Promise.all([plain, list, hidden, outlineHidden].map(schema => screen.findByLabelText(`Enter ${schema.name}`)))
-    const stops: (string | HTMLElement)[] = [scalar, placeholders[0], listScaffold, member, placeholders[1], placeholders[2], placeholders[3], below]
+    const placeholders = await Promise.all([hidden, outlineHidden].map(schema => screen.findByLabelText(`Enter ${schema.name}`)))
+    const stops: (string | HTMLElement)[] = [scalar, listScaffold, member, placeholders[0], placeholders[1], below]
     for (const [key, path] of [['j', stops], ['k', [...stops].reverse()]] as const) {
       for (let index = 1; index < path.length; index++) {
         const previous = path[index - 1]
         const target = path[index]
         if (typeof previous === 'string') await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(previous))
         fireEvent.keyDown(typeof previous === 'string' ? document.querySelector(`[data-block-id="${previous}"]`)! : previous, {key, code: `Key${key.toUpperCase()}`})
-        if (typeof target === 'string') await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(target))
+        if (typeof target === 'string') await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId, `navigation to ${target}`).toBe(target))
         else await waitFor(() => { expect(document.activeElement).toBe(target); expect(target.contentEditable).toBe('false') })
       }
     }
     expect(await ownerDescendants()).toEqual(before)
   })
 
-  it.each(['ghost', 'scalar', 'list'].flatMap(kind => ['d d', 'Tab', 'Shift+Tab', 'Meta+Shift+ArrowDown', 'Meta+Shift+ArrowUp', 't', 'Delete', 'Backspace', 'p', 'Shift+p', 'y y', 'Meta+v', 'Meta+c', 'Enter', 'q'].map(chord => [kind, chord])))('landed %s consumes %s without dispatching or writing', async (kind, chord) => {
-    const schema = kind === 'list' ? list : plain
-    if (kind !== 'ghost') {
-      const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-      await choosePropertyField(repo.block(OWNER), schema, repo.block(source), '::', () => true)
-    }
+  it.each(['d d', 'Tab', 'Shift+Tab', 'Meta+Shift+ArrowDown', 'Meta+Shift+ArrowUp', 't', 'Delete', 'Backspace', 'p', 'Shift+p', 'y y', 'Meta+v', 'Meta+c', 'Enter', 'q'])('landed ghost consumes %s without dispatching or writing', async chord => {
+    const schema = plain
     mount('all')
     const target = await screen.findByLabelText(`Enter ${schema.name}`)
     await act(async () => { focusPlaceholder(target, false) })
-    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(kind === 'ghost' ? OWNER : target.dataset.propertyPlaceholder))
+    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(OWNER))
     await waitFor(() => expect(document.activeElement).toBe(target))
     expect(target.contentEditable).toBe('false')
     const tx = vi.spyOn(repo, 'tx')
@@ -420,20 +416,29 @@ describe('expected property placeholders in the outline', () => {
     await waitFor(async () => expect(await repo.block(OWNER).get(plain)).toBe('pasted'))
   })
 
-  it.each(['i', 'a', 'o', 'Enter'])('normal-mode %s keeps the field-row key semantics', async key => {
+  it.each(['i', 'a', 'o', 'Enter'])('normal-mode %s uses ordinary field-row commands', async key => {
     await repo.block(OWNER).set(list, ['saved'])
+    const field = await db.db.get<{id: string}>("SELECT parent_id AS id FROM blocks WHERE content = 'saved' AND deleted = 0")
     await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
     mount('all')
-    const placeholder = await screen.findByLabelText(`Enter ${list.name}`)
-    const fieldId = placeholder.getAttribute('data-property-placeholder')!
-    await act(async () => { await focusBlock(repo.block(PANEL), fieldId, {renderScopeId: 'creation-test'}) })
-    await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(fieldId))
+    await act(async () => { await focusBlock(repo.block(PANEL), field.id, {renderScopeId: 'creation-test'}) })
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(field.id))
+    expect(screen.queryByLabelText(`Enter ${list.name}`)).toBeNull()
     const before = await ownerDescendants()
-    fireEvent.keyDown(document.querySelector(`[data-block-id="${fieldId}"]`)!, {key, code: key === 'Enter' ? 'Enter' : `Key${key.toUpperCase()}`})
-    if (key === 'o') await waitFor(() => expect(document.activeElement).toBe(placeholder))
-    else if (key !== 'Enter') await waitFor(() => expect(document.querySelector(`[data-block-id="${fieldId}"] .cm-content`)?.textContent).toBe(repo.block(fieldId).peek()?.content))
-    else expect(repo.block(PANEL).peekProperty(isEditingProp)).toBe(false)
-    expect(await ownerDescendants()).toEqual(before)
+    fireEvent.keyDown(document.querySelector(`[data-block-id="${field.id}"]`)!, {key, code: key === 'Enter' ? 'Enter' : `Key${key.toUpperCase()}`})
+    if (key === 'o') {
+      await waitFor(async () => {
+        const id = peekFocusedBlockLocation(repo.block(PANEL))?.blockId
+        expect(id).not.toBe(field.id)
+        expect((await repo.load(id!))?.parentId).toBe(field.id)
+        expect(document.querySelector(`[data-block-id="${id}"] .cm-content`)).not.toBeNull()
+      })
+      expect(await repo.query.children({id: field.id, propertyChildren: 'all'}).load()).toHaveLength(2)
+    } else {
+      if (key !== 'Enter') await waitFor(() => expect(document.querySelector(`[data-block-id="${field.id}"] .cm-content`)?.textContent).toBe(repo.block(field.id).peek()?.content))
+      else expect(repo.block(PANEL).peekProperty(isEditingProp)).toBe(false)
+      expect(await ownerDescendants()).toEqual(before)
+    }
   })
 
   it('normal-mode o beside an empty scalar creates an ordinary sibling', async () => {
@@ -441,7 +446,6 @@ describe('expected property placeholders in the outline', () => {
     await choosePropertyField(repo.block(OWNER), plain, repo.block(source), '::', () => true)
     await repo.block(PANEL).set(topLevelBlockIdProp, OWNER)
     mount('all')
-    await screen.findByLabelText(`Enter ${plain.name}`)
     await act(async () => { await focusBlock(repo.block(PANEL), source, {renderScopeId: 'creation-test'}) })
     await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as BlockShortcutDependencies)?.block.id).toBe(source))
     fireEvent.keyDown(document.querySelector(`[data-block-id="${source}"]`)!, {key: 'o', code: 'KeyO'})
@@ -474,11 +478,10 @@ describe('expected property placeholders in the outline', () => {
     } finally { tx.mockRestore() }
   })
 
-  it('hides both expected and existing value placeholders in read-only mode', async () => {
+  it('hides expected placeholders in read-only mode', async () => {
     await repo.block(OWNER).set(list, ['saved'])
     const editable = mount('all')
     await screen.findByLabelText(`Enter ${plain.name}`)
-    await screen.findByLabelText(`Enter ${list.name}`)
     editable.unmount()
     repo.setReadOnly(true)
     mount('all')
@@ -612,12 +615,7 @@ describe('expected property placeholders in the outline', () => {
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
   })
 
-  it.each(['ghost', 'existing scalar'])('keeps command keys on the mounted %s input through every handoff stage', async kind => {
-    if (kind === 'existing scalar') {
-      const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-      await choosePropertyField(repo.block(OWNER), plain, repo.block(source), '::', () => true)
-      repo.undoManager.clear()
-    }
+  it('keeps command keys on the mounted ghost input through every handoff stage', async () => {
     mount('all')
     const target = await screen.findByLabelText(`Enter ${plain.name}`)
     const barriers = Array.from({length: 2}, () => {
@@ -745,38 +743,31 @@ describe('expected property placeholders in the outline', () => {
     expect(await ownerDescendants()).toEqual(before)
   })
 
-  it('creates a distinct member each time the existing list placeholder is revisited', async () => {
+  it.each([false, true])('choosing an existing populated list creates and focuses an ordinary member (collapsed: %s)', async collapsed => {
     await repo.block(OWNER).set(list, ['saved'])
+    const definition = repo.propertySchemaResolverFor(WS).resolve(list.name)
+    if (definition.status !== 'resolved') throw new Error('Missing list definition')
+    const field = await db.db.get<{id: string}>("SELECT id FROM blocks WHERE reference_target_id = ? AND is_field_form = 1 AND deleted = 0", [definition.schema.fieldId])
+    if (collapsed) await repo.block(field.id).set(isCollapsedProp, true)
+    const source = await repo.mutate.createChild({parentId: OWNER, content: `::${list.name}`})
     repo.undoManager.clear()
     mount('all')
-    let target = await screen.findByLabelText(`Enter ${list.name}`)
-    await act(async () => { target.focus(); typePlaceholderText(target, 'x') })
-    await waitFor(async () => expect(await repo.block(OWNER).get(list)).toEqual(['saved', 'x']))
-    await waitFor(() => expect([...document.querySelectorAll('.cm-content')].some(node => node.textContent === 'x')).toBe(true))
-    target = await screen.findByLabelText(`Enter ${list.name}`)
-    await act(async () => { target.focus(); typePlaceholderText(target, 'y') })
-    await waitFor(async () => expect(await repo.block(OWNER).get(list)).toEqual(['saved', 'x', 'y']))
-    const field = await db.db.get<{id: string}>(
-      "SELECT id FROM blocks WHERE reference_target_id = ? AND is_field_form = 1 AND deleted = 0", [
-        (repo.propertySchemaResolverFor(WS).resolve(list.name) as {status: 'resolved'; schema: {fieldId: string}}).schema.fieldId,
-      ])
-    expect(await repo.query.children({id: field.id, propertyChildren: 'all'}).load()).toHaveLength(3)
-  })
-
-  it('focuses the value placeholder when choosing a collapsed existing list field', async () => {
-    await repo.block(OWNER).set(list, ['saved'])
-    const field = await db.db.get<{id: string}>("SELECT parent_id AS id FROM blocks WHERE content = 'saved' AND deleted = 0")
-    await repo.block(field.id).set(isCollapsedProp, true)
-    const source = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-    mount('all')
-    await settle()
-    await act(async () => {
-      const picked = await choosePropertyField(repo.block(OWNER), list, repo.block(source), '::', () => true)
-      await focusBlock(repo.block(PANEL), picked.fieldRowId, {edit: false, renderScopeId: 'creation-test'})
-      focusPickedPlaceholder(picked.fieldRowId, 'creation-test', () => true)
+    await act(async () => { await focusBlock(repo.block(PANEL), source, {edit: true, renderScopeId: 'creation-test'}) })
+    const view = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-block-id="${source}"] .cm-editor`)
+      expect(node).not.toBeNull()
+      return EditorView.findFromDOM(node!)!
     })
-    const target = await screen.findByLabelText(`Enter ${list.name}`)
-    expect(document.activeElement).toBe(target)
+    act(() => { view.focus(); view.dispatch({selection: {anchor: view.state.doc.length}}); startCompletion(view) })
+    await screen.findByRole('option', {name: list.name})
+    await waitFor(() => expect(acceptCompletion(view)).toBe(true))
+    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).not.toBe(source))
+    const memberId = peekFocusedBlockLocation(repo.block(PANEL))!.blockId
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-block-id="${memberId}"] .cm-content`)))
+    expect((await repo.load(memberId))?.parentId).toBe(field.id)
+    expect((await repo.load(memberId))?.content).toBe('')
+    expect(await repo.block(OWNER).get(list)).toEqual(['saved', ''])
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
   })
 
   it('finishing an earlier ghost does not release the next ghost during its handoff', async () => {
@@ -937,7 +928,7 @@ describe('expected property placeholders in the outline', () => {
     }
   })
 
-  it('opens native completion while typing and converts the same block without an empty value', async () => {
+  it('opens native completion and an ordinary first child', async () => {
     const id = await repo.mutate.createChild({parentId: OWNER, content: ''})
     mount('none')
     await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
@@ -946,10 +937,17 @@ describe('expected property placeholders in the outline', () => {
     act(() => { view.focus(); view.dispatch({changes: {from: 0, insert: '::creation:plain'}, selection: {anchor: 16}, userEvent: 'input.type'}) })
     await screen.findByRole('option', {name: plain.name})
     await waitFor(() => { expect(acceptCompletion(view)).toBe(true) })
-    const placeholder = await screen.findByRole('textbox', {name: `Enter ${plain.name}`})
-    await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    const childId = await waitFor(() => {
+      const field = repo.block(id)
+      const children = field.repo.query.childIds({id, hydrate: true, propertyChildren: 'all'})
+      return children.load().then(rows => {
+        expect(rows).toHaveLength(1)
+        return rows[0]!
+      })
+    })
+    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(childId))
     expect((await repo.load(id))?.isFieldForm).toBe(true)
-    expect(await repo.query.children({id, propertyChildren: 'all'}).load()).toEqual([])
+    expect(await repo.query.children({id, propertyChildren: 'all'}).load()).toHaveLength(1)
   })
 
   it('automatic Create is accepted from prose and one undo restores the text and removes the definition', async () => {
@@ -970,8 +968,9 @@ describe('expected property placeholders in the outline', () => {
     })
     await screen.findByRole('option', {name: 'Create “some prose”'})
     await waitFor(() => expect(acceptCompletion(view)).toBe(true))
-    const placeholder = await screen.findByRole('textbox', {name: 'Enter some prose'})
-    await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    await waitFor(() => expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).not.toBe(id))
+    const child = peekFocusedBlockLocation(repo.block(PANEL))!.blockId
+    expect((await repo.load(child))?.parentId).toBe(id)
     const definitionId = repo.block(id).peek()!.referenceTargetId!
     expect(definitionId).toBeTruthy()
     expect(repo.propertySchemas.has('some prose')).toBe(true)
@@ -1002,12 +1001,15 @@ describe('expected property placeholders in the outline', () => {
     })
     await screen.findByRole('option', {name: `Create “${name}”`})
     await waitFor(() => expect(acceptCompletion(view)).toBe(true))
-    const placeholder = await screen.findByRole('textbox', {name: `Enter ${name}`})
-    await waitFor(() => expect(document.activeElement).toBe(placeholder))
-    const group = vi.spyOn(repo, 'undoGroup')
-    await act(async () => { typePlaceholderText(placeholder, words) })
-    await waitFor(() => expect(document.activeElement?.classList.contains('cm-content')).toBe(true))
-    await act(async () => { await group.mock.results[0].value })
+    const childId = await waitFor(() => {
+      const focused = peekFocusedBlockLocation(repo.block(PANEL))?.blockId
+      expect(focused).not.toBe(id)
+      return focused!
+    })
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${childId}"] .cm-content`)).not.toBeNull())
+    const editor = document.querySelector<HTMLElement>(`[data-block-id="${childId}"] .cm-content`)!
+    const childView = EditorView.findFromDOM(editor)!
+    await act(async () => { childView.dispatch({changes: {from: 0, insert: words}, selection: {anchor: words.length}, userEvent: 'input.type'}); flushEditorContent(childView) })
     await waitFor(() => expect(repo.block(OWNER).peek()?.properties[name]).toBe(words))
     const [value] = await repo.query.children({id, propertyChildren: 'all'}).load()
     expect(value.content).toBe(words)
@@ -1017,7 +1019,7 @@ describe('expected property placeholders in the outline', () => {
     expect(document.querySelector(`[data-block-id="${value.id}"] [data-invalid-property-value]`)).toBeNull()
   })
 
-  it.each([false, true])('only hands list Enter to a placeholder in the rendered document (member root: %s)', async memberRoot => {
+  it.each([false, true])('list member Enter creates an ordinary block (member root: %s)', async memberRoot => {
     await repo.block(OWNER).set(list, ['saved'])
     const definition = repo.propertySchemaResolverFor(WS).resolve(list.name)
     if (definition.status !== 'resolved') throw new Error('Missing definition')
@@ -1033,35 +1035,22 @@ describe('expected property placeholders in the outline', () => {
       return EditorView.findFromDOM(dom!)!
     })
     act(() => { view.dispatch({selection: {anchor: view.state.doc.length}}) })
-    const placeholder = screen.queryByLabelText(`Enter ${list.name}`)
-    expect(Boolean(placeholder)).toBe(!memberRoot)
-    const before = await ownerDescendants()
-    const event = new KeyboardEvent('keydown', {key: 'Enter', cancelable: true})
-    let handled = false
-    await act(async () => {
-      handled = handlePropertyValueEnter({repo, block: repo.block(value.id), uiStateBlock: repo.block(PANEL), renderScopeId: 'creation-test'}, event, view)
+    expect(screen.queryByLabelText(`Enter ${list.name}`)).toBeNull()
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as BlockShortcutDependencies)?.block.id).toBe(value.id))
+    fireEvent.keyDown(view.contentDOM, {key: 'Enter', code: 'Enter'})
+    const created = await waitFor(async () => {
+      const focusedId = peekFocusedBlockLocation(repo.block(PANEL))?.blockId
+      expect(focusedId).toBeTruthy()
+      expect(focusedId).not.toBe(value.id)
+      const row = await repo.load(focusedId!)
+      expect(row?.parentId).toBe(memberRoot ? value.id : field.id)
+      expect(row?.content).toBe('')
+      return row!
     })
-    expect(handled).toBe(!memberRoot)
-    expect(event.defaultPrevented).toBe(!memberRoot)
-    expect(await ownerDescendants()).toEqual(before)
-    if (memberRoot) expect(peekFocusedBlockLocation(repo.block(PANEL))?.blockId).toBe(value.id)
-    else await waitFor(() => expect(document.activeElement).toBe(placeholder))
+    await waitFor(() => expect(document.querySelector(`[data-block-id="${created.id}"] .cm-content`)).not.toBeNull())
+    expect(await repo.block(OWNER).get(list)).toEqual(memberRoot ? ['saved'] : ['saved', ''])
   })
 
-  it('keeps selection of an existing list field from writing or appending an empty member', async () => {
-    await repo.block(OWNER).set(list, ['saved'])
-    repo.undoManager.clear()
-    mount('all')
-    const fieldPlaceholder = await screen.findByLabelText(`Enter ${list.name}`)
-    const before = await ownerDescendants()
-    await act(async () => {
-      fieldPlaceholder.focus()
-      fireEvent.keyDown(fieldPlaceholder, {key: 'Enter'})
-    })
-    expect(await ownerDescendants()).toEqual(before)
-    expect(await repo.block(OWNER).get(list)).toEqual(['saved'])
-    expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(0)
-  })
   it.each([
     {key: 'ArrowDown', isComposing: true}, {key: 'ArrowUp', isComposing: true},
     {key: 'Enter', isComposing: true}, {key: 'Enter', keyCode: 229},

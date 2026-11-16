@@ -17,8 +17,8 @@ import {showError} from '@/utils/toast'
 import {EditorView} from '@codemirror/view'
 
 /** Explicitly activated input stays mounted until the ordinary editor owns DOM focus. */
-export function PropertyPlaceholder({owner, schema, fieldRowId, available = true, onActiveChange}: {
-  owner: Block; schema: AnyPropertySchema; fieldRowId?: string; available?: boolean; onActiveChange?: (active: boolean) => void
+export function PropertyPlaceholder({owner, schema, onActiveChange}: {
+  owner: Block; schema: AnyPropertySchema; onActiveChange?: (active: boolean) => void
 }) {
   const ui = useUIStateBlock()
   const editing = usePropertyEditingActivation(owner)
@@ -99,7 +99,7 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
         activate('landed')
         return
       }
-      const target = fieldRowId ?? placeholderEscapeTarget(event.currentTarget, scope, owner.id)
+      const target = placeholderEscapeTarget(event.currentTarget, scope, owner.id)
       event.currentTarget.blur()
       if (target) void exitEditModeForBlock(ui, target, scope).then(() => focusBlock(ui, target, {renderScopeId: scope}))
       else void ui.set(focusedBlockLocationProp, undefined)
@@ -135,11 +135,10 @@ export function PropertyPlaceholder({owner, schema, fieldRowId, available = true
     failed.current = false
     activate(target.dataset.placeholderMode === 'landed' ? 'landed' : 'active')
     editing.onFocus(event)
-    void focusBlock(ui, fieldRowId ?? owner.id, {edit: false, renderScopeId: scope})
+    void focusBlock(ui, owner.id, {edit: false, renderScopeId: scope})
   }
-  if (!available && mode === 'idle') return null
   return <div ref={element} contentEditable={mode === 'active'} data-placeholder-mode={mode} suppressContentEditableWarning tabIndex={-1} data-block-interaction="ignore" role="textbox" aria-label={`Enter ${schema.name}`} data-outline-placeholder-scope={scope}
-    data-property-placeholder={fieldRowId ?? schema.name} data-property-editing="true" data-placeholder="Enter value…"
+    data-property-placeholder={schema.name} data-property-editing="true" data-placeholder="Enter value…"
     onInput={event => { if (!(event.nativeEvent as InputEvent).isComposing) input() }}
     onCompositionEnd={input}
     className="empty:before:content-[attr(data-placeholder)] empty:before:pointer-events-none min-h-7 rounded-sm px-1 text-muted-foreground/60 outline-none focus:data-[placeholder-mode=active]:ring-1 focus:data-[placeholder-mode=active]:ring-ring focus:data-[placeholder-mode=landed]:bg-accent/40"
