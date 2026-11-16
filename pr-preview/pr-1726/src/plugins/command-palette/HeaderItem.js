@@ -1,1 +1,1 @@
-export{lM as CommandPaletteHeaderItem}from"../../../chunks/app-BFOaP4YV.js";
+export{eM as CommandPaletteHeaderItem}from"../../../chunks/app-CgiOJfX4.js";

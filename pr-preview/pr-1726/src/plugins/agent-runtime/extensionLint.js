@@ -1,1 +1,1 @@
-export{Kh as lintExtensionSource}from"../../../chunks/app-BFOaP4YV.js";
+export{tg as lintExtensionSource}from"../../../chunks/app-CgiOJfX4.js";

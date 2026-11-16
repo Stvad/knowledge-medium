@@ -1,1 +1,1 @@
-export{Vn as htmlDocumentActions}from"../../../chunks/app-BFOaP4YV.js";
+export{Vn as htmlDocumentActions}from"../../../chunks/app-CgiOJfX4.js";

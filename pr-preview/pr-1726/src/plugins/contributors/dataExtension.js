@@ -1,1 +1,1 @@
-export{OZ as contributorsDataExtension}from"../../../chunks/app-BFOaP4YV.js";
+export{WZ as contributorsDataExtension}from"../../../chunks/app-CgiOJfX4.js";

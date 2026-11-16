@@ -1,1 +1,1 @@
-export{FW as isIOS,IW as isMacPlatform}from"../../chunks/app-BFOaP4YV.js";
+export{EW as isIOS,DW as isMacPlatform}from"../../chunks/app-CgiOJfX4.js";

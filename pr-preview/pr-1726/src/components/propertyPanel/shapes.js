@@ -1,1 +1,1 @@
-export{QG as propertyShapeLabel}from"../../../chunks/app-BFOaP4YV.js";
+export{UG as propertyShapeLabel}from"../../../chunks/app-CgiOJfX4.js";

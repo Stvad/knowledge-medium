@@ -1,1 +1,1 @@
-export{QT as WorkspaceSettingsDialog}from"../../../chunks/app-BFOaP4YV.js";
+export{sE as WorkspaceSettingsDialog}from"../../../chunks/app-CgiOJfX4.js";

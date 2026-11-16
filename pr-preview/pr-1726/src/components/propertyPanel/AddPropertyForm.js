@@ -1,1 +1,1 @@
-export{PV as AddPropertyForm}from"../../../chunks/app-BFOaP4YV.js";
+export{TV as AddPropertyForm}from"../../../chunks/app-CgiOJfX4.js";

@@ -1,1 +1,1 @@
-export{EC as onboardingLanding}from"../../../chunks/app-BFOaP4YV.js";
+export{FC as onboardingLanding}from"../../../chunks/app-CgiOJfX4.js";

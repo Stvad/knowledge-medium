@@ -1,0 +1,1 @@
+export{jf as moveCommentToOwnThread}from"../../../chunks/app-CgiOJfX4.js";
