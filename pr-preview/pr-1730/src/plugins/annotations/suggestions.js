@@ -1,1 +1,1 @@
-export{Af as acceptSuggestion,jf as appliedContent,Mf as rejectSuggestion}from"../../../chunks/app-CY3MVvQQ.js";
+export{kf as acceptSuggestion,Af as appliedContent,jf as rejectSuggestion}from"../../../chunks/app-CPY_PfvJ.js";

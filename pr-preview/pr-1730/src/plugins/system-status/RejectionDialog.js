@@ -1,1 +1,1 @@
-export{Ec as RejectionDialog}from"../../../chunks/app-CY3MVvQQ.js";
+export{Tc as RejectionDialog}from"../../../chunks/app-CPY_PfvJ.js";

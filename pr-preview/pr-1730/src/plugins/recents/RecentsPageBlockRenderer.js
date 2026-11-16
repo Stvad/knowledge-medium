@@ -1,1 +1,1 @@
-export{GD as RecentsList,KD as RecentsPageBlockRenderer}from"../../../chunks/app-CY3MVvQQ.js";
+export{WD as RecentsList,GD as RecentsPageBlockRenderer}from"../../../chunks/app-CPY_PfvJ.js";

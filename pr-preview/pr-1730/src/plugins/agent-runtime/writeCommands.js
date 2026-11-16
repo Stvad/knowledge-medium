@@ -1,1 +1,1 @@
-export{eg as appendMarkdown,tg as contentEcho,ng as createPage,rg as editBlock,ig as parseAgentMarkdown,ag as renderAppendView}from"../../../chunks/app-CY3MVvQQ.js";
+export{$h as appendMarkdown,eg as contentEcho,tg as createPage,ng as editBlock,rg as parseAgentMarkdown,ig as renderAppendView}from"../../../chunks/app-CPY_PfvJ.js";

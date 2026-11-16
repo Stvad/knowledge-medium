@@ -1,1 +1,1 @@
-export{i_ as BlockRefError,a_ as resolveBlockRef}from"../../../../chunks/app-CY3MVvQQ.js";
+export{r_ as BlockRefError,i_ as resolveBlockRef}from"../../../../chunks/app-CPY_PfvJ.js";

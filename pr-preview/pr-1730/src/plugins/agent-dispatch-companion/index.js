@@ -1,1 +1,1 @@
-export{Nm as agentDispatchCompanionPlugin}from"../../../chunks/app-CY3MVvQQ.js";
+export{Mm as agentDispatchCompanionPlugin}from"../../../chunks/app-CPY_PfvJ.js";

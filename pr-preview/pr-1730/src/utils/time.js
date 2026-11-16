@@ -1,1 +1,1 @@
-export{KS as hmsToSeconds}from"../../chunks/app-CY3MVvQQ.js";
+export{GS as hmsToSeconds}from"../../chunks/app-CPY_PfvJ.js";

@@ -1,1 +1,1 @@
-export{TV as buildPropertyPanelSections}from"../../chunks/app-CY3MVvQQ.js";
+export{wV as buildPropertyPanelSections}from"../../chunks/app-CPY_PfvJ.js";

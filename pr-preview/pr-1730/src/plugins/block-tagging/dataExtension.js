@@ -1,1 +1,1 @@
-export{ju as blockTaggingDataExtension}from"../../../chunks/app-CY3MVvQQ.js";
+export{Au as blockTaggingDataExtension}from"../../../chunks/app-CPY_PfvJ.js";

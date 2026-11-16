@@ -1,1 +1,1 @@
-export{DN as ensureMetricsConsoleHook}from"../../chunks/app-CY3MVvQQ.js";
+export{EN as ensureMetricsConsoleHook}from"../../chunks/app-CPY_PfvJ.js";

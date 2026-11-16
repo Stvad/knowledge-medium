@@ -1,1 +1,1 @@
-export{Cg as addMedia}from"../../../chunks/app-CY3MVvQQ.js";
+export{Sg as addMedia}from"../../../chunks/app-CPY_PfvJ.js";
