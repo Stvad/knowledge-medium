@@ -1,1 +1,1 @@
-export{bat as getOrCreateTypesPage,xat as typesPageBlockId,Sat as typesPageSpec}from"../../chunks/app-D7ORsM55.js";
+export{bat as getOrCreateTypesPage,xat as typesPageBlockId,Sat as typesPageSpec}from"../../chunks/app-Cmi9FUTM.js";
