@@ -38,24 +38,6 @@ export const navigatePlaceholder = async (element: HTMLElement | string, scope: 
   return true
 }
 
-export const fieldPlaceholder = (fieldId: string, scope: string | undefined): HTMLElement | undefined =>
-  [...document.querySelectorAll<HTMLElement>('[data-property-placeholder]')].find(element =>
-    element.dataset.propertyPlaceholder === fieldId && element.dataset.outlinePlaceholderScope === scope && isVisibleElement(element))
-
-/** An explicit pick waits for its new row to render; ordinary block focus never does this. */
-export const focusPickedPlaceholder = (fieldId: string, scope: string | undefined, stillCurrent: () => boolean) => {
-  const focus = () => {
-    if (!stillCurrent()) return true
-    const target = fieldPlaceholder(fieldId, scope)
-    if (target) focusPlaceholder(target)
-    return !!target
-  }
-  if (focus()) return
-  const observer = new MutationObserver(() => { if (focus()) { observer.disconnect(); clearTimeout(deadline) } })
-  const deadline = setTimeout(() => observer.disconnect(), 5000)
-  observer.observe(document.body, {childList: true, subtree: true, attributes: true})
-}
-
 export const placeholderEscapeTarget = (element: HTMLElement, scope: string | undefined, ownerId: string): string | undefined => {
   if (!scope) return undefined
   const rows = rowsIn(scope)

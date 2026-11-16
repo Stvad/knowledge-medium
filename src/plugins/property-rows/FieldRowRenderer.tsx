@@ -1,7 +1,4 @@
 /** A property field arranges ordinary block content and children in columns. */
-import {memberCodecOf} from '@/data/api'
-import {isFieldValueChild} from '@/data/propertyChildren'
-import {PropertyPlaceholder} from './PropertyPlaceholder'
 import {useFocusWithin} from '@/hooks/focusedChild'
 import {useBlockContext} from '@/context/block'
 import type { BlockLayout, BlockLayoutContribution } from '@/extensions/blockInteraction'
@@ -22,8 +19,6 @@ const PropertyFieldLayout: BlockLayout = ({
 }) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
   const focused = useFocusWithin(block, useBlockContext().renderScopeId) === true
-  const definition = useFieldRowDefinition(block)
-  const values = useHandle(block.repo.query.children({id: block.id, propertyChildren: 'all'}), {selector: rows => rows?.filter(isFieldValueChild)})
   const mode = usePropertyDisplayMode(block)
   const soleChildId = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
     selector: children => children?.length === 1 ? children[0] : null,
@@ -53,8 +48,6 @@ const PropertyFieldLayout: BlockLayout = ({
           <CollapsibleContent forceMount={focused || undefined} hidden={isCollapsed && !focused} className="min-w-0" data-property-value-cell="true">
             <PropertyFieldRowContext value={block.id}>
               <Children/>
-              {!block.repo.isReadOnly && definition?.schema && values &&
-                <PropertyPlaceholder owner={block.repo.block(block.peek()!.parentId!)} schema={definition.schema} fieldRowId={block.id} available={values.length === 0 || !!memberCodecOf(definition.schema.codec)}/>}
             </PropertyFieldRowContext>
           </CollapsibleContent>
         </div>

@@ -1,20 +1,18 @@
-import type {Block} from '@/data/block'
-import {ChangeScope, memberCodecOf, type AnyPropertySchema} from '@/data/api'
-import {fieldRowDefinition} from './fieldRow'
+import {Block} from '@/data/block'
+import {ChangeScope, type AnyPropertySchema} from '@/data/api'
 import {EditorState} from '@codemirror/state'
-import {closeCompletion, completionStatus, type CompletionSource} from '@codemirror/autocomplete'
+import {closeCompletion, type CompletionSource} from '@codemirror/autocomplete'
 import {EditorView} from '@codemirror/view'
 import type {CodeMirrorExtensionContribution, CodeMirrorExtensionContext} from '@/editor/codeMirrorExtensions'
 import {flushEditorContent} from '@/editor/contentFlush'
 import {canConvertEmptyChildBlockToProperty} from '@/utils/propertyCreation'
 import {choosePropertyField, createPropertyField} from '@/data/propertyRowCreation'
-import {exitEditModeForBlock, peekFocusedBlockLocation, sameFocusedBlockLocation, uiStateRenderScopeId, focusBlock} from '@/data/properties'
+import {exitEditModeForBlock, peekFocusedBlockLocation, sameFocusedBlockLocation, uiStateRenderScopeId} from '@/data/properties'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {isPropertyPickerName} from '@/components/propertyPanel/visibility'
 import {propertyEditorOverridesFacet} from '@/data/facets'
 
 import {showError} from '@/utils/toast'
-import {fieldPlaceholder, focusPlaceholder, focusPickedPlaceholder} from '@/utils/outlinePlaceholderNavigation'
 
 export const OUTLINE_PROPERTY_PRESET_ID = 'string'
 type PropertyChoice =
@@ -34,11 +32,8 @@ const focusChoice = async (context: CodeMirrorExtensionContext & {block: Block},
   const {repo, block, uiStateBlock, renderScopeId} = context
   if (!target || !uiStateBlock || !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), {blockId: block.id, renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, block.id)})) return
   await exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
-  if (target.valueId) await enterEditModeForBlock(repo.block(target.valueId), uiStateBlock, renderScopeId)
-  else {
-    await focusBlock(uiStateBlock, target.fieldRowId, {edit: false, renderScopeId})
-    focusPickedPlaceholder(target.fieldRowId, renderScopeId, () => sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), {blockId: target.fieldRowId, renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, target.fieldRowId)}))
-  }
+  const valueId = target.valueId ?? await repo.mutate.createChild({parentId: target.fieldRowId, revealParent: true})
+  await enterEditModeForBlock(repo.block(valueId), uiStateBlock, renderScopeId)
 }
 
 export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): CompletionSource => async context => {
@@ -59,29 +54,16 @@ export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): Co
   if (!candidates.length) return null
   return {from: 0, filter: false, options: candidates.map(candidate => ({label: candidate.label, apply: (view: EditorView) => {
     closeCompletion(view)
-    return convertChoice(repo.block(source.parentId!), block, candidate, text, view)
-      .then(target => focusChoice({...editor, block}, target))
+    return repo.undoGroup(async grouped => {
+      const target = await convertChoice(new Block(grouped, source.parentId!), new Block(grouped, block.id), candidate, text, view)
+      await focusChoice({...editor, repo: grouped, block}, target)
+    })
       .catch(error => showError(error instanceof Error ? error.message : 'Could not add property'))
   }}))}
 }
 
-export const handlePropertyValueEnter = (context: CodeMirrorExtensionContext, event: KeyboardEvent, view: EditorView): boolean => {
-    const {block, repo, uiStateBlock, renderScopeId} = context
-    if (event.key !== 'Enter' || event.defaultPrevented || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || repo.isReadOnly || !uiStateBlock) return false
-    if (completionStatus(view.state) === 'active') return false
-    if (!view.state.selection.main.empty || view.state.selection.main.head !== view.state.doc.length) return false
-    const parent = repo.cache.getSnapshot(block!.peek()?.parentId ?? '')
-    const field = fieldRowDefinition(repo, repo.propertyDefinitions, parent)
-    if (!field?.schema || !memberCodecOf(field.schema.codec)) return false
-    const placeholder = fieldPlaceholder(parent!.id, renderScopeId)
-    if (!placeholder) return false
-    event.preventDefault(); event.stopPropagation(); flushEditorContent(view)
-    focusPlaceholder(placeholder)
-    return true
-}
 export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {
   if (!context.block) return []
   const source = propertyCompletionSource(context)
-  return [EditorState.languageData.of(() => [{autocomplete: source}]),
-    EditorView.domEventHandlers({keydown: (event, view) => handlePropertyValueEnter(context, event, view)})]
+  return [EditorState.languageData.of(() => [{autocomplete: source}])]
 }

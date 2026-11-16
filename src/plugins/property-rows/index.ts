@@ -1,8 +1,7 @@
 import {drawsPropertyRows} from './fieldRow'
 import {actionDispatchWrap} from '@/shortcuts/actionDispatch'
 import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
-import {structuralEditPolicyForBlock} from '@/data/structuralEditPolicy'
-import {fieldPlaceholder, focusPlaceholder, navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
+import {navigatePlaceholder} from '@/utils/outlinePlaceholderNavigation'
 import {placeholderMoves} from './placeholderKeys'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
@@ -48,14 +47,6 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
       if (!await navigatePlaceholder(block.id, renderScopeId, direction, uiStateBlock, false)) await next(deps, trigger)
     },
   }, {source: SOURCE})),
-  actionDispatchWrap({actionId: 'create_block_below_and_edit', context: ActionContextTypes.NORMAL_MODE,
-    wrap: async (deps, trigger, next) => {
-      const blockDeps = deps as BlockShortcutDependencies
-      const placeholder = fieldPlaceholder(blockDeps.block.id, blockDeps.renderScopeId)
-      if (placeholder && (await structuralEditPolicyForBlock(blockDeps.block, blockDeps)).createBelowPlacement === 'child-first') focusPlaceholder(placeholder)
-      else await next(deps, trigger)
-    },
-  }, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
   blockChildrenFooterFacet.of(context => drawsPropertyRows(context.blockContext) ? ExpectedPropertyRows : null, {source: SOURCE, precedence: -100}),
   blockLayoutFacet.of(fieldRowLayoutContribution, {source: SOURCE, precedence: -100}),
