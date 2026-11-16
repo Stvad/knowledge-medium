@@ -4610,12 +4610,11 @@ export class Repo {
   }
 
   private async reprojectResolvedPropertyValues(valueIds: readonly string[], workspaceId: string): Promise<void> {
-    for (let start = 0; start < valueIds.length; start += 200) {
-      await this.tx(async tx => {
-        if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
-        tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds: valueIds.slice(start, start + 200)}, workspaceId)
-      }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
-    }
+    if (valueIds.length === 0) return
+    await this.tx(async tx => {
+      if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
+      tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds}, workspaceId)
+    }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
