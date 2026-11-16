@@ -1,0 +1,1 @@
+export{GS as default}from"../../../chunks/app-CY3MVvQQ.js";

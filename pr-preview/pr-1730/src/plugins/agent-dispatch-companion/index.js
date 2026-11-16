@@ -1,0 +1,1 @@
+export{Nm as agentDispatchCompanionPlugin}from"../../../chunks/app-CY3MVvQQ.js";

@@ -1,0 +1,1 @@
+export{bv as groupedBacklinksPlugin}from"../../../chunks/app-CY3MVvQQ.js";

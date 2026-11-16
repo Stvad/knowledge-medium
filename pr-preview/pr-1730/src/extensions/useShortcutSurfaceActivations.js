@@ -1,0 +1,1 @@
+export{HR as useShortcutSurfaceActivations}from"../../chunks/app-CY3MVvQQ.js";

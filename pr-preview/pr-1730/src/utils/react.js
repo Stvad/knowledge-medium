@@ -1,0 +1,1 @@
+export{UL as useIsMobile,WL as usePointerCoarse}from"../../chunks/app-CY3MVvQQ.js";

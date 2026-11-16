@@ -1,0 +1,1 @@
+export{of as quotedInFooterContribution}from"../../../chunks/app-CY3MVvQQ.js";

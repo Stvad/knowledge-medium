@@ -1,0 +1,1 @@
+export{BJ as geoDataExtension}from"../../../chunks/app-CY3MVvQQ.js";

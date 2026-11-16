@@ -1,0 +1,1 @@
+export{ku as BlockTagsConfigEditor}from"../../../chunks/app-CY3MVvQQ.js";

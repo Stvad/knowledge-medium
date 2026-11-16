@@ -1,0 +1,1 @@
+export{Kh as lintExtensionSource}from"../../../chunks/app-CY3MVvQQ.js";

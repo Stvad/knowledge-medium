@@ -1,0 +1,1 @@
+export{_6 as kernelDataExtension}from"../../chunks/app-CY3MVvQQ.js";

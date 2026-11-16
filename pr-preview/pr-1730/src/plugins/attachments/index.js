@@ -1,0 +1,1 @@
+export{Ub as attachmentsPlugin}from"../../../chunks/app-CY3MVvQQ.js";

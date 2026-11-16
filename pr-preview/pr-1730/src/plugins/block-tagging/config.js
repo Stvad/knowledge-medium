@@ -1,0 +1,1 @@
+export{Mu as blockTaggingPrefsType,Nu as blockTagsConfigCodec,Pu as blockTagsConfigPresetCore,Fu as blockTagsConfigProp,Iu as isValidTagName,Lu as normalizeBlockTagsConfig,Ru as selectableTagNames,zu as tagNameIssue}from"../../../chunks/app-CY3MVvQQ.js";

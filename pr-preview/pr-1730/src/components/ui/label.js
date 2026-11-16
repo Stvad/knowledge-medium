@@ -1,0 +1,1 @@
+export{ok as Label}from"../../../chunks/app-CY3MVvQQ.js";

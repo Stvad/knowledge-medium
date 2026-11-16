@@ -1,0 +1,1 @@
+export{fv as updateIndicatorPlugin}from"../../../chunks/app-CY3MVvQQ.js";

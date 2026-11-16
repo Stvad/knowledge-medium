@@ -1,0 +1,1 @@
+export{Fz as ExtensionRenderBoundary}from"../../chunks/app-CY3MVvQQ.js";

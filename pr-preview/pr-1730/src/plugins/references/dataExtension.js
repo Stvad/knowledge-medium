@@ -1,0 +1,1 @@
+export{gq as referencesDataExtension}from"../../../chunks/app-CY3MVvQQ.js";

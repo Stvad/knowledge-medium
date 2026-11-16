@@ -1,0 +1,1 @@
+export{VS as videoPlayerPlugin}from"../../../chunks/app-CY3MVvQQ.js";

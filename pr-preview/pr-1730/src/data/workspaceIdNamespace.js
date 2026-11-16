@@ -1,0 +1,1 @@
+export{kat as DerivedIdNamespaceUnavailableError,Aat as derivedIdNamespaceInTx,jat as resolveDerivedIdNamespace}from"../../chunks/app-CY3MVvQQ.js";

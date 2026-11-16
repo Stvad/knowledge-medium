@@ -1,0 +1,1 @@
+export{wm as contributorsPlugin}from"../../../chunks/app-CY3MVvQQ.js";

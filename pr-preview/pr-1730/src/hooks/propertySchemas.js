@@ -1,0 +1,1 @@
+export{KG as usePropertySchemas}from"../../chunks/app-CY3MVvQQ.js";

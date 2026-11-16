@@ -1,0 +1,1 @@
+export{vc as REMATERIALIZE_WORKSPACE_ACTION_ID,yc as rematerializeWorkspaceAction,bc as rematerializeWorkspaceActionContribution}from"../../../chunks/app-CY3MVvQQ.js";
