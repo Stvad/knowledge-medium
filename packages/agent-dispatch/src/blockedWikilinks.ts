@@ -126,11 +126,12 @@ interface DeleteGuardRow {
   id: string
   content?: string
   properties?: Record<string, unknown>
-  /** A property row, whose children are its values. */
+  /** A property row, whose children are its values. Its own content is a
+   *  marker naming the property, checked like any row. */
   fieldForm: boolean
-  /** Not checked: a property row, or a value under one. Its owner's
-   *  properties hold the same value and are checked there, attribution left
-   *  out. What is written under a value is checked like any block. */
+  /** Not checked: a value under a property row. Its owner's properties hold
+   *  the same value and are checked there, attribution left out. What is
+   *  written under a value is checked like any block. */
   skip: boolean
 }
 
@@ -139,7 +140,7 @@ const deleteGuardRowFromSqlRow = (row: unknown, underFieldRow: boolean): DeleteG
   const {id, is_field_form} = row as {id?: unknown, is_field_form?: unknown}
   if (typeof id !== 'string') return null
   const fieldForm = is_field_form === 1
-  return {id, ...refsFromSqlRow(row), fieldForm, skip: fieldForm || underFieldRow}
+  return {id, ...refsFromSqlRow(row), fieldForm, skip: underFieldRow}
 }
 
 export const createBlockedWikilinkWriteGuard = (
