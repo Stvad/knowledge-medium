@@ -1,1 +1,1 @@
-export{tO as useMinuteClock}from"../../chunks/app-Qy__5D9g.js";
+export{tO as useMinuteClock}from"../../chunks/app-CAycEw2f.js";
