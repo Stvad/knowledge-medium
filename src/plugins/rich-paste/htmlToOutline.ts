@@ -166,11 +166,6 @@ const MARKDOWN_OPTIONS: ToMarkdownOptions = {
   // break — the same thing Shift+Enter types — where markdown's `\` hard
   // break would show its backslash in the editor.
   handlers: {break: () => '\n'},
-  // The serializer spells the character beside emphasis or strikethrough as
-  // a reference when it must (the `A` of `A**!**`), but only after escaping
-  // the text, so a backslash before it would escape the `&` instead (an
-  // upstream bug). The class is every attention marker it writes.
-  unsafe: [{character: '\\', after: '.[*_~]', unicode: true}],
 }
 
 const markdown = (node: Nodes): string =>

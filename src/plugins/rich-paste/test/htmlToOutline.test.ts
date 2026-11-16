@@ -251,7 +251,7 @@ describe('convertClipboardHtml: content', () => {
 
   it('unwraps markup nested in the same markup', () => {
     expect(outline('<h1>T</h1><p><del><a href="#x"><del>struck</del></a></del> <b>a <i><b>b</b></i></b></p>'))
-      .toEqual(['# T', '  ~~struck~~ **a *b***'])
+      .toEqual(['# T', '  ~~struck~~ **a _b_**'])
   })
 
   it('escapes text left touching by what it drops, as one text', () => {
