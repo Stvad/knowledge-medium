@@ -58,9 +58,8 @@ describe('resolveWorkspaceCwd', () => {
   beforeEach(async () => { parent = await fsp.mkdtemp(path.join(os.tmpdir(), 'km-ws-cwd-')) })
   afterEach(async () => { await fsp.rm(parent, {recursive: true, force: true}) })
 
-  it('creates the folder and names it by its real path', async () => {
+  it('creates the folder, and the root on a watcher\'s first run, and names it by its real path', async () => {
     const root = path.join(parent, 'root')
-    await fsp.mkdir(root)
     const cwd = await resolveWorkspaceCwd(root, workspaceThreadDir(root, 'b1'))
     expect(cwd).toBe(path.join(await fsp.realpath(root), 'threads', 'b1'))
     expect((await fsp.stat(cwd)).isDirectory()).toBe(true)

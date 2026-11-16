@@ -40,6 +40,7 @@ export const workspaceThreadDir = (root: string, threadId: string): string => {
  *  later run starts there, and the working directory is what the file tools and the
  *  sandbox trust. Returns the real path so the spawn cannot follow a later swap. */
 export const resolveWorkspaceCwd = async (root: string, cwd: string): Promise<string> => {
+  await fsp.mkdir(root, {recursive: true})
   const expected = path.join(await fsp.realpath(root), path.relative(root, cwd))
   await fsp.mkdir(cwd, {recursive: true})
   const real = await fsp.realpath(cwd)
@@ -105,7 +106,7 @@ export const workspaceSettings = ({root, allowedDomains}: RunWorkspace, credenti
  *  not reach it. */
 const PASSED_ENV = [
   'HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', '__CF_USER_TEXT_ENCODING',
-  'CLAUDE_CONFIG_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS',
+  'CLAUDE_CONFIG_DIR', 'NODE_EXTRA_CA_CERTS',
 ]
 
 /** `credentialEnv`: variables to pass as well, such as an API key the run bills to. */
