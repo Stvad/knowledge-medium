@@ -495,6 +495,11 @@ export const createEngine = (deps: EngineDeps) => {
         })
       }
 
+      type Step = {label: string, startedAt: number}
+      const seenSteps = new Set<string>()
+      const pendingSteps = new Map<string, Step>()
+      const lastPendingStep = () => [...pendingSteps.values()].at(-1)
+      const writeActivity = (step: Step) => queueWrite(() => graph.setActivity(sourceId, step.label, step.startedAt))
       let lastTextWriteMs = 0
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
@@ -503,8 +508,23 @@ export const createEngine = (deps: EngineDeps) => {
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
-          const startedAt = now()
-          queueWrite(() => graph.setActivity(sourceId, event.label, startedAt))
+          const step = {label: event.label, startedAt: now()}
+          // One owner for both runners: duplicate reports cannot restart a
+          // step, and completing a parallel call cannot age another from zero.
+          if (event.stepId === undefined) {
+            if (pendingSteps.size > 0) return
+          } else {
+            if (seenSteps.has(event.stepId)) return
+            seenSteps.add(event.stepId)
+            pendingSteps.set(event.stepId, step)
+          }
+          writeActivity(step)
+        } else if (event.kind === 'activity-end') {
+          const previous = lastPendingStep()
+          pendingSteps.delete(event.stepId)
+          const next = lastPendingStep()
+          if (next === previous) return
+          writeActivity(next ?? {label: 'Thinking', startedAt: now()})
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text

@@ -4,6 +4,7 @@ import {parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, ReplyWriter} from '../src/graph'
 import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
+import {createCodexJsonlParser} from '../src/codexRunner'
 import {activityStateFor, chipStateFor} from '../../../src/plugins/agent-dispatch-companion/chipState'
 import type {StateStore} from '../src/state'
 import type {MemoryEntry} from '../src/memory'
@@ -1541,6 +1542,70 @@ describe('mention lifecycle', () => {
 })
 
 describe('live progress streaming', () => {
+  it.each(['claude', 'codex'] as const)('%s restores an outstanding parallel tool with its original age', async executor => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      const parser = executor === 'claude' ? createStreamJsonParser(options.onEvent) : createCodexJsonlParser(options.onEvent)
+      const start = (id: string) => parser.feed(`${JSON.stringify(executor === 'claude'
+        ? {type: 'assistant', message: {content: [{type: 'tool_use', id, name: 'mcp__km__comments'}]}}
+        : {type: 'item.started', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
+      const end = (id: string) => parser.feed(`${JSON.stringify(executor === 'claude'
+        ? {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: id, content: 'result'}]}}
+        : {type: 'item.completed', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
+      start('slow-tool')
+      clock += 5_000
+      start('slow-tool') // A repeated report is not a new start.
+      clock += 5_000
+      start('quick-tool')
+      clock += 2_000
+      end('quick-tool')
+      end('quick-tool')
+      options.onEvent?.({kind: 'activity', label: 'Thinking'})
+      clock += 70_000
+      end('slow-tool')
+      end('slow-tool')
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: comments', nowMs: NOW},
+      {id: 'b-1', label: 'km: comments', nowMs: NOW + 10_000},
+      {id: 'b-1', label: 'km: comments', nowMs: NOW},
+      {id: 'b-1', label: 'Thinking', nowMs: NOW + 82_000},
+    ])
+    const restored = activityWrites[2]
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': restored.label, 'agent:activity-at': restored.nowMs})!
+    expect(activityStateFor(chip, NOW + 70_000)).toMatchObject({stalled: true})
+  })
+
+  it('keeps the latest tool age when an earlier parallel tool completes first', async () => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: comments', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 10_000},
+      {id: 'b-1', label: 'Thinking', nowMs: NOW + 30_000},
+    ])
+  })
+
   it('does not warn of bridge trouble after a completed tool while Claude thinks', async () => {
     const {graph, activityWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},

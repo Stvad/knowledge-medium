@@ -161,19 +161,15 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
     return 'Using a tool'
   }
 
-  const seenActivityItems = new Set<string>()
-  const activityForItem = (item: Record<string, unknown>) => {
-    // Updates and completions must not restart an item's age.
-    const id = item.id
-    if (typeof id === 'string') {
-      if (seenActivityItems.has(id)) return
-      seenActivityItems.add(id)
-    }
+  const activityForItem = (item: Record<string, unknown>, completed: boolean) => {
     const type = item.type
-    if (type === 'command_execution') emit({kind: 'activity', label: 'Running a command'})
-    else if (type === 'web_search') emit({kind: 'activity', label: 'Searching the web'})
-    else if (type === 'mcp_tool_call') emit({kind: 'activity', label: mcpToolActivityLabel(item)})
-    else if (type === 'reasoning') emit({kind: 'activity', label: 'Thinking'})
+    const label = type === 'command_execution' ? 'Running a command'
+      : type === 'web_search' ? 'Searching the web'
+        : type === 'mcp_tool_call' ? mcpToolActivityLabel(item)
+          : type === 'reasoning' ? 'Thinking' : null
+    if (label === null) return
+    emit({kind: 'activity', label, ...(typeof item.id === 'string' ? {stepId: item.id} : {})})
+    if (completed && typeof item.id === 'string') emit({kind: 'activity-end', stepId: item.id})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -206,7 +202,7 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
         }
         return
       }
-      activityForItem(itemRecord)
+      activityForItem(itemRecord, type === 'item.completed')
       return
     }
 

@@ -120,7 +120,10 @@ describe('createCodexJsonlParser', () => {
       {server: '', tool: 'mcp__km__comments'},
       {server: 'km', toolName: 'comments'},
       {server: 'km', tool: ''},
+      {server: 'km', tool: ['comments']},
+      {server: 'km'},
       {server: 42, tool: 'mcp__km__comments'},
+      {id: 42, server: 'km', tool: 'comments'},
       {},
     ]) parser.feed(line({type: 'item.completed', item: {type: 'mcp_tool_call', ...fields}}))
     expect(events).toEqual([
@@ -128,12 +131,15 @@ describe('createCodexJsonlParser', () => {
       {kind: 'activity', label: 'km: comments'},
       {kind: 'activity', label: 'km: comments'},
       {kind: 'activity', label: 'km'},
+      {kind: 'activity', label: 'km'},
+      {kind: 'activity', label: 'km'},
+      {kind: 'activity', label: 'km: comments'},
       {kind: 'activity', label: 'km: comments'},
       {kind: 'activity', label: 'Using a tool'},
     ])
   })
 
-  it('emits consecutive same-label tool starts once per item, ignoring updates and completions', () => {
+  it('preserves step ids across repeated reports and emits completion for each completed item', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))
     for (const id of ['tool-1', 'tool-2']) {
@@ -143,8 +149,14 @@ describe('createCodexJsonlParser', () => {
       }
     }
     expect(events).toEqual([
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km: comments'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity-end', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity-end', stepId: 'tool-2'},
     ])
   })
 
@@ -222,10 +234,15 @@ describe('createCodexJsonlParser', () => {
 
     expect(events).toEqual([
       {kind: 'session', sessionId: 't1'},
-      {kind: 'activity', label: 'Thinking'},
-      {kind: 'activity', label: 'Running a command'},
-      {kind: 'activity', label: 'Searching the web'},
-      {kind: 'activity', label: 'km: search'},
+      {kind: 'activity', label: 'Thinking', stepId: 'item_1'},
+      {kind: 'activity', label: 'Thinking', stepId: 'item_1'},
+      {kind: 'activity-end', stepId: 'item_1'},
+      {kind: 'activity', label: 'Running a command', stepId: 'item_2'},
+      {kind: 'activity-end', stepId: 'item_2'},
+      {kind: 'activity', label: 'Searching the web', stepId: 'item_3'},
+      {kind: 'activity-end', stepId: 'item_3'},
+      {kind: 'activity', label: 'km: search', stepId: 'item_4'},
+      {kind: 'activity-end', stepId: 'item_4'},
       {kind: 'text', text: 'done'},
     ])
     expect(parser.finish()).toMatchObject({resultText: 'done', sawTurnCompleted: true, failed: false})

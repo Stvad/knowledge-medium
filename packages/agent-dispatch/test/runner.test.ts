@@ -92,46 +92,37 @@ describe('scrubEnv', () => {
 describe('createStreamJsonParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
-  it('moves from the last tool to thinking on its result, without resetting on other or repeated results', () => {
+  it('normalizes tool reports by step id and ends valid tool results without synthesizing Thinking', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))
-    const tool = (id: string) => parser.feed(line({type: 'assistant', message: {content: [
-      {type: 'tool_use', id, name: 'mcp__km__comments'},
-    ]}}))
+    const tool = (id: string | number) => {
+      const item = {type: 'tool_use', id, name: 'mcp__km__comments'}
+      parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: item}}))
+      parser.feed(line({type: 'assistant', message: {content: [item]}}))
+    }
     const result = (id: string | null) => parser.feed(line({type: 'user', message: {content: [
       null, {type: 'tool_result', tool_use_id: id, content: 'result'},
     ]}}))
     tool('tool-1')
     tool('tool-2')
+    parser.feed(line({type: 'user', message: {content: [
+      null,
+      {type: 'tool_result', tool_use_id: 42, content: 'bad id'},
+      {type: 'text', tool_use_id: 'tool-1'},
+      {type: 'tool_result', content: 'missing id'},
+    ]}}))
     result('tool-1')
-    expect(events).toEqual([
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km: comments'},
-    ])
-    parser.feed(line({type: 'user', message: {content: [null, 'text', {type: 'text', tool_use_id: 'tool-2'}]}}))
-    expect(events).toHaveLength(2)
+    result('tool-1')
     result('tool-2')
-    result('tool-2')
-    result(null)
-    // A replayed finalized tool message must not re-arm an already completed call.
-    tool('tool-2')
-    result('tool-2')
+    tool(42)
     expect(events).toEqual([
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'km: comments'},
-      {kind: 'activity', label: 'Thinking'},
-    ])
-  })
-
-  it('emits distinct same-label tool starts once each across partial and finalized messages', () => {
-    const events: RunEvent[] = []
-    const parser = createStreamJsonParser(event => events.push(event))
-    for (const id of ['tool-1', 'tool-2']) {
-      const tool = {type: 'tool_use', id, name: 'mcp__km__comments'}
-      parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: tool}}))
-      parser.feed(line({type: 'assistant', message: {content: [tool]}}))
-    }
-    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity-end', stepId: 'tool-1'},
+      {kind: 'activity-end', stepId: 'tool-1'},
+      {kind: 'activity-end', stepId: 'tool-2'},
       {kind: 'activity', label: 'km: comments'},
       {kind: 'activity', label: 'km: comments'},
     ])

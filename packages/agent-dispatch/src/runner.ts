@@ -23,7 +23,8 @@ import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSa
  *  they last saw. */
 export type RunEvent =
   | {kind: 'session', sessionId: string}
-  | {kind: 'activity', label: string}
+  | {kind: 'activity', label: string, stepId?: string}
+  | {kind: 'activity-end', stepId: string}
   | {kind: 'text', text: string}
 
 /** What the engine sets for a run whichever executor it dispatches to.
@@ -249,20 +250,11 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
     }
   }
 
-  const seenToolUses = new Set<string>()
-  let activeToolId: string | null = null
   const activityForToolUse = (toolUse: Record<string, unknown>) => {
     const name = typeof toolUse.name === 'string' ? toolUse.name : null
     if (!name) return
-    // Partial and finalized messages describe the same tool use; only a new
-    // tool id starts a step, even when consecutive tools share a name.
-    const id = typeof toolUse.id === 'string' ? toolUse.id : null
-    if (id !== null) {
-      if (seenToolUses.has(id)) return
-      seenToolUses.add(id)
-    }
-    activeToolId = id
-    emit({kind: 'activity', label: humanizeToolName(name)})
+    emit({kind: 'activity', label: humanizeToolName(name),
+      ...(typeof toolUse.id === 'string' ? {stepId: toolUse.id} : {})})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -281,10 +273,10 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
       const message = line.message as {content?: unknown} | undefined
       const content = Array.isArray(message?.content) ? message?.content : []
       if (type === 'user') {
-        if (activeToolId !== null && content.some(item =>
-          isRecord(item) && item.type === 'tool_result' && item.tool_use_id === activeToolId)) {
-          activeToolId = null
-          emit({kind: 'activity', label: 'Thinking'})
+        for (const item of content) {
+          if (isRecord(item) && item.type === 'tool_result' && typeof item.tool_use_id === 'string') {
+            emit({kind: 'activity-end', stepId: item.tool_use_id})
+          }
         }
         return
       }
