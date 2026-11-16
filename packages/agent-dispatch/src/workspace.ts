@@ -38,22 +38,26 @@ export const workspaceThreadDir = (root: string, threadId: string): string => {
 /** Creates the run's folder one level at a time from the root down, refusing any level
  *  that is not a real folder: a run can swap the root, `threads/` or a thread's folder
  *  for a link before a later run starts there, and the working directory is what the
- *  file tools and the sandbox trust. Returns the real path, for the spawn and for the
- *  check that the run started there (runner.ts). The refusal names no local path: it
- *  becomes a synced reply. */
+ *  file tools and the sandbox trust. Returns the folder's real path, derived from the
+ *  root's parent, which no run can write, so a swap after the check cannot change it:
+ *  the spawn uses it, and runner.ts stops a run that reports starting anywhere else.
+ *  The refusal names no local path: it becomes a synced reply. */
 export const resolveWorkspaceCwd = async (root: string, cwd: string): Promise<string> => {
   await fsp.mkdir(path.dirname(root), {recursive: true})
   const levels = path.relative(root, cwd).split(path.sep).filter(Boolean)
+  const refuse = (dir: string) =>
+    new Error(`workspace: ${path.relative(path.dirname(root), dir)} is not a real folder; a run may have replaced it with a link`)
   for (let depth = 0; depth <= levels.length; depth += 1) {
     const dir = path.join(root, ...levels.slice(0, depth))
     await fsp.mkdir(dir).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'EEXIST') throw error
     })
-    if (!(await fsp.lstat(dir)).isDirectory()) {
-      throw new Error(`workspace: ${path.relative(path.dirname(root), dir)} is not a real folder; a run may have replaced it with a link`)
-    }
+    if (!(await fsp.lstat(dir)).isDirectory()) throw refuse(dir)
   }
-  return fsp.realpath(cwd)
+  const expected = path.join(await fsp.realpath(path.dirname(root)), path.basename(root), ...levels)
+  // Defence in depth: a swap racing the walk above, which no test can schedule.
+  if (await fsp.realpath(cwd) !== expected) throw refuse(cwd)
+  return expected
 }
 
 /** What must exist before a workspace run spawns: its private temp dir and its folder
