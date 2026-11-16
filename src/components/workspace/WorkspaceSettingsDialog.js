@@ -1,1 +1,1 @@
-export{ZT as WorkspaceSettingsDialog}from"../../../chunks/app-CSntpKO5.js";
+export{QT as WorkspaceSettingsDialog}from"../../../chunks/app-DokRHCWM.js";

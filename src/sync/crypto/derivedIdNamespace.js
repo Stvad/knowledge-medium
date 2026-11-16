@@ -1,1 +1,1 @@
-export{sot as deriveWorkspaceIdNamespace}from"../../../chunks/app-CSntpKO5.js";
+export{lot as deriveWorkspaceIdNamespace}from"../../../chunks/app-DokRHCWM.js";

@@ -1,1 +1,1 @@
-export{VP as HotkeyReconciler}from"../../chunks/app-CSntpKO5.js";
+export{HP as HotkeyReconciler}from"../../chunks/app-DokRHCWM.js";

@@ -1,1 +1,1 @@
-export{HS as videoPlayerPlugin}from"../../../chunks/app-CSntpKO5.js";
+export{US as videoPlayerPlugin}from"../../../chunks/app-DokRHCWM.js";

@@ -1,1 +1,1 @@
-export{qG as usePropertySchemas}from"../../chunks/app-CSntpKO5.js";
+export{JG as usePropertySchemas}from"../../chunks/app-DokRHCWM.js";

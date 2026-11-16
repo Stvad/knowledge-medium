@@ -1,1 +1,1 @@
-export{S2 as Input}from"../../../chunks/app-CSntpKO5.js";
+export{w2 as Input}from"../../../chunks/app-DokRHCWM.js";

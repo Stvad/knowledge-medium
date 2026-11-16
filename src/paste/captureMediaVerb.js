@@ -1,1 +1,1 @@
-export{MR as captureMediaVerb}from"../../chunks/app-CSntpKO5.js";
+export{NR as captureMediaVerb}from"../../chunks/app-DokRHCWM.js";

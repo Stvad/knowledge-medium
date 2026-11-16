@@ -1,1 +1,1 @@
-export{KI as ExtensionLoadErrorStore,qI as ExtensionLoadErrorsProvider,JI as useExtensionLoadError,YI as useExtensionLoadErrors}from"../../chunks/app-CSntpKO5.js";
+export{qI as ExtensionLoadErrorStore,JI as ExtensionLoadErrorsProvider,YI as useExtensionLoadError,XI as useExtensionLoadErrors}from"../../chunks/app-DokRHCWM.js";

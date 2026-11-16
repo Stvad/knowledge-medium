@@ -1,1 +1,1 @@
-export{Mm as agentDispatchCompanionPlugin}from"../../../chunks/app-CSntpKO5.js";
+export{Mm as agentDispatchCompanionPlugin}from"../../../chunks/app-DokRHCWM.js";

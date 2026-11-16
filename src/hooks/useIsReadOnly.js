@@ -1,1 +1,1 @@
-export{db as useIsReadOnly}from"../../chunks/app-CSntpKO5.js";
+export{fb as useIsReadOnly}from"../../chunks/app-DokRHCWM.js";

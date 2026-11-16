@@ -1,1 +1,1 @@
-export{sF as dynamicExtensionsExtension}from"../../chunks/app-CSntpKO5.js";
+export{cF as dynamicExtensionsExtension}from"../../chunks/app-DokRHCWM.js";

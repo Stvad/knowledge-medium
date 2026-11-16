@@ -1,1 +1,1 @@
-export{oh as agentRuntimeBridgeRestartEvent,sh as bridgeUrl,ch as isLoopbackBridgeUrl,lh as processBridgePairingFromHash,uh as startAgentRuntimeBridge}from"../../../chunks/app-CSntpKO5.js";
+export{sh as agentRuntimeBridgeRestartEvent,ch as bridgeUrl,lh as isLoopbackBridgeUrl,uh as processBridgePairingFromHash,dh as startAgentRuntimeBridge}from"../../../chunks/app-DokRHCWM.js";

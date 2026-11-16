@@ -1,1 +1,1 @@
-export{HF as LazyBlockComponent}from"../../chunks/app-CSntpKO5.js";
+export{UF as LazyBlockComponent}from"../../chunks/app-DokRHCWM.js";

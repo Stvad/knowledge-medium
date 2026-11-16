@@ -1,1 +1,1 @@
-export{BW as withMoveTransition}from"../../chunks/app-CSntpKO5.js";
+export{VW as withMoveTransition}from"../../chunks/app-DokRHCWM.js";

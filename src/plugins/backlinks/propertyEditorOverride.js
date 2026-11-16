@@ -1,1 +1,1 @@
-export{Wv as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-CSntpKO5.js";
+export{Gv as dailyNoteBacklinksDefaultsUi}from"../../../chunks/app-DokRHCWM.js";
