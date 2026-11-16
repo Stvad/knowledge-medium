@@ -1,0 +1,1 @@
+export{B_ as DATA_MODEL_GUIDE,V_ as dataModelGuide}from"../../../chunks/app-D7ORsM55.js";

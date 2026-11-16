@@ -1,0 +1,1 @@
+export{gq as REFERENCES_TARGET_INVALIDATION_CHANNEL,_q as referencesInvalidationRule}from"../../../chunks/app-D7ORsM55.js";

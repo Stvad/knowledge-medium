@@ -1,0 +1,1 @@
+export{g6 as kernelDataExtension}from"../../chunks/app-D7ORsM55.js";

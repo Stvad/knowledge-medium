@@ -1,0 +1,1 @@
+export{XJ as getOrCreateLocationsPage,ZJ as locationsPageBlockId,QJ as locationsPageSpec}from"../../../chunks/app-D7ORsM55.js";

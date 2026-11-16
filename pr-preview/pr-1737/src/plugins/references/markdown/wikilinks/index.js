@@ -1,0 +1,1 @@
+export{Ey as wikilinkMarkdownExtension}from"../../../../../chunks/app-D7ORsM55.js";

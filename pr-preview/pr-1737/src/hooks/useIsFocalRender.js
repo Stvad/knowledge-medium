@@ -1,0 +1,1 @@
+export{VB as isFocalRender,HB as useIsFocalRender}from"../../chunks/app-D7ORsM55.js";

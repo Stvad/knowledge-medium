@@ -1,0 +1,1 @@
+export{Gv as LazyBlockEntry}from"../../../chunks/app-D7ORsM55.js";
