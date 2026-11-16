@@ -1,1 +1,0 @@
-export{km as contributorsPlugin}from"../../../chunks/app-OEsEAncQ.js";

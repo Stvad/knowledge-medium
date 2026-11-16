@@ -1,1 +1,0 @@
-export{Jk as dailyDateWikilinkDecorator}from"../../../chunks/app-OEsEAncQ.js";

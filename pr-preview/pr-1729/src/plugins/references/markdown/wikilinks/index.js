@@ -1,1 +1,0 @@
-export{My as wikilinkMarkdownExtension}from"../../../../../chunks/app-OEsEAncQ.js";

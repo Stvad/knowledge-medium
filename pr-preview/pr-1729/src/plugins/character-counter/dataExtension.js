@@ -1,1 +1,0 @@
-export{tQ as characterCounterDataExtension}from"../../../chunks/app-OEsEAncQ.js";

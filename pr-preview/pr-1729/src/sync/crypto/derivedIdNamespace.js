@@ -1,1 +1,0 @@
-export{hot as deriveWorkspaceIdNamespace}from"../../../chunks/app-OEsEAncQ.js";

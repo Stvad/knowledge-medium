@@ -1,1 +1,0 @@
-export{Wb as richPastePlugin}from"../../../chunks/app-OEsEAncQ.js";

@@ -1,1 +1,0 @@
-export{CI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,wI as openExtensionsSettings}from"../../chunks/app-OEsEAncQ.js";

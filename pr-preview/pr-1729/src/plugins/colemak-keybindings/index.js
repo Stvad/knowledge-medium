@@ -1,1 +1,0 @@
-export{BC as COLEMAK_KEYBINDINGS_PLUGIN_ID,VC as colemakKeybindingsPlugin,HC as colemakMovementKeybindingOverrides}from"../../../chunks/app-OEsEAncQ.js";

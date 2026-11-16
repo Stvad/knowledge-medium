@@ -1,1 +1,0 @@
-export{Ny as Wikilink}from"../../../../../chunks/app-OEsEAncQ.js";
