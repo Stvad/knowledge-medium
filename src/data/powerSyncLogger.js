@@ -1,1 +1,1 @@
-export{c2 as powerSyncLogger}from"../../chunks/app-DYmzEXkr.js";
+export{s2 as powerSyncLogger}from"../../chunks/app-CYe9Cgxi.js";

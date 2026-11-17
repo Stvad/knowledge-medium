@@ -1,1 +1,1 @@
-export{Kut as definePostCommitProcessor}from"../../../chunks/app-DYmzEXkr.js";
+export{Kut as definePostCommitProcessor}from"../../../chunks/app-CYe9Cgxi.js";

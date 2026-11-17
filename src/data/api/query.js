@@ -1,1 +1,1 @@
-export{Rut as defineQuery}from"../../../chunks/app-DYmzEXkr.js";
+export{Rut as defineQuery}from"../../../chunks/app-CYe9Cgxi.js";

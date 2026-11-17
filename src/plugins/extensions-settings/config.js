@@ -1,1 +1,1 @@
-export{Rh as extensionsOverridesPresetCore,zh as extensionsOverridesProp,Bh as extensionsPrefsType,Vh as overridesCodec}from"../../../chunks/app-DYmzEXkr.js";
+export{Rh as extensionsOverridesPresetCore,zh as extensionsOverridesProp,Bh as extensionsPrefsType,Vh as overridesCodec}from"../../../chunks/app-CYe9Cgxi.js";
