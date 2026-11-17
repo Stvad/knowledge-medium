@@ -1,0 +1,1 @@
+export{Gv as inlineBacklinkCountsExtension}from"../../../../chunks/app-DbVAmMjP.js";

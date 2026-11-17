@@ -1,0 +1,1 @@
+export{HR as useShortcutSurfaceActivations}from"../../chunks/app-DbVAmMjP.js";

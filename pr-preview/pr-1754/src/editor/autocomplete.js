@@ -1,0 +1,1 @@
+export{iP as editorAutocompleteExtension}from"../../chunks/app-DbVAmMjP.js";

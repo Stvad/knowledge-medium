@@ -1,0 +1,1 @@
+export{Kut as definePostCommitProcessor}from"../../../chunks/app-DbVAmMjP.js";

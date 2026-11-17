@@ -1,0 +1,1 @@
+export{R6 as applySyncInvalidation}from"../../../../chunks/app-DbVAmMjP.js";

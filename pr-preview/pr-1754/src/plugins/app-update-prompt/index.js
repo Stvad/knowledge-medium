@@ -1,0 +1,1 @@
+export{xP as appUpdatePromptExtension}from"../../../chunks/app-DbVAmMjP.js";

@@ -1,0 +1,1 @@
+export{X6 as kernelDataExtension}from"../../chunks/app-DbVAmMjP.js";

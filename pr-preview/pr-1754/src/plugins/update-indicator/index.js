@@ -1,0 +1,1 @@
+export{Av as updateIndicatorPlugin}from"../../../chunks/app-DbVAmMjP.js";

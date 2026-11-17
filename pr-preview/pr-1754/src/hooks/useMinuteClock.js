@@ -1,0 +1,1 @@
+export{yO as useMinuteClock}from"../../chunks/app-DbVAmMjP.js";

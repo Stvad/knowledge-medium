@@ -1,0 +1,1 @@
+export{Ih as extensionApiCatalog,Lh as extensionApiRuntimeExports}from"../../chunks/app-DbVAmMjP.js";

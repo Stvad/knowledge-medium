@@ -1,0 +1,1 @@
+export{rx as richPastePlugin}from"../../../chunks/app-DbVAmMjP.js";

@@ -1,0 +1,1 @@
+export{V1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DbVAmMjP.js";

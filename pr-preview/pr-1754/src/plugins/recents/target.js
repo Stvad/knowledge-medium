@@ -1,0 +1,1 @@
+export{xO as openRecentsPage}from"../../../chunks/app-DbVAmMjP.js";

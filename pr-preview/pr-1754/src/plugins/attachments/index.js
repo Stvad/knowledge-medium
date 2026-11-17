@@ -1,0 +1,1 @@
+export{sx as attachmentsPlugin}from"../../../chunks/app-DbVAmMjP.js";
