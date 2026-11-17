@@ -1,1 +1,0 @@
-export{mq as referencesDataExtension}from"../../../chunks/app-9NXAhVJp.js";

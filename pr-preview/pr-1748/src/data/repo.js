@@ -1,1 +1,0 @@
-export{Q2 as Repo}from"../../chunks/app-9NXAhVJp.js";

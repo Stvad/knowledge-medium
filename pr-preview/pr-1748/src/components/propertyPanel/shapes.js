@@ -1,1 +1,0 @@
-export{JG as propertyShapeLabel}from"../../../chunks/app-9NXAhVJp.js";

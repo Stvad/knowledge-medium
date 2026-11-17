@@ -1,1 +1,0 @@
-export{Sk as Label}from"../../../chunks/app-9NXAhVJp.js";
