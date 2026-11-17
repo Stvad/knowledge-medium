@@ -7,10 +7,11 @@ import type {CodeMirrorExtensionContribution, CodeMirrorExtensionContext} from '
 import {flushEditorContent} from '@/editor/contentFlush'
 import {canConvertEmptyChildBlockToProperty} from '@/utils/propertyCreation'
 import {choosePropertyField, createPropertyField} from '@/data/propertyRowCreation'
-import {exitEditModeForBlock, peekFocusedBlockLocation, sameFocusedBlockLocation, uiStateRenderScopeId} from '@/data/properties'
+import {exitEditModeForBlock, getBlockTypes, peekFocusedBlockLocation, sameFocusedBlockLocation, uiStateRenderScopeId} from '@/data/properties'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction'
 import {isPropertyPickerName} from '@/components/propertyPanel/visibility'
 import {propertyEditorOverridesFacet} from '@/data/facets'
+import {typePropertyGroups} from '@/data/typePropertyGroups'
 
 import {showError} from '@/utils/toast'
 
@@ -46,10 +47,32 @@ export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): Co
   const query = name.toLowerCase()
   const uis = repo.facetRuntime?.read(propertyEditorOverridesFacet) ?? new Map()
   const hidden = (name: string) => !isPropertyPickerName(name, repo.propertySchemas, uis, repo.propertyDefinitions)
-  const rank = (name: string) => name.toLowerCase() === query ? 0 : name.toLowerCase().startsWith(query) ? 1 : 2
   const schemas = [...repo.propertySchemas.values()].filter(schema => schema.changeScope === ChangeScope.BlockDefault && !hidden(schema.name) && schema.name.toLowerCase().includes(query))
+  const missing = new Set<string>()
+  const owner = await repo.load(source.parentId!)
+  if (owner) {
+    const declared = new Set([...typePropertyGroups(getBlockTypes(owner), repo.types, repo.propertySchemas)]
+      .flatMap(group => group.fields.map(({schema}) => schema.name)))
+    const unfilled = schemas.filter(schema => declared.has(schema.name) && !Object.hasOwn(owner.properties, schema.name))
+    if (unfilled.length) {
+      const children = await repo.query.children({id: owner.id, propertyChildren: 'all'}).load()
+      const existingFields = new Set(children.filter(row => row.isFieldForm).map(row => row.referenceTargetId))
+      const resolver = repo.propertySchemaResolverFor(owner.workspaceId)
+      for (const schema of unfilled) {
+        const resolved = resolver.resolve(schema.name)
+        if (resolved.status === 'resolved' && !existingFields.has(resolved.schema.fieldId)) missing.add(schema.name)
+      }
+    }
+  }
+  // Exact names win; missing declared fields precede other prefix/substring matches.
+  const rank = (name: string) => {
+    const normalized = name.toLowerCase()
+    if (normalized === query) return 0
+    return (missing.has(name) ? 1 : 3) + (normalized.startsWith(query) ? 0 : 1)
+  }
+  const candidates: PropertyChoice[] = schemas
     .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name)).slice(0, 8)
-  const candidates: PropertyChoice[] = schemas.map(schema => ({kind: 'existing', label: schema.name, schema}))
+    .map(schema => ({kind: 'existing', label: schema.name, schema}))
   if (name && !hidden(name) && ![...repo.propertySchemas.keys()].some(existing => existing.toLowerCase() === query)) candidates.splice(7, 1, {kind: 'create', label: `Create “${name}”`, name})
   if (!candidates.length) return null
   return {from: 0, filter: false, options: candidates.map(candidate => ({label: candidate.label, apply: (view: EditorView) => {
