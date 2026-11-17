@@ -4,7 +4,7 @@
  * card's header (`ui.tsx`) mounts it in place of the quote.
  */
 
-import {useState, type MouseEvent} from 'react'
+import {useState, type MouseEvent, type ReactNode} from 'react'
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {safeDecodeRowProperty} from '@/data/rowProperty'
@@ -13,6 +13,7 @@ import {truncate} from '@/utils/string.js'
 import {reportFailure} from './actions.ts'
 import {annotationStatusProp, threadIsOpen, threadSuggestionOf, type ThreadStatus, type ThreadSuggestion} from './schema.ts'
 import {acceptSuggestion, rejectSuggestion} from './suggestions.ts'
+import {AnchorChangedError, isThreadRefusal} from './threads.ts'
 
 type RootFields = Pick<BlockData, 'content' | 'properties'>
 
@@ -61,13 +62,18 @@ export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}
  *  pending write ahead of the accept's transaction (`suggestions.ts`). One
  *  decision at a time: both buttons wait while one is in flight, and each
  *  transaction also refuses a suggestion that is no longer open. */
-export const SuggestionActions = ({threadId}: {threadId: string}) => {
+export const SuggestionActions = ({threadId, recovery}: {threadId: string; recovery?: ReactNode}) => {
   const repo = useRepo()
   const [deciding, setDeciding] = useState(false)
+  const [refusal, setRefusal] = useState<{message: string; canRecoverAnchor: boolean} | null>(null)
   const decide = (write: (repo: Repo, threadId: string) => Promise<void>) => (event: MouseEvent) => {
     event.stopPropagation()
+    setRefusal(null)
     setDeciding(true)
-    write(repo, threadId).catch(reportFailure).finally(() => setDeciding(false))
+    write(repo, threadId).catch(error => {
+      if (isThreadRefusal(error)) setRefusal({message: error.message, canRecoverAnchor: error instanceof AnchorChangedError})
+      else reportFailure(error)
+    }).finally(() => setDeciding(false))
   }
   return (
     <>
@@ -87,6 +93,16 @@ export const SuggestionActions = ({threadId}: {threadId: string}) => {
       >
         Reject
       </button>
+      {refusal && (
+        <div className="basis-full rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-foreground" role="alert">
+          <p>{refusal.message}</p>
+          {refusal.canRecoverAnchor && recovery && (
+            <div className="mt-2 space-y-1.5">
+              {recovery}
+            </div>
+          )}
+        </div>
+      )}
     </>
   )
 }

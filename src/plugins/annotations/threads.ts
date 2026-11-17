@@ -17,6 +17,7 @@ import {commentsPageBlockId, getOrCreateCommentsPage} from './container.ts'
 import {
   anchorFieldValues,
   annotationReplacementProp,
+  annotationSourceContentProp,
   annotationStatusProp,
   annotationTargetProp,
   THREAD_TYPE,
@@ -198,6 +199,9 @@ export const createThread = async (
     }
 
     const threadId = await writeThreadRoot(repo, tx, container.id, {targetId, anchor, replacement})
+    if (replacement !== undefined && anchor) {
+      await tx.setProperty(threadId, annotationSourceContentProp, current.content)
+    }
     const commentId = comment || emptyComment
       ? await tx.run(createChild, {parentId: threadId, content: comment ?? ''})
       : null

@@ -50,7 +50,7 @@ import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRend
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import type {RangeAnchor} from './anchor.ts'
+import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
@@ -60,7 +60,7 @@ import {deleteCommentFromCard} from './deleteComment.ts'
 import {moveCommentToOwnThread} from './ownThreadPicker.tsx'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
-import {confirmedAnchor, reanchorThread} from './reanchor.ts'
+import {reanchorThread} from './reanchor.ts'
 import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {ReadSelectionMenu} from './readSelectionUi.tsx'
@@ -472,11 +472,13 @@ const useFocusNewComment = () => {
   return (id: string) => enterEditModeForBlock(uiStateBlock.repo.block(id), uiStateBlock, renderScopeId, {start: 0})
 }
 
-const ActionButton = ({onClick, children}: {onClick: () => void; children: ReactNode}) => (
+const ActionButton = ({onClick, children, bordered = false}: {onClick: () => void; children: ReactNode; bordered?: boolean}) => (
   <button
     type="button"
     onClick={event => { event.stopPropagation(); onClick() }}
-    className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+    className={bordered
+      ? 'rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-muted'
+      : 'text-xs text-muted-foreground hover:text-foreground hover:underline'}
   >
     {children}
   </button>
@@ -520,26 +522,33 @@ const reportRefusal = (error: unknown): void => {
  *  new text for it (the next comment-on-selection in its block re-anchors
  *  it), or anchor it to the whole block, which a suggestion can't be: it
  *  would have nothing to replace. */
-const ReanchorControls = ({root, state, targetContent}: {
+export const ReanchorControls = ({root, targetContent}: {
   root: RootFields
-  state: 'moved' | 'stale'
   targetContent: string
 }) => {
   const repo = useRepo()
   const pending = usePendingReanchor()
   const anchor = threadAnchorOf(root) as {kind: 'range'} & RangeAnchor
   const targetId = threadTargetIdOf(root)
+  const resolved = resolveAnchor(targetContent, anchor)
+  const preview = resolved?.state === 'moved' ? {
+    before: targetContent.slice(Math.max(0, resolved.from - 32), resolved.from),
+    quote: targetContent.slice(resolved.from, resolved.to),
+    after: targetContent.slice(resolved.to, Math.min(targetContent.length, resolved.to + 32)),
+    hasBefore: resolved.from > 32,
+    hasAfter: resolved.to + 32 < targetContent.length,
+  } : null
   useEffect(() => () => releasePendingReanchor(root.id), [root.id])
   if (pending?.threadId === root.id) {
     return (
       <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground" role="status">
-        <span>Select the new text in the block, then choose Comment on selection.</span>
-        <ActionButton onClick={() => startReanchor(null)}>Cancel</ActionButton>
+        <span>Select the new text in the block, then choose Comment in its context menu.</span>
+        <ActionButton bordered onClick={() => startReanchor(null)}>Cancel</ActionButton>
       </div>
     )
   }
   const confirm = () => {
-    const next = confirmedAnchor(targetContent, anchor)
+    const next = resolved.state === 'moved' ? recaptureAnchor(targetContent, resolved.from, anchor.quote) : null
     if (!next) {
       showError('This quote can\u2019t be confirmed where it is now. Select it again.')
       return
@@ -547,12 +556,20 @@ const ReanchorControls = ({root, state, targetContent}: {
     reanchorThread(repo, root.id, next).catch(reportRefusal)
   }
   return (
-    <div className="flex flex-wrap gap-x-2">
-      {state === 'moved' && <ActionButton onClick={confirm}>Confirm position</ActionButton>}
-      {targetId && <ActionButton onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
+    <div className="space-y-1.5">
+      {preview && <div className="text-xs text-muted-foreground">
+        <p>Suggested position (review before confirming):</p>
+        <p className="whitespace-pre-wrap break-words rounded bg-muted/50 px-1.5 py-1" aria-label={`Candidate quote: ${preview.before}${preview.quote}${preview.after}`}>
+          {preview.hasBefore && '…'}{preview.before}<mark className="rounded bg-amber-300/50 text-foreground">{preview.quote}</mark>{preview.after}{preview.hasAfter && '…'}
+        </p>
+      </div>}
+      <div className="flex flex-wrap gap-x-2">
+      {resolved.state === 'moved' && <ActionButton bordered onClick={confirm}>Confirm position</ActionButton>}
+      {targetId && <ActionButton bordered onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
       {!threadSuggestionOf(root) && (
-        <ActionButton onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
+        <ActionButton bordered onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
       )}
+      </div>
     </div>
   )
 }
@@ -578,7 +595,13 @@ const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; o
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}
       {!readOnly && <>
-        {awaitingDecision && <SuggestionActions threadId={root.id}/>}
+        {awaitingDecision && <SuggestionActions
+          threadId={root.id}
+          recovery={targetContent === null ? undefined : <ReanchorControls
+            root={root}
+            targetContent={targetContent}
+          />}
+        />}
         <ActionButton onClick={() => onReply().catch(reportFailure)}>Reply</ActionButton>
         {!awaitingDecision && !isAccepted(root) && (
           <ActionButton onClick={() => setThreadStatus(repo, root.id, open ? 'resolved' : 'open').catch(reportFailure)}>
@@ -587,8 +610,8 @@ const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; o
         )}
       </>}
     </div>
-    {anchorShown && !readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
-      <ReanchorControls root={root} state={state} targetContent={targetContent}/>
+    {anchorShown && !awaitingDecision && !readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
+      <ReanchorControls root={root} targetContent={targetContent}/>
     )}
     </div>
   )
