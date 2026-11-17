@@ -1,0 +1,1 @@
+export{QI as ConfirmBulkDeleteDialog}from"../../chunks/app-DkZhd-yk.js";

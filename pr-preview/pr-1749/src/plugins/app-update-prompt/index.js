@@ -1,0 +1,1 @@
+export{hP as appUpdatePromptExtension}from"../../../chunks/app-DkZhd-yk.js";

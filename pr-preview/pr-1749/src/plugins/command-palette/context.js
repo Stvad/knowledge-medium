@@ -1,0 +1,1 @@
+export{Ij as COMMAND_PALETTE_ACTION_ID,Lj as COMMAND_PALETTE_CONTEXT,Rj as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,zj as commandPaletteActionContext}from"../../../chunks/app-DkZhd-yk.js";

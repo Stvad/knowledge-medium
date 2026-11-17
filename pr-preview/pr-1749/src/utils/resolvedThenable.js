@@ -1,0 +1,1 @@
+export{w$ as resolvedThenable,T$ as stampFulfilled}from"../../chunks/app-DkZhd-yk.js";

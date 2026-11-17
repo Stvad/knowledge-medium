@@ -1,0 +1,1 @@
+export{Gq as preferredSpanReplacement}from"../../../chunks/app-DkZhd-yk.js";

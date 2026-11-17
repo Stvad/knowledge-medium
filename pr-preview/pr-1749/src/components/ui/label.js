@@ -1,0 +1,1 @@
+export{vk as Label}from"../../../chunks/app-DkZhd-yk.js";

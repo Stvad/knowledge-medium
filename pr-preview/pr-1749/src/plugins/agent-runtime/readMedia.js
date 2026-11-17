@@ -1,0 +1,1 @@
+export{Mg as readMedia}from"../../../chunks/app-DkZhd-yk.js";

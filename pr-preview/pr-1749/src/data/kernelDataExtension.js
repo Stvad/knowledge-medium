@@ -1,0 +1,1 @@
+export{R6 as kernelDataExtension}from"../../chunks/app-DkZhd-yk.js";

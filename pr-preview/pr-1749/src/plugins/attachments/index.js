@@ -1,0 +1,1 @@
+export{tx as attachmentsPlugin}from"../../../chunks/app-DkZhd-yk.js";

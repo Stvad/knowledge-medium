@@ -1,0 +1,1 @@
+export{XF as MarkdownImage}from"../../chunks/app-DkZhd-yk.js";

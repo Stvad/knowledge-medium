@@ -1,0 +1,1 @@
+export{F6 as Block,I6 as requireLoadedBlock}from"../../chunks/app-DkZhd-yk.js";

@@ -1,0 +1,1 @@
+export{DW as isIOS,OW as isMacPlatform}from"../../chunks/app-DkZhd-yk.js";

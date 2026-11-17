@@ -1,0 +1,1 @@
+export{g4 as UndoManager}from"../../../chunks/app-DkZhd-yk.js";

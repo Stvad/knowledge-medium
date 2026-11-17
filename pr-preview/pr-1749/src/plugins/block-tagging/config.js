@@ -1,0 +1,1 @@
+export{ju as blockTaggingPrefsType,Mu as blockTagsConfigCodec,Nu as blockTagsConfigPresetCore,Pu as blockTagsConfigProp,Fu as isValidTagName,Iu as normalizeBlockTagsConfig,Lu as selectableTagNames,Ru as tagNameIssue}from"../../../chunks/app-DkZhd-yk.js";

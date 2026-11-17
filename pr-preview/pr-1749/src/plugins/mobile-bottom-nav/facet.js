@@ -1,0 +1,1 @@
+export{CT as mobileBottomNavItemsFacet}from"../../../chunks/app-DkZhd-yk.js";

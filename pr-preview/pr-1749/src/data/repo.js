@@ -1,0 +1,1 @@
+export{J2 as Repo}from"../../chunks/app-DkZhd-yk.js";

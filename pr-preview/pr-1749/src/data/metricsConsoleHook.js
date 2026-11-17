@@ -1,0 +1,1 @@
+export{xN as ensureMetricsConsoleHook}from"../../chunks/app-DkZhd-yk.js";

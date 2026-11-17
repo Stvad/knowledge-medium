@@ -1,0 +1,1 @@
+export{tM as CommandPaletteHeaderItem}from"../../../chunks/app-DkZhd-yk.js";

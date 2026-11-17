@@ -1,0 +1,1 @@
+export{BG as usePropertySchemas}from"../../chunks/app-DkZhd-yk.js";

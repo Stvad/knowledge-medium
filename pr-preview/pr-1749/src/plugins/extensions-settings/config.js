@@ -1,0 +1,1 @@
+export{Mh as extensionsOverridesPresetCore,Nh as extensionsOverridesProp,Ph as extensionsPrefsType,Fh as overridesCodec}from"../../../chunks/app-DkZhd-yk.js";

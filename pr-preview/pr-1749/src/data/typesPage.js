@@ -1,0 +1,1 @@
+export{Wat as getOrCreateTypesPage,Gat as typesPageBlockId,Kat as typesPageSpec}from"../../chunks/app-DkZhd-yk.js";

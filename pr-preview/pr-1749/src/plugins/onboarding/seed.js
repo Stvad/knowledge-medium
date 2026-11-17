@@ -1,0 +1,1 @@
+export{ij as seedTutorial}from"../../../chunks/app-DkZhd-yk.js";

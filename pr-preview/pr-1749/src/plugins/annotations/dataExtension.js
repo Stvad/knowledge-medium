@@ -1,0 +1,1 @@
+export{lX as annotationsDataExtension}from"../../../chunks/app-DkZhd-yk.js";

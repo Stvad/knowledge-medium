@@ -1,0 +1,1 @@
+export{eC as videoPlayerMarkdownExtension}from"../../../chunks/app-DkZhd-yk.js";

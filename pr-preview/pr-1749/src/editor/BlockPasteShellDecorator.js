@@ -1,0 +1,1 @@
+export{HN as BlockPasteShellDecorator,UN as blockPasteShellDecorator}from"../../chunks/app-DkZhd-yk.js";

@@ -1,0 +1,1 @@
+export{B2 as Button}from"../../../chunks/app-DkZhd-yk.js";

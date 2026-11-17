@@ -1,0 +1,1 @@
+export{rN as TypeChip}from"../../../chunks/app-DkZhd-yk.js";

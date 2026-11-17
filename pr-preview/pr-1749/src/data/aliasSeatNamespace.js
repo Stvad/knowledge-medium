@@ -1,0 +1,1 @@
+export{Xat as aliasSeatNamespacesInTx,Zat as resolveAliasSeatNamespaces}from"../../chunks/app-DkZhd-yk.js";

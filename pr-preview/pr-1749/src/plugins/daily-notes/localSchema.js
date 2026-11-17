@@ -1,0 +1,1 @@
+export{WY as dailyNotesLocalSchema}from"../../../chunks/app-DkZhd-yk.js";

@@ -1,0 +1,1 @@
+export{oJ as htmlDocumentTypeSeed}from"../../../chunks/app-DkZhd-yk.js";

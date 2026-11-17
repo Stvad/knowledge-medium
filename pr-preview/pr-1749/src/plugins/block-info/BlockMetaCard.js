@@ -1,0 +1,1 @@
+export{Cv as BlockMetaCard}from"../../../chunks/app-DkZhd-yk.js";

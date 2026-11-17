@@ -1,0 +1,1 @@
+export{VF as BlockLoadingPlaceholder}from"../../chunks/app-DkZhd-yk.js";

@@ -1,0 +1,1 @@
+export{kot as deriveWorkspaceIdNamespace}from"../../../chunks/app-DkZhd-yk.js";
