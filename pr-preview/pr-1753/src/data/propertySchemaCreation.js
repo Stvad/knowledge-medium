@@ -1,0 +1,1 @@
+export{RG as adoptOrCreatePropertySchema}from"../../chunks/app-C4egjCCM.js";

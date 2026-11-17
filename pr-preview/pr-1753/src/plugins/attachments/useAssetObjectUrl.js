@@ -1,0 +1,1 @@
+export{OS as useAssetObjectUrl}from"../../../chunks/app-C4egjCCM.js";

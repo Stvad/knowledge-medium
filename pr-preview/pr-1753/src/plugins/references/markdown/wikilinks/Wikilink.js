@@ -1,0 +1,1 @@
+export{Ky as Wikilink}from"../../../../../chunks/app-C4egjCCM.js";

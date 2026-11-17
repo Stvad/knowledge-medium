@@ -1,0 +1,1 @@
+export{Ws as parsePropertiesJson}from"../../../chunks/app-C4egjCCM.js";

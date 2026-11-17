@@ -1,0 +1,1 @@
+export{sP as ExtensionPromptSurface,cP as extensionPromptsExtension}from"../../../chunks/app-C4egjCCM.js";

@@ -1,0 +1,1 @@
+export{Rq as preferredSpanReplacement}from"../../../chunks/app-C4egjCCM.js";

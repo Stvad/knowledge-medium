@@ -1,0 +1,1 @@
+export{nX as annotationsDataExtension}from"../../../chunks/app-C4egjCCM.js";

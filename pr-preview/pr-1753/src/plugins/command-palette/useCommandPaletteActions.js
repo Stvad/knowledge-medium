@@ -1,0 +1,1 @@
+export{Ij as useCommandPaletteActions}from"../../../chunks/app-C4egjCCM.js";

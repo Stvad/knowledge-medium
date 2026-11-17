@@ -1,0 +1,1 @@
+export{Tg as authorIdOf}from"../../../chunks/app-C4egjCCM.js";

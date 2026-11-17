@@ -1,0 +1,1 @@
+export{bK as SuspenseFallback}from"../../../chunks/app-C4egjCCM.js";

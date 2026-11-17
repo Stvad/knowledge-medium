@@ -1,0 +1,1 @@
+export{IX as ANCHOR_CONTEXT_LENGTH,LX as captureAnchor,RX as recaptureAnchor,zX as resolveAnchor,BX as widenToReferenceSpans,VX as widenToSpans}from"../../../chunks/app-C4egjCCM.js";

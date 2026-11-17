@@ -1,0 +1,1 @@
+export{oF as dynamicExtensionsExtension}from"../../chunks/app-C4egjCCM.js";

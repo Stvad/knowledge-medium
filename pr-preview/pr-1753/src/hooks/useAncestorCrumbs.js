@@ -1,0 +1,1 @@
+export{qO as useAncestorCrumbs}from"../../chunks/app-C4egjCCM.js";

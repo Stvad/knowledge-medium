@@ -1,0 +1,1 @@
+export{Ob as useIsReadOnly}from"../../chunks/app-C4egjCCM.js";

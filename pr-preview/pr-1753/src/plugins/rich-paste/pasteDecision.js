@@ -1,0 +1,1 @@
+export{ix as richPasteDecisionContribution}from"../../../chunks/app-C4egjCCM.js";

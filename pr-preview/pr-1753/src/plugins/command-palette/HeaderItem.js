@@ -1,0 +1,1 @@
+export{sM as CommandPaletteHeaderItem}from"../../../chunks/app-C4egjCCM.js";

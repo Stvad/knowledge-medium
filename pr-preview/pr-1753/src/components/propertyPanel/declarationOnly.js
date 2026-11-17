@@ -1,0 +1,1 @@
+export{AV as declarationOnlyDefinitionForName,jV as declarationOnlyStatusText}from"../../../chunks/app-C4egjCCM.js";

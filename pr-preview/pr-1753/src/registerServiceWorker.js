@@ -1,0 +1,1 @@
+export{AP as checkForAppUpdate,jP as registerServiceWorker}from"../chunks/app-C4egjCCM.js";

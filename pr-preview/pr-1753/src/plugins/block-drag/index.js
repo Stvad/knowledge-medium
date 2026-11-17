@@ -1,0 +1,1 @@
+export{vb as blockDragPlugin}from"../../../chunks/app-C4egjCCM.js";

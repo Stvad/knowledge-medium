@@ -1,0 +1,1 @@
+export{A_ as boundDisplayId,j_ as idMark}from"../../../../chunks/app-C4egjCCM.js";

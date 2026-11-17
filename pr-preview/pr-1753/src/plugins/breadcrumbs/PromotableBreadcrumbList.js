@@ -1,0 +1,1 @@
+export{FT as PromotableBreadcrumbList}from"../../../chunks/app-C4egjCCM.js";

@@ -1,0 +1,1 @@
+export{Vot as deriveWorkspaceIdNamespace}from"../../../chunks/app-C4egjCCM.js";

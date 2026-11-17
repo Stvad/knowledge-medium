@@ -1,0 +1,1 @@
+export{wQ as characterCounterDataExtension}from"../../../chunks/app-C4egjCCM.js";

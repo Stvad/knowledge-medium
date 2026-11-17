@@ -1,0 +1,1 @@
+export{HK as staticDataExtensions}from"../../chunks/app-C4egjCCM.js";

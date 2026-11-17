@@ -1,0 +1,1 @@
+export{iQ as contributorsDataExtension}from"../../../chunks/app-C4egjCCM.js";

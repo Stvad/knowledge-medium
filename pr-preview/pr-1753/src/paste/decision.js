@@ -1,0 +1,1 @@
+export{TR as defaultPasteDecision,ER as pasteDecisionVerb}from"../../chunks/app-C4egjCCM.js";
