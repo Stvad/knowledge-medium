@@ -14,9 +14,8 @@ export interface ConfirmBulkDeleteDialogProps {
   /** Blocks the gesture names — the selection, or the one block a key was
    *  pressed on. */
   targetCount: number
-  /** Blocks the delete actually removes: the targets plus everything nested
-   *  under them. Always >= `targetCount`, and the number that decides whether
-   *  this dialog opens at all. */
+  /** Blocks counted toward the warning. This includes directly selected field
+   *  rows and skips field rows swept up by an ancestor delete. */
   totalCount: number
 }
 
@@ -47,7 +46,7 @@ export const ConfirmBulkDeleteDialog = ({
             does not get. */}
         <DialogDescription>
           {targetCount === 1 ? 'This block' : pluralize(targetCount, 'selected block')}
-          {nested > 0 && <> and the {pluralize(nested, 'block')} nested
+          {nested > 0 && <> and {pluralize(nested, 'block')} nested
             {' '}{agree(targetCount, 'under it', 'under them')}</>}
           {' '}will be deleted.
         </DialogDescription>
