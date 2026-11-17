@@ -154,6 +154,28 @@ describe('minimal markdown CodeMirror config', () => {
       expect.stringMatching(/^\.\S+\.cm-focused \{outline: none;\}$/),
     )
   })
+
+  const mountMarkdown = (doc: string) =>
+    new EditorView({
+      parent: document.body,
+      state: EditorState.create({doc, extensions: createMinimalMarkdownConfig()}),
+    })
+
+  const textsWithClass = (view: EditorView, cls: string) =>
+    [...view.contentDOM.querySelectorAll(`.${cls}`)].map(el => el.textContent)
+
+  it('marks markdown syntax with static classes, not generated highlight classes', () => {
+    const view = mountMarkdown('see https://example.com/x and **bold** here')
+    expect(textsWithClass(view, 'km-md-url')).toEqual(['https://example.com/x'])
+    expect(textsWithClass(view, 'km-md-strong').join('')).toBe('**bold**')
+    expect(textsWithClass(view, 'km-md-mark')).toEqual(['**', '**'])
+    // basicSetup's fallback `defaultHighlightStyle` paints through generated
+    // `ͼ…` classes with light-only colors; a main highlighter displaces it.
+    const generated = [...view.contentDOM.querySelectorAll('.cm-line *')]
+      .filter(el => [...el.classList].some(c => c.startsWith('ͼ')))
+    expect(generated).toEqual([])
+    view.destroy()
+  })
 })
 
 describe('completion keymap behavior', () => {
