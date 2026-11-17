@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { activityStateFor, chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
+import { activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, elapsedLabel } from '../chipState.ts'
 import { contentWithAgentMention } from '../askAgent.ts'
 
 const chipTitleFor = (properties: Record<string, unknown>, nowMs = 1_000_000): string => {
   const chip = chipStateFor(properties)!
-  return chipTitle(chip, activityStateFor(chip, nowMs))
+  return chipTitle(chip, activityStateFor(chip, nowMs), nowMs)
 }
 
 describe('chipStateFor', () => {
@@ -80,7 +80,7 @@ describe('activityStateFor', () => {
     })!
     expect(activityStateFor(other, now)).toMatchObject({ageLabel: '10m', stalled: false})
     expect(activityStateFor(other, now + 1)).toMatchObject({stalled: false})
-    expect(chipTitle(other, activityStateFor(other, now + 1))).not.toContain('No progress')
+    expect(chipTitle(other, activityStateFor(other, now + 1), now + 1)).not.toContain('No progress')
   })
 
   it('returns no step age for missing, invalid, zero, or empty activity', () => {
@@ -144,6 +144,48 @@ describe('chipTitle', () => {
   it('says a running chip is being cancelled, since the pill has no room for the executor then', () => {
     expect(chipTitleFor({'agent:status': 'running', 'agent:cancel': 1}))
       .toBe('Cancelling the Claude run')
+  })
+})
+
+describe('compactActivityLabel and chipActivityDetails', () => {
+  it('maps known activities compactly and keeps unknown km tools neutral', () => {
+    expect(compactActivityLabel('km: get_block')).toBe('Reading')
+    expect(compactActivityLabel('km: update_block')).toBe('Writing')
+    expect(compactActivityLabel('km: search')).toBe('Search')
+    expect(compactActivityLabel('Searching the web')).toBe('Search')
+    expect(compactActivityLabel('Fetching a page')).toBe('Fetching')
+    expect(compactActivityLabel('Thinking')).toBe('Thinking')
+    expect(compactActivityLabel('Running a command')).toBe('Running')
+    expect(compactActivityLabel('km: future_tool')).toBe('Working')
+    expect(compactActivityLabel('km: constructor')).toBe('Working')
+  })
+
+  it('keeps total time available before the first step and omits it without a claim timestamp', () => {
+    expect(chipTitleFor({'agent:status': 'running', 'agent:updated-at': 88_000}, 100_000))
+      .toContain('Working · 12s total')
+    const withoutClaim = chipStateFor({
+      'agent:status': 'running', 'agent:activity': 'Thinking', 'agent:activity-at': 97_000,
+    })!
+    expect(chipActivityDetails(withoutClaim, activityStateFor(withoutClaim, 100_000), 100_000))
+      .toBe('Thinking · 3s on this step')
+  })
+
+  it('labels step and total durations separately, omitting an absent step age', () => {
+    const chip = chipStateFor({
+      'agent:status': 'running',
+      'agent:updated-at': 88_000,
+      'agent:activity': 'km: get_block',
+      'agent:activity-at': 97_000,
+    })!
+    expect(chipActivityDetails(chip, activityStateFor(chip, 100_000), 100_000))
+      .toBe('Reading: km: get_block · 3s on this step · 12s total')
+    const withoutStepStart = chipStateFor({
+      'agent:status': 'running',
+      'agent:updated-at': 90_000,
+      'agent:activity': 'km: future_tool',
+    })!
+    expect(chipActivityDetails(withoutStepStart, activityStateFor(withoutStepStart, 100_000), 100_000))
+      .toBe('Working: km: future_tool · 10s total')
   })
 })
 
