@@ -72,8 +72,10 @@ const EDGE_PX = 16
 const CARD_GAP_PX = 8
 /** Kept clear at the column's foot for `MarginFooter`'s buttons. */
 const FOOTER_PX = 28
-/** How long after a wheel or touch on the outline, or a scroll that carries
- *  one on (momentum), the outline's scrolling counts as the user's. */
+/** A scroll this soon after the user's wheel or touch is that input's. */
+const INPUT_TO_SCROLL_MS = 1000
+/** And the outline's scrolling counts as the user's this long after such a
+ *  scroll, so the scroll it carries on into (momentum) does too. */
 const USER_SCROLL_MS = 300
 /** After moving on to another card, wheel events are dropped until they stop
  *  for this long, so one flick, momentum included, moves on by one card. */
@@ -173,9 +175,12 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     let placedOrder: readonly string[] = []
     /** The pinned card's row as last seen. */
     let pinnedRow: {key: string; inView: boolean} | undefined
+    /** Timed from the scroll an input causes, not the input: the scroll is
+     *  dispatched in the same frame as the layout pass that judges it. */
+    let userInputAt = Number.NEGATIVE_INFINITY
     let userScrollUntil = Number.NEGATIVE_INFINITY
     let pausedUntil = Number.NEGATIVE_INFINITY
-    const noteUserScroll = () => { userScrollUntil = performance.now() + USER_SCROLL_MS }
+    const noteUserInput = () => { userInputAt = performance.now() }
     /** Room added below the outline so the last cards, pushed below the last
      *  row, can be scrolled to. Inline style, which React leaves alone on the
      *  text frame, and removed with the margin. On the frame, never the
@@ -392,7 +397,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
           event.preventDefault()
           pausedUntil = now + MOVE_ON_QUIET_MS
         } else {
-          noteUserScroll()
+          noteUserInput()
         }
         return
       }
@@ -421,13 +426,16 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       } else if (action === 'move-on' && moveOnTo(next!, down)) {
         pausedUntil = now + MOVE_ON_QUIET_MS
       } else {
-        noteUserScroll()
+        noteUserInput()
         scrollport.scrollBy({top: deltaY, left: 0})
       }
     }
-    // A scroll that carries a user's on (momentum) is the user's too.
     const onScroll = () => {
-      if (performance.now() < userScrollUntil) noteUserScroll()
+      const now = performance.now()
+      if (now - userInputAt < INPUT_TO_SCROLL_MS || now < userScrollUntil) {
+        userInputAt = Number.NEGATIVE_INFINITY
+        userScrollUntil = now + USER_SCROLL_MS
+      }
       schedule()
     }
     layout.current = {schedule, flush}
@@ -446,7 +454,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     mutations.observe(scrollport, {childList: true, characterData: true, subtree: true})
     scrollport.addEventListener('scroll', onScroll, {passive: true})
     panelEl.addEventListener('wheel', onWheel, {passive: false})
-    scrollport.addEventListener('touchmove', noteUserScroll, {passive: true})
+    scrollport.addEventListener('touchmove', noteUserInput, {passive: true})
     const unsubscribe = onUiStoreChange(schedule)
     schedule()
     return () => {
@@ -456,7 +464,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       mutations.disconnect()
       scrollport.removeEventListener('scroll', onScroll)
       panelEl.removeEventListener('wheel', onWheel)
-      scrollport.removeEventListener('touchmove', noteUserScroll)
+      scrollport.removeEventListener('touchmove', noteUserInput)
       unsubscribe()
       setExtraBottom(0)
       setPanelGeometry(null)
