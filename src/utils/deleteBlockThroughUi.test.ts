@@ -6,6 +6,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
+import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog'
@@ -118,16 +119,17 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('counts a block and its own descendant once', async () => {
-    // A selection can hold both; the delete visits each row once, so the count
-    // has to as well. Sized so double-counting the overlap crosses the
-    // threshold and deduping does not: the subtree is one short of it, and the
-    // child is picked up a second time by being selected in its own right.
+    // Child-first order makes both subtree queries run. Counting their overlap
+    // twice would push the delete to the threshold.
     await repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent'})
     const kids = await seedChildren('parent', BULK_DELETE_CONFIRM_THRESHOLD - 2, 'kid')
 
-    expect(await deleteBlocksThroughUi([repo.block('parent'), repo.block(kids[0])])).toBe(true)
-
-    expect(getDialogQueue()).toHaveLength(0)
+    const stop = subscribeDialogs(() => pendingDialog()?.finalize(null))
+    try {
+      expect(await deleteBlocksThroughUi([repo.block(kids[0]), repo.block('parent')])).toBe(true)
+    } finally {
+      stop()
+    }
     expect(await isBlockDeleted(repo, kids[0])).toBe(true)
   })
 
@@ -220,37 +222,49 @@ describe('bulk-delete confirmation', () => {
     expect(runQuery.mock.calls.filter(([name]) => name === 'core.subtree')).toHaveLength(1)
   })
 
-  it('counts authored descendants hanging under a property field row', async () => {
-    // The visible view prunes the whole branch under a field row, comment
-    // thread included; the delete takes them anyway. See `countBlocksRemovedBy`.
+  const seedPropertyBranch = async (descendantCount: number): Promise<string[]> => {
+    repo.setActiveWorkspaceId(WS)
+    await repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
     await repo.tx(async tx => {
       await tx.create({
-        id: 'def', workspaceId: WS, parentId: 'root', orderKey: 'b0', content: 'a property',
-        properties: {types: ['property-schema']},
+        id: 'def', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'a property',
+        properties: {types: ['property-schema'], 'property-schema:name': 'note', 'property-schema:preset': 'string'},
       })
       await tx.create({
         id: 'field', workspaceId: WS, parentId: 'root', orderKey: 'c0',
         content: '::((def))', referenceTargetId: 'def', isFieldForm: true,
       })
       await tx.create({id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0', content: 'v'})
-      // Authored content under the value — the part the visible view drops.
-      for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
-        await tx.create({
-          id: `comment-${i}`, workspaceId: WS, parentId: 'value', orderKey: `a${i}`,
-          content: `comment ${i}`,
-        })
-      }
     }, {scope: ChangeScope.BlockDefault})
+    await waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.has('def')).toBe(true))
+    return seedChildren('value', descendantCount, 'comment')
+  }
 
-    // Precondition: the field row really is recognized as machinery, or this
-    // test proves nothing — the visible view would include the branch anyway.
-    const visible = await repo.runQuery('core.subtree', {id: 'root', propertyChildren: 'none'})
-    expect((visible as {id: string}[]).map(row => row.id)).not.toContain('comment-0')
+  it('deletes without asking when only an incidental property field row reaches the threshold', async () => {
+    const children = await seedPropertyBranch(BULK_DELETE_CONFIRM_THRESHOLD - 3)
+    const stop = subscribeDialogs(() => pendingDialog()?.finalize(null))
+    try {
+      expect(await deleteBlockThroughUi(repo.block('root'))).toBe(true)
+    } finally {
+      stop()
+    }
+    for (const id of ['root', 'field', 'value', ...children]) {
+      expect(await isBlockDeleted(repo, id)).toBe(true)
+    }
+  })
 
-    const deleting = deleteBlockThroughUi(repo.block('root'))
+  it.each([
+    {scenario: 'values and authored descendants', targets: ['root']},
+    {scenario: 'an explicitly selected field row', targets: ['root', 'field']},
+  ])('counts $scenario toward the warning', async ({targets}) => {
+    await seedPropertyBranch(BULK_DELETE_CONFIRM_THRESHOLD - targets.length - 1)
+
+    const deleting = deleteBlocksThroughUi(targets.map(id => repo.block(id)))
     await waitFor(() => expect(pendingDialog()).toBeDefined())
+    const props = pendingDialog()?.props
     answerDialog(null)
-    await deleting
+    expect(await deleting).toBe(false)
+    expect(props).toEqual({targetCount: targets.length, totalCount: BULK_DELETE_CONFIRM_THRESHOLD})
   })
 
   it('keeps the editor in edit mode while the dialog holds focus', async () => {

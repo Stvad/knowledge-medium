@@ -12,8 +12,7 @@
  * keystroke from doing something pointless, not an immortality bit — but don't
  * read the guards as a subtree-wide protection when adding one.
  *
- * The CONFIRMATION is scoped the other way round, to everything that will be
- * tombstoned — see {@link confirmBulkDeleteThroughUi}.
+ * The confirmation looks through the entire subtree to count deleted content.
  *
  * Why this is a UI affordance rather than a data-layer guard, and what IS
  * unbypassable instead, is on `BlockDeletionGuard` in `@/extensions/core` —
@@ -24,6 +23,8 @@
  */
 import type { SubtreeRow } from '@/data/api'
 import type { Block } from '@/data/block.js'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
+import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { resolveDeletionRefusal } from '@/extensions/core.js'
@@ -36,14 +37,7 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
  *  by id). */
 const REFUSAL_TOAST_ID = 'block-deletion-refused'
 
-/** How many blocks one gesture may remove before it has to ask. Counted over
- *  the whole affected set, so the number means the same thing whether the user
- *  selected 30 blocks or pressed Delete on one collapsed page holding 30.
- *
- *  Sized for a confirmation that stays worth reading: one met often enough to
- *  click through without looking is worse than none. If it starts asking about
- *  deletes that look small, read `countBlocksRemovedBy` before changing this
- *  number — what it counts is the likelier cause. */
+/** Ask at this count of affected blocks, as measured by `countBlocksRemovedBy`. */
 export const BULK_DELETE_CONFIRM_THRESHOLD = 20
 
 export interface DeleteThroughUiOptions {
@@ -169,34 +163,27 @@ const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boo
   return ensureDeletableThroughUi(blocks)
 }
 
-/** Live blocks the delete would tombstone — the single owner of what "how many
- *  blocks" means here; `BULK_DELETE_CONFIRM_THRESHOLD` and
- *  `confirmBulkDeleteThroughUi` both defer to it.
- *
- *  The FULL subtree, matching `deleteSubtreeInTx`'s walk, NOT the visible view.
- *  The visible view prunes at a recognized field row and takes that row's whole
- *  branch, including any authored comment thread under a property value — which
- *  the delete removes regardless. Undercounting is the one direction of error
- *  that matters: it can drop the total under the threshold and skip the
- *  question entirely. The price is that machinery rows count too, so a
- *  property-heavy block reads higher than what is on screen; if that starts
- *  asking about deletes that look small, the fix is a data-layer count that
- *  drops machinery without pruning its authored descendants, never a field-row
- *  classifier restated here (issue #738).
- *
- *  Deduping is a saving, not a correctness condition — the count is the same
- *  either way, but a page selected with its 200 children costs 1 query instead
- *  of 201. It only pays when targets arrive ancestor-first, so callers pass
- *  selection order and leave the leaf-first ordering to the delete. */
+/** Recognized field rows count only when directly targeted. Read the structural
+ *  subtree so values and their descendants still count under omitted fields.
+ *  Deduplication also skips redundant queries for an ancestor-first selection. */
 const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> => {
-  const ids = new Set<string>()
+  const targets = new Set(blocks.map(block => block.id))
+  const seen = new Set<string>()
+  let count = 0
   for (const block of blocks) {
-    if (ids.has(block.id)) continue
+    if (seen.has(block.id)) continue
     const rows = await block.repo.runQuery<SubtreeRow[]>(
       'core.subtree',
       {id: block.id},
     )
-    for (const row of rows) ids.add(row.id)
+    for (const row of rows) {
+      if (seen.has(row.id)) continue
+      seen.add(row.id)
+      if (targets.has(row.id) || !isPropertyFieldInstance(row, fieldId =>
+        repoFieldDefinitionTest(block.repo, row.workspaceId)(fieldId))) {
+        count++
+      }
+    }
   }
-  return ids.size
+  return count
 }
