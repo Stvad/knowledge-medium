@@ -1,1 +1,1 @@
-export{iQ as contributorsDataExtension}from"../../../chunks/app-DbVAmMjP.js";
+export{iQ as contributorsDataExtension}from"../../../chunks/app-C-y_01fG.js";
