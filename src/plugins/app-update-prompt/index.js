@@ -1,1 +1,1 @@
-export{_P as appUpdatePromptExtension}from"../../../chunks/app-BgiNeOS4.js";
+export{xP as appUpdatePromptExtension}from"../../../chunks/app-DLct8BrS.js";

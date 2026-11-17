@@ -1,1 +1,1 @@
-export{wv as blockInfoPlugin}from"../../../chunks/app-BgiNeOS4.js";
+export{Ov as blockInfoPlugin}from"../../../chunks/app-DLct8BrS.js";

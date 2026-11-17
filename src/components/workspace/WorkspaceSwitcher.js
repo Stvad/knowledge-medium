@@ -1,1 +1,1 @@
-export{lE as WorkspaceSwitcher}from"../../../chunks/app-BgiNeOS4.js";
+export{pE as WorkspaceSwitcher}from"../../../chunks/app-DLct8BrS.js";

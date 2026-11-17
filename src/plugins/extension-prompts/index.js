@@ -1,1 +1,1 @@
-export{rP as ExtensionPromptSurface,iP as extensionPromptsExtension}from"../../../chunks/app-BgiNeOS4.js";
+export{sP as ExtensionPromptSurface,cP as extensionPromptsExtension}from"../../../chunks/app-DLct8BrS.js";

@@ -1,1 +1,1 @@
-export{N8 as KERNEL_PROCESSORS}from"../../../chunks/app-BgiNeOS4.js";
+export{L8 as KERNEL_PROCESSORS}from"../../../chunks/app-DLct8BrS.js";

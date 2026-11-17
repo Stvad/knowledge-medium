@@ -1,1 +1,1 @@
-export{xV as buildPropertyPanelSections}from"../../chunks/app-BgiNeOS4.js";
+export{TV as buildPropertyPanelSections}from"../../chunks/app-DLct8BrS.js";

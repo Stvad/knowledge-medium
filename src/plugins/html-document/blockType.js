@@ -1,1 +1,1 @@
-export{cJ as htmlDocumentTypeSeed}from"../../../chunks/app-BgiNeOS4.js";
+export{fJ as htmlDocumentTypeSeed}from"../../../chunks/app-DLct8BrS.js";

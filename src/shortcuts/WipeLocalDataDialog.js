@@ -1,1 +1,1 @@
-export{SN as WipeLocalDataDialog}from"../../chunks/app-BgiNeOS4.js";
+export{EN as WipeLocalDataDialog}from"../../chunks/app-DLct8BrS.js";

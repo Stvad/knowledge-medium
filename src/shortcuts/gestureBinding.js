@@ -1,1 +1,1 @@
-export{zP as gestureBindingDescriptor,BP as matchesGestureEvent}from"../../chunks/app-BgiNeOS4.js";
+export{UP as gestureBindingDescriptor,WP as matchesGestureEvent}from"../../chunks/app-DLct8BrS.js";

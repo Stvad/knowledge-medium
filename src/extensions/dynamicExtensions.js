@@ -1,1 +1,1 @@
-export{nF as dynamicExtensionsExtension}from"../../chunks/app-BgiNeOS4.js";
+export{oF as dynamicExtensionsExtension}from"../../chunks/app-DLct8BrS.js";

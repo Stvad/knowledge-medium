@@ -1,1 +1,1 @@
-export{mQ as characterCounterDataExtension}from"../../../chunks/app-BgiNeOS4.js";
+export{vQ as characterCounterDataExtension}from"../../../chunks/app-DLct8BrS.js";

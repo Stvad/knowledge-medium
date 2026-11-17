@@ -1,1 +1,1 @@
-export{nC as videoPlayerMarkdownExtension}from"../../../chunks/app-BgiNeOS4.js";
+export{oC as videoPlayerMarkdownExtension}from"../../../chunks/app-DLct8BrS.js";

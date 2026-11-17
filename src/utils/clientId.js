@@ -1,1 +1,1 @@
-export{vit as deviceSurface,yit as getClientId,bit as getDeviceLabel,xit as isClientIdPersistent,Sit as resetClientIdCache}from"../../chunks/app-BgiNeOS4.js";
+export{Sit as deviceSurface,Cit as getClientId,wit as getDeviceLabel,Tit as isClientIdPersistent,Eit as resetClientIdCache}from"../../chunks/app-DLct8BrS.js";

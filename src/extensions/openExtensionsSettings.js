@@ -1,1 +1,1 @@
-export{uI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,dI as openExtensionsSettings}from"../../chunks/app-BgiNeOS4.js";
+export{mI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,hI as openExtensionsSettings}from"../../chunks/app-DLct8BrS.js";

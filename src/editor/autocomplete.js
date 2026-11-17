@@ -1,1 +1,1 @@
-export{eP as editorAutocompleteExtension}from"../../chunks/app-BgiNeOS4.js";
+export{iP as editorAutocompleteExtension}from"../../chunks/app-DLct8BrS.js";

@@ -1,1 +1,1 @@
-export{$z as BLOCK_TITLE_TEXT_CLASS,eB as useBlockTitleTextClass}from"../../../chunks/app-BgiNeOS4.js";
+export{rB as BLOCK_TITLE_TEXT_CLASS,iB as useBlockTitleTextClass}from"../../../chunks/app-DLct8BrS.js";

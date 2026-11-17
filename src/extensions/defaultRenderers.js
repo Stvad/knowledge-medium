@@ -1,1 +1,1 @@
-export{KF as defaultRegistry,qF as defaultRendererContributions,JF as defaultRenderersExtension}from"../../chunks/app-BgiNeOS4.js";
+export{XF as defaultRegistry,ZF as defaultRendererContributions,QF as defaultRenderersExtension}from"../../chunks/app-DLct8BrS.js";

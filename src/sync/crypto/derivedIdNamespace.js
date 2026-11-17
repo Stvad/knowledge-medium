@@ -1,1 +1,1 @@
-export{jot as deriveWorkspaceIdNamespace}from"../../../chunks/app-BgiNeOS4.js";
+export{Fot as deriveWorkspaceIdNamespace}from"../../../chunks/app-DLct8BrS.js";

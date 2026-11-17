@@ -1,1 +1,1 @@
-export{kE as createEncryptedWorkspace}from"../../../../chunks/app-BgiNeOS4.js";
+export{NE as createEncryptedWorkspace}from"../../../../chunks/app-DLct8BrS.js";

@@ -1,1 +1,1 @@
-export{wb as useIsReadOnly}from"../../chunks/app-BgiNeOS4.js";
+export{Ob as useIsReadOnly}from"../../chunks/app-DLct8BrS.js";

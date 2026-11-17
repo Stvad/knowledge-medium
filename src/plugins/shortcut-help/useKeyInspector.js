@@ -1,1 +1,1 @@
-export{HA as useKeyInspector}from"../../../chunks/app-BgiNeOS4.js";
+export{KA as useKeyInspector}from"../../../chunks/app-DLct8BrS.js";

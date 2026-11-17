@@ -1,1 +1,1 @@
-export{zit as MIGRATIONS_PAGE_ALIAS,Bit as getOrCreateMigrationsPage,Vit as migrationsPageBlockId,Hit as migrationsPageSpec}from"../../chunks/app-BgiNeOS4.js";
+export{Uit as MIGRATIONS_PAGE_ALIAS,Wit as getOrCreateMigrationsPage,Git as migrationsPageBlockId,Kit as migrationsPageSpec}from"../../chunks/app-DLct8BrS.js";

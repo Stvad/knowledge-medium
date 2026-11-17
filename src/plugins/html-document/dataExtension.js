@@ -1,1 +1,1 @@
-export{sJ as htmlDocumentDataExtension}from"../../../chunks/app-BgiNeOS4.js";
+export{dJ as htmlDocumentDataExtension}from"../../../chunks/app-DLct8BrS.js";

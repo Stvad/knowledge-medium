@@ -1,1 +1,1 @@
-export{Kt as AppRuntimeProvider}from"../../chunks/app-BgiNeOS4.js";
+export{Kt as AppRuntimeProvider}from"../../chunks/app-DLct8BrS.js";

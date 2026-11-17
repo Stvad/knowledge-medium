@@ -1,1 +1,1 @@
-export{ig as lintExtensionSource}from"../../../chunks/app-BgiNeOS4.js";
+export{cg as lintExtensionSource}from"../../../chunks/app-DLct8BrS.js";

@@ -1,1 +1,1 @@
-export{qG as adoptOrCreatePropertySchema}from"../../chunks/app-BgiNeOS4.js";
+export{ZG as adoptOrCreatePropertySchema}from"../../chunks/app-DLct8BrS.js";

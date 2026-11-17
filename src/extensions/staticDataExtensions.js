@@ -1,1 +1,1 @@
-export{ZK as staticDataExtensions}from"../../chunks/app-BgiNeOS4.js";
+export{tq as staticDataExtensions}from"../../chunks/app-DLct8BrS.js";

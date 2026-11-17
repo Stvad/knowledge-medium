@@ -1,1 +1,1 @@
-export{OP as appUpdate,kP as useAppUpdateAvailable}from"../chunks/app-BgiNeOS4.js";
+export{MP as appUpdate,NP as useAppUpdateAvailable}from"../chunks/app-DLct8BrS.js";
