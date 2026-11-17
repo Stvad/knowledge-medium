@@ -1,1 +1,1 @@
-export{MV as declarationOnlyDefinitionForName,NV as declarationOnlyStatusText}from"../../../chunks/app-he-oOZgA.js";
+export{wV as declarationOnlyDefinitionForName,TV as declarationOnlyStatusText}from"../../../chunks/app-hWTxfK70.js";
