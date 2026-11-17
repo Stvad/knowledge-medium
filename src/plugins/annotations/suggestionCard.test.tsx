@@ -75,11 +75,18 @@ describe('SuggestionText', () => {
     expect(container.querySelector('ins')?.textContent).toBe('Thursday 9am')
   })
 
-  it('shows an open suggestion whole, since Accept applies all of it', () => {
-    const long = `${'a'.repeat(200)} and the change at the very end`
-    const r = {...root('open'), properties: {...root('open').properties, [annotationReplacementProp.name]: long}}
+  it('shows the full multiline before and after text, since Accept applies all of it', () => {
+    const quote = `${'a'.repeat(200)}\noriginal final line`
+    const replacement = `${'b'.repeat(200)}\nreplacement final line`
+    const r = {...root('open'), content: quote, properties: {...root('open').properties, [annotationReplacementProp.name]: replacement}}
     const {container} = render(<SuggestionText root={r} suggestion={threadSuggestionOf(r)!}/>)
-    expect(container.querySelector('ins')?.textContent).toBe(long)
+    expect(container.querySelector('del')?.textContent).toBe(quote)
+    expect(container.querySelector('ins')?.textContent).toBe(replacement)
+    expect(container.querySelector('[aria-label]')).toHaveAttribute('aria-label', `Suggested edit: replace “${quote}” with “${replacement}”`)
+    expect(container.textContent).toContain('Before:')
+    expect(container.textContent).toContain('After:')
+    expect(container.querySelector('del')?.parentElement).toHaveClass('whitespace-pre-wrap')
+    expect(container.querySelector('ins')?.parentElement).toHaveClass('whitespace-pre-wrap')
   })
 
   it('reads a closed one as what became of it', () => {
