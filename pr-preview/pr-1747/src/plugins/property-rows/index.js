@@ -1,1 +1,1 @@
-export{eo as propertyRowsPlugin}from"../../../chunks/app-DZDQzpLo.js";
+export{eo as propertyRowsPlugin}from"../../../chunks/app-bEpoX72B.js";

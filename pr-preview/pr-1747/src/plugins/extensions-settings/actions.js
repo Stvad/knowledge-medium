@@ -1,1 +1,1 @@
-export{Zr as openExtensionsSettingsAction}from"../../../chunks/app-DZDQzpLo.js";
+export{Zr as openExtensionsSettingsAction}from"../../../chunks/app-bEpoX72B.js";

@@ -1,1 +1,1 @@
-export{Fut as defineMutator}from"../../../chunks/app-DZDQzpLo.js";
+export{Fut as defineMutator}from"../../../chunks/app-bEpoX72B.js";
