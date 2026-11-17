@@ -1,1 +1,0 @@
-export{yg as authorIdOf}from"../../../chunks/app-DkZhd-yk.js";

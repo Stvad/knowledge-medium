@@ -1,1 +1,0 @@
-export{vQ as RAW_CHARACTER_COUNT_PROFILE_ID,yQ as WORDS_COUNT_PROFILE_ID,bQ as charLimitProp,xQ as charProfileProp,SQ as charScopeProp}from"../../../chunks/app-DkZhd-yk.js";

@@ -1,1 +1,0 @@
-export{JM as BlockEmbed}from"../../../chunks/app-DkZhd-yk.js";

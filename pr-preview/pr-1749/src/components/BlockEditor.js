@@ -1,1 +1,0 @@
-export{kR as BlockEditor}from"../../chunks/app-DkZhd-yk.js";

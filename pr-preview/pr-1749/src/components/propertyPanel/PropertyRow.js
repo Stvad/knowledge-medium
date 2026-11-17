@@ -1,1 +1,0 @@
-export{tV as PropertyRow,nV as PropertyValueCell}from"../../../chunks/app-DkZhd-yk.js";

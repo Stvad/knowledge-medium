@@ -1,1 +1,0 @@
-export{yo as propertiesMigrationPlugin}from"../../../chunks/app-DkZhd-yk.js";

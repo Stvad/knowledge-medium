@@ -1,1 +1,0 @@
-export{k8 as assertAliasClaimable,A8 as claimedAliases}from"../../chunks/app-DkZhd-yk.js";

@@ -1,1 +1,0 @@
-export{Q_ as DATA_MODEL_GUIDE,$_ as dataModelGuide}from"../../../chunks/app-DkZhd-yk.js";

@@ -1,1 +1,0 @@
-export{Nm as contributorsPlugin}from"../../../chunks/app-DkZhd-yk.js";

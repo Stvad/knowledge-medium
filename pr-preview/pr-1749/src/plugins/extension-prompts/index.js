@@ -1,1 +1,0 @@
-export{tP as ExtensionPromptSurface,nP as extensionPromptsExtension}from"../../../chunks/app-DkZhd-yk.js";

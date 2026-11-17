@@ -1,1 +1,0 @@
-export{qat as getOrCreatePropertiesPage,Jat as propertiesPageBlockId,Yat as propertiesPageSpec}from"../../chunks/app-DkZhd-yk.js";

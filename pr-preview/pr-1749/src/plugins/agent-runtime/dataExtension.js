@@ -1,1 +1,0 @@
-export{D1 as agentRuntimeDataExtension}from"../../../chunks/app-DkZhd-yk.js";
