@@ -542,7 +542,7 @@ export const ReanchorControls = ({root, targetContent}: {
   if (pending?.threadId === root.id) {
     return (
       <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground" role="status">
-        <span>Select the new text in the block, then choose Comment on selection.</span>
+        <span>Select the new text in the block, then choose Comment in its context menu.</span>
         <ActionButton bordered onClick={() => startReanchor(null)}>Cancel</ActionButton>
       </div>
     )

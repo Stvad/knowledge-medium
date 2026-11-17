@@ -122,7 +122,7 @@ describe('SuggestionActions', () => {
     await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('Select the text this suggestion should replace.')
     await userEvent.click(screen.getByRole('button', {name: 'Reselect'}))
-    expect(await screen.findByRole('status')).toHaveTextContent('Select the new text in the block, then choose Comment on selection.')
+    expect(await screen.findByRole('status')).toHaveTextContent('Select the new text in the block, then choose Comment in its context menu.')
     expect((await repo.load('B'))!.content).toBe('Meet Wednesday')
     expect(threadStatusOf((await repo.load(threadId))!)).toBe('open')
 
