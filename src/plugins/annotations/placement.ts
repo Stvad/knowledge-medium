@@ -107,23 +107,61 @@ export const scrollToShow = (box: Span, clip: Span, gap: number): number => {
   return toBottom > 0 ? Math.min(toBottom, toTop) : 0
 }
 
-/** The card after (`1`) or before (`-1`) `active` in placement order, past
- *  any that only stand in for others; undefined past either end, or when
- *  `active` isn't placed. */
-export const adjacentCard = (
-  order: readonly string[],
-  active: string,
-  step: 1 | -1,
-  standsIn: (key: string) => boolean,
-): string | undefined => {
+/** The card after (`1`) or before (`-1`) `active` in placement order;
+ *  undefined past either end, or when `active` isn't placed. */
+export const adjacentCard = (order: readonly string[], active: string, step: 1 | -1): string | undefined => {
   const at = order.indexOf(active)
-  if (at < 0) return undefined
-  for (let i = at + step; i >= 0 && i < order.length; i += step) {
-    if (!standsIn(order[i])) return order[i]
-  }
-  return undefined
+  return at < 0 ? undefined : order[at + step]
 }
 
 /** Is `span`, measured from the view's top, wholly outside a view `height`
  *  tall? */
 export const outOfView = (span: Span, height: number): boolean => span.bottom <= 0 || span.top >= height
+
+export interface PinState {
+  /** The user is scrolling the page (a wheel or touch on it, and the scroll
+   *  it carries on into), not the app. */
+  userScrolling: boolean
+  /** Focus is in the pinned card: the user is writing or reading in it. */
+  holdsFocus: boolean
+  /** The pinned card is placed here; a pin from another page is not. */
+  placed: boolean
+  /** Whether its row was in view on the last pass; undefined on the first. */
+  wasInView: boolean | undefined
+  inView: boolean
+}
+
+/** Does the pinned card go back to its row? When the user's own scrolling
+ *  takes its row out of view, so a card pinned with its row already out of
+ *  view (a link in it scrolled the page away) stays until the user brings the
+ *  row back and scrolls past it. */
+export const releasesPin = ({userScrolling, holdsFocus, placed, wasInView, inView}: PinState): boolean =>
+  userScrolling && !holdsFocus && (!placed || (wasInView === true && !inView))
+
+export interface MarginWheelState {
+  /** Inside the pause after moving on to another card. */
+  paused: boolean
+  horizontal: boolean
+  /** A scroller between the wheel's target and the card has room that way. */
+  innerCanScroll: boolean
+  /** Over the active card. */
+  overActive: boolean
+  /** The column cuts off the active card's side the wheel scrolls toward. */
+  activeClipped: boolean
+  holdsFocus: boolean
+  /** There is a card to move on to that way. */
+  hasNext: boolean
+}
+
+export type MarginWheelAction = 'native' | 'drop' | 'reveal' | 'move-on' | 'page'
+
+/** What a wheel over the margin does: scroll what it is over, show the rest
+ *  of the active card, move on to the next card past its end, or scroll the
+ *  page. Writing in the active card keeps it: the wheel scrolls the page. */
+export const marginWheel = (state: MarginWheelState): MarginWheelAction => {
+  if (state.paused) return 'drop'
+  if (state.horizontal || state.innerCanScroll) return 'native'
+  if (!state.overActive || state.holdsFocus) return 'page'
+  if (state.activeClipped) return 'reveal'
+  return state.hasNext ? 'move-on' : 'page'
+}
