@@ -907,33 +907,49 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(survivor?.reference_target_id).toBeNull()
   })
 
-  // #443 group 3: the projection's ref decode gates on the content's FORM, not
-  // on `reference_target_id` being non-null. End-to-end because the column read
-  // was defensible in isolation and only wrong once you see what DERIVE
-  // actually stamps: a whole-block `[[alias]]` resolves through the live alias
-  // index, so the column is populated with a REAL, WRONG block id. Before the
-  // fix this test measured `cell === 'mary-page'` — the property silently
-  // followed a name the user typed over the id it held.
-  it('a wikilink typed into a ref value unsets the cell — never re-points it', async () => {
+  it('projects a named ref without rewriting the authored wikilink', async () => {
     const repo = await setupWithRef()
     await createBlock(repo, 'p')
-    await createBlock(repo, 'mary-page')
-    await repo.tx(tx => tx.update('mary-page', {properties: {[aliasesProp.name]: ['Mary']}}),
+    await createBlock(repo, 'named-target')
+    await repo.tx(tx => tx.setProperty('named-target', aliasesProp, ['Named target']),
       {scope: ChangeScope.BlockDefault})
-    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-before'),
       {scope: ChangeScope.BlockDefault})
     const value = await relatedValueChild('p')
-
-    await repo.tx(tx => tx.update(value!.id, {content: '[[Mary]]'}),
+    await repo.tx(tx => tx.update(value!.id, {content: '[[Named target]]'}),
       {scope: ChangeScope.BlockDefault})
+    expect((await relatedValueChild('p'))?.reference_target_id).toBe('named-target')
+    expect(await relatedCell('p')).toBe('named-target')
+    expect((await relatedValueChild('p'))?.content).toBe('[[Named target]]')
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'named-target'),
+      {scope: ChangeScope.BlockDefault})
+    expect((await relatedValueChild('p'))?.content).toBe('[[Named target]]')
 
-    expect(await relatedCell('p')).toBeUndefined()
-    const survivor = await relatedValueChild('p')
-    // The row keeps the user's text and stays visible/fixable in the tree...
-    expect(survivor?.content).toBe('[[Mary]]')
-    // ...and the derived column is still stamped, which is the whole point:
-    // it resolves, so the OLD decode would have coerced this into a ref value.
-    expect(survivor?.reference_target_id).toBe('mary-page')
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-after'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await relatedCell('p')).toBe('target-after')
+    expect((await relatedValueChild('p'))?.id).toBe(value!.id)
+  })
+
+  it('projects mixed refList forms and retains the named member when the list changes', async () => {
+    const repo = await setupWithRef()
+    const listSchema = defineProperty('related-list', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    registerDefinition(repo, 'test-list-definition', 'field-related-list', listSchema)
+    await createBlock(repo, 'p')
+    await createBlock(repo, 'named-target')
+    await repo.tx(tx => tx.setProperty('named-target', aliasesProp, ['Named target']), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', listSchema, ['named-target', 'other-target']), {scope: ChangeScope.BlockDefault})
+    const field = (await childrenRows('p')).find(row => row.reference_target_id === 'field-related-list')!
+    const named = (await childrenRows(field.id))[0]!
+    await repo.tx(async tx => {
+      await tx.update(named.id, {content: '[[Named target]]'})
+      await tx.create({id: 'member-note', workspaceId: WS, parentId: named.id, orderKey: 'a0', content: 'member annotation'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await bagOf('p'))[listSchema.name]).toEqual(['named-target', 'other-target'])
+    await repo.tx(tx => tx.setProperty('p', listSchema, ['named-target', 'added-target']), {scope: ChangeScope.BlockDefault})
+    expect((await bagOf('p'))[listSchema.name]).toEqual(['named-target', 'added-target'])
+    expect(await repo.load(named.id)).toMatchObject({deleted: false, content: '[[Named target]]'})
+    expect(await repo.load('member-note')).toMatchObject({deleted: false, parentId: named.id})
   })
 
   it('a merge-losing ref value keeps its stamp (no unsound stamp-clear) — #19', async () => {
@@ -3839,14 +3855,7 @@ describe('content <-> value codecs: escaping strings content cannot hold as itse
   })
 })
 
-describe('content <-> value codecs: ref values decode from the id-carrying span', () => {
-  // A ref value child holds the reference in EDITABLE `((id))` form (the same
-  // affordance as any block reference), while the cell keeps a bare id. The
-  // read side parses the id out of the span, and accepts the ID-CARRYING forms
-  // ONLY (§9; #443 group 3). It used to read `reference_target_id` instead, on
-  // a stated invariant — "column is null iff content isn't a resolvable exact
-  // ref" — that was false: the derive stamps that column for a whole-block
-  // `[[alias]]` too, minting a seat when nothing claims it.
+describe('content <-> value codecs: reference value decoding', () => {
   const refSchema = defineProperty<string>('related', {
     codec: codecs.ref(),
     defaultValue: '',
@@ -3901,24 +3910,13 @@ describe('content <-> value codecs: ref values decode from the id-carrying span'
     ).toThrow()
   })
 
-  // The case the column read got WRONG, and the reason this decode moved to a
-  // form check: in a real workspace this content has a non-null
-  // `reference_target_id`, so a column-trusting decode wrote a live block id
-  // into the cell. The end-to-end test above is the one that proves the column
-  // really is populated; here it's the form alone that decides.
-  it('rejects a whole-block wikilink', () => {
-    expect(() => valueChildContentToEncoded(refSchema, '[[Mary]]')).toThrow()
-  })
-
-  // ...and it must be THIS clause doing the refusing, not a downstream codec.
-  // For a required ref `codecs.ref().decode(undefined)` throws anyway, so the
-  // required case can't tell the two apart. `optionalRef` can: its
-  // `decode(undefined)` returns undefined without throwing, which
-  // `firstProjectedFieldValue` reads as "nothing parsed" — so a weakened
-  // clause here would stop the value scan on a wikilink row and skip a later
-  // sibling that does name an id.
-  it('rejects a wikilink in an OPTIONAL ref too, where no codec catches it', () => {
-    expect(() => valueChildContentToEncoded(optionalRefSchema, '[[Mary]]')).toThrow()
+  it.each([refSchema, optionalRefSchema])('accepts resolved names for $name and rejects unresolved names', schema => {
+    expect(valueChildContentToEncoded(schema, {content: '[[Page]]', referenceTargetId: 'page-target'}))
+      .toBe('page-target')
+    expect(() => valueChildContentToEncoded(schema, '[[Page]]')).toThrow()
+    expect(() => valueChildContentToEncoded(schema, {content: '[[Page]]', referenceTargetId: null})).toThrow()
+    expect(() => valueChildContentToEncoded(schema, {content: '::[[Page]]', referenceTargetId: 'page-target'})).toThrow()
+    expect(() => valueChildContentToEncoded(schema, {content: 'prose', referenceTargetId: 'stale-target'})).toThrow()
   })
 
   it('rejects the MARKED id-carrying form — `::((id))` is a field row, not a value', () => {
@@ -5133,15 +5131,20 @@ describe('convertValueChildContent: which reading of a value child wins (#1055)'
     expect(convert('number', 'list', '[1,2]')).toEqual({outcome: 'converted', content: '[1,2]'})
   })
 
-  it('re-spells a reference the stored text ALREADY carried', () => {
-    // The mint decline is gated on the stored text, not on the target: an
-    // alias the person wrote is an identity they wrote. Nothing else can
-    // answer here — the text route cannot read the alias form under `ref` at
-    // all, so declining would refuse the re-type rather than answer it
-    // differently.
-    expect(convert('string', 'ref', '[[Page]]'))
-      .toEqual({outcome: 'converted', content: '(([[Page]]))'})
+  it('resolves the authored named reference when changing text to ref', () => {
+    expect(convertValueChildContent(schemaOf('string'), schemaOf('ref'), {
+      content: '[[Page]]', referenceTargetId: 'page-target',
+    })).toEqual({outcome: 'converted', content: '((page-target))'})
+    expect(convert('string', 'ref', '[[Page]]')).toEqual({outcome: 'unreadable'})
     expect(convert('string', 'ref', 'Mary')).toEqual({outcome: 'unreadable'})
+  })
+
+  it('preserves named reference identity when changing ref to text or a list', () => {
+    const row = {content: '[[Page]]', referenceTargetId: 'page-target'}
+    expect(convertValueChildContent(schemaOf('ref'), schemaOf('string'), row))
+      .toEqual({outcome: 'converted', content: 'page-target'})
+    expect(convertValueChildContent(schemaOf('ref'), {...schemaOf('ref'), codec: codecs.refList()}, row))
+      .toEqual({outcome: 'converted', content: '[[Page]]'})
   })
 
   it('treats the EMPTY spelling as a spelling', () => {

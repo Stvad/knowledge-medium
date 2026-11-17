@@ -19,7 +19,7 @@ const InlineValue = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const runtime = useAppRuntime()
   const definitions = usePropertyDefinitions(block.repo)
   const data = useHandle(block, {selector: row => row ? {
-    parentId: row.parentId, content: row.content, isFieldForm: row.isFieldForm,
+    parentId: row.parentId, content: row.content, isFieldForm: row.isFieldForm, referenceTargetId: row.referenceTargetId,
   } : undefined})
   const definition = useFieldRowDefinition(block.repo.block(data?.parentId ?? ''))
   const schema = definition?.schema
@@ -32,7 +32,7 @@ const InlineValue = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   }
   let value: unknown
   try {
-    value = (memberCodecOf(schema.codec) ?? schema.codec).decode(valueChildContentToEncoded(schema, data.content))
+    value = (memberCodecOf(schema.codec) ?? schema.codec).decode(valueChildContentToEncoded(schema, data))
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
     return <div className="flex min-w-0 items-center gap-1">

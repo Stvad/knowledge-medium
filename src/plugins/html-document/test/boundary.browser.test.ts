@@ -54,7 +54,7 @@ const CONTROL_CANNOT: Record<Engine, readonly string[]> = {
  *  Playwright's, whose focus handling differs from a shipped browser's: `webkit`
  *  here says nothing about Safari on an iPhone. */
 const TAKES_THE_KEYBOARD: Record<Engine, boolean> = {
-  chromium: true,
+  chromium: false,
   webkit: false,
   firefox: true,
 }
@@ -1108,19 +1108,12 @@ describe.each(selectedEngines())('%s', engine => {
       expect(await stunPacketsFrom(host => mountRunning(host, stunProbe()))).toBeGreaterThan(0)
     })
 
-    // Measured on Chromium only. No script is involved, so holding doesn't stop these,
-    // but what it takes has no way out of a held document.
-    const FRAGMENT_THIEF = `<meta http-equiv="refresh" content="1"><iframe srcdoc="<input id=f><meta http-equiv=refresh content='0;url=#f'>"></iframe>`
+    // Measured on Chromium only. No script is involved, so holding doesn't stop it.
+    const FRAGMENT_REFRESH = `<meta http-equiv="refresh" content="1"><iframe srcdoc="<input id=f><meta http-equiv=refresh content='0;url=#f'>"></iframe>`
 
-    it.runIf(engine === 'chromium')('takes the keyboard while held, through a fragment link in a refresh', async () => {
-      const taken = await typeIntoApp(host => mountHeld(host, FRAGMENT_THIEF))
-      expect(taken.inApp).not.toBe('abcde')
-      expect(taken.stolen).toBe('')
-    })
-
-    it.runIf(engine === 'chromium')('adds to the page\'s history while held, the same way', async () => {
+    it.runIf(engine === 'chromium')('adds to the page\'s history while held, through a fragment link in a refresh', async () => {
       const host = await openHost(browser, servers.hostUrl)
-      await mountHeld(host, FRAGMENT_THIEF)
+      await mountHeld(host, FRAGMENT_REFRESH)
       const before = await historyLength(host)
       await expect.poll(() => historyLength(host), {timeout: 10_000}).toBeGreaterThan(before)
       await host.close()

@@ -176,6 +176,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
   reprojectOwnersOfStampedFieldRows: 'private; reached only from stampReferenceTargets (schedule-driven jobs)',
+  reprojectResolvedPropertyValues: 'private; reached only by schedule-driven reference-target derivation jobs',
   referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 

@@ -266,6 +266,6 @@ describe('landingCardScopes', () => {
     const landing = {targetId: 'B', threads: [{id: 'T1', open: true}, {id: 'T2', open: true}], collapsed: [], rows: []}
     const margin = cardRenderScopeId('margin', panelRenderScopeId('p', 'B'), 'T1')
 
-    expect(landingCardScopes('p', landing, true)).toEqual([margin, cardRenderScopeId('comments', margin, 'T2')])
+    expect(landingCardScopes(panelRenderScopeId('p', 'B'), landing, true)).toEqual([margin, cardRenderScopeId('comments', margin, 'T2')])
   })
 })

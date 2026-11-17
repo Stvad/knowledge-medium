@@ -124,6 +124,7 @@ import {referenceTargetLookupsVia} from './internals/referenceTargetLookups'
 import type { BlockIdPolicy } from './blockId'
 import {
   reprojectOwnersForRowStates,
+  PROPERTY_VALUES_RESOLVED_EVENT,
   type ProjectableRow,
   type ProjectionLookups,
 } from './internals/propertyChildrenProcessor'
@@ -907,12 +908,9 @@ export class Repo {
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
    *  (a durable once-ever marker permanently missed definitions/aliases
-   *  that arrived while the app was closed or
-   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
-   *  the first run, but the LIKE prefilter itself is an O(table) scan on
-   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
-   *  deep idle, once per workspace open; a partial expression index on the
-   *  content-shape predicate is the escape hatch if it ever matters. */
+   *  that arrived while the app was closed or the workspace inactive).
+   *  Candidates are unresolved reference rows selected through the partial
+   *  reference-candidate index; the sweep runs once per workspace per session. */
   private readonly referenceTargetSweepDone = new Set<string>()
   /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
    *  in ONE batched scan per drain (never one scan per name). Names only
@@ -4484,7 +4482,6 @@ export class Repo {
     }
 
     await this.stampReferenceTargets(updates, stampContext)
-
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
     // narrow accepted window: an alias/definition arriving between this
@@ -4500,9 +4497,9 @@ export class Repo {
     return referenceTargetLookupsVia(reader)
   }
 
-  /** Chunked raw column stamps, materializer-style: source-NULL (upload
-   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
-   *  `updated_at` (the LWW row-version) for a purely local derivation.
+  /** Chunked raw column stamps without advancing `updated_at`.
+   * Field rows receive additive repair; named values dispatch settled
+   * projection so derived cell writes cannot materialize over source rows.
    *
    *  Compare-and-set per row (adversarial-review fix): callers scan/derive
    *  outside the write lock, so a concurrent local edit or sync arrival can
@@ -4590,6 +4587,10 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+      if (reproject) {
+        const valueIds = [...snapshots.values()].filter(({after}) => !after.isFieldForm).map(({after}) => after.id)
+        await this.reprojectResolvedPropertyValues(valueIds, context.workspaceId)
+      }
       if (newlyRecognized.length === 0) continue
       try {
         await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
@@ -4606,6 +4607,14 @@ export class Repo {
         )
       }
     }
+  }
+
+  private async reprojectResolvedPropertyValues(valueIds: readonly string[], workspaceId: string): Promise<void> {
+    if (valueIds.length === 0) return
+    await this.tx(async tx => {
+      if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
+      tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds}, workspaceId)
+    }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
@@ -4710,12 +4719,8 @@ export class Repo {
       // yet — a generic alias minted mid-session (referencesProcessor enqueues
       // the name when it creates the seat) repairs `[[Foo]]` rows written
       // before page Foo existed. Re-pointing an ALREADY-stamped row is
-      // deliberately NOT done: `reference_target_id`'s only consumers are
-      // property field-row recognition (is-target-a-definition), and
-      // definitions aren't name-resolvable yet, so a non-NULL re-point would
-      // change nothing any reader observes. That reclaim (with the cell
-      // reprojection a raw stamp currently skips) belongs to the auto-claim
-      // work that makes definitions name-resolvable.
+      // deliberately NOT done here: existing bindings are maintained by
+      // the ordinary rename/merge paths; this drain only fills missing targets.
       // Alias forms only (`REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL`): this
       // drain discards anything that isn't `kind === 'alias'` two lines below.
       const candidates = await this.db.getAll<{id: string; content: string}>(

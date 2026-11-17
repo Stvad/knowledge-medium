@@ -2,6 +2,7 @@
 import {cleanup, fireEvent, render, screen} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
+import type {ReactNode} from 'react'
 import {ChangeScope} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -10,9 +11,11 @@ import {RepoContext} from '@/context/repo'
 import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {captureAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
-import {annotationReplacementProp, annotationStatusProp, threadStatusOf, threadSuggestionOf} from './schema'
+import {annotationReplacementProp, annotationStatusProp, threadAnchorOf, threadStatusOf, threadSuggestionOf} from './schema'
 import {showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard'
 import {createThread} from './threads'
+import {ReanchorControls} from './ui'
+import {releasePendingReanchor} from './uiStore'
 
 const WS = 'ws'
 const TEXT = 'Meet Thursday'
@@ -87,8 +90,10 @@ describe('SuggestionText', () => {
 })
 
 describe('SuggestionActions', () => {
-  const renderActions = (threadId: string) => render(
-    <RepoContext.Provider value={repo}><SuggestionActions threadId={threadId}/></RepoContext.Provider>,
+  const renderActions = (threadId: string, recovery?: ReactNode) => render(
+    <RepoContext.Provider value={repo}>
+      <SuggestionActions threadId={threadId} recovery={recovery}/>
+    </RepoContext.Provider>,
   )
 
   it('accepts with a click, editing the target', async () => {
@@ -106,6 +111,46 @@ describe('SuggestionActions', () => {
     expect(screen.getByRole('button', {name: 'Reject'})).toBeDisabled()
     expect(screen.getByRole('button', {name: 'Accept'})).toBeDisabled()
     await vi.waitFor(async () => expect(threadStatusOf((await repo.load(threadId))!)).toBe('accepted'))
+  })
+
+  it('shows anchor recovery after a refusal and can accept after the text is corrected', async () => {
+    const threadId = await suggestOnB()
+    await repo.tx(tx => tx.update('B', {content: 'Meet Wednesday'}), opts)
+    const rootData = (await repo.load(threadId))!
+    renderActions(threadId, <ReanchorControls root={rootData} targetContent="Meet Wednesday"/>)
+
+    await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Select the text this suggestion should replace.')
+    await userEvent.click(screen.getByRole('button', {name: 'Reselect'}))
+    expect(await screen.findByRole('status')).toHaveTextContent('Select the new text in the block, then choose Comment in its context menu.')
+    expect((await repo.load('B'))!.content).toBe('Meet Wednesday')
+    expect(threadStatusOf((await repo.load(threadId))!)).toBe('open')
+
+    releasePendingReanchor(threadId)
+    await repo.tx(tx => tx.update('B', {content: TEXT}), opts)
+    await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
+    await vi.waitFor(async () => expect((await repo.load('B'))!.content).toBe('Meet Thursday 9am'))
+    expect(threadStatusOf((await repo.load(threadId))!)).toBe('accepted')
+  })
+
+  it('previews the moved candidate before confirming its position, then accepts after re-anchoring', async () => {
+    const threadId = await suggestOnB()
+    const targetContent = `${'x'.repeat(20)} ${TEXT} and ${TEXT}`
+    await repo.tx(tx => tx.update('B', {content: targetContent}), opts)
+    const rootData = (await repo.load(threadId))!
+    renderActions(threadId, <ReanchorControls root={rootData} targetContent={targetContent}/>)
+
+    await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
+    expect(await screen.findByRole('alert')).toHaveTextContent('This text appears more than once.')
+    expect(screen.getByText('Suggested position (review before confirming):')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Candidate quote: .*Meet Thursday/)).toBeInTheDocument()
+    expect(screen.getByText('Thursday', {selector: 'mark'})).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', {name: 'Confirm position'}))
+    await vi.waitFor(async () => expect(threadAnchorOf((await repo.load(threadId))!)).toMatchObject({quoteStart: 26}))
+    await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
+    await vi.waitFor(async () => expect((await repo.load('B'))!.content).toBe('xxxxxxxxxxxxxxxxxxxx Meet Thursday 9am and Meet Thursday'))
+    expect(threadStatusOf((await repo.load(threadId))!)).toBe('accepted')
   })
 
   it('rejects with a click, leaving the target alone', async () => {

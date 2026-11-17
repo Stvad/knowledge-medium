@@ -61,6 +61,7 @@ import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
   scalarValueRow,
+  valueChildContentToEncoded,
   getPropertyFieldTargetId,
   fieldValueChildren,
   isFieldValueChild,
@@ -242,7 +243,7 @@ const projectedFieldValue = async (
  *  should hold. */
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
-  perFieldRow: readonly (readonly Pick<BlockData, 'id' | 'content'>[])[],
+  perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
 ): unknown | undefined => {
   // NO field row at all: the key is unset. That is the only thing that unsets a
   // multi-valued property, and it is the precondition
@@ -251,7 +252,7 @@ export const projectFieldRowValues = (
   if (perFieldRow.length === 0) return undefined
   // `unionValuesAcrossFieldRows` owns what happens across the rows.
   return childContentsToEncodedPropertyValue(
-    schema, unionValuesAcrossFieldRows(schema, perFieldRow).map(value => value.content))
+    schema, unionValuesAcrossFieldRows(schema, perFieldRow))
 }
 
 // §9 selection: the bit + target pair (the JS twin of
@@ -945,7 +946,15 @@ const reconcileSingleValueChild = async (
     await createValueChild(tx, fieldRow, content, keyAtStart(values[0]?.orderKey ?? null), slot)
     return
   }
-  if (primary.content !== content) await tx.update(primary.id, {content})
+  let sameValue = primary.content === content
+  if (!sameValue) {
+    try {
+      sameValue = jsonValuesEqual(valueChildContentToEncoded(schema, primary), valueChildContentToEncoded(schema, content))
+    } catch {
+      // An unreadable primary is repaired by the requested spelling.
+    }
+  }
+  if (!sameValue) await tx.update(primary.id, {content})
   // Fold only EXACT duplicates of the projected cell value (concurrent
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
@@ -1305,5 +1314,34 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       // makes the lossy unset safe here and nowhere else.
       'full',
     )
+  },
+})
+
+export const PROPERTY_VALUES_RESOLVED_EVENT = 'core.propertyValuesResolved' as const
+
+interface ResolvedPropertyValuesEvent {workspaceId: string; valueIds: readonly string[]}
+
+declare module '../api/sameTxProcessor' {
+  interface SameTxEventRegistry {
+    'core.propertyValuesResolved': ResolvedPropertyValuesEvent
+  }
+}
+
+/** A reference target can become available after its value row was written;
+ * project that value without rewriting its source content. */
+export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor({
+  name: 'core.projectResolvedPropertyValues',
+  watches: {kind: 'event', events: [PROPERTY_VALUES_RESOLVED_EVENT]},
+  settledWrites: true,
+  apply: async (event, ctx) => {
+    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
+    const rows: ProjectableRow[] = []
+    for (const resolved of event.emittedEvents) {
+      for (const id of (resolved.payload as ResolvedPropertyValuesEvent).valueIds) {
+        const row = await ctx.tx.get(id)
+        if (row) rows.push(row)
+      }
+    }
+    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'full')
   },
 })

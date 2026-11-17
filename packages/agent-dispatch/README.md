@@ -45,6 +45,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 
 0.10.0 requires `@knowledge-medium/agent-cli` 0.15.0. A claude watcher can now work in a persistent folder with sandboxed Bash and file tools: add `"workspace": {}` to its `runner` (see [Workspace](#workspace)). Watchers without it run as before. Watcher names that differ only in case (`Claude`, `claude`) are now refused as duplicates: a workspace's folder and MCP config are named for its watcher on a disk that ignores case. A thread that started before its watcher had a workspace keeps resuming its session, now from a new folder, so paths in its earlier turns point outside the workspace and are unreachable. Upgrade both packages and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
 
+## Upgrade to 0.9.4
+
+Comment-thread requests now include the annotated block's ID and its containing root page's ID, so agents can address them directly instead of searching by text or breadcrumb. If the ancestry does not reach a root, the page ID is marked unavailable. Upgrade `@knowledge-medium/agent-dispatch` and restart the daemon; no app update is required.
+
 ## Upgrade to 0.9.3
 
 0.9.3 requires `@knowledge-medium/agent-cli` 0.14.1. The status chip shows the oldest outstanding tool's age, with a warning when a `km:` call has waited more than 20 seconds. Other activities show age without warnings. Activity details remain in the title and menu, and the pill keeps the same width in every state.
