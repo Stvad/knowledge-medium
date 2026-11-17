@@ -1,0 +1,1 @@
+export{eot as DerivedIdNamespaceUnavailableError,tot as derivedIdNamespaceInTx,not as resolveDerivedIdNamespace}from"../../chunks/app-B-rPP7Y0.js";

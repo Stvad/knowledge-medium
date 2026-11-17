@@ -1,0 +1,1 @@
+export{YC as COLEMAK_KEYBINDINGS_PLUGIN_ID,XC as colemakKeybindingsPlugin,ZC as colemakMovementKeybindingOverrides}from"../../../chunks/app-B-rPP7Y0.js";

@@ -1,0 +1,1 @@
+export{KF as defaultRegistry,qF as defaultRendererContributions,JF as defaultRenderersExtension}from"../../chunks/app-B-rPP7Y0.js";
