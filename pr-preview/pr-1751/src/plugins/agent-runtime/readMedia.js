@@ -1,0 +1,1 @@
+export{Mg as readMedia}from"../../../chunks/app-hM73oniL.js";

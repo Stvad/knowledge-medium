@@ -1,0 +1,1 @@
+export{zy as wikilinkMarkdownExtension}from"../../../../../chunks/app-hM73oniL.js";

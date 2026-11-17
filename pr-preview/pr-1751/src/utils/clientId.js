@@ -1,0 +1,1 @@
+export{git as deviceSurface,_it as getClientId,vit as getDeviceLabel,yit as isClientIdPersistent,bit as resetClientIdCache}from"../../chunks/app-hM73oniL.js";

@@ -1,0 +1,1 @@
+export{VO as useAncestorCrumbs}from"../../chunks/app-hM73oniL.js";

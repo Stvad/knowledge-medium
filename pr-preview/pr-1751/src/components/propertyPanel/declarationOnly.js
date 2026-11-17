@@ -1,0 +1,1 @@
+export{wV as declarationOnlyDefinitionForName,TV as declarationOnlyStatusText}from"../../../chunks/app-hM73oniL.js";

@@ -1,0 +1,1 @@
+export{Zb as richPastePlugin}from"../../../chunks/app-hM73oniL.js";

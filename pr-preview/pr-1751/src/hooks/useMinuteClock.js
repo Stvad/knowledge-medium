@@ -1,0 +1,1 @@
+export{pO as useMinuteClock}from"../../chunks/app-hM73oniL.js";

@@ -1,0 +1,1 @@
+export{iN as chipStyle}from"../../../chunks/app-hM73oniL.js";

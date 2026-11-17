@@ -1,0 +1,1 @@
+export{Nh as extensionsOverridesProp,Ph as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-hM73oniL.js";

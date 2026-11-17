@@ -1,0 +1,1 @@
+export{Sb as useIsReadOnly}from"../../chunks/app-hM73oniL.js";

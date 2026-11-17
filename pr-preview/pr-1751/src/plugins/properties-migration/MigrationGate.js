@@ -1,0 +1,1 @@
+export{bo as MigrationGate}from"../../../chunks/app-hM73oniL.js";

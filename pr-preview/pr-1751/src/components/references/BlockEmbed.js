@@ -1,0 +1,1 @@
+export{JM as BlockEmbed}from"../../../chunks/app-hM73oniL.js";

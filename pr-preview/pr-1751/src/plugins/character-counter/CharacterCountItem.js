@@ -1,0 +1,1 @@
+export{Gn as characterCountItemContribution}from"../../../chunks/app-hM73oniL.js";

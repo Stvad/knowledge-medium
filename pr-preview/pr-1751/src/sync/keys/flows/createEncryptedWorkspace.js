@@ -1,0 +1,1 @@
+export{DE as createEncryptedWorkspace}from"../../../../chunks/app-hM73oniL.js";

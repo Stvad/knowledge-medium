@@ -1,0 +1,1 @@
+export{uP as approveExtensionHere}from"../../chunks/app-hM73oniL.js";
