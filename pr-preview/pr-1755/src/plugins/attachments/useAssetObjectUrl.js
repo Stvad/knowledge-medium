@@ -1,0 +1,1 @@
+export{OS as useAssetObjectUrl}from"../../../chunks/app-CxKaJqK9.js";

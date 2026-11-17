@@ -1,0 +1,1 @@
+export{lg as findExtensionBlock}from"../../chunks/app-CxKaJqK9.js";
