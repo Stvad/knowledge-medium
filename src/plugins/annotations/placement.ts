@@ -106,3 +106,24 @@ export const scrollToShow = (box: Span, clip: Span, gap: number): number => {
   const toBottom = box.bottom - clip.bottom + gap
   return toBottom > 0 ? Math.min(toBottom, toTop) : 0
 }
+
+/** The card after (`1`) or before (`-1`) `active` in placement order, past
+ *  any that only stand in for others; undefined past either end, or when
+ *  `active` isn't placed. */
+export const adjacentCard = (
+  order: readonly string[],
+  active: string,
+  step: 1 | -1,
+  standsIn: (key: string) => boolean,
+): string | undefined => {
+  const at = order.indexOf(active)
+  if (at < 0) return undefined
+  for (let i = at + step; i >= 0 && i < order.length; i += step) {
+    if (!standsIn(order[i])) return order[i]
+  }
+  return undefined
+}
+
+/** Is `span`, measured from the view's top, wholly outside a view `height`
+ *  tall? */
+export const outOfView = (span: Span, height: number): boolean => span.bottom <= 0 || span.top >= height

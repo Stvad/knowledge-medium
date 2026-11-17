@@ -16,9 +16,12 @@
  *
  * A card sits beside its target row's top, or, for a quote, beside the line
  * the quote starts on (`quoteTop`). The active card stays in view while the
- * outline scrolls away from its row, until it is released. A card is never
- * taller than the column: past that it scrolls inside itself, and the wheel
- * scrolls the outline once the card can scroll no further.
+ * outline scrolls away from its row, until it is released: by its close
+ * button, by Escape, or by the user scrolling the outline (not a scroll the
+ * app makes, such as a link in a comment revealing its block) until its row
+ * is out of view. A card is never taller than the column: past that it
+ * scrolls inside itself. Scrolling on past the end of the active card moves
+ * on to the next card, or the previous one, and the outline with it.
  *
  * Where even the narrowed text leaves no room, it draws nothing and says so
  * (`setMarginShowing`), and the comment pill falls back to expanding threads
@@ -44,7 +47,7 @@ import {shouldScrollFocusedBlockIntoView} from '@/extensions/BlockFocusShellDeco
 import {isEditorElement} from '@/utils/dom.js'
 import {panelRenderScopeId} from '@/utils/renderScope.js'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
-import {byPlacement, fitColumn, placeCards, scrollToShow} from './placement.ts'
+import {adjacentCard, byPlacement, fitColumn, outOfView, placeCards, scrollToShow} from './placement.ts'
 import {quoteTop} from './quotePosition.ts'
 import type {RangeAnchor} from './anchor.ts'
 import {THREADS_IN_SCOPE_QUERY, type ScopeThread} from './scopeThreads.ts'
@@ -69,6 +72,12 @@ const EDGE_PX = 16
 const CARD_GAP_PX = 8
 /** Kept clear at the column's foot for `MarginFooter`'s buttons. */
 const FOOTER_PX = 28
+/** How recently a wheel or touch on the outline counts as the user scrolling
+ *  it: it lands in the next layout pass, a frame or two later. */
+const USER_SCROLL_MS = 300
+/** After moving on to another card, the rest of that wheel gesture is
+ *  dropped, so one flick moves on by one card. */
+const HANDOFF_PAUSE_MS = 400
 /** The tallest a card's scrolling body grows, set on the column. */
 const CARD_MAX_HEIGHT_VAR = '--margin-card-max-height'
 
@@ -160,6 +169,11 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     /** Each card's top as last placed, and the card that was active then. */
     const placedTops = new Map<string, number>()
     let placedActive: string | undefined
+    /** The cards in placement order as last placed. */
+    let placedOrder: readonly string[] = []
+    let userScrolledAt = Number.NEGATIVE_INFINITY
+    let handoffUntil = Number.NEGATIVE_INFINITY
+    const noteUserScroll = () => { userScrolledAt = performance.now() }
     /** Room added below the outline so the last cards, pushed below the last
      *  row, can be scrolled to. Inline style, which React leaves alone on the
      *  text frame, and removed with the margin. On the frame, never the
@@ -268,7 +282,18 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         }))
         .sort(byPlacement)
       const boxes = placed.map(card => ({anchor: card.anchor, height: card.entry.el.offsetHeight}))
-      const active = peekActiveThread(panelId)
+      placedOrder = placed.map(card => card.key)
+      let active = peekActiveThread(panelId)
+      if (active !== undefined && performance.now() - userScrolledAt < USER_SCROLL_MS) {
+        const pinned = placed.find(card => card.key === active)
+        const row = pinned && contentBox(rowEls.get(pinned.entry.blockId) as HTMLElement)
+        const span = row && {top: row.top - columnTop, bottom: row.bottom - columnTop}
+        // An active card from elsewhere (another page) has no row here at all.
+        if (!span || outOfView(span, nextFrame.height)) {
+          deactivateThread(panelId)
+          active = undefined
+        }
+      }
       const tops = placeCards(boxes, placed.findIndex(card => card.key === active), CARD_GAP_PX, nextFrame.height)
       // The room below the outline follows the cards as they flow, not as the
       // active one pushes them: that moves with the scroll, and the room it
@@ -319,7 +344,38 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       cancelAnimationFrame(pending)
       return run()
     }
-    layout.current = {schedule, flush}
+    /** Bring `key`'s card in as the active one: the outline scrolls its row
+     *  to the column's top, and its body starts from the end the wheel comes
+     *  in from. */
+    const moveOnTo = (key: string, down: boolean) => {
+      const entry = cards.current.get(key)
+      if (!entry) return
+      activateThread(panelId, key)
+      const row = [...scrollport.querySelectorAll<HTMLElement>(selector)].find(el => scopeRowBlockId(el) === entry.blockId)
+      const column = columnRef.current
+      if (row && column) scrollport.scrollTop += contentBox(row).top - column.getBoundingClientRect().top - CARD_GAP_PX
+      flush()
+      const body = entry.el.querySelector<HTMLElement>(CARD_BODY_SELECTOR)
+      if (body) body.scrollTop = down ? 0 : body.scrollHeight
+    }
+    const wheel = (deltaY: number, target: Element) => {
+      const now = performance.now()
+      if (now < handoffUntil || deltaY === 0) return
+      const body = target.closest<HTMLElement>(CARD_BODY_SELECTOR)
+      if (body && canScrollBy(body, deltaY)) return
+      const active = peekActiveThread(panelId)
+      if (active !== undefined && body?.closest<HTMLElement>('[data-margin-card]')?.dataset.marginCard === active) {
+        const next = adjacentCard(placedOrder, active, deltaY > 0 ? 1 : -1, isStandIn)
+        if (next !== undefined) {
+          handoffUntil = now + HANDOFF_PAUSE_MS
+          moveOnTo(next, deltaY > 0)
+          return
+        }
+      }
+      noteUserScroll()
+      scrollport.scrollBy({top: deltaY, left: 0})
+    }
+    layout.current = {schedule, flush, wheel}
 
     // Before this frame's paint, so text narrowed by a resize and the column
     // beside it move together.
@@ -334,6 +390,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
     const mutations = new MutationObserver(schedule)
     mutations.observe(scrollport, {childList: true, characterData: true, subtree: true})
     scrollport.addEventListener('scroll', schedule, {passive: true})
+    scrollport.addEventListener('wheel', noteUserScroll, {passive: true})
+    scrollport.addEventListener('touchmove', noteUserScroll, {passive: true})
     const unsubscribe = onUiStoreChange(schedule)
     schedule()
     return () => {
@@ -342,6 +400,8 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
       cardObserver.current = null
       mutations.disconnect()
       scrollport.removeEventListener('scroll', schedule)
+      scrollport.removeEventListener('wheel', noteUserScroll)
+      scrollport.removeEventListener('touchmove', noteUserScroll)
       unsubscribe()
       setExtraBottom(0)
       setPanelGeometry(null)
@@ -375,12 +435,9 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
   )
 
   // The column is outside the scrollport, so a wheel over it would scroll
-  // nothing; hand it to the outline, unless a card scrolls it itself.
+  // nothing; the layout pass decides where it goes.
   const forwardWheel = (event: WheelEvent) => {
-    if (event.ctrlKey) return
-    const body = (event.target as Element).closest<HTMLElement>(CARD_BODY_SELECTOR)
-    if (body && canScrollBy(body, event.deltaY)) return
-    scrollportRef.current?.scrollBy({top: event.deltaY, left: 0})
+    if (!event.ctrlKey) layout.current.wheel(event.deltaY, event.target as Element)
   }
 
   return (
@@ -500,7 +557,16 @@ const FocusedCardInView = ({panelBlock, columnRef, layout}: {
 
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
 
-const IDLE_LAYOUT = {schedule: () => {}, flush: (): ColumnFrame | null => null}
+const IDLE_LAYOUT = {
+  schedule: () => {},
+  flush: (): ColumnFrame | null => null,
+  /** A wheel over the column, from its target. */
+  wheel: (() => {}) as (deltaY: number, target: Element) => void,
+}
+
+/** A card that only stands in for others (`HiddenThreadsStub`). */
+const isStandIn = (key: string): boolean => key.startsWith(HIDDEN_STUB_PREFIX)
+const HIDDEN_STUB_PREFIX = 'hidden:'
 
 const frameStyle = (frame: ColumnFrame) =>
   ({left: `${frame.left}px`, top: `${frame.top}px`, width: `${frame.width}px`, height: `${frame.height}px`})
@@ -646,7 +712,7 @@ const CardSlot = ({slotKey, activates = true, blockId, order, quote, trailing, c
 const HiddenThreadsStub = ({blockId, count}: {blockId: string; count: number}) => {
   const block = useRepo().block(blockId)
   return (
-    <CardSlot slotKey={`hidden:${blockId}`} activates={false} blockId={blockId} order={0} trailing>
+    <CardSlot slotKey={`${HIDDEN_STUB_PREFIX}${blockId}`} activates={false} blockId={blockId} order={0} trailing>
       <button
         type="button"
         onClick={() => { if (block.peekProperty(isCollapsedProp)) void block.set(isCollapsedProp, false) }}

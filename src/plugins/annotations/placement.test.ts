@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it} from 'vitest'
-import {byPlacement, fitColumn, placeCards, scrollToShow, type MarginCard} from './placement'
+import {adjacentCard, byPlacement, fitColumn, outOfView, placeCards, scrollToShow, type MarginCard} from './placement'
 
 const cards = (...pairs: Array<[anchor: number, height: number]>) => pairs.map(([anchor, height]) => ({anchor, height}))
 
@@ -128,5 +128,31 @@ describe('scrollToShow', () => {
 
   it('shows the top of a box taller than the clip', () => {
     expect(scrollToShow({top: 1000, bottom: 2500}, clip, 8)).toBe(892)
+  })
+})
+
+describe('adjacentCard', () => {
+  const order = ['a', 'hidden:x', 'b', 'c']
+  const standIn = (key: string) => key.startsWith('hidden:')
+
+  it('is the next or previous card in placement order, past stand-ins', () => {
+    expect(adjacentCard(order, 'a', 1, standIn)).toBe('b')
+    expect(adjacentCard(order, 'b', -1, standIn)).toBe('a')
+    expect(adjacentCard(order, 'b', 1, standIn)).toBe('c')
+  })
+
+  it('is none past either end, or for a card not placed', () => {
+    expect(adjacentCard(order, 'c', 1, standIn)).toBeUndefined()
+    expect(adjacentCard(order, 'a', -1, standIn)).toBeUndefined()
+    expect(adjacentCard(order, 'gone', 1, standIn)).toBeUndefined()
+  })
+})
+
+describe('outOfView', () => {
+  it('is a span wholly above or below the view', () => {
+    expect(outOfView({top: -50, bottom: 0}, 1000)).toBe(true)
+    expect(outOfView({top: 1000, bottom: 1040}, 1000)).toBe(true)
+    expect(outOfView({top: -50, bottom: 1}, 1000)).toBe(false)
+    expect(outOfView({top: 999, bottom: 1040}, 1000)).toBe(false)
   })
 })
