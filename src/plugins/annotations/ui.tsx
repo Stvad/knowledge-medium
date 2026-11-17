@@ -50,7 +50,7 @@ import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRend
 import {isPanelRenderScopeId} from '@/utils/renderScope.js'
 import {firstLine, truncate} from '@/utils/string.js'
 import {showError} from '@/utils/toast.js'
-import {resolveAnchor, type RangeAnchor} from './anchor.ts'
+import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
 import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
 import {highlightRanges} from './highlights.ts'
@@ -60,7 +60,7 @@ import {deleteCommentFromCard} from './deleteComment.ts'
 import {moveCommentToOwnThread} from './ownThreadPicker.tsx'
 import {annotationMarginOpenProp} from './marginSchema.ts'
 import {startComment} from './newComment.ts'
-import {confirmedAnchor, reanchorThread} from './reanchor.ts'
+import {reanchorThread} from './reanchor.ts'
 import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
 import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
 import {ReadSelectionMenu} from './readSelectionUi.tsx'
@@ -522,16 +522,15 @@ const reportRefusal = (error: unknown): void => {
  *  new text for it (the next comment-on-selection in its block re-anchors
  *  it), or anchor it to the whole block, which a suggestion can't be: it
  *  would have nothing to replace. */
-export const ReanchorControls = ({root, state, targetContent}: {
+export const ReanchorControls = ({root, targetContent}: {
   root: RootFields
-  state: 'exact' | 'moved' | 'stale' | 'deleted'
   targetContent: string
 }) => {
   const repo = useRepo()
   const pending = usePendingReanchor()
   const anchor = threadAnchorOf(root) as {kind: 'range'} & RangeAnchor
   const targetId = threadTargetIdOf(root)
-  const resolved = state === 'moved' ? resolveAnchor(targetContent, anchor) : null
+  const resolved = resolveAnchor(targetContent, anchor)
   const preview = resolved?.state === 'moved' ? {
     before: targetContent.slice(Math.max(0, resolved.from - 32), resolved.from),
     quote: targetContent.slice(resolved.from, resolved.to),
@@ -549,7 +548,7 @@ export const ReanchorControls = ({root, state, targetContent}: {
     )
   }
   const confirm = () => {
-    const next = confirmedAnchor(targetContent, anchor)
+    const next = resolved.state === 'moved' ? recaptureAnchor(targetContent, resolved.from, anchor.quote) : null
     if (!next) {
       showError('This quote can\u2019t be confirmed where it is now. Select it again.')
       return
@@ -565,7 +564,7 @@ export const ReanchorControls = ({root, state, targetContent}: {
         </p>
       </div>}
       <div className="flex flex-wrap gap-x-2">
-      {state === 'moved' && <ActionButton bordered onClick={confirm}>Confirm position</ActionButton>}
+      {resolved.state === 'moved' && <ActionButton bordered onClick={confirm}>Confirm position</ActionButton>}
       {targetId && <ActionButton bordered onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
       {!threadSuggestionOf(root) && (
         <ActionButton bordered onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
@@ -600,7 +599,6 @@ const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; o
           threadId={root.id}
           recovery={targetContent === null ? undefined : <ReanchorControls
             root={root}
-            state={state}
             targetContent={targetContent}
           />}
         />}
@@ -613,7 +611,7 @@ const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; o
       </>}
     </div>
     {anchorShown && !awaitingDecision && !readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
-      <ReanchorControls root={root} state={state} targetContent={targetContent}/>
+      <ReanchorControls root={root} targetContent={targetContent}/>
     )}
     </div>
   )

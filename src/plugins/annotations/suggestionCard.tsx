@@ -98,7 +98,6 @@ export const SuggestionActions = ({threadId, recovery}: {threadId: string; recov
           <p>{refusal.message}</p>
           {refusal.canRecoverAnchor && recovery && (
             <div className="mt-2 space-y-1.5">
-              <p className="text-muted-foreground">Check the position or select the text again before trying Accept.</p>
               {recovery}
             </div>
           )}

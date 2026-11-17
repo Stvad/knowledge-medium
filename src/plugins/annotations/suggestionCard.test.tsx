@@ -117,11 +117,10 @@ describe('SuggestionActions', () => {
     const threadId = await suggestOnB()
     await repo.tx(tx => tx.update('B', {content: 'Meet Wednesday'}), opts)
     const rootData = (await repo.load(threadId))!
-    renderActions(threadId, <ReanchorControls root={rootData} state="stale" targetContent="Meet Wednesday"/>)
+    renderActions(threadId, <ReanchorControls root={rootData} targetContent="Meet Wednesday"/>)
 
     await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('Select the text this suggestion should replace.')
-    expect(screen.getByText('Check the position or select the text again before trying Accept.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', {name: 'Reselect'}))
     expect(await screen.findByRole('status')).toHaveTextContent('Select the new text in the block, then choose Comment on selection.')
     expect((await repo.load('B'))!.content).toBe('Meet Wednesday')
@@ -139,7 +138,7 @@ describe('SuggestionActions', () => {
     const targetContent = `${'x'.repeat(20)} ${TEXT} and ${TEXT}`
     await repo.tx(tx => tx.update('B', {content: targetContent}), opts)
     const rootData = (await repo.load(threadId))!
-    renderActions(threadId, <ReanchorControls root={rootData} state="moved" targetContent={targetContent}/>)
+    renderActions(threadId, <ReanchorControls root={rootData} targetContent={targetContent}/>)
 
     await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
     expect(await screen.findByRole('alert')).toHaveTextContent('This text appears more than once.')
@@ -150,7 +149,7 @@ describe('SuggestionActions', () => {
     await userEvent.click(screen.getByRole('button', {name: 'Confirm position'}))
     await vi.waitFor(async () => expect(threadAnchorOf((await repo.load(threadId))!)).toMatchObject({quoteStart: 26}))
     await userEvent.click(screen.getByRole('button', {name: 'Accept'}))
-    await vi.waitFor(async () => expect((await repo.load('B'))!.content).toContain('Thursday 9am'))
+    await vi.waitFor(async () => expect((await repo.load('B'))!.content).toBe('xxxxxxxxxxxxxxxxxxxx Meet Thursday 9am and Meet Thursday'))
     expect(threadStatusOf((await repo.load(threadId))!)).toBe('accepted')
   })
 

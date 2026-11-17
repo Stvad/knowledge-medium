@@ -14,8 +14,9 @@ import {ChangeScope} from '@/data/api'
 import {hasBlockType} from '@/data/properties'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
+import {safeDecodeRowProperty} from '@/data/rowProperty'
 import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {annotationStatusProp, THREAD_TYPE, threadIsOpen, threadSuggestionOf} from './schema.ts'
+import {annotationSourceContentProp, annotationStatusProp, THREAD_TYPE, threadIsOpen, threadSuggestionOf} from './schema.ts'
 import {AnchorChangedError, assertSuggestion, InvalidSuggestionError, threadAndTarget} from './threads.ts'
 
 /** Does the text around `from` already read as `replacement`, with the quote
@@ -55,22 +56,37 @@ export const appliedContent = (
   return next
 }
 
-/** A relocated quote must be unique and still share context with its anchor.
- *  Matching replacement text in that context can be an already-applied copy;
- *  leave that case for explicit position confirmation instead of jumping to
- *  another occurrence of the old quote. */
-const suggestionRange = (content: string, anchor: RangeAnchor, replacement: string): {from: number; to: number} => {
-  const resolved = resolveAnchor(content, anchor)
-  if (resolved.state === 'stale') {
-    throw new AnchorChangedError('The original text could not be located reliably. Select the text this suggestion should replace.')
-  }
-  if (resolved.state === 'moved') {
-    if (content.indexOf(anchor.quote) !== content.lastIndexOf(anchor.quote)) {
+/** Whether an already-matched, non-empty quote occurs just once in the block. */
+const quoteIsUnique = (content: string, quote: string): boolean =>
+  content.indexOf(quote) === content.lastIndexOf(quote)
+
+/** A relocated quote must lie in the unchanged prefix or suffix of the
+ *  captured source. Uniqueness at both ends prevents a deleted occurrence
+ *  being mistaken for a surviving copy. Changes on both sides of the quote
+ *  require confirmation: their combined changed span crosses the selection. */
+const suggestionRange = (content: string, anchor: RangeAnchor, source: unknown): {from: number; to: number} => {
+  let resolved = resolveAnchor(content, anchor)
+  if (resolved.state !== 'exact') {
+    const from = content.indexOf(anchor.quote)
+    if (from < 0) {
+      throw new AnchorChangedError('The original text could not be located reliably. Select the text this suggestion should replace.')
+    }
+    if (!quoteIsUnique(content, anchor.quote)) {
       throw new AnchorChangedError('This text appears more than once. Check its position before accepting.')
     }
-    if (resolveAnchor(content, {...anchor, quote: replacement}).state !== 'stale') {
-      throw new AnchorChangedError('The suggested replacement is already present nearby. Check its position before accepting.')
+    const originalContent = typeof source === 'string' ? source : ''
+    const original = resolveAnchor(originalContent, anchor)
+    if (original.state !== 'exact' || !quoteIsUnique(originalContent, anchor.quote)) {
+      throw new AnchorChangedError('The original position needs confirmation. Check the highlighted text before accepting.')
     }
+    let prefix = 0
+    while (prefix < originalContent.length && prefix < content.length && originalContent[prefix] === content[prefix]) prefix++
+    let suffix = 0
+    while (suffix < originalContent.length && suffix < content.length && originalContent[originalContent.length - 1 - suffix] === content[content.length - 1 - suffix]) suffix++
+    if (original.to > prefix && original.from < originalContent.length - suffix) {
+      throw new AnchorChangedError('The passage containing this quote changed. Check its position or select the text again.')
+    }
+    resolved = {state: 'moved', from, to: from + anchor.quote.length}
   }
   if (!recaptureAnchor(content, resolved.from, anchor.quote)) {
     throw new AnchorChangedError('The text is now part of a larger reference. Select the whole reference before accepting.')
@@ -89,7 +105,7 @@ export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
     assertSuggestion(suggestion.anchor, suggestion.replacement)
     // The card offers Accept only while open, but may be stale.
     if (!threadIsOpen(root)) throw new InvalidSuggestionError('This suggestion is closed.')
-    const resolved = suggestionRange(target.content, suggestion.anchor, suggestion.replacement)
+    const resolved = suggestionRange(target.content, suggestion.anchor, safeDecodeRowProperty(root, annotationSourceContentProp))
     await tx.update(target.id, {content: appliedContent(target.content, resolved, suggestion.anchor, suggestion.replacement)})
     await tx.setProperty(threadId, annotationStatusProp, 'accepted')
   }, {scope: ChangeScope.BlockDefault, description: 'accept suggestion'})

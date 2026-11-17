@@ -10,6 +10,7 @@ import {captureAnchor, resolveAnchor, type RangeAnchor} from './anchor'
 import {annotationsDataExtension} from './dataExtension'
 import {
   annotationQuotePrefixProp,
+  annotationSourceContentProp,
   annotationReplacementProp,
   threadAnchorOf,
   threadIsOpen,
@@ -18,7 +19,7 @@ import {
 } from './schema'
 import {confirmedAnchor, reanchorThread} from './reanchor'
 import {acceptSuggestion, appliedContent, rejectSuggestion} from './suggestions'
-import {AnchorChangedError, createThread, InvalidSuggestionError, setThreadStatus, UnannotatableTargetError} from './threads'
+import {AnchorChangedError, createThread, InvalidSuggestionError, setThreadStatus, ThreadRefusal, UnannotatableTargetError} from './threads'
 
 const WS = 'ws'
 const MID = 'We moved the launch to Thursday because the vendor slipped.'
@@ -133,6 +134,7 @@ describe('acceptSuggestion', () => {
     expect(await targetText()).toBe('We moved the launch to Wednesday morning because the supplier slipped.')
     expect(threadStatusOf(await rootOf(b))).toBe('accepted')
     expect(threadAnchorOf(await rootOf(b))).toEqual(originalAnchor)
+    expect((await rootOf(b)).properties[annotationSourceContentProp.name]).toBe(MID)
     expect(await repo.undo()).toBe(true)
     expect(await targetText()).toBe(intermediate)
     expect(threadStatusOf(await rootOf(b))).toBe('open')
@@ -154,10 +156,10 @@ describe('acceptSuggestion', () => {
     expect(await targetText()).toBe('Update: Meet Friday, then discuss Thursday.')
   })
 
-  it('does not redirect a duplicate to the remaining occurrence after the first was replaced', async () => {
+  it.each(['dog', 'kitten'])('does not redirect an overlapping suggestion to the remaining occurrence (%s)', async replacement => {
     await setTarget('the cat sat. the cat sat.')
     const first = await suggest('cat', 'dog')
-    const duplicate = await suggest('cat', 'dog')
+    const duplicate = await suggest('cat', replacement)
     await acceptSuggestion(repo, first)
     const after = await targetText()
     expect(resolveAnchor(after, threadAnchorOf(await rootOf(duplicate)) as RangeAnchor).state).toBe('moved')
@@ -168,7 +170,7 @@ describe('acceptSuggestion', () => {
 
   it('requires reselection when moving the quote would cut a newly surrounding reference', async () => {
     const quote = 'long descriptive launch plan'
-    await setTarget(`Read the ${quote} tomorrow.`)
+    await setTarget(`Read the ${quote} tomorrow]].`)
     const threadId = await suggest(quote, 'short plan')
     const after = `Read [[the ${quote} tomorrow]].`
     await setTarget(after)
@@ -177,8 +179,87 @@ describe('acceptSuggestion', () => {
     expect(await targetText()).toBe(after)
   })
 
-  // The duplicate still finds its quote at its offset; only the context
-  // windows, compared for equality, tell that the text was already changed.
+  it('does not follow a unique quote introduced elsewhere by an overlapping rewrite', async () => {
+    const before = 'the cat sat. the dog sat.'
+    const after = 'the lion sat. the cat sat.'
+    await setTarget(before)
+    const rewrite = await suggest(before, after)
+    const word = await suggest('cat', 'kitten')
+    await acceptSuggestion(repo, rewrite)
+    await expect(acceptSuggestion(repo, word)).rejects.toThrow('passage containing this quote changed')
+    expect(await targetText()).toBe(after)
+    expect(threadStatusOf(await rootOf(word))).toBe('open')
+  })
+
+  it('requires confirmation when deleting a repeated phrase leaves an indistinguishable copy', async () => {
+    await setTarget('cat cat')
+    const threadId = await suggest('cat', 'dog')
+    await setTarget('cat')
+    await expect(acceptSuggestion(repo, threadId)).rejects.toThrow('original position needs confirmation')
+    expect(await targetText()).toBe('cat')
+  })
+
+  it('refuses a newly duplicated quote instead of choosing between unchanged suffixes', async () => {
+    await setTarget('Meet Thursday')
+    const threadId = await suggest('Thursday', 'Friday')
+    const after = 'Update: Meet Thursday and Meet Thursday'
+    await setTarget(after)
+    await expect(acceptSuggestion(repo, threadId)).rejects.toThrow('appears more than once')
+    expect(await targetText()).toBe(after)
+  })
+
+  it('accepts an unchanged prefix even when all nearby context was rewritten', async () => {
+    await setTarget('Thursday works for everyone.')
+    const threadId = await suggest('Thursday', 'Friday')
+    await setTarget('Thursday is better.')
+    expect(resolveAnchor(await targetText(), threadAnchorOf(await rootOf(threadId)) as RangeAnchor).state).toBe('stale')
+    await acceptSuggestion(repo, threadId)
+    expect(await targetText()).toBe('Friday is better.')
+  })
+
+  it('requires confirmation for an older suggestion, then records enough information to relocate it', async () => {
+    const threadId = await suggest('Thursday', 'Friday')
+    await repo.tx(tx => tx.setProperties(threadId, {unset: [annotationSourceContentProp]}), opts)
+    await setTarget(`Update: ${MID}`)
+    await expect(acceptSuggestion(repo, threadId)).rejects.toThrow('original position needs confirmation')
+    expect(await targetText()).toBe(`Update: ${MID}`)
+
+    const anchor = confirmedAnchor(await targetText(), threadAnchorOf(await rootOf(threadId)) as RangeAnchor)!
+    await reanchorThread(repo, threadId, anchor)
+    await setTarget(`Note: Update: ${MID}`)
+    await acceptSuggestion(repo, threadId)
+    expect(await targetText()).toBe(`Note: Update: ${MID.replace('Thursday', 'Friday')}`)
+  })
+
+  it('refreshes the source snapshot when reselecting a repeated quote', async () => {
+    const threadId = await suggest('Thursday', 'Saturday')
+    await setTarget('Meet Thursday. Meet Thursday.')
+    await reanchorThread(repo, threadId, anchorFor(await targetText(), 'Thursday'))
+    await setTarget('Meet Friday. Meet Thursday.')
+    expect(resolveAnchor(await targetText(), threadAnchorOf(await rootOf(threadId)) as RangeAnchor).state).toBe('moved')
+    await expect(acceptSuggestion(repo, threadId)).rejects.toThrow('original position needs confirmation')
+    expect(await targetText()).toBe('Meet Friday. Meet Thursday.')
+  })
+
+  it('keeps references in the source snapshot inert in property-backed workspaces', async () => {
+    await db.db.execute(`INSERT INTO workspaces
+      (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+      VALUES (?, 'Test', 'alex', 1, 1, 'none', NULL, 'children')`, [WS])
+    const text = 'See [[Launch plan]] on Thursday.'
+    await setTarget(text)
+    const threadId = await suggest('Thursday', 'Friday')
+    await repo.awaitProcessors()
+    expect((await rootOf(threadId)).properties[annotationSourceContentProp.name]).toBe(text)
+    const fieldId = propertyDefinitionBlockId(WS, annotationSourceContentProp.seedKey)
+    const field = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND content = ? AND deleted = 0', [threadId, propertyFieldContent(fieldId)])
+    const value = await db.db.get<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [field.id])
+    expect((await repo.load(value.id))!.references).toEqual([])
+  })
+
+  // Keeping the old quote inside the replacement must not make a copy apply
+  // again, including at block boundaries with only one context window.
   it.each([
     ['mid-block', MID, 'We moved the launch to Thursday 9am because the vendor slipped.'],
     ['at the very start', 'Thursday works for everyone.', 'Thursday 9am works for everyone.'],
@@ -190,7 +271,7 @@ describe('acceptSuggestion', () => {
     await acceptSuggestion(repo, first)
     expect(await targetText()).toBe(after)
 
-    await expect(acceptSuggestion(repo, duplicate)).rejects.toBeInstanceOf(AnchorChangedError)
+    await expect(acceptSuggestion(repo, duplicate)).rejects.toBeInstanceOf(ThreadRefusal)
     expect(await targetText()).toBe(after)
     expect(threadStatusOf(await rootOf(duplicate))).toBe('open')
   })
