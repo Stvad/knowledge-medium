@@ -1,1 +1,1 @@
-export{Dj as ShortcutHelpHeaderItem}from"../../../chunks/app-CxKaJqK9.js";
+export{Dj as ShortcutHelpHeaderItem}from"../../../chunks/app-YAp3bTWz.js";

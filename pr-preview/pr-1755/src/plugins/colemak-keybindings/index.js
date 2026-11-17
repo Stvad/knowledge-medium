@@ -1,1 +1,1 @@
-export{$C as COLEMAK_KEYBINDINGS_PLUGIN_ID,ew as colemakKeybindingsPlugin,tw as colemakMovementKeybindingOverrides}from"../../../chunks/app-CxKaJqK9.js";
+export{$C as COLEMAK_KEYBINDINGS_PLUGIN_ID,ew as colemakKeybindingsPlugin,tw as colemakMovementKeybindingOverrides}from"../../../chunks/app-YAp3bTWz.js";

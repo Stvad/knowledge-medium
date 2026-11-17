@@ -1,1 +1,1 @@
-export{Av as updateIndicatorPlugin}from"../../../chunks/app-CxKaJqK9.js";
+export{Av as updateIndicatorPlugin}from"../../../chunks/app-YAp3bTWz.js";

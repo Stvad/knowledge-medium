@@ -1,1 +1,1 @@
-export{cot as aliasSeatNamespacesInTx,lot as resolveAliasSeatNamespaces}from"../../chunks/app-CxKaJqK9.js";
+export{cot as aliasSeatNamespacesInTx,lot as resolveAliasSeatNamespaces}from"../../chunks/app-YAp3bTWz.js";
