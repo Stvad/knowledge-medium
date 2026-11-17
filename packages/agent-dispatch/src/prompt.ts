@@ -9,7 +9,7 @@ import { renderSubtreeOutline } from '@knowledge-medium/agent-cli/subtreeOutline
 /** A mention inside a comment thread (threadContext.ts). */
 export interface ThreadPromptContext {
   /** The annotated block; null when it is gone. */
-  target: {content: string, path: string[]} | null
+  target: {id: string, pageId: string | null, content: string, path: string[]} | null
   /** The quoted text; null for a thread on the whole block. */
   quote: string | null
   anchor: CommentAnchorState
@@ -126,7 +126,12 @@ const renderThreadContext = (thread: ThreadPromptContext): string => {
   const lines = ['The block that mentioned you is a comment in a thread on another block.', '']
   if (thread.target) {
     const path = thread.target.path.length > 0 ? thread.target.path.join(' › ') : '(top level)'
-    lines.push(`The annotated block (page path: ${path}):`, thread.target.content, '')
+    lines.push(
+      `The annotated block (id ${thread.target.id}; page path: ${path}):`,
+      `Containing page id: ${thread.target.pageId ?? 'unavailable'}`,
+      thread.target.content,
+      '',
+    )
   } else {
     lines.push('The annotated block has been deleted.', '')
   }

@@ -301,8 +301,10 @@ describe('mention inside a comment thread', () => {
   const threadSeed = (): FakeGraphSeed => ({
     backlinks: [{id: 'c3'}],
     blocks: {
-      'target': {content: 'We moved the launch to Thursday because the vendor slipped.'},
-      'container': {content: 'Comments (km)'},
+      'target': {parentId: 'section', content: 'We moved the launch to Thursday because the vendor slipped.'},
+      'section': {parentId: 'page-root', content: 'Launch details'},
+      'page-root': {parentId: null, content: 'Project plan'},
+      'container': {parentId: null, content: 'Comments (km)'},
       'root': {parentId: 'container', content: 'Thursday', properties: {types: ['annotation:thread']}},
       'c1': {parentId: 'root', content: 'Is Thursday confirmed?'},
       'c2': {parentId: 'c1', content: 'Yes, 9am.'},
@@ -336,7 +338,7 @@ describe('mention inside a comment thread', () => {
 
     const prompt = promptOf(runTask)
     expect(graph.comments).toHaveBeenCalledWith({thread: 'root'})
-    expect(prompt).toContain('The annotated block (page path: Launch plan):\nWe moved the launch to Thursday because the vendor slipped.')
+    expect(prompt).toContain('The annotated block (id target; page path: Launch plan):\nContaining page id: page-root\nWe moved the launch to Thursday because the vendor slipped.')
     expect(prompt).toContain('The thread quotes: "Thursday"')
     expect(prompt).toContain([
       '- [c1] Alex (human): Is Thursday confirmed?',
@@ -346,6 +348,32 @@ describe('mention inside a comment thread', () => {
     expect(prompt).not.toContain('unrelated sibling')
     // The seed's view has no replacement, as an app older than suggestions sends.
     expect(prompt).not.toContain('edit suggestion')
+  })
+
+  it('uses the annotated block itself as the containing page when it is top level', async () => {
+    const seed = threadSeed()
+    seed.blocks!.target = {parentId: null, content: 'A root-level plan.'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('Containing page id: target')
+  })
+
+  it('reports the containing page unavailable when the ancestor chain is cut', async () => {
+    const seed = threadSeed()
+    seed.blocks!.target = {parentId: 'section', content: 'A plan with a missing parent.'}
+    seed.blocks!.section = {parentId: 'missing-parent', content: 'An intermediate section.'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('Containing page id: unavailable')
+    expect(promptOf(runTask)).not.toContain('Containing page id: section')
   })
 
   it('says what an edit suggestion proposes', async () => {
