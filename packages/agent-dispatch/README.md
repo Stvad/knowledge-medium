@@ -41,6 +41,10 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade to 0.9.4
+
+Comment-thread requests now include the annotated block's ID and its containing root page's ID, so agents can address them directly instead of searching by text or breadcrumb. If the ancestry does not reach a root, the page ID is marked unavailable. Upgrade `@knowledge-medium/agent-dispatch` and restart the daemon; no app update is required.
+
 ## Upgrade to 0.9.3
 
 0.9.3 requires `@knowledge-medium/agent-cli` 0.14.1. The status chip shows the oldest outstanding tool's age, with a warning when a `km:` call has waited more than 20 seconds. Other activities show age without warnings. Activity details remain in the title and menu, and the pill keeps the same width in every state.
