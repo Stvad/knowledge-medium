@@ -1,1 +1,1 @@
-export{ig as lintExtensionSource}from"../../../chunks/app-DAXbGWOX.js";
+export{og as lintExtensionSource}from"../../../chunks/app-9NXAhVJp.js";
