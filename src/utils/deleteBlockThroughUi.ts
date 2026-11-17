@@ -130,9 +130,7 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
 
 /**
  * User consent for a delete big enough to be worth a second look — true,
- * without asking, for the small deletes that are nearly every gesture. Measured
- * over what the delete REMOVES (`countBlocksRemovedBy`), not over the blocks
- * the gesture names.
+ * without asking, when `countBlocksRemovedBy` is below the threshold.
  *
  * Deliberately not folded into `ensureDeletableThroughUi`: merge runs those
  * guards to veto destroying its source block, but REPARENTS the children, so
@@ -165,6 +163,7 @@ const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boo
 
 /** Recognized field rows count only when directly targeted. Read the structural
  *  subtree so values and their descendants still count under omitted fields.
+ *  Long chains of field rows can push counted blocks beyond the query's depth limit.
  *  Deduplication also skips redundant queries for an ancestor-first selection. */
 const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> => {
   const targets = new Set(blocks.map(block => block.id))
@@ -176,11 +175,13 @@ const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> =
       'core.subtree',
       {id: block.id},
     )
+    const [root] = rows
+    if (!root) continue
+    const isFieldDefinition = repoFieldDefinitionTest(block.repo, root.workspaceId)
     for (const row of rows) {
       if (seen.has(row.id)) continue
       seen.add(row.id)
-      if (targets.has(row.id) || !isPropertyFieldInstance(row, fieldId =>
-        repoFieldDefinitionTest(block.repo, row.workspaceId)(fieldId))) {
+      if (targets.has(row.id) || !isPropertyFieldInstance(row, isFieldDefinition)) {
         count++
       }
     }

@@ -46,7 +46,7 @@ export const ConfirmBulkDeleteDialog = ({
             does not get. */}
         <DialogDescription>
           {targetCount === 1 ? 'This block' : pluralize(targetCount, 'selected block')}
-          {nested > 0 && <> and the {pluralize(nested, 'block')} nested
+          {nested > 0 && <> and {pluralize(nested, 'block')} nested
             {' '}{agree(targetCount, 'under it', 'under them')}</>}
           {' '}will be deleted.
         </DialogDescription>

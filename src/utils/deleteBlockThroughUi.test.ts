@@ -72,6 +72,13 @@ describe('bulk-delete confirmation', () => {
     expect(await isBlockDeleted(repo, ids[0])).toBe(true)
   })
 
+  it('accepts a target whose subtree is already deleted', async () => {
+    await repo.mutate.delete({id: 'root'})
+
+    expect(await deleteBlockThroughUi(repo.block('root'))).toBe(true)
+    expect(getDialogQueue()).toHaveLength(0)
+  })
+
   it('asks before deleting a selection at the threshold, and deletes nothing until answered', async () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
