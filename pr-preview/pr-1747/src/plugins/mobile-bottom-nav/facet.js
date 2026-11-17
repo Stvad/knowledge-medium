@@ -1,1 +1,0 @@
-export{CT as mobileBottomNavItemsFacet}from"../../../chunks/app-bEpoX72B.js";

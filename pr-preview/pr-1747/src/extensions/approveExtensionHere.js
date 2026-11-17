@@ -1,1 +1,0 @@
-export{uP as approveExtensionHere}from"../../chunks/app-bEpoX72B.js";

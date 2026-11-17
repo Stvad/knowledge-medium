@@ -1,1 +1,0 @@
-export{vk as Label}from"../../../chunks/app-bEpoX72B.js";

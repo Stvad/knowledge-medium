@@ -1,1 +1,0 @@
-export{wV as declarationOnlyDefinitionForName,TV as declarationOnlyStatusText}from"../../../chunks/app-bEpoX72B.js";

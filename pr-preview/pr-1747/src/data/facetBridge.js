@@ -1,1 +1,0 @@
-export{X2 as FacetBridge}from"../../chunks/app-bEpoX72B.js";

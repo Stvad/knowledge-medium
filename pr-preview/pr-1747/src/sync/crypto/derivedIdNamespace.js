@@ -1,1 +1,0 @@
-export{kot as deriveWorkspaceIdNamespace}from"../../../chunks/app-bEpoX72B.js";

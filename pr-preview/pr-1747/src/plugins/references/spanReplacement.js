@@ -1,1 +1,0 @@
-export{Gq as preferredSpanReplacement}from"../../../chunks/app-bEpoX72B.js";

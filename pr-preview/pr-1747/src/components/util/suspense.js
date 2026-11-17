@@ -1,1 +1,0 @@
-export{DK as SuspenseFallback}from"../../../chunks/app-bEpoX72B.js";

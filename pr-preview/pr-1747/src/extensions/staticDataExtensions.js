@@ -1,1 +1,0 @@
-export{YK as staticDataExtensions}from"../../chunks/app-bEpoX72B.js";

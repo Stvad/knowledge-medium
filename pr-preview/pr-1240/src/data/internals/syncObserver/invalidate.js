@@ -1,1 +1,0 @@
-import{QK as e}from"../../../../chunks/app-Ds3vbQza.js";export{e as applySyncInvalidation};

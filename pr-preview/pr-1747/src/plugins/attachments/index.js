@@ -1,1 +1,0 @@
-export{tx as attachmentsPlugin}from"../../../chunks/app-bEpoX72B.js";

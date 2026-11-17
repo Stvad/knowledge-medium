@@ -1,1 +1,0 @@
-export{QI as ConfirmBulkDeleteDialog}from"../../chunks/app-bEpoX72B.js";
