@@ -309,6 +309,36 @@ describe('ordinary property creation in the outline', () => {
     }
   })
 
+  it('selects a missing type field first in native completion without writing until accepted', async () => {
+    await repo.block(OWNER).set(list, ['saved'])
+    await repo.block(OWNER).set(outlineHidden, '')
+    const id = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    const before = await ownerDescendants()
+    mount('all')
+    await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
+    const view = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
+      expect(node).not.toBeNull()
+      return EditorView.findFromDOM(node!)!
+    })
+    act(() => { view.focus(); view.dispatch({selection: {anchor: 2}}); startCompletion(view) })
+    await screen.findByRole('option', {name: plain.name})
+    const options = screen.getAllByRole('option')
+    expect(options[0].textContent).toBe(plain.name)
+    expect(options[0].getAttribute('aria-selected')).toBe('true')
+    expect(await ownerDescendants()).toEqual(before)
+    await waitFor(() => expect(acceptCompletion(view)).toBe(true))
+    await waitFor(() => expect(repo.block(OWNER).peek()?.properties[plain.name]).toBe(''))
+    const valueId = await waitFor(async () => {
+      const focused = peekFocusedBlockLocation(repo.block(PANEL))!.blockId
+      expect(focused).not.toBe(id)
+      expect((await repo.load(focused))?.parentId).toBe(id)
+      return focused
+    })
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-block-id="${valueId}"] .cm-content`)))
+    expect(await repo.block(OWNER).get(list)).toEqual(['saved'])
+  })
+
   it('opens native completion and an ordinary first child', async () => {
     const id = await repo.mutate.createChild({parentId: OWNER, content: ''})
     mount('none')
