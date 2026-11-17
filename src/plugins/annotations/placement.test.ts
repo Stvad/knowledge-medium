@@ -154,7 +154,7 @@ describe('outOfView', () => {
 })
 
 describe('releasesPin', () => {
-  const pin = {userScrolling: true, holdsFocus: false, placed: true, wasInView: true, inView: false}
+  const pin = {userScrolling: true, writing: false, placed: true, wasInView: true, inView: false}
 
   it('releases when the user scrolls its row from in view to out of it', () => {
     expect(releasesPin(pin)).toBe(true)
@@ -165,9 +165,9 @@ describe('releasesPin', () => {
     expect(releasesPin({...pin, wasInView: undefined})).toBe(false)
   })
 
-  it('keeps it for a scroll the app made, or while focus is in the card', () => {
+  it('keeps it for a scroll the app made, or while writing in the card', () => {
     expect(releasesPin({...pin, userScrolling: false})).toBe(false)
-    expect(releasesPin({...pin, holdsFocus: true})).toBe(false)
+    expect(releasesPin({...pin, writing: true})).toBe(false)
   })
 
   it('keeps it while its row is in view', () => {
@@ -183,7 +183,7 @@ describe('releasesPin', () => {
 describe('marginWheel', () => {
   const wheel = {
     paused: false, horizontal: false, innerCanScroll: false,
-    overActive: true, activeClipped: false, holdsFocus: false, hasNext: true,
+    overActive: true, activeClipped: false, writing: false, hasNext: true,
   }
 
   it('moves on to the next card from the end of the active one', () => {
@@ -206,6 +206,6 @@ describe('marginWheel', () => {
   it('scrolls the page from elsewhere in the margin, past the last card, or while writing in the card', () => {
     expect(marginWheel({...wheel, overActive: false})).toBe('page')
     expect(marginWheel({...wheel, hasNext: false})).toBe('page')
-    expect(marginWheel({...wheel, holdsFocus: true})).toBe('page')
+    expect(marginWheel({...wheel, writing: true})).toBe('page')
   })
 })

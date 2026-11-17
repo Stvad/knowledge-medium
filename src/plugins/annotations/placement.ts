@@ -122,8 +122,8 @@ export interface PinState {
   /** The user is scrolling the page (a wheel or touch on it, and the scroll
    *  it carries on into), not the app. */
   userScrolling: boolean
-  /** Focus is in the pinned card: the user is writing or reading in it. */
-  holdsFocus: boolean
+  /** An editor in the pinned card has focus: the user is writing in it. */
+  writing: boolean
   /** The pinned card is placed here; a pin from another page is not. */
   placed: boolean
   /** Whether its row was in view on the last pass; undefined on the first. */
@@ -135,8 +135,8 @@ export interface PinState {
  *  takes its row out of view, so a card pinned with its row already out of
  *  view (a link in it scrolled the page away) stays until the user brings the
  *  row back and scrolls past it. */
-export const releasesPin = ({userScrolling, holdsFocus, placed, wasInView, inView}: PinState): boolean =>
-  userScrolling && !holdsFocus && (!placed || (wasInView === true && !inView))
+export const releasesPin = ({userScrolling, writing, placed, wasInView, inView}: PinState): boolean =>
+  userScrolling && !writing && (!placed || (wasInView === true && !inView))
 
 export interface MarginWheelState {
   /** Inside the pause after moving on to another card. */
@@ -148,7 +148,7 @@ export interface MarginWheelState {
   overActive: boolean
   /** The column cuts off the active card's side the wheel scrolls toward. */
   activeClipped: boolean
-  holdsFocus: boolean
+  writing: boolean
   /** There is a card to move on to that way. */
   hasNext: boolean
 }
@@ -161,7 +161,7 @@ export type MarginWheelAction = 'native' | 'drop' | 'reveal' | 'move-on' | 'page
 export const marginWheel = (state: MarginWheelState): MarginWheelAction => {
   if (state.paused) return 'drop'
   if (state.horizontal || state.innerCanScroll) return 'native'
-  if (!state.overActive || state.holdsFocus) return 'page'
+  if (!state.overActive || state.writing) return 'page'
   if (state.activeClipped) return 'reveal'
   return state.hasNext ? 'move-on' : 'page'
 }

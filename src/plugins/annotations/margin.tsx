@@ -293,7 +293,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         const inView = !!row && !outOfView({top: row.top - columnTop, bottom: row.bottom - columnTop}, nextFrame.height)
         const release = releasesPin({
           userScrolling: performance.now() < userScrollUntil,
-          holdsFocus: !!pinned && pinned.entry.el.contains(document.activeElement),
+          writing: !!pinned && writingIn(pinned.entry.el),
           placed: !!pinned,
           wasInView: pinnedRow?.key === active ? pinnedRow.inView : undefined,
           inView,
@@ -409,7 +409,7 @@ const MarginColumn = ({panelBlock, topLevelBlockId}: {panelBlock: Block; topLeve
         innerCanScroll: scrollerWithRoom(target, column, deltaY),
         overActive: !!activeEl?.contains(target),
         activeClipped: !!activeBox && (down ? activeBox.bottom > clip.bottom : activeBox.top < clip.top),
-        holdsFocus: !!activeEl?.contains(document.activeElement),
+        writing: !!activeEl && writingIn(activeEl),
         hasNext: next !== undefined,
       })
       if (action === 'native') return
@@ -607,6 +607,10 @@ const FocusedCardInView = ({panelBlock, columnRef, layout}: {
 const NO_SCOPE_THREADS: readonly ScopeThread[] = Object.freeze([])
 
 const IDLE_LAYOUT = {schedule: () => {}, flush: (): ColumnFrame | null => null}
+
+/** Is an editor in `card` focused: is the user writing in it? */
+const writingIn = (card: HTMLElement): boolean =>
+  card.contains(document.activeElement) && isEditorElement(document.activeElement)
 
 /** Is there a scroller from `target` up to `root` (not included) with room
  *  to scroll `deltaY`, a card's body or one inside a comment? */
