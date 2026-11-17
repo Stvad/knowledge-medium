@@ -1,0 +1,1 @@
+export{wv as updateIndicatorPlugin}from"../../../chunks/app-Bl2ELxYV.js";

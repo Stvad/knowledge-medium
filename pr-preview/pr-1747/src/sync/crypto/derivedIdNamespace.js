@@ -1,0 +1,1 @@
+export{Oot as deriveWorkspaceIdNamespace}from"../../../chunks/app-Bl2ELxYV.js";

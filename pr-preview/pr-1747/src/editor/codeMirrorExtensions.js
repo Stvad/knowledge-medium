@@ -1,0 +1,1 @@
+export{kY as codeMirrorExtensionsFacet}from"../../chunks/app-Bl2ELxYV.js";

@@ -1,0 +1,1 @@
+export{A8 as KERNEL_PROCESSORS}from"../../../chunks/app-Bl2ELxYV.js";

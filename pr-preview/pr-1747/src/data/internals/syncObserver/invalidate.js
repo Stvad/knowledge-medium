@@ -1,0 +1,1 @@
+export{T6 as applySyncInvalidation}from"../../../../chunks/app-Bl2ELxYV.js";

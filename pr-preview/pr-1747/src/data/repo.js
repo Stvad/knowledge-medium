@@ -1,0 +1,1 @@
+export{q2 as Repo}from"../../chunks/app-Bl2ELxYV.js";

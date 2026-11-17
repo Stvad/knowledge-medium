@@ -1,0 +1,1 @@
+export{GZ as contributorsDataExtension}from"../../../chunks/app-Bl2ELxYV.js";

@@ -1,0 +1,1 @@
+export{kz as ExtensionRenderBoundary}from"../../chunks/app-Bl2ELxYV.js";

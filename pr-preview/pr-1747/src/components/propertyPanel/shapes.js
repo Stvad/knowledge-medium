@@ -1,0 +1,1 @@
+export{WG as propertyShapeLabel}from"../../../chunks/app-Bl2ELxYV.js";

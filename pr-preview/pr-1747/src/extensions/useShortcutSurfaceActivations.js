@@ -1,0 +1,1 @@
+export{IR as useShortcutSurfaceActivations}from"../../chunks/app-Bl2ELxYV.js";
