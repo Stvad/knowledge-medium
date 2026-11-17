@@ -1,1 +1,0 @@
-export{FR as BlockEditor}from"../../chunks/app-YAp3bTWz.js";

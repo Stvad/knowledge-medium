@@ -1,1 +1,0 @@
-export{Vot as deriveWorkspaceIdNamespace}from"../../../chunks/app-YAp3bTWz.js";
