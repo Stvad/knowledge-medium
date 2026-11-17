@@ -1,1 +1,0 @@
-export{Tg as authorIdOf}from"../../../chunks/app-C-y_01fG.js";

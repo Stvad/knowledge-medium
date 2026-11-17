@@ -1,1 +1,0 @@
-export{iQ as contributorsDataExtension}from"../../../chunks/app-C-y_01fG.js";

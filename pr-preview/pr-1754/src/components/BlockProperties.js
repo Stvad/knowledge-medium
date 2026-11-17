@@ -1,1 +1,0 @@
-export{tV as BlockProperties}from"../../chunks/app-C-y_01fG.js";

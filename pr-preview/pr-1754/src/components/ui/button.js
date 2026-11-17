@@ -1,1 +1,0 @@
-export{Q2 as Button}from"../../../chunks/app-C-y_01fG.js";
