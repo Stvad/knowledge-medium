@@ -1,1 +1,1 @@
-export{IB as isFocalRender,LB as useIsFocalRender}from"../../chunks/app-CW4Y68ji.js";
+export{IB as isFocalRender,LB as useIsFocalRender}from"../../chunks/app-BWmM5C0q.js";

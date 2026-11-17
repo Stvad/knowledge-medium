@@ -1,1 +1,1 @@
-export{Bet as parsePropertyDefinitionMetadata,Vet as propertySchemaOriginForSeedKey}from"../../chunks/app-CW4Y68ji.js";
+export{Bet as parsePropertyDefinitionMetadata,Vet as propertySchemaOriginForSeedKey}from"../../chunks/app-BWmM5C0q.js";
