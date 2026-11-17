@@ -50,10 +50,9 @@ export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}
     return <span className="break-words">Closed without applying: replace “{clipped(quote)}” with “{clipped(replacement)}”</span>
   }
   return (
-    <span className="break-words" aria-label={`Suggested edit: replace “${quote}” with “${replacement}”`}>
-      <del className="whitespace-pre-wrap text-muted-foreground decoration-red-600/70">{quote}</del>
-      {' '}
-      <ins className="whitespace-pre-wrap rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{replacement}</ins>
+    <span className="block w-full space-y-1 break-words" aria-label={`Suggested edit: replace “${quote}” with “${replacement}”`}>
+      <span className="block whitespace-pre-wrap break-words"><span className="font-medium">Before: </span><del className="text-muted-foreground decoration-red-600/70">{quote}</del></span>
+      <span className="block whitespace-pre-wrap break-words"><span className="font-medium">After: </span><ins className="rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{replacement}</ins></span>
     </span>
   )
 }
