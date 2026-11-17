@@ -23,7 +23,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { activityStateFor, chipStateFor, chipTitle, elapsedLabel, type ActivityState, type ChipState } from './chipState.ts'
+import { activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, type ActivityState, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
@@ -40,16 +40,13 @@ const useRunningClock = (running: boolean): number => {
 }
 
 /** Keep every lifecycle state the same width so age and warning changes never rewrap the gutter. */
-const CHIP_CLASS = `group ${GUTTER_PILL_CLASS} w-24 gap-1 bg-muted px-1 text-muted-foreground`
+const CHIP_CLASS = `group ${GUTTER_PILL_CLASS} w-24 gap-0.5 bg-muted px-1 text-muted-foreground`
 
 const ChipLabel = ({children}: {children: ReactNode}) => (
   <span className="min-w-0 flex-1 truncate text-left leading-4">{children}</span>
 )
 
-const RunningChip = ({ chip, activity, nowMs }: { chip: ChipState; activity: ActivityState | null; nowMs: number }) => {
-  const elapsed = chip.updatedAtMs === null
-    ? null
-    : elapsedLabel(Math.max(0, Math.round((nowMs - chip.updatedAtMs) / 1_000)))
+const RunningChip = ({ chip, activity }: { chip: ChipState; activity: ActivityState | null }) => {
   return (
     <>
       <span className={activity?.stalled ? 'text-amber-600' : 'animate-pulse text-amber-600'}>{activity?.stalled ? '⚠' : '●'}</span>
@@ -57,15 +54,15 @@ const RunningChip = ({ chip, activity, nowMs }: { chip: ChipState; activity: Act
         <ChipLabel>cancelling…</ChipLabel>
       ) : (
         <>
-          <ChipLabel>{chip.executorLabel}</ChipLabel>
-          {(activity?.ageLabel ?? elapsed) && <span className="shrink-0 tabular-nums">{activity?.ageLabel ?? elapsed}</span>}
+          <ChipLabel>{compactActivityLabel(chip.activity)}</ChipLabel>
+          {activity?.ageLabel && <span className="shrink-0 tabular-nums">{activity.ageLabel}</span>}
         </>
       )}
     </>
   )
 }
 
-const chipBody = (chip: ChipState, activity: ActivityState | null, nowMs: number) => {
+const chipBody = (chip: ChipState, activity: ActivityState | null) => {
   switch (chip.kind) {
     case 'queued':
       return (
@@ -75,7 +72,7 @@ const chipBody = (chip: ChipState, activity: ActivityState | null, nowMs: number
         </>
       )
     case 'running':
-      return <RunningChip chip={chip} activity={activity} nowMs={nowMs} />
+      return <RunningChip chip={chip} activity={activity} />
     case 'done':
       return (
         <>
@@ -106,7 +103,7 @@ const AgentStatusChipMenu = ({
 }) => {
   const nowMs = useRunningClock(chip.kind === 'running' && !chip.cancelling)
   const activity = activityStateFor(chip, nowMs)
-  const title = chipTitle(chip, activity)
+  const title = chipTitle(chip, activity, nowMs)
   const className = `${CHIP_CLASS}${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
   const canStop = chip.kind === 'running' && !chip.cancelling
   if (!chip.resumeCommand && !canStop) {
@@ -116,7 +113,7 @@ const AgentStatusChipMenu = ({
         data-agent-dispatch-chip={chip.kind}
         className={className}
       >
-        {chipBody(chip, activity, nowMs)}
+        {chipBody(chip, activity)}
       </span>
     )
   }
@@ -127,18 +124,18 @@ const AgentStatusChipMenu = ({
         <button
           type="button"
           title={title}
-          aria-label={`${chip.executorLabel} task actions${activity?.stalled ? `; warning: no progress for ${activity.ageLabel}` : ''}`}
+          aria-label={`${title}; task actions`}
           data-agent-dispatch-chip={chip.kind}
           onClick={event => event.stopPropagation()}
           className={`${className} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
-          {chipBody(chip, activity, nowMs)}
+          {chipBody(chip, activity)}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        {canStop && chip.activity && (
+        {canStop && (
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-            {chip.activity}
+            {chip.executorLabel} · {chipActivityDetails(chip, activity, nowMs)}
           </DropdownMenuLabel>
         )}
         {chip.resumeCommand && (

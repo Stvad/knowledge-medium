@@ -6,6 +6,7 @@
  * daemon-owned graph fields.
  */
 import { BRIDGE_COMMAND_TIMEOUT_MS } from '@knowledge-medium/agent-cli/protocol'
+import type { KmMcpToolName } from '@knowledge-medium/agent-cli/mcpShared'
 
 export const AGENT_PROPS = {
   status: 'agent:status',
@@ -103,6 +104,47 @@ export interface ActivityState {
   stalled: boolean
 }
 
+const KM_TOOL_ACTIVITY_LABELS = {
+  get_block: 'Reading',
+  subtree: 'Reading',
+  backlinks: 'Reading',
+  grouped_backlinks: 'Reading',
+  page: 'Reading',
+  daily_note: 'Reading',
+  search: 'Search',
+  guide: 'Reading',
+  sql_query: 'Reading',
+  read_media: 'Reading',
+  create_block: 'Writing',
+  update_block: 'Writing',
+  move_block: 'Writing',
+  delete_block: 'Writing',
+  restore_block: 'Writing',
+  append_markdown: 'Writing',
+  edit_block: 'Writing',
+  create_page: 'Writing',
+  add_media: 'Writing',
+  list_contributors: 'Reading',
+  create_contributor: 'Writing',
+  recent_changes: 'Reading',
+  block_history: 'Reading',
+  comments: 'Reading',
+  add_comment: 'Writing',
+} satisfies Record<KmMcpToolName, string>
+
+/** Short labels for the fixed-width status pill. Unknown km tools stay neutral. */
+export const compactActivityLabel = (activity: string): string => {
+  if (activity === 'Thinking') return 'Thinking'
+  if (activity === 'Searching the web') return 'Search'
+  if (activity === 'Fetching a page') return 'Fetching'
+  if (activity === 'Running a command' || activity === 'Bash') return 'Running'
+  if (activity === 'Read') return 'Reading'
+  if (activity === 'Edit' || activity === 'Write') return 'Writing'
+  const kmTool = /^km:\s*([a-z_]+)$/.exec(activity)?.[1] as KmMcpToolName | undefined
+  if (kmTool && Object.hasOwn(KM_TOOL_ACTIVITY_LABELS, kmTool)) return KM_TOOL_ACTIVITY_LABELS[kmTool]
+  return 'Working'
+}
+
 const KM_ACTIVITY_PREFIX = 'km:'
 const KM_STALLED_THRESHOLD_MS = BRIDGE_COMMAND_TIMEOUT_MS / 3
 
@@ -118,7 +160,18 @@ export const activityStateFor = (chip: ChipState, nowMs: number): ActivityState 
   }
 }
 
-export const chipTitle = (chip: ChipState, activity: ActivityState | null): string => {
+/** Detail text shared by the tooltip and action menu so both clocks agree. */
+export const chipActivityDetails = (chip: ChipState, activity: ActivityState | null, nowMs: number): string => {
+  const label = compactActivityLabel(chip.activity)
+  const details = [chip.activity && chip.activity !== label ? `${label}: ${chip.activity}` : label]
+  if (activity) details.push(`${activity.ageLabel} on this step`)
+  if (chip.updatedAtMs !== null) {
+    details.push(`${elapsedLabel(Math.max(0, Math.round((nowMs - chip.updatedAtMs) / 1_000)))} total`)
+  }
+  return details.join(' · ')
+}
+
+export const chipTitle = (chip: ChipState, activity: ActivityState | null, nowMs: number): string => {
   switch (chip.kind) {
     case 'queued':
       return chip.activity ? `Queued for ${chip.executorLabel} — ${chip.activity}` : `Queued for ${chip.executorLabel}`
@@ -127,10 +180,11 @@ export const chipTitle = (chip: ChipState, activity: ActivityState | null): stri
       const base = chip.attempts > 1
         ? `${chip.executorLabel} is working (attempt ${chip.attempts})`
         : `${chip.executorLabel} is working`
-      if (!chip.activity) return base
-      const detail = `${base} — ${chip.activity}`
-      if (!activity?.stalled) return detail
-      return `${detail} · No progress for ${activity.ageLabel}; the app tab may not be answering`
+      if (!chip.activity && chip.updatedAtMs === null) return base
+      const detail = chipActivityDetails(chip, activity, nowMs)
+      const title = `${base} — ${detail}`
+      if (!activity?.stalled) return title
+      return `${title} · No progress for ${activity.ageLabel}; the app tab may not be answering`
     }
     case 'done':
       return chip.updatedAtMs
