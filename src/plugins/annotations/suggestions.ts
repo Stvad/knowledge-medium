@@ -14,7 +14,7 @@ import {ChangeScope} from '@/data/api'
 import {hasBlockType} from '@/data/properties'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import type {Repo} from '@/data/repo'
-import {resolveAnchor, type RangeAnchor} from './anchor.ts'
+import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
 import {annotationStatusProp, THREAD_TYPE, threadIsOpen, threadSuggestionOf} from './schema.ts'
 import {AnchorChangedError, assertSuggestion, InvalidSuggestionError, threadAndTarget} from './threads.ts'
 
@@ -55,10 +55,32 @@ export const appliedContent = (
   return next
 }
 
+/** A relocated quote must be unique and still share context with its anchor.
+ *  Matching replacement text in that context can be an already-applied copy;
+ *  leave that case for explicit position confirmation instead of jumping to
+ *  another occurrence of the old quote. */
+const suggestionRange = (content: string, anchor: RangeAnchor, replacement: string): {from: number; to: number} => {
+  const resolved = resolveAnchor(content, anchor)
+  if (resolved.state === 'stale') {
+    throw new AnchorChangedError('The original text could not be located reliably. Select the text this suggestion should replace.')
+  }
+  if (resolved.state === 'moved') {
+    if (content.indexOf(anchor.quote) !== content.lastIndexOf(anchor.quote)) {
+      throw new AnchorChangedError('This text appears more than once. Check its position before accepting.')
+    }
+    if (resolveAnchor(content, {...anchor, quote: replacement}).state !== 'stale') {
+      throw new AnchorChangedError('The suggested replacement is already present nearby. Check its position before accepting.')
+    }
+  }
+  if (!recaptureAnchor(content, resolved.from, anchor.quote)) {
+    throw new AnchorChangedError('The text is now part of a larger reference. Select the whole reference before accepting.')
+  }
+  return resolved
+}
+
 /** Splice the replacement over the quote and mark the thread accepted, as
- *  one undo step. The anchor must resolve exact as of this transaction and is
- *  never rewritten: exactness, with `appliedContent`'s refusals, is what
- *  stops a duplicate, or this thread reopened, from applying twice. */
+ *  one undo step. Resolve against this transaction's content; keep the stored
+ *  anchor as the original quote and context for the suggestion's history. */
 export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
   repo.tx(async tx => {
     const {root, target} = await threadAndTarget(tx, threadId)
@@ -67,10 +89,7 @@ export const acceptSuggestion = (repo: Repo, threadId: string): Promise<void> =>
     assertSuggestion(suggestion.anchor, suggestion.replacement)
     // The card offers Accept only while open, but may be stale.
     if (!threadIsOpen(root)) throw new InvalidSuggestionError('This suggestion is closed.')
-    const resolved = resolveAnchor(target.content, suggestion.anchor)
-    if (resolved.state !== 'exact') {
-      throw new AnchorChangedError('The text changed since this was suggested. Confirm its position, or reselect it, to accept.')
-    }
+    const resolved = suggestionRange(target.content, suggestion.anchor, suggestion.replacement)
     await tx.update(target.id, {content: appliedContent(target.content, resolved, suggestion.anchor, suggestion.replacement)})
     await tx.setProperty(threadId, annotationStatusProp, 'accepted')
   }, {scope: ChangeScope.BlockDefault, description: 'accept suggestion'})

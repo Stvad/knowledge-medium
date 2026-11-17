@@ -10,7 +10,8 @@
  *
  * - exact: the quote is at `quoteStart` and the windows on each side EQUAL the
  *   stored context. Equality, not "starts with", so a quote that began or
- *   ended the block must still do so. Every write requires exact.
+ *   ended the block must still do so. Capturing or rewriting an anchor requires
+ *   exact; suggestion acceptance also permits an unambiguous moved quote.
  * - moved: the quote occurs elsewhere and its surroundings still agree with
  *   the stored context; shown, but flagged.
  * - stale: no occurrence qualifies.

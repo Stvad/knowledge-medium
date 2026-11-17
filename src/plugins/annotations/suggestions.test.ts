@@ -112,11 +112,69 @@ describe('acceptSuggestion', () => {
     expect(threadStatusOf(await rootOf(threadId))).toBe('open')
   })
 
-  it('refuses once the quote has moved, even though it is still found', async () => {
+  it('accepts an unchanged unique quote after text is inserted before it', async () => {
     const threadId = await suggest('Thursday', 'Thursday 9am')
     await setTarget(`Update: ${MID}`)
-    await expect(acceptSuggestion(repo, threadId)).rejects.toThrow('The text changed since this was suggested')
-    expect(await targetText()).toBe(`Update: ${MID}`)
+    await acceptSuggestion(repo, threadId)
+    expect(await targetText()).toBe(`Update: ${MID.replace('Thursday', 'Thursday 9am')}`)
+    expect(threadStatusOf(await rootOf(threadId))).toBe('accepted')
+  })
+
+  it.each([false, true])('accepts two independent suggestions in either order (reverse: %s)', async reverse => {
+    const first = await suggest('Thursday', 'Wednesday morning')
+    const second = await suggest('vendor', 'supplier')
+    const [a, b] = reverse ? [second, first] : [first, second]
+    const originalAnchor = threadAnchorOf(await rootOf(b)) as RangeAnchor
+    await acceptSuggestion(repo, a)
+    const intermediate = await targetText()
+    expect(resolveAnchor(intermediate, originalAnchor).state).toBe('moved')
+
+    await acceptSuggestion(repo, b)
+    expect(await targetText()).toBe('We moved the launch to Wednesday morning because the supplier slipped.')
+    expect(threadStatusOf(await rootOf(b))).toBe('accepted')
+    expect(threadAnchorOf(await rootOf(b))).toEqual(originalAnchor)
+    expect(await repo.undo()).toBe(true)
+    expect(await targetText()).toBe(intermediate)
+    expect(threadStatusOf(await rootOf(b))).toBe('open')
+  })
+
+  it('requires confirmation for repeated quotes instead of choosing the closest match', async () => {
+    const before = 'Meet Thursday, then discuss Thursday.'
+    await setTarget(before)
+    const threadId = await suggest('Thursday', 'Friday')
+    await setTarget(`Update: ${before}`)
+    expect(resolveAnchor(await targetText(), threadAnchorOf(await rootOf(threadId)) as RangeAnchor).state).toBe('moved')
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(AnchorChangedError)
+    expect(await targetText()).toBe(`Update: ${before}`)
+    expect(threadStatusOf(await rootOf(threadId))).toBe('open')
+
+    const confirmed = confirmedAnchor(await targetText(), threadAnchorOf(await rootOf(threadId)) as RangeAnchor)!
+    await reanchorThread(repo, threadId, confirmed)
+    await acceptSuggestion(repo, threadId)
+    expect(await targetText()).toBe('Update: Meet Friday, then discuss Thursday.')
+  })
+
+  it('does not redirect a duplicate to the remaining occurrence after the first was replaced', async () => {
+    await setTarget('the cat sat. the cat sat.')
+    const first = await suggest('cat', 'dog')
+    const duplicate = await suggest('cat', 'dog')
+    await acceptSuggestion(repo, first)
+    const after = await targetText()
+    expect(resolveAnchor(after, threadAnchorOf(await rootOf(duplicate)) as RangeAnchor).state).toBe('moved')
+    await expect(acceptSuggestion(repo, duplicate)).rejects.toBeInstanceOf(AnchorChangedError)
+    expect(await targetText()).toBe(after)
+    expect(threadStatusOf(await rootOf(duplicate))).toBe('open')
+  })
+
+  it('requires reselection when moving the quote would cut a newly surrounding reference', async () => {
+    const quote = 'long descriptive launch plan'
+    await setTarget(`Read the ${quote} tomorrow.`)
+    const threadId = await suggest(quote, 'short plan')
+    const after = `Read [[the ${quote} tomorrow]].`
+    await setTarget(after)
+    expect(resolveAnchor(after, threadAnchorOf(await rootOf(threadId)) as RangeAnchor).state).toBe('moved')
+    await expect(acceptSuggestion(repo, threadId)).rejects.toBeInstanceOf(AnchorChangedError)
+    expect(await targetText()).toBe(after)
   })
 
   // The duplicate still finds its quote at its offset; only the context
