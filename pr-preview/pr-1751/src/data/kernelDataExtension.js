@@ -1,1 +1,0 @@
-export{R6 as kernelDataExtension}from"../../chunks/app-hM73oniL.js";

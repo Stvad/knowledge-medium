@@ -1,1 +1,0 @@
-export{K$ as aliasDataExtension}from"../../../chunks/app-hM73oniL.js";

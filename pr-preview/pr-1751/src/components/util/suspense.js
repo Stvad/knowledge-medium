@@ -1,1 +1,0 @@
-export{DK as SuspenseFallback}from"../../../chunks/app-hM73oniL.js";

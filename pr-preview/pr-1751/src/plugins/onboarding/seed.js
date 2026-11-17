@@ -1,1 +1,0 @@
-export{ij as seedTutorial}from"../../../chunks/app-hM73oniL.js";

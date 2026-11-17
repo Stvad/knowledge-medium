@@ -1,1 +1,0 @@
-export{Cm as HIGHLIGHT_CLASS,wm as MOVED_HIGHLIGHT_CLASS,Tm as SUGGESTION_HIGHLIGHT_CLASS,Em as coveringStyle,Dm as highlightClasses,Om as highlightField,km as highlightRange,Am as highlightRanges,jm as threadHighlights,Mm as threadHighlightsContribution}from"../../../chunks/app-hM73oniL.js";

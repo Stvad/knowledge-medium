@@ -1,1 +1,0 @@
-export{KZ as contributorsDataExtension}from"../../../chunks/app-hM73oniL.js";

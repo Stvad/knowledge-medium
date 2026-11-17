@@ -1,1 +1,0 @@
-export{XB as MetadataRow,ZB as PropertySectionLabel}from"../../../chunks/app-hM73oniL.js";
