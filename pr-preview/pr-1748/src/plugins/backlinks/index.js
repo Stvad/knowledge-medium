@@ -1,0 +1,1 @@
+export{Bv as backlinksPlugin}from"../../../chunks/app-DAXbGWOX.js";

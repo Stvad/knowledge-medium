@@ -1,0 +1,1 @@
+export{q2 as cn}from"../../chunks/app-DAXbGWOX.js";

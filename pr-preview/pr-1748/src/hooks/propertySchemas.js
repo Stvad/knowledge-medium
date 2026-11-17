@@ -1,0 +1,1 @@
+export{HG as usePropertySchemas}from"../../chunks/app-DAXbGWOX.js";

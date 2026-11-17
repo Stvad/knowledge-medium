@@ -1,0 +1,1 @@
+export{QP as ClientLocalSettings,$P as clientLocalSettings}from"../../chunks/app-DAXbGWOX.js";

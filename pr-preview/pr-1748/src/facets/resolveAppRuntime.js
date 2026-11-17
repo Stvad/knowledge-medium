@@ -1,0 +1,1 @@
+export{eF as resolveAppRuntime,tF as resolveAppRuntimeSync}from"../../chunks/app-DAXbGWOX.js";

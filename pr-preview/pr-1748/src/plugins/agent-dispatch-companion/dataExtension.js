@@ -1,0 +1,1 @@
+export{j1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DAXbGWOX.js";

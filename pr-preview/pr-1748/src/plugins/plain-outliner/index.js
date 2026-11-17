@@ -1,0 +1,1 @@
+export{IT as plainOutlinerPlugin}from"../../../chunks/app-DAXbGWOX.js";

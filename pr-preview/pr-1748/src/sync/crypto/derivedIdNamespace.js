@@ -1,0 +1,1 @@
+export{jot as deriveWorkspaceIdNamespace}from"../../../chunks/app-DAXbGWOX.js";

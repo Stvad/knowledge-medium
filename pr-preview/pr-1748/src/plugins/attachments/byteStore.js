@@ -1,0 +1,1 @@
+export{VS as ASSETS_ROOT,HS as InMemoryByteStore,US as OpfsByteStore,WS as assetPathSegments,GS as createByteStore,KS as getByteStore}from"../../../chunks/app-DAXbGWOX.js";

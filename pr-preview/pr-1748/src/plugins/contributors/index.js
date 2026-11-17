@@ -1,0 +1,1 @@
+export{Fm as contributorsPlugin}from"../../../chunks/app-DAXbGWOX.js";

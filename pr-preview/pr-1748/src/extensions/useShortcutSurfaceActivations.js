@@ -1,0 +1,1 @@
+export{RR as useShortcutSurfaceActivations}from"../../chunks/app-DAXbGWOX.js";

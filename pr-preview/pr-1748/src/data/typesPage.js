@@ -1,0 +1,1 @@
+export{Kat as getOrCreateTypesPage,qat as typesPageBlockId,Jat as typesPageSpec}from"../../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{kE as createEncryptedWorkspace}from"../../../../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{LF as LazyBlockComponent}from"../../chunks/app-DAXbGWOX.js";

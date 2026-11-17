@@ -1,0 +1,1 @@
+export{OP as appUpdate,kP as useAppUpdateAvailable}from"../chunks/app-DAXbGWOX.js";

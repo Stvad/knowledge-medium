@@ -1,0 +1,1 @@
+export{xR as defaultPasteDecision,SR as pasteDecisionVerb}from"../../chunks/app-DAXbGWOX.js";

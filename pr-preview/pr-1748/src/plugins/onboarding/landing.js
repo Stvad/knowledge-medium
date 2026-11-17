@@ -1,0 +1,1 @@
+export{RC as onboardingLanding}from"../../../chunks/app-DAXbGWOX.js";

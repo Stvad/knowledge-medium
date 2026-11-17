@@ -1,0 +1,1 @@
+export{kW as isIOS,AW as isMacPlatform}from"../../chunks/app-DAXbGWOX.js";

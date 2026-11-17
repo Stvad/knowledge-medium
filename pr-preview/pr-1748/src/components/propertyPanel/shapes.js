@@ -1,0 +1,1 @@
+export{KG as propertyShapeLabel}from"../../../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{mb as blockDragPlugin}from"../../../chunks/app-DAXbGWOX.js";

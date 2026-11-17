@@ -1,0 +1,1 @@
+export{_O as openRecentsPage}from"../../../chunks/app-DAXbGWOX.js";

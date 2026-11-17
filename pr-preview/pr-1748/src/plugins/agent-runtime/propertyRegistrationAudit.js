@@ -1,0 +1,1 @@
+export{Rh as PROVENANCE_BLOCKS_PER_KEY,zh as PROVENANCE_KEY_LIMIT,Bh as auditPropertyRegistration,Vh as describeUnregisteredProperty}from"../../../chunks/app-DAXbGWOX.js";

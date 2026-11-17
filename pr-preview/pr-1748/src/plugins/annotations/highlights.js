@@ -1,0 +1,1 @@
+export{Tm as HIGHLIGHT_CLASS,Em as MOVED_HIGHLIGHT_CLASS,Dm as SUGGESTION_HIGHLIGHT_CLASS,Om as coveringStyle,km as highlightClasses,Am as highlightField,jm as highlightRange,Mm as highlightRanges,Nm as threadHighlights,Pm as threadHighlightsContribution}from"../../../chunks/app-DAXbGWOX.js";

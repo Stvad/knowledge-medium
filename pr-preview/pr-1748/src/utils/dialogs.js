@@ -1,0 +1,1 @@
+export{VL as __resetDialogsForTests,HL as getDialogQueue,UL as isDialogOpenForWorkspace,WL as openDialog,GL as subscribeDialogs}from"../../chunks/app-DAXbGWOX.js";

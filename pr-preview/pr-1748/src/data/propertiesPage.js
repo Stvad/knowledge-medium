@@ -1,0 +1,1 @@
+export{Yat as getOrCreatePropertiesPage,Xat as propertiesPageBlockId,Zat as propertiesPageSpec}from"../../chunks/app-DAXbGWOX.js";

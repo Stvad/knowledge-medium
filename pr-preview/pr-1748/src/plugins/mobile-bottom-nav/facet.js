@@ -1,0 +1,1 @@
+export{TT as mobileBottomNavItemsFacet}from"../../../chunks/app-DAXbGWOX.js";

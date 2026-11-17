@@ -1,0 +1,1 @@
+export{ig as lintExtensionSource}from"../../../chunks/app-DAXbGWOX.js";

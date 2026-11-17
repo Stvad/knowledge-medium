@@ -1,0 +1,1 @@
+export{fP as approveExtensionHere}from"../../chunks/app-DAXbGWOX.js";

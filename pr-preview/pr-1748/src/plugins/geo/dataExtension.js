@@ -1,0 +1,1 @@
+export{IJ as geoDataExtension}from"../../../chunks/app-DAXbGWOX.js";

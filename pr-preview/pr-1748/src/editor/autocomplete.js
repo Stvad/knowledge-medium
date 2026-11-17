@@ -1,0 +1,1 @@
+export{eP as editorAutocompleteExtension}from"../../chunks/app-DAXbGWOX.js";

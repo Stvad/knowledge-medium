@@ -1,0 +1,1 @@
+export{wb as useIsReadOnly}from"../../chunks/app-DAXbGWOX.js";

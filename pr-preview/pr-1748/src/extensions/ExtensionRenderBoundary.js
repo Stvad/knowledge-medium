@@ -1,0 +1,1 @@
+export{jz as ExtensionRenderBoundary}from"../../chunks/app-DAXbGWOX.js";

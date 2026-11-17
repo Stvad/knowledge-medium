@@ -1,0 +1,1 @@
+export{_P as appUpdatePromptExtension}from"../../../chunks/app-DAXbGWOX.js";

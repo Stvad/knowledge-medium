@@ -1,0 +1,1 @@
+export{xg as authorIdOf}from"../../../chunks/app-DAXbGWOX.js";

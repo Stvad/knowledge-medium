@@ -1,0 +1,1 @@
+export{fq as referencesDataExtension}from"../../../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{tC as videoPlayerPlugin}from"../../../chunks/app-DAXbGWOX.js";

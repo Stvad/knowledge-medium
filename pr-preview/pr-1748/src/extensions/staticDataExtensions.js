@@ -1,0 +1,1 @@
+export{ZK as staticDataExtensions}from"../../chunks/app-DAXbGWOX.js";

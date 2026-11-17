@@ -1,0 +1,1 @@
+export{UF as BlockLoadingPlaceholder}from"../../chunks/app-DAXbGWOX.js";

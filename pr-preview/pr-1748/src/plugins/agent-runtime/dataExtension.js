@@ -1,0 +1,1 @@
+export{k1 as agentRuntimeDataExtension}from"../../../chunks/app-DAXbGWOX.js";

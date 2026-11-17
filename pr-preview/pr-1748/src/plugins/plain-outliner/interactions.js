@@ -1,0 +1,1 @@
+export{BT as blockEditingContentRenderer}from"../../../chunks/app-DAXbGWOX.js";

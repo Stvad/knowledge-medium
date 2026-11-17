@@ -1,0 +1,1 @@
+export{HZ as annotationMarginOpenProp,UZ as annotationMarginShareProp}from"../../../chunks/app-DAXbGWOX.js";

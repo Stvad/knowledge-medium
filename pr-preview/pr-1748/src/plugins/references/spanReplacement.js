@@ -1,0 +1,1 @@
+export{qq as preferredSpanReplacement}from"../../../chunks/app-DAXbGWOX.js";

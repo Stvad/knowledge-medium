@@ -1,0 +1,1 @@
+export{k6 as materializeStagingRows}from"../../../../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{N8 as KERNEL_PROCESSORS}from"../../../chunks/app-DAXbGWOX.js";

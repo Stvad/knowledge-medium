@@ -1,0 +1,1 @@
+export{EV as declarationOnlyDefinitionForName,DV as declarationOnlyStatusText}from"../../../chunks/app-DAXbGWOX.js";

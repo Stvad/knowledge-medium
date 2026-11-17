@@ -1,0 +1,1 @@
+export{Hy as Wikilink}from"../../../../../chunks/app-DAXbGWOX.js";

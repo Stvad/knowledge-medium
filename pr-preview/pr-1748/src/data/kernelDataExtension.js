@@ -1,0 +1,1 @@
+export{B6 as kernelDataExtension}from"../../chunks/app-DAXbGWOX.js";

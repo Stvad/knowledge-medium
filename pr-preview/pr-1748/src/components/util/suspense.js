@@ -1,0 +1,1 @@
+export{kK as SuspenseFallback}from"../../../chunks/app-DAXbGWOX.js";

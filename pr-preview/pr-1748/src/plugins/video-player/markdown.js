@@ -1,0 +1,1 @@
+export{nC as videoPlayerMarkdownExtension}from"../../../chunks/app-DAXbGWOX.js";

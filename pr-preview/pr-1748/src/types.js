@@ -1,0 +1,1 @@
+export{ist as isChildBackedPropertiesWorkspace}from"../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{Qat as aliasSeatNamespacesInTx,$at as resolveAliasSeatNamespaces}from"../../chunks/app-DAXbGWOX.js";

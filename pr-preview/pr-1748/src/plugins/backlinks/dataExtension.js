@@ -1,0 +1,1 @@
+export{TQ as backlinksDataExtension}from"../../../chunks/app-DAXbGWOX.js";

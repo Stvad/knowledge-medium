@@ -1,0 +1,1 @@
+export{sJ as htmlDocumentDataExtension}from"../../../chunks/app-DAXbGWOX.js";

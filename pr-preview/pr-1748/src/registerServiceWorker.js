@@ -1,0 +1,1 @@
+export{EP as checkForAppUpdate,DP as registerServiceWorker}from"../chunks/app-DAXbGWOX.js";

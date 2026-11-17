@@ -1,0 +1,1 @@
+export{J$ as aliasDataExtension}from"../../../chunks/app-DAXbGWOX.js";

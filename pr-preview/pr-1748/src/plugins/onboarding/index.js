@@ -1,0 +1,1 @@
+export{sj as EXTENSIONS_PAGE_TITLE,cj as TUTORIAL_DEFAULT_TITLE,lj as TUTORIAL_VIM_TITLE,jC as onboardingPlugin,oj as seedTutorial}from"../../../chunks/app-DAXbGWOX.js";

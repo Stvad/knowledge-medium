@@ -1,0 +1,1 @@
+export{vit as deviceSurface,yit as getClientId,bit as getDeviceLabel,xit as isClientIdPersistent,Sit as resetClientIdCache}from"../../chunks/app-DAXbGWOX.js";

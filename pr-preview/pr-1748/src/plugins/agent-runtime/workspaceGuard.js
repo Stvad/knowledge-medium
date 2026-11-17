@@ -1,0 +1,1 @@
+export{Ng as assertActiveWorkspace}from"../../../chunks/app-DAXbGWOX.js";

@@ -1,0 +1,1 @@
+export{hO as useMinuteClock}from"../../chunks/app-DAXbGWOX.js";

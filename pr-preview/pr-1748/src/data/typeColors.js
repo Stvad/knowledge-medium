@@ -1,0 +1,1 @@
+export{sN as DEFAULT_TYPE_COLORS,cN as defaultTypeColor,lN as pickLeastUsedTypeColor}from"../../chunks/app-DAXbGWOX.js";

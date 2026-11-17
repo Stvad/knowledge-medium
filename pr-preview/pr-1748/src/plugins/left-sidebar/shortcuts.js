@@ -1,0 +1,1 @@
+export{rE as getOrCreateShortcutsBlock,iE as journalShortcutBlockId,aE as shortcutsBlockId}from"../../../chunks/app-DAXbGWOX.js";

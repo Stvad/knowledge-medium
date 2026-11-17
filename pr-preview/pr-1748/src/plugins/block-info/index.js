@@ -1,0 +1,1 @@
+export{wv as blockInfoPlugin}from"../../../chunks/app-DAXbGWOX.js";

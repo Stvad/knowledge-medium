@@ -1,0 +1,1 @@
+export{rA as dailyDateWikilinkDecorator}from"../../../chunks/app-DAXbGWOX.js";

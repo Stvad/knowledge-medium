@@ -1,0 +1,1 @@
+export{cJ as htmlDocumentTypeSeed}from"../../../chunks/app-DAXbGWOX.js";

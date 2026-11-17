@@ -1,0 +1,1 @@
+export{CN as ensureMetricsConsoleHook}from"../../chunks/app-DAXbGWOX.js";
