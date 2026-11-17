@@ -1,1 +1,1 @@
-export{Iit as MIGRATIONS_PAGE_ALIAS,Lit as getOrCreateMigrationsPage,Rit as migrationsPageBlockId,zit as migrationsPageSpec}from"../../chunks/app-Bl2ELxYV.js";
+export{Lit as MIGRATIONS_PAGE_ALIAS,Rit as getOrCreateMigrationsPage,zit as migrationsPageBlockId,Bit as migrationsPageSpec}from"../../chunks/app-DZDQzpLo.js";
