@@ -1,1 +1,1 @@
-export{tg as lintExtensionSource}from"../../../chunks/app-4FQheiWZ.js";
+export{ng as lintExtensionSource}from"../../../chunks/app-DEqGdhIB.js";

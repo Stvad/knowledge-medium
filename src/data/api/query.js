@@ -1,1 +1,1 @@
-export{wut as defineQuery}from"../../../chunks/app-4FQheiWZ.js";
+export{Eut as defineQuery}from"../../../chunks/app-DEqGdhIB.js";

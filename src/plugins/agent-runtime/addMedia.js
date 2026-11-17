@@ -1,1 +1,1 @@
-export{Mg as addMedia}from"../../../chunks/app-4FQheiWZ.js";
+export{Ng as addMedia}from"../../../chunks/app-DEqGdhIB.js";
