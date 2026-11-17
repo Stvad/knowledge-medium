@@ -1,1 +1,0 @@
-export{X2 as withLock}from"../../chunks/app-C4egjCCM.js";

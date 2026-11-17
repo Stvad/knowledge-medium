@@ -1,1 +1,0 @@
-export{xP as appUpdatePromptExtension}from"../../../chunks/app-C4egjCCM.js";

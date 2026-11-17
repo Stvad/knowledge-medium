@@ -1,1 +1,0 @@
-export{V1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-C4egjCCM.js";

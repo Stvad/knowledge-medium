@@ -1,1 +1,0 @@
-export{SD as usePendingInvitations}from"../../chunks/app-C4egjCCM.js";

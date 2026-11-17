@@ -1,1 +1,0 @@
-export{Du as blockTagsConfigUi}from"../../../chunks/app-C4egjCCM.js";

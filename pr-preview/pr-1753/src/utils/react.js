@@ -1,1 +1,0 @@
-export{UL as useIsMobile,WL as usePointerCoarse}from"../../chunks/app-C4egjCCM.js";

@@ -1,1 +1,0 @@
-export{fF as extensionDisplayName,pF as extensionName,mF as userExtensionShellToggle,hF as userExtensionToggle}from"../../chunks/app-C4egjCCM.js";

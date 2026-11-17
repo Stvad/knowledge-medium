@@ -1,1 +1,0 @@
-export{Lm as contributorsPlugin}from"../../../chunks/app-C4egjCCM.js";

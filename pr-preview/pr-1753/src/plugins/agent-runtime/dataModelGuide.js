@@ -1,1 +1,0 @@
-export{iv as DATA_MODEL_GUIDE,av as dataModelGuide}from"../../../chunks/app-C4egjCCM.js";

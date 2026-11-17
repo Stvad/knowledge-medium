@@ -1,1 +1,0 @@
-export{i1 as aliasDataExtension}from"../../../chunks/app-C4egjCCM.js";

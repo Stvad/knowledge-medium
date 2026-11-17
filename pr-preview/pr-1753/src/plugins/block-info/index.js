@@ -1,1 +1,0 @@
-export{Ov as blockInfoPlugin}from"../../../chunks/app-C4egjCCM.js";

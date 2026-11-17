@@ -1,1 +1,0 @@
-export{BB as defineVariant,VB as defineVariantFacet}from"../../chunks/app-C4egjCCM.js";

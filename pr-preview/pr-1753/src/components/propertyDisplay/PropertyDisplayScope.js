@@ -1,1 +1,0 @@
-export{NI as PropertyDisplayScope}from"../../../chunks/app-C4egjCCM.js";

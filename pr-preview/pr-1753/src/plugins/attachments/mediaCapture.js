@@ -1,1 +1,0 @@
-export{fS as DEFAULT_MAX_CAPTURE_BYTES,pS as captureMedia,mS as mediaBlockId}from"../../../chunks/app-C4egjCCM.js";

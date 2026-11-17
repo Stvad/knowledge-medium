@@ -1,1 +1,0 @@
-export{l2 as instrumentAdapter}from"../../../chunks/app-C4egjCCM.js";

@@ -1,1 +1,0 @@
-export{X6 as kernelDataExtension}from"../../chunks/app-C4egjCCM.js";

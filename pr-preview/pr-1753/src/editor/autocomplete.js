@@ -1,1 +1,0 @@
-export{iP as editorAutocompleteExtension}from"../../chunks/app-C4egjCCM.js";
