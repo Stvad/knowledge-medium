@@ -20,13 +20,14 @@ const privateFields = [
   seedProperty({seedKey: 'test/property/preference', revision: 1, name: 'preference choice', preset: 'string', changeScope: ChangeScope.UserPrefs}),
 ]
 const typedMissing = seedProperty({seedKey: 'test/property/completion-status-focus', revision: 1, name: 'status focus', preset: 'string', changeScope: ChangeScope.BlockDefault})
+const typedSecond = seedProperty({seedKey: 'test/property/completion-status-second', revision: 1, name: 'status second', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const typedSubstring = seedProperty({seedKey: 'test/property/completion-past-status-focus', revision: 1, name: 'past status focus', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const typedList = seedProperty({seedKey: 'test/property/completion-status-list', revision: 1, name: 'status list', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
 const typedFieldOnly = seedProperty({seedKey: 'test/property/completion-status-field-only', revision: 1, name: 'status field-only', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const typedStaleCell = seedProperty({seedKey: 'test/property/completion-status-stale-cell', revision: 1, name: 'status stale-cell', preset: 'string', changeScope: ChangeScope.BlockDefault})
 const typeA = seedType({seedKey: 'test/type/completion-a', revision: 1, id: 'test:completion-a', label: 'Completion A', properties: [matching[0]!, typedMissing, typedSubstring, privateFields[0]]})
-const typeB = seedType({seedKey: 'test/type/completion-b', revision: 1, id: 'test:completion-b', label: 'Completion B', properties: [matching[1]!, typedMissing, typedList, typedFieldOnly, typedStaleCell]})
-const typedFields = [typedMissing, typedSubstring, typedList, typedFieldOnly, typedStaleCell]
+const typeB = seedType({seedKey: 'test/type/completion-b', revision: 1, id: 'test:completion-b', label: 'Completion B', properties: [matching[1]!, typedMissing, typedSecond, typedList, typedFieldOnly, typedStaleCell]})
+const typedFields = [typedMissing, typedSecond, typedSubstring, typedList, typedFieldOnly, typedStaleCell]
 let h: TestDb
 let repo: Repo
 beforeAll(async () => { h = await createTestDb() })
@@ -69,6 +70,12 @@ it('puts missing fields from every owner type before ordinary matches within the
   if (fieldOnlyResolution.status !== 'resolved') throw new Error('Missing field-only definition')
   await repo.mutate.createChild({parentId: 'owner', content: propertyFieldContent(fieldOnlyResolution.schema.fieldId)})
 
+  const missingResolution = repo.propertySchemaResolverFor('ws').resolve(typedMissing.name)
+  if (missingResolution.status !== 'resolved') throw new Error('Missing declared definition')
+  const referenceId = await repo.mutate.createChild({parentId: 'owner', content: `((${missingResolution.schema.fieldId}))`})
+  expect((await repo.load(referenceId))?.referenceTargetId).toBe(missingResolution.schema.fieldId)
+  expect((await repo.load(referenceId))?.isFieldForm).not.toBe(true)
+
   const staleResolution = repo.propertySchemaResolverFor('ws').resolve(typedStaleCell.name)
   if (staleResolution.status !== 'resolved') throw new Error('Missing stale-cell definition')
   const stored = {...repo.block('owner').peek()!.properties,
@@ -88,7 +95,7 @@ it('puts missing fields from every owner type before ordinary matches within the
   expect(ownerChildren.some(row => row.isFieldForm && row.referenceTargetId === staleResolution.schema.fieldId)).toBe(false)
 
   const names = (await complete('::status'))!.options.map(option => option.label)
-  expect(names.slice(0, 4)).toEqual(['status', typedMissing.name, typedSubstring.name, 'status 0'])
+  expect(names.slice(0, 5)).toEqual(['status', typedMissing.name, typedSecond.name, typedSubstring.name, 'status 0'])
   expect(names).toHaveLength(8)
   expect(names.filter(name => name === typedMissing.name)).toHaveLength(1)
   expect((await complete('::STATUS'))!.options[0]?.label).toBe('status')
@@ -101,6 +108,43 @@ it('puts missing fields from every owner type before ordinary matches within the
   const partial = (await complete('::stat'))!.options.map(option => option.label)
   expect(partial.indexOf(typedMissing.name)).toBeLessThan(partial.indexOf('status'))
   expect(await complete('::hidden choice', 15, true)).toBeNull()
+})
+it('keeps a declared field with unavailable identity as an ordinary suggestion', async () => {
+  await repo.block('owner').set(typesProp, [typeA.id])
+  const resolver = repo.propertySchemaResolverFor('ws')
+  const resolve = resolver.resolve.bind(resolver)
+  vi.spyOn(repo, 'propertySchemaResolverFor').mockReturnValue(resolver)
+  const resolveSpy = vi.spyOn(resolver, 'resolve').mockImplementation(name => name === typedMissing.name
+    ? {status: 'identity-unavailable', reason: 'definition-unavailable'}
+    : resolve(name))
+  expect((await complete('::focus'))!.options.map(option => option.label))
+    .toEqual([typedSubstring.name, typedMissing.name, 'Create “focus”'])
+  expect(resolveSpy).toHaveBeenCalledWith(typedMissing.name)
+})
+it('keeps ordinary suggestions when the source owner is unavailable', async () => {
+  await h.db.execute("UPDATE blocks SET parent_id = 'missing-owner' WHERE id = 'source'")
+  repo.cache.deleteSnapshot('source')
+  expect(await repo.load('missing-owner')).toBeNull()
+  expect((await complete('::status'))!.options[0].label).toBe('status')
+})
+it('only enumerates owner children when a matching declared field could be missing', async () => {
+  const originalQuery = repo.query
+  const children = vi.fn(originalQuery.children)
+  const writable = repo as {query: Repo['query']}
+  writable.query = new Proxy(originalQuery, {get: (target, key) => key === 'children' ? children : Reflect.get(target, key)})
+  try {
+    await complete()
+    expect(children).not.toHaveBeenCalled()
+    await repo.block('owner').set(typesProp, [typeA.id])
+    children.mockClear()
+    await complete('::focus')
+    expect(children).toHaveBeenCalledWith({id: 'owner', propertyChildren: 'all'})
+    children.mockClear()
+    await complete('::unrelated')
+    expect(children).not.toHaveBeenCalled()
+  } finally {
+    writable.query = originalQuery
+  }
 })
 it('uses picker visibility and only ordinary undoable scopes', async () => {
   const names = (await complete())!.options.map(option => option.label)
