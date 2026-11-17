@@ -1,1 +1,0 @@
-export{Jt as staticAppExtensions}from"../../chunks/app-B-rPP7Y0.js";

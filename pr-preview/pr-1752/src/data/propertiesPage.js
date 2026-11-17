@@ -1,1 +1,0 @@
-export{Yat as getOrCreatePropertiesPage,Xat as propertiesPageBlockId,Zat as propertiesPageSpec}from"../../chunks/app-B-rPP7Y0.js";

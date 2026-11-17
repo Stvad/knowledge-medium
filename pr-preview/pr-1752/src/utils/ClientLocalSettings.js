@@ -1,1 +1,0 @@
-export{QP as ClientLocalSettings,$P as clientLocalSettings}from"../../chunks/app-B-rPP7Y0.js";

@@ -1,1 +1,0 @@
-export{jot as deriveWorkspaceIdNamespace}from"../../../chunks/app-B-rPP7Y0.js";
