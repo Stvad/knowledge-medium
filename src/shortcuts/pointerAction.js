@@ -1,1 +1,1 @@
-export{GP as dispatchPointerAction,KP as setPointerActionDispatcher}from"../../chunks/app-CzuqNxZ6.js";
+export{GP as dispatchPointerAction,KP as setPointerActionDispatcher}from"../../chunks/app-DYmzEXkr.js";

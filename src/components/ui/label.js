@@ -1,1 +1,1 @@
-export{wk as Label}from"../../../chunks/app-CzuqNxZ6.js";
+export{wk as Label}from"../../../chunks/app-DYmzEXkr.js";

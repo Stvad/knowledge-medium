@@ -1,1 +1,1 @@
-export{UI as CodeMirrorExtensionBlockRenderer,WI as ExtensionEditor}from"../../../chunks/app-CzuqNxZ6.js";
+export{UI as CodeMirrorExtensionBlockRenderer,WI as ExtensionEditor}from"../../../chunks/app-DYmzEXkr.js";
