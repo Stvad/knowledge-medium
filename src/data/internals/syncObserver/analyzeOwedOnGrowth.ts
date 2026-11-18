@@ -7,7 +7,7 @@
  * repays it.
  */
 
-import { recordAnalyzeOwed } from '@/data/internals/clientSchema.js'
+import { readAnalyzeOwed, recordAnalyzeOwed } from '@/data/internals/clientSchema.js'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { installedAnalyzeTableNames } from '@/data/localSchema.js'
 import type { MaterializeOutcome } from './materialize.js'
@@ -31,9 +31,13 @@ const readBlocksStatRows = async (db: PowerSyncDb): Promise<number> => {
 }
 
 /** Counts the rows each materialize pass INSERTED into `blocks`, and records an
- *  ANALYZE as owed whenever they reach {@link SYNC_GROWTH_OWES_ANALYZE_FRACTION}
- *  of the stats' row count. Each record restarts the count against a fresh read
- *  of the stats, which a repaid ANALYZE will have moved.
+ *  ANALYZE as owed when they reach {@link SYNC_GROWTH_OWES_ANALYZE_FRACTION} of
+ *  the stats' row count. While one is already owed it counts nothing: the
+ *  owed ANALYZE will see those rows, and recording again would only repeat the
+ *  write.
+ *
+ *  Counts `blocks` inserts only; growth of the index tables alone (many new
+ *  references on existing rows) is not counted.
  *
  *  Per observer lifetime, not persisted: a bulk change synced across several
  *  sessions, each below the fraction, is not recorded. Accepted: a bulk change
@@ -42,22 +46,18 @@ const readBlocksStatRows = async (db: PowerSyncDb): Promise<number> => {
  *  No stats counts as zero rows: a device's first sync owes one ANALYZE. */
 export const createSyncGrowthAnalyzeOwer = (db: PowerSyncDb) => {
   let inserted = 0
-  let statRows: Promise<number> | null = null
 
   return async (outcome: MaterializeOutcome): Promise<void> => {
     for (const {before, after} of outcome.snapshots.values()) {
       if (before === null && after !== null) inserted++
     }
     if (inserted === 0) return
-    // A failed read is not cached, so the next window retries it.
-    statRows ??= readBlocksStatRows(db).catch((err: unknown) => {
-      statRows = null
-      throw err
-    })
-    const rows = await statRows
-    if (inserted < rows * SYNC_GROWTH_OWES_ANALYZE_FRACTION) return
-    inserted = 0
-    statRows = null
+    if ((await readAnalyzeOwed(db)).includes('blocks')) {
+      inserted = 0
+      return
+    }
+    if (inserted < await readBlocksStatRows(db) * SYNC_GROWTH_OWES_ANALYZE_FRACTION) return
     await recordAnalyzeOwed(db, installedAnalyzeTableNames())
+    inserted = 0
   }
 }

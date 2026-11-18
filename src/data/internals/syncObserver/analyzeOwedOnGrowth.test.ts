@@ -15,7 +15,7 @@ const data = (id: string): BlockData => ({
   updatedBy: 'u', deleted: false,
 })
 
-const { env, start, stageRow, seedLocalBlock } = setupObserverTestDb()
+const { env, start, stageRow, seedLocalBlock, blocks, queueLen } = setupObserverTestDb()
 
 /** `blocks` analyzed when it held `rows` rows. */
 const statsSay = async (rows: number): Promise<void> => {
@@ -73,6 +73,23 @@ describe('blocksSyncedObserver — sync-applied growth owes an ANALYZE', () => {
     expect(await owed()).toContain('analyze_owed:blocks')
   })
 
+  it('records once while a refresh is owed, however many windows insert', async () => {
+    await statsSay(0)
+    const {observer} = start({getMaterializability: constMat('copy'), drainChunkSize: 1})
+    await arrive(['a'])
+    await observer.flush()
+    const firstRecord = await env.db.getAll<{completed_at: number}>(
+      `SELECT completed_at FROM client_schema_state WHERE key = 'analyze_owed:blocks'`)
+    await env.db.execute(`UPDATE client_schema_state SET completed_at = 0 WHERE key = 'analyze_owed:blocks'`)
+
+    await arrive(['b', 'c', 'd'])
+    await observer.flush()
+    expect(firstRecord).toHaveLength(1)
+    expect(await env.db.getAll(
+      `SELECT completed_at FROM client_schema_state WHERE key = 'analyze_owed:blocks'`))
+      .toEqual([{completed_at: 0}])
+  })
+
   it('counts only inserts: re-delivering rows it already holds owes nothing', async () => {
     for (const id of ['a', 'b', 'c']) await seedLocalBlock(data(id))
     await statsSay(4)
@@ -100,5 +117,19 @@ describe('blocksSyncedObserver — sync-applied growth owes an ANALYZE', () => {
     await arrive(['a'])
     await observer.flush()
     expect(await owed()).toContain('analyze_owed:blocks')
+  })
+
+  // Last in the file: it drops the table the other cases record into.
+  it('a failed record is reported and leaves the drain intact', async () => {
+    await statsSay(0)
+    await env.db.execute('DROP TABLE client_schema_state')
+    const errors: unknown[] = []
+    const {observer} = start({getMaterializability: constMat('copy'), onError: e => errors.push(e)})
+
+    await arrive(['a'])
+    await observer.flush()
+    expect(await blocks()).toEqual([{id: 'a', content: 'a'}])
+    expect(await queueLen()).toBe(0)
+    expect(errors).toHaveLength(1)
   })
 })
