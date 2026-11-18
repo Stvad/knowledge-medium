@@ -1,1 +1,1 @@
-export{Tf as ReadSelectionMenu,Ef as nestedReadSelectionMenuContribution,Df as readSelectionShortcutsMount}from"../../../chunks/app-BBVFhS-C.js";
+export{Tf as ReadSelectionMenu,Ef as nestedReadSelectionMenuContribution,Df as readSelectionShortcutsMount}from"../../../chunks/app-CvDvqhXk.js";

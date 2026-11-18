@@ -1,1 +1,1 @@
-export{GC as onboardingLanding}from"../../../chunks/app-BBVFhS-C.js";
+export{GC as onboardingLanding}from"../../../chunks/app-CvDvqhXk.js";

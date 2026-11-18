@@ -1,1 +1,1 @@
-export{BG as adoptOrCreatePropertySchema}from"../../chunks/app-BBVFhS-C.js";
+export{BG as adoptOrCreatePropertySchema}from"../../chunks/app-CvDvqhXk.js";

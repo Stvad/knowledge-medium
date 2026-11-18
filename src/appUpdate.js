@@ -1,1 +1,1 @@
-export{FP as appUpdate,IP as useAppUpdateAvailable}from"../chunks/app-BBVFhS-C.js";
+export{FP as appUpdate,IP as useAppUpdateAvailable}from"../chunks/app-CvDvqhXk.js";

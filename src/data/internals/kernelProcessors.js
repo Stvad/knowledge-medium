@@ -1,1 +1,1 @@
-export{G8 as KERNEL_PROCESSORS}from"../../../chunks/app-BBVFhS-C.js";
+export{J8 as KERNEL_PROCESSORS}from"../../../chunks/app-CvDvqhXk.js";
