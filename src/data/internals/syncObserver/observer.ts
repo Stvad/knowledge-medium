@@ -54,6 +54,7 @@ import {
   type SyncInvalidationTarget,
 } from './invalidate.js'
 import { WORKSPACE_UNAPPLIED_IDS_SQL } from './reconcile.js'
+import { createSyncGrowthAnalyzeOwer } from './analyzeOwedOnGrowth.js'
 
 /** Drain-throttle window (ms) — coalesces sync-burst arrivals into one batched
  *  drain. */
@@ -245,6 +246,7 @@ export const startBlocksSyncedObserver = (
     if (!isConnectionClosedError(err)) console.warn('[blocksSyncedObserver] drain error:', err)
   })
 
+  const oweAnalyzeOnGrowth = createSyncGrowthAnalyzeOwer(db)
   let disposed = false
   let unsubscribe: (() => void) | null = null
   let chain: Promise<void> = Promise.resolve()
@@ -292,6 +294,8 @@ export const startBlocksSyncedObserver = (
   ): Promise<MaterializeOutcome> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
     await applyOutcome(outcome)
+    // Bookkeeping, not materialization: a failure here must not re-queue a window.
+    await oweAnalyzeOnGrowth(outcome).catch(onError)
     return outcome
   }
 

@@ -1789,7 +1789,7 @@ export const recordAnalyzeOwed = async (
   for (const table of tables) await db.execute(RECORD_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
 }
 
-const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
+export const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
   const row = await db.getOptional<{tables: string | null}>(SELECT_ANALYZE_OWED_SQL)
   return row?.tables ? row.tables.split('\x1f') : []
 }
