@@ -1,1 +1,1 @@
-export{sM as CommandPaletteHeaderItem}from"../../../chunks/app-Br5R3-99.js";
+export{uM as CommandPaletteHeaderItem}from"../../../chunks/app-BBVFhS-C.js";

@@ -1,1 +1,1 @@
-export{VF as LazyBlockComponent}from"../../chunks/app-Br5R3-99.js";
+export{WF as LazyBlockComponent}from"../../chunks/app-BBVFhS-C.js";

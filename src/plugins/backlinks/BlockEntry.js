@@ -1,1 +1,1 @@
-export{uy as LazyBlockEntry}from"../../../chunks/app-Br5R3-99.js";
+export{py as LazyBlockEntry}from"../../../chunks/app-BBVFhS-C.js";
