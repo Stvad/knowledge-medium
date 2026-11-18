@@ -1,1 +1,0 @@
-export{dot as aliasSeatNamespacesInTx,fot as resolveAliasSeatNamespaces}from"../../chunks/app-Clz3L3DZ.js";

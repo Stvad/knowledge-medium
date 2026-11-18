@@ -1,1 +1,0 @@
-export{IG as propertyShapeLabel}from"../../../chunks/app-Clz3L3DZ.js";

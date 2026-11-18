@@ -1,1 +1,0 @@
-export{cot as getOrCreatePropertiesPage,lot as propertiesPageBlockId,uot as propertiesPageSpec}from"../../chunks/app-Clz3L3DZ.js";

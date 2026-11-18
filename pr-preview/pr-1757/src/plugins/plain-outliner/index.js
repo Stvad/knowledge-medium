@@ -1,1 +1,0 @@
-export{BT as plainOutlinerPlugin}from"../../../chunks/app-Clz3L3DZ.js";

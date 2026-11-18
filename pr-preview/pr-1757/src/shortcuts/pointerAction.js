@@ -1,1 +1,0 @@
-export{GP as dispatchPointerAction,KP as setPointerActionDispatcher}from"../../chunks/app-Clz3L3DZ.js";
