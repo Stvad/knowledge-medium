@@ -1,1 +1,1 @@
-export{tat as getOrCreateKernelPage,nat as kernelPageBlockId}from"../../chunks/app-CzD8j74s.js";
+export{nat as getOrCreateKernelPage,rat as kernelPageBlockId}from"../../chunks/app-Clz3L3DZ.js";

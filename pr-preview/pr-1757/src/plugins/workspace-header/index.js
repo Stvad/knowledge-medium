@@ -1,1 +1,1 @@
-export{GT as WorkspaceSwitcherSidebarSection,KT as pendingInvitationsHeaderItem,qT as workspaceHeaderPlugin,JT as workspaceSwitcherSidebarSection}from"../../../chunks/app-CzD8j74s.js";
+export{GT as WorkspaceSwitcherSidebarSection,KT as pendingInvitationsHeaderItem,qT as workspaceHeaderPlugin,JT as workspaceSwitcherSidebarSection}from"../../../chunks/app-Clz3L3DZ.js";
