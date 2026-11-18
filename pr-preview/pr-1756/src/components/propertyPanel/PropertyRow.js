@@ -1,0 +1,1 @@
+export{sV as PropertyRow,cV as PropertyValueCell}from"../../../chunks/app-dW2R79vU.js";

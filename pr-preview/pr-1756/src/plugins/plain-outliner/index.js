@@ -1,0 +1,1 @@
+export{BT as plainOutlinerPlugin}from"../../../chunks/app-dW2R79vU.js";

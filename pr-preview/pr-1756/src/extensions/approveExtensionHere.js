@@ -1,0 +1,1 @@
+export{gP as approveExtensionHere}from"../../chunks/app-dW2R79vU.js";

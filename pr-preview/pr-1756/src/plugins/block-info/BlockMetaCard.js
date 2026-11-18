@@ -1,0 +1,1 @@
+export{kv as BlockMetaCard}from"../../../chunks/app-dW2R79vU.js";
