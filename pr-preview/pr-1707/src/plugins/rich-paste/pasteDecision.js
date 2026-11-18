@@ -1,1 +1,1 @@
-export{Ib as richPasteDecisionContribution}from"../../../chunks/app-C5iP7ck-.js";
+export{sx as richPasteDecisionContribution}from"../../../chunks/app-JLtIm6Zr.js";

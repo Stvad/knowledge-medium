@@ -1,0 +1,1 @@
+export{kV as typePropertyGroups}from"../../chunks/app-JLtIm6Zr.js";

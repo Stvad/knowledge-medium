@@ -1,0 +1,1 @@
+export{BG as adoptOrCreatePropertySchema}from"../../chunks/app-JLtIm6Zr.js";

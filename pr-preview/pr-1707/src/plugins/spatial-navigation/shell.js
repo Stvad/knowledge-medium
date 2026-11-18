@@ -1,1 +1,1 @@
-export{GC as spatialNavigationShellDecorator}from"../../../chunks/app-C5iP7ck-.js";
+export{_w as spatialNavigationShellDecorator}from"../../../chunks/app-JLtIm6Zr.js";
