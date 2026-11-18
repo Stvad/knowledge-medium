@@ -1,1 +1,0 @@
-export{i8 as kernelDataExtension}from"../../chunks/app-Ss9tj2bj.js";

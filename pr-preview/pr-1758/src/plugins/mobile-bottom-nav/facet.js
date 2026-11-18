@@ -1,1 +1,0 @@
-export{FT as mobileBottomNavItemsFacet}from"../../../chunks/app-Ss9tj2bj.js";

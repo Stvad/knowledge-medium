@@ -1,1 +1,0 @@
-export{DP as appUpdatePromptExtension}from"../../../chunks/app-Ss9tj2bj.js";

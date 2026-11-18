@@ -1,1 +1,0 @@
-export{KG as appRuntimeUpdateEvent,qG as refreshAppRuntime}from"../../chunks/app-Ss9tj2bj.js";
