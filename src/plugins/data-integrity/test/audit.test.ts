@@ -332,52 +332,6 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     expect(check.samples).toEqual(['blk-a', 'blk-b'])
     expect(sampleQueries).toBe(1) // ran once, because the count was > 0
   })
-
-  it('debounces transient divergence — a dirty pass that clears on recheck reports ok', async () => {
-    let strandedCountCalls = 0
-    let slept = 0
-    // The stranded COUNT query is dirty (5) on the first measure, clean (0) on
-    // the recheck; every other count is 0. Sample queries (SELECT b.id) only run
-    // for the settled state, which is clean → none.
-    const db: AuditDb = {
-      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
-        // The stranded query is the only one with a `NOT EXISTS (… blocks_synced)`
-        // subquery (the others JOIN blocks_synced); its count is dirty then clean.
-        if (sql.includes('count(*)') && sql.includes('NOT EXISTS (SELECT 1 FROM blocks_synced')) {
-          strandedCountCalls += 1
-          return [{ n: strandedCountCalls === 1 ? 5 : 0 }] as unknown as T[]
-        }
-        return [{ n: 0 }] as unknown as T[]
-      },
-    }
-    const result = await runConsistencyAudit(db, 'ws', 0, {
-      divergenceRecheckMs: 1,
-      sleep: async () => { slept += 1 },
-    })
-    const div = result.checks.local_server_divergence
-    expect(div.status).toBe('ok') // transient cleared on recheck
-    expect(div.rechecked).toBe(true)
-    expect(div.strandedLocalOnly).toBe(0)
-    expect(slept).toBe(1)
-    expect(strandedCountCalls).toBe(2) // measured twice
-    expect(result.anomalies).toBe(0)
-  })
-
-  it('does not run sample queries when a check is clean', async () => {
-    let sampleQueries = 0
-    const db: AuditDb = {
-      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
-        // A sample query never selects count(*); flag any non-count SELECT as
-        // one, bar the workspace's properties_migration read that gates the
-        // property-children checks.
-        if (!sql.includes('count(*)') && !sql.includes('FROM workspaces')) sampleQueries += 1
-        return [{ n: 0 }] as unknown as T[]
-      },
-    }
-    const result = await runConsistencyAudit(db, 'ws', 0)
-    expect(result.anomalies).toBe(0)
-    expect(sampleQueries).toBe(0) // clean path runs zero sample queries
-  })
 })
 
 describe('runConsistencyAudit — pending-upload divergence', () => {
@@ -521,44 +475,71 @@ describe('runConsistencyAudit — pending-upload divergence', () => {
     expect(divergence.localRicherNoPending).toBe(0)
   })
 
-  it.each([
-    ['strandedLocalOnly'],
-    ['localRicherNoPending'],
-    ['serverAheadUndrained'],
-  ])('plans %s pending-upload exclusion as one queue scan', async (category) => {
+  it('rechecks a dirty pass against the updated mirror and drops its earlier samples', async () => {
+    const row = block('echo-in-flight')
+    await seedLocal(row)
+    const sleep = vi.fn(async () => { await seedSynced(row) })
+    const { checks } = await runConsistencyAudit(sharedDb.db, WS, 0, { divergenceRecheckMs: 1, sleep })
+    expect(sleep).toHaveBeenCalledTimes(1)
+    expect(checks.local_server_divergence).toMatchObject({
+      status: 'ok', rechecked: true, strandedLocalOnly: 0, samples: [],
+    })
+  })
+
+  it('refreshes pending exclusions on recheck and counts equal-stamp conflicts even while queued', async () => {
+    await seedLocal(block('needs-upload'))
+    await seedLocal(block('conflict'))
+    await seedSynced(block('conflict', { content: 'another value at the same stamp' }))
+    await queue('blocks', 'conflict')
+    const { checks } = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      divergenceRecheckMs: 1, sleep: async () => { await queue('blocks', 'needs-upload') },
+    })
+    expect(checks.local_server_divergence).toMatchObject({
+      status: 'anomaly', rechecked: true, strandedLocalOnly: 0, equalStampStandoff: 1, samples: ['conflict'],
+    })
+  })
+
+  it('finds discrepancies across sparse rowid ranges while yielding between them', async () => {
+    await seedLocal(block('early'))
+    await seedLocal(block('late'))
+    await sharedDb.db.execute("UPDATE blocks SET rowid=1000000 WHERE id='late'")
+    let pages = 0
+    let yielded = false
+    const db: AuditDb = {
+      async getAll<T>(sql: string, params?: unknown[]) {
+        if (sql.includes('LEFT JOIN blocks_synced')) {
+          expect(yielded).toBe(true)
+          pages++
+        }
+        yielded = false
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+    const { checks } = await runConsistencyAudit(db, WS, 0, {
+      yieldWhenBusy: async () => { yielded = true },
+    })
+    expect(checks.local_server_divergence).toMatchObject({
+      strandedLocalOnly: 2, samples: ['early', 'late'],
+    })
+    expect(pages).toBe(2)
+  })
+
+  it('range-seeks blocks, probes each synced twin, and reads pending uploads once across dirty pages', async () => {
     await seedScenario()
+    await sharedDb.db.execute("UPDATE blocks SET rowid=1000000 WHERE id='stranded-pending'")
     const { db, queries } = captureAuditQueries()
     await runConsistencyAudit(db, WS, 0)
-    const predicate = category === 'strandedLocalOnly'
-      ? 'NOT EXISTS (SELECT 1 FROM blocks_synced'
-      : category === 'localRicherNoPending'
-        ? 'b.updated_at>bs.updated_at'
-        : 'bs.updated_at>b.updated_at'
-    const captured = queries.find(query =>
-      query.sql.includes('count(*)') && query.sql.includes('ps_crud') && query.sql.includes(predicate),
-    )
-    if (!captured) throw new Error(`No ${category} divergence count query was captured`)
+    const captured = queries.find(query => query.sql.includes('LEFT JOIN blocks_synced'))
+    if (!captured) throw new Error('No divergence page was read')
     const plan = await sharedDb.db.getAll<{ id: number; parent: number; detail: string }>(
       `EXPLAIN QUERY PLAN ${captured.sql}`,
       captured.params,
     )
     const details = plan.map(row => `${row.id}/${row.parent} ${row.detail}`)
-    const queueScans = plan.filter(row => /(?:SCAN|SEARCH) (?:ps_crud|p)\b/i.test(row.detail))
-    expect(queueScans).toHaveLength(1)
-    const byId = new Map(plan.map(row => [row.id, row]))
-    const ancestors = (row: typeof plan[number]): string[] => {
-      const result: string[] = []
-      let parent = row.parent
-      while (parent !== 0 && byId.has(parent)) {
-        const ancestor = byId.get(parent)!
-        result.push(ancestor.detail)
-        parent = ancestor.parent
-      }
-      return result
-    }
-    const queueAncestors = ancestors(queueScans[0])
-    expect(queueAncestors.some(detail => /LIST SUBQUERY/i.test(detail)), details.join('\n')).toBe(true)
-    expect(queueAncestors.some(detail => /CORRELATED/i.test(detail)), details.join('\n')).toBe(false)
+    expect(details.join('\n')).toMatch(/SEARCH b USING INTEGER PRIMARY KEY \(rowid>\? AND rowid<\?\)/)
+    expect(details.join('\n')).toMatch(/SEARCH bs USING INDEX .* \(id=\?\) LEFT-JOIN/)
+    expect(queries.filter(query => query.sql.includes('LEFT JOIN blocks_synced'))).toHaveLength(2)
+    expect(queries.filter(query => query.sql.includes('FROM ps_crud'))).toHaveLength(1)
   })
 })
 
