@@ -41,8 +41,6 @@ const OWNERS_PER_KEY = 3
 const readyRegistry = async (repo: Repo, workspaceId: string): Promise<void> => {
   if (workspaceId !== repo.activeWorkspaceId) requirePropertyRegistryFor(repo, workspaceId)
   await repo.whenPropertyDefinitionsReady(workspaceId)
-  // Defence in depth: only two workspace switches during the wait reach it.
-  requirePropertyRegistryFor(repo, workspaceId)
 }
 
 const DUPLICATE_PAIRS_FROM = `
@@ -87,9 +85,10 @@ const bucketOwners = (bucket: PropertyCellCoverageBucket): string[] =>
  *  a cell the children do not back, so any of them is an anomaly. */
 export const runPropertyCellCoverageCheck = async (
   repo: Repo, workspaceId: string, sampleLimit: number,
+  beforePage?: () => Promise<void>,
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
-  const coverage = await surveyPropertyCellCoverage(repo, workspaceId)
+  const coverage = await surveyPropertyCellCoverage(repo, workspaceId, beforePage)
   const uncovered = coverage.missing.cells + coverage.refused.cells
     + coverage.deletedThroughChildren.cells
   const samples = [...new Set([
@@ -152,19 +151,9 @@ const inChunks = async <T>(
  *  processor either, so it is counted (`unresolvedFields`) and not compared. */
 export const runPropertyCellDivergenceCheck = async (
   db: AuditDb, repo: Repo, workspaceId: string, sampleLimit: number,
+  beforePage?: () => Promise<void>,
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
-  const schemaOf = new Map<string, ResolvedPropertySchema<unknown> | null>()
-  const resolveField = (fieldId: string): ResolvedPropertySchema<unknown> | null => {
-    let schema = schemaOf.get(fieldId)
-    if (schema === undefined) {
-      const resolution = resolver.resolveField(fieldId)
-      schema = resolution.status === 'resolved' ? resolution.schema : null
-      schemaOf.set(fieldId, schema)
-    }
-    return schema
-  }
 
   let ownersScanned = 0
   let fieldsChecked = 0
@@ -177,6 +166,21 @@ export const runPropertyCellDivergenceCheck = async (
 
   let cursor = ''
   for (;;) {
+    // Pause before collecting either side of the comparison. Definitions may
+    // change during the wait, so the resolver and its cache belong to one page.
+    if (beforePage) await beforePage()
+    requirePropertyRegistryFor(repo, workspaceId)
+    const resolver = repo.propertySchemaResolverFor(workspaceId)
+    const schemaOf = new Map<string, ResolvedPropertySchema<unknown> | null>()
+    const resolveField = (fieldId: string): ResolvedPropertySchema<unknown> | null => {
+      let schema = schemaOf.get(fieldId)
+      if (schema === undefined) {
+        const resolution = resolver.resolveField(fieldId)
+        schema = resolution.status === 'resolved' ? resolution.schema : null
+        schemaOf.set(fieldId, schema)
+      }
+      return schema
+    }
     const page = (await db.getAll<{ id: string }>(
       OWNERS_WITH_FIELD_ROWS_SQL, [workspaceId, cursor, SCAN_PAGE])).map(row => String(row.id))
     if (page.length === 0) break
