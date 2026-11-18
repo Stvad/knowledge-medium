@@ -55,6 +55,7 @@ it('counts each missing occurrence and each duplicate tuple while scoping both d
   ]))
   edge('tuples', 'b', 'present', 'other-ws', 'topic')
   edge('tuples', 'c', 'nullable-field')
+  edge('tuples', 'ignored', 'invalid-field', 'ws', '7')
   edge('tuples', 'a', 'different alias', 'other-ws')
   edge('tuples', 'ignored', 'stale-index', 'other-ws')
 
@@ -102,6 +103,38 @@ it('counts unparseable storage and non-array JSON separately', async () => {
 it('surfaces unreadable reference elements as a check error', async () => {
   block('bad-element', '["unreadable"]')
   await expect(runReferencesMirrorCheck(db, 'ws', 8)).rejects.toThrow(/malformed JSON/i)
+})
+
+it('opens a source reference array only once for a page of outgoing index entries', async () => {
+  const refs = Array.from({ length: 64 }, (_, n) => ({ id: String(n), alias: 'link' }))
+  const sourceJson = JSON.stringify(refs)
+  block('source', sourceJson, 'other-ws')
+  for (const ref of refs) edge('source', ref.id, ref.alias)
+  let sourceReads = 0
+  // Only the reverse scan visits this source. Count evaluations of the input
+  // to json_each rather than measuring wall time.
+  sqlite.function('json_valid', value => {
+    if (value === sourceJson) sourceReads++
+    try {
+      JSON.parse(String(value))
+      return 1
+    } catch {
+      return 0
+    }
+  })
+
+  expect(await runReferencesMirrorCheck(db, 'ws', 8)).toMatchObject({ status: 'ok' })
+  expect(sourceReads).toBe(1)
+})
+
+it('checks foreign index tuples independently of unrelated unreadable source elements', async () => {
+  block('foreign', '[{"id":"a","alias":"valid"},"unreadable"]', 'other-ws')
+  edge('foreign', 'a', 'valid')
+  edge('foreign', 'b', 'extra')
+  expect(await runReferencesMirrorCheck(db, 'ws', 8)).toMatchObject({
+    status: 'anomaly', extraIndexRows: 1, samples: ['foreign'],
+  })
+  await expect(runReferencesMirrorCheck(db, 'other-ws', 8)).rejects.toThrow(/malformed JSON/i)
 })
 
 it('continues after full ranges in other workspaces and caps distinct samples', async () => {

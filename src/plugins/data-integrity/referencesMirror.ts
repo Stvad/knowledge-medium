@@ -40,21 +40,27 @@ WHERE br.source_id IS NULL OR e.occurrences > 1
 GROUP BY e.source_id
 `
 
-// The workspace index orders by alias before rowid. Use the table's rowid
-// range so each page visits only the rows in that range.
+// Expand each source once per page. Searching its JSON for every outgoing
+// edge makes the reverse check quadratic for a densely linked block.
+// EXCEPT has no column affinity, so normalize to the index columns' TEXT affinity.
 const INDEX_ISSUES_SQL = `
-SELECT br.source_id AS id, b.id IS NULL OR b.deleted = 1 AS orphan
-FROM block_references br NOT INDEXED
-LEFT JOIN blocks b ON b.id = br.source_id
-WHERE br.rowid BETWEEN ? AND ? AND br.workspace_id = ?
-  AND (b.id IS NULL OR b.deleted = 1 OR (b.deleted = 0 AND CASE
-    WHEN b.references_json = '[]' OR NOT json_valid(b.references_json) THEN 1
-    ELSE NOT EXISTS (
-      SELECT 1 FROM json_each(b.references_json) je
-      WHERE ${REF_TARGET} = br.target_id AND ${REF_ALIAS} = br.alias
-        AND COALESCE(${REF_FIELD}, '') = br.source_field
-    ) END))
-ORDER BY br.rowid
+WITH indexed AS MATERIALIZED (
+  SELECT source_id, target_id, alias, source_field
+  FROM block_references NOT INDEXED
+  WHERE rowid BETWEEN ? AND ? AND workspace_id = ?
+), unmatched AS (
+  SELECT source_id, target_id, alias, source_field FROM indexed
+  EXCEPT
+  SELECT s.source_id, CAST(${REF_TARGET} AS TEXT), CAST(${REF_ALIAS} AS TEXT),
+         CAST(COALESCE(${REF_FIELD}, '') AS TEXT)
+  FROM (SELECT DISTINCT source_id FROM indexed) s
+  JOIN blocks b ON b.id = s.source_id AND b.deleted = 0
+  CROSS JOIN json_each(CASE WHEN json_valid(b.references_json) THEN b.references_json ELSE '[]' END) je
+  WHERE je.type != 'text' OR json_valid(je.value)
+)
+SELECT e.source_id AS id, b.id IS NULL OR b.deleted = 1 AS orphan
+FROM unmatched e LEFT JOIN blocks b ON b.id = e.source_id
+WHERE b.id IS NULL OR b.deleted IN (0, 1)
 `
 
 interface BlockIssues {

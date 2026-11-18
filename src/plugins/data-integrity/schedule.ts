@@ -27,12 +27,8 @@ export const AUDIT_QUIET_MS = 10_000
 // each page session runs once per workspace per cadence window and repopulates
 // the diagnostics store. A fresh session starts empty (always runs once).
 const lastRun = new Map<string, number>()
-// Shared idle-job queue so tests can drain in-flight audits deterministically.
-// The audit is the heaviest cold-start idle job (≈14 scan queries, two paged property-cell scans and bounded
-// decrypt spot-checks) and a 30-min-cadence smoke alarm with no urgency, so it
-// runs on GENUINE idle only (deep idle, no force-run fallback) — it must never
-// land in the time-to-interactivity window, and skipping a never-idle session
-// is fine.
+// The audit scans the graph. Require deep idle with no forced fallback so a
+// session that never goes idle can skip it.
 const jobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, LAZY_DEEP_IDLE))
 
 /** True if the workspace is due for a cadenced audit (never run this session, or
