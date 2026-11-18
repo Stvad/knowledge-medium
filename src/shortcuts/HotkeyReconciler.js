@@ -1,1 +1,1 @@
-export{UP as HotkeyReconciler}from"../../chunks/app-CvDvqhXk.js";
+export{KP as HotkeyReconciler}from"../../chunks/app-CplK3vnI.js";
