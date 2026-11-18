@@ -1,1 +1,0 @@
-export{rQ as contributorsDataExtension}from"../../../chunks/app-Bmq64Wrq.js";

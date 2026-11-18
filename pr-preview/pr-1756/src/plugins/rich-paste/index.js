@@ -1,1 +1,0 @@
-export{rx as richPastePlugin}from"../../../chunks/app-Bmq64Wrq.js";

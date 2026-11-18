@@ -1,1 +1,0 @@
-export{c2 as instrumentAdapter}from"../../../chunks/app-Bmq64Wrq.js";

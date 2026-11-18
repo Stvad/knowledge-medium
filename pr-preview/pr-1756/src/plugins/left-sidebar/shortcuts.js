@@ -1,1 +1,0 @@
-export{sE as getOrCreateShortcutsBlock,cE as journalShortcutBlockId,lE as shortcutsBlockId}from"../../../chunks/app-Bmq64Wrq.js";

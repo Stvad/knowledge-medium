@@ -1,1 +1,0 @@
-export{kt as bootstrapWorkspace}from"../../chunks/app-Bmq64Wrq.js";

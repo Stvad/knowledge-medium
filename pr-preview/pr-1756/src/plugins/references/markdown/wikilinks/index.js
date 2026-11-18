@@ -1,1 +1,0 @@
-export{Gy as wikilinkMarkdownExtension}from"../../../../../chunks/app-Bmq64Wrq.js";

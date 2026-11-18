@@ -1,1 +1,0 @@
-export{IG as propertyShapeLabel}from"../../../chunks/app-Bmq64Wrq.js";

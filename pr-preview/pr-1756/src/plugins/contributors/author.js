@@ -1,1 +1,0 @@
-export{Tg as authorIdOf}from"../../../chunks/app-Bmq64Wrq.js";

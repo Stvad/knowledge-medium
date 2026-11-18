@@ -1,1 +1,0 @@
-export{sx as attachmentsPlugin}from"../../../chunks/app-Bmq64Wrq.js";

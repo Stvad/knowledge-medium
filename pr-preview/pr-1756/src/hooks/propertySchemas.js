@@ -1,1 +1,0 @@
-export{MG as usePropertySchemas}from"../../chunks/app-Bmq64Wrq.js";

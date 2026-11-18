@@ -1,1 +1,0 @@
-export{mw as spatialNavigationShellDecorator}from"../../../chunks/app-Bmq64Wrq.js";

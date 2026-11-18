@@ -1,1 +1,0 @@
-export{GS as ASSETS_ROOT,KS as InMemoryByteStore,qS as OpfsByteStore,JS as assetPathSegments,YS as createByteStore,XS as getByteStore}from"../../../chunks/app-Bmq64Wrq.js";

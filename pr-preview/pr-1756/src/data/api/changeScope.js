@@ -1,1 +1,0 @@
-export{jdt as CHANGE_SCOPE_POLICIES,Mdt as ChangeScope,Ndt as isChangeScope,Pdt as policyForScope,Fdt as scopeAllowedInReadOnly,Idt as scopeIsUndoable,Ldt as scopePoliciesEquivalent,Rdt as scopeUploadsToServer,zdt as sourceForScope}from"../../../chunks/app-Bmq64Wrq.js";

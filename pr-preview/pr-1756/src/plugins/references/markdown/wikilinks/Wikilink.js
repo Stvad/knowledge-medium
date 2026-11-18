@@ -1,1 +1,0 @@
-export{Ky as Wikilink}from"../../../../../chunks/app-Bmq64Wrq.js";

@@ -1,1 +1,0 @@
-export{Ov as blockInfoPlugin}from"../../../chunks/app-Bmq64Wrq.js";

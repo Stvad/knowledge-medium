@@ -1,1 +1,0 @@
-export{cg as lintExtensionSource}from"../../../chunks/app-Bmq64Wrq.js";
