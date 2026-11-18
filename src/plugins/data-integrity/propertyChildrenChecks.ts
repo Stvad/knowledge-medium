@@ -41,8 +41,6 @@ const OWNERS_PER_KEY = 3
 const readyRegistry = async (repo: Repo, workspaceId: string): Promise<void> => {
   if (workspaceId !== repo.activeWorkspaceId) requirePropertyRegistryFor(repo, workspaceId)
   await repo.whenPropertyDefinitionsReady(workspaceId)
-  // Defence in depth: only two workspace switches during the wait reach it.
-  requirePropertyRegistryFor(repo, workspaceId)
 }
 
 const DUPLICATE_PAIRS_FROM = `
@@ -87,10 +85,10 @@ const bucketOwners = (bucket: PropertyCellCoverageBucket): string[] =>
  *  a cell the children do not back, so any of them is an anomaly. */
 export const runPropertyCellCoverageCheck = async (
   repo: Repo, workspaceId: string, sampleLimit: number,
-  betweenPages?: () => Promise<void>,
+  beforePage?: () => Promise<void>,
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
-  const coverage = await surveyPropertyCellCoverage(repo, workspaceId, betweenPages)
+  const coverage = await surveyPropertyCellCoverage(repo, workspaceId, beforePage)
   const uncovered = coverage.missing.cells + coverage.refused.cells
     + coverage.deletedThroughChildren.cells
   const samples = [...new Set([
@@ -145,10 +143,7 @@ const inChunks = async <T>(
 
 /** Recompute every child-backed cell key from its live field rows' value
  *  children and compare with the stored cell. Owners are visited in keyset
- *  pages, so memory is bounded by a page, not by the graph. A page's reads run
- *  back to back and `betweenPages` is awaited only between pages: an edit
- *  landing between a page's cell read and its children read would compare the
- *  old cell with the new children and report a divergence that is not there.
+ *  pages, so memory is bounded by a page, not by the graph.
  *
  *  Cell keys with no live field row are coverage's question, not this one's:
  *  only (owner, definition) pairs with a field row are recomputed. A field row
@@ -156,20 +151,9 @@ const inChunks = async <T>(
  *  processor either, so it is counted (`unresolvedFields`) and not compared. */
 export const runPropertyCellDivergenceCheck = async (
   db: AuditDb, repo: Repo, workspaceId: string, sampleLimit: number,
-  betweenPages: () => Promise<void> = async () => {},
+  beforePage?: () => Promise<void>,
 ): Promise<ConsistencyCheckResult> => {
   await readyRegistry(repo, workspaceId)
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
-  const schemaOf = new Map<string, ResolvedPropertySchema<unknown> | null>()
-  const resolveField = (fieldId: string): ResolvedPropertySchema<unknown> | null => {
-    let schema = schemaOf.get(fieldId)
-    if (schema === undefined) {
-      const resolution = resolver.resolveField(fieldId)
-      schema = resolution.status === 'resolved' ? resolution.schema : null
-      schemaOf.set(fieldId, schema)
-    }
-    return schema
-  }
 
   let ownersScanned = 0
   let fieldsChecked = 0
@@ -182,6 +166,21 @@ export const runPropertyCellDivergenceCheck = async (
 
   let cursor = ''
   for (;;) {
+    // Pause before collecting either side of the comparison. Definitions may
+    // change during the wait, so the resolver and its cache belong to one page.
+    if (beforePage) await beforePage()
+    requirePropertyRegistryFor(repo, workspaceId)
+    const resolver = repo.propertySchemaResolverFor(workspaceId)
+    const schemaOf = new Map<string, ResolvedPropertySchema<unknown> | null>()
+    const resolveField = (fieldId: string): ResolvedPropertySchema<unknown> | null => {
+      let schema = schemaOf.get(fieldId)
+      if (schema === undefined) {
+        const resolution = resolver.resolveField(fieldId)
+        schema = resolution.status === 'resolved' ? resolution.schema : null
+        schemaOf.set(fieldId, schema)
+      }
+      return schema
+    }
     const page = (await db.getAll<{ id: string }>(
       OWNERS_WITH_FIELD_ROWS_SQL, [workspaceId, cursor, SCAN_PAGE])).map(row => String(row.id))
     if (page.length === 0) break
@@ -242,7 +241,6 @@ export const runPropertyCellDivergenceCheck = async (
       }
     }
     if (page.length < SCAN_PAGE) break
-    await betweenPages()
   }
 
   return {

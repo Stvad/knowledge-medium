@@ -59,4 +59,11 @@ describe('createUserActivity', () => {
 
     expect(await settled(activity.whenQuiet(QUIET))).toBe(true)
   })
+
+  it('rejects an already cancelled wait even when quiet', async () => {
+    const activity = createUserActivity(new EventTarget())
+    const signal = AbortSignal.abort()
+
+    await expect(activity.whenQuiet(QUIET, signal)).rejects.toBe(signal.reason)
+  })
 })

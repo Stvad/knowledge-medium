@@ -16,6 +16,8 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { definitionSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { presetIdProp, propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
 import {
   BLOCKS_SYNCED_RAW_TABLE, BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams, blockToSyncedRowParams,
 } from '@/data/blockSchema'
@@ -131,11 +133,11 @@ const valueChild = (id: string, fieldRowId: string, content: string, overrides: 
 /** One owner past a scan page (500), each with a stale cell, so a keyset
  *  scan over owners takes two pages. */
 const PAGE_AND_ONE = 501
-const pageAndOneOwners = (): BlockData[] => {
+const pageAndOneOwners = (name = statusProp.name, stored = 'stale'): BlockData[] => {
   const rows: BlockData[] = []
   for (let i = 0; i < PAGE_AND_ONE; i++) {
     const id = `o${String(i).padStart(4, '0')}`
-    rows.push(owner(id, { [statusProp.name]: 'stale' }), fieldRow(`f-${id}`, id, statusProp.name),
+    rows.push(owner(id, { [name]: stored }), fieldRow(`f-${id}`, id, name),
       valueChild(`v-${id}`, `f-${id}`, 'fresh'))
   }
   return rows
@@ -435,7 +437,7 @@ describe('property_cell_divergence', () => {
   })
 })
 
-describe('property_cell_divergence reads a page as one snapshot', () => {
+describe('property_cell_divergence keeps related reads together', () => {
   it('does not wait between reading a page\'s cells and their value children', async () => {
     await setMode('children')
     await insertRaw(
@@ -456,9 +458,11 @@ describe('property_cell_divergence reads a page as one snapshot', () => {
     const yieldWhenBusy = async () => {
       if (edited || !lastSql.includes('properties_json AS propertiesJson')) return
       edited = true
-      await sharedDb.db.execute(`UPDATE blocks SET properties_json = ? WHERE id = 'o1'`,
-        [JSON.stringify({ [statusProp.name]: 'new' })])
-      await sharedDb.db.execute(`UPDATE blocks SET content = 'new' WHERE id = 'v1'`)
+      await sharedDb.db.writeTransaction(async tx => {
+        await tx.execute(`UPDATE blocks SET properties_json = ? WHERE id = 'o1'`,
+          [JSON.stringify({ [statusProp.name]: 'new' })])
+        await tx.execute(`UPDATE blocks SET content = 'new' WHERE id = 'v1'`)
+      })
     }
 
     const { checks } = await runConsistencyAudit(db, WS, 0, { repo, yieldWhenBusy })
@@ -467,35 +471,89 @@ describe('property_cell_divergence reads a page as one snapshot', () => {
   })
 })
 
-describe('property_cell_coverage stands aside between pages', () => {
-  // Its reads go through the repo, past the audit's yielding reader, so the
-  // page boundary is where it waits.
-  it('awaits the hook at the page boundary and reads nothing while it holds', async () => {
+describe('property scans wait before each page', () => {
+  const scans = [
+    {
+      name: 'coverage',
+      run: (beforePage: () => Promise<void>) => runPropertyCellCoverageCheck(repo, WS, 8, beforePage),
+      owners: 'blocksScanned',
+    },
+    {
+      name: 'divergence',
+      run: (beforePage: () => Promise<void>) =>
+        runPropertyCellDivergenceCheck(sharedDb.db, repo, WS, 8, beforePage),
+      owners: 'ownersScanned',
+    },
+  ] as const
+
+  // Inserts 1,503 rows and scans them in about one second locally.
+  it.each(scans)('$name waits before the first and second pages', async ({ run, owners }) => {
     await insertRaw(...pageAndOneOwners())
     const getAll = vi.spyOn(sharedDb.db, 'getAll')
-    let yields = 0
     let release!: () => void
-    const held = new Promise<void>(resolve => { release = resolve })
+    const first = new Promise<void>(resolve => { release = resolve })
+    const readsAtYield: number[] = []
+    const result = run(() => {
+      readsAtYield.push(getAll.mock.calls.length)
+      if (readsAtYield.length > 1) return Promise.resolve()
+      return first
+    })
+    try {
+      await vi.waitFor(() => expect(readsAtYield).toHaveLength(1))
+      expect(readsAtYield).toEqual([0])
+      expect(getAll).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await result
+    }
+    expect(await result).toMatchObject({ [owners]: PAGE_AND_ONE })
+    expect(readsAtYield).toEqual([0, expect.any(Number)])
+    expect(readsAtYield[1]).toBeGreaterThan(0)
+  }, 20_000)
 
-    const result = runPropertyCellCoverageCheck(repo, WS, 8, () => { yields += 1; return held })
-    await vi.waitFor(() => expect(yields).toBe(1))
-    const readsWhileHeld = getAll.mock.calls.length
-    expect(readsWhileHeld).toBeGreaterThan(0)
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(getAll.mock.calls.length).toBe(readsWhileHeld)
+  // Includes a 501-owner rename fan-out, which takes about two seconds locally.
+  it.each(scans)('$name resolves the current property name after a pause', async ({ name, run }) => {
+    const oldName = 'audit:before-rename'
+    const newName = 'audit:after-rename'
+    const fieldId = 'renamed-field'
+    await setMode('children')
+    await repo.tx(tx => tx.create({
+      id: fieldId, workspaceId: WS, parentId: null, orderKey: 'a', content: oldName,
+      properties: {
+        types: [PROPERTY_SCHEMA_TYPE],
+        [propertyNameProp.name]: oldName,
+        [propertyChangeScopeProp.name]: ChangeScope.BlockDefault,
+        [presetIdProp.name]: 'string',
+      },
+    }), { scope: ChangeScope.BlockDefault })
+    await vi.waitFor(() => expect(fieldIdOf(oldName)).toBe(fieldId))
+    await insertRaw(...pageAndOneOwners(oldName, 'fresh'))
 
-    release()
-    expect((await result).blocksScanned).toBe(PAGE_AND_ONE)
-    // Two pages, one boundary: no wait before the first page or after the last.
-    expect(yields).toBe(1)
-  })
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
+    let renamed = false
+    const result = await run(async () => {
+      if (renamed || !getAll.mock.calls.some(([sql]) => sql.includes('properties_json AS propertiesJson'))) return
+      renamed = true
+      await repo.tx(tx => tx.setProperty(fieldId, propertyNameProp, newName), { scope: ChangeScope.BlockDefault })
+      await vi.waitFor(() => expect(fieldIdOf(newName)).toBe(fieldId))
+      if (name === 'coverage') {
+        await insertRaw(owner('z-uncovered', { [newName]: 'cell only' }))
+      }
+    })
+
+    expect(renamed).toBe(true)
+    if (name === 'coverage') {
+      expect(result).toMatchObject({ status: 'anomaly', uncoveredCells: 1, samples: ['z-uncovered'] })
+    } else {
+      expect(result).toMatchObject({ status: 'ok', divergentCells: 0 })
+      expect(result.fieldsChecked).toBeGreaterThanOrEqual(PAGE_AND_ONE)
+    }
+  }, 20_000)
 
   it('gets the audit\'s hook, as does the divergence scan', async () => {
     await setMode('children')
     await insertRaw(...pageAndOneOwners())
-    // Statements through this reader wait one by one until the divergence
-    // scan (the last check) starts; it waits between its pages instead.
-    // Coverage reads through the repo and waits at its own page boundary.
+    // Coverage uses the repo's reader. Each scan adds one wait per page.
     let beforeDivergence = 0
     let inDivergence = false
     const db = {
@@ -510,6 +568,6 @@ describe('property_cell_coverage stands aside between pages', () => {
     await runConsistencyAudit(db, WS, 0, { repo, yieldWhenBusy: async () => { yields += 1 } })
 
     expect(inDivergence).toBe(true)
-    expect(yields).toBe(beforeDivergence + 2)
+    expect(yields).toBe(beforeDivergence + 4)
   })
 })

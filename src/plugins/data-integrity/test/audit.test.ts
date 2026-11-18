@@ -39,7 +39,7 @@ import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/wor
 import type { BlockData } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet'
 import { Repo } from '@/data/repo'
-import { createUserActivity, type UserActivity } from '@/utils/userActivity'
+import { createUserActivity } from '@/utils/userActivity'
 
 interface Harness {
   repo: Repo
@@ -163,7 +163,7 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     expect(getConsistencyAuditSnapshotFor('ws-eff3')).toBeNull()
   })
 
-  it('a run parked when its effect is torn down ends at its next statement, unpublished', async () => {
+  it('tearing down a parked audit cancels its quiet timer immediately', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     const getAll = vi.spyOn(sharedDb.db, 'getAll')
     try {
@@ -175,7 +175,7 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
       expect(getAll).not.toHaveBeenCalled()
 
       if (typeof cleanup === 'function') cleanup() // e.g. a workspace switch
-      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      expect(vi.getTimerCount()).toBe(0)
       await drainConsistencyAudits()
 
       expect(getAll).not.toHaveBeenCalled()
@@ -188,38 +188,54 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     }
   })
 
+  it('keeps the on-demand result when an older paused audit finishes later', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const input = new EventTarget()
+    const activity = createUserActivity(input)
+    const waitForQuiet = vi.spyOn(activity, 'whenQuiet')
+    const effect = createConsistencyAuditEffect(() => activity)
+    const workspaceId = 'ws-manual'
+    try {
+      effect.start(ctx(workspaceId))
+      input.dispatchEvent(new Event('keydown'))
+      await vi.advanceTimersByTimeAsync(1)
+      expect(waitForQuiet).toHaveBeenCalledTimes(1)
+
+      const manual = await runConsistencyAuditNow(env.repo, workspaceId)
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+
+      expect(getConsistencyAuditSnapshotFor(workspaceId)).toBe(manual)
+    } finally {
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+      vi.useRealTimers()
+    }
+  })
+
   it('the scheduled audit waits until the user has been quiet, then runs', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
     try {
       const input = new EventTarget()
-      const waits: { quietMs: number; over: boolean }[] = []
-      const effect = createConsistencyAuditEffect((): UserActivity => {
-        const user = createUserActivity(input)
-        return {
-          whenQuiet: async quietMs => {
-            const wait = { quietMs, over: false }
-            waits.push(wait)
-            await user.whenQuiet(quietMs)
-            wait.over = true
-          },
-        }
-      })
+      const activity = createUserActivity(input)
+      const waitForQuiet = vi.spyOn(activity, 'whenQuiet')
+      const effect = createConsistencyAuditEffect(() => activity)
       effect.start(ctx('ws-busy'))
       // Before the idle job runs: the tracker listens from the workspace open.
       input.dispatchEvent(new Event('keydown'))
 
       await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS - 1)
-      expect(waits).toEqual([{ quietMs: AUDIT_QUIET_MS, over: false }]) // parked at its first
-      expect(getConsistencyAuditSnapshotFor('ws-busy')).toBeNull()
+      expect(waitForQuiet).toHaveBeenCalledExactlyOnceWith(AUDIT_QUIET_MS, expect.any(AbortSignal))
+      expect(getAll).not.toHaveBeenCalled()
 
       await vi.advanceTimersByTimeAsync(1)
-      expect(waits[0].over).toBe(true)
       await drainConsistencyAudits()
       expect(getConsistencyAuditSnapshotFor('ws-busy')?.workspaceId).toBe('ws-busy')
     } finally {
-      // A failed assertion above leaves the run parked on a fake timer, where
-      // the shared job queue would hang every later drain in this file.
+      getAll.mockRestore()
       await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
       vi.useRealTimers()
     }
   })

@@ -187,11 +187,8 @@ export interface AuditOptions {
    *  keys — the coverage and divergence checks read through it. Omit and they
    *  report `skipped`; the SQL-only duplicate check runs either way. */
   repo?: Repo
-  /** Awaited before every statement the audit issues through `db`, except
-   *  inside a page of the two paged property scans, which wait between pages:
-   *  a page's reads are one snapshot. The audit stands aside while it stays
-   *  pending, past one statement or one page. The scheduled run passes "until
-   *  the user is quiet"; a run someone asked for passes nothing. */
+  /** The scheduled audit awaits this before each statement through `db`.
+   *  The two property scans wait once before each page. */
   yieldWhenBusy?: () => Promise<void>
 }
 

@@ -20,8 +20,7 @@ const CADENCE_MS = 30 * 60 * 1000
 // Debounce transient mid-sync divergence: a dirty divergence pass re-measures
 // after this delay and reports the settled counts.
 const DIVERGENCE_RECHECK_MS = 4000
-/** The scheduled audit waits out input this recent before each statement, so
- *  it never starts one while someone is typing or scrolling. */
+/** The scheduled audit waits this long after input before starting more work. */
 export const AUDIT_QUIET_MS = 10_000
 
 // Per-session, in-memory: workspaceId → epoch ms of the last completed audit, so
@@ -61,8 +60,8 @@ const auditWorkspace = (
     repo,
   })
 
-const recordAudit = (workspaceId: string, result: ConsistencyAuditResult): void => {
-  lastRun.set(workspaceId, Date.now())
+const recordAudit = (result: ConsistencyAuditResult): void => {
+  lastRun.set(result.workspaceId, Date.now())
   publishConsistencyAudit(result)
 }
 
@@ -74,7 +73,7 @@ export const runConsistencyAuditNow = async (
   workspaceId: string,
 ): Promise<ConsistencyAuditResult> => {
   const result = await auditWorkspace(repo, workspaceId)
-  recordAudit(workspaceId, result)
+  recordAudit(result)
   return result
 }
 
@@ -88,26 +87,21 @@ export const createConsistencyAuditEffect = (activity: () => UserActivity): AppE
   start: ({ repo, workspaceId }) => {
     if (!workspaceId || !isAuditDue(workspaceId, Date.now())) return
     const user = activity()
-    let cancelled = false
+    const controller = new AbortController()
+    const { signal } = controller
     jobs.schedule(async () => {
       // Re-check at run time: a rapid workspace re-open may have queued twice.
-      if (cancelled || !isAuditDue(workspaceId, Date.now())) return
+      if (signal.aborted || !isAuditDue(workspaceId, Date.now())) return
+      const previousCompletion = lastRun.get(workspaceId)
       try {
-        const result = await auditWorkspace(repo, workspaceId, async () => {
-          await user.whenQuiet(AUDIT_QUIET_MS)
-          // Torn down while parked (a workspace switch): every remaining check
-          // fails at its next statement instead of reading against a repo that
-          // has moved on, and the result is dropped below.
-          if (cancelled) throw new Error('audit cancelled: its workspace effect was torn down')
-        })
-        if (!cancelled) recordAudit(workspaceId, result)
+        const result = await auditWorkspace(repo, workspaceId, () => user.whenQuiet(AUDIT_QUIET_MS, signal))
+        // A run on demand can finish while this one is paused.
+        if (!signal.aborted && lastRun.get(workspaceId) === previousCompletion) recordAudit(result)
       } catch (err) {
         console.error(`[data-integrity] audit for workspace ${workspaceId} failed`, err)
       }
     })
-    return () => {
-      cancelled = true
-    }
+    return () => controller.abort()
   },
 })
 

@@ -1,3 +1,5 @@
+import { abortableSleep } from './abortableSleep'
+
 // Whether the USER is active, as opposed to the main thread: `requestIdleCallback`
 // fires between keystrokes, so it cannot tell background work to stand aside
 // while someone is typing. This watches input events and says how long ago the
@@ -9,7 +11,7 @@ const ACTIVITY_EVENTS = ['keydown', 'pointerdown', 'wheel', 'scroll', 'input'] a
 
 export interface UserActivity {
   /** Resolves once no input has arrived for `quietMs`, at once if none has. */
-  whenQuiet: (quietMs: number) => Promise<void>
+  whenQuiet: (quietMs: number, signal?: AbortSignal) => Promise<void>
 }
 
 export const createUserActivity = (target: EventTarget): UserActivity => {
@@ -19,11 +21,12 @@ export const createUserActivity = (target: EventTarget): UserActivity => {
     target.addEventListener(type, onInput, {capture: true, passive: true})
   }
   return {
-    whenQuiet: async quietMs => {
+    whenQuiet: async (quietMs, signal) => {
       for (;;) {
+        signal?.throwIfAborted()
         const remaining = lastInputAt + quietMs - Date.now()
         if (remaining <= 0) return
-        await new Promise<void>(resolve => setTimeout(resolve, remaining))
+        await abortableSleep(remaining, signal)
       }
     },
   }
