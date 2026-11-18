@@ -1,1 +1,1 @@
-export{Vot as deriveWorkspaceIdNamespace}from"../../../chunks/app-CYe9Cgxi.js";
+export{Vot as deriveWorkspaceIdNamespace}from"../../../chunks/app-Br5R3-99.js";

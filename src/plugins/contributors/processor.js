@@ -1,1 +1,1 @@
-export{oQ as CHOOSE_CONTRIBUTOR_MESSAGE,sQ as contributorAttributionProcessor}from"../../../chunks/app-CYe9Cgxi.js";
+export{oQ as CHOOSE_CONTRIBUTOR_MESSAGE,sQ as contributorAttributionProcessor}from"../../../chunks/app-Br5R3-99.js";

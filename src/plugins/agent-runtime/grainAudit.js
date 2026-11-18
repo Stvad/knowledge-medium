@@ -1,1 +1,1 @@
-export{eg as AUDIT_BLOCK_LIMIT,tg as auditBlocks,ng as auditExtensionData,rg as createBlockResolver,ig as grainWarningsForProperties,ag as writeWarnings}from"../../../chunks/app-CYe9Cgxi.js";
+export{eg as AUDIT_BLOCK_LIMIT,tg as auditBlocks,ng as auditExtensionData,rg as createBlockResolver,ig as grainWarningsForProperties,ag as writeWarnings}from"../../../chunks/app-Br5R3-99.js";
