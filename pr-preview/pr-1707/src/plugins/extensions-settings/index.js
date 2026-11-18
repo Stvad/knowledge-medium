@@ -1,1 +1,0 @@
-export{Hh as extensionsOverridesProp,Uh as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-JLtIm6Zr.js";

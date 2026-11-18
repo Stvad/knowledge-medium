@@ -1,1 +1,0 @@
-export{LG as PropertyShapeButton,RG as PropertyShapeGlyph}from"../../../chunks/app-JLtIm6Zr.js";

@@ -1,1 +1,0 @@
-export{FP as appUpdate,IP as useAppUpdateAvailable}from"../chunks/app-JLtIm6Zr.js";

@@ -1,1 +1,0 @@
-export{Gs as parsePropertiesJson}from"../../../chunks/app-JLtIm6Zr.js";

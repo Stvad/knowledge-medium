@@ -1,1 +1,0 @@
-export{of as quotedInFooterContribution}from"../../../chunks/app-JLtIm6Zr.js";

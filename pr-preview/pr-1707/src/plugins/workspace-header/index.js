@@ -1,1 +1,0 @@
-export{JT as WorkspaceSwitcherSidebarSection,YT as pendingInvitationsHeaderItem,XT as workspaceHeaderPlugin,ZT as workspaceSwitcherSidebarSection}from"../../../chunks/app-JLtIm6Zr.js";

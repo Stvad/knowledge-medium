@@ -1,1 +1,0 @@
-export{Qr as perfMonitorPlugin}from"../../../chunks/app-JLtIm6Zr.js";

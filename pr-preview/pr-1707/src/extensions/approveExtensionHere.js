@@ -1,1 +1,0 @@
-export{yP as approveExtensionHere}from"../../chunks/app-JLtIm6Zr.js";

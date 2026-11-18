@@ -1,1 +1,0 @@
-export{UB as defineVariant,WB as defineVariantFacet}from"../../chunks/app-JLtIm6Zr.js";

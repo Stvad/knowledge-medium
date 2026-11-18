@@ -1,1 +1,0 @@
-export{zG as propertyShapeLabel}from"../../../chunks/app-JLtIm6Zr.js";

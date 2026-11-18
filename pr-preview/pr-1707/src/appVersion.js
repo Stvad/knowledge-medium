@@ -1,1 +1,0 @@
-export{Lc as appVersion}from"../chunks/app-JLtIm6Zr.js";

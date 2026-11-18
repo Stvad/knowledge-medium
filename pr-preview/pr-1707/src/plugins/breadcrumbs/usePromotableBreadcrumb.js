@@ -1,1 +1,0 @@
-export{LT as usePromotableBreadcrumb}from"../../../chunks/app-JLtIm6Zr.js";

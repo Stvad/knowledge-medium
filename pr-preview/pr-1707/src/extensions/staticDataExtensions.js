@@ -1,1 +1,0 @@
-export{WK as staticDataExtensions}from"../../chunks/app-JLtIm6Zr.js";

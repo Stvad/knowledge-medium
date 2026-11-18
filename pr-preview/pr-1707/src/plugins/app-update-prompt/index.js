@@ -1,1 +1,0 @@
-export{wP as appUpdatePromptExtension}from"../../../chunks/app-JLtIm6Zr.js";

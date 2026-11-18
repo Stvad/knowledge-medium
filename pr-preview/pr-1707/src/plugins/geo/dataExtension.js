@@ -1,1 +1,0 @@
-export{kJ as geoDataExtension}from"../../../chunks/app-JLtIm6Zr.js";

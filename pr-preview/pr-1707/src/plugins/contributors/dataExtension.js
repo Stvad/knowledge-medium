@@ -1,1 +1,0 @@
-export{oQ as contributorsDataExtension}from"../../../chunks/app-JLtIm6Zr.js";

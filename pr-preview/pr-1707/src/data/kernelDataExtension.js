@@ -1,1 +1,0 @@
-export{Q6 as kernelDataExtension}from"../../chunks/app-JLtIm6Zr.js";

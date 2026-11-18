@@ -1,1 +1,0 @@
-export{uP as ExtensionPromptSurface,dP as extensionPromptsExtension}from"../../../chunks/app-JLtIm6Zr.js";

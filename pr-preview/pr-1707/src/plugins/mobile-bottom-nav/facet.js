@@ -1,1 +1,0 @@
-export{MT as mobileBottomNavItemsFacet}from"../../../chunks/app-JLtIm6Zr.js";

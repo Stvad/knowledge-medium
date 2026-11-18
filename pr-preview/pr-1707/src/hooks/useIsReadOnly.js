@@ -1,1 +1,0 @@
-export{jb as useIsReadOnly}from"../../chunks/app-JLtIm6Zr.js";

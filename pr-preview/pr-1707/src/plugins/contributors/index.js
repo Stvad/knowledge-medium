@@ -1,1 +1,0 @@
-export{Bm as contributorsPlugin}from"../../../chunks/app-JLtIm6Zr.js";

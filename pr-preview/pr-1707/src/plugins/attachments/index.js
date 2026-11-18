@@ -1,1 +1,0 @@
-export{ux as attachmentsPlugin}from"../../../chunks/app-JLtIm6Zr.js";

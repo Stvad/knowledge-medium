@@ -1,1 +1,0 @@
-export{Og as authorIdOf}from"../../../chunks/app-JLtIm6Zr.js";

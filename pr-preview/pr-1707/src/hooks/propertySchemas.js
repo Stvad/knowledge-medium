@@ -1,1 +1,0 @@
-export{FG as usePropertySchemas}from"../../chunks/app-JLtIm6Zr.js";

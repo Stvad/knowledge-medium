@@ -1,1 +1,0 @@
-export{BT as getBreadcrumbContentPreview}from"../../../chunks/app-JLtIm6Zr.js";

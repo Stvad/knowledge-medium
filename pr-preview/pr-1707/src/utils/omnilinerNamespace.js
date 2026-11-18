@@ -1,1 +1,0 @@
-export{m0 as omnilinerNamespace}from"../../chunks/app-JLtIm6Zr.js";

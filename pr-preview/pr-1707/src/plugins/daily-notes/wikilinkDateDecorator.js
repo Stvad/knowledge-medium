@@ -1,1 +1,0 @@
-export{uA as dailyDateWikilinkDecorator}from"../../../chunks/app-JLtIm6Zr.js";

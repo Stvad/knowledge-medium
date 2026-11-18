@@ -1,1 +1,0 @@
-export{KP as gestureBindingDescriptor,qP as matchesGestureEvent}from"../../chunks/app-JLtIm6Zr.js";

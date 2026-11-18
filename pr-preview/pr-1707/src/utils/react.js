@@ -1,1 +1,0 @@
-export{KL as useIsMobile,qL as usePointerCoarse}from"../../chunks/app-JLtIm6Zr.js";

@@ -1,1 +1,0 @@
-export{iV as BlockProperties}from"../../chunks/app-JLtIm6Zr.js";

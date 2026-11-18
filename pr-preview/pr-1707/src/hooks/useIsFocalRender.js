@@ -1,1 +1,0 @@
-export{GB as isFocalRender,KB as useIsFocalRender}from"../../chunks/app-JLtIm6Zr.js";

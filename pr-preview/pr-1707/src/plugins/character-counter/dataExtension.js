@@ -1,1 +1,0 @@
-export{EQ as characterCounterDataExtension}from"../../../chunks/app-JLtIm6Zr.js";

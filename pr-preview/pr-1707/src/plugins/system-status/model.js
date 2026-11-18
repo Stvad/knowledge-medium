@@ -1,1 +1,0 @@
-export{Ic as getSyncIndicatorView}from"../../../chunks/app-JLtIm6Zr.js";

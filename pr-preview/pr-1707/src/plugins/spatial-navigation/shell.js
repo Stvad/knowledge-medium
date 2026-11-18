@@ -1,1 +1,0 @@
-export{_w as spatialNavigationShellDecorator}from"../../../chunks/app-JLtIm6Zr.js";
