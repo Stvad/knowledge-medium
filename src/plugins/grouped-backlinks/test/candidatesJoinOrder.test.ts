@@ -23,12 +23,11 @@ import { SELECT_GROUPED_BACKLINK_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_FIELD_C
 const WS = 'ws-1'
 const SOURCE_IDS = JSON.stringify(['s-1', 's-2', 's-3'])
 
-// A device whose `blocks` stats predate a sync-applied ~3x growth: `PRAGMA
-// optimize` re-analyzes only past ~10x drift, so these stay. They make the
-// per-workspace index look selective enough to drive from.
+// `blocks` stats whose per-workspace live-row estimate is far below the
+// table's, as `PRAGMA optimize` leaves them after growth under ~10x. Under them
+// the planner drives from `idx_blocks_workspace_active`.
 const STALE_BLOCKS_STATS: readonly StatOverride[] = [
   ['blocks', 'idx_blocks_workspace_active', '342103 68421'],
-  ['blocks', 'sqlite_autoindex_blocks_1', '366435 1'],
 ]
 
 let planner: LargeGraphPlanner

@@ -71,16 +71,16 @@ export const createLargeGraphPlanner = async (
   )
   expect(indexes.map(row => `${row.tbl_name} ${row.name}`).sort())
     .toEqual(LARGE_GRAPH_STATS.map(([tbl, idx]) => `${tbl} ${idx}`).sort())
-  for (const [tbl, idx] of overrides) {
-    expect(LARGE_GRAPH_STATS.some(([t, i]) => t === tbl && i === idx), `override for an unknown index ${tbl} ${idx}`).toBe(true)
-  }
+  const overridden = new Map(overrides.map(([tbl, idx, stat]) => [`${tbl} ${idx}`, stat]))
+  expect(overridden.size, 'one override per index').toBe(overrides.length)
+  const known = new Set(LARGE_GRAPH_STATS.map(([tbl, idx]) => `${tbl} ${idx}`))
+  expect([...overridden.keys()].filter(key => !known.has(key)), 'overrides for unknown indexes').toEqual([])
   const hasStat4 = (await h.db.getAll(`SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat4'`)).length > 0
   await h.db.writeTransaction(async tx => {
     await tx.execute('DELETE FROM sqlite_stat1')
     if (hasStat4) await tx.execute('DELETE FROM sqlite_stat4')
     for (const [tbl, idx, stat] of LARGE_GRAPH_STATS) {
-      const override = overrides.find(([t, i]) => t === tbl && i === idx)
-      await tx.execute('INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)', [tbl, idx, override?.[2] ?? stat])
+      await tx.execute('INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)', [tbl, idx, overridden.get(`${tbl} ${idx}`) ?? stat])
     }
   })
 
