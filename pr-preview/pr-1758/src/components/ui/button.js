@@ -1,1 +1,1 @@
-export{Q2 as Button}from"../../../chunks/app-mJJTlaki.js";
+export{Q2 as Button}from"../../../chunks/app-Ss9tj2bj.js";

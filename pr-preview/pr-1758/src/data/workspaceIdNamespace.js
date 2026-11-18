@@ -1,1 +1,1 @@
-export{yot as DerivedIdNamespaceUnavailableError,bot as derivedIdNamespaceInTx,xot as resolveDerivedIdNamespace}from"../../chunks/app-mJJTlaki.js";
+export{yot as DerivedIdNamespaceUnavailableError,bot as derivedIdNamespaceInTx,xot as resolveDerivedIdNamespace}from"../../chunks/app-Ss9tj2bj.js";

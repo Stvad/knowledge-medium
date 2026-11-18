@@ -1,1 +1,1 @@
-export{IP as checkForAppUpdate,LP as registerServiceWorker}from"../chunks/app-mJJTlaki.js";
+export{IP as checkForAppUpdate,LP as registerServiceWorker}from"../chunks/app-Ss9tj2bj.js";
