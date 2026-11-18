@@ -1,0 +1,1 @@
+export{lQ as contributorsDataExtension}from"../../../chunks/app-mJJTlaki.js";

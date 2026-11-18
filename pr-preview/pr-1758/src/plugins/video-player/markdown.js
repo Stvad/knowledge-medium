@@ -1,0 +1,1 @@
+export{fC as videoPlayerMarkdownExtension}from"../../../chunks/app-mJJTlaki.js";

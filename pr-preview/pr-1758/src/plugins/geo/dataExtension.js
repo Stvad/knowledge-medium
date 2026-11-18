@@ -1,0 +1,1 @@
+export{MJ as geoDataExtension}from"../../../chunks/app-mJJTlaki.js";

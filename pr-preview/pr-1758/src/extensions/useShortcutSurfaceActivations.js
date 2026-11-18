@@ -1,0 +1,1 @@
+export{JR as useShortcutSurfaceActivations}from"../../chunks/app-mJJTlaki.js";

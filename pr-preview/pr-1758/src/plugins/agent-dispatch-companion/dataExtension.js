@@ -1,0 +1,1 @@
+export{K1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-mJJTlaki.js";

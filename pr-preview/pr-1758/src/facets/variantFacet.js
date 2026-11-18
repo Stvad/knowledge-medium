@@ -1,0 +1,1 @@
+export{KB as defineVariant,qB as defineVariantFacet}from"../../chunks/app-mJJTlaki.js";

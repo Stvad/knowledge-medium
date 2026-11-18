@@ -1,0 +1,1 @@
+export{wK as BootFallback}from"../../../chunks/app-mJJTlaki.js";

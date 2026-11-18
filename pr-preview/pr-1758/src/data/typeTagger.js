@@ -1,0 +1,1 @@
+export{h4 as TypeTagger,g4 as applyTypeTagInTx}from"../../chunks/app-mJJTlaki.js";

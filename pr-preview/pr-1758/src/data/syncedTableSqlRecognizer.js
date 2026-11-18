@@ -1,0 +1,1 @@
+export{c0 as SYNCED_TABLES,l0 as syncedWriteTarget,u0 as writeTargets}from"../../chunks/app-mJJTlaki.js";

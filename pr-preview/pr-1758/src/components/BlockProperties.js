@@ -1,0 +1,1 @@
+export{sV as BlockProperties}from"../../chunks/app-mJJTlaki.js";

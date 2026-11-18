@@ -1,0 +1,1 @@
+export{DP as appUpdatePromptExtension}from"../../../chunks/app-mJJTlaki.js";

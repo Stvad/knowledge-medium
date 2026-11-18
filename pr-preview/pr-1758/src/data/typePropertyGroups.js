@@ -1,0 +1,1 @@
+export{MV as typePropertyGroups}from"../../chunks/app-mJJTlaki.js";

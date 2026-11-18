@@ -1,0 +1,1 @@
+export{lx as richPastePlugin}from"../../../chunks/app-mJJTlaki.js";

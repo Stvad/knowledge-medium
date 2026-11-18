@@ -1,0 +1,1 @@
+export{gy as LazyBlockEntry}from"../../../chunks/app-mJJTlaki.js";

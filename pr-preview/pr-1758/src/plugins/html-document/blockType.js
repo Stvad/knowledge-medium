@@ -1,0 +1,1 @@
+export{iJ as htmlDocumentTypeSeed}from"../../../chunks/app-mJJTlaki.js";

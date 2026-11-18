@@ -1,0 +1,1 @@
+export{i8 as kernelDataExtension}from"../../chunks/app-mJJTlaki.js";

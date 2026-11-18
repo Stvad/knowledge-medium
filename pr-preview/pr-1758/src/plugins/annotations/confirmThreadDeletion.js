@@ -1,0 +1,1 @@
+export{Bp as confirmThreadDeletion}from"../../../chunks/app-mJJTlaki.js";

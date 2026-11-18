@@ -1,0 +1,1 @@
+export{X2 as withLock}from"../../chunks/app-mJJTlaki.js";

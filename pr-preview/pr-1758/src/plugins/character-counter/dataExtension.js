@@ -1,0 +1,1 @@
+export{kQ as characterCounterDataExtension}from"../../../chunks/app-mJJTlaki.js";

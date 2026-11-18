@@ -1,0 +1,1 @@
+export{DO as openRecentsPage}from"../../../chunks/app-mJJTlaki.js";

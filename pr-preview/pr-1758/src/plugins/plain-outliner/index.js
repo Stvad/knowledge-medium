@@ -1,0 +1,1 @@
+export{KT as plainOutlinerPlugin}from"../../../chunks/app-mJJTlaki.js";

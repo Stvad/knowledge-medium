@@ -1,0 +1,1 @@
+export{oN as BlockEmbed}from"../../../chunks/app-mJJTlaki.js";

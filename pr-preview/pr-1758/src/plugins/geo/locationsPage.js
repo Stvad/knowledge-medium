@@ -1,0 +1,1 @@
+export{UJ as getOrCreateLocationsPage,WJ as locationsPageBlockId,GJ as locationsPageSpec}from"../../../chunks/app-mJJTlaki.js";

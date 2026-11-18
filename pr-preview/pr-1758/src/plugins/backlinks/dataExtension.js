@@ -1,0 +1,1 @@
+export{BQ as backlinksDataExtension}from"../../../chunks/app-mJJTlaki.js";

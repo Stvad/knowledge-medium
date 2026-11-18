@@ -1,0 +1,1 @@
+export{TO as useMinuteClock}from"../../chunks/app-mJJTlaki.js";

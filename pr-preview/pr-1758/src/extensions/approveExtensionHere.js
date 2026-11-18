@@ -1,0 +1,1 @@
+export{SP as approveExtensionHere}from"../../chunks/app-mJJTlaki.js";

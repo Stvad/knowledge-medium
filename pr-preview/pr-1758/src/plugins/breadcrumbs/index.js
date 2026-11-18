@@ -1,0 +1,1 @@
+export{GT as BreadcrumbList,HT as BreadcrumbRenderer,WT as Breadcrumbs,VT as PromotableBreadcrumbList,RT as breadcrumbRendererContribution,zT as breadcrumbsPlugin,UT as getBreadcrumbContentPreview,BT as usePromotableBreadcrumb}from"../../../chunks/app-mJJTlaki.js";

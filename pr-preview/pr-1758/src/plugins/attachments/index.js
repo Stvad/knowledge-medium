@@ -1,0 +1,1 @@
+export{px as attachmentsPlugin}from"../../../chunks/app-mJJTlaki.js";

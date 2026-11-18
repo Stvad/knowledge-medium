@@ -1,0 +1,1 @@
+export{RG as usePropertySchemas}from"../../chunks/app-mJJTlaki.js";

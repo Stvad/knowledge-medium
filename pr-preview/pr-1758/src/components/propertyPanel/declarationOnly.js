@@ -1,0 +1,1 @@
+export{IV as declarationOnlyDefinitionForName,LV as declarationOnlyStatusText}from"../../../chunks/app-mJJTlaki.js";

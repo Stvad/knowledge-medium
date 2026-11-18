@@ -1,0 +1,1 @@
+export{qK as staticDataExtensions}from"../../chunks/app-mJJTlaki.js";

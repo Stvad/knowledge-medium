@@ -1,0 +1,1 @@
+export{pA as dailyDateWikilinkDecorator}from"../../../chunks/app-mJJTlaki.js";

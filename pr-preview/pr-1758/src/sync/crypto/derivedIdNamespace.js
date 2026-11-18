@@ -1,0 +1,1 @@
+export{Xot as deriveWorkspaceIdNamespace}from"../../../chunks/app-mJJTlaki.js";

@@ -1,0 +1,1 @@
+export{JC as onboardingLanding}from"../../../chunks/app-mJJTlaki.js";

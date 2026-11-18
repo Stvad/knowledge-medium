@@ -1,0 +1,1 @@
+export{Ks as parsePropertiesJson}from"../../../chunks/app-mJJTlaki.js";

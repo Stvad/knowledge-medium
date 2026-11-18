@@ -1,0 +1,1 @@
+export{$F as BlockLoadingPlaceholder}from"../../chunks/app-mJJTlaki.js";

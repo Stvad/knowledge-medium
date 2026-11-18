@@ -1,0 +1,1 @@
+export{l1 as aliasDataExtension}from"../../../chunks/app-mJJTlaki.js";

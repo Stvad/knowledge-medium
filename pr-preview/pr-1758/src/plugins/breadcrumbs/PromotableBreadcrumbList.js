@@ -1,0 +1,1 @@
+export{VT as PromotableBreadcrumbList}from"../../../chunks/app-mJJTlaki.js";

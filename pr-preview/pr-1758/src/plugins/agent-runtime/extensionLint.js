@@ -1,0 +1,1 @@
+export{mg as lintExtensionSource}from"../../../chunks/app-mJJTlaki.js";

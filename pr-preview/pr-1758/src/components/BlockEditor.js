@@ -1,0 +1,1 @@
+export{VR as BlockEditor}from"../../chunks/app-mJJTlaki.js";

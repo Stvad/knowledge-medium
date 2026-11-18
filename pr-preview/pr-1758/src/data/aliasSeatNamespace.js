@@ -1,0 +1,1 @@
+export{_ot as aliasSeatNamespacesInTx,vot as resolveAliasSeatNamespaces}from"../../chunks/app-mJJTlaki.js";

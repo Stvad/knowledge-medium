@@ -1,0 +1,1 @@
+export{NN as ensureMetricsConsoleHook}from"../../chunks/app-mJJTlaki.js";

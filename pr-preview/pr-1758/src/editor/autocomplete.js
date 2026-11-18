@@ -1,0 +1,1 @@
+export{uP as editorAutocompleteExtension}from"../../chunks/app-mJJTlaki.js";

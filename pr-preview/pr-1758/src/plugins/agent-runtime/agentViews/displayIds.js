@@ -1,0 +1,1 @@
+export{I_ as boundDisplayId,L_ as idMark}from"../../../../chunks/app-mJJTlaki.js";

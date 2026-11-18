@@ -1,0 +1,1 @@
+export{c4 as FacetBridge}from"../../chunks/app-mJJTlaki.js";

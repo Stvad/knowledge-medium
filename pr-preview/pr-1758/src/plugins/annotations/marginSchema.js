@@ -1,0 +1,1 @@
+export{RZ as annotationMarginOpenProp,zZ as annotationMarginShareProp}from"../../../chunks/app-mJJTlaki.js";

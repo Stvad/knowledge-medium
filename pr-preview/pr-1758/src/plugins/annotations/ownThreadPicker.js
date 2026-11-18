@@ -1,0 +1,1 @@
+export{Rf as moveCommentToOwnThread}from"../../../chunks/app-mJJTlaki.js";

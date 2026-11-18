@@ -1,0 +1,1 @@
+export{IP as checkForAppUpdate,LP as registerServiceWorker}from"../chunks/app-mJJTlaki.js";

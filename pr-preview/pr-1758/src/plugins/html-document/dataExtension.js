@@ -1,0 +1,1 @@
+export{rJ as htmlDocumentDataExtension}from"../../../chunks/app-mJJTlaki.js";

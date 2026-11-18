@@ -1,0 +1,1 @@
+export{Bdt as CHANGE_SCOPE_POLICIES,Vdt as ChangeScope,Hdt as isChangeScope,Udt as policyForScope,Wdt as scopeAllowedInReadOnly,Gdt as scopeIsUndoable,Kdt as scopePoliciesEquivalent,qdt as scopeUploadsToServer,Jdt as sourceForScope}from"../../../chunks/app-mJJTlaki.js";

@@ -1,0 +1,1 @@
+export{jR as defaultPasteDecision,MR as pasteDecisionVerb}from"../../chunks/app-mJJTlaki.js";

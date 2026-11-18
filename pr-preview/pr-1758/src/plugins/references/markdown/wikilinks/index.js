@@ -1,0 +1,1 @@
+export{Zy as wikilinkMarkdownExtension}from"../../../../../chunks/app-mJJTlaki.js";

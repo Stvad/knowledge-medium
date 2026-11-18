@@ -1,0 +1,1 @@
+export{gN as chipStyle}from"../../../chunks/app-mJJTlaki.js";

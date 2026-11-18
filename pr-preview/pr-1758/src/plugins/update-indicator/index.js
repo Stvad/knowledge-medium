@@ -1,0 +1,1 @@
+export{Iv as updateIndicatorPlugin}from"../../../chunks/app-mJJTlaki.js";

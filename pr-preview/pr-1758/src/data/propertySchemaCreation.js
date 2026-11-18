@@ -1,0 +1,1 @@
+export{UG as adoptOrCreatePropertySchema}from"../../chunks/app-mJJTlaki.js";

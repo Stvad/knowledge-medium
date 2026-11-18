@@ -1,0 +1,1 @@
+export{FQ as RAW_CHARACTER_COUNT_PROFILE_ID,IQ as WORDS_COUNT_PROFILE_ID,LQ as charLimitProp,RQ as charProfileProp,zQ as charScopeProp}from"../../../chunks/app-mJJTlaki.js";

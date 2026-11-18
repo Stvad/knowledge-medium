@@ -1,0 +1,1 @@
+export{$y as remarkWikilinks}from"../../../../../chunks/app-mJJTlaki.js";

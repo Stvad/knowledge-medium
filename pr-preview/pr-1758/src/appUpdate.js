@@ -1,0 +1,1 @@
+export{RP as appUpdate,zP as useAppUpdateAvailable}from"../chunks/app-mJJTlaki.js";

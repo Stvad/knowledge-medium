@@ -1,0 +1,1 @@
+export{Pv as blockInfoPlugin}from"../../../chunks/app-mJJTlaki.js";

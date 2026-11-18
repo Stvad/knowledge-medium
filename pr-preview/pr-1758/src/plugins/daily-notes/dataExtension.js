@@ -1,0 +1,1 @@
+export{VY as dailyNotesDataExtension}from"../../../chunks/app-mJJTlaki.js";

@@ -1,0 +1,1 @@
+export{Um as contributorsPlugin}from"../../../chunks/app-mJJTlaki.js";

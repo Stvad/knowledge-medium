@@ -1,0 +1,1 @@
+export{lf as quotedInFooterContribution}from"../../../chunks/app-mJJTlaki.js";

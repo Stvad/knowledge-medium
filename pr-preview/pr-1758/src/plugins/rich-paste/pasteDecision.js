@@ -1,0 +1,1 @@
+export{ux as richPasteDecisionContribution}from"../../../chunks/app-mJJTlaki.js";

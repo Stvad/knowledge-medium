@@ -1,0 +1,1 @@
+export{KG as appRuntimeUpdateEvent,qG as refreshAppRuntime}from"../../chunks/app-mJJTlaki.js";

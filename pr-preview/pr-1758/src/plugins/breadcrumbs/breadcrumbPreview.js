@@ -1,0 +1,1 @@
+export{UT as getBreadcrumbContentPreview}from"../../../chunks/app-mJJTlaki.js";

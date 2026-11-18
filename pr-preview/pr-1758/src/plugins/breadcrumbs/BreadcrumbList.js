@@ -1,0 +1,1 @@
+export{GT as BreadcrumbList}from"../../../chunks/app-mJJTlaki.js";

@@ -1,0 +1,1 @@
+export{TK as SuspenseFallback}from"../../../chunks/app-mJJTlaki.js";

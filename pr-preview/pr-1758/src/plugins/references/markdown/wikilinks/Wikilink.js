@@ -1,0 +1,1 @@
+export{Qy as Wikilink}from"../../../../../chunks/app-mJJTlaki.js";

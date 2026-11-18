@@ -1,0 +1,1 @@
+export{ZP as dispatchPointerAction,QP as setPointerActionDispatcher}from"../../chunks/app-mJJTlaki.js";

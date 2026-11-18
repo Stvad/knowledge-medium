@@ -1,0 +1,1 @@
+export{BT as usePromotableBreadcrumb}from"../../../chunks/app-mJJTlaki.js";

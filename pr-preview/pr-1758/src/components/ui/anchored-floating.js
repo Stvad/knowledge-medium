@@ -1,0 +1,1 @@
+export{IG as floatingAnchorFromRect,LG as useAnchoredFloating}from"../../../chunks/app-mJJTlaki.js";

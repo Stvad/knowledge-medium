@@ -1,0 +1,1 @@
+export{YL as useIsMobile,XL as usePointerCoarse}from"../../chunks/app-mJJTlaki.js";

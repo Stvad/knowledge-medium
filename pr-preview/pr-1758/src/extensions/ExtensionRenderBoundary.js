@@ -1,0 +1,1 @@
+export{Vz as ExtensionRenderBoundary}from"../../chunks/app-mJJTlaki.js";
