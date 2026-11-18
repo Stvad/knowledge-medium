@@ -1,0 +1,1 @@
+export{B1 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CzD8j74s.js";

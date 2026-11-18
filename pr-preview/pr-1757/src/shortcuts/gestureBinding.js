@@ -1,0 +1,1 @@
+export{UP as gestureBindingDescriptor,WP as matchesGestureEvent}from"../../chunks/app-CzD8j74s.js";

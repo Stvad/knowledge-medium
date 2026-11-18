@@ -1,0 +1,1 @@
+export{Put as SYSTEM_AUTHOR_PREFIX,Fut as isSystemAuthor,Iut as systemAuthor}from"../../../chunks/app-CzD8j74s.js";

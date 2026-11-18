@@ -1,0 +1,1 @@
+export{BB as defineVariant,VB as defineVariantFacet}from"../../chunks/app-CzD8j74s.js";

@@ -1,0 +1,1 @@
+export{VF as LazyBlockComponent}from"../../chunks/app-CzD8j74s.js";
