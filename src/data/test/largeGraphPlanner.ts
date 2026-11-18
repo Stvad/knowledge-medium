@@ -54,7 +54,14 @@ export interface LargeGraphPlanner {
   cleanup: () => Promise<void>
 }
 
-export const createLargeGraphPlanner = async (): Promise<LargeGraphPlanner> => {
+/** One `sqlite_stat1` row's replacement, keyed by its table and index. */
+export type StatOverride = readonly [tbl: string, idx: string, stat: string]
+
+/** `overrides` replaces individual {@link LARGE_GRAPH_STATS} rows, e.g. to plan
+ *  under stats that are stale against the graph's real size. */
+export const createLargeGraphPlanner = async (
+  {overrides = []}: {overrides?: readonly StatOverride[]} = {},
+): Promise<LargeGraphPlanner> => {
   const h: TestDb = await createTestDb()
   // Creates the stats tables; their rows are then replaced.
   await h.db.execute('ANALYZE')
@@ -64,12 +71,16 @@ export const createLargeGraphPlanner = async (): Promise<LargeGraphPlanner> => {
   )
   expect(indexes.map(row => `${row.tbl_name} ${row.name}`).sort())
     .toEqual(LARGE_GRAPH_STATS.map(([tbl, idx]) => `${tbl} ${idx}`).sort())
+  const overridden = new Map(overrides.map(([tbl, idx, stat]) => [`${tbl} ${idx}`, stat]))
+  expect(overridden.size, 'one override per index').toBe(overrides.length)
+  const known = new Set(LARGE_GRAPH_STATS.map(([tbl, idx]) => `${tbl} ${idx}`))
+  expect([...overridden.keys()].filter(key => !known.has(key)), 'overrides for unknown indexes').toEqual([])
   const hasStat4 = (await h.db.getAll(`SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat4'`)).length > 0
   await h.db.writeTransaction(async tx => {
     await tx.execute('DELETE FROM sqlite_stat1')
     if (hasStat4) await tx.execute('DELETE FROM sqlite_stat4')
     for (const [tbl, idx, stat] of LARGE_GRAPH_STATS) {
-      await tx.execute('INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)', [tbl, idx, stat])
+      await tx.execute('INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)', [tbl, idx, overridden.get(`${tbl} ${idx}`) ?? stat])
     }
   })
 
