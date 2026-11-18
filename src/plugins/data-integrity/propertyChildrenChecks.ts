@@ -43,8 +43,9 @@ const readyRegistry = async (repo: Repo, workspaceId: string): Promise<void> => 
   await repo.whenPropertyDefinitionsReady(workspaceId)
 }
 
+// The live field index orders the pairs by owner and definition within a workspace.
 const DUPLICATE_PAIRS_FROM = `
-  FROM blocks INDEXED BY idx_blocks_any_field_form
+  FROM blocks INDEXED BY idx_blocks_field_form
   WHERE workspace_id = ? AND is_field_form = 1 AND deleted = 0
     AND reference_target_id IS NOT NULL
   GROUP BY parent_id, reference_target_id

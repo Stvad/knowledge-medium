@@ -21,8 +21,12 @@ import { presetIdProp, propertyChangeScopeProp, propertyNameProp } from '@/data/
 import {
   BLOCKS_SYNCED_RAW_TABLE, BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams, blockToSyncedRowParams,
 } from '@/data/blockSchema'
-import { runConsistencyAudit, type ConsistencyCheckResult } from '../audit'
-import { runPropertyCellCoverageCheck, runPropertyCellDivergenceCheck } from '../propertyChildrenChecks'
+import { runConsistencyAudit, type AuditDb, type ConsistencyCheckResult } from '../audit'
+import {
+  runPropertyCellCoverageCheck,
+  runPropertyCellDivergenceCheck,
+  runPropertyFieldRowDuplicatesCheck,
+} from '../propertyChildrenChecks'
 import { runConsistencyAuditNow } from '../schedule'
 import { resetConsistencyAuditStore } from '../store'
 
@@ -203,6 +207,31 @@ describe('property_field_row_duplicates', () => {
     const check = (await audit()).property_field_row_duplicates
 
     expect(check).toMatchObject({ status: 'ok', duplicatePairs: 0, samples: [] })
+  })
+
+  it('reads the live field index in group order for the count and samples', async () => {
+    await insertRaw(
+      owner('o1', {}),
+      fieldRow('f1', 'o1', statusProp.name),
+      fieldRow('f2', 'o1', statusProp.name),
+    )
+    const plans: string[] = []
+    const db: AuditDb = {
+      getAll: async <T,>(sql: string, params?: unknown[]) => {
+        const plan = await sharedDb.db.getAll<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, params)
+        plans.push(plan.map(row => row.detail).join('\n'))
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+
+    const check = await runPropertyFieldRowDuplicatesCheck(db, WS, 8)
+
+    expect(check).toMatchObject({ duplicatePairs: 1, samples: ['o1'] })
+    expect(plans.length).toBeGreaterThan(0)
+    for (const plan of plans) {
+      expect(plan).toMatch(/SEARCH blocks USING (?:COVERING )?INDEX idx_blocks_field_form \(workspace_id=\?\)/)
+      expect(plan).not.toMatch(/TEMP B-TREE FOR GROUP BY/)
+    }
   })
 })
 
