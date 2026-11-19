@@ -9,6 +9,7 @@
 
 import { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { acceptCompletionInsert } from '@/editor/contentFlush.js'
+import { constrainedReferenceRange } from '@/editor/referenceCompletionRange.js'
 import { completionQueryEnd } from '@/utils/codemirrorCompletion.js'
 
 export interface BlockSearchHit {
@@ -17,7 +18,7 @@ export interface BlockSearchHit {
 }
 
 export interface BlockrefAutocompleteOptions {
-  searchBlocks: (filter: string) => Promise<BlockSearchHit[]>
+  searchBlocks: (filter: string, targetTypes: readonly string[]) => Promise<BlockSearchHit[]>
 }
 
 const stripWhitespace = (s: string) => s.replace(/\s+/g, ' ').trim()
@@ -42,19 +43,19 @@ export function blockrefCompletionSource(options: BlockrefAutocompleteOptions) {
     if (!openMatch) return null
 
     const filter = openMatch[1]
-    // Cheap noise filter — without something to search, surfacing every block
-    // in the workspace is just clutter.
-    if (filter.length === 0 && !context.explicit) return null
-
     const startPos = line.from + openMatch.index! + 2
-    const closingExists = afterCursor.startsWith('))')
+    const constrained = constrainedReferenceRange(context, startPos, '))')
+    if (filter.length === 0 && !context.explicit && !constrained) return null
+    const closingExists = constrained && constrained.end > pos
+      ? true
+      : afterCursor.startsWith('))')
 
-    const hits = await options.searchBlocks(filter)
+    const hits = await options.searchBlocks(filter, constrained?.types ?? [])
     if (hits.length === 0) return null
 
     return {
       from: startPos,
-      to: pos,
+      to: constrained?.end ?? pos,
       filter: false,
       options: hits.map(hit => {
         const label = stripWhitespace(hit.content) || hit.id

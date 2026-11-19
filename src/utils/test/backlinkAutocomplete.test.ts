@@ -103,7 +103,7 @@ describe('backlinkAutocomplete', () => {
       const getAliases = vi.fn().mockResolvedValue(['World News'])
       const source = backlinkCompletionSource({getAliases})
       await source(afterWrapping('hello world', 6, 11, '[[').context)
-      expect(getAliases).toHaveBeenCalledWith('world')
+      expect(getAliases.mock.calls[0][0]).toBe('world')
     })
 
     it('spans the whole selection, so accepting replaces the wrapped text', async () => {

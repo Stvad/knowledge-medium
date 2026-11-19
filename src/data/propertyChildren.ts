@@ -201,7 +201,7 @@ const codecAcceptsNull = (codec: AnyCodec): boolean => {
  *  directly would read a list codec's whole-array grammar against one member's
  *  text: `["a","b"]` and the string `a` are both "not an array", so the errors
  *  are silent rather than loud. */
-const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
+export const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
   memberCodecOf(schema.codec) ?? schema.codec
 
 /** The characters every reference span OPENS with. Escaping these is what
