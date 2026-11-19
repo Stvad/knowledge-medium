@@ -1,1 +1,0 @@
-import{gI as e,hI as t}from"../../../chunks/app-BENfKfgH.js";export{t as floatingAnchorFromRect,e as useAnchoredFloating};

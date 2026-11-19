@@ -1,1 +1,0 @@
-export{KV as declarationOnlyDefinitionForName,qV as declarationOnlyStatusText}from"../../../chunks/app-C4Fnfy45.js";

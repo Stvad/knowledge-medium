@@ -1,1 +1,0 @@
-export{m8 as kernelDataExtension}from"../../chunks/app-C4Fnfy45.js";

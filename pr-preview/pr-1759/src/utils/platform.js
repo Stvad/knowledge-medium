@@ -1,1 +1,0 @@
-export{JW as isIOS,YW as isMacPlatform}from"../../chunks/app-C4Fnfy45.js";

@@ -1,1 +1,0 @@
-export{ko as migratePropertiesToBlocksAction,To as propertiesMigrationPlugin}from"../../../chunks/app-C4Fnfy45.js";

@@ -1,1 +1,0 @@
-export{MP as approveExtensionHere}from"../../chunks/app-C4Fnfy45.js";

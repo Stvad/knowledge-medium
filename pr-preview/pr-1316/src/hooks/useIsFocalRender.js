@@ -1,1 +1,0 @@
-import{iM as e,rM as t}from"../../chunks/app-BENfKfgH.js";export{t as isFocalRender,e as useIsFocalRender};

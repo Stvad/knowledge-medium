@@ -1,1 +1,0 @@
-export{_V as BlockProperties}from"../../chunks/app-C4Fnfy45.js";

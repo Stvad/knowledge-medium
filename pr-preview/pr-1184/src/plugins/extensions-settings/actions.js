@@ -1,1 +1,0 @@
-import{dE as e,fE as t}from"../../../chunks/app-Dx7VSAvW.js";export{e as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,t as openExtensionsSettingsAction};

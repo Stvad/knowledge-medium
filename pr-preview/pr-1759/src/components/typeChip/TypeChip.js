@@ -1,1 +1,0 @@
-export{TN as TypeChip}from"../../../chunks/app-C4Fnfy45.js";

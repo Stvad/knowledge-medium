@@ -1,1 +1,0 @@
-import{A8 as e,D8 as t,E8 as n,M8 as r,N8 as i,O8 as a,P8 as o,j8 as s,k8 as c}from"../../../chunks/app-Dx7VSAvW.js";export{n as CHANGE_SCOPE_POLICIES,t as ChangeScope,a as isChangeScope,c as policyForScope,e as scopeAllowedInReadOnly,s as scopeIsUndoable,r as scopePoliciesEquivalent,i as scopeUploadsToServer,o as sourceForScope};

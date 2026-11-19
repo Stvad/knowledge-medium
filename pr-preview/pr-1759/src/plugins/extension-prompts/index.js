@@ -1,1 +1,0 @@
-export{CP as ExtensionPromptSurface,wP as extensionPromptsExtension}from"../../../chunks/app-C4Fnfy45.js";

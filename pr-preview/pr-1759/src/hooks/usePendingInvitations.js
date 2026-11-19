@@ -1,1 +1,0 @@
-export{RD as usePendingInvitations}from"../../chunks/app-C4Fnfy45.js";

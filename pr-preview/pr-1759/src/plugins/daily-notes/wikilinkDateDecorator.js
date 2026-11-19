@@ -1,1 +1,0 @@
-export{CA as dailyDateWikilinkDecorator}from"../../../chunks/app-C4Fnfy45.js";

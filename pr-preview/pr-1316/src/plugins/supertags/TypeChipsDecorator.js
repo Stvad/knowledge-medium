@@ -1,1 +1,0 @@
-import{T as e}from"../../../chunks/app-BENfKfgH.js";export{e as typeChipsDecoratorContribution};

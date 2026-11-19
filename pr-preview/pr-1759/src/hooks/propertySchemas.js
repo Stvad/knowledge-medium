@@ -1,1 +1,0 @@
-export{JG as usePropertySchemas}from"../../chunks/app-C4Fnfy45.js";

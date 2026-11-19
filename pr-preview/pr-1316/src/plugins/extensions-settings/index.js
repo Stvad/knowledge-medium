@@ -1,1 +1,0 @@
-import{St as e,TE as t,wE as n}from"../../../chunks/app-BENfKfgH.js";export{n as extensionsOverridesProp,t as extensionsPrefsType,e as extensionsSettingsPlugin};

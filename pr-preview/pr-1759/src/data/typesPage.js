@@ -1,1 +1,0 @@
-export{wot as getOrCreateTypesPage,Tot as typesPageBlockId,Eot as typesPageSpec}from"../../chunks/app-C4Fnfy45.js";

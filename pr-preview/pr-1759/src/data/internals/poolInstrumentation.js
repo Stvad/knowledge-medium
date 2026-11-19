@@ -1,1 +1,0 @@
-export{y2 as instrumentAdapter}from"../../../chunks/app-C4Fnfy45.js";

@@ -1,1 +1,0 @@
-import{GE as e,KE as t}from"../../chunks/app-Dx7VSAvW.js";export{e as gestureBindingDescriptor,t as matchesGestureEvent};

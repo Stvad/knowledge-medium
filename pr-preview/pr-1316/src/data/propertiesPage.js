@@ -1,1 +1,0 @@
-import{a4 as e,i4 as t}from"../../chunks/app-BENfKfgH.js";export{t as getOrCreatePropertiesPage,e as propertiesPageBlockId};

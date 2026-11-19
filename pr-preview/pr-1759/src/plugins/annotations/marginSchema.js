@@ -1,1 +1,0 @@
-export{JZ as annotationMarginOpenProp,YZ as annotationMarginShareProp}from"../../../chunks/app-C4Fnfy45.js";

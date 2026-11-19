@@ -1,1 +1,0 @@
-import{Bk as e}from"../../chunks/app-BENfKfgH.js";export{e as ExtensionRenderBoundary};

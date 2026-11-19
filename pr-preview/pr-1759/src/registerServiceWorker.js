@@ -1,1 +1,0 @@
-export{KP as checkForAppUpdate,qP as registerServiceWorker}from"../chunks/app-C4Fnfy45.js";

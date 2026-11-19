@@ -1,1 +1,0 @@
-export{fI as defaultRegistry,pI as defaultRendererContributions,mI as defaultRenderersExtension}from"../../chunks/app-C4Fnfy45.js";

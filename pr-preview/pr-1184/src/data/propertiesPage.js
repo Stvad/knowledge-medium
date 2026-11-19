@@ -1,1 +1,0 @@
-import{U2 as e,W2 as t}from"../../chunks/app-Dx7VSAvW.js";export{e as getOrCreatePropertiesPage,t as propertiesPageBlockId};

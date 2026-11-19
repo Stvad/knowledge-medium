@@ -1,1 +1,0 @@
-export{rq as staticDataExtensions}from"../../chunks/app-C4Fnfy45.js";

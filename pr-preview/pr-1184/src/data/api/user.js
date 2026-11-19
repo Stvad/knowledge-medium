@@ -1,1 +1,0 @@
-import{A6 as e,O6 as t,k6 as n}from"../../../chunks/app-Dx7VSAvW.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

@@ -1,1 +1,0 @@
-export{OF as extensionDisplayName,kF as extensionName,AF as userExtensionShellToggle,jF as userExtensionToggle}from"../../chunks/app-C4Fnfy45.js";

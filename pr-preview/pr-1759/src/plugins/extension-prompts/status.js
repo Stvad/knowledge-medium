@@ -1,1 +1,0 @@
-export{TP as extensionPromptDiagnosticContribution,EP as extensionPromptDiagnosticSource}from"../../../chunks/app-C4Fnfy45.js";

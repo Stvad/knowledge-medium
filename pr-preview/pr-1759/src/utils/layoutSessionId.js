@@ -1,1 +1,0 @@
-export{tat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,nat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,rat as __resetLayoutSessionIdForTesting,iat as getLayoutSessionId,aat as isInstalledAppDisplayMode,oat as readOrCreateLayoutSessionId}from"../../chunks/app-C4Fnfy45.js";

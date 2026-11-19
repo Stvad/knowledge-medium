@@ -1,1 +1,0 @@
-export{ib as Wikilink}from"../../../../../chunks/app-C4Fnfy45.js";

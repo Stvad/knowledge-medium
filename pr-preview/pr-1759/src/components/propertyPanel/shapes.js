@@ -1,1 +1,0 @@
-export{QG as propertyShapeLabel}from"../../../chunks/app-C4Fnfy45.js";

@@ -1,1 +1,0 @@
-export{lst as deriveWorkspaceIdNamespace}from"../../../chunks/app-C4Fnfy45.js";

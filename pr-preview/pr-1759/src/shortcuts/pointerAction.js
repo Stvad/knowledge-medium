@@ -1,1 +1,0 @@
-export{sF as dispatchPointerAction,cF as setPointerActionDispatcher}from"../../chunks/app-C4Fnfy45.js";

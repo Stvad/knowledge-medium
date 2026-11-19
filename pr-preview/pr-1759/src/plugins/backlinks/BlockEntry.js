@@ -1,1 +1,0 @@
-export{Sy as LazyBlockEntry}from"../../../chunks/app-C4Fnfy45.js";
