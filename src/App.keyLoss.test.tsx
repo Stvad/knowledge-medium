@@ -177,16 +177,17 @@ describe('an open encrypted workspace whose key record disappears', () => {
     expect(vi.mocked(bootstrapWorkspace).mock.lastCall?.[0].requestedHash).toBe(buildLayout(WS, ['page-b']))
   })
 
-  it('still locks on a real loss after an unreadable store recovered by the time it was checked', async () => {
+  it('stays open over a key store that cannot be read, and still locks on a real loss', async () => {
     await openApp()
-    vi.mocked(bootstrapWorkspace).mockResolvedValueOnce({id: 'reopened'} as unknown as Block)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const failure = new Error('IndexedDB connection lost')
-    vi.spyOn(getWorkspaceKeyStore(), 'get').mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
-    await act(async () => { await requireWorkspaceKeys(getWorkspaceKeyStore(), USER, WS).catch(() => {}) })
-    // The re-resolve found the key and opened the workspace again: wait for that
-    // layout to commit, then flush the effect that watches it.
-    await vi.waitFor(() => expect(screen.getByTestId('workspace-open').dataset.blockId).toBe('reopened'))
-    await act(async () => {})
+    const get = vi.spyOn(getWorkspaceKeyStore(), 'get').mockRejectedValue(failure)
+    await act(async () => {
+      await expect(requireWorkspaceKeys(getWorkspaceKeyStore(), USER, WS)).rejects.toThrow(/could not be read/)
+    })
+    get.mockRestore()
+    expect(screen.getByTestId('workspace-open')).toBeTruthy()
+    expect(repo.isReadOnly).toBe(false)
 
     await loseKeyThenLink()
 

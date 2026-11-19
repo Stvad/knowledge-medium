@@ -46,17 +46,18 @@ describe('requireWorkspaceKeys', () => {
     expect(reported).toHaveBeenCalledWith(USER, WS)
   })
 
-  it('tries a failed read once more before reporting anything', async () => {
+  it('tries a failed read once more before throwing', async () => {
     const reported = watch()
     const store = new InMemoryWorkspaceKeyStore()
     await store.put(USER, WS, {wk: WK, contentKeyHmac: KID})
-    vi.spyOn(store, 'get').mockRejectedValueOnce(new Error('IndexedDB connection lost'))
+    const lost = new Error('IndexedDB connection lost')
+    vi.spyOn(store, 'get').mockRejectedValueOnce(lost)
 
     expect(await requireWorkspaceKeys(store, USER, WS)).toEqual({cek: WK, contentKeyHmac: KID})
     expect(reported).not.toHaveBeenCalled()
   })
 
-  it('treats an unreadable store as no key, keeping the read failure as the cause', async () => {
+  it('throws for a store it cannot read without reporting the key gone', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const reported = watch()
     const failure = new Error('IndexedDB connection lost')
@@ -70,8 +71,9 @@ describe('requireWorkspaceKeys', () => {
     const error = await requireWorkspaceKeys(store, USER, WS).catch((err: unknown) => err)
 
     expect(error).toBeInstanceOf(WorkspaceKeyUnavailableError)
+    expect((error as WorkspaceKeyUnavailableError).storeUnreadable).toBe(true)
     expect((error as Error).cause).toBe(failure)
-    expect(reported).toHaveBeenCalledWith(USER, WS)
+    expect(reported).not.toHaveBeenCalled()
   })
 })
 

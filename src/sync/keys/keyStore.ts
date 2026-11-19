@@ -100,7 +100,19 @@ export const readUsableKeyRecord = async (
   }
 }
 
+/** The record is stored but cannot be read right now. iOS seals a stored
+ *  `CryptoKey` under a secret the device withholds while it is locked, and a
+ *  read then succeeds with `null` in place of the record. */
+export class KeyRecordUnreadableError extends Error {
+  constructor(workspaceId: string) {
+    super(`the stored workspace key for ${workspaceId} cannot be read right now`)
+    this.name = 'KeyRecordUnreadableError'
+  }
+}
+
 export interface WorkspaceKeyStore {
+  /** The stored record, or null when there is none. Throws when the store
+   *  cannot say: an unreadable record is not an absent one. */
   get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null>
   put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void>
   delete(userId: string, workspaceId: string): Promise<void>
@@ -157,33 +169,53 @@ const STORE_NAME = 'workspace_keys'
  *  the cached connection + commit-durable `tx` come from {@link IdbKeyedStore}. */
 export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
   private readonly idb = new IdbKeyedStore(DB_NAME, STORE_NAME)
+  /** The last record each id read or wrote, served while the store cannot be
+   *  read. A page that outlives the screen lock (one playing audio) keeps
+   *  syncing, and without this every key read under the lock would fail. A
+   *  read that finds NO record clears it, so a real loss still shows. */
+  private readonly held = new Map<string, WorkspaceKeyRecord>()
 
   async get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null> {
+    const id = keyStoreRecordId(userId, workspaceId)
+    let stored: unknown
+    try {
+      stored = await this.idb.tx<unknown>('readonly', store => store.get(id))
+      // An absent record reads as `undefined`; `null` is never written.
+      if (stored === null) throw new KeyRecordUnreadableError(workspaceId)
+    } catch (err) {
+      const held = this.held.get(id)
+      if (held) return held
+      throw err
+    }
     // A value written before the K_id feature is a bare CryptoKey; normalize it
     // to the record shape (with no K_id) so legacy devices read back cleanly.
-    const result = await this.idb.tx<unknown>('readonly', store =>
-      store.get(keyStoreRecordId(userId, workspaceId)),
-    )
-    return normalizeKeyRecord(result)
+    const record = normalizeKeyRecord(stored)
+    if (record) this.held.set(id, record)
+    else this.held.delete(id)
+    return record
   }
 
   async put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void> {
-    await this.idb.tx('readwrite', store =>
-      store.put(record, keyStoreRecordId(userId, workspaceId)),
-    )
+    const id = keyStoreRecordId(userId, workspaceId)
+    await this.idb.tx('readwrite', store => store.put(record, id))
+    this.held.set(id, record)
   }
 
   async delete(userId: string, workspaceId: string): Promise<void> {
-    await this.idb.tx('readwrite', store =>
-      store.delete(keyStoreRecordId(userId, workspaceId)),
-    )
+    const id = keyStoreRecordId(userId, workspaceId)
+    await this.idb.tx('readwrite', store => store.delete(id))
+    this.held.delete(id)
   }
 
   async clearForUser(userId: string): Promise<void> {
     // Delete only this user's records (commit-durable — a caller may navigate/
     // reload right after). The store is shared across the profile's accounts, so
     // the prefix scoping is load-bearing: it must not touch another account.
-    await this.idb.deleteByPrefix(keyStoreUserPrefix(userId))
+    const prefix = keyStoreUserPrefix(userId)
+    await this.idb.deleteByPrefix(prefix)
+    for (const id of [...this.held.keys()]) {
+      if (id.startsWith(prefix)) this.held.delete(id)
+    }
   }
 }
 
