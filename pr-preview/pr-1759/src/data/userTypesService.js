@@ -1,1 +1,1 @@
-export{H8 as USER_TYPES_PROJECTOR_ID,U8 as UserTypesService,W8 as userTypesProjector}from"../../chunks/app-BSxrNPiz.js";
+export{U8 as USER_TYPES_PROJECTOR_ID,W8 as UserTypesService,G8 as userTypesProjector}from"../../chunks/app-C4Fnfy45.js";

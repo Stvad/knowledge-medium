@@ -1,1 +1,1 @@
-export{Uv as UpdateIndicator}from"../../../chunks/app-BSxrNPiz.js";
+export{Uv as UpdateIndicator}from"../../../chunks/app-C4Fnfy45.js";

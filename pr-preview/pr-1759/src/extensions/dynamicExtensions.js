@@ -1,1 +1,1 @@
-export{xF as dynamicExtensionsExtension}from"../../chunks/app-BSxrNPiz.js";
+export{SF as dynamicExtensionsExtension}from"../../chunks/app-C4Fnfy45.js";
