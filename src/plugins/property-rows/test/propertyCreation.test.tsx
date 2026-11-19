@@ -59,7 +59,10 @@ const outlineHidden = seedProperty({seedKey: 'test/property/creation-outline-hid
   name: 'creation:outline-hidden', preset: 'string', hideInOutline: true, changeScope: ChangeScope.BlockDefault})
 const list = seedProperty({seedKey: 'test/property/creation-list', revision: 1,
   name: 'creation:list', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
-const props = [plain, hidden, outlineHidden, list]
+const stage = seedProperty({seedKey: 'test/property/creation-stage', revision: 1,
+  name: 'creation:stage', preset: 'strict-enum', defaultValue: 'active', changeScope: ChangeScope.BlockDefault,
+  config: {options: [{label: 'In progress', value: 'active'}, {label: 'Finished', value: 'done'}]}})
+const props = [plain, hidden, outlineHidden, list, stage]
 const expectedType = seedType({seedKey: 'test/type/creation-expected', revision: 1,
   id: 'test:creation-expected', label: 'Expected fields', properties: props})
 const TestFooter = () => <div data-testid="children-footer-marker">footer marker</div>
@@ -212,6 +215,24 @@ describe('ordinary property creation in the outline', () => {
     expect(focused).not.toBe(source)
     expect((await repo.load(focused))?.parentId).toBe(OWNER)
     expect(await repo.query.children({id: source, propertyChildren: 'all'}).load()).toEqual([])
+  })
+
+  it('offers enum choices on entry to a new value and stores the selected option', async () => {
+    const fieldId = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    await choosePropertyField(repo.block(OWNER), stage, repo.block(fieldId), '::', () => true)
+    const valueId = await repo.mutate.createChild({parentId: fieldId})
+    mount('all')
+    await act(() => focusBlock(repo.block(PANEL), valueId, {edit: true, renderScopeId: 'creation-test'}))
+    await screen.findByRole('option', {name: /In progress/})
+    const view = EditorView.findFromDOM(document.querySelector<HTMLElement>('.cm-editor')!)!
+    act(() => view.dispatch({changes: {from: 0, insert: 'fin'}, selection: {anchor: 3}, userEvent: 'input.type'}))
+    await waitFor(() => {
+      expect(screen.getAllByRole('option')).toHaveLength(1)
+      expect(screen.getByRole('option', {name: /Finished/})).toBeTruthy()
+    })
+    await waitFor(() => expect(acceptCompletion(view)).toBe(true))
+    await waitFor(() => expect(repo.block(OWNER).peekProperty(stage)).toBe('done'))
+    expect((await repo.load(valueId))?.content).toBe('done')
   })
 
   it.each([false, true])('choosing an existing populated list creates and focuses an ordinary member (collapsed: %s)', async collapsed => {

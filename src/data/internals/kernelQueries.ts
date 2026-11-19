@@ -462,10 +462,10 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
  *  about where `[[Name]]` points. Lookups go through
  *  `idx_block_aliases_ws_alias`; the blocks JOIN reads the row by
  *  primary key. */
-const liveAliasLookupSql = (aliasExpression: string) => `
+const liveAliasLookupSql = (aliasExpression: string, workspaceExpression = '?') => `
   FROM block_aliases ba
   JOIN blocks ON blocks.id = ba.block_id
-  WHERE ba.workspace_id = ?
+  WHERE ba.workspace_id = ${workspaceExpression}
     AND ba.alias = ${aliasExpression}
     AND blocks.deleted = 0
   ORDER BY blocks.created_at, blocks.id
@@ -567,29 +567,31 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  Falls back to a workspace-scoped scan when `tokenCount === 0` (empty
  *  query) so the same query handle can also serve the "browse all
  *  aliases" path. */
-export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
+export const buildFuzzyAliasMatchesSql = (tokenCount: number, constrainTypes = false): string => {
   const filters = tokenCount > 0
-    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
+    ? Array(tokenCount).fill(`a.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
     : '1=1'
   return `
     SELECT
-      ba.alias AS alias,
+      a.alias AS alias,
       b.id AS blockId,
       b.content AS content,
       coalesce(b.user_updated_at, b.updated_at) AS updatedAt
-    FROM block_aliases ba
-    JOIN blocks b ON b.id = ba.block_id
-    WHERE ba.workspace_id = ?
+    FROM block_aliases a
+    JOIN blocks b ON b.id = a.block_id
+    WHERE a.workspace_id = ?
       AND b.deleted = 0
       AND (${filters})
+      ${constrainTypes ? `AND b.id = (SELECT blocks.id ${liveAliasLookupSql('a.alias', 'a.workspace_id')})
+        AND EXISTS (${blockTypeInSql})` : ''}
     ORDER BY
       CASE
-        WHEN ba.alias_lower = ? THEN 0
-        WHEN ba.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
+        WHEN a.alias_lower = ? THEN 0
+        WHEN a.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
         ELSE 2
       END,
       b.created_at,
-      ba.alias
+      a.alias
     LIMIT ?
   `
 }
@@ -1036,6 +1038,7 @@ const typedBlocksArgsSchema = z.object({
   match: z.array(blockPredicateSchema).optional(),
   exclude: z.array(blockPredicateSchema).optional(),
   order: z.enum(['created-asc', 'created-desc']).optional(),
+  limit: z.number().int().nonnegative().optional(),
 })
 
 const ANCESTOR_DEP_KIND = 'a'
@@ -1378,7 +1381,8 @@ export const resolveTypedBlocks = async (
     referencedBy === undefined &&
     matchPredicates.length === 0 &&
     excludePredicates.length === 0 &&
-    normalized.order !== 'created-desc'
+    normalized.order !== 'created-desc' &&
+    normalized.limit === undefined
   ) {
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, types[0]],
@@ -1840,13 +1844,14 @@ export const aliasMatchesQuery = defineQuery<
  *  Empty `prefixes` returns every (alias, block) pair in the workspace
  *  up to `limit`, suitable for the "browse all" path. */
 export const aliasMatchesFuzzyQuery = defineQuery<
-  {workspaceId: string; prefixes: string[]; query?: string; limit?: number},
+  {workspaceId: string; prefixes: string[]; query?: string; limit?: number; targetTypes?: string[]},
   AliasMatchWithRecency[]
 >({
   name: 'core.aliasMatchesFuzzy',
   argsSchema: z.object({
     workspaceId: z.string(),
     prefixes: z.array(z.string()),
+    targetTypes: z.array(z.string()).optional(),
     query: z.string().optional(),
     limit: z.number().optional(),
   }),
@@ -1856,14 +1861,15 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     content: z.string(),
     updatedAt: z.number(),
   })),
-  resolve: async ({workspaceId, prefixes, query = '', limit = 100}, ctx) => {
+  resolve: async ({workspaceId, prefixes, query = '', limit = 100, targetTypes}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({
       kind: 'plugin',
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
-    const sql = buildFuzzyAliasMatchesSql(prefixes.length)
+    if (targetTypes?.length) ctx.depend({kind: 'workspace', workspaceId})
+    const sql = buildFuzzyAliasMatchesSql(prefixes.length, !!targetTypes?.length)
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.
     // Prefixes are literal token substrings (first-3 of each query token,
@@ -1874,7 +1880,7 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     const queryLower = query.toLowerCase()
     const escapedPrefixes = prefixes.map(escapeLikePattern)
     const params: (string | number)[] = [
-      workspaceId, ...escapedPrefixes, queryLower, escapeLikePattern(queryLower), limit,
+      workspaceId, ...escapedPrefixes, ...(targetTypes?.length ? [JSON.stringify(targetTypes)] : []), queryLower, escapeLikePattern(queryLower), limit,
     ]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row

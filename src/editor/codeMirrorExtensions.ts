@@ -1,5 +1,6 @@
 import type { Extension as CodeMirrorExtension } from '@codemirror/state'
 import type { Block } from '@/data/block.js'
+import type { AnyPropertySchema } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
 import { defineFacet, isFunction } from '@/facets/facet.js'
 
@@ -11,6 +12,8 @@ export interface CodeMirrorExtensionContext {
   block?: Block
   /** Storage mode supplied by the renderer. */
   childBacked?: boolean
+  /** Present on direct value children rendered in a property field. */
+  propertyValueSchema?: AnyPropertySchema
   /** UI state and render location used for editor focus handoff. */
   uiStateBlock?: Block
   renderScopeId?: string

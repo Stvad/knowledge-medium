@@ -109,6 +109,8 @@ export interface TypedBlockQuery {
   /** Result ordering. Default `created-asc`. Backlinks panels use
    *  `created-desc` to put newest sources first. */
   readonly order?: 'created-asc' | 'created-desc'
+  /** Maximum number of rows returned. */
+  readonly limit?: number
 }
 
 /** Historically the "post-default-resolution" shape used internally;

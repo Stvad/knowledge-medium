@@ -25,7 +25,7 @@ export interface BacklinkAutocompleteOptions {
    * @param filter The current search term to filter aliases
    * @returns Promise resolving to array of matching candidates
    */
-  getAliases: (filter: string) => Promise<Array<string | BacklinkCompletionCandidate>>
+  getAliases: (filter: string, context: CompletionContext, startPos: number) => Promise<Array<string | BacklinkCompletionCandidate>>
 }
 
 /**
@@ -73,7 +73,7 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
     const startPos = line.from + openBracketMatch.index! + 2 // Position after [[
 
     // Get filtered candidates
-    const candidates = await options.getAliases(searchTerm)
+    const candidates = await options.getAliases(searchTerm, context, startPos)
 
     if (candidates.length === 0) {
       return null
@@ -81,7 +81,7 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
 
     return {
       from: startPos,
-      to: pos,
+      to: hasClosingBrackets ? pos + closeBracketIndex : line.to,
       // Source-side filtering is final — `getAliases` already runs a
       // workspace-scoped LIKE filter, and we surface entries the user
       // didn't *type* (e.g. typing "fri" suggests "April 30th, 2026"

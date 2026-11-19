@@ -5,6 +5,8 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
+import { referenceTargetTypes } from '@/editor/referenceTargetTypes.js'
+import type { CompletionContext } from '@codemirror/autocomplete'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'
@@ -13,6 +15,9 @@ import {
   completionTypeHint,
   searchAliasLabels,
   searchBlocksAcrossSources,
+  searchTypedReferenceCandidates,
+  searchTypedAliasCandidates,
+  readTypeIds,
 } from '@/utils/linkTargetAutocomplete.js'
 import { loadRecentBlockIds } from '@/plugins/quick-find/recents.js'
 import { canRenderAsWikilink } from './referenceParser.ts'
@@ -141,13 +146,45 @@ export const aliasCompletions = (
       detail: completionTypeHint(match.typeIds, typeRegistry),
     }))
 
-const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+// Constraints apply only when the reference occupies the whole value row.
+const targetTypesForReference = (context: CompletionContext, startPos: number, close: string): readonly string[] => {
+  const text = context.state.doc.toString()
+  const before = text.slice(0, startPos - 2)
+  const selection = context.state.selection.main
+  const end = context.pos === selection.from ? selection.to : context.pos
+  const after = text.slice(end)
+  const closingIndex = after.indexOf(close)
+  const remainder = closingIndex < 0 ? '' : after.slice(closingIndex + close.length)
+  return before.trim() === '' && remainder.trim() === ''
+    ? context.state.facet(referenceTargetTypes)
+    : []
+}
+
+export const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
   backlinkCompletionSource({
-    getAliases: async (filter: string) => {
+    getAliases: async (filter: string, context, startPos) => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) {
         console.warn('No active workspace for alias search')
         return []
+      }
+
+      const targetTypes = targetTypesForReference(context, startPos, ']]')
+      if (targetTypes.length > 0) {
+        const [aliases, dates] = await Promise.all([
+          searchTypedAliasCandidates(repo, {workspaceId, query: filter, targetTypes, limit: 50}),
+          Promise.all(relativeDateCandidates(filter).map(async candidate => {
+            const label = formatRoamDate(candidate.date)
+            const block = await repo.query.aliasLookup({workspaceId, alias: label}).load()
+            return block && readTypeIds(block).some(type => targetTypes.includes(type))
+              ? {label, detail: candidate.phrase}
+              : null
+          })),
+        ])
+        const dateCandidates = dates.filter((date): date is {label: string; detail: string} => date !== null)
+        const dateLabels = new Set(dateCandidates.map(date => date.label))
+        return [...dateCandidates, ...aliasCompletions(aliases, repo.types).filter(alias => !dateLabels.has(alias.label))]
+
       }
 
       // MRU loads through the memoized ui-state helper, so this is
@@ -186,13 +223,18 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
     },
   })
 
-const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+export const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
   blockrefCompletionSource({
-    searchBlocks: async (filter: string) => {
+    searchBlocks: async (filter: string, context, startPos) => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) return []
 
       const query = filter.trim()
+      const targetTypes = targetTypesForReference(context, startPos, '))')
+      if (targetTypes.length > 0) {
+        const candidates = await searchTypedReferenceCandidates(repo, {workspaceId, query, targetTypes, limit: 12})
+        return candidates.map(candidate => ({id: candidate.id, content: candidate.label}))
+      }
       // Shared merge point (searchSourcesFacet), not a direct
       // `searchByContent` call, so a contributed search source (e.g.
       // semantic search) is reachable from block-ref completion too.

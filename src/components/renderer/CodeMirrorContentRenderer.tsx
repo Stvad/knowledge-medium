@@ -1,6 +1,8 @@
 import { BlockRendererProps } from '@/types.js'
 import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
-import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
+import { useHandle } from '@/hooks/block'
+import { isFieldValueChild } from '@/data/propertyChildren'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
@@ -31,6 +33,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
   const propertyDisplay = useContext(PropertyDisplayScopeContext)
+  const field = useContext(PropertyFieldRowContext)
+  const propertyValueSchema = useHandle(block, {selector: row =>
+    field && row && row.parentId === field.id && isFieldValueChild(row) ? field.schema : undefined})
   // The editor draws the block's own text too, so it carries the same title
   // typography as the read renderer — otherwise a page title would shrink to
   // body size the moment you clicked into it. CodeMirror's theme sets
@@ -54,10 +59,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const extensions = useMemo(() => {
     // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
     const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
-    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, childBacked: propertyDisplay.childBacked,
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema, childBacked: propertyDisplay.childBacked,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, propertyDisplay.childBacked])
+  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before

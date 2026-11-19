@@ -22,6 +22,8 @@ import {
   searchLinkTargets,
   searchLinkTargetsProgressively,
   searchLinkTargetValueCandidates,
+  searchTypedReferenceCandidates,
+  searchTypedAliasCandidates,
 } from '../linkTargetAutocomplete.ts'
 
 const WS = 'ws-1'
@@ -1026,5 +1028,59 @@ describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
     for (const report of reports) {
       expect(report.outcomes.map(o => o.sourceId)).toEqual(['core.content', 'test.slow'])
     }
+  })
+})
+
+
+describe('searchTypedReferenceCandidates', () => {
+  it('filters by type before the limit and matches aliases as well as content', async () => {
+    for (let i = 0; i < 15; i++) {
+      await create({id: `other-${i}`, content: 'Example', types: ['other']})
+    }
+    await create({id: 'person', content: 'A person', aliases: ['Example alias'], types: ['person']})
+    const result = await searchTypedReferenceCandidates(env.repo, {
+      workspaceId: WS, query: 'Example', targetTypes: ['person'], limit: 1,
+    })
+    expect(result).toMatchObject([{id: 'person', label: 'Example alias', typeIds: ['person']}])
+  })
+
+  it('matches any allowed type and limits empty results', async () => {
+    await create({id: 'person', content: 'Alice', types: ['person']})
+    await create({id: 'place', content: 'Alpine', types: ['place']})
+    const result = await searchTypedReferenceCandidates(env.repo, {
+      workspaceId: WS, query: '', targetTypes: ['person', 'place'], limit: 2,
+    })
+    expect(new Set(result.map(candidate => candidate.id))).toEqual(new Set(['person', 'place']))
+    const one = await env.repo.query.typedBlocks({workspaceId: WS, types: ['person', 'place'], limit: 1}).load()
+    expect(one).toHaveLength(1)
+  })
+
+  it('offers typed blocks for an empty query', async () => {
+    await create({id: 'person', content: 'Alice', types: ['person']})
+    await create({id: 'other', content: 'Bob', types: ['other']})
+    const result = await searchTypedReferenceCandidates(env.repo, {
+      workspaceId: WS, query: '', targetTypes: ['person'], limit: 10,
+    })
+    expect(result.map(candidate => candidate.id)).toEqual(['person'])
+  })
+})
+
+
+describe('searchTypedAliasCandidates', () => {
+  it('uses the type of the alias target even when another claimant has a matching type', async () => {
+    await create({id: 'old', aliases: ['Shared'], types: ['place']})
+    await env.h.db.execute(`UPDATE blocks SET created_at = 1 WHERE id = 'old'`)
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('new', ?, NULL, 'key-new', '', ?, '[]', 9, 9, 9, 'u', 'u', 0)`,
+      [WS, JSON.stringify({alias: ['Shared'], types: ['person']})],
+    )
+    expect((await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Shared'}).load())?.id).toBe('old')
+    const search = (targetTypes: string[]) => searchTypedAliasCandidates(env.repo, {
+      workspaceId: WS, query: 'Shared', targetTypes, limit: 10,
+    })
+    expect(await search(['person'])).toEqual([])
+    expect(await search(['place'])).toMatchObject([{id: 'old', label: 'Shared'}])
   })
 })

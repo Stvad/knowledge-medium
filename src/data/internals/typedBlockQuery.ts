@@ -425,6 +425,7 @@ export const normalizeTypedBlockQuery = (
   match: dedupePredicates(query.match),
   exclude: dedupePredicates(query.exclude),
   order: query.order,
+  limit: query.limit,
 })
 
 export const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
@@ -694,6 +695,7 @@ export const compileTypedBlockQuery = (
     JOIN blocks b ON b.id = c.id
     ${filterClauses.length > 0 ? `WHERE ${filterClauses.join('\n      AND ')}` : ''}
     ${orderClause}
+    ${!isCount && normalized.limit !== undefined ? `LIMIT ${Math.max(0, Math.floor(normalized.limit))}` : ''}
   `
 
   return {sql, params}

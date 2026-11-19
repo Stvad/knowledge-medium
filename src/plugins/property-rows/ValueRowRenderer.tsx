@@ -1,5 +1,8 @@
 import {memberCodecOf} from '@/data/api'
-import { useContext } from 'react'
+import { useContext, useEffect, useState } from 'react'
+import type { AnyPropertySchema } from '@/data/api'
+import { watchReferenceWarning } from './referenceWarning'
+import { propertyValueTargetTypes } from './valueSchema'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
@@ -15,14 +18,19 @@ import { useHandle } from '@/hooks/block'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
 import { drawsPropertyRows, useFieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
-const InlineValue = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+const ReferenceWarning = ({block, schema, content, targetId}: {block: Block; schema: AnyPropertySchema; content: string; targetId: string | null}) => {
+  const [result, setResult] = useState<{content: string; targetId: string | null; warning: string | null}>()
+  useEffect(() => watchReferenceWarning(block, schema, content, warning => setResult({content, targetId, warning}), targetId), [block, schema, content, targetId])
+  const warning = result?.content === content && result.targetId === targetId ? result.warning : null
+  return warning ? <span data-reference-type-warning="true" aria-label={warning} title={warning}>⚠</span> : null
+}
+
+const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer; schema: AnyPropertySchema | undefined}) => {
   const runtime = useAppRuntime()
   const definitions = usePropertyDefinitions(block.repo)
   const data = useHandle(block, {selector: row => row ? {
     parentId: row.parentId, content: row.content, isFieldForm: row.isFieldForm, referenceTargetId: row.referenceTargetId,
   } : undefined})
-  const definition = useFieldRowDefinition(block.repo.block(data?.parentId ?? ''))
-  const schema = definition?.schema
   const override = schema && resolveEditorOverride(schema.name, definitions,
     runtime.read(propertyEditorOverridesFacet), schema)
   const Editor = override?.InlineEditor ?? (schema && readValuePresets(runtime).get(schema.codec.type)?.InlineEditor)
@@ -40,10 +48,14 @@ const InlineValue = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
       <Inner block={block}/>
     </div>
   }
-  if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return <Inner block={block}/>
+  const warning = propertyValueTargetTypes(schema).length > 0
+    ? <ReferenceWarning block={block} schema={schema} content={data.content} targetId={data.referenceTargetId ?? null}/> : null
+  if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
+    ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
   return (
     <div data-property-value-row="true" data-property-name={schema.name}
       onFocus={focusHandlers.onFocus} onBlur={focusHandlers.onBlur}>
+      {warning}
       <Editor block={block} schema={schema} value={value} onChange={next => {
         const [content] = encodedPropertyValueToChildContents(schema, schema.codec.encode(next))
         void block.setContent(content)
@@ -55,7 +67,8 @@ const InlineValue = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
 const PropertyReadContent = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const definition = useFieldRowDefinition(block)
   const isListed = useIsChildOf(block, useContext(PropertyRowListingContext))
-  const isValue = useIsChildOf(block, useContext(PropertyFieldRowContext))
+  const field = useContext(PropertyFieldRowContext)
+  const isValue = useIsChildOf(block, field?.id ?? null)
   if (isListed && definition && Inner === MarkdownContentRenderer) {
     return (
       <div data-property-definition-link="true" className="min-w-0 text-sm text-muted-foreground">
@@ -63,7 +76,7 @@ const PropertyReadContent = ({block, Inner}: {block: Block; Inner: BlockRenderer
       </div>
     )
   }
-  return isValue ? <InlineValue block={block} Inner={Inner}/> : <Inner block={block}/>
+  return isValue ? <InlineValue block={block} Inner={Inner} schema={field?.schema}/> : <Inner block={block}/>
 }
 
 const decoratePropertyContent = cachedContentDecorator(PropertyReadContent, 'PropertyReadContent')

@@ -1,22 +1,22 @@
 /** A property field arranges ordinary block content and children in columns. */
 import {useFocusWithin} from '@/hooks/focusedChild'
 import {useBlockContext} from '@/context/block'
-import type { BlockLayout, BlockLayoutContribution } from '@/extensions/blockInteraction'
+import type { BlockLayout, BlockLayoutContribution, BlockLayoutSlots } from '@/extensions/blockInteraction'
 import { BlockFrame, DefaultBlockLayout } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { useHandle, usePropertyDisplayMode, usePropertyValue } from '@/hooks/block'
 import { useContext } from 'react'
 import { isCollapsedProp } from '@/data/properties'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { drawsPropertyRows, useFieldRowDefinition, useIsChildOf } from './fieldRow'
+import { drawsPropertyRows, useFieldRowDefinition, useIsChildOf, type FieldRowDefinition } from './fieldRow'
 import './FieldRowRenderer.css'
 
-const PropertyFieldLayout: BlockLayout = ({
+const PropertyFieldLayout = ({
   block,
   Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
-  Shell,
-}) => {
+  Shell, definition,
+}: BlockLayoutSlots & {definition: FieldRowDefinition}) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
   const focused = useFocusWithin(block, useBlockContext().renderScopeId) === true
   const mode = usePropertyDisplayMode(block)
@@ -46,7 +46,7 @@ const PropertyFieldLayout: BlockLayout = ({
             <Content/>
           </div>
           <CollapsibleContent forceMount={focused || undefined} hidden={isCollapsed && !focused} className="min-w-0" data-property-value-cell="true">
-            <PropertyFieldRowContext value={block.id}>
+            <PropertyFieldRowContext value={{id: block.id, schema: definition.schema}}>
               <Children/>
             </PropertyFieldRowContext>
           </CollapsibleContent>
@@ -62,9 +62,9 @@ const PropertyFieldLayout: BlockLayout = ({
 const FieldRowLayout: BlockLayout = props => {
   const definition = useFieldRowDefinition(props.block)
   const isListed = useIsChildOf(props.block, useContext(PropertyRowListingContext))
-  const Layout = isListed && definition
-    ? PropertyFieldLayout : DefaultBlockLayout
-  return <Layout {...props}/>
+  return isListed && definition
+    ? <PropertyFieldLayout {...props} definition={definition}/>
+    : <DefaultBlockLayout {...props}/>
 }
 
 export const fieldRowLayoutContribution: BlockLayoutContribution = context =>
