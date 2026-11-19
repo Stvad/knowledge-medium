@@ -3,7 +3,9 @@ import { EditorSelection, EditorState, type Extension, type StateCommand, type T
 import { EditorView } from '@codemirror/view'
 import { autocompletion, completionKeymap, completionStatus, startCompletion } from '@codemirror/autocomplete'
 import { describe, expect, it, vi } from 'vitest'
+import { basicSetup } from '@uiw/react-codemirror'
 import {
+  BLOCK_EDITOR_BASIC_SETUP,
   acceptCompletionOnEnterCapture,
   clampSelectionToLength,
   createMinimalMarkdownConfig,
@@ -155,10 +157,16 @@ describe('minimal markdown CodeMirror config', () => {
     )
   })
 
+  // The block editor's own extension stack: @uiw's basicSetup (which brings
+  // CodeMirror's `defaultHighlightStyle` as a FALLBACK) under the config, the
+  // way `useCodeMirror` assembles them for `CodeMirrorContentRenderer`.
   const mountMarkdown = (doc: string) =>
     new EditorView({
       parent: document.body,
-      state: EditorState.create({doc, extensions: createMinimalMarkdownConfig()}),
+      state: EditorState.create({
+        doc,
+        extensions: [basicSetup(BLOCK_EDITOR_BASIC_SETUP), createMinimalMarkdownConfig()],
+      }),
     })
 
   const textsWithClass = (view: EditorView, cls: string) =>
@@ -169,8 +177,9 @@ describe('minimal markdown CodeMirror config', () => {
     expect(textsWithClass(view, 'km-md-url')).toEqual(['https://example.com/x'])
     expect(textsWithClass(view, 'km-md-strong').join('')).toBe('**bold**')
     expect(textsWithClass(view, 'km-md-mark')).toEqual(['**', '**'])
-    // basicSetup's fallback `defaultHighlightStyle` paints through generated
-    // `ͼ…` classes with light-only colors; a main highlighter displaces it.
+    // Without the config's main highlighter, basicSetup's fallback
+    // `defaultHighlightStyle` paints these same spans through generated `ͼ…`
+    // classes with light-only colors.
     const generated = [...view.contentDOM.querySelectorAll('.cm-line *')]
       .filter(el => [...el.classList].some(c => c.startsWith('ͼ')))
     expect(generated).toEqual([])
