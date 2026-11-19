@@ -1,0 +1,1 @@
+export{cI as BlockLoadingPlaceholder}from"../../chunks/app-BSxrNPiz.js";

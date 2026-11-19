@@ -1,0 +1,1 @@
+export{ck as useAncestorCrumbs}from"../../chunks/app-BSxrNPiz.js";

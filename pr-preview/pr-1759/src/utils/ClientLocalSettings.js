@@ -1,0 +1,1 @@
+export{_F as ClientLocalSettings,vF as clientLocalSettings}from"../../chunks/app-BSxrNPiz.js";

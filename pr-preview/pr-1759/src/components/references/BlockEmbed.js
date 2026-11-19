@@ -1,0 +1,1 @@
+export{hN as BlockEmbed}from"../../../chunks/app-BSxrNPiz.js";

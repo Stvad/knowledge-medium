@@ -1,0 +1,1 @@
+export{yP as editorAutocompleteExtension}from"../../chunks/app-BSxrNPiz.js";

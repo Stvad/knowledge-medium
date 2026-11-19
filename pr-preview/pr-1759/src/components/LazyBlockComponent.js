@@ -1,0 +1,1 @@
+export{nI as LazyBlockComponent}from"../../chunks/app-BSxrNPiz.js";

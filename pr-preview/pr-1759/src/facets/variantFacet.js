@@ -1,0 +1,1 @@
+export{tV as defineVariant,nV as defineVariantFacet}from"../../chunks/app-BSxrNPiz.js";

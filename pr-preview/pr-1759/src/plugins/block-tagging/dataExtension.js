@@ -1,0 +1,1 @@
+export{Hu as blockTaggingDataExtension}from"../../../chunks/app-BSxrNPiz.js";

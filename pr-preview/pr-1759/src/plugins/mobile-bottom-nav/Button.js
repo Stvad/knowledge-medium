@@ -1,0 +1,1 @@
+export{UT as MobileBottomNavButton}from"../../../chunks/app-BSxrNPiz.js";

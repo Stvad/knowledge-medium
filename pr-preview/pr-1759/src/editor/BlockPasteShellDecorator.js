@@ -1,0 +1,1 @@
+export{lP as BlockPasteShellDecorator,uP as blockPasteShellDecorator}from"../../chunks/app-BSxrNPiz.js";

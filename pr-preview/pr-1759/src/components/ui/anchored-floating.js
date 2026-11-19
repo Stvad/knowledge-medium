@@ -1,0 +1,1 @@
+export{GG as floatingAnchorFromRect,KG as useAnchoredFloating}from"../../../chunks/app-BSxrNPiz.js";

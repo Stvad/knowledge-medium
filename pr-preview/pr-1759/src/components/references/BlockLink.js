@@ -1,0 +1,1 @@
+export{MO as BlockLink}from"../../../chunks/app-BSxrNPiz.js";

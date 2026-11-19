@@ -1,0 +1,1 @@
+export{QG as adoptOrCreatePropertySchema}from"../../chunks/app-BSxrNPiz.js";

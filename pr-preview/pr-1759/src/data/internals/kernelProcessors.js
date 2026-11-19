@@ -1,0 +1,1 @@
+export{c5 as KERNEL_PROCESSORS}from"../../../chunks/app-BSxrNPiz.js";

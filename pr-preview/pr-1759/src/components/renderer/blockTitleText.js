@@ -1,0 +1,1 @@
+export{vB as BLOCK_TITLE_TEXT_CLASS,yB as useBlockTitleTextClass}from"../../../chunks/app-BSxrNPiz.js";

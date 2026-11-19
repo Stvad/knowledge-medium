@@ -1,0 +1,1 @@
+export{t8 as applySyncInvalidation}from"../../../../chunks/app-BSxrNPiz.js";

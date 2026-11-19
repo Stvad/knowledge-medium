@@ -1,0 +1,1 @@
+export{Uv as UpdateIndicator}from"../../../chunks/app-BSxrNPiz.js";

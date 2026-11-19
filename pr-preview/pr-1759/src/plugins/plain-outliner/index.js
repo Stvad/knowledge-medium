@@ -1,0 +1,1 @@
+export{tE as plainOutlinerPlugin}from"../../../chunks/app-BSxrNPiz.js";

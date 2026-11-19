@@ -1,0 +1,1 @@
+export{xC as videoPlayerMarkdownExtension}from"../../../chunks/app-BSxrNPiz.js";

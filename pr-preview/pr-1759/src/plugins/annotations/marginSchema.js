@@ -1,0 +1,1 @@
+export{qZ as annotationMarginOpenProp,JZ as annotationMarginShareProp}from"../../../chunks/app-BSxrNPiz.js";

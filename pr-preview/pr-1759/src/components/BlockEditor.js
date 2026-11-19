@@ -1,0 +1,1 @@
+export{XR as BlockEditor}from"../../chunks/app-BSxrNPiz.js";

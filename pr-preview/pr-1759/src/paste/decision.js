@@ -1,0 +1,1 @@
+export{BR as defaultPasteDecision,VR as pasteDecisionVerb}from"../../chunks/app-BSxrNPiz.js";

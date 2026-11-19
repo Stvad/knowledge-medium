@@ -1,0 +1,1 @@
+export{rM as COMMAND_PALETTE_ACTION_ID,iM as COMMAND_PALETTE_CONTEXT,aM as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,oM as commandPaletteActionContext}from"../../../chunks/app-BSxrNPiz.js";

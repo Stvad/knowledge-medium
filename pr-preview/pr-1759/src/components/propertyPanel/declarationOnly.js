@@ -1,0 +1,1 @@
+export{GV as declarationOnlyDefinitionForName,KV as declarationOnlyStatusText}from"../../../chunks/app-BSxrNPiz.js";

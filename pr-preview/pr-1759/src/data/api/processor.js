@@ -1,0 +1,1 @@
+export{fdt as definePostCommitProcessor}from"../../../chunks/app-BSxrNPiz.js";

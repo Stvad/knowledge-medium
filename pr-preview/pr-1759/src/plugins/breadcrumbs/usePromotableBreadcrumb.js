@@ -1,0 +1,1 @@
+export{YT as usePromotableBreadcrumb}from"../../../chunks/app-BSxrNPiz.js";

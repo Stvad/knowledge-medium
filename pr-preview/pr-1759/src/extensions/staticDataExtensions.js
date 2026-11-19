@@ -1,0 +1,1 @@
+export{nq as staticDataExtensions}from"../../chunks/app-BSxrNPiz.js";

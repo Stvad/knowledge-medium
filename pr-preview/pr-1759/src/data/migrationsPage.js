@@ -1,0 +1,1 @@
+export{hat as MIGRATIONS_PAGE_ALIAS,gat as getOrCreateMigrationsPage,_at as migrationsPageBlockId,vat as migrationsPageSpec}from"../../chunks/app-BSxrNPiz.js";

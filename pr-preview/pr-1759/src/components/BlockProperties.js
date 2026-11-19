@@ -1,0 +1,1 @@
+export{gV as BlockProperties}from"../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{qP as appUpdate,JP as useAppUpdateAvailable}from"../chunks/app-BSxrNPiz.js";

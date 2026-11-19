@@ -1,0 +1,1 @@
+export{gX as annotationsDataExtension}from"../../../chunks/app-BSxrNPiz.js";

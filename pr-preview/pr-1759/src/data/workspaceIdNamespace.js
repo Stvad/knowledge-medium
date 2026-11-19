@@ -1,0 +1,1 @@
+export{Aot as DerivedIdNamespaceUnavailableError,jot as derivedIdNamespaceInTx,Mot as resolveDerivedIdNamespace}from"../../chunks/app-BSxrNPiz.js";

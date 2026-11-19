@@ -1,0 +1,1 @@
+export{Oot as aliasSeatNamespacesInTx,kot as resolveAliasSeatNamespaces}from"../../chunks/app-BSxrNPiz.js";

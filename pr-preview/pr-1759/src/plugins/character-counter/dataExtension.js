@@ -1,0 +1,1 @@
+export{RQ as characterCounterDataExtension}from"../../../chunks/app-BSxrNPiz.js";

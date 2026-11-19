@@ -1,0 +1,1 @@
+export{VJ as geoDataExtension}from"../../../chunks/app-BSxrNPiz.js";

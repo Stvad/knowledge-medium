@@ -1,0 +1,1 @@
+export{oF as dispatchPointerAction,sF as setPointerActionDispatcher}from"../../chunks/app-BSxrNPiz.js";

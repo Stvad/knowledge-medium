@@ -1,0 +1,1 @@
+export{IO as openRecentsPage}from"../../../chunks/app-BSxrNPiz.js";

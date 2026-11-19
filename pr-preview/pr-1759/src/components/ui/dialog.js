@@ -1,0 +1,1 @@
+"use client";export{fR as Dialog,pR as DialogClose,mR as DialogContent,hR as DialogDescription,gR as DialogFooter,_R as DialogHeader,vR as DialogOverlay,yR as DialogPortal,bR as DialogTitle,xR as DialogTrigger}from"../../../chunks/app-BSxrNPiz.js";

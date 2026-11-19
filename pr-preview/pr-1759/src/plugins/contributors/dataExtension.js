@@ -1,0 +1,1 @@
+export{vQ as contributorsDataExtension}from"../../../chunks/app-BSxrNPiz.js";

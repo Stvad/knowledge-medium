@@ -1,0 +1,1 @@
+export{fJ as htmlDocumentDataExtension}from"../../../chunks/app-BSxrNPiz.js";

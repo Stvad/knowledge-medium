@@ -1,0 +1,1 @@
+export{Tot as getOrCreatePropertiesPage,Eot as propertiesPageBlockId,Dot as propertiesPageSpec}from"../../chunks/app-BSxrNPiz.js";

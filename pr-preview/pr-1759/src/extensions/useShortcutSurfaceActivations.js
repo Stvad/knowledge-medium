@@ -1,0 +1,1 @@
+export{rz as useShortcutSurfaceActivations}from"../../chunks/app-BSxrNPiz.js";

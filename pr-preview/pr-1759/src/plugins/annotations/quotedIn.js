@@ -1,0 +1,1 @@
+export{hf as quotedInFooterContribution}from"../../../chunks/app-BSxrNPiz.js";

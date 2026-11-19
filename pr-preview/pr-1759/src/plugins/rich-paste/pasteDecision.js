@@ -1,0 +1,1 @@
+export{yx as richPasteDecisionContribution}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{iF as gestureBindingDescriptor,aF as matchesGestureEvent}from"../../chunks/app-BSxrNPiz.js";

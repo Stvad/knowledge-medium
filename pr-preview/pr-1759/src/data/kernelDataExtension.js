@@ -1,0 +1,1 @@
+export{p8 as kernelDataExtension}from"../../chunks/app-BSxrNPiz.js";

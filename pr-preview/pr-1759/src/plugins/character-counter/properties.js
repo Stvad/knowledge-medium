@@ -1,0 +1,1 @@
+export{WQ as RAW_CHARACTER_COUNT_PROFILE_ID,GQ as WORDS_COUNT_PROFILE_ID,KQ as charLimitProp,qQ as charProfileProp,JQ as charScopeProp}from"../../../chunks/app-BSxrNPiz.js";

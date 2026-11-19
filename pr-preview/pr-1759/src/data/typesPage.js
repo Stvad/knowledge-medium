@@ -1,0 +1,1 @@
+export{Sot as getOrCreateTypesPage,Cot as typesPageBlockId,wot as typesPageSpec}from"../../chunks/app-BSxrNPiz.js";

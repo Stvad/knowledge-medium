@@ -1,0 +1,1 @@
+export{qW as isIOS,JW as isMacPlatform}from"../../chunks/app-BSxrNPiz.js";

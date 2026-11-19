@@ -1,0 +1,1 @@
+export{rb as wikilinkMarkdownExtension}from"../../../../../chunks/app-BSxrNPiz.js";

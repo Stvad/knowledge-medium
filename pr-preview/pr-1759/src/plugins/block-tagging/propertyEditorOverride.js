@@ -1,0 +1,1 @@
+export{zu as blockTagsConfigUi}from"../../../chunks/app-BSxrNPiz.js";

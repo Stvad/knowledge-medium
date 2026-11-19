@@ -1,0 +1,1 @@
+export{iR as useIsMobile,aR as usePointerCoarse}from"../../chunks/app-BSxrNPiz.js";

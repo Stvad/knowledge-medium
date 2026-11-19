@@ -1,0 +1,1 @@
+export{$it as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,eat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,tat as __resetLayoutSessionIdForTesting,nat as getLayoutSessionId,rat as isInstalledAppDisplayMode,iat as readOrCreateLayoutSessionId}from"../../chunks/app-BSxrNPiz.js";

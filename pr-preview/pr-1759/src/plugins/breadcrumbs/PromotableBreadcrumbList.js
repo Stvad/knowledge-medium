@@ -1,0 +1,1 @@
+export{XT as PromotableBreadcrumbList}from"../../../chunks/app-BSxrNPiz.js";

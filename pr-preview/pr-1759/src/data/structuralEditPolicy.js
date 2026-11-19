@@ -1,0 +1,1 @@
+export{$N as resolveStructuralEditPolicy,eP as structuralEditPolicyForBlock}from"../../chunks/app-BSxrNPiz.js";

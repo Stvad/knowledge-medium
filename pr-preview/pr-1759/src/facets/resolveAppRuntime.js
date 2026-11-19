@@ -1,0 +1,1 @@
+export{yF as resolveAppRuntime,bF as resolveAppRuntimeSync}from"../../chunks/app-BSxrNPiz.js";

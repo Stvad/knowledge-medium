@@ -1,0 +1,1 @@
+export{wC as default}from"../../../chunks/app-BSxrNPiz.js";

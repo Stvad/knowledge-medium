@@ -1,0 +1,1 @@
+export{Xz as ExtensionRenderBoundary}from"../../chunks/app-BSxrNPiz.js";

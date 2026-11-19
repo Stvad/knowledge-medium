@@ -1,0 +1,1 @@
+export{GP as checkForAppUpdate,KP as registerServiceWorker}from"../chunks/app-BSxrNPiz.js";

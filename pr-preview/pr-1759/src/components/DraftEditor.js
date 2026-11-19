@@ -1,0 +1,1 @@
+export{ip as DraftEditor}from"../../chunks/app-BSxrNPiz.js";

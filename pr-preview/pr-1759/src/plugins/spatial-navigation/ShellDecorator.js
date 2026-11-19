@@ -1,0 +1,1 @@
+export{Aw as SpatialNavigationShellDecorator}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{v1 as aliasDataExtension}from"../../../chunks/app-BSxrNPiz.js";

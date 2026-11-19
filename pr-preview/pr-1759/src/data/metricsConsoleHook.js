@@ -1,0 +1,1 @@
+export{HN as ensureMetricsConsoleHook}from"../../chunks/app-BSxrNPiz.js";

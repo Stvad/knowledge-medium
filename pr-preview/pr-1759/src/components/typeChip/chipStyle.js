@@ -1,0 +1,1 @@
+export{TN as chipStyle}from"../../../chunks/app-BSxrNPiz.js";

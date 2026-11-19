@@ -1,0 +1,1 @@
+export{Qut as SYSTEM_AUTHOR_PREFIX,$ut as isSystemAuthor,edt as systemAuthor}from"../../../chunks/app-BSxrNPiz.js";

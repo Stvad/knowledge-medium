@@ -1,0 +1,1 @@
+export{Ub as useIsReadOnly}from"../../chunks/app-BSxrNPiz.js";

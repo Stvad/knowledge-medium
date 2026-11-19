@@ -1,0 +1,1 @@
+export{xF as dynamicExtensionsExtension}from"../../chunks/app-BSxrNPiz.js";

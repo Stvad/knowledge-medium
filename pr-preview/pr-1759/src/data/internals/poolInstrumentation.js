@@ -1,0 +1,1 @@
+export{v2 as instrumentAdapter}from"../../../chunks/app-BSxrNPiz.js";

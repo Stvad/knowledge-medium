@@ -1,0 +1,1 @@
+export{t0 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BSxrNPiz.js";

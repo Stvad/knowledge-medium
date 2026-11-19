@@ -1,0 +1,1 @@
+export{vx as richPastePlugin}from"../../../chunks/app-BSxrNPiz.js";

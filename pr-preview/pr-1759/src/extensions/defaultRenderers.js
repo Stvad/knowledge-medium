@@ -1,0 +1,1 @@
+export{dI as defaultRegistry,fI as defaultRendererContributions,pI as defaultRenderersExtension}from"../../chunks/app-BSxrNPiz.js";

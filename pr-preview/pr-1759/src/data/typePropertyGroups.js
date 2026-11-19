@@ -1,0 +1,1 @@
+export{VV as typePropertyGroups}from"../../chunks/app-BSxrNPiz.js";

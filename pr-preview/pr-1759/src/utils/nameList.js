@@ -1,0 +1,1 @@
+export{B5 as NAMES_IN_A_SENTENCE,V5 as describeNames,H5 as firstFew}from"../../chunks/app-BSxrNPiz.js";

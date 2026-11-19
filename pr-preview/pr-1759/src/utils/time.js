@@ -1,0 +1,1 @@
+export{TC as hmsToSeconds}from"../../chunks/app-BSxrNPiz.js";

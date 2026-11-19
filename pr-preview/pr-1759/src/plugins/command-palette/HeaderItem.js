@@ -1,0 +1,1 @@
+export{SM as CommandPaletteHeaderItem}from"../../../chunks/app-BSxrNPiz.js";

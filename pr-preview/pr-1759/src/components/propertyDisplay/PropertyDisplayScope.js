@@ -1,0 +1,1 @@
+export{JI as PropertyDisplayScope}from"../../../chunks/app-BSxrNPiz.js";

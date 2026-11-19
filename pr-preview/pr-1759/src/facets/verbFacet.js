@@ -1,0 +1,1 @@
+export{Q1 as defineVerbFacet}from"../../chunks/app-BSxrNPiz.js";

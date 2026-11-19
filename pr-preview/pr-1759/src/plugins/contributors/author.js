@@ -1,0 +1,1 @@
+export{Lg as authorIdOf}from"../../../chunks/app-BSxrNPiz.js";

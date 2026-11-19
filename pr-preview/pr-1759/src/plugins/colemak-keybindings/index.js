@@ -1,0 +1,1 @@
+export{mw as COLEMAK_KEYBINDINGS_PLUGIN_ID,hw as colemakKeybindingsPlugin,gw as colemakMovementKeybindingOverrides}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{kw as spatialNavigationShellDecorator}from"../../../chunks/app-BSxrNPiz.js";

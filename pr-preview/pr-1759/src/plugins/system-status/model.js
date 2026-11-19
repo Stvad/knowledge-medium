@@ -1,0 +1,1 @@
+export{Gc as getSyncIndicatorView}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+"use client";export{fV as Collapsible,pV as CollapsibleContent,mV as CollapsibleTrigger}from"../../../chunks/app-BSxrNPiz.js";

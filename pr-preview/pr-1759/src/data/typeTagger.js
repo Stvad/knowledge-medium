@@ -1,0 +1,1 @@
+export{w4 as TypeTagger,T4 as applyTypeTagInTx}from"../../chunks/app-BSxrNPiz.js";

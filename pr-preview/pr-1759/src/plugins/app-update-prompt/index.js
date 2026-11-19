@@ -1,0 +1,1 @@
+export{IP as appUpdatePromptExtension}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{pJ as htmlDocumentTypeSeed}from"../../../chunks/app-BSxrNPiz.js";

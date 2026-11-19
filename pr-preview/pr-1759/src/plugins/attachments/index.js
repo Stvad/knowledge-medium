@@ -1,0 +1,1 @@
+export{Sx as attachmentsPlugin}from"../../../chunks/app-BSxrNPiz.js";

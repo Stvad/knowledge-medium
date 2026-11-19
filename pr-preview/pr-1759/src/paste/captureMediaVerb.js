@@ -1,0 +1,1 @@
+export{KR as captureMediaVerb}from"../../chunks/app-BSxrNPiz.js";

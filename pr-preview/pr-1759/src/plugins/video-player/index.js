@@ -1,0 +1,1 @@
+export{bC as videoPlayerPlugin}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{ZG as propertyShapeLabel}from"../../../chunks/app-BSxrNPiz.js";

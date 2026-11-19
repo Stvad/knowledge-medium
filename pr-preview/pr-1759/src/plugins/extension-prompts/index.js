@@ -1,0 +1,1 @@
+export{SP as ExtensionPromptSurface,CP as extensionPromptsExtension}from"../../../chunks/app-BSxrNPiz.js";

@@ -1,0 +1,1 @@
+export{EN as DEFAULT_TYPE_COLORS,DN as defaultTypeColor,ON as pickLeastUsedTypeColor}from"../../chunks/app-BSxrNPiz.js";
