@@ -1,1 +1,1 @@
-export{vS as DEFAULT_MAX_CAPTURE_BYTES,yS as captureMedia,bS as mediaBlockId}from"../../../chunks/app-CplK3vnI.js";
+export{OS as DEFAULT_MAX_CAPTURE_BYTES,kS as captureMedia,AS as mediaBlockId}from"../../../chunks/app-RDTb6lSj.js";

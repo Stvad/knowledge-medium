@@ -1,1 +1,1 @@
-export{Xot as deriveWorkspaceIdNamespace}from"../../../chunks/app-CplK3vnI.js";
+export{lst as deriveWorkspaceIdNamespace}from"../../../chunks/app-RDTb6lSj.js";

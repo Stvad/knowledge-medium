@@ -1,1 +1,1 @@
-export{BP as kernelPageDeletionGuard}from"../../chunks/app-CplK3vnI.js";
+export{XP as kernelPageDeletionGuard}from"../../chunks/app-RDTb6lSj.js";
