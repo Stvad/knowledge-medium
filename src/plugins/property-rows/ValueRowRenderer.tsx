@@ -1,13 +1,12 @@
-import {memberCodecOf} from '@/data/api'
-import { useContext, useEffect, useState } from 'react'
+import { useContext } from 'react'
 import type { AnyPropertySchema } from '@/data/api'
-import { watchReferenceWarning } from './referenceWarning'
+import { referenceWarningMessage } from './referenceWarning'
 import { propertyValueTargetTypes } from './valueSchema'
 import { PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
-import { encodedPropertyValueToChildContents, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { encodedPropertyValueToChildContents, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { propertyEditorOverridesFacet } from '@/data/facets'
 import { readValuePresets } from '@/data/valuePresetRegistry'
@@ -18,10 +17,8 @@ import { useHandle } from '@/hooks/block'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
 import { drawsPropertyRows, useFieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
 
-const ReferenceWarning = ({block, schema, content, targetId}: {block: Block; schema: AnyPropertySchema; content: string; targetId: string | null}) => {
-  const [result, setResult] = useState<{content: string; targetId: string | null; warning: string | null}>()
-  useEffect(() => watchReferenceWarning(block, schema, content, warning => setResult({content, targetId, warning}), targetId), [block, schema, content, targetId])
-  const warning = result?.content === content && result.targetId === targetId ? result.warning : null
+const ReferenceWarning = ({block, schema, targetId}: {block: Block; schema: AnyPropertySchema; targetId: string}) => {
+  const warning = useHandle(block.repo.block(targetId), {selector: target => referenceWarningMessage(block, schema, target)})
   return warning ? <span data-reference-type-warning="true" aria-label={warning} title={warning}>⚠</span> : null
 }
 
@@ -29,7 +26,7 @@ const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer
   const runtime = useAppRuntime()
   const definitions = usePropertyDefinitions(block.repo)
   const data = useHandle(block, {selector: row => row ? {
-    parentId: row.parentId, content: row.content, isFieldForm: row.isFieldForm, referenceTargetId: row.referenceTargetId,
+    content: row.content, isFieldForm: row.isFieldForm, referenceTargetId: row.referenceTargetId,
   } : undefined})
   const override = schema && resolveEditorOverride(schema.name, definitions,
     runtime.read(propertyEditorOverridesFacet), schema)
@@ -40,7 +37,7 @@ const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer
   }
   let value: unknown
   try {
-    value = (memberCodecOf(schema.codec) ?? schema.codec).decode(valueChildContentToEncoded(schema, data))
+    value = valueChildCodec(schema).decode(valueChildContentToEncoded(schema, data))
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Value cannot be decoded'
     return <div className="flex min-w-0 items-center gap-1">
@@ -48,8 +45,8 @@ const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer
       <Inner block={block}/>
     </div>
   }
-  const warning = propertyValueTargetTypes(schema).length > 0
-    ? <ReferenceWarning block={block} schema={schema} content={data.content} targetId={data.referenceTargetId ?? null}/> : null
+  const warning = typeof value === 'string' && value && propertyValueTargetTypes(schema).length > 0
+    ? <ReferenceWarning block={block} schema={schema} targetId={value}/> : null
   if (!isSingleValueProperty(schema) || !Editor || Inner !== MarkdownContentRenderer) return warning
     ? <div className="flex min-w-0 items-center gap-1">{warning}<Inner block={block}/></div> : <Inner block={block}/>
   return (

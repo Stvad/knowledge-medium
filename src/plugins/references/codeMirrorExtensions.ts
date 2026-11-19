@@ -5,8 +5,6 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
-import { referenceTargetTypes } from '@/editor/referenceTargetTypes.js'
-import type { CompletionContext } from '@codemirror/autocomplete'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'
@@ -146,30 +144,15 @@ export const aliasCompletions = (
       detail: completionTypeHint(match.typeIds, typeRegistry),
     }))
 
-// Constraints apply only when the reference occupies the whole value row.
-const targetTypesForReference = (context: CompletionContext, startPos: number, close: string): readonly string[] => {
-  const text = context.state.doc.toString()
-  const before = text.slice(0, startPos - 2)
-  const selection = context.state.selection.main
-  const end = context.pos === selection.from ? selection.to : context.pos
-  const after = text.slice(end)
-  const closingIndex = after.indexOf(close)
-  const remainder = closingIndex < 0 ? '' : after.slice(closingIndex + close.length)
-  return before.trim() === '' && remainder.trim() === ''
-    ? context.state.facet(referenceTargetTypes)
-    : []
-}
-
-export const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+export const buildWikilinkSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource =>
   backlinkCompletionSource({
-    getAliases: async (filter: string, context, startPos) => {
-      const workspaceId = repo.activeWorkspaceId
+    getAliases: async (filter, targetTypes) => {
+      const workspaceId = targetTypes.length && block ? block.peek()?.workspaceId : repo.activeWorkspaceId
       if (!workspaceId) {
         console.warn('No active workspace for alias search')
         return []
       }
 
-      const targetTypes = targetTypesForReference(context, startPos, ']]')
       if (targetTypes.length > 0) {
         const [aliases, dates] = await Promise.all([
           searchTypedAliasCandidates(repo, {workspaceId, query: filter, targetTypes, limit: 50}),
@@ -184,7 +167,6 @@ export const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): Complet
         const dateCandidates = dates.filter((date): date is {label: string; detail: string} => date !== null)
         const dateLabels = new Set(dateCandidates.map(date => date.label))
         return [...dateCandidates, ...aliasCompletions(aliases, repo.types).filter(alias => !dateLabels.has(alias.label))]
-
       }
 
       // MRU loads through the memoized ui-state helper, so this is
@@ -223,14 +205,13 @@ export const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): Complet
     },
   })
 
-export const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSource =>
+export const buildBlockrefSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource =>
   blockrefCompletionSource({
-    searchBlocks: async (filter: string, context, startPos) => {
-      const workspaceId = repo.activeWorkspaceId
+    searchBlocks: async (filter, targetTypes) => {
+      const workspaceId = targetTypes.length && block ? block.peek()?.workspaceId : repo.activeWorkspaceId
       if (!workspaceId) return []
 
       const query = filter.trim()
-      const targetTypes = targetTypesForReference(context, startPos, '))')
       if (targetTypes.length > 0) {
         const candidates = await searchTypedReferenceCandidates(repo, {workspaceId, query, targetTypes, limit: 12})
         return candidates.map(candidate => ({id: candidate.id, content: candidate.label}))

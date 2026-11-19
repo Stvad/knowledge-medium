@@ -1044,6 +1044,16 @@ describe('searchTypedReferenceCandidates', () => {
     expect(result).toMatchObject([{id: 'person', label: 'Example alias', typeIds: ['person']}])
   })
 
+  it('does not offer IDs that cannot survive reference parsing', async () => {
+    await create({id: 'bad id', content: 'Example invalid', types: ['person']})
+    await create({id: 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF', content: 'Example uppercase', types: ['person']})
+    await create({id: 'valid-id', content: 'Example valid', types: ['person']})
+    const result = await searchTypedReferenceCandidates(env.repo, {
+      workspaceId: WS, query: 'Example', targetTypes: ['person'], limit: 10,
+    })
+    expect(result.map(candidate => candidate.id)).toEqual(['valid-id'])
+  })
+
   it('matches any allowed type and limits empty results', async () => {
     await create({id: 'person', content: 'Alice', types: ['person']})
     await create({id: 'place', content: 'Alpine', types: ['place']})

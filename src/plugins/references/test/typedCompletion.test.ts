@@ -45,6 +45,21 @@ describe('typed reference completion sources', () => {
     env.repo.setActiveWorkspaceId(null)
   })
 
+  it('searches the edited block workspace when another workspace is active', async () => {
+    await create({id: 'person', content: 'Alice', aliases: ['Alice'], types: ['person']})
+    await create({id: 'value', types: []})
+    env.repo.setActiveWorkspaceId('other-workspace')
+    const editor = {repo: env.repo, block: env.repo.block('value')} as Parameters<typeof buildWikilinkSource>[0]
+    await editor.block!.load()
+    const run = async (doc: string, source: ReturnType<typeof buildWikilinkSource>) => {
+      const state = EditorState.create({doc, extensions: [referenceTargetTypes.of(['person'])]})
+      return source(new CompletionContext(state, doc.length, false))
+    }
+    expect((await run('[[Ali', buildWikilinkSource(editor)))?.options.map(option => option.label)).toEqual(['Alice'])
+    expect((await run('((Ali', buildBlockrefSource(editor)))?.options.map(option => option.label)).toEqual(['Alice'])
+    env.repo.setActiveWorkspaceId(null)
+  })
+
   it('includes a relative date only when its resolved target has an allowed type', async () => {
     const label = formatRoamDate(new Date())
     await create({id: 'daily', aliases: [label], types: ['daily']})

@@ -1,9 +1,7 @@
-import {isRefCodec, memberCodecOf, type AnyPropertySchema} from '@/data/api'
-
-/** A value row represents one member of a list, or the scalar itself. */
-export const propertyValueCodec = (schema: AnyPropertySchema) => memberCodecOf(schema.codec) ?? schema.codec
+import {isRefCodec, type AnyPropertySchema} from '@/data/api'
+import {valueChildCodec} from '@/data/propertyChildren'
 
 export const propertyValueTargetTypes = (schema: AnyPropertySchema): readonly string[] => {
-  const codec = propertyValueCodec(schema)
+  const codec = valueChildCodec(schema)
   return isRefCodec(codec) ? codec.targetTypes : []
 }

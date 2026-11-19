@@ -10,6 +10,7 @@ import {
   completionKeymapWithEscapeFallthrough,
   completionQueryEnd,
 } from '@/utils/codemirrorCompletion.js'
+import { constrainedReferenceRange } from '@/editor/referenceCompletionRange.js'
 import { acceptCompletionInsert } from '@/editor/contentFlush.js'
 
 export interface BacklinkCompletionCandidate {
@@ -25,7 +26,7 @@ export interface BacklinkAutocompleteOptions {
    * @param filter The current search term to filter aliases
    * @returns Promise resolving to array of matching candidates
    */
-  getAliases: (filter: string, context: CompletionContext, startPos: number) => Promise<Array<string | BacklinkCompletionCandidate>>
+  getAliases: (filter: string, targetTypes: readonly string[]) => Promise<Array<string | BacklinkCompletionCandidate>>
 }
 
 /**
@@ -72,8 +73,10 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
     const searchTerm = openBracketMatch[1]
     const startPos = line.from + openBracketMatch.index! + 2 // Position after [[
 
+    const constrained = constrainedReferenceRange(context, startPos, ']]')
+
     // Get filtered candidates
-    const candidates = await options.getAliases(searchTerm, context, startPos)
+    const candidates = await options.getAliases(searchTerm, constrained?.types ?? [])
 
     if (candidates.length === 0) {
       return null
@@ -81,7 +84,7 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
 
     return {
       from: startPos,
-      to: hasClosingBrackets ? pos + closeBracketIndex : line.to,
+      to: constrained?.end ?? pos,
       // Source-side filtering is final — `getAliases` already runs a
       // workspace-scoped LIKE filter, and we surface entries the user
       // didn't *type* (e.g. typing "fri" suggests "April 30th, 2026"

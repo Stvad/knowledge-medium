@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
-import {autocompletion, CompletionContext, completionStatus, currentCompletions} from '@codemirror/autocomplete'
+import {autocompletion, CompletionContext, completionStatus, currentCompletions, type CompletionSource} from '@codemirror/autocomplete'
 import {EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
 import {expect, it, vi} from 'vitest'
 import {ChangeScope, codecs, defineProperty} from '@/data/api'
 import type {Repo} from '@/data/repo'
+import type {Block} from '@/data/block'
+import * as linkSearch from '@/utils/linkTargetAutocomplete'
 import {valueAutocomplete, valueCompletionSource} from '../valueAutocomplete'
 
 const enumSchema = defineProperty('status', {codec: codecs.enum([{value: ' open ', label: 'Open'}, {value: 'done', label: 'Done'}]), defaultValue: 'done', changeScope: ChangeScope.BlockDefault})
@@ -65,4 +67,19 @@ it('opens on focus of an empty enum value and updates as the user types', async 
     view.destroy()
     window.removeEventListener('selectionchange', swallowSelectionChange, true)
   }
+})
+
+
+it('searches the edited block workspace rather than the active workspace', async () => {
+  const spy = vi.spyOn(linkSearch, 'searchTypedReferenceCandidates').mockResolvedValue([])
+  const repo = {activeWorkspaceId: 'other-workspace'} as Repo
+  const block = {peek: () => ({workspaceId: 'edited-workspace'})} as Block
+  try {
+    const extensions = valueAutocomplete({repo, block, propertyValueSchema: refSchema})
+    const state = EditorState.create({doc: 'alice', selection: {anchor: 5}, extensions})
+    const sources = state.languageDataAt<CompletionSource>('autocomplete', 5)
+    expect(sources).toHaveLength(1)
+    await sources[0]!(new CompletionContext(state, 5, false))
+    expect(spy).toHaveBeenCalledWith(repo, {workspaceId: 'edited-workspace', query: 'alice', targetTypes: ['person'], limit: 12})
+  } finally { spy.mockRestore() }
 })

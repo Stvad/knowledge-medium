@@ -1038,7 +1038,6 @@ const typedBlocksArgsSchema = z.object({
   match: z.array(blockPredicateSchema).optional(),
   exclude: z.array(blockPredicateSchema).optional(),
   order: z.enum(['created-asc', 'created-desc']).optional(),
-  limit: z.number().int().nonnegative().optional(),
 })
 
 const ANCESTOR_DEP_KIND = 'a'
@@ -1353,7 +1352,7 @@ const declareAncestorDeps = async (
  *  that compose typed-query semantics — sharing this resolver keeps
  *  the dep declarations and SQL in one place. */
 export const resolveTypedBlocks = async (
-  query: ResolvedTypedBlockQuery,
+  query: ResolvedTypedBlockQuery & {limit?: number},
   ctx: QueryCtx,
 ): Promise<BlockData[]> => {
   if (!query.workspaceId) return []
@@ -1375,22 +1374,19 @@ export const resolveTypedBlocks = async (
     await declareAncestorDeps(normalized, ctx, 'row', ancestorTargetProps)
   }
 
-  if (
+  const fastPath =
     types.length === 1 &&
     normalized.where === undefined &&
     referencedBy === undefined &&
     matchPredicates.length === 0 &&
     excludePredicates.length === 0 &&
-    normalized.order !== 'created-desc' &&
-    normalized.limit === undefined
-  ) {
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, types[0]],
-    )
-    return ctx.hydrateBlocks(asBlockRows(rows))
-  }
-  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
-  const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
+    normalized.order !== 'created-desc'
+  const compiled = fastPath
+    ? {sql: SELECT_BLOCKS_BY_TYPE_SQL, params: [workspaceId, types[0]]}
+    : compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
+  const sql = query.limit === undefined ? compiled.sql : `${compiled.sql} LIMIT ?`
+  const params = query.limit === undefined ? [...compiled.params] : [...compiled.params, query.limit]
+  const rows = await ctx.db.getAll<BlockRow>(sql, params)
   return ctx.hydrateBlocks(asBlockRows(rows))
 }
 
@@ -1435,9 +1431,9 @@ export const resolveTypedBlockIds = async (
  *  result. The old `{kind:'workspace', workspaceId}` dep was too coarse
  *  — UiState focus writes (and unrelated content edits) re-fired it
  *  needlessly. */
-export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]>({
+export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery & {limit?: number}, BlockData[]>({
   name: 'core.typedBlocks',
-  argsSchema: typedBlocksArgsSchema,
+  argsSchema: typedBlocksArgsSchema.extend({limit: z.number().int().nonnegative().optional()}),
   resultSchema: blockDataArraySchema,
   resolve: (query, ctx) => resolveTypedBlocks(query, ctx),
 })
@@ -1868,7 +1864,9 @@ export const aliasMatchesFuzzyQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
-    if (targetTypes?.length) ctx.depend({kind: 'workspace', workspaceId})
+    for (const type of targetTypes ?? []) {
+      ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, type)})
+    }
     const sql = buildFuzzyAliasMatchesSql(prefixes.length, !!targetTypes?.length)
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.

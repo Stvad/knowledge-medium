@@ -145,6 +145,17 @@ const create = async (args: {
 
 const ids = (rows: readonly {id: string}[]) => rows.map(row => row.id)
 
+describe('hydrated typedBlocks limit', () => {
+  it('limits both single-type and multi-type results after ordering', async () => {
+    await create({id: 'first', types: ['todo']})
+    await create({id: 'second', types: ['todo', 'task']})
+    await create({id: 'third', types: ['task']})
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 1}).load())).toEqual(['first'])
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo', 'task'], limit: 2}).load())).toEqual(['first', 'second'])
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 0}).load())).toEqual([])
+  })
+})
+
 describe('repo.queryBlocks', () => {
   it('rejects calls that omit workspaceId at the type level', () => {
     // TypedBlockQuery.workspaceId is required so

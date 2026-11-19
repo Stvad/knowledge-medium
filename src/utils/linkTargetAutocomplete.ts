@@ -1,5 +1,6 @@
 import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
+import {referenceBlockContentForId} from '@/data/referenceBlock'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
   isActiveSearchFilter,
@@ -973,7 +974,7 @@ export const searchTypedAliasCandidates = async (
   args: {workspaceId: string; query: string; targetTypes: readonly string[]; limit: number},
 ): Promise<TypedReferenceCandidate[]> => {
   if (!args.workspaceId || args.targetTypes.length === 0 || args.limit <= 0) return []
-  const rows = await runFuzzyAliasSearch(repo, {...args, limit: args.limit})
+  const rows = await runFuzzyAliasSearch(repo, args)
   const types = await loadTypeIdsByBlock(repo, args.workspaceId, rows.map(row => row.blockId))
   const seen = new Set<string>()
   return rows.flatMap(row => {
@@ -990,11 +991,12 @@ export const searchTypedReferenceCandidates = async (
 ): Promise<TypedReferenceCandidate[]> => {
   if (!args.workspaceId || args.targetTypes.length === 0 || args.limit <= 0) return []
   const query = args.query.trim()
+  const fetchLimit = Math.max(args.limit, Math.min(args.limit * 4, 200))
   const [aliases, blocks] = await Promise.all([
-    searchTypedAliasCandidates(repo, args),
+    query ? searchTypedAliasCandidates(repo, {...args, limit: fetchLimit}) : [],
     query
-      ? searchBlocksAcrossSources(repo, {workspaceId: args.workspaceId, query, limit: args.limit, filter: {types: [...args.targetTypes]}})
-      : repo.query.typedBlocks({workspaceId: args.workspaceId, types: [...args.targetTypes], order: 'created-desc', limit: args.limit}).load(),
+      ? searchBlocksAcrossSources(repo, {workspaceId: args.workspaceId, query, limit: fetchLimit, filter: {types: [...args.targetTypes]}})
+      : repo.query.typedBlocks({workspaceId: args.workspaceId, types: [...args.targetTypes], order: 'created-desc', limit: fetchLimit}).load(),
   ])
   const candidates = [...aliases, ...blocks.map(block => ({
     id: block.id, label: labelForBlockData(block, block.id), detail: block.content, typeIds: readTypeIds(block),
@@ -1002,6 +1004,7 @@ export const searchTypedReferenceCandidates = async (
   const seen = new Set<string>()
   return candidates.filter(candidate => {
     if (seen.has(candidate.id)) return false
+    try { referenceBlockContentForId(candidate.id) } catch { return false }
     seen.add(candidate.id)
     return true
   }).slice(0, args.limit)

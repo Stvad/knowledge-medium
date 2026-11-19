@@ -1123,7 +1123,7 @@ it('warns for a wrong-type list member in read and edit mode while retaining the
   const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
   mount({workspace: 'non-hidden'})
   const row = () => document.querySelector<HTMLElement>(`[data-block-id="${value.id}"]`)!
-  await waitFor(() => expect(row()?.querySelector('[data-reference-type-warning]')?.getAttribute('title')).toContain('Expected person'))
+  await waitFor(() => expect(row()?.querySelector('[data-reference-type-warning]')?.getAttribute('title')).toContain('rows:constrained-refs expects person'))
   expect((await repo.load(value.id))?.content).toBe('((target))')
   await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
   const view = await editorFor(value.id)

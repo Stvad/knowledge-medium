@@ -2,12 +2,13 @@ import {startCompletion, type CompletionSource} from '@codemirror/autocomplete'
 import {EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
 import {isEnumCodec, type AnyPropertySchema} from '@/data/api'
-import {encodedToValueChildContent} from '@/data/propertyChildren'
+import {encodedToValueChildContent, valueChildCodec} from '@/data/propertyChildren'
+import {referenceBlockContentForId} from '@/data/referenceBlock'
 import {acceptCompletionInsert} from '@/editor/contentFlush'
 import type {CodeMirrorExtensionContribution} from '@/editor/codeMirrorExtensions'
 import {referenceTargetTypes} from '@/editor/referenceTargetTypes'
 import {searchTypedReferenceCandidates} from '@/utils/linkTargetAutocomplete'
-import {propertyValueCodec, propertyValueTargetTypes} from './valueSchema'
+import {propertyValueTargetTypes} from './valueSchema'
 
 interface ReferenceCandidate {id: string; label: string; detail?: string}
 
@@ -17,7 +18,7 @@ export const valueCompletionSource = (
 ): CompletionSource => async context => {
   const text = context.state.doc.toString()
   if (context.pos !== text.length || !context.state.selection.main.empty || /\n|\[\[|\(\(/.test(text)) return null
-  const codec = propertyValueCodec(schema)
+  const codec = valueChildCodec(schema)
   if (isEnumCodec(codec)) {
     const query = text.trim().toLowerCase()
     const options = codec.options.filter(option => option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query))
@@ -34,18 +35,18 @@ export const valueCompletionSource = (
   if (!hits.length) return null
   return {from: 0, filter: false, options: hits.map(hit => ({
     label: hit.label,
-    detail: hit.detail,
-    apply: (view: EditorView, _completion, from, to) => acceptCompletionInsert(view, {from, to, insert: `((${hit.id}))`}),
+    detail: hit.detail === hit.label ? undefined : hit.detail,
+    apply: (view: EditorView, _completion, from, to) => acceptCompletionInsert(view, {from, to, insert: referenceBlockContentForId(hit.id)}),
   }))}
 }
 
-export const valueAutocomplete: CodeMirrorExtensionContribution = ({repo, propertyValueSchema}) => {
+export const valueAutocomplete: CodeMirrorExtensionContribution = ({repo, block, propertyValueSchema}) => {
   if (!propertyValueSchema) return []
-  const codec = propertyValueCodec(propertyValueSchema)
+  const codec = valueChildCodec(propertyValueSchema)
   const targetTypes = propertyValueTargetTypes(propertyValueSchema)
   if (!isEnumCodec(codec) && !targetTypes.length) return []
   const source = valueCompletionSource(propertyValueSchema, async (query, types) => {
-    const workspaceId = repo.activeWorkspaceId
+    const workspaceId = (block?.peek() ?? await block?.load())?.workspaceId
     return workspaceId ? searchTypedReferenceCandidates(repo, {workspaceId, query, targetTypes: types, limit: 12}) : []
   })
   return [
