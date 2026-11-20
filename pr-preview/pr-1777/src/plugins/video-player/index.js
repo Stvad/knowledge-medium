@@ -1,1 +1,0 @@
-export{WC as videoPlayerPlugin}from"../../../chunks/app-BfXb9bIu.js";

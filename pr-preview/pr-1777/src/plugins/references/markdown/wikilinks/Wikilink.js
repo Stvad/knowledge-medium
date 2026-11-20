@@ -1,1 +1,0 @@
-export{Db as Wikilink}from"../../../../../chunks/app-BfXb9bIu.js";

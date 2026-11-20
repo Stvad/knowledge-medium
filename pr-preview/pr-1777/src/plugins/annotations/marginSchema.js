@@ -1,1 +1,0 @@
-export{wQ as annotationMarginOpenProp,TQ as annotationMarginShareProp}from"../../../chunks/app-BfXb9bIu.js";

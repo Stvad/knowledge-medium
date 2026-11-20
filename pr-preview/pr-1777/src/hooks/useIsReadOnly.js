@@ -1,1 +1,0 @@
-export{px as useIsReadOnly}from"../../chunks/app-BfXb9bIu.js";

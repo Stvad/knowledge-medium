@@ -1,1 +1,0 @@
-export{JF as ClientLocalSettings,YF as clientLocalSettings}from"../../chunks/app-BfXb9bIu.js";

@@ -1,1 +1,0 @@
-export{en as staticAppExtensions}from"../../chunks/app-BfXb9bIu.js";

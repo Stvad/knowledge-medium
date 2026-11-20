@@ -1,1 +1,0 @@
-export{Kx as attachmentsPlugin}from"../../../chunks/app-BfXb9bIu.js";

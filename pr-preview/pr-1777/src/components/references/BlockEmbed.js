@@ -1,1 +1,0 @@
-export{KN as BlockEmbed}from"../../../chunks/app-BfXb9bIu.js";

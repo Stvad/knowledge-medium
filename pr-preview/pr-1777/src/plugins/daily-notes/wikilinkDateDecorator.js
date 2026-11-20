@@ -1,1 +1,0 @@
-export{$A as dailyDateWikilinkDecorator}from"../../../chunks/app-BfXb9bIu.js";

@@ -1,1 +1,0 @@
-export{QF as dynamicExtensionsExtension}from"../../chunks/app-BfXb9bIu.js";

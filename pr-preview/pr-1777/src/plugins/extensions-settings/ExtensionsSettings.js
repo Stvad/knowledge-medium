@@ -1,1 +1,0 @@
-export{Qr as ExtensionsSettings}from"../../../chunks/app-BfXb9bIu.js";

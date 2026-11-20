@@ -1,1 +1,0 @@
-export{GC as videoPlayerMarkdownExtension}from"../../../chunks/app-BfXb9bIu.js";

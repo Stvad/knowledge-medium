@@ -1,1 +1,0 @@
-export{XP as editorAutocompleteExtension}from"../../chunks/app-BfXb9bIu.js";

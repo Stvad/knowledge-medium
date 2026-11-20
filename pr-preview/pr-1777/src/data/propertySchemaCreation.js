@@ -1,1 +1,0 @@
-export{kK as adoptOrCreatePropertySchema}from"../../chunks/app-BfXb9bIu.js";

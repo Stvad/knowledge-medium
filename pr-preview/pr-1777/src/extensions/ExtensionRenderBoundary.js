@@ -1,1 +1,0 @@
-export{DB as ExtensionRenderBoundary}from"../../chunks/app-BfXb9bIu.js";

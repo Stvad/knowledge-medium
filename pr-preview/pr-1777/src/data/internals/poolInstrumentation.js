@@ -1,1 +1,0 @@
-export{X2 as instrumentAdapter}from"../../../chunks/app-BfXb9bIu.js";
