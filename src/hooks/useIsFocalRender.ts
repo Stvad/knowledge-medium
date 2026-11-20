@@ -31,3 +31,12 @@ export const useIsFocalRender = (block: Block): boolean => {
  *  `BlockResolveContext`. Same policy as `useIsFocalRender`. */
 export const isFocalRender = (ctx: BlockResolveContext): boolean =>
   ctx.isTopLevel && !ctx.blockContext?.isNestedSurface
+
+/** Whether this render shows the block open regardless of its stored
+ *  collapse: the panel's document body, or the root of a peek
+ *  (`peekRootId`). Such a block has no expand control. */
+export const useForcesOpen = (block: Block): boolean => {
+  const isFocal = useIsFocalRender(block)
+  const {peekRootId} = useBlockContext()
+  return isFocal || peekRootId === block.id
+}

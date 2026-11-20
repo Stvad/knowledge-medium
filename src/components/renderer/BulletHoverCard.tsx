@@ -11,28 +11,21 @@
  * sections, `BlockBullet` passes `enabled: false` and every handler below is
  * a no-op, so the bullet attaches no listeners and the card never mounts.
  */
-import { createPortal } from 'react-dom'
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
-import { useAnchoredFloating } from '@/components/ui/anchored-floating.js'
+import { HoverCard, type HoverHandlers } from '@/components/ui/hover-card.js'
 
 // Slightly deliberate open delay so brushing past a bullet during
 // navigation doesn't flash the card; a short close delay bridges the gap
 // between the bullet and the (offset) card as the pointer crosses.
 const OPEN_DELAY_MS = 350
 const CLOSE_DELAY_MS = 140
-
-interface HoverHandlers {
-  onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => void
-  onMouseLeave: (event: ReactMouseEvent<HTMLElement>) => void
-}
 
 export interface BulletHoverController {
   /** True only while `enabled` AND the card should be visible. */
@@ -151,10 +144,6 @@ export function useBulletHover(enabled: boolean): BulletHoverController {
   return {open: enabled && open, anchorEl, anchorHoverProps, cardHoverProps, close}
 }
 
-/** Marks the bullet hover card, so a gesture that runs over bullets (block
- *  drag-and-drop) can keep it out of the way. */
-export const BULLET_HOVER_CARD_ATTRIBUTE = 'data-bullet-hover-card'
-
 export interface BulletHoverCardProps {
   open: boolean
   anchorEl: HTMLElement | null
@@ -162,39 +151,17 @@ export interface BulletHoverCardProps {
   children: ReactNode
 }
 
-/** Floating card portalled to `document.body`, glued to the bullet via
- *  Floating UI. Rendered only while open with a live anchor. */
 export function BulletHoverCard({open, anchorEl, hoverProps, children}: BulletHoverCardProps) {
-  const {floatingStyle, setFloatingElement} = useAnchoredFloating({
-    open,
-    anchorElement: anchorEl,
-    placement: 'right-start',
-    gap: 6,
-    viewportMargin: 8,
-  })
-
-  if (!open || !anchorEl || typeof document === 'undefined') return null
-
-  return createPortal(
-    <div
-      ref={setFloatingElement}
-      // Portalled to <body>, but React events still bubble through the React
-      // tree to the block shell — a click on the card would otherwise
-      // focus/edit/select the underlying block. Mark it ignored (belt) and stop
-      // pointer/click propagation at the boundary (suspenders). No
-      // role="tooltip": the card holds interactive links, which that role
-      // forbids; the mouse handlers keep the hover-intent alive.
-      data-block-interaction="ignore"
-      {...{[BULLET_HOVER_CARD_ATTRIBUTE]: 'true'}}
-      style={floatingStyle}
-      onMouseEnter={hoverProps.onMouseEnter}
-      onMouseLeave={hoverProps.onMouseLeave}
-      onPointerDown={event => event.stopPropagation()}
-      onClick={event => event.stopPropagation()}
-      className="bullet-hover-card z-50 min-w-[13rem] max-w-[20rem] rounded-md border border-border bg-background text-foreground shadow-md p-2.5"
+  return (
+    <HoverCard
+      open={open}
+      anchorEl={anchorEl}
+      hoverProps={hoverProps}
+      placement="right-start"
+      gap={6}
+      className="bullet-hover-card min-w-[13rem] max-w-[20rem] p-2.5"
     >
       {children}
-    </div>,
-    document.body,
+    </HoverCard>
   )
 }

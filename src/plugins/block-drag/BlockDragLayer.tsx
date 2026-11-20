@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { useIsReadOnly } from '@/hooks/useIsReadOnly.js'
-import { BULLET_HOVER_CARD_ATTRIBUTE } from '@/components/renderer/BulletHoverCard.js'
+import { HOVER_CARD_ATTRIBUTE } from '@/components/ui/hover-card.js'
 import { BLOCK_BULLET_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
   createBlockDragController,
@@ -12,9 +12,9 @@ import {
 /** While a drag runs, all by attribute so no row re-renders for it:
  *  dragged rows dim; the page shows a grabbing cursor without text
  *  selection; embedded documents (a video iframe, a PDF) stop taking the
- *  pointer, or a release over one never reaches this document; and the
- *  bullet hover card, which opens on any bullet the pointer rests on,
- *  stays hidden rather than cover the drop targets. */
+ *  pointer, or a release over one never reaches this document; and hover
+ *  cards (the bullet card opens on any bullet the pointer rests on) stay
+ *  hidden rather than cover the drop targets. */
 const DRAG_STYLES = `
 [${DRAGGING_ROW_ATTRIBUTE}] { opacity: 0.4; }
 html[${DRAG_ACTIVE_ATTRIBUTE}], html[${DRAG_ACTIVE_ATTRIBUTE}] * {
@@ -22,7 +22,7 @@ html[${DRAG_ACTIVE_ATTRIBUTE}], html[${DRAG_ACTIVE_ATTRIBUTE}] * {
   user-select: none !important;
 }
 html[${DRAG_ACTIVE_ATTRIBUTE}] :is(iframe, object, embed) { pointer-events: none !important; }
-html[${DRAG_ACTIVE_ATTRIBUTE}] [${BULLET_HOVER_CARD_ATTRIBUTE}] { display: none !important; }
+html[${DRAG_ACTIVE_ATTRIBUTE}] [${HOVER_CARD_ATTRIBUTE}] { display: none !important; }
 `
 
 /** On whenever a drag can start, not only during one: the browser reads

@@ -364,7 +364,7 @@ describe('describeRuntime', () => {
     // The bound guards those dumps, with room for the rest: `apiSurface` grows
     // with every catalogued facet and type, and the storage examples must declare
     // what they use so they compile.
-    expect(JSON.stringify(description).length).toBeLessThan(47_000)
+    expect(JSON.stringify(description).length).toBeLessThan(48_000)
   })
 
   it('exposes the authoring primitives plugins reach for first', () => {

@@ -53,7 +53,10 @@ export const BreadcrumbList = ({
             // text-inherit so the link picks up the container's muted color
             // instead of the user-agent blue.
             className={cn('text-inherit', itemClassName)}
-            onClickCapture={(event: MouseEvent) => {
+            onClickCapture={(event: MouseEvent<HTMLAnchorElement>) => {
+              // A card portalled from the crumb's content (a link preview)
+              // reaches here through the React tree but is not the crumb's.
+              if (!event.currentTarget.contains(event.target as Node)) return
               // Capture before nested markdown links/block refs can stop the
               // event; the breadcrumb item owns clicks on its preview content.
               event.stopPropagation()
