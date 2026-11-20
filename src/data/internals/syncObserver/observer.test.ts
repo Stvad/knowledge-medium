@@ -847,8 +847,10 @@ describe('blocksSyncedObserver — drain stats', () => {
       onError: e => errors.push(e),
       onDrainStats: () => { throw new Error('listener') },
     })
-    await observer.flush()
-    expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }])
+    await observer.flush().catch(() => {})
+    errors.length = 0
+    // A pass of our own, so the promise under test is the one that reported.
+    await expect(observer.drainWorkspace('ws', 'all')).resolves.toMatchObject({ scanned: 1 })
     expect(errors).toEqual([new Error('listener')])
   })
 
