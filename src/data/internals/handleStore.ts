@@ -122,6 +122,8 @@ interface RegisteredHandle {
    *  loader: the next `load()` / `loadFresh()` re-resolves, subscribers are
    *  not notified. See `HandleStore.markStale`. */
   markStale: () => void
+  /** `observeDuringLoad` for a stale mark. */
+  observeStaleMarkDuringLoad: (change: ChangeNotification) => void
   /** Called when GC fires — handle clears its state, the store removes
    *  the entry from the registry. */
   dispose: () => void
@@ -401,7 +403,7 @@ export class HandleStore {
    *  producer owes that later `invalidate`. */
   markStale(change: ChangeNotification): void {
     for (const h of Array.from(this.handles.values())) {
-      h.observeDuringLoad(change)
+      h.observeStaleMarkDuringLoad(change)
       if (h.matches(change)) h.markStale()
     }
   }
@@ -532,6 +534,12 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  (only the upfront `parent-edge` dep is known at that point) and
    *  the handle would settle with stale `BlockData[]`. */
   private changesDuringLoad: ChangeNotification[] = []
+  /** The `markStale` counterparts of `pendingReinvalidate` and
+   *  `changesDuringLoad`. Kept apart because they end differently: a load a
+   *  stale mark overlapped settles STALE, with no rerun — the rerun is what
+   *  `markStale`'s caller is holding back. */
+  private staleMarkedDuringLoad = false
+  private staleMarksDuringLoad: ChangeNotification[] = []
 
   /** Set when an invalidation lands on a handle with zero subscribers
    *  and no inflight load. Eagerly re-running the loader for nobody is
@@ -710,6 +718,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.store.metrics.loaderRuns++
     this.pendingReinvalidate = false
     this.changesDuringLoad = []
+    this.staleMarkedDuringLoad = false
+    this.staleMarksDuringLoad = []
     this.stale = false
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
@@ -781,6 +791,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           }
         }
         this.changesDuringLoad = []
+        const settlesStale = this.staleMarkedDuringLoad
+          || this.staleMarksDuringLoad.some(change => this.matchesAgainst(collected, change))
+        this.staleMarkedDuringLoad = false
+        this.staleMarksDuringLoad = []
         const needsPostSettleReload = this.pendingReinvalidate && !this.disposed
         // This settle supersedes every notify still queued behind an open
         // barrier from an EARLIER run of this handle: whatever those slots
@@ -823,6 +837,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           this.store.metrics.notifiesSkippedByDiff++
           batch?.finish(null)
         }
+        // After the settle above: a rerun scheduled below clears it again.
+        if (settlesStale) this.stale = true
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
         // returned may already be stale. Re-run via a microtask so the
@@ -975,11 +991,17 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (this.inflight) this.changesDuringLoad.push(change)
   }
 
+  /** `markStale` for a change the handle does not match YET: recorded so a
+   *  load in flight is judged against the deps it ends up declaring. */
+  observeStaleMarkDuringLoad(change: ChangeNotification): void {
+    if (this.inflight) this.staleMarksDuringLoad.push(change)
+  }
+
   markStale(): void {
     if (this.disposed) return
-    // A load in flight may have read before the change committed: same
-    // treatment as `invalidate` gives it, a rerun once it settles.
-    if (this.inflight) this.pendingReinvalidate = true
+    // A load in flight may have read before the change committed, so it must
+    // not settle as current — and must not rerun either.
+    if (this.inflight) this.staleMarkedDuringLoad = true
     else this.stale = true
   }
 

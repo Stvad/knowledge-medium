@@ -2293,6 +2293,39 @@ describe('markStale()', () => {
   })
 })
 
+describe('markStale() during a load', () => {
+  it('lets a subscribed load in flight settle stale instead of running it again', async () => {
+    const store = makeStore()
+    let runs = 0
+    let release!: (value: number) => void
+    const h = store.getOrCreate('stale-inflight', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-inflight',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'r1' })
+          runs++
+          if (runs > 1) return 2
+          return new Promise<number>((resolve) => { release = resolve })
+        },
+      }),
+    )
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await waitFor(() => expect(runs).toBe(1))
+
+    store.markStale({ rowIds: ['r1'] })
+    release(1)
+    await waitFor(() => expect(fired).toEqual([1]))
+    // Its subscriber is what would have triggered a second run.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(runs).toBe(1)
+
+    // The value it settled with predates the change, so an awaited read re-resolves.
+    expect(await h.load()).toBe(2)
+  })
+})
+
 describe('mergeChangeNotifications()', () => {
   const sorted = (x: ReadonlySet<string> | readonly string[] | undefined) => (x ? [...x].sort() : x)
 
