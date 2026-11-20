@@ -1,1 +1,1 @@
-export{UO as classifyLinkInteraction}from"../../../chunks/app-Bo90AGWM.js";
+export{ik as classifyLinkInteraction}from"../../../chunks/app-Ch9qixOw.js";

@@ -1,1 +1,1 @@
-export{UK as BootFallback}from"../../../chunks/app-Bo90AGWM.js";
+export{iq as BootFallback}from"../../../chunks/app-Ch9qixOw.js";
