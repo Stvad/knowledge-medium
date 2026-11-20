@@ -7,6 +7,7 @@ import { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { Repo } from '../../data/repo'
 import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
+import { vimLinkHintsPlugin } from '@/plugins/vim-link-hints'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
   enterBlockEditModeOnGestureAction,
@@ -45,4 +46,5 @@ export const vimNormalModePlugin = ({repo}: { repo: Repo }): AppExtension =>
     // here (not top-level) so it's gated by vim — with normal mode off the
     // remaps have nothing to act on, and the settings UI shows it under Vim.
     colemakKeybindingsPlugin,
+    vimLinkHintsPlugin,
   ])
