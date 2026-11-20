@@ -3,7 +3,7 @@ import type { BlockData } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties.js'
 import { AGENT_VIEW_DEFAULTS } from '@knowledge-medium/agent-cli/protocol'
 import { loadBlocks, loadCrumbs, visibleChildCounts, visibleChildrenLevel } from './context.ts'
-import { createRefResolver, loadEmbedTargets, refSuffix, REFS_LEGEND } from './refs.ts'
+import { expandsRefs, loadEmbedTargets, NO_REFS, refLines, REFS_LEGEND, resolveRowRefs, type ExpandRefsParam } from './refs.ts'
 import { idMark } from './displayIds.ts'
 import { createPropertyRenderer, type PropertyDetail } from './properties.ts'
 import {
@@ -20,15 +20,13 @@ import {
 } from './shared.ts'
 import { formatCount } from './text.ts'
 
-export interface OutlineParams {
+export interface OutlineParams extends ExpandRefsParam {
   ref: string
   depth?: number
   limit?: number
   offset?: number
   properties?: PropertyDetail | 'none'
   expandCollapsed?: boolean
-  /** Expand embeds into rows and note each reference's text (default true). */
-  expandRefs?: boolean
 }
 
 export interface OutlineRow extends ViewRow {
@@ -37,7 +35,7 @@ export interface OutlineRow extends ViewRow {
   /** Set on a row shown because the row above embeds it (`!((id))`,
    *  `![[Page]]`): where the block really lives. Its id is the block's own,
    *  so an edit through it changes that block wherever it is shown. */
-  embedded?: {breadcrumb: string[]}
+  embedded?: {parentId: string | null, breadcrumb: string[]}
   /** 1 for the root's children. */
   depth: number
   childCount: number
@@ -75,47 +73,45 @@ interface Node {
   /** The blocks its content embeds, shown as rows before its children, as
    *  the app shows them in its content. Not counted by `childCount`. */
   embeds: string[]
-  /** {@link OutlineRow.parentId}. */
-  viewParentId: string
   embedded: boolean
-  /** Child rows not placed because their block already has a row: an embed
-   *  showed it first, or a parent cycle leads back to it. Counted by
-   *  `childCount`, but nothing more to expand. Only rows actually fetched
-   *  are seen; such a child past the depth or under a collapsed block still
-   *  counts as hidden — accepted, since excluding it needs an ancestry walk
-   *  per child. */
-  placedChildren: number
+  /** Child rows refused as a cycle back to an already-placed block: counted
+   *  by `childCount`, but nothing more to expand. Only rows actually fetched
+   *  are seen; a cycle edge past the depth or under a collapsed block still
+   *  counts — accepted, since excluding it needs an ancestry walk per child
+   *  and only corrupt (cyclic) data has one. */
+  cycleChildren: number
+}
+
+interface Selection {
+  nodes: Map<string, Node>
+  /** The root's embeds shown, as {@link Node.embeds} is a row's. */
+  rootEmbeds: string[]
 }
 
 const isCollapsed = (block: BlockData): boolean => block.properties[isCollapsedProp.name] === true
 
 /** What a row's `(+N children)` counts once `kept` of its children are shown. */
-const hiddenChildCount = (node: Node, kept: number): number => node.childCount - kept - node.placedChildren
+const hiddenChildCount = (node: Node, kept: number): number => node.childCount - kept - node.cycleChildren
 
 /** Pick what to show breadth-first, so a budget spent on one deep branch never
  *  hides the root's other children: level by level, each level ordered by its
  *  parents' position and then sibling order, until the block budget or the
- *  depth runs out. A level's embedded rows come before its children, and an
- *  embedded block's own children follow at the next level like any row's. A
- *  block gets one row: an embed of a block already shown (an ancestor's, a
- *  cycle) is left to the host's reference note. */
+ *  depth runs out. A level's children are read before its embeds, which get
+ *  the budget left: an embed can then neither take a block's place among its
+ *  own siblings nor the budget the root's paging needs to move forward. An
+ *  embedded block's children follow at the next level like any row's. A block
+ *  gets one row: an embed of a block already shown is left to the host's note. */
 const selectNodes = async (
   repo: Repo,
   root: BlockData,
   {depth, limit, offset, expandCollapsed, expandEmbeds}: {
     depth: number, limit: number, offset: number, expandCollapsed: boolean, expandEmbeds: boolean
   },
-): Promise<Map<string, Node>> => {
+): Promise<Selection> => {
   const workspaceId = root.workspaceId
   const nodes = new Map<string, Node>()
+  const rootEmbeds: string[] = []
   const placed = (id: string) => id === root.id || nodes.has(id)
-  const place = (block: BlockData, childCount: number, level: number, viewParentId: string, embedded: boolean) => {
-    nodes.set(block.id, {block, childCount, depth: level, children: [], embeds: [], viewParentId, embedded, placedChildren: 0})
-  }
-  const loadWithCounts = async (ids: readonly string[]) => {
-    const [blocks, counts] = await Promise.all([loadBlocks(repo, ids, {workspaceId}), visibleChildCounts(repo, ids, workspaceId)])
-    return blocks.map(block => ({block, childCount: counts.get(block.id) ?? 0}))
-  }
   let budget = limit
   // The root shows its children even when collapsed, as the app shows those of
   // a collapsed block zoomed into; collapsed summarizes a block below the root.
@@ -125,42 +121,37 @@ const selectNodes = async (
   for (let level = 1; level <= depth && budget > 0 && (frontier.length > 0 || embedHosts.length > 0); level++) {
     const next: string[] = []
     const nextHosts: BlockData[] = []
-    const placedThisLevel = (block: BlockData, childCount: number) => {
+    const place = (block: BlockData, childCount: number, embedded: boolean) => {
+      nodes.set(block.id, {block, childCount, depth: level, children: [], embeds: [], embedded, cycleChildren: 0})
+      // An embed shows in the host's content whether or not the host is collapsed.
       if (expandEmbeds) nextHosts.push(block)
       if (childCount > 0 && (expandCollapsed || !isCollapsed(block))) next.push(block.id)
-    }
-    // An embed shows in the host's content whether or not the host is collapsed.
-    const embedded = await loadEmbedTargets(repo, workspaceId, embedHosts, loadWithCounts)
-    for (const host of embedHosts) {
-      for (const {block, childCount} of embedded.get(host.id) ?? []) {
-        if (budget <= 0) break
-        if (placed(block.id)) continue
-        place(block, childCount, level, host.id, true)
-        nodes.get(host.id)?.embeds.push(block.id)
-        budget -= 1
-        placedThisLevel(block, childCount)
-      }
     }
     const rows = await visibleChildrenLevel(repo, frontier, {workspaceId, limit: budget, offset: level === 1 ? offset : 0})
     budget -= rows.length
     for (const {block, childCount} of rows) {
-      // A parent cycle (sync applies parent ids verbatim), or an embed shown
-      // first, leads back to a block already placed; placing it again would
-      // give one block two rows.
+      // A parent cycle (sync applies parent ids verbatim) leads back to a
+      // block already placed; placing it again would re-parent it. A block an
+      // earlier level's embed shows is not one: it stays hidden here, so its
+      // parent's line still says a child is not shown.
       if (placed(block.id)) {
         const parent = nodes.get(block.parentId ?? '')
-        if (parent) parent.placedChildren += 1
+        if (parent && !nodes.get(block.id)?.embedded) parent.cycleChildren += 1
         continue
       }
-      place(block, childCount, level, block.parentId ?? root.id, false)
+      place(block, childCount, false)
       nodes.get(block.parentId ?? '')?.children.push(block.id)
-      placedThisLevel(block, childCount)
+    }
+    for (const {hostId, block, childCount} of await loadEmbedTargets(repo, workspaceId, embedHosts, {budget, placed})) {
+      place(block, childCount, true)
+      ;(hostId === root.id ? rootEmbeds : nodes.get(hostId)!.embeds).push(block.id)
+      budget -= 1
     }
     frontier = next
     embedHosts = nextHosts
   }
-  for (const node of nodes.values()) node.childCount = Math.max(node.childCount, node.children.length + node.placedChildren)
-  return nodes
+  for (const node of nodes.values()) node.childCount = Math.max(node.childCount, node.children.length + node.cycleChildren)
+  return {nodes, rootEmbeds}
 }
 
 /** Keep the longest prefix of the selection, in its breadth-first order (so
@@ -180,9 +171,8 @@ const keepWithinBudget = (nodes: Map<string, Node>, budget: number, lineChars: (
   for (const node of nodes.values()) {
     const ownHidden = hiddenChildCount(node, 0)
     // An embedded row is not its host's child: keeping it leaves the host's
-    // note as it was. Budget accounting only (a few characters either way);
-    // the printed note counts `node.children`, so no output test pins it.
-    const parent = node.embedded ? undefined : nodes.get(node.viewParentId)
+    // note as it was. Budget accounting only, a few characters either way.
+    const parent = node.embedded ? undefined : nodes.get(node.block.parentId ?? '')
     const parentHidden = parent ? hidden.get(parent.block.id)! : 0
     const cost = lineChars(node) + noteChars(node, ownHidden)
       + (parent ? noteChars(parent, parentHidden - 1) - noteChars(parent, parentHidden) : 0)
@@ -210,11 +200,10 @@ export const buildOutlineView = async (
   const limit = clampInt(params.limit, AGENT_VIEW_DEFAULTS.outlineLimit, MAX_BLOCKS)
   const offset = params.offset ?? 0
   const detail = params.properties ?? 'brief'
-  const expandRefs = params.expandRefs !== false
 
   const {root} = await loadRoot(repo, params.ref, workspaceId, async id => (await loadBlocks(repo, [id]))[0])
-  const nodes = await selectNodes(repo, root, {
-    depth, limit, offset, expandCollapsed: params.expandCollapsed === true, expandEmbeds: expandRefs,
+  const {nodes, rootEmbeds} = await selectNodes(repo, root, {
+    depth, limit, offset, expandCollapsed: params.expandCollapsed === true, expandEmbeds: expandsRefs(params),
   })
   const embeddedIds = [...nodes.values()].filter(node => node.embedded).map(node => node.block.id)
   const crumbs = await loadCrumbs(repo, [root.id, ...embeddedIds], workspaceId)
@@ -227,35 +216,33 @@ export const buildOutlineView = async (
   const rootChildCount = rootChildrenRead.length > 0 ? Math.max(counted, offset + rootChildrenRead.length) : counted
 
   const blocks = [root, ...[...nodes.values()].map(node => node.block)]
+  // A host's notes leave out the embeds selected as its rows; one the budget
+  // then drops is counted by `budgetDropped` instead.
+  const embedsOf = (id: string) => (id === root.id ? rootEmbeds : nodes.get(id)?.embeds) ?? []
   const [renderer, refs] = await Promise.all([
     createPropertyRenderer(repo, blocks, detail),
-    createRefResolver(repo, workspaceId, blocks.map(block => block.content), expandRefs),
+    resolveRowRefs(repo, workspaceId, blocks.map(block => ({...block, skip: new Set(embedsOf(block.id))})), params),
   ])
-  // A host's note leaves out the embeds selected as its rows; one the budget
-  // then drops is counted by `budgetDropped` instead.
-  const shownEmbeds = (id: string) => new Set(id === root.id
-    ? [...nodes.values()].filter(node => node.embedded && node.viewParentId === root.id).map(node => node.block.id)
-    : nodes.get(id)?.embeds)
 
   const viewRoot = {
-    ...toViewRow(root, {renderer, maxChars: ROOT_CHARS, refs, skipRefs: shownEmbeds(root.id)}),
+    ...toViewRow(root, {renderer, maxChars: ROOT_CHARS, refs: refs.get(root.id) ?? NO_REFS}),
     breadcrumb: crumbs.get(root.id) ?? [],
     childCount: rootChildCount,
   }
   const viewRows = new Map([...nodes].map(([id, node]) => [
     id,
-    toViewRow(node.block, {renderer, maxChars: LINE_CHARS, refs, skipRefs: shownEmbeds(id)}),
+    toViewRow(node.block, {renderer, maxChars: LINE_CHARS, refs: refs.get(id) ?? NO_REFS}),
   ]))
   const rowFields = (node: Node, hiddenChildren: number) => ({
     ...viewRows.get(node.block.id)!,
-    ...(node.embedded ? {embedded: {breadcrumb: crumbs.get(node.block.id) ?? []}} : {}),
+    ...(node.embedded ? {embedded: {parentId: node.block.parentId, breadcrumb: crumbs.get(node.block.id) ?? []}} : {}),
     depth: node.depth,
     childCount: node.childCount,
     hiddenChildren,
     collapsed: isCollapsed(node.block),
   })
   const headerChars = headerLines({root: viewRoot, offset}).reduce((sum, line) => sum + displayLineChars(line), 0)
-  const budgetDropped = keepWithinBudget(nodes, OUTPUT_CHARS - headerChars, node => displayLineChars(rowLine(rowFields(node, 0))))
+  const budgetDropped = keepWithinBudget(nodes, OUTPUT_CHARS - headerChars, node => rowLines(rowFields(node, 0)).reduce((sum, line) => sum + displayLineChars(line), 0))
 
   const rootChildren = rootChildrenRead.filter(id => nodes.has(id))
   const rows: OutlineRow[] = []
@@ -266,7 +253,7 @@ export const buildOutlineView = async (
       visit(id, [...node.embeds, ...node.children])
     }
   }
-  visit(root.id, [...shownEmbeds(root.id)].filter(id => nodes.has(id)).concat(rootChildren))
+  visit(root.id, [...rootEmbeds.filter(id => nodes.has(id)), ...rootChildren])
 
   const shownEnd = offset + rootChildren.length
   return {
@@ -279,7 +266,8 @@ export const buildOutlineView = async (
 }
 
 const headerLines = ({root, offset}: Pick<OutlineView, 'root' | 'offset'>): string[] => [
-  `${root.content}  ${idMark(root.id)}${metaSuffix(root)}  · ${plural(root.childCount, 'child', 'children')}${refSuffix(root)}`,
+  `${root.content}  ${idMark(root.id)}${metaSuffix(root)}  · ${plural(root.childCount, 'child', 'children')}`,
+  ...refLines(root, '  '),
   ...(root.breadcrumb.length > 0 ? [`in: ${crumbLine(root.breadcrumb)}`] : []),
   ...(offset > 0 ? [`(children from #${formatCount(offset + 1)})`] : []),
 ]
@@ -288,13 +276,17 @@ const hiddenSuffix = (row: Pick<OutlineRow, 'hiddenChildren' | 'collapsed'>): st
   ? `  (+${plural(row.hiddenChildren, 'child', 'children')}${row.collapsed ? ', collapsed' : ''})`
   : ''
 
-const embeddedSuffix = (row: Pick<OutlineRow, 'embedded'>): string =>
-  row.embedded ? `  (embedded; lives in: ${crumbLine(row.embedded.breadcrumb)})` : ''
+/** A row's line, then its notes: the row's id ends its line. */
+const rowLines = (row: Omit<OutlineRow, 'parentId'>): string[] => {
+  const indent = '  '.repeat(row.depth - 1)
+  return [
+    `${indent}- ${row.content}${metaSuffix(row)}  ${idMark(row.id)}${hiddenSuffix(row)}`,
+    ...(row.embedded ? [`${indent}  ↳ embedded; lives in: ${crumbLine(row.embedded.breadcrumb)}`] : []),
+    ...refLines(row, `${indent}  `),
+  ]
+}
 
-const rowLine = (row: Omit<OutlineRow, 'parentId'>): string =>
-  `${'  '.repeat(row.depth - 1)}- ${row.content}${metaSuffix(row)}  ${idMark(row.id)}${embeddedSuffix(row)}${hiddenSuffix(row)}${refSuffix(row)}`
-
-const EMBEDDED_LEGEND = '(embedded) = the row above embeds this block, shown as the app shows it; '
+const EMBEDDED_LEGEND = '↳ embedded = the row above embeds this block, shown as the app shows it; '
   + 'the id is the block\'s own, so an edit through it changes that block everywhere it appears.'
 
 export const renderOutlineView = (view: OutlineView): string => {
@@ -309,7 +301,7 @@ export const renderOutlineView = (view: OutlineView): string => {
     sawCut ||= row.cut > 0
     sawEmbedded ||= row.embedded !== undefined
     sawRefs ||= row.refs.length > 0
-    lines.push(rowLine(row))
+    lines.push(...rowLines(row))
   }
 
   if (view.nextOffset !== null) {

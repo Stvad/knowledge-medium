@@ -4,7 +4,7 @@ import { BlockRefError, resolveBlockRef, type BlockRefResolution } from './resol
 import { formatPropertyPairs, type PropertyLine, type PropertyRenderer } from './properties.ts'
 import { neutralizeDisplayText } from '@knowledge-medium/agent-cli/protocol'
 import { clipLine, formatCount, oneLine } from './text.ts'
-import { ROW_REFS, type RefResolver, type RowRefs } from './refs.ts'
+import type { RowRefs } from './refs.ts'
 
 /** One block as a view row: everything a line needs, already bounded. */
 export interface ViewRow extends RowRefs {
@@ -20,17 +20,16 @@ export interface ViewRow extends RowRefs {
 
 export const toViewRow = (
   block: BlockData,
-  {renderer, maxChars, refs, skipRefs}: {
+  {renderer, maxChars, refs}: {
     renderer: PropertyRenderer
     maxChars: number
-    refs: RefResolver
-    skipRefs?: ReadonlySet<string>
+    refs: RowRefs
   },
 ): ViewRow => {
   const clipped = clipLine(block.content, maxChars)
   const properties = renderer.view(block)
   return {
-    ...refs.notes(block.content, ROW_REFS, skipRefs),
+    ...refs,
     id: block.id,
     content: clipped.text === '' ? EMPTY_CONTENT : clipped.text,
     cut: clipped.cut,

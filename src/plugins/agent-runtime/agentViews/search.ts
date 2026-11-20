@@ -10,17 +10,15 @@ import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from '
 import { idMark } from './displayIds.ts'
 import { clampInt, crumbLine, joinDisplayLines, loadRoot, siblingLines } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
-import { createRefResolver, refSuffix, REFS_LEGEND, ROW_REFS, type RowRefs } from './refs.ts'
+import { NO_REFS, refLines, REFS_LEGEND, resolveRowRefs, type ExpandRefsParam, type RowRefs } from './refs.ts'
 
-export interface SearchParams {
+export interface SearchParams extends ExpandRefsParam {
   query: string
   limit?: number
   offset?: number
   types?: string[]
   under?: string
   includeExtensions?: boolean
-  /** Note each reference's text after its hit (default true). */
-  expandRefs?: boolean
 }
 
 export interface SearchDuplicate {
@@ -174,7 +172,7 @@ export const buildSearchView = async (
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
   const [renderer, refs, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
-    createRefResolver(repo, workspaceId, shown.map(block => block.content), params.expandRefs !== false),
+    resolveRowRefs(repo, workspaceId, shown, params),
     loadCrumbs(repo, [...shownIds, ...duplicateIds], workspaceId),
     recordSiblings(repo, shownIds, records, workspaceId),
   ])
@@ -196,7 +194,7 @@ export const buildSearchView = async (
         id: block.id,
         breadcrumb: crumbs.get(block.id) ?? [],
         snippet: snippet(block.content, params.query),
-        ...refs.notes(block.content, ROW_REFS),
+        ...refs.get(block.id) ?? NO_REFS,
         types: renderer.typeLabels(block),
         properties: properties.visible,
         omittedProperties: properties.omitted,
@@ -247,7 +245,7 @@ export const renderSearchView = (view: SearchView): string => {
       ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${listed.join('; ')}${unlisted > 0 ? `; …+${formatCount(unlisted)} more` : ''})`
       : ''
     lines.push(`${view.offset + index + 1}. ${idMark(hit.id)}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
-    lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}${refSuffix(hit)}`)
+    lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`, ...refLines(hit, '   '))
     lines.push(...siblingLines(hit.siblings))
   })
   if (capNote) lines.push(capNote)

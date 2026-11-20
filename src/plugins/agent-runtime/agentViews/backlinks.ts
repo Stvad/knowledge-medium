@@ -36,7 +36,7 @@ import {
   toViewRow,
   type ViewRow,
 } from './shared.ts'
-import { createRefResolver, refSuffix, REFS_LEGEND } from './refs.ts'
+import { NO_REFS, refLines, REFS_LEGEND, resolveRowRefs, type ExpandRefsParam } from './refs.ts'
 import { boundLabels, clipLine, CONTEXT_HEAD_CHARS, contextPreview, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
@@ -135,14 +135,16 @@ const backlinkRows = async (
   targetId: string,
   sources: readonly BlockData[],
   positionOf: (id: string) => number,
-  expandRefs: boolean,
+  params: ExpandRefsParam,
 ): Promise<BacklinkRow[]> => {
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
+  const targetOnly = new Set([targetId])
   const parentIds = [...new Set(linkOnly.flatMap(source => contextParentId(source) ?? []))]
   const [renderer, refs, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
     createPropertyRenderer(repo, sources, 'brief'),
-    createRefResolver(repo, workspaceId, sources.map(source => source.content), expandRefs),
+    // A reference to the target is what put the row here; the header names it.
+    resolveRowRefs(repo, workspaceId, sources.map(source => ({...source, skip: targetOnly})), params),
     loadCrumbs(repo, ids, workspaceId),
     visibleChildCounts(repo, ids, workspaceId),
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
@@ -152,8 +154,7 @@ const backlinkRows = async (
   ])
   return sources.map(source => {
     const row: BacklinkRow = {
-      // A reference to the target is what put the row here; the header names it.
-      ...toViewRow(source, {renderer, maxChars: ROW_CHARS, refs, skipRefs: new Set([targetId])}),
+      ...toViewRow(source, {renderer, maxChars: ROW_CHARS, refs: refs.get(source.id) ?? NO_REFS}),
       position: positionOf(source.id),
       parentId: source.parentId,
       breadcrumb: crumbs.get(source.id) ?? [],
@@ -175,10 +176,8 @@ const backlinkRows = async (
   })
 }
 
-export interface BacklinksParams {
+export interface BacklinksParams extends ExpandRefsParam {
   ref: string
-  /** Note each reference's text after its row (default true). */
-  expandRefs?: boolean
   limit?: number
   offset?: number
   filter?: BacklinksFilterSpec
@@ -210,7 +209,7 @@ export const buildBacklinksView = async (
     offset,
     nextOffset: end < ids.length ? end : null,
     filter: filter ?? null,
-    rows: await backlinkRows(repo, block.workspaceId, block.id, sources, id => offset + page.indexOf(id) + 1, params.expandRefs !== false),
+    rows: await backlinkRows(repo, block.workspaceId, block.id, sources, id => offset + page.indexOf(id) + 1, params),
   }
 }
 
@@ -223,12 +222,17 @@ const samePlace = (row: BacklinkRow, previous: BacklinkRow): boolean =>
 const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean): string[] => {
   const via = row.viaProperties.length > 0 ? `  [via ${row.viaProperties.join(', ')}]` : ''
   const children = row.childCount > 0 ? `  (${plural(row.childCount, 'child', 'children')})` : ''
-  const body = `${row.content}${metaSuffix(row)}${children}${refSuffix(row)}`
+  const body = `${row.content}${metaSuffix(row)}${children}`
   const firstChild = row.firstChildContent ? `   ↳ first child: ${row.firstChildContent}` : null
   if (samePlace) {
-    return [`${index}. ${idMark(row.id)}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : []), ...siblingLines(row.siblings)]
+    return [
+      `${index}. ${idMark(row.id)}  (same place as above)${via}  ${body}`,
+      ...refLines(row, '   '),
+      ...(firstChild ? [firstChild] : []),
+      ...siblingLines(row.siblings),
+    ]
   }
-  const lines = [`${index}. ${idMark(row.id)}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`]
+  const lines = [`${index}. ${idMark(row.id)}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`, ...refLines(row, '   ')]
   if (row.parentContent) lines.push(`   ↳ parent: ${row.parentContent}`)
   if (firstChild) lines.push(firstChild)
   lines.push(...siblingLines(row.siblings))
@@ -316,11 +320,11 @@ export const buildGroupedBacklinksView = async (
   const membersPerGroup = Math.max(1, Math.min(requestedPerGroup, Math.floor(MAX_BACKLINKS / Math.max(1, page.length))))
   const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
   const members = await loadBlocks(repo, memberIds, {workspaceId: block.workspaceId})
+  const targetOnly = new Set([block.id])
   const [renderer, refs] = await Promise.all([
     createPropertyRenderer(repo, members, 'brief'),
-    createRefResolver(repo, block.workspaceId, members.map(member => member.content), params.expandRefs !== false),
+    resolveRowRefs(repo, block.workspaceId, members.map(member => ({...member, skip: targetOnly})), params),
   ])
-  const skipRefs = new Set([block.id])
   const memberById = new Map(members.map(member => [member.id, member]))
   const end = offset + page.length
 
@@ -343,7 +347,7 @@ export const buildGroupedBacklinksView = async (
         members: consumed
           .flatMap(id => {
             const member = memberById.get(id)
-            return member ? [toViewRow(member, {renderer, maxChars: ROW_CHARS, refs, skipRefs})] : []
+            return member ? [toViewRow(member, {renderer, maxChars: ROW_CHARS, refs: refs.get(member.id) ?? NO_REFS})] : []
           }),
       }
     }),
@@ -358,7 +362,9 @@ export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string =
     const id = group.groupId === null ? '' : `  ${idMark(group.groupId)}`
     lines.push(`## ${group.label}${id}  (${formatCount(group.memberCount)})`)
     if (view.memberOffset > 0) lines.push(`  (members from #${formatCount(view.memberOffset + 1)})`)
-    for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member)}  ${idMark(member.id)}${refSuffix(member)}`)
+    for (const member of group.members) {
+      lines.push(`- ${member.content}${metaSuffix(member)}  ${idMark(member.id)}`, ...refLines(member, '  '))
+    }
     if (group.nextMemberOffset !== null) {
       const rest = group.memberCount - group.nextMemberOffset
       lines.push(`  +${formatCount(rest)} more — memberOffset=${group.nextMemberOffset} offset=${view.offset + index} limit=1 continues this group`)

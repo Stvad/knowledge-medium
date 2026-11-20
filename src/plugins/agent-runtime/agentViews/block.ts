@@ -6,14 +6,12 @@ import { createPropertyRenderer, type PropertyLine } from './properties.ts'
 import { boundDisplayId, idMark } from './displayIds.ts'
 import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
 import { charBoundary, formatCount } from './text.ts'
-import { createRefResolver, refLines, REFS_LEGEND, type RowRefs } from './refs.ts'
+import { NO_REFS, refLines, REFS_LEGEND, resolveRowRefs, type ExpandRefsParam, type RowRefs } from './refs.ts'
 
-export interface BlockViewParams {
+export interface BlockViewParams extends ExpandRefsParam {
   ref: string
   maxChars?: number
   contentOffset?: number
-  /** List what each reference shows (default true). */
-  expandRefs?: boolean
 }
 
 /** The notes the view lists: the whole block's, not one content page's. */
@@ -65,7 +63,7 @@ export const buildBlockView = async (
 
   const [renderer, refs, crumbs, childCounts, backlinkCount] = await Promise.all([
     createPropertyRenderer(repo, [block], 'full'),
-    createRefResolver(repo, workspaceId, [block.content], params.expandRefs !== false),
+    resolveRowRefs(repo, workspaceId, [block], params, BLOCK_REFS),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id], workspaceId),
     // The count of the backlinks view's own set, which owns that equality;
@@ -91,7 +89,7 @@ export const buildBlockView = async (
     childCount: childCounts.get(block.id) ?? 0,
     backlinkCount,
     editedAt: validIso(editedAt),
-    ...refs.notes(block.content, BLOCK_REFS),
+    ...refs.get(block.id) ?? NO_REFS,
   }
 }
 
@@ -113,8 +111,8 @@ export const renderBlockView = (view: BlockView): string => {
     lines.push(`…[+${formatCount(rest)} chars — continue with contentOffset=${view.nextContentOffset}]`)
   }
   if (view.refs.length > 0) {
-    lines.push('')
-    lines.push(...refLines(view), REFS_LEGEND)
+    // Headed, since content can itself hold a blank line or a line starting with ↳.
+    lines.push('', 'references (not part of the content):', ...refLines(view), REFS_LEGEND)
   }
   if (view.properties.length > 0) {
     lines.push('')

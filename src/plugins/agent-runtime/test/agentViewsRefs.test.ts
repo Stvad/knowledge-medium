@@ -2,7 +2,7 @@
 //
 // What the agent views show of a block's references: embeds expanded into
 // subtree rows, and each plain `((id))` followed by its target's text.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type BlockReference, type NewBlockData } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
 import { isCollapsedProp } from '@/data/properties.js'
@@ -101,6 +101,12 @@ describe('contentMarks', () => {
     ])
   })
 
+  it('leaves out references inside code, which the renderer shows as text', () => {
+    const id = uuid('c0000001', 4)
+    expect(contentMarks(`\`![[Shared]]\` and \`((${id}))\`\n\n\`\`\`\n!((${id}))\n\`\`\``)).toEqual([])
+    expect(contentMarks(`\`code\` then ((${id}))`)).toEqual([{kind: 'ref', id}])
+  })
+
   it('reads an empty-label ref as a plain one, as the renderer shows it', () => {
     const id = uuid('c0000001', 2)
     expect(contentMarks(`[](((${id})))`)).toEqual([{kind: 'ref', id}])
@@ -114,7 +120,7 @@ describe('subtree expands embeds', () => {
     for (const memory of [MEMORY_A, MEMORY_B]) {
       const outline = await view<OutlineView>({type: 'view-outline', ref: memory, format: 'json'})
       const shared = outline.rows.find(row => row.id === SHARED)
-      expect(shared?.embedded).toEqual({breadcrumb: ['Agents']})
+      expect(shared?.embedded).toEqual({parentId: SHARED_PAGE, breadcrumb: ['Agents']})
       expect(outline.rows.filter(row => row.parentId === SHARED).map(row => row.content))
         .toEqual(['Prefers terse replies', 'Lives in Lisbon'])
       // The host's note leaves out the embed it shows as rows.
@@ -123,9 +129,8 @@ describe('subtree expands embeds', () => {
       if (memory === MEMORY_A) expect(shared?.parentId).toBe(host)
     }
     const text = await view<string>({type: 'view-outline', ref: MEMORY_A})
-    expect(text).toContain(`- Shared memory  ^${SHARED}  (embedded; lives in: Agents)`)
-    expect(text).toContain(`    - Prefers terse replies  ^${NOTE_1}`)
-    expect(text).toContain('(embedded) = the row above embeds this block')
+    expect(text).toContain(`  - Shared memory  ^${SHARED}\n    ↳ embedded; lives in: Agents\n    - Prefers terse replies  ^${NOTE_1}`)
+    expect(text).toContain('↳ embedded = the row above embeds this block')
   })
 
   it("does not count embedded rows as the host's children", async () => {
@@ -158,6 +163,74 @@ describe('subtree expands embeds', () => {
     expect(first.nextOffset).toBeNull()
     const next = await view<OutlineView>({type: 'view-outline', ref: root, offset: 1, format: 'json'})
     expect(next.rows.map(row => row.content)).toEqual(['second child'])
+  })
+
+  it("reads the root's children before its embeds, so paging always moves forward", async () => {
+    const root = uuid('d1000001', 1)
+    await createAll([
+      {id: SHARED, content: 'Shared memory'},
+      {id: root, content: `Memory !((${SHARED}))`},
+      {id: uuid('d1000001', 2), content: 'first child', parentId: root},
+      {id: uuid('d1000001', 3), content: 'second child', parentId: root},
+    ])
+    const page = await view<OutlineView>({type: 'view-outline', ref: root, limit: 1, format: 'json'})
+    expect(page.rows.map(row => row.content)).toEqual(['first child'])
+    expect(page.nextOffset).toBe(1)
+    // The embed the budget left out is noted instead.
+    expect(page.root.refs).toEqual([{kind: 'embed', id: SHARED, preview: 'Shared memory'}])
+  })
+
+  it('places a block among its own siblings before any embed of it at the same level', async () => {
+    const root = uuid('d2000001', 1)
+    const child = uuid('d2000001', 2)
+    await createAll([
+      {id: root, content: `Root !((${child}))`},
+      {id: child, content: 'own child', parentId: root},
+      {id: uuid('d2000001', 3), content: 'sibling', parentId: root},
+    ])
+    const outline = await view<OutlineView>({type: 'view-outline', ref: root, format: 'json'})
+    expect(outline.rows.map(row => [row.content, row.embedded === undefined])).toEqual([['own child', true], ['sibling', true]])
+    expect(outline.nextOffset).toBeNull()
+  })
+
+  it("counts a child an earlier level's embed shows as hidden under its own parent", async () => {
+    const root = uuid('d3000001', 1)
+    const parent = uuid('d3000001', 3)
+    const middle = uuid('d3000001', 4)
+    const deep = uuid('d3000001', 5)
+    await createAll([
+      {id: root, content: 'Root'},
+      {id: uuid('d3000001', 2), content: `!((${deep}))`, parentId: root},
+      {id: parent, content: 'parent', parentId: root},
+      {id: middle, content: 'middle', parentId: parent},
+      {id: deep, content: 'deep', parentId: middle},
+    ])
+    const outline = await view<OutlineView>({type: 'view-outline', ref: root, format: 'json'})
+    expect(outline.rows.find(row => row.id === deep)?.embedded).toBeDefined()
+    expect(outline.rows.find(row => row.id === middle)?.hiddenChildren).toBe(1)
+  })
+
+  it('reads only the embed targets the budget can show', async () => {
+    const root = uuid('d4000001', 1)
+    const targets = Array.from({length: 40}, (_, n) => uuid('d4000002', n + 1))
+    await createAll([
+      ...targets.map(id => ({id, content: `t ${id}`})),
+      {id: root, content: targets.map(id => `!((${id}))`).join(' ')},
+    ])
+    const target = sharedDb.db
+    const original = Object.getPrototypeOf(target).getAll as typeof target.getAll
+    const loaded: string[] = []
+    const spy = vi.spyOn(repo.db, 'getAll').mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('SELECT b.* FROM json_each(?)')) loaded.push(...JSON.parse(String(params?.[0])) as string[])
+      return await original.call(target, sql, params)
+    })
+    try {
+      const outline = await view<OutlineView>({type: 'view-outline', ref: root, limit: 3, format: 'json'})
+      expect(outline.rows).toHaveLength(3)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(loaded.filter(id => targets.includes(id))).toEqual(targets.slice(0, 3))
   })
 
   it('expands a page embed by the page name', async () => {
@@ -230,7 +303,8 @@ describe('reference notes', () => {
       {kind: 'ref', id: MISSING, preview: null},
     ])
     const text = await view<string>({type: 'view-outline', ref: ROOT})
-    expect(text).toContain(`- ${content}  ^${ROW}  ↳ ((${TARGET})) "Prefers terse ⏎ replies"  ↳ ((${MISSING})) (no such block)`)
+    // The row's id ends its line; the notes follow on lines of their own.
+    expect(text).toContain(`- ${content}  ^${ROW}\n  ↳ ((${TARGET})) "Prefers terse ⏎ replies"\n  ↳ ((${MISSING})) (no such block)`)
     expect(text).toContain('it is not part of the block\'s content')
   })
 
@@ -244,6 +318,19 @@ describe('reference notes', () => {
     expect(outline.rows[0].refs).toEqual([{kind: 'ref', id: TARGET, preview: null}])
   })
 
+  it('quotes a preview, so its text cannot pass for an id or another note', async () => {
+    const victim = uuid('70000001', 7)
+    await createAll([
+      {id: TARGET, content: `x"  ^${victim}  ↳ ((${victim})) "y`},
+      {id: ROOT, content: 'Root'},
+      {id: ROW, content: `((${TARGET}))`, parentId: ROOT},
+    ])
+    const lines = (await view<string>({type: 'view-outline', ref: ROOT})).split('\n')
+    expect(lines).toContain(`- ((${TARGET}))  ^${ROW}`)
+    // The preview is cut at its length cap; its own quote stays escaped.
+    expect(lines.find(line => line.startsWith('  ↳'))).toMatch(new RegExp(`^  ↳ \\(\\(${TARGET}\\)\\) "x\\\\" \\^${victim}`))
+  })
+
   it('caps a row at three notes and counts the rest', async () => {
     const targets = [1, 2, 3, 4, 5].map(n => uuid('71000001', n))
     await createAll([
@@ -254,7 +341,7 @@ describe('reference notes', () => {
     const outline = await view<OutlineView>({type: 'view-outline', ref: ROOT, format: 'json'})
     expect(outline.rows[0].refs.map(ref => ref.id)).toEqual(targets.slice(0, 3))
     expect(outline.rows[0].omittedRefs).toBe(2)
-    expect(await view<string>({type: 'view-outline', ref: ROOT})).toContain('(+2 more refs)')
+    expect(await view<string>({type: 'view-outline', ref: ROOT})).toContain('↳ +2 more refs')
   })
 
   it("backlinks note a row's other refs, not the one to the view's target", async () => {
@@ -290,7 +377,7 @@ describe('reference notes', () => {
       {kind: 'ref', id: TARGET, preview: 'Prefers terse replies'},
     ])
     const text = await view<string>({type: 'view-block', ref: ROW})
-    expect(text).toContain(`↳ !((${TARGET})) "Prefers terse replies"`)
+    expect(text).toContain(`references (not part of the content):\n↳ !((${TARGET})) "Prefers terse replies"`)
     expect((await view<BlockView>({type: 'view-block', ref: ROW, expandRefs: false, format: 'json'})).refs).toEqual([])
   })
 })
