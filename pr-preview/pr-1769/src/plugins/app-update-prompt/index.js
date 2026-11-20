@@ -1,1 +1,1 @@
-export{WP as appUpdatePromptExtension}from"../../../chunks/app-PRAdNSCa.js";
+export{WP as appUpdatePromptExtension}from"../../../chunks/app-Dy5NUWxc.js";
