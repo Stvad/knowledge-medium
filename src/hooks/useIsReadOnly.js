@@ -1,1 +1,1 @@
-export{sx as useIsReadOnly}from"../../chunks/app-Ch9qixOw.js";
+export{sx as useIsReadOnly}from"../../chunks/app-7XW1YvkF.js";
