@@ -11,11 +11,21 @@ export interface MaterializeFixture {
 
 export const MATERIALIZE_WORKSPACE_ID = 'bench-materialize-workspace'
 export const MATERIALIZE_USER_ID = 'bench-materialize-user'
-export const materializeFixtureId = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`
+const sequentialFixtureId = (n: number) =>
+  `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`
+export const materializeFixtureId = sequentialFixtureId
 export const materializeFixtureAlias = (n: number) => `bench-alias-${n}`
 
+/** Same uniqueness (trailing n) but the leading hex is a multiplicative scramble of n, so
+ *  ids are deterministic yet scattered across the key space like real random UUIDs. */
+export const materializeScrambledFixtureId = (n: number) =>
+  `${(Math.imul(n, 0x9e3779b1) >>> 0).toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString().padStart(12, '0')}`
+
 /** Deterministic, browser-safe synthetic records shared by Node and WebKit benches. */
-export const makeMaterializeFixture = (count: number): MaterializeFixture => {
+export const makeMaterializeFixture = (
+  count: number, options: {randomIds?: boolean} = {},
+): MaterializeFixture => {
+  const materializeFixtureId = options.randomIds ? materializeScrambledFixtureId : sequentialFixtureId
   const blocks: BlockData[] = []
   const expectedPlaintext = new Map<string, BlockData>()
   let aliasCount = 0
