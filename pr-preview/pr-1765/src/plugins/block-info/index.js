@@ -1,0 +1,1 @@
+export{Bv as blockInfoPlugin}from"../../../chunks/app-Dgx6ap-c.js";

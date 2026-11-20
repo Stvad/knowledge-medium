@@ -1,0 +1,1 @@
+export{aM as useCommandPaletteActions}from"../../../chunks/app-Dgx6ap-c.js";

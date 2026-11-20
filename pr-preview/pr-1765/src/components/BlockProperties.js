@@ -1,0 +1,1 @@
+export{wV as BlockProperties}from"../../chunks/app-Dgx6ap-c.js";

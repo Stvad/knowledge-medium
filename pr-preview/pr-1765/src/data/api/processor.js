@@ -1,0 +1,1 @@
+export{wdt as definePostCommitProcessor}from"../../../chunks/app-Dgx6ap-c.js";

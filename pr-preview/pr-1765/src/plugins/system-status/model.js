@@ -1,0 +1,1 @@
+export{Gc as getSyncIndicatorView}from"../../../chunks/app-Dgx6ap-c.js";

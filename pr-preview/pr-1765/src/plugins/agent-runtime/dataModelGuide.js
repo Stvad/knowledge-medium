@@ -1,0 +1,1 @@
+export{gv as DATA_MODEL_GUIDE,_v as dataModelGuide}from"../../../chunks/app-Dgx6ap-c.js";

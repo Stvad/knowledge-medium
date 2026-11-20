@@ -1,0 +1,1 @@
+export{KQ as characterCounterDataExtension}from"../../../chunks/app-Dgx6ap-c.js";

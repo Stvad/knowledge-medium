@@ -1,0 +1,1 @@
+export{Rw as SpatialNavigationShellDecorator}from"../../../chunks/app-Dgx6ap-c.js";

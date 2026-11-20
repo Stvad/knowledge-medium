@@ -1,0 +1,1 @@
+export{E1 as aliasDataExtension}from"../../../chunks/app-Dgx6ap-c.js";

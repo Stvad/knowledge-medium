@@ -1,0 +1,1 @@
+export{uI as LazyBlockComponent}from"../../chunks/app-Dgx6ap-c.js";

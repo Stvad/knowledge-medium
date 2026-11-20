@@ -1,0 +1,1 @@
+export{tK as usePropertySchemas}from"../../chunks/app-Dgx6ap-c.js";

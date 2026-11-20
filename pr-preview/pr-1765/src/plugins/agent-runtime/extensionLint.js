@@ -1,0 +1,1 @@
+export{bg as lintExtensionSource}from"../../../chunks/app-Dgx6ap-c.js";

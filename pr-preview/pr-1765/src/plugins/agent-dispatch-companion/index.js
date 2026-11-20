@@ -1,0 +1,1 @@
+export{ih as agentDispatchCompanionPlugin}from"../../../chunks/app-Dgx6ap-c.js";

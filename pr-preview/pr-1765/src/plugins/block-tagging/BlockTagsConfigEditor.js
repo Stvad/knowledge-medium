@@ -1,0 +1,1 @@
+export{Bu as BlockTagsConfigEditor}from"../../../chunks/app-Dgx6ap-c.js";

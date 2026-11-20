@@ -1,0 +1,1 @@
+export{Kp as confirmThreadDeletion}from"../../../chunks/app-Dgx6ap-c.js";

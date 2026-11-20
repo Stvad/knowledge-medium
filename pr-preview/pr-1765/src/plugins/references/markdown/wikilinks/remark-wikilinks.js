@@ -1,0 +1,1 @@
+export{ab as remarkWikilinks}from"../../../../../chunks/app-Dgx6ap-c.js";

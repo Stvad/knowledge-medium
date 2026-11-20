@@ -1,0 +1,1 @@
+export{ib as Wikilink}from"../../../../../chunks/app-Dgx6ap-c.js";

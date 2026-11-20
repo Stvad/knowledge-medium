@@ -1,0 +1,1 @@
+export{$_ as CONTEXT_HEAD_CHARS,ev as boundLabels,kv as charBoundary,Av as clip,tv as clipLine,nv as contextPreview,jv as cutMarker,rv as ellipsize,iv as firstAliasSql,Mv as formatCount,av as isLabel,ov as isReferenceOnly,sv as oneLine,cv as snippet,lv as textBeyondLinks,uv as textHeadSql}from"../../../../chunks/app-Dgx6ap-c.js";

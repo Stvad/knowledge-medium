@@ -1,0 +1,1 @@
+export{vst as deriveWorkspaceIdNamespace}from"../../../chunks/app-Dgx6ap-c.js";

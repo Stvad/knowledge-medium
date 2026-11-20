@@ -1,0 +1,1 @@
+export{ny as backlinksPlugin}from"../../../chunks/app-Dgx6ap-c.js";

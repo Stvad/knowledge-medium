@@ -1,0 +1,1 @@
+export{NN as chipStyle}from"../../../chunks/app-Dgx6ap-c.js";

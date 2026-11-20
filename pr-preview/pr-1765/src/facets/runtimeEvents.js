@@ -1,0 +1,1 @@
+export{lK as appRuntimeUpdateEvent,uK as refreshAppRuntime}from"../../chunks/app-Dgx6ap-c.js";

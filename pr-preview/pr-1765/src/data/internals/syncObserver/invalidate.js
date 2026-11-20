@@ -1,0 +1,1 @@
+export{l8 as applySyncInvalidation}from"../../../../chunks/app-Dgx6ap-c.js";

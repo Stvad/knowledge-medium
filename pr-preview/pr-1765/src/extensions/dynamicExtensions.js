@@ -1,0 +1,1 @@
+export{kF as dynamicExtensionsExtension}from"../../chunks/app-Dgx6ap-c.js";

@@ -1,0 +1,1 @@
+export{rE as usePromotableBreadcrumb}from"../../../chunks/app-Dgx6ap-c.js";

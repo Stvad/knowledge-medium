@@ -1,0 +1,1 @@
+export{CN as BlockEmbed}from"../../../chunks/app-Dgx6ap-c.js";

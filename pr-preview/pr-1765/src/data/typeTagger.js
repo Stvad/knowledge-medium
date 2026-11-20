@@ -1,0 +1,1 @@
+export{M4 as TypeTagger,N4 as applyTypeTagInTx}from"../../chunks/app-Dgx6ap-c.js";

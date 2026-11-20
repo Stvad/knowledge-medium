@@ -1,0 +1,1 @@
+export{E2 as instrumentAdapter}from"../../../chunks/app-Dgx6ap-c.js";

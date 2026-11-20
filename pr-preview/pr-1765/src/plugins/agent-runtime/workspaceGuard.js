@@ -1,0 +1,1 @@
+export{Yg as assertActiveWorkspace}from"../../../chunks/app-Dgx6ap-c.js";

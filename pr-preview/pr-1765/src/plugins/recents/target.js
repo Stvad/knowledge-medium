@@ -1,0 +1,1 @@
+export{WO as openRecentsPage}from"../../../chunks/app-Dgx6ap-c.js";

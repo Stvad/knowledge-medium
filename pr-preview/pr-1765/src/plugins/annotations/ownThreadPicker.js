@@ -1,0 +1,1 @@
+export{Wf as moveCommentToOwnThread}from"../../../chunks/app-Dgx6ap-c.js";

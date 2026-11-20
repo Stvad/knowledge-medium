@@ -1,0 +1,1 @@
+export{xC as videoPlayerPlugin}from"../../../chunks/app-Dgx6ap-c.js";

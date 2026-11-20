@@ -1,0 +1,1 @@
+export{d as holdScreenWakeLock}from"../../chunks/app-Dgx6ap-c.js";

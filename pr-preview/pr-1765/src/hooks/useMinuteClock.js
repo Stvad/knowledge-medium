@@ -1,0 +1,1 @@
+export{HO as useMinuteClock}from"../../chunks/app-Dgx6ap-c.js";

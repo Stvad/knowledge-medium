@@ -1,0 +1,1 @@
+export{EQ as contributorsDataExtension}from"../../../chunks/app-Dgx6ap-c.js";

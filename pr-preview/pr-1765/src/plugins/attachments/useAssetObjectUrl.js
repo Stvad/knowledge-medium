@@ -1,0 +1,1 @@
+export{WS as useAssetObjectUrl}from"../../../chunks/app-Dgx6ap-c.js";

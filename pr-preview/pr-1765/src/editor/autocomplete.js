@@ -1,0 +1,1 @@
+export{DP as editorAutocompleteExtension}from"../../chunks/app-Dgx6ap-c.js";

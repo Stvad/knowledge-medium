@@ -1,0 +1,1 @@
+export{MP as extensionPromptDiagnosticContribution,NP as extensionPromptDiagnosticSource}from"../../../chunks/app-Dgx6ap-c.js";

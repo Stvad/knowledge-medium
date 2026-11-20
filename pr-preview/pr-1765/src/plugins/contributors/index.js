@@ -1,0 +1,1 @@
+export{Ym as contributorsPlugin}from"../../../chunks/app-Dgx6ap-c.js";

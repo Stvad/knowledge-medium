@@ -1,0 +1,1 @@
+export{OI as DialogHost,kI as dialogAppMountExtension}from"../../chunks/app-Dgx6ap-c.js";

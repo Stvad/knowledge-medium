@@ -1,0 +1,1 @@
+export{IE as WorkspaceSwitcher}from"../../../chunks/app-Dgx6ap-c.js";

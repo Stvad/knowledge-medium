@@ -1,0 +1,1 @@
+export{Cx as attachmentsPlugin}from"../../../chunks/app-Dgx6ap-c.js";

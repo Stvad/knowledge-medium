@@ -1,0 +1,1 @@
+export{QT as mobileBottomNavItemsFacet}from"../../../chunks/app-Dgx6ap-c.js";

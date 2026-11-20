@@ -1,0 +1,1 @@
+export{YV as typePropertyGroups}from"../../chunks/app-Dgx6ap-c.js";

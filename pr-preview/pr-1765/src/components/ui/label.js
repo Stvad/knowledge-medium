@@ -1,0 +1,1 @@
+export{qk as Label}from"../../../chunks/app-Dgx6ap-c.js";

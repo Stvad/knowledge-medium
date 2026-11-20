@@ -1,0 +1,1 @@
+export{yI as defaultRegistry,bI as defaultRendererContributions,xI as defaultRenderersExtension}from"../../chunks/app-Dgx6ap-c.js";

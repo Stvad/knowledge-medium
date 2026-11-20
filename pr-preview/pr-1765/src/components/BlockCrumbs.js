@@ -1,0 +1,1 @@
+export{hk as BlockCrumbs}from"../../chunks/app-Dgx6ap-c.js";

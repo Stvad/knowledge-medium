@@ -1,0 +1,1 @@
+export{VM as SwipeActionMenu}from"../../../chunks/app-Dgx6ap-c.js";

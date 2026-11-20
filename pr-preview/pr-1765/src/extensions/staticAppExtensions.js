@@ -1,0 +1,1 @@
+export{Jt as staticAppExtensions}from"../../chunks/app-Dgx6ap-c.js";

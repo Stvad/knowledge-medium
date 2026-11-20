@@ -1,0 +1,1 @@
+export{ob as blockrefMarkdownExtension}from"../../../../../chunks/app-Dgx6ap-c.js";

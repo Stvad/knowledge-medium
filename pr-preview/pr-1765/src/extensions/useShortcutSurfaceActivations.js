@@ -1,0 +1,1 @@
+export{dz as useShortcutSurfaceActivations}from"../../chunks/app-Dgx6ap-c.js";

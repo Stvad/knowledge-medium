@@ -1,0 +1,1 @@
+export{HK as SuspenseFallback}from"../../../chunks/app-Dgx6ap-c.js";

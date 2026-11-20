@@ -1,0 +1,1 @@
+export{DF as resolveAppRuntime,OF as resolveAppRuntimeSync}from"../../chunks/app-Dgx6ap-c.js";

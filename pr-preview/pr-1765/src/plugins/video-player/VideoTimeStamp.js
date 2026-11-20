@@ -1,0 +1,1 @@
+export{TC as default}from"../../../chunks/app-Dgx6ap-c.js";

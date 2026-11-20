@@ -1,0 +1,1 @@
+export{Lg as authorIdOf}from"../../../chunks/app-Dgx6ap-c.js";

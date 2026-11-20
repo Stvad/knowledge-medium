@@ -1,0 +1,1 @@
+export{rb as wikilinkMarkdownExtension}from"../../../../../chunks/app-Dgx6ap-c.js";

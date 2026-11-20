@@ -1,0 +1,1 @@
+export{uat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,dat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,fat as __resetLayoutSessionIdForTesting,pat as getLayoutSessionId,mat as isInstalledAppDisplayMode,hat as readOrCreateLayoutSessionId}from"../../chunks/app-Dgx6ap-c.js";

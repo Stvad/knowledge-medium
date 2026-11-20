@@ -1,0 +1,1 @@
+export{Ott as parsePropertyDefinitionMetadata,ktt as propertySchemaOriginForSeedKey}from"../../chunks/app-Dgx6ap-c.js";
