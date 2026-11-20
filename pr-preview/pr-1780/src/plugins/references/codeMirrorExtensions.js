@@ -1,1 +1,1 @@
-export{Bb as aliasCompletions,Vb as buildBlockrefSource,Hb as buildWikilinkSource,Ub as referencesCodeMirrorExtensions}from"../../../chunks/app-FE73ADoW.js";
+export{Bb as aliasCompletions,Vb as buildBlockrefSource,Hb as buildWikilinkSource,Ub as referencesCodeMirrorExtensions}from"../../../chunks/app-Bob5CDCH.js";

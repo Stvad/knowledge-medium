@@ -1,1 +1,1 @@
-export{QN as BlockEmbed}from"../../../chunks/app-FE73ADoW.js";
+export{QN as BlockEmbed}from"../../../chunks/app-Bob5CDCH.js";

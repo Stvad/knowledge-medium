@@ -1,1 +1,1 @@
-export{Bc as requestPersistenceActionContribution}from"../../../chunks/app-FE73ADoW.js";
+export{Bc as requestPersistenceActionContribution}from"../../../chunks/app-Bob5CDCH.js";

@@ -1,1 +1,1 @@
-export{FX as dailyNotesLocalSchema}from"../../../chunks/app-FE73ADoW.js";
+export{FX as dailyNotesLocalSchema}from"../../../chunks/app-Bob5CDCH.js";

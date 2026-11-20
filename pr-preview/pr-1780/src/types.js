@@ -1,1 +1,1 @@
-export{kct as isChildBackedPropertiesWorkspace}from"../chunks/app-FE73ADoW.js";
+export{kct as isChildBackedPropertiesWorkspace}from"../chunks/app-Bob5CDCH.js";

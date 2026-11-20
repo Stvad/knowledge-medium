@@ -1,1 +1,1 @@
-export{It as WorkspaceSyncGate}from"../../../chunks/app-FE73ADoW.js";
+export{It as WorkspaceSyncGate}from"../../../chunks/app-Bob5CDCH.js";
