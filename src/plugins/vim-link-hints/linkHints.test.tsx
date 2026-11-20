@@ -182,3 +182,21 @@ it('keeps a trigger pressed between DOM focus and the matching normal-mode activ
   expect(hint('Other instance')).toBe('a')
   expect(hint('First')).toBeNull()
 })
+
+it('follows logical normal-mode focus when Colemak navigation leaves DOM focus on the previous row', () => {
+  const {shell, view, tree} = setup()
+  view.rerender(tree(false, 'other'))
+  expect(document.activeElement).toBe(shell)
+  press(shell, 'f', {code: 'KeyE'})
+  expect(hint('Other instance')).toBe('a')
+  expect(hint('First')).toBeNull()
+  expect(press(shell, 'a').defaultPrevented).toBe(true)
+})
+
+it('keeps always-show hints on the normal-mode block when the document body receives the keys', () => {
+  const {shell, clicked} = setup({always: true})
+  act(() => shell.blur())
+  expect(hint('First')).toBe('a')
+  press(document.body, 'a')
+  expect(clicked).toHaveBeenCalledTimes(1)
+})

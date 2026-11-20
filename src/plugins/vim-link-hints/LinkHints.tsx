@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { matchKeybindingPress } from 'tinykeys'
 import { BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { computeInstallableContexts } from '@/shortcuts/resolve.js'
@@ -35,6 +35,7 @@ export function LinkHints() {
   const presses = useMemo(() => boundPresses(actions, installable), [actions, installable])
   const letters = useMemo(() => hintLetters(presses), [presses])
 
+  const toggleOwner = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => () => linkHintsToggle.close(), [])
 
   useLayoutEffect(() => {
@@ -42,6 +43,12 @@ export function LinkHints() {
       linkHintsToggle.close()
       return
     }
+    const scope = renderScopeId === undefined
+      ? ':not([data-render-scope-id])'
+      : `[data-render-scope-id="${CSS.escape(renderScopeId)}"]`
+    const selector = `${SHELL}[data-block-id="${CSS.escape(blockId)}"]${scope}`
+    const selected = Array.from(document.querySelectorAll<HTMLElement>(selector)).find(isVisibleElement)
+    if (!selected) return
     let shell: HTMLElement | null = null
     let links = new Map<string, HTMLAnchorElement>()
     let prefix = ''
@@ -59,15 +66,27 @@ export function LinkHints() {
     }
     const refresh = () => {
       observer.disconnect()
-      clear()
-      if (!shell || always === linkHintsToggle.isOpen()) return
+      const toggled = linkHintsToggle.isOpen()
+      toggleOwner.current = toggled ? shell : null
+      if (!shell || always === toggled) {
+        clear()
+        return
+      }
       const root = shell
       const content = root.querySelector('.block-content')
-      if (!content || content.closest(SHELL) !== root) return
+      if (!content || content.closest(SHELL) !== root) {
+        clear()
+        observer.observe(root, {childList: true, subtree: true})
+        return
+      }
       const anchors = Array.from(content.querySelectorAll('a[href]'))
         .filter((link): link is HTMLAnchorElement => link instanceof HTMLAnchorElement && isAvailableLink(link, root))
-      links = new Map(hintLabels(letters, anchors.length).map((label, index) => [label, anchors[index]!]))
-      paint()
+      const labels = hintLabels(letters, anchors.length)
+      if (labels.length !== links.size || labels.some((label, index) => links.get(label) !== anchors[index])) {
+        clear()
+        links = new Map(labels.map((label, index) => [label, anchors[index]!]))
+        paint()
+      }
       observer.observe(content, {
         subtree: true,
         childList: true,
@@ -78,28 +97,31 @@ export function LinkHints() {
     }
 
     const observer = new MutationObserver(refresh)
-    const setFocus = (target: EventTarget | null) => {
-      const next = target instanceof HTMLElement
-        && target.hasAttribute(BLOCK_SHELL_ATTRIBUTE)
-        && target.dataset.blockId === blockId
-        && target.dataset.renderScopeId === renderScopeId
-        && target.dataset.editing !== 'true'
-        ? target
-        : null
+    const setShell = (next: HTMLElement | null) => {
       if (next === shell) return
       shell = next
       refresh()
     }
 
-    const onFocusIn = (event: FocusEvent) => setFocus(event.target)
-    // DOM focus can arrive before the new block claims normal mode. Reset
-    // visibility on blur so a trigger pressed during that handoff survives.
-    const onFocusOut = () => {
-      setFocus(null)
-      linkHintsToggle.close()
+    // A click can focus a different shell before it claims normal mode.
+    // Keep its trigger pending until that claim supplies the new selection.
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.target instanceof Element && selected.contains(event.target)
+        && event.target.closest(SHELL) === selected) {
+        setShell(selected)
+      } else {
+        setShell(null)
+        linkHintsToggle.close()
+      }
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      if (!event.relatedTarget || event.relatedTarget === document.body) setShell(selected)
     }
     const onKeyDown = (rawEvent: KeyboardEvent) => {
-      if (!shell || rawEvent.target !== shell || rawEvent.defaultPrevented || links.size === 0) return
+      const target = rawEvent.target
+      if (!shell || rawEvent.defaultPrevented || !links.size) return
+      if (target instanceof Element && target !== document.body && !target.matches(SHELL)
+        && (!shell.contains(target) || target.closest('input, textarea, select, button, [contenteditable="true"]'))) return
       if (isImeKeyEvent(rawEvent) || rawEvent.getModifierState('AltGraph')) return
       const event = withRecoveredLetterKey(rawEvent)
       if (event.getModifierState(event.key)) return
@@ -160,7 +182,12 @@ export function LinkHints() {
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
     document.addEventListener('keydown', onKeyDown)
-    setFocus(document.activeElement)
+    if (toggleOwner.current && toggleOwner.current !== selected) linkHintsToggle.close()
+    toggleOwner.current = null
+    const focused = document.activeElement
+    if (!focused || focused === document.body || focused.matches(SHELL) || selected.contains(focused)) {
+      setShell(selected)
+    }
     return () => {
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)

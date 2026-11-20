@@ -1,12 +1,14 @@
 a[data-vim-link-hint]::before {
   content: attr(data-vim-link-hint) / "";
-  display: inline-block;
-  margin-inline-end: 0.3em;
-  border: 1px solid hsl(var(--muted-foreground));
-  border-radius: 0.25em;
-  padding-inline: 0.3em;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font: 700 0.8em/1.2 ui-monospace, monospace;
+  position: absolute;
+  z-index: 1;
+  transform: translate(-0.12em, -55%);
+  border-radius: var(--radius-sm);
+  padding: 0.08em 0.3em;
+  background: var(--color-muted);
+  color: var(--color-muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  font: 500 0.625rem/1.1 var(--font-mono);
   pointer-events: none;
+  user-select: none;
 }
