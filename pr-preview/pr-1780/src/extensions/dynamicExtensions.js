@@ -1,0 +1,1 @@
+export{aI as dynamicExtensionsExtension}from"../../chunks/app-FE73ADoW.js";

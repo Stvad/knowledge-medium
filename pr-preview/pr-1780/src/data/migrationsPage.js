@@ -1,0 +1,1 @@
+export{sot as MIGRATIONS_PAGE_ALIAS,cot as getOrCreateMigrationsPage,lot as migrationsPageBlockId,uot as migrationsPageSpec}from"../../chunks/app-FE73ADoW.js";

@@ -1,0 +1,1 @@
+export{XJ as htmlDocumentDataExtension}from"../../../chunks/app-FE73ADoW.js";

@@ -1,0 +1,1 @@
+export{ii as perfMonitorPlugin}from"../../../chunks/app-FE73ADoW.js";

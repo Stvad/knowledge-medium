@@ -1,0 +1,1 @@
+export{_k as useMinuteClock}from"../../chunks/app-FE73ADoW.js";

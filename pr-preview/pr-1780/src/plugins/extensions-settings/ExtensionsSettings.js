@@ -1,0 +1,1 @@
+export{Qr as ExtensionsSettings}from"../../../chunks/app-FE73ADoW.js";

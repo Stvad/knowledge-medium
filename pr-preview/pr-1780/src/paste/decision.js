@@ -1,0 +1,1 @@
+export{wz as defaultPasteDecision,Tz as pasteDecisionVerb}from"../../chunks/app-FE73ADoW.js";

@@ -1,0 +1,1 @@
+export{YI as defaultRegistry,XI as defaultRendererContributions,ZI as defaultRenderersExtension}from"../../chunks/app-FE73ADoW.js";

@@ -1,0 +1,1 @@
+export{kF as checkForAppUpdate,AF as registerServiceWorker}from"../chunks/app-FE73ADoW.js";

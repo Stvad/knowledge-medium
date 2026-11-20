@@ -1,0 +1,1 @@
+export{kct as isChildBackedPropertiesWorkspace}from"../chunks/app-FE73ADoW.js";

@@ -1,0 +1,1 @@
+export{WF as dispatchPointerAction,GF as setPointerActionDispatcher}from"../../chunks/app-FE73ADoW.js";

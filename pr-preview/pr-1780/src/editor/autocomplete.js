@@ -1,0 +1,1 @@
+export{rF as editorAutocompleteExtension}from"../../chunks/app-FE73ADoW.js";

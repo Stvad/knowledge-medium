@@ -1,0 +1,1 @@
+export{OE as mobileBottomNavItemsFacet}from"../../../chunks/app-FE73ADoW.js";

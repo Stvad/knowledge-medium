@@ -1,0 +1,1 @@
+export{_q as BootFallback}from"../../../chunks/app-FE73ADoW.js";

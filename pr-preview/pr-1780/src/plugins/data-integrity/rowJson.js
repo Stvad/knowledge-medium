@@ -1,0 +1,1 @@
+export{yc as parsePropertiesJson}from"../../../chunks/app-FE73ADoW.js";

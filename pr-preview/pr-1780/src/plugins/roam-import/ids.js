@@ -1,0 +1,1 @@
+export{wf as resolveDailyPage}from"../../../chunks/app-FE73ADoW.js";

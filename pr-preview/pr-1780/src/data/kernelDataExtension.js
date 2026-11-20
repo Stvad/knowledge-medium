@@ -1,0 +1,1 @@
+export{n5 as kernelDataExtension}from"../../chunks/app-FE73ADoW.js";

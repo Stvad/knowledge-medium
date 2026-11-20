@@ -1,0 +1,1 @@
+export{bC as useAssetObjectUrl}from"../../../chunks/app-FE73ADoW.js";

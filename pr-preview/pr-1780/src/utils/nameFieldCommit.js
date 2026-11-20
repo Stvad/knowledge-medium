@@ -1,0 +1,1 @@
+export{QL as trimIfEdited}from"../../chunks/app-FE73ADoW.js";

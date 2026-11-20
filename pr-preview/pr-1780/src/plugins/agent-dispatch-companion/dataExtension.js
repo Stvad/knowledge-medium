@@ -1,0 +1,1 @@
+export{V0 as agentDispatchCompanionDataExtension}from"../../../chunks/app-FE73ADoW.js";

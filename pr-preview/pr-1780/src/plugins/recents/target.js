@@ -1,0 +1,1 @@
+export{yk as openRecentsPage}from"../../../chunks/app-FE73ADoW.js";

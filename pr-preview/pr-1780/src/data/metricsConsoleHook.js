@@ -1,0 +1,1 @@
+export{EP as ensureMetricsConsoleHook}from"../../chunks/app-FE73ADoW.js";
