@@ -40,3 +40,12 @@ describe('dispatch activity writes', () => {
     }), undefined)
   })
 })
+
+describe('memory outline', () => {
+  it('leaves references unexpanded, since the change account only reads the memory block\'s own subtree', async () => {
+    const {graph, runCommand} = setup()
+    runCommand.mockResolvedValueOnce('Memory  ^mem' as never)
+    await graph.memoryOutline('mem')
+    expect(runCommand).toHaveBeenLastCalledWith(expect.objectContaining({type: 'view-outline', ref: 'mem', expandRefs: false}), undefined)
+  })
+})

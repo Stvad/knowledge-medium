@@ -119,9 +119,13 @@ export const createGraph = (bridgeClient: BridgeClient) => {
   }
 
   /** The bounded outline the run's own `subtree` tool prints: shallow levels
-   *  first, long entries cut with a marker. */
+   *  first, long entries cut with a marker. Without expanding references: an
+   *  embedded row is a block outside the memory block, so a run's edit to it
+   *  would miss {@link memoryEntries}' account of what the run changed. */
   const memoryOutline = async (memoryId: string): Promise<string> => {
-    const view = await client.runCommand({type: 'view-outline', ref: memoryId, depth: 2, limit: MEMORY_OUTLINE_LIMIT})
+    const view = await client.runCommand({
+      type: 'view-outline', ref: memoryId, depth: 2, limit: MEMORY_OUTLINE_LIMIT, expandRefs: false,
+    })
     if (typeof view !== 'string') throw new Error('view-outline returned no text')
     return view
   }
