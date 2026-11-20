@@ -195,30 +195,34 @@ the large differences; the ones of a few seconds are not resolved.
 | C: B + drop `blocks_row_event_insert` | 26,238 / 24,360 | 20,507 / 19,570 | 3,811 / 4,105 |
 | D: B + drop `blocks_fts_insert` | 23,064 / 24,390 | 18,257 / 19,563 | 4,336 / 4,100 |
 | E: B + drop `blocks_alias_insert`, `blocks_type_insert` | 26,395 / 27,363 | 21,677 / 22,530 | 3,789 / 3,655 |
-| F: B + drop all four, then rebuild | 16,469 / 18,248 | 11,678 / 13,203 | 6,072 / 5,480 |
+| F: B + drop all four, then rebuild | 17,327 / 17,632 | 12,375 / 12,797 | 5,771 / 5,672 |
 | G: B + `--window 5000` | 20,343 / 20,133 | 15,854 / 15,418 | 4,916 / 4,967 |
 | H: B + `--window 20000` | 18,131 / 18,243 | 13,531 / 13,388 | 5,515 / 5,482 |
 
 Phase one (reads, gates, decrypt) stayed at 4.1–5.7 s in every variant.
 
-F's set-based rebuild took 1.2–1.4 s in total: `blocks_fts` 955 / 1,180 ms,
-`blocks_fts_rowids` 153 / 132 ms, `block_aliases` 52 / 50 ms, `block_types`
-31 / 33 ms. Rebuilt row counts matched a triggers-on run. The fixture has no
+F's set-based rebuild, run with the production backfill statements, took
+1.1–1.3 s in total: `blocks_fts` 869 / 1,065 ms, `blocks_fts_rowids`
+145 / 140 ms, `block_aliases` 50 / 49 ms, `block_types` 31 / 31 ms. Rebuilt
+row counts matched a triggers-on run. The fixture has no
 `$.types`, so the `block_types` rebuild ran over nothing.
 
 What the matrix shows:
 
-- Scattered ids roughly double the wall time and nearly triple the write
-  transaction. Every earlier figure in this file used sequential ids and
-  understates a real device by about that much.
+- Scattered ids roughly double the wall time and take the write transaction
+  to 2–3x. Every earlier figure in this file used sequential ids; that they
+  understate a real device by a similar factor is reasoned from this one
+  comparison, not measured on a device.
 - A larger window helps without touching the upsert: the multi-row upsert's
   summed time was the same in B, G and H (8.2–9.9 s), while the write
   transaction fell from 21.6–26.8 s to 13.4 s at 20,000. The difference is
   outside the timed statements. Per-transaction cost (commit) is the likely
   place; that was not broken down.
 - No single trigger is the cost. Dropping the row-event trigger or the alias
-  and type triggers is within noise; dropping the FTS trigger took the upsert
-  from 8.2–9.9 s to 5.7–6.0 s.
+  and type triggers is within noise. Dropping the FTS trigger took the
+  multi-row upsert's summed time from 8.2–9.9 s to 5.7–6.0 s (per-statement
+  timings from the run output, not in the table; the write-transaction
+  column alone does not separate D from B).
 - Dropping all four and rebuilding (F) is about a third faster than B, but it
   is not a like-for-like pass: reference derivation resolves through
   `block_aliases`, so with `blocks_alias_insert` gone it resolved 693 of 924

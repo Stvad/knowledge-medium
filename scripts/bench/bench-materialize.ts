@@ -10,6 +10,12 @@
  */
 
 import { createTestDb, resetTestDb } from '@/data/test/createTestDb.js'
+import {
+  BACKFILL_BLOCK_ALIASES_SQL,
+  BACKFILL_BLOCK_TYPES_SQL,
+  BACKFILL_BLOCKS_FTS_ROWIDS_SQL,
+  BACKFILL_BLOCKS_FTS_SQL,
+} from '@/data/internals/clientSchema.js'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { makeMaterializeFixture } from './materialize-fixture.js'
 import {
@@ -81,30 +87,19 @@ const dropTriggerList = async (db: PowerSyncDb, names: string[]) => {
   for (const name of names) await db.execute(`DROP TRIGGER IF EXISTS ${name}`)
 }
 
-/** One timed set-based rebuild per derived table, mirroring the dropped insert triggers. */
+/** One timed set-based rebuild per derived table, with the production backfill statements. */
 const rebuildDerivedTables = async (db: PowerSyncDb) => {
   const timed = async (label: string, sql: string) => {
     const started = performance.now()
     await db.execute(sql)
     return {label, ms: round(performance.now() - started)}
   }
-  const steps = [
-    await timed('block_aliases', `INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
-      SELECT b.id, b.workspace_id, je.value, LOWER(je.value)
-      FROM blocks b, json_each(b.properties_json, '$.alias') AS je
-      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`),
-    await timed('block_types', `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
-      SELECT b.id, b.workspace_id, je.value
-      FROM blocks b, json_each(b.properties_json, '$.types') AS je
-      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`),
-    await timed('blocks_fts_rowids', `INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
-      SELECT id FROM blocks WHERE deleted = 0 AND content != ''`),
-    await timed('blocks_fts', `INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
-      SELECT r.fts_rowid, b.content, b.workspace_id, b.id
-      FROM blocks b JOIN blocks_fts_rowids r ON r.block_id = b.id
-      WHERE b.deleted = 0 AND b.content != ''`),
+  return [
+    await timed('block_aliases', BACKFILL_BLOCK_ALIASES_SQL),
+    await timed('block_types', BACKFILL_BLOCK_TYPES_SQL),
+    await timed('blocks_fts_rowids', BACKFILL_BLOCKS_FTS_ROWIDS_SQL),
+    await timed('blocks_fts', BACKFILL_BLOCKS_FTS_SQL),
   ]
-  return steps
 }
 
 const derivedCounts = async (db: PowerSyncDb) => {
@@ -141,7 +136,6 @@ const main = async () => {
       for (const scenario of scenarios) {
         for (let sample = -1; sample < reps; sample++) {
           await resetTestDb(env.db)
-          await dropTriggerList(db, dropTriggers) // resetTestDb only deletes rows; re-drop is a cheap no-op guard
           await stageMaterializeRows(db, fixture, prepared.get(mode)!)
           if (scenario === 'echo-repass') {
             await runMaterializePass(db, fixture, mode, key)
@@ -161,7 +155,7 @@ const main = async () => {
       }
     }
     const workflowSamples = workflow
-      ? await runMaterializeWorkflowBench(db, () => resetTestDb(env.db), fixture, prepared.get('e2ee')!, key, reps)
+      ? await runMaterializeWorkflowBench(db, () => resetTestDb(env.db), fixture, prepared.get('e2ee') ?? await makeMaterializeWireRows(fixture, 'e2ee', key), key, reps)
       : undefined
     if (workflowSamples) for (const sample of workflowSamples) console.log(JSON.stringify({workflowSample: sample}))
     console.log(JSON.stringify({complete: true, records, reps, warmups: 1, windowSize: window, workflow, ...variantInfo,
