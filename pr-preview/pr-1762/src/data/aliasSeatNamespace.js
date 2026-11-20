@@ -1,0 +1,1 @@
+export{Mot as aliasSeatNamespacesInTx,Not as resolveAliasSeatNamespaces}from"../../chunks/app-Bt7fS4nY.js";

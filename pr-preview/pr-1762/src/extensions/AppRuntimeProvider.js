@@ -1,0 +1,1 @@
+export{Kt as AppRuntimeProvider}from"../../chunks/app-Bt7fS4nY.js";

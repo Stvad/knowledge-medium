@@ -1,0 +1,1 @@
+export{JW as isIOS,YW as isMacPlatform}from"../../chunks/app-Bt7fS4nY.js";

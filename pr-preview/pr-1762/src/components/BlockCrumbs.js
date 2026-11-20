@@ -1,0 +1,1 @@
+export{ck as BlockCrumbs}from"../../chunks/app-Bt7fS4nY.js";

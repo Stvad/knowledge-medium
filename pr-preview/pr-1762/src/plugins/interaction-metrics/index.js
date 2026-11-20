@@ -1,0 +1,1 @@
+export{ia as interactionMetricsPlugin}from"../../../chunks/app-Bt7fS4nY.js";

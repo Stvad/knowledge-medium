@@ -1,0 +1,1 @@
+export{MP as approveExtensionHere}from"../../chunks/app-Bt7fS4nY.js";
