@@ -182,3 +182,57 @@ it('keeps a trigger pressed between DOM focus and the matching normal-mode activ
   expect(hint('Other instance')).toBe('a')
   expect(hint('First')).toBeNull()
 })
+
+it('follows logical normal-mode focus when Colemak navigation leaves DOM focus on the previous row', () => {
+  const {shell, view, tree} = setup()
+  view.rerender(tree(false, 'other'))
+  expect(document.activeElement).toBe(shell)
+  press(shell, 'f', {code: 'KeyE'})
+  expect(hint('Other instance')).toBe('a')
+  expect(hint('First')).toBeNull()
+  expect(press(shell, 'a').defaultPrevented).toBe(true)
+})
+
+it('keeps always-show hints on the normal-mode block when the document body receives the keys', () => {
+  const {shell, clicked} = setup({always: true})
+  act(() => shell.blur())
+  expect(hint('First')).toBe('a')
+  press(document.body, 'a')
+  expect(clicked).toHaveBeenCalledTimes(1)
+})
+
+it('accepts Colemak movement from a tab-focused link on the previous row', () => {
+  const {view, tree} = setup()
+  const previous = screen.getByText('First')
+  act(() => previous.focus())
+  view.rerender(tree(false, 'other'))
+  press(previous, 'f', {code: 'KeyE'})
+  expect(hint('Other instance')).toBe('a')
+  expect(press(previous, 'a').defaultPrevented).toBe(true)
+})
+
+it.each(['', 'plaintext-only'])('leaves typing in contenteditable="%s" to the editor', mode => {
+  const {shell, clicked} = setup({always: true})
+  const editor = document.createElement('div')
+  editor.setAttribute('contenteditable', mode)
+  editor.tabIndex = 0
+  shell.append(editor)
+  expect(hint('First')).toBe('a')
+  act(() => editor.focus())
+  expect(press(editor, 'a').defaultPrevented).toBe(false)
+  expect(clicked).not.toHaveBeenCalled()
+})
+
+it('offsets nested link badges and releases their styling when hints close', async () => {
+  const {shell} = setup({always: true})
+  const outer = screen.getByText('First')
+  const inner = document.createElement('a')
+  inner.href = '#inner'
+  inner.textContent = 'Inner'
+  outer.prepend(inner)
+  await waitFor(() => expect(hint('Inner')).toBe('b'))
+  expect(outer.getAttribute('data-vim-link-hint')).toBe('a')
+  expect(inner.style.getPropertyValue('--vim-link-hint-depth')).toBe('1')
+  press(shell, 'f')
+  expect(inner.style.getPropertyValue('--vim-link-hint-depth')).toBe('')
+})
