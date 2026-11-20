@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { createDownloadTracker } from '../downloadTracker'
+import { createDownloadTracker, takeInitialDownloadTimings, trackInitialDownload, type DownloadStatusSample } from './initialDownload'
 
 const progress = (downloadedOperations: number, totalOperations: number) => ({
   totalOperations, downloadedOperations, downloadedFraction: downloadedOperations / totalOperations,
@@ -56,5 +56,38 @@ describe('createDownloadTracker', () => {
     at(50); tracker.sample({ downloadProgress: progress(100, 150) })
     at(70)
     expect(tracker.sample({ hasSynced: true })).toMatchObject({ downloadMs: 10, applyMs: 60, totalOperations: 150 })
+  })
+})
+
+describe('trackInitialDownload', () => {
+  const fakeDb = (hasSynced: boolean) => {
+    let listener: ((s: DownloadStatusSample) => void) | undefined
+    const dispose = () => { listener = undefined }
+    return {
+      db: {
+        currentStatus: { hasSynced },
+        registerListener: (l: { statusChanged?: (s: DownloadStatusSample) => void }) => { listener = l.statusChanged; return dispose },
+      },
+      status: (s: DownloadStatusSample) => listener?.(s),
+      listening: () => listener !== undefined,
+    }
+  }
+
+  it('holds the timings of a download that completed before anyone asked, and hands them out once', async () => {
+    const f = fakeDb(false)
+    trackInitialDownload(f.db)
+    f.status({ hasSynced: false, downloadProgress: progress(400, 400) })
+    f.status({ hasSynced: true })
+
+    await expect(takeInitialDownloadTimings(f.db)).resolves.toMatchObject({ totalOperations: 400 })
+    expect(f.listening()).toBe(false)
+    expect(takeInitialDownloadTimings(f.db)).toBeNull()
+  })
+
+  it('tracks nothing on a device that has already synced', () => {
+    const f = fakeDb(true)
+    trackInitialDownload(f.db)
+    expect(f.listening()).toBe(false)
+    expect(takeInitialDownloadTimings(f.db)).toBeNull()
   })
 })

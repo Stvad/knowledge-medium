@@ -85,6 +85,8 @@ export interface SyncDrainStats {
   readonly source: 'queue' | 'workspace'
   /** False when the drain threw or was cut short by `dispose()`. */
   readonly completed: boolean
+  /** Epoch ms at which the drain ended. */
+  readonly endedAtMs: number
   readonly wallMs: number
   readonly windows: number
   /** Distinct staged changes fed to the materializer, summed over windows. */
@@ -362,7 +364,7 @@ export const startBlocksSyncedObserver = (
     drain: (meter: Mutable<SyncDrainStats>) => Promise<T>,
   ): Promise<T> => {
     const meter: Mutable<SyncDrainStats> = {
-      source, completed: false, wallMs: 0, windows: 0, rows: 0,
+      source, completed: false, endedAtMs: 0, wallMs: 0, windows: 0, rows: 0,
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
       readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
     }
@@ -374,6 +376,7 @@ export const startBlocksSyncedObserver = (
     } finally {
       if (meter.windows > 0) {
         meter.wallMs = performance.now() - startedAt
+        meter.endedAtMs = Date.now()
         // Guarded here rather than trusted: a throw from a `finally` would
         // replace the drain's own result or error.
         try { args.onDrainStats?.({...meter}) } catch (err) { onError(err) }

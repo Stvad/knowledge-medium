@@ -668,6 +668,10 @@ export interface RunOptions {
   description?: string
 }
 
+/** Bound on {@link Repo.onSyncDrainStats}'s held drains, for a session in which
+ *  nothing ever subscribes. */
+const MAX_HELD_SYNC_DRAIN_STATS = 50
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -744,6 +748,8 @@ export class Repo {
   private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
   private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
   private readonly syncDrainStatsListeners = new CallbackSet<[SyncDrainStats]>('Repo.syncDrainStats')
+  /** Drains that ended with nobody subscribed — see {@link onSyncDrainStats}. */
+  private readonly heldSyncDrainStats: SyncDrainStats[] = []
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -1338,7 +1344,7 @@ export class Repo {
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
       onError: options?.onError,
-      onDrainStats: stats => this.syncDrainStatsListeners.notify(stats),
+      onDrainStats: stats => this.reportSyncDrainStats(stats),
     })
     return this.syncObserver
   }
@@ -1362,9 +1368,28 @@ export class Repo {
 
   /** Hear what each sync drain did and where its time went. Fires for every
    *  drain that ran a window — per arrival in steady state — so a listener
-   *  that persists anything picks which ones are worth it. */
+   *  that persists anything picks which ones are worth it.
+   *
+   *  The first subscriber is also handed the drains that ended before anyone
+   *  subscribed: an encrypted workspace's unlock drain, the largest a device
+   *  ever runs, finishes before the app runtime that hosts listeners mounts. */
   onSyncDrainStats(cb: (stats: SyncDrainStats) => void): () => void {
-    return this.syncDrainStatsListeners.add(cb)
+    const unsubscribe = this.syncDrainStatsListeners.add(cb)
+    for (const stats of this.heldSyncDrainStats.splice(0)) this.syncDrainStatsListeners.notify(stats)
+    return unsubscribe
+  }
+
+  private reportSyncDrainStats(stats: SyncDrainStats): void {
+    if (this.syncDrainStatsListeners.size > 0) {
+      this.syncDrainStatsListeners.notify(stats)
+      return
+    }
+    const held = this.heldSyncDrainStats
+    held.push(stats)
+    if (held.length > MAX_HELD_SYNC_DRAIN_STATS) {
+      // Over the bound, the smallest drain is the one least worth keeping.
+      held.splice(held.reduce((min, s, i) => (s.rows < held[min]!.rows ? i : min), 0), 1)
+    }
   }
 
   /** Manually flush the sync observer — drains any pending `blocks_synced`

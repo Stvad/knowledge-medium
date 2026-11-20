@@ -20,6 +20,7 @@
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  */
 
+import { trackInitialDownload } from '@/data/internals/initialDownload.js'
 import {
   LogLevels,
   PowerSyncDatabase,
@@ -436,6 +437,8 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
   if (alreadyActive) {
     return
   }
+
+  trackInitialDownload(db)
 
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and

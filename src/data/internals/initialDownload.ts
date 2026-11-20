@@ -1,6 +1,8 @@
 /*
- * Pure tracker for the initial download: PowerSync status samples in, stage
- * timings out. Kept free of PowerSync so the logic is testable on its own.
+ * Times a device's initial download. Tracking starts where the database
+ * connects, not in the app runtime: on a fresh device the download can finish
+ * while the workspace key gate is still up, before anything that would record
+ * it has mounted. The result is held until someone takes it.
  */
 
 /** The subset of PowerSync's `SyncStatus` the tracker reads. */
@@ -36,7 +38,7 @@ export interface TrackerClock {
   epoch: () => number
 }
 
-export const realClock: TrackerClock = { now: () => performance.now(), epoch: () => Date.now() }
+const realClock: TrackerClock = { now: () => performance.now(), epoch: () => Date.now() }
 
 export interface DownloadTracker {
   /** Feed a status sample; returns the timings once `hasSynced` is true, else null. */
@@ -70,4 +72,43 @@ export const createDownloadTracker = (clock: TrackerClock = realClock): Download
       }
     },
   }
+}
+
+/** The slice of a PowerSync database the tracker listens to. */
+interface DownloadStatusDb {
+  currentStatus?: DownloadStatusSample
+  registerListener?: (l: { statusChanged?: (s: DownloadStatusSample) => void }) => () => void
+}
+
+const pending = new WeakMap<object, Promise<DownloadTimings>>()
+
+/** Start timing `db`'s initial download, unless it has already synced or is
+ *  already tracked. Call once the database is ready: before that `hasSynced`
+ *  is not yet known, and every warm boot would read as a download. */
+export const trackInitialDownload = (db: DownloadStatusDb, clock: TrackerClock = realClock): void => {
+  if (pending.has(db) || db.currentStatus?.hasSynced || typeof db.registerListener !== 'function') return
+  const tracker = createDownloadTracker(clock)
+  pending.set(db, new Promise<DownloadTimings>((resolve) => {
+    let done = false
+    const dispose = db.registerListener!({
+      statusChanged: (status) => {
+        const timings = done ? null : tracker.sample(status)
+        if (!timings) return
+        done = true
+        resolve(timings)
+        // Deferred so a listener invoked during registration never reads
+        // `dispose` before it is assigned.
+        queueMicrotask(() => dispose())
+      },
+    })
+  }))
+}
+
+/** The tracked download's timings, resolving when it completes — handed out
+ *  ONCE, so a second caller (another workspace's effect, a remount) cannot
+ *  record the same download again. Null when none was tracked or it was taken. */
+export const takeInitialDownloadTimings = (db: object): Promise<DownloadTimings> | null => {
+  const timings = pending.get(db) ?? null
+  pending.delete(db)
+  return timings
 }
