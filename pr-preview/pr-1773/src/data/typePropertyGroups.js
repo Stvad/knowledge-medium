@@ -1,1 +1,0 @@
-export{TH as typePropertyGroups}from"../../chunks/app-lwi3Y0dD.js";
