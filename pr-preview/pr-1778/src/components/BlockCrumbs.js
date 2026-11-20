@@ -1,0 +1,1 @@
+export{Mk as BlockCrumbs}from"../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{BN as BlockEmbed}from"../../../chunks/app-BNXMuxOJ.js";

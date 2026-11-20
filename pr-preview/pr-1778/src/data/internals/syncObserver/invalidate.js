@@ -1,0 +1,1 @@
+export{k8 as applySyncInvalidation}from"../../../../chunks/app-BNXMuxOJ.js";

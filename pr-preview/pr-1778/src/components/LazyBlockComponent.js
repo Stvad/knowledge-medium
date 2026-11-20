@@ -1,0 +1,1 @@
+export{DI as LazyBlockComponent}from"../../chunks/app-BNXMuxOJ.js";

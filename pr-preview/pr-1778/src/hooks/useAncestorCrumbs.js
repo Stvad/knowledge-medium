@@ -1,0 +1,1 @@
+export{Nk as useAncestorCrumbs}from"../../chunks/app-BNXMuxOJ.js";

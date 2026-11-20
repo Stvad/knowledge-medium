@@ -1,0 +1,1 @@
+export{zdt as defineQuery}from"../../../chunks/app-BNXMuxOJ.js";

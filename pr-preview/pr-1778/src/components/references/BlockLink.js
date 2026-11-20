@@ -1,0 +1,1 @@
+export{rk as BlockLink}from"../../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{xB as ExtensionRenderBoundary}from"../../chunks/app-BNXMuxOJ.js";

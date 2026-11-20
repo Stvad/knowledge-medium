@@ -1,0 +1,1 @@
+export{aq as SuspenseFallback}from"../../../chunks/app-BNXMuxOJ.js";

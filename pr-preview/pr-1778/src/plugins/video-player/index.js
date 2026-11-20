@@ -1,0 +1,1 @@
+export{RC as videoPlayerPlugin}from"../../../chunks/app-BNXMuxOJ.js";

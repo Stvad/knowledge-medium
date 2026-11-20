@@ -1,0 +1,1 @@
+export{SK as propertyShapeLabel}from"../../../chunks/app-BNXMuxOJ.js";

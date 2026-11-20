@@ -1,0 +1,1 @@
+export{Lx as richPasteDecisionContribution}from"../../../chunks/app-BNXMuxOJ.js";

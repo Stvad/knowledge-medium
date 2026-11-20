@@ -1,0 +1,1 @@
+export{ib as backlinksViewFacet}from"../../../chunks/app-BNXMuxOJ.js";

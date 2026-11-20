@@ -1,0 +1,1 @@
+export{PP as BlockPasteShellDecorator,FP as blockPasteShellDecorator}from"../../chunks/app-BNXMuxOJ.js";

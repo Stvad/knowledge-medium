@@ -1,0 +1,1 @@
+export{SP as exampleExtensions,CP as insertExampleExtensionsUnder}from"../../chunks/app-BNXMuxOJ.js";

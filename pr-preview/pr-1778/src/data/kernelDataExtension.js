@@ -1,0 +1,1 @@
+export{V8 as kernelDataExtension}from"../../chunks/app-BNXMuxOJ.js";

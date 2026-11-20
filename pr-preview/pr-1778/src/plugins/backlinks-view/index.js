@@ -1,0 +1,1 @@
+export{fy as backlinksViewPlugin}from"../../../chunks/app-BNXMuxOJ.js";

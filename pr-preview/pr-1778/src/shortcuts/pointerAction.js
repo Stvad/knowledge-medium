@@ -1,0 +1,1 @@
+export{jF as dispatchPointerAction,MF as setPointerActionDispatcher}from"../../chunks/app-BNXMuxOJ.js";

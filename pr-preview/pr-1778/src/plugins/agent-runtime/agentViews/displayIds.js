@@ -1,0 +1,1 @@
+export{av as boundDisplayId,ov as idMark}from"../../../../chunks/app-BNXMuxOJ.js";

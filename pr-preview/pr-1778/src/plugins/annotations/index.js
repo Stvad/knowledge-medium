@@ -1,0 +1,1 @@
+export{Af as annotationsPlugin}from"../../../chunks/app-BNXMuxOJ.js";

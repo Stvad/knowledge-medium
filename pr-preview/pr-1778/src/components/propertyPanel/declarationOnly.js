@@ -1,0 +1,1 @@
+export{gH as declarationOnlyDefinitionForName,_H as declarationOnlyStatusText}from"../../../chunks/app-BNXMuxOJ.js";

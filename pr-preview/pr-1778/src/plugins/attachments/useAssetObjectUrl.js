@@ -1,0 +1,1 @@
+export{sC as useAssetObjectUrl}from"../../../chunks/app-BNXMuxOJ.js";

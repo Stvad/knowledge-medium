@@ -1,0 +1,1 @@
+export{sk as openRecentsPage}from"../../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{iq as BootFallback}from"../../../chunks/app-BNXMuxOJ.js";

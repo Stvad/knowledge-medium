@@ -1,0 +1,1 @@
+export{Lg as lintExtensionSource}from"../../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{Vo as MigrationGate}from"../../../chunks/app-BNXMuxOJ.js";

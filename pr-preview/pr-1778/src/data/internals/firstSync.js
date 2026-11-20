@@ -1,0 +1,1 @@
+export{G5 as onFirstSync,K5 as onSyncSettled}from"../../../chunks/app-BNXMuxOJ.js";

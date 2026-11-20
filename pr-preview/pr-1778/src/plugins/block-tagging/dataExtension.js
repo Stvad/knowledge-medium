@@ -1,0 +1,1 @@
+export{ad as blockTaggingDataExtension}from"../../../chunks/app-BNXMuxOJ.js";

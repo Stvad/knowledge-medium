@@ -1,0 +1,1 @@
+export{uA as Label}from"../../../chunks/app-BNXMuxOJ.js";

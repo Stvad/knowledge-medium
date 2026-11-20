@@ -1,0 +1,1 @@
+export{vG as isIOS,yG as isMacPlatform}from"../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{fH as typePropertyGroups}from"../../chunks/app-BNXMuxOJ.js";

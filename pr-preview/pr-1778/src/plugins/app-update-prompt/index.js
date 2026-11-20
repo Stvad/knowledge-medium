@@ -1,0 +1,1 @@
+export{sF as appUpdatePromptExtension}from"../../../chunks/app-BNXMuxOJ.js";

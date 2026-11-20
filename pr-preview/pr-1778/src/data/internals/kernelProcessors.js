@@ -1,0 +1,1 @@
+export{L5 as KERNEL_PROCESSORS}from"../../../chunks/app-BNXMuxOJ.js";

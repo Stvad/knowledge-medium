@@ -1,0 +1,1 @@
+export{Pc as requestPersistenceActionContribution}from"../../../chunks/app-BNXMuxOJ.js";

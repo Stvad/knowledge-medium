@@ -1,0 +1,1 @@
+export{jG as BackgroundSubtreeContext,MG as BackgroundSubtreeProvider,NG as useIsBackgroundSubtree}from"../../chunks/app-BNXMuxOJ.js";

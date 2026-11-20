@@ -1,0 +1,1 @@
+export{GI as DialogHost,KI as dialogAppMountExtension}from"../../chunks/app-BNXMuxOJ.js";

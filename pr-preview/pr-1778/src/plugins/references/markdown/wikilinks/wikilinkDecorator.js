@@ -1,0 +1,1 @@
+export{YA as isWikilinkDisplayParts,XA as resolveWikilinkDisplay,ZA as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-BNXMuxOJ.js";

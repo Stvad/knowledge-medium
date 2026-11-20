@@ -1,0 +1,1 @@
+export{ll as appVersion}from"../chunks/app-BNXMuxOJ.js";

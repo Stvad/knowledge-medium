@@ -1,0 +1,1 @@
+export{VX as annotationsDataExtension}from"../../../chunks/app-BNXMuxOJ.js";

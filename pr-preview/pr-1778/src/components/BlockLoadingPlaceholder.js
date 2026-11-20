@@ -1,0 +1,1 @@
+export{NI as BlockLoadingPlaceholder}from"../../chunks/app-BNXMuxOJ.js";

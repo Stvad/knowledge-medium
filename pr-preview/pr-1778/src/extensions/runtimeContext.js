@@ -1,0 +1,1 @@
+export{wK as AppRuntimeContextProvider,TK as useAppRuntime}from"../../chunks/app-BNXMuxOJ.js";

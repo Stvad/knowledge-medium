@@ -1,0 +1,1 @@
+export{Sb as remarkWikilinks}from"../../../../../chunks/app-BNXMuxOJ.js";

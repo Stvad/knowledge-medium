@@ -1,0 +1,1 @@
+export{WP as editorAutocompleteExtension}from"../../chunks/app-BNXMuxOJ.js";

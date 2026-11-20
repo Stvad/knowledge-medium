@@ -1,0 +1,1 @@
+export{ay as updateIndicatorPlugin}from"../../../chunks/app-BNXMuxOJ.js";

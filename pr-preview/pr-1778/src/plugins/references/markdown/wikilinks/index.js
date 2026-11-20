@@ -1,0 +1,1 @@
+export{bb as wikilinkMarkdownExtension}from"../../../../../chunks/app-BNXMuxOJ.js";

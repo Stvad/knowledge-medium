@@ -1,0 +1,1 @@
+export{tP as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,nP as OPEN_PREFERENCES_ACTION_ID,rP as RELOAD_IN_SAFE_MODE_ACTION_ID,iP as defaultActionContextsExtension,aP as defaultActionsExtension,oP as getDefaultActionGroups,sP as getDefaultActions}from"../../chunks/app-BNXMuxOJ.js";

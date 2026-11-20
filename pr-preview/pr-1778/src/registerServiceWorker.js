@@ -1,0 +1,1 @@
+export{gF as checkForAppUpdate,_F as registerServiceWorker}from"../chunks/app-BNXMuxOJ.js";

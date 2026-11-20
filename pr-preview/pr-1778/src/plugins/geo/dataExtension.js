@@ -1,0 +1,1 @@
+export{fY as geoDataExtension}from"../../../chunks/app-BNXMuxOJ.js";

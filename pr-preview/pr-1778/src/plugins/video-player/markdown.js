@@ -1,0 +1,1 @@
+export{zC as videoPlayerMarkdownExtension}from"../../../chunks/app-BNXMuxOJ.js";

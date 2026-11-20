@@ -1,0 +1,1 @@
+export{pc as parsePropertiesJson}from"../../../chunks/app-BNXMuxOJ.js";

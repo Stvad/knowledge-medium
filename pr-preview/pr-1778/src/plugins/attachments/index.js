@@ -1,0 +1,1 @@
+export{Bx as attachmentsPlugin}from"../../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{xb as Wikilink}from"../../../../../chunks/app-BNXMuxOJ.js";

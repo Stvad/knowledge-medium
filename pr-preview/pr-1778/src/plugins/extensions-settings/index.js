@@ -1,0 +1,1 @@
+export{mg as extensionsOverridesProp,hg as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-BNXMuxOJ.js";

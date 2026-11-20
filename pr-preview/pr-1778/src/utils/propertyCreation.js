@@ -1,0 +1,1 @@
+export{ez as canConvertEmptyChildBlockToProperty,tz as convertEmptyChildBlockToProperty}from"../../chunks/app-BNXMuxOJ.js";

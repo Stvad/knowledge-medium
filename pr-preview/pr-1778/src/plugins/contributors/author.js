@@ -1,0 +1,1 @@
+export{e_ as authorIdOf}from"../../../chunks/app-BNXMuxOJ.js";

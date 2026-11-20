@@ -1,0 +1,1 @@
+export{wG as withMoveTransition}from"../../chunks/app-BNXMuxOJ.js";

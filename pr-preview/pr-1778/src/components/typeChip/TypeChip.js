@@ -1,0 +1,1 @@
+export{YN as TypeChip}from"../../../chunks/app-BNXMuxOJ.js";

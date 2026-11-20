@@ -1,0 +1,1 @@
+export{xh as agentDispatchCompanionPlugin}from"../../../chunks/app-BNXMuxOJ.js";

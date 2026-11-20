@@ -1,0 +1,1 @@
+export{RJ as htmlDocumentTypeSeed}from"../../../chunks/app-BNXMuxOJ.js";

@@ -1,0 +1,1 @@
+export{II as defaultRegistry,LI as defaultRendererContributions,RI as defaultRenderersExtension}from"../../chunks/app-BNXMuxOJ.js";

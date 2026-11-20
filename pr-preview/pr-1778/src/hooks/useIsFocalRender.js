@@ -1,0 +1,1 @@
+export{OV as isFocalRender,kV as useIsFocalRender}from"../../chunks/app-BNXMuxOJ.js";
