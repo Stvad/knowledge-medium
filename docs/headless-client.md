@@ -9,24 +9,23 @@ Run the data layer and the agent surface with no browser tab, so `agent-dispatch
 
 A headless client is a Node process that signs in, syncs, decrypts and materializes like a device, and serves the bridge protocol the tab serves today. It is a new kind of *device*, and the design treats it as one wherever it can: the same Repo, the same data extensions, the same upload connector, the same key flows.
 
-## 2. Scope (the decision that sizes everything else)
+## 2. Scope
 
-**This design is for a host that keeps its disk: one long-lived process, one database directory, on a machine that stays up** (a home server, a small VPS, a Mac that does not sleep). Owner decision, 2026-11-19: persistent hosts first; transient containers are wanted eventually, so this design must not foreclose them ([§11](#11-later-hosts-that-lose-their-disk)).
+**A host that keeps its disk: one long-lived process, one database directory, on a machine that stays up.** Owner decisions, 2026-11-19: persistent hosts first; transient containers are wanted eventually, so this design must not foreclose them ([§12](#12-later)); the host signs in as a dedicated member account.
 
-It protects against: a plaintext upload to an encrypted workspace; a headless write that skips mutators or processors; a data migration run from the host; two processes on one database; an agent reading the key through the agent surface.
+It protects against: a plaintext upload to an encrypted workspace; a headless write that differs from the same write made in a tab; a workspace backfill run from the host; two processes on one database; an agent reading the key through the agent surface; a host that keeps accepting writes it can no longer upload.
 
-It does not cover hosts that lose their disk (a cloud container that is reclaimed). That case needs a database snapshot that can be exported, published, restored and re-identified, and it is the origin of most of the hard invariants in the scoping notes this design started from (not in the repo). [§11](#11-later-hosts-that-lose-their-disk) says what was verified about it, why it is not built first, and what this design keeps open for it.
-
-Where the *agent* runs stays open and is small: an agent anywhere can use a persistent host through the bridge protocol ([§12](#12-later-agents-that-run-somewhere-else)).
+It does not cover hosts that lose their disk. That case needs a database snapshot that can be exported, restored and re-identified, and is where most of the hard requirements in the scoping notes for this design came from.
 
 ## 3. What already exists
 
-- **The agent surface already runs under Node.** `scripts/agent-eval/host.ts` opens a `@powersync/node` database, builds a Repo with `staticDataExtensions`, and serves it through the real `startBridgeLoop` + `executeCommand` to the real relay (`packages/agent-cli/dist/server.js`), so the real `kmagent` and km MCP server drive it. **[read]** What it lacks is everything about being a device: no `db.connect()`, no sign-in, no key, a throwaway database.
-- **The seam is one function.** `BridgeLoopOptions.execute(command)` (`src/plugins/agent-runtime/bridgeLoop.ts`); the tab and the eval host differ only in the options they pass. **[read]**
-- **The relay does not care what registers.** A tab is an HTTP *client* of the relay; so is the eval host. `agent-dispatch`, `kmagent` and `km-mcp` reach whichever client lists their token. **[read]**
-- **The upload connector is platform-neutral** apart from two build-time env reads and a Web Lock that degrades to a direct call where `navigator.locks` is absent (`src/services/powersync.ts`, `src/utils/webLock.ts`). **[read]**
-- **The core data layer touches no browser global.** Repo, tx engine, mutators, processors and `internals/` have zero hits; the browser-bound files are the OPFS/VFS boot (`repoProvider.ts`, `localDbVfs.ts`), which a headless boot replaces, and storage-backed device state (mode pins, client id, the Supabase session), which reads `localStorage`. **[read]**
-- **Workspace backfills refuse without a claim.** A Repo built with no `backfillCompletionClaim` refuses every backfill (`repo.ts`, "Absent ⇒ backfills refuse"), and the one production backfill is `trigger: 'operator'`. **[read]**
+- **The agent surface already runs under Node.** `scripts/agent-eval/host.ts` opens a `@powersync/node` database, builds a Repo with the data extensions, and serves it through the real `startBridgeLoop` + `executeCommand` to the real relay (`packages/agent-cli/dist/server.js`), so the real `kmagent` and km MCP server drive it. **[read]** It has no `db.connect()`, no sign-in, no key, and a throwaway database built by test factories.
+- **The seam is one function**, `BridgeLoopOptions.execute(command)` in `src/plugins/agent-runtime/bridgeLoop.ts`. **[read]**
+- **The relay does not care what registers.** A tab is an HTTP client of the relay, and so is the eval host. **[read]**
+- **The core data layer touches no browser global** beyond a few guarded reads. The browser-bound files are the OPFS boot (`repoProvider.ts`, `localDbVfs.ts`) and storage-backed device state (mode pins, client id, the Supabase session). **[read]**
+- **Workspace backfills refuse without a claim**, on the operator path and the runner alike, and the one production backfill is `trigger: 'operator'`. **[read]**
+- **A Repo can be read-only.** `isReadOnly` / `setReadOnly` reject content writes, and the seed scheduler short-circuits on it. **[read]**
+- **Rows staged before a Repo exists are not lost**: triggers capture them durably and the observer drains the backlog when it starts. **[read]**
 
 ## 4. Measurements
 
@@ -37,9 +36,9 @@ Read-only queries against a live client:
 | Blocks, all workspaces | about 1.18 M **[measured]** |
 | Largest workspace | about 99% of them; roughly 65 MB of content and 28 MB of properties as plaintext **[measured]** |
 | Local database file | about 6.3 GB, no free pages **[measured]** |
-| Data behaviour contributed by installed extensions | property and type seeds only. Every mutator, same-tx processor, post-commit processor, invalidation rule, query and local-schema contribution in the live runtime comes from the kernel or a plugin already in `staticDataExtensions` **[measured]** |
+| Data behaviour contributed by installed extensions | property and type seeds only. Every mutator, processor, invalidation rule, query and local-schema contribution in the live runtime comes from the kernel or a plugin already in `staticDataExtensions` **[measured]** |
 
-Not measured, and needed before trusting the host on the real graph (slice 2): cold sync plus materialization time under Node; peak memory; the Node database size.
+Not measured, and needed before trusting the host on the real graph (slice 2): cold sync plus materialization time under Node, peak memory, the Node database size.
 
 ## 5. Shape
 
@@ -49,110 +48,117 @@ kmagent ────────┼─ relay (server.js) ─ headless host ─�
 km-mcp ─────────┘        127.0.0.1                    └─ Supabase (auth, upload RPCs)
 ```
 
-One daemon per graph, registered with the existing relay as a client, under its own profile and token. Nothing in `packages/agent-cli` or `packages/agent-dispatch` changes; they are pointed at the host's profile.
+One daemon per graph, registered with the existing relay as a client, under its own profile and token. `agent-dispatch`, `kmagent` and `km-mcp` are pointed at that profile and are otherwise unchanged.
 
-A daemon rather than a library each agent embeds, because the database is the unit of identity: PowerSync's client id lives in the file and write checkpoints are requested per client id (`powersync_client_id()`, `/write-checkpoint2.json?client_id=…`, in the SDK's `SqliteBucketStorage` and `AbstractStreamingSyncImplementation`). **[read]** One process owning one directory makes "two clients with one identity" unrepresentable, and a lock file on the directory enforces it.
+A daemon rather than a library each agent embeds, because the database is the unit of identity: PowerSync's client id lives in the file and write checkpoints are requested per client id (`powersync_client_id()`, `/write-checkpoint2.json?client_id=…` in the SDK). **[read]** One process owning one directory makes "two clients with one identity" unrepresentable.
 
-The entry point is a composition root **outside `src/`** (`headless/`, beside `scripts/`), like the eval host: it composes core and plugins, so the kernel/plugin lint is untouched. It runs from a checkout with `vite-node`, as the eval host does; a bundled artifact is deferred until a host without a checkout needs one.
+The entry point lives in **`scripts/headless/`**. `scripts/` is already typechecked with Node types, already exempt from the kernel/plugin lint as a consumer above both layers, and already has tests in the gate (`scripts/agent-eval`). **[read]** It runs from a checkout with `vite-node`; a bundled artifact waits for a host without a checkout.
 
-## 6. Boot
+## 6. The app shell's duties
 
-1. **Device storage.** Install a file-backed `localStorage` (one JSON file in the state directory, written atomically) before the app's module graph loads. It carries what a browser profile carries: the Supabase session, the mode pins, the app-level client id. A shim rather than injected storage: several modules read `localStorage`, the eval host already runs on an in-memory shim of the same shape, and threading a storage parameter through them buys nothing for a single-process host. `window` is provided once loading is done, as the eval shim does, because the mode-pin module looks for `window.localStorage`. **[read]**
-2. **Sign in.** Restore the session from device storage and refresh it. No session, or a refused refresh: exit non-zero naming the `login` subcommand ([§7](#7-identity-and-secrets)).
-3. **Open the database** in the state directory with `@powersync/node`, then run the shared client-schema initialisation ([§9](#9-code-changes)).
-4. **Connect** with the production connector and the upload-mode clamp ([§8](#8-invariants), invariant 6).
-5. **Unlock.** Once the configured workspace's row is local, run the existing `unlockWorkspaceWithKey` flow against its synced `wk_canary`, with the in-memory key store. It validates the key, pins the workspace `e2ee` and holds a non-extractable `CryptoKey`; the raw bytes are zeroed by the flow as they are today. **[read]** A wrong key exits non-zero with the flow's own reason.
-6. **Build the Repo** only now, so the sync observer never sees the workspace locked: `new Repo({db, cache, user, syncObserverDeps})` with no backfill claim, the `staticDataExtensions` runtime, and the configured workspace active.
-7. **Wait until settled**: first sync complete and the materialize backlog at zero (the numbers the `health` verb already reports). Only then register with the relay. Until then `whoami` shows no connected client and `agent-dispatch` claims nothing, which is its documented behaviour with no tab. **[read]**
-8. **Shutdown** (SIGTERM): stop taking commands, let in-flight ones finish, `repo.awaitDeferredWork()`, wait a bounded time for the upload queue to empty, close. Whatever is still queued stays in `ps_crud` on disk and uploads on the next start, as on any device.
+A tab is safe to write from because the app shell around the Repo does several things. The host has no shell, so each duty needs an owner. This table is the design's centre: every row is something a Repo alone does not do.
 
-## 7. Identity and secrets
+| Duty | In a tab | In the host |
+|---|---|---|
+| Persist the session | supabase-js writes `localStorage`, which it uses only when `window` and `document` both exist at client construction **[read]** | The client is given its auth storage explicitly ([§10](#10-code-changes)); without that the session lives in memory and every restart needs a new emailed code |
+| Hold device state (mode pins, client id) | `localStorage` | The same file-backed storage, installed as `localStorage` before the app graph loads |
+| Gate writes on access | Bootstrap sets `repo.setReadOnly(role === 'viewer')` and an effect re-applies it when the role changes **[read]** | The Repo is **born read-only**. It becomes writable only when the host's own member row says editor or owner, and goes back the moment it does not, including when the row disappears |
+| Hold writes until the workspace is usable | The key gate runs before bootstrap's writes | Read-only until unlocked, settled and ready (below) |
+| Make writes come out the same | Bootstrap awaits `whenPropertyDefinitionsReady` and resolves the alias-seat and property-child namespaces, which an encrypted workspace needs `K_id` for; a writer that runs first leaves out an alias seat or gives a property row a random id **[read]** | The same steps, from one shared function ([§10](#10-code-changes)), **awaited** before the Repo is made writable |
+| Defer catch-up work off startup | `requestIdleCallback` | Absent in Node, where deep-idle work runs at once **[read]**; read-only is what holds it back, not idleness |
+| Pick up new code | Tabs reload on deploy | Nothing reloads a daemon. The host is in the drain set ([§9](#9-failure-and-recovery)) |
+| Surface rejected uploads | The system-status UI reads `ps_crud_rejected` | `health` reports the rejected count; the host logs it at boot and on change |
 
-**Account: a dedicated member account with the editor role, not the owner's session** (owner decision, 2026-11-19). The credential on an unattended machine is then bounded by row-level security to one workspace, cannot delete or convert the workspace, and is revoked by removing a member. It also means the host has no second workspace to write to, which removes a class of question from the plaintext-upload invariant. Sync volume is not a reason either way: the other workspaces are about 1% of the blocks. **[measured]** Cost: rows the host writes carry the automation user's id beside the contributor attribution, and whatever per-user rows a member account mints on first open (not yet sized; slice 1 lists them).
+## 7. Boot
 
-**Sign-in.** The app signs in by emailed code only (`signInWithOtp` / `verifyOtp` in `Login.tsx`). **[read]** So `headless login` is interactive once: email, typed code, session persisted to device storage. supabase-js refreshes in-process, and the rotated refresh token lands in the same file. **[reasoned]** A password or service credential would be a new auth surface for one host; not proposed.
+1. **Lock** the state directory with the pidfile helper `agent-dispatch` already has (stale-pid detection, so a SIGKILL does not block the restart). **[read]**
+2. **Device storage.** Install the file-backed storage as `localStorage` and as the auth-storage override, before the app's module graph loads. `window` is provided after loading, as the eval shim does, because the mode-pin module looks for `window.localStorage`. **[read]**
+3. **Sign in.** Restore and refresh the session. None, or a refused refresh: exit non-zero naming the `login` subcommand.
+4. **Open the database** and run the shared client-schema initialisation.
+5. **Refuse a stale queue.** If `ps_crud` is non-empty and the host last ran more than a day ago (a heartbeat it keeps in device storage), exit unless started with an explicit flag. A weeks-old agent patch would overwrite whatever a person wrote since, because server patches are last-write-wins by arrival. **[read]** The flag is the operator's decision; nothing is discarded either way.
+6. **Unlock before connecting, whenever the workspace row is already local** (every boot but the first, when the queue is empty by construction). Run the existing `unlockWorkspaceWithKey` flow against the synced `wk_canary`, into the process-wide key store (`getWorkspaceKeyStore()`, which falls back to memory with no IndexedDB). **[read]** A wrong key exits non-zero with the flow's own reason. On the first boot: connect, wait for the row, then unlock.
+7. **Connect** with the production connector and resolver.
+8. **Build the Repo, read-only**: `new Repo({db, cache, user, syncObserverDeps, isReadOnly: true})` with no backfill claim, the `staticDataExtensions` runtime, and the configured workspace active. Not through `createTestRepo`, which installs a working stand-in claim. **[read]**
+9. **Wait until settled**: `onSyncSettled` (`src/data/internals/firstSync.ts`; `onFirstSync` never fires offline) and a materialize backlog of zero.
+10. **Become writable** if the role allows: run the shared write-readiness function, then `setReadOnly(false)`. Seed materialization now runs against a fully materialized workspace, where it finds its definitions already present. **[reasoned]**; invariant 4's test pins it.
+11. **Register with the relay.** Until this step `whoami` shows no connected client and `agent-dispatch` claims nothing, its documented behaviour with no tab. **[read]**
+12. **Shutdown** (SIGTERM): deregister, let in-flight commands finish, `repo.awaitDeferredWork()`, wait a bounded time for the upload queue to empty, close. Queued writes stay in `ps_crud` on disk.
 
-**Workspace key.** Read once at start from a file the config names (mode 0600), handed to the unlock flow, never written elsewhere. No key-delivery endpoint: an endpoint that returns the key puts the key on a server, which is what end-to-end encryption exists to avoid, and a revocable token in front of it revokes nothing useful, since the host has already held plaintext. What is revocable is membership.
+Slices 1 and 2 stop at step 9: a read-only Repo queues nothing, so nothing can leave the device.
 
-**The agent surface must not reach the secrets.** In a Node host, the `eval` verb runs with the daemon's OS privileges and could read the key file. The host therefore serves an **allowlist** of verbs ([§8](#8-invariants)), and `eval` is not on it. An agent with a shell on the same machine as the same OS user can still read the file; run the daemon as its own user if that matters. The owner has accepted the host holding key and plaintext, so nothing more is built for it.
+## 8. Identity, secrets, invariants
 
-## 8. Invariants
+**Account: a dedicated member with the editor role** (owner decision). The credential on an unattended machine is bounded by row-level security to the workspaces it is a member of, cannot change ownership, convert the workspace or flip its `properties_migration` mode, and is revoked by removing the member. **[read]** It can still do everything a writer can, including deleting blocks. Per-user rows are minted only app-side, so the host creates none. **[read]** The account may own a personal workspace if it ever opened the app; that workspace is never pinned, so nothing materializes in it and nothing can be written to it. **[read]** The invitation is accepted once, in a browser or by `login` calling the same RPC (slice 1 settles which).
 
-Each has the mechanism that holds it and the test that fails when the mechanism is deleted.
+**Sign-in.** The app offers an emailed code or an anonymous session. **[read]** `headless login` uses the emailed code, once, interactively. A password or service credential would be a new auth surface for one host; not proposed.
 
-1. **Writes go through the data layer.** The host exposes only `executeCommand`, which writes through `repo.tx`. The verb allowlist excludes `eval`, and admits `sql` only when the protocol's own `isReadOnlyAgentCommand` says it is a read. *Test:* each refused verb, sent over the in-process bridge client, is refused; deleting its allowlist check makes a named test fail.
-2. **Queued writes are durable and visible.** On a host that keeps its disk the upload queue survives a kill, so "a run is not done until uploaded" reduces to: shutdown drains, and `health` reports queue depth. This is deliberately weaker than "completion means acknowledged"; that stronger form belongs to hosts that lose their disk ([§11](#11-later-hosts-that-lose-their-disk)). *Test:* SIGTERM with a queued write exits only after the fake sink received it; SIGKILL then restart uploads it once.
-3. **One identity per database.** A lock file in the state directory; the second process exits. The state directory is never copied to another machine: a new host does a cold sync. *Test:* a second boot on a held directory fails before opening the database.
-4. **Snapshot export and stamping** (two invariants from the scoping notes) do not apply: there is no snapshot. Across code upgrades the database is migrated at open by the same idempotent `ensure*` steps a browser's is, because the initialisation is shared.
-5. **No data migration from the host.** Structural: the Repo has no `backfillCompletionClaim`, so backfills refuse, and `run-backfill` is off the allowlist. Per-device derivation passes run as on any device. *Test:* a backfill requested on a Repo built the way the host builds it refuses; `workspaceBackfillRunner.test.ts` is where the absent-claim branch is exercised today, to be confirmed in slice 1.
-6. **A plaintext upload to an encrypted workspace is impossible.** Three layers, the first two new:
-   - `createPowerSyncConnector`'s `encryption` option becomes **required**. Today it is optional and defaults to plaintext pass-through. **[read]** Tests pass an explicit plaintext constant.
-   - The host wraps the resolver's upload mode in a clamp typed `(workspaceId) => Promise<'e2ee' | 'hold'>` for an e2ee-configured host: the configured workspace answers `e2ee` or holds, every other workspace holds. `'none'` is not in the type. The resolver underneath is the production one, reading the same pin.
-   - The server's ciphertext trigger stays as the backstop.
+**Workspace key.** Read once at start from a file the config names (mode 0600), handed to the unlock flow, which zeroes the bytes. **[read]** No key-delivery endpoint: it would put the key on a server, which is what end-to-end encryption exists to avoid, and the revocable thing is membership.
 
-   No command is served before boot step 5 pins the workspace, so no write exists before the pin does. *Test:* with the clamp deleted and the pin absent, a queued write reaches the fake sink as plaintext; with it, the pass throws `UploadHeldError`.
-7. **Attribution.** Unchanged code: `executeCommand` rebinds `repo.withTxContext({contributorId, contributorSource: 'agent'})` and refuses an unchosen contributor, and the contributors same-tx processor is in `staticDataExtensions`. **[read]** The owner's undo stacks hold only their own devices' local transactions, so a synced agent write is never on them. **[reasoned]**
+**Invariants.** Each has its mechanism and the test that fails when the mechanism is deleted.
 
-**Verb allowlist.** The repo-only verbs: the reads (`sql` read modes, `get-block`, `get-subtree`, `view-*`, `backlinks`, `page`, `daily-note`, `search`, `comments`, `recent-changes`, `block-history`, `data-model`, `resolve-block-id`, `list-contributors`, `health`, `ping`, `describe-runtime`), the block writes (`create-block`, `update-block`, `edit-block`, `move-block`, `delete-block`, `restore-block`, `append-markdown`, `reconcile-markdown-subtree`, `create-page`, `add-comment`, `create-contributor`) and `watch-events`. That covers everything `agent-dispatch` calls and every `km-mcp` tool except media. **[read]** An allowlist, so a verb added later is refused until someone decides it is safe here.
+1. **Writes go through the data layer, and only served verbs run.** The host serves an allowlist ([below](#verbs)). *Test:* every `KnownCommandType` is classified served or refused in `scripts/headless/`, so a verb added to the protocol fails the test until someone decides; each refusal has a named test.
+2. **The host never accepts a write it cannot upload.** Read-only tracks the member row. *Test:* with the member row set to viewer, then removed, a write verb is refused; deleting the role subscription makes it succeed locally.
+3. **One identity per database.** The pidfile lock. The state directory is never copied to another machine. *Test:* a second boot on a held directory exits before opening the database.
+4. **No workspace backfill from the host.** The Repo has no claim, so backfills refuse, and `run-backfill` is not served. Seed materialization is *not* covered by that claim: it creates or restores definition blocks through `repo.tx` on any device that opens a workspace writable, with deterministic ids and insert-or-touch on the server. **[read]** It is allowed, and bounded by step 10. *Test:* a first writable open against an already-seeded workspace leaves `ps_crud` empty.
+5. **A plaintext upload to an encrypted workspace is impossible.** The production resolver already decides this from the pin, and review found no path around it. **[read]** Two hardenings, both labelled defence in depth: `createPowerSyncConnector`'s `encryption` option becomes required (today it defaults to plaintext pass-through **[read]**; three call sites), and a create or patch with no `workspace_id` throws instead of passing through unsealed (unreachable today, since the upload trigger always sets it **[read]**). The host adds a clamp typed `'e2ee' | 'hold'` over the resolver's answer; `'hold'` for any other workspace cannot be reached, since nothing materializes there, and a held write at the head of the queue also stops downloads, so `health` names it. *Test:* with the clamp deleted and the pin absent, a queued write reaches the fake sink as plaintext.
+6. **Attribution.** Unchanged code: with the contributors processor in the runtime (it is in `staticDataExtensions`), `executeCommand` rebinds `repo.withTxContext({contributorId, contributorSource: 'agent'})` and an unchosen contributor is refused. **[read]** A synced agent write is never on another device's undo stack. **[reasoned]**
 
-**Not served, and why:** `eval` (privileges); the extension install/enable verbs (they compile through the page's importmap and blob URLs); `run-action` (handlers assume UI state); `run-backfill`; `add-media` / `read-media` (the byte lanes are OPFS- and app-effect-driven; a real gap, deferred).
+<a id="verbs"></a>**Served:** the reads (`sql` when `isReadOnlyAgentCommand` says so, `get-block`, `get-subtree`, `view-*`, `backlinks`, `grouped-backlinks`, `page`, `daily-note`, `search`, `comments`, `recent-changes`, `block-history`, `data-model`, `resolve-block-id`, `list-contributors`, `health`, `ping`, `describe-runtime`, `runtime-summary`), the block writes (`create-block`, `update-block`, `edit-block`, `move-block`, `delete-block`, `restore-block`, `append-markdown`, `reconcile-markdown-subtree`, `create-page`, `add-comment`, `create-contributor`) and `watch-events`. That covers what `agent-dispatch` calls and every `km-mcp` tool except media. **[read]**
 
-## 9. Code changes
+**Refused:** `eval` (it runs with the daemon's OS privileges and could read the key file); the extension verbs and `audit-extension` (they compile through the page's importmap and blob URLs); `run-action` / `action`; `run-backfill`, `rematerialize-workspace`, `audit-properties`; `add-media` / `read-media` (the byte lanes are OPFS- and app-effect-driven; a real gap).
 
-**Core (`src/`, no plugin imports):**
-- *One owner for client-schema initialisation.* `initializeClientSchema` and the backfill sequence after it live in `repoProvider.ts`, which imports `@powersync/web` at module level, and `createTestDb.ts` re-states the same sequence by hand. Move both the DDL sequence and the raw-table schema into a platform-neutral module that `repoProvider`, `createTestDb` and the host all call. This deletes a duplicate that can already drift.
-- `createPowerSyncConnector`: `encryption` required.
-- *Seed completeness.* Eleven static plugins register property or type seeds only on the app side **[measured]**, so a data-only runtime does not know those definitions. Move those seeds into data extensions and pin with a test that the app runtime's seed set equals the data runtime's.
+An agent with a shell on the same machine as the same OS user can still read the key file; run the daemon as its own user if that matters.
 
-**New, outside `src/`:** `headless/` with the entry point, device storage, boot, `login`, the verb allowlist and the upload clamp. The eval host's shims and bridge-loop wiring move here and the eval host becomes "the headless host over a fixture database with no sync", so Node hosting has one owner. The host also wires `watchEventsRegistry.setTransport`, which today only `bridge.ts` does, so `watcher-settled` events reach `agent-dispatch`. **[read]**
-
-**Untouched:** `packages/agent-cli`, `packages/agent-dispatch` (a README note on the headless profile), Supabase, the sync rules.
-
-**Installed extensions.** They cannot load in Node today (Babel plus blob-URL imports through the page importmap). **[read]** Sized: on the real graph they contribute seeds only. **[measured]** Their definitions are also blocks in the workspace, and the registry already has a status for "this device cannot build the codec" (`behavior-unavailable`). **[read]** Slice 3 verifies that an agent write to such a property is refused or stored under the synced definition, never re-typed. If an installed extension ever ships a processor, the host must refuse writes it would have processed; that check is not built until one exists.
-
-## 10. Failure and recovery
+## 9. Failure and recovery
 
 | Failure | What happens | Recovery |
 |---|---|---|
-| Killed mid-upload | The queue is on disk; the connector's ambiguous-attempt handling is unchanged | Restart |
-| Session refresh refused | Boot exits non-zero; queue stays on disk | `headless login`, restart |
+| Killed mid-upload | The queue is on disk. Delivery is at-least-once: creates are insert-or-skip, a replayed patch re-applies the same columns **[read]** | Restart |
+| Killed between a write and its post-commit processor | Derived columns such as parsed references stay underived until the block is next edited; content is intact. Same as a tab closed at that moment **[read]** | None; accepted |
+| Session refresh refused | Boot exits non-zero; the queue stays on disk | `headless login`, restart |
 | Wrong or missing key | Boot exits before any command is served | Fix the key file |
-| Server says e2ee, pin missing | Clamp holds uploads; materialization defers | Unlock runs at next boot |
+| Demoted to viewer, or membership removed | The Repo goes read-only at once; writes already queued are rejected by row-level security into `ps_crud_rejected`, which `health` reports. They exist locally and were never synced | Restore the role. The rows stay quarantined in the host's database; the retry the app's status UI offers is not served by the host yet, and slice 3 decides whether to serve it |
+| Non-empty queue after more than a day down | Boot exits (step 5) | Restart with the flag, after looking at what is queued |
 | Corrupt or suspect database | Refuse to boot; never auto-wipe a database with a non-empty queue | Inspect the queue, then delete the directory and cold-sync |
-| Host off for weeks, then started with queued writes | They upload, as from a laptop that was closed | None; the queue holds only what agents wrote just before the stop |
-| Membership removed | Sync and uploads fail; queued writes go through the existing rejection path **[reasoned]** | Re-add, or discard the directory |
+| Timers armed at shutdown | `awaitDeferredWork` does not cover them (the orphan-alias cleanup is armed for 4 s **[read]**); the host waits out the longest before closing | — |
 
-## 11. Later: hosts that lose their disk
+**Deploys.** Nothing gates an old client: there is no minimum-version check, and an unknown `properties_migration` mode parses as `'cell'`, so an old daemon would write cell-shaped properties into a workspace that had moved on. **[read]** The host is therefore in the drain set, with no new machinery: before a deploy that changes schema, codecs, seeds or the migration mode, stop the host with an empty queue, update the checkout, start it. `health` reports the checkout's commit so the running version is visible.
 
-Wanted eventually, not built first. Two different things get called a transient container, and only one needs this section:
+## 10. Code changes
 
-- **A transient agent with a persistent client.** The container runs the agent and reaches a persistent host over the bridge ([§12](#12-later-agents-that-run-somewhere-else)). No database, no key and no snapshot enter the container. This is the cheap path and should be tried first.
-- **A transient client.** The container itself syncs and decrypts, so it must start from a saved database or pay a cold sync. That is the snapshot path below.
+**Core (`src/`, no plugin imports), each an extraction or a strictness change:**
+- *Client-schema initialisation* (`initializeClientSchema` and the backfill sequence after it) moves out of `repoProvider.ts`, which imports `@powersync/web` at module level, into a platform-neutral module beside `clientSchema.ts`. `createTestDb.ts` re-states the same sequence by hand with a different statement list; converging it is separate work, to be filed.
+- *Resolver and connect wiring* (`resolverForUser`, the connect options) moves out of `repoProvider.ts` the same way, so the host connects with the production resolver rather than a copy.
+- *Write readiness*: the data-relevant steps of `bootstrapWorkspace` (definitions ready, the two namespace resolves) become one function that the tab bootstrap and the host both call. The tab keeps not awaiting the resolves, for its IndexedDB-hang reason; the host awaits.
+- *Auth storage*: `services/supabase.ts` passes `auth.storage` from an override a leaf module holds, unset in browsers, so `createClient` behaves there exactly as today.
+- `createPowerSyncConnector`: `encryption` required; a create or patch without `workspace_id` throws.
+- `health` reports the rejected-upload count.
 
-What a snapshot has to carry is a 6 GB file **[measured]** holding plaintext, whole-file encrypted, stored somewhere never public, refreshed by something, downloaded at each fresh start. On top of that: export only with an empty queue and no open transaction; a stamp of schema and app version; a restore that mints a new PowerSync client id (the id is in the file **[read]**; that resetting it is sufficient is **[reasoned]**); the app-level client id and device storage reset with it; a completion rule of "uploaded and acknowledged", because a reclaimed container loses its queue; and a way to deliver the key into the container.
+**New, in `scripts/headless/`:** entry point, device storage (a small write-temp-then-rename helper; `agent-dispatch`'s `atomicFile.ts` is exclusive-create, not this), boot, `login`, verb classification, the role subscription, the clamp. Shared with the eval host: the shims and a small `serveBridge` helper around `startBridgeLoop`; the eval host itself stays as it is. The host wires `watchEventsRegistry.setTransport`, which today only `bridge.ts` does, so `watcher-settled` events reach `agent-dispatch`. **[read]**
 
-**What this design keeps open for it, at no cost now:**
+**Config and processes.** One config file: state directory, workspace id, expected encryption mode, key-file path, relay profile. The relay URL and secret come from the same `agent-cli` config the relay itself reads, since both run on one machine. **[reasoned]** The host mints its relay token on first start and keeps it in the state directory. Who supervises the relay beside the daemon (launchd or systemd units for both) is settled in slice 1.
 
-- The state directory is the whole device: the database and the device-storage file, nothing elsewhere. A snapshot is that directory.
-- Boot is "open whatever is in the state directory, then sync incrementally". A restore is the same boot over a directory that arrived by download.
-- The host is the only writer of its directory, so it is also the only thing that could export it consistently.
-- Settled-ness is already a number the host computes (first sync done, materialize backlog zero, upload queue depth). The stronger completion rule is a wait on that number.
+**Seeds.** Eleven static plugins register seeds only on the app side **[measured]**, and installed extensions cannot load in Node (Babel plus blob-URL imports **[read]**), so the host's seed set is narrower than a tab's. Whether that matters is slice 3's first check: a write to a property whose seed the host lacks must be refused or stored under the synced definition, never re-typed. Only if that fails do the static seeds move into data extensions. Whether the host needs `kernelValuePresetsExtension`, which the eval host adds and which lives in a React module, is settled in slice 1.
 
-Slice 2's measurements (cold sync time and file size under Node) decide how much of the snapshot path is worth building: a cold sync of a few minutes on native SQLite would make a transient client viable for long jobs with no snapshot at all.
+**Untouched:** `packages/agent-cli`, `packages/agent-dispatch` (a README note on the headless profile), Supabase, the sync rules.
 
-## 12. Later: agents that run somewhere else
+## 11. Slices
 
-An agent in a cloud session needs the bridge, not the database. The relay speaks HTTP with `Authorization: Bearer`, and already has a guarded switch for listening beyond loopback (`AGENT_RUNTIME_ALLOW_NETWORK`). **[read]** Behind a TLS tunnel, the agent's credential is a revocable bearer token for one host name, which is exactly the shape a header-injecting secret proxy supports, and neither the workspace key nor the database ever enters the remote machine. This needs its own short design (exposure, token scope, rate limits) and is the natural second step after slice 4.
-
-## 13. Slices
-
-1. **Host skeleton on a scratch plaintext workspace.** The shared schema initialisation, device storage, `login`, connect, the allowlist with reads only, and an upload mode that always holds, so nothing can leave the device. List every row a first boot writes locally.
+1. **Read-only host on a scratch plaintext workspace.** The extractions, device storage with a test that a token refresh rewrites the file, `login`, lock, boot to step 9, the read verbs.
 2. **Unlock, then the real graph, still read-only.** Measure cold sync, memory and file size. Compare `health` counts and a sample of `view-*` outputs with a tab's.
-3. **Writes on a scratch e2ee workspace.** The clamp, the write verbs, contributor attribution, shutdown drain, the missing-seed write check, and a parity test: one command sequence against a tab-shaped and a host-shaped runtime yields identical rows.
-4. **The real graph, with `agent-dispatch` pointed at the host's profile.** Dispatch runs only there, so the claim race it documents does not widen.
+3. **Writes on a scratch encrypted workspace.** The missing-seed check first; then steps 10–12, the role subscription, the write verbs, attribution, and a parity test: one command sequence against a tab-shaped and a host-shaped runtime yields identical rows.
+4. **The real graph.** Stop the tab-pointed `agent-dispatch` first, then point it at the host's profile. Dispatch runs only there, so the claim race it documents does not widen.
 
-## 14. Decided, and still open
+## 12. Later
 
-Decided by the owner, 2026-11-19: persistent hosts first, transient containers later ([§2](#2-scope-the-decision-that-sizes-everything-else)); a dedicated member account ([§7](#7-identity-and-secrets)).
+Two different things get called a transient container.
 
-Still open, each assigned to a slice: cold sync time, memory and file size under Node (slice 2); what a member account writes on first open (slice 1); how a write to a property whose seed the host lacks behaves (slice 3).
+**A transient agent with a persistent client.** The container runs the agent and reaches the host over the bridge. The relay speaks HTTP with `Authorization: Bearer` and has a guarded switch for listening beyond loopback (`AGENT_RUNTIME_ALLOW_NETWORK`). **[read]** Behind a TLS tunnel the agent's credential is a revocable bearer token for one host name, and neither the key nor the database enters the container. This needs its own short design (exposure, token scope, rate limits) and should be tried first.
+
+**A transient client.** The container itself syncs and decrypts, so it starts from a saved database or pays a cold sync. A snapshot is a 6 GB file **[measured]** holding plaintext, whole-file encrypted, stored somewhere never public, refreshed by something and downloaded at each fresh start. It also needs: export only with an empty queue and no open transaction; a schema and app version stamp; a restore that mints a new PowerSync client id (resetting it being sufficient is **[reasoned]**) and resets device storage; completion defined as "uploaded and acknowledged", because a reclaimed container loses its queue; and a way to deliver the key.
+
+What this design keeps open for it at no cost: the state directory is the whole device, so a snapshot is that directory; boot is "open what is there, then sync", so a restore is the same boot; the host is the only writer of its directory, so it is the only thing that could export it consistently; settled-ness is already something the host waits on. Slice 2's measurements decide how much of the snapshot path is worth building.
+
+## 13. Still open
+
+Each is assigned above: cold sync time, memory and file size under Node (slice 2); the missing-seed write behaviour (slice 3); invitation acceptance, relay supervision and `kernelValuePresetsExtension` (slice 1).
