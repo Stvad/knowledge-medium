@@ -151,7 +151,7 @@ export function LinkHints() {
       const hasCandidate = key.length === 1 && letters.includes(key)
         && Array.from(links.keys()).some(label => label.startsWith(next))
       // Modified shortcuts and physical-key bindings on this layout take priority.
-      const matchesBinding = hasCandidate && presses.some(press => {
+      const matchesBinding = hasCandidate && presses.some(({press}) => {
         const pattern = press[2]
         if (pattern instanceof RegExp) pattern.lastIndex = 0
         return matchKeybindingPress(event, press)

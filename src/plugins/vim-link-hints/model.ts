@@ -4,20 +4,30 @@ import type { ActionConfig, ActionContextType } from '@/shortcuts/types.js'
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz'
 
+interface BoundPress {
+  press: KeybindingPress
+  canShareLetter: boolean
+}
+
 export function boundPresses(
   actions: readonly ActionConfig[],
   installable: ReadonlySet<ActionContextType>,
-): KeybindingPress[] {
+): BoundPress[] {
   return actions.flatMap(({context, defaultBinding}) =>
     defaultBinding && installable.has(context)
-      ? toChordArray(defaultBinding.keys).flatMap(chord => parseKeybinding(chord))
+      ? toChordArray(defaultBinding.keys).flatMap(chord => parseKeybinding(chord).map((press, index) => ({
+        press,
+        // A suffix only owns its chord after the prefix has been pressed.
+        // Reserving its letter avoids a hint that yields to an idle sequence.
+        canShareLetter: index === 0 && press[0].length > 0,
+      })))
       : [],
   )
 }
 
-export function hintLetters(presses: readonly KeybindingPress[]): string {
-  const bindings = presses.map(([required, , key]) => ({
-    requiresModifier: required.length > 0,
+export function hintLetters(presses: readonly BoundPress[]): string {
+  const bindings = presses.map(({press: [, , key], canShareLetter}) => ({
+    canShareLetter,
     key: typeof key === 'string' ? key.toLowerCase() : new RegExp(key.source, 'i'),
   }))
   const unused: string[] = []
@@ -27,7 +37,7 @@ export function hintLetters(presses: readonly KeybindingPress[]): string {
       ? key === letter || key === `key${letter}`
       : key.test(letter) || key.test(`Key${letter.toUpperCase()}`))
     if (!matches.length) unused.push(letter)
-    else if (matches.every(binding => binding.requiresModifier)) modifiedOnly.push(letter)
+    else if (matches.every(binding => binding.canShareLetter)) modifiedOnly.push(letter)
   }
   // Prefer labels that work with every click modifier. Additional labels
   // share a letter with a shortcut only when its plain press is free.
