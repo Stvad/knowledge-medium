@@ -484,13 +484,13 @@ export const selectAliasTargetIdsSql = (count: number): string => `
   FROM requested
 `
 
-/** Aliases that would resolve back to each offered block when inserted as a wikilink. */
-export const SELECT_RESOLVING_ALIASES_FOR_BLOCKS_SQL = `
-  SELECT a.block_id AS id, a.alias
-    FROM block_aliases a
-   WHERE a.workspace_id = ? AND a.block_id IN (SELECT value FROM json_each(?))
+/** Prefer the selected label among names that resolve back to this block. */
+export const SELECT_RESOLVING_ALIASES_FOR_BLOCK_SQL = `
+  SELECT a.alias
+    FROM block_aliases a INDEXED BY sqlite_autoindex_block_aliases_1
+   WHERE a.workspace_id = ? AND a.block_id = ?
      AND a.block_id = (SELECT blocks.id ${liveAliasLookupSql('a.alias', 'a.workspace_id')})
-   ORDER BY a.block_id, a.alias
+   ORDER BY a.alias = ? DESC, a.alias
 `
 
 /** ALL live claimants of an exact alias in a workspace — no `LIMIT 1`.

@@ -5,6 +5,7 @@ import {EditorView} from '@codemirror/view'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import {ChangeScope, codecs, defineProperty} from '@/data/api'
 import {aliasesProp, typesProp} from '@/data/properties'
+import {SELECT_RESOLVING_ALIASES_FOR_BLOCK_SQL} from '@/data/internals/kernelQueries'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -40,7 +41,7 @@ const create = async (id: string, content: string, aliases: string[], types = ['
   }), {scope: ChangeScope.BlockDefault})
 }
 
-const open = async (text: string) => {
+const open = async (text: string, beforeAccept?: (view: EditorView) => Promise<void>) => {
   view = new EditorView({parent: document.body, state: EditorState.create({
     doc: text, selection: {anchor: text.length},
     extensions: [autocompletion({activateOnTypingDelay: 0}), ...valueAutocomplete({repo, block: repo.block('value'), propertyValueSchema: constrained})],
@@ -49,7 +50,9 @@ const open = async (text: string) => {
   if (text) startCompletion(view)
   await vi.waitFor(() => expect(completionStatus(view!.state)).toBe('active'))
   expect(currentCompletions(view.state)).toHaveLength(1)
+  await beforeAccept?.(view)
   await vi.waitFor(() => expect(acceptCompletion(view!)).toBe(true))
+  await vi.waitFor(() => expect(view!.state.doc.toString()).not.toBe(text))
   return view.state.doc.toString()
 }
 
@@ -107,4 +110,27 @@ it('can insert a good alias even when the block id cannot be written as a refere
 it('does not install automatic completion for an enum with no options', () => {
   const extensions = valueAutocomplete({repo, block: repo.block('value'), propertyValueSchema: emptyEnum})
   expect(extensions).toEqual([])
+})
+
+it('resolves the chosen block again if its alias changes before acceptance', async () => {
+  await create('alice', 'Pianist', ['Alice'])
+  const inserted = await open('Pianist', async () => {
+    await db.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [
+      JSON.stringify({[aliasesProp.name]: [], [typesProp.name]: ['person']}), 'alice',
+    ]))
+    await create('other', 'Other', ['Alice'], ['place'])
+    expect((await repo.query.aliasLookup({workspaceId: WS, alias: 'Alice'}).load())?.id).toBe('other')
+  })
+  expect(inserted).toBe('((alice))')
+})
+
+it('uses indexed lookups for the selected block and its aliases', async () => {
+  const rows = await db.db.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${SELECT_RESOLVING_ALIASES_FOR_BLOCK_SQL}`, [WS, 'alice', 'Alice'])
+  expect(rows.some(row => /SEARCH a USING INDEX .*\(block_id=\?\)/.test(row.detail))).toBe(true)
+  expect(rows.some(row => /SEARCH ba USING INDEX .*\(workspace_id=\? AND alias=\?\)/.test(row.detail))).toBe(true)
+})
+
+it('uses the id when an alias cannot survive property projection whitespace trimming', async () => {
+  await create('alice', 'Pianist', [' Alice '])
+  expect(await open('Pianist')).toBe('((alice))')
 })

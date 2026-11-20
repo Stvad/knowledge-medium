@@ -4,41 +4,42 @@ import {EditorView} from '@codemirror/view'
 import {isEnumCodec, type AnyPropertySchema} from '@/data/api'
 import {encodedToValueChildContent, valueChildCodec} from '@/data/propertyChildren'
 import {parseExactReferenceBlockContent, tryReferenceBlockContentForId} from '@/data/referenceBlock'
-import {SELECT_RESOLVING_ALIASES_FOR_BLOCKS_SQL} from '@/data/internals/kernelQueries'
+import {SELECT_RESOLVING_ALIASES_FOR_BLOCK_SQL} from '@/data/internals/kernelQueries'
 import {faithfulWikilinkReplacement} from '@/plugins/references/referenceParser'
 import type {Repo} from '@/data/repo'
 import {acceptCompletionInsert} from '@/editor/contentFlush'
 import type {CodeMirrorExtensionContribution} from '@/editor/codeMirrorExtensions'
 import {referenceTargetTypes} from '@/editor/referenceTargetTypes'
 import {rankedTypedReferenceCandidates} from '@/utils/linkTargetAutocomplete'
+import {showError} from '@/utils/toast'
 import {propertyValueTargetTypes} from './valueSchema'
 
-interface ReferenceCandidate {insert: string; label: string; detail?: string}
+interface ReferenceCandidate {
+  label: string
+  detail?: string
+  resolveContent: () => Promise<string | null>
+}
 
 const propertyReferenceChoices = async (
   repo: Repo, workspaceId: string, query: string, targetTypes: readonly string[],
 ): Promise<ReferenceCandidate[]> => {
   const limit = 12
   const hits = await rankedTypedReferenceCandidates(repo, {workspaceId, query, targetTypes, limit})
-  if (!hits.length) return []
-  const aliases = await repo.db.getAll<{id: string; alias: string}>(
-    SELECT_RESOLVING_ALIASES_FOR_BLOCKS_SQL, [workspaceId, JSON.stringify(hits.map(hit => hit.id))],
-  )
-  const matchedLabels = new Map(hits.map(hit => [hit.id, hit.label]))
-  const named = new Map<string, {label: string; insert: string}>()
-  for (const {id, alias} of aliases) {
-    if (named.has(id) && alias !== matchedLabels.get(id)) continue
-    const insert = faithfulWikilinkReplacement(alias)?.text
-    if (!insert) continue
-    // Property projection parses the entire row. Its alias must agree with the inline renderer.
-    const parsed = parseExactReferenceBlockContent(insert)
-    if (parsed?.kind === 'alias' && parsed.alias === alias) named.set(id, {label: alias, insert})
-  }
   const choices: ReferenceCandidate[] = []
   for (const hit of hits) {
-    const alias = named.get(hit.id)
-    const insert = alias?.insert ?? tryReferenceBlockContentForId(hit.id)
-    if (insert) choices.push({label: alias?.label ?? hit.label, detail: hit.detail, insert})
+    const fallback = tryReferenceBlockContentForId(hit.id)
+    const resolveContent = async () => {
+      const aliases = await repo.db.getAll<{alias: string}>(SELECT_RESOLVING_ALIASES_FOR_BLOCK_SQL, [workspaceId, hit.id, hit.label])
+      for (const {alias} of aliases) {
+        const text = faithfulWikilinkReplacement(alias)?.text
+        if (!text) continue
+        const parsed = parseExactReferenceBlockContent(text)
+        if (parsed?.kind === 'alias' && parsed.alias === alias) return text
+      }
+      return fallback
+    }
+    // Only targets with no ID spelling need an alias check before they can be offered.
+    if (fallback || await resolveContent()) choices.push({label: hit.label, detail: hit.detail, resolveContent})
     if (choices.length === limit) break
   }
   return choices
@@ -68,7 +69,20 @@ export const valueCompletionSource = (
   return {from: 0, filter: false, options: hits.map(hit => ({
     label: hit.label,
     detail: hit.detail === hit.label ? undefined : hit.detail,
-    apply: (view: EditorView, _completion, from, to) => acceptCompletionInsert(view, {from, to, insert: hit.insert}),
+    apply: async (view: EditorView, _completion, from, to) => {
+      const {doc, selection} = view.state
+      try {
+        const insert = await hit.resolveContent()
+        if (!view.dom.isConnected || view.state.doc !== doc || !view.state.selection.eq(selection)) return
+        if (insert === null) {
+          showError('This block no longer has a usable reference.')
+          return
+        }
+        acceptCompletionInsert(view, {from, to, insert})
+      } catch (error) {
+        showError(error instanceof Error ? error.message : 'Could not resolve the reference.')
+      }
+    },
   }))}
 }
 

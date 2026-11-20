@@ -11,7 +11,7 @@ import {valueAutocomplete, valueCompletionSource} from '../valueAutocomplete'
 
 const enumSchema = defineProperty('status', {codec: codecs.enum([{value: ' open ', label: 'Open'}, {value: 'done', label: 'Done'}]), defaultValue: 'done', changeScope: ChangeScope.BlockDefault})
 const refSchema = defineProperty('owner', {codec: codecs.ref({targetTypes: ['person']}), defaultValue: '', changeScope: ChangeScope.BlockDefault})
-const search = vi.fn(async () => [{insert: '((target))', label: 'Alice'}])
+const search = vi.fn(async () => [{resolveContent: async () => '((target))', label: 'Alice'}])
 const complete = async (schema: typeof enumSchema | typeof refSchema, doc: string) => {
   const state = EditorState.create({doc, selection: {anchor: doc.length}})
   return valueCompletionSource(schema, search)(new CompletionContext(state, doc.length, false))
@@ -32,12 +32,31 @@ it('searches constrained references and inserts a block reference', async () => 
   search.mockClear()
   const result = await complete(refSchema, 'ali')
   expect(search).toHaveBeenCalledWith('ali', ['person'])
-  const view = new EditorView({doc: 'ali'})
+  const view = new EditorView({doc: 'ali', parent: document.body})
   const option = result!.options[0]!
   if (typeof option.apply !== 'function') throw new Error('Missing apply')
-  option.apply(view, option, 0, 3)
+  await option.apply(view, option, 0, 3)
   expect(view.state.doc.toString()).toBe('((target))')
   view.destroy()
+})
+
+it.each(['typing', 'moving the caret', 'closing the editor'])('preserves changes from %s during reference lookup', async gesture => {
+  const view = new EditorView({doc: 'ali', parent: document.body})
+  let finish!: (text: string) => void
+  const pending = new Promise<string>(resolve => { finish = resolve })
+  const source = valueCompletionSource(refSchema, async () => [{label: 'Alice', resolveContent: () => pending}])
+  try {
+    const result = await source(new CompletionContext(view.state, 3, false))
+    const pick = result!.options[0]!
+    if (typeof pick.apply !== 'function') throw new Error('Missing apply')
+    const applied = pick.apply(view, pick, 0, 3)
+    if (gesture === 'typing') view.dispatch({changes: {from: 3, insert: '!'}})
+    if (gesture === 'moving the caret') view.dispatch({selection: {anchor: 1}})
+    if (gesture === 'closing the editor') view.destroy()
+    finish('[[Alice]]')
+    await applied
+    expect(view.state.doc.toString()).toBe(gesture === 'typing' ? 'ali!' : 'ali')
+  } finally { view.destroy() }
 })
 
 it('offers empty values and leaves explicit link triggers to their own sources', async () => {
