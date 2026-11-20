@@ -1,1 +1,1 @@
-export{mh as contributorMentionCandidates,hh as contributorMentionSource,gh as loadContributorMentionCandidates}from"../../../chunks/app-CXtK5QVp.js";
+export{mh as contributorMentionCandidates,hh as contributorMentionSource,gh as loadContributorMentionCandidates}from"../../../chunks/app-8hMDne2u.js";

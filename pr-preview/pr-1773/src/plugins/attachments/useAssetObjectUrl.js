@@ -1,1 +1,1 @@
-export{sC as useAssetObjectUrl}from"../../../chunks/app-CXtK5QVp.js";
+export{sC as useAssetObjectUrl}from"../../../chunks/app-8hMDne2u.js";

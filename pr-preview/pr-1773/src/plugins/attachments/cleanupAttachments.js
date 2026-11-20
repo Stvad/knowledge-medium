@@ -1,1 +1,1 @@
-export{Vx as CLEANUP_ATTACHMENTS_ACTION_ID,Hx as cleanupAttachmentsAction,Ux as prepareCleanup}from"../../../chunks/app-CXtK5QVp.js";
+export{Vx as CLEANUP_ATTACHMENTS_ACTION_ID,Hx as cleanupAttachmentsAction,Ux as prepareCleanup}from"../../../chunks/app-8hMDne2u.js";

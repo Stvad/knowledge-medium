@@ -1,1 +1,1 @@
-export{Bdt as defineQuery}from"../../../chunks/app-CXtK5QVp.js";
+export{Bdt as defineQuery}from"../../../chunks/app-8hMDne2u.js";

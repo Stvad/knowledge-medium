@@ -1,1 +1,1 @@
-export{WF as resolveAppRuntime,GF as resolveAppRuntimeSync}from"../../chunks/app-CXtK5QVp.js";
+export{WF as resolveAppRuntime,GF as resolveAppRuntimeSync}from"../../chunks/app-8hMDne2u.js";

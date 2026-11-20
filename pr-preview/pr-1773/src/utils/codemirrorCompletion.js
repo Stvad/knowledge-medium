@@ -1,1 +1,1 @@
-export{GP as completionKeymapWithEscapeFallthrough,KP as completionQueryEnd}from"../../chunks/app-CXtK5QVp.js";
+export{GP as completionKeymapWithEscapeFallthrough,KP as completionQueryEnd}from"../../chunks/app-8hMDne2u.js";
