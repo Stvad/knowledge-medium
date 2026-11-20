@@ -1,0 +1,1 @@
+export{Cg as BLOCK_HISTORY_CONTENT_CHARS,wg as LISTED_PROPERTY_NAMES,Tg as MAX_LISTED_CHANGES,Eg as blockHistory,Dg as recentChanges}from"../../../chunks/app-DTCf7gv4.js";

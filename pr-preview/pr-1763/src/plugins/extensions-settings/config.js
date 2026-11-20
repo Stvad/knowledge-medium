@@ -1,0 +1,1 @@
+export{Xh as extensionsOverridesPresetCore,Zh as extensionsOverridesProp,Qh as extensionsPrefsType,$h as overridesCodec}from"../../../chunks/app-DTCf7gv4.js";

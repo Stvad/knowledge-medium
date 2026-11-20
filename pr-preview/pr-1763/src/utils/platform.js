@@ -1,0 +1,1 @@
+export{tG as isIOS,nG as isMacPlatform}from"../../chunks/app-DTCf7gv4.js";

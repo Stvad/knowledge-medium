@@ -1,0 +1,1 @@
+export{x8 as kernelDataExtension}from"../../chunks/app-DTCf7gv4.js";

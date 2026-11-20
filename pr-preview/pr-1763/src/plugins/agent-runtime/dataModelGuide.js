@@ -1,0 +1,1 @@
+export{gv as DATA_MODEL_GUIDE,_v as dataModelGuide}from"../../../chunks/app-DTCf7gv4.js";

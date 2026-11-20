@@ -1,0 +1,1 @@
+export{zot as DerivedIdNamespaceUnavailableError,Bot as derivedIdNamespaceInTx,Vot as resolveDerivedIdNamespace}from"../../chunks/app-DTCf7gv4.js";

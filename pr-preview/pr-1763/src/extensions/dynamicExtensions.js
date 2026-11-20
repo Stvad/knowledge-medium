@@ -1,0 +1,1 @@
+export{kF as dynamicExtensionsExtension}from"../../chunks/app-DTCf7gv4.js";

@@ -1,0 +1,1 @@
+export{iz as BlockEditor}from"../../chunks/app-DTCf7gv4.js";

@@ -1,0 +1,1 @@
+export{$V as declarationOnlyDefinitionForName,eH as declarationOnlyStatusText}from"../../../chunks/app-DTCf7gv4.js";

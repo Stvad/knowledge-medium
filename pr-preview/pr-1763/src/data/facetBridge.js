@@ -1,0 +1,1 @@
+export{T4 as FacetBridge}from"../../chunks/app-DTCf7gv4.js";

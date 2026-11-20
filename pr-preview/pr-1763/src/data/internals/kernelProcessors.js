@@ -1,0 +1,1 @@
+export{g5 as KERNEL_PROCESSORS}from"../../../chunks/app-DTCf7gv4.js";

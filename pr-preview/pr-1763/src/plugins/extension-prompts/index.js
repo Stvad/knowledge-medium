@@ -1,0 +1,1 @@
+export{AP as ExtensionPromptSurface,jP as extensionPromptsExtension}from"../../../chunks/app-DTCf7gv4.js";

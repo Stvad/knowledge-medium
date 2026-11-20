@@ -1,0 +1,1 @@
+export{SC as videoPlayerMarkdownExtension}from"../../../chunks/app-DTCf7gv4.js";

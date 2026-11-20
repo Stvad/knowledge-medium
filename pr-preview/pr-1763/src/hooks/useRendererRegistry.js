@@ -1,0 +1,1 @@
+export{yI as defaultRegistry,_I as refreshRendererRegistry,vI as useRenderer}from"../../chunks/app-DTCf7gv4.js";

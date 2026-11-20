@@ -1,0 +1,1 @@
+export{ny as backlinksPlugin}from"../../../chunks/app-DTCf7gv4.js";

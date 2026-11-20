@@ -1,0 +1,1 @@
+export{Lw as spatialNavigationShellDecorator}from"../../../chunks/app-DTCf7gv4.js";

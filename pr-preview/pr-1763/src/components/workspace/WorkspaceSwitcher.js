@@ -1,0 +1,1 @@
+export{IE as WorkspaceSwitcher}from"../../../chunks/app-DTCf7gv4.js";

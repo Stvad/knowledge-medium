@@ -1,0 +1,1 @@
+export{Wb as useIsReadOnly}from"../../chunks/app-DTCf7gv4.js";
