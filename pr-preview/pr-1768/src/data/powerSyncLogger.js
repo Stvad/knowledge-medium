@@ -1,1 +1,0 @@
-export{D2 as powerSyncLogger}from"../../chunks/app-CfxVrkhC.js";

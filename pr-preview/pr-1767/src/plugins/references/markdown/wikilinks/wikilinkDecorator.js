@@ -1,1 +1,0 @@
-export{MA as isWikilinkDisplayParts,NA as resolveWikilinkDisplay,PA as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-jNpI-EPZ.js";

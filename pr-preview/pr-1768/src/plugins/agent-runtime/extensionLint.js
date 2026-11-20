@@ -1,1 +1,0 @@
-export{Sg as lintExtensionSource}from"../../../chunks/app-CfxVrkhC.js";

@@ -1,1 +1,0 @@
-export{_f as quotedInFooterContribution}from"../../../chunks/app-CfxVrkhC.js";

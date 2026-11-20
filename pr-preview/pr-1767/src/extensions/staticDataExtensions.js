@@ -1,1 +1,0 @@
-export{uq as staticDataExtensions}from"../../chunks/app-jNpI-EPZ.js";

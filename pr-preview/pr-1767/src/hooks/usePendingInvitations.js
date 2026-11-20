@@ -1,1 +1,0 @@
-export{GD as usePendingInvitations}from"../../chunks/app-jNpI-EPZ.js";

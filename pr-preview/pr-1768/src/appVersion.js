@@ -1,1 +1,0 @@
-export{Jc as appVersion}from"../chunks/app-CfxVrkhC.js";

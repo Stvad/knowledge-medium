@@ -1,1 +1,0 @@
-export{Gv as UpdateIndicator}from"../../../chunks/app-CfxVrkhC.js";

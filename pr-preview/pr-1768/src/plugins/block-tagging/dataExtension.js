@@ -1,1 +1,0 @@
-export{Wu as blockTaggingDataExtension}from"../../../chunks/app-CfxVrkhC.js";

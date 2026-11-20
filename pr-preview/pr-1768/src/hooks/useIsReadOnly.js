@@ -1,1 +1,0 @@
-export{Kb as useIsReadOnly}from"../../chunks/app-CfxVrkhC.js";

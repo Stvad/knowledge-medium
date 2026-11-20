@@ -1,1 +1,0 @@
-export{fq as staticDataExtensions}from"../../chunks/app-CfxVrkhC.js";

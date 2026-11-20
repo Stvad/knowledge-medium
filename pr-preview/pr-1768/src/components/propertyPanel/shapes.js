@@ -1,1 +1,0 @@
-export{sK as propertyShapeLabel}from"../../../chunks/app-CfxVrkhC.js";

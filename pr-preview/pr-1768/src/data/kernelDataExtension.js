@@ -1,1 +1,0 @@
-export{C8 as kernelDataExtension}from"../../chunks/app-CfxVrkhC.js";

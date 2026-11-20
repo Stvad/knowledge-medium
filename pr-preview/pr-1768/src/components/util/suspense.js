@@ -1,1 +1,0 @@
-export{WK as SuspenseFallback}from"../../../chunks/app-CfxVrkhC.js";

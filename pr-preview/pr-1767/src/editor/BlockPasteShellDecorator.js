@@ -1,1 +1,0 @@
-export{_P as BlockPasteShellDecorator,vP as blockPasteShellDecorator}from"../../chunks/app-jNpI-EPZ.js";

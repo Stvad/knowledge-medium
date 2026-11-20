@@ -1,1 +1,0 @@
-export{mF as gestureBindingDescriptor,hF as matchesGestureEvent}from"../../chunks/app-CfxVrkhC.js";

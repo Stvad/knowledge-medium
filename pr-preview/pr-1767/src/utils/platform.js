@@ -1,1 +1,0 @@
-export{tG as isIOS,nG as isMacPlatform}from"../../chunks/app-jNpI-EPZ.js";

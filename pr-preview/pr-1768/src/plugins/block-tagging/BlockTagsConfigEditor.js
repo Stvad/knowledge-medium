@@ -1,1 +1,0 @@
-export{Hu as BlockTagsConfigEditor}from"../../../chunks/app-CfxVrkhC.js";

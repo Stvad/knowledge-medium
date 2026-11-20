@@ -1,1 +1,0 @@
-export{yx as richPastePlugin}from"../../../chunks/app-jNpI-EPZ.js";

@@ -1,1 +1,0 @@
-export{pM as COMMAND_PALETTE_ACTION_ID,mM as COMMAND_PALETTE_CONTEXT,hM as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,gM as commandPaletteActionContext}from"../../../chunks/app-CfxVrkhC.js";

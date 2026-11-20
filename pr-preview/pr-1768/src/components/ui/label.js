@@ -1,1 +1,0 @@
-export{Yk as Label}from"../../../chunks/app-CfxVrkhC.js";

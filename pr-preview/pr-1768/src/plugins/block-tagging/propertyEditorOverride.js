@@ -1,1 +1,0 @@
-export{Vu as blockTagsConfigUi}from"../../../chunks/app-CfxVrkhC.js";

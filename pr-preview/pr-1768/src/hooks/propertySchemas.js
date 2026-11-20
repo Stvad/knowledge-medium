@@ -1,1 +1,0 @@
-export{rK as usePropertySchemas}from"../../chunks/app-CfxVrkhC.js";

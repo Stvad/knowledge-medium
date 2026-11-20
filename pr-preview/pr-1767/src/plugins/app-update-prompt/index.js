@@ -1,1 +1,0 @@
-export{WP as appUpdatePromptExtension}from"../../../chunks/app-jNpI-EPZ.js";

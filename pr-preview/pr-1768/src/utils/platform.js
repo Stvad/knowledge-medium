@@ -1,1 +1,0 @@
-export{rG as isIOS,iG as isMacPlatform}from"../../chunks/app-CfxVrkhC.js";

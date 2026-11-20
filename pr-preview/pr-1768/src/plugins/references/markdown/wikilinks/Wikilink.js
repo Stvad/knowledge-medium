@@ -1,1 +1,0 @@
-export{ob as Wikilink}from"../../../../../chunks/app-CfxVrkhC.js";

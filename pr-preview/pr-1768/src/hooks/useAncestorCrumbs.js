@@ -1,1 +1,0 @@
-export{vk as useAncestorCrumbs}from"../../chunks/app-CfxVrkhC.js";

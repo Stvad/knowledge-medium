@@ -1,1 +1,0 @@
-export{kP as editorAutocompleteExtension}from"../../chunks/app-CfxVrkhC.js";

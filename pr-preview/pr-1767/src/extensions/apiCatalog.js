@@ -1,1 +1,0 @@
-export{Jh as extensionApiCatalog,Yh as extensionApiRuntimeExports}from"../../chunks/app-jNpI-EPZ.js";

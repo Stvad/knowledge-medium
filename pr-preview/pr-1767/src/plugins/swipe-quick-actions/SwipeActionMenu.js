@@ -1,1 +1,0 @@
-export{VM as SwipeActionMenu}from"../../../chunks/app-jNpI-EPZ.js";

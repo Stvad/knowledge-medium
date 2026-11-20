@@ -1,1 +1,0 @@
-export{MN as TypeChip}from"../../../chunks/app-jNpI-EPZ.js";

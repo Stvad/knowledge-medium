@@ -1,1 +1,0 @@
-export{AM as CommandPaletteHeaderItem}from"../../../chunks/app-jNpI-EPZ.js";

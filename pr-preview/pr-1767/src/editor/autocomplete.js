@@ -1,1 +1,0 @@
-export{DP as editorAutocompleteExtension}from"../../chunks/app-jNpI-EPZ.js";

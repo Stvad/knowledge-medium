@@ -1,1 +1,0 @@
-export{Tx as attachmentsPlugin}from"../../../chunks/app-CfxVrkhC.js";

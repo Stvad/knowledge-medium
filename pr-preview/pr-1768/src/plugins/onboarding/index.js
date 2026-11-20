@@ -1,1 +1,0 @@
-export{Ij as EXTENSIONS_PAGE_TITLE,Lj as TUTORIAL_DEFAULT_TITLE,Rj as TUTORIAL_VIM_TITLE,$C as onboardingPlugin,Fj as seedTutorial}from"../../../chunks/app-CfxVrkhC.js";

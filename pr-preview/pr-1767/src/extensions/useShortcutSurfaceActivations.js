@@ -1,1 +1,0 @@
-export{dz as useShortcutSurfaceActivations}from"../../chunks/app-jNpI-EPZ.js";

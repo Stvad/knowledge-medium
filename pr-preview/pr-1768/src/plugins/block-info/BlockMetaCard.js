@@ -1,1 +1,0 @@
-export{Uv as BlockMetaCard}from"../../../chunks/app-CfxVrkhC.js";

@@ -1,1 +1,0 @@
-export{xI as defaultRegistry,SI as defaultRendererContributions,CI as defaultRenderersExtension}from"../../chunks/app-CfxVrkhC.js";

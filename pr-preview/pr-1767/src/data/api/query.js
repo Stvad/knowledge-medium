@@ -1,1 +1,0 @@
-export{vdt as defineQuery}from"../../../chunks/app-jNpI-EPZ.js";

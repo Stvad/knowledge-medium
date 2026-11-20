@@ -1,1 +1,0 @@
-export{EV as BlockProperties}from"../../chunks/app-CfxVrkhC.js";

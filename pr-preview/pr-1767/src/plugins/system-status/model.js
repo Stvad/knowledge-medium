@@ -1,1 +1,0 @@
-export{Gc as getSyncIndicatorView}from"../../../chunks/app-jNpI-EPZ.js";

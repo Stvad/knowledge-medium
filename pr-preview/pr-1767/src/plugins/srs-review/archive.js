@@ -1,1 +1,0 @@
-export{gl as archiveSrsCard}from"../../../chunks/app-jNpI-EPZ.js";

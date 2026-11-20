@@ -1,1 +1,0 @@
-export{Vot as aliasSeatNamespacesInTx,Hot as resolveAliasSeatNamespaces}from"../../chunks/app-jNpI-EPZ.js";

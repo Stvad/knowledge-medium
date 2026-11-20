@@ -1,1 +1,0 @@
-export{EQ as contributorsDataExtension}from"../../../chunks/app-jNpI-EPZ.js";

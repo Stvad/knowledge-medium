@@ -1,1 +1,0 @@
-export{rQ as annotationMarginOpenProp,iQ as annotationMarginShareProp}from"../../../chunks/app-CfxVrkhC.js";

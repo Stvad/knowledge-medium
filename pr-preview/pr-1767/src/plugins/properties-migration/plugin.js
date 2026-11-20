@@ -1,1 +1,0 @@
-export{To as propertiesMigrationPlugin}from"../../../chunks/app-jNpI-EPZ.js";

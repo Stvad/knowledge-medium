@@ -1,1 +1,0 @@
-export{ib as Wikilink}from"../../../../../chunks/app-jNpI-EPZ.js";

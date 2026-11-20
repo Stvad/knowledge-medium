@@ -1,1 +1,0 @@
-export{dft as CHANGE_SCOPE_POLICIES,fft as ChangeScope,pft as isChangeScope,mft as policyForScope,hft as scopeAllowedInReadOnly,gft as scopeIsUndoable,_ft as scopePoliciesEquivalent,vft as scopeUploadsToServer,yft as sourceForScope}from"../../../chunks/app-jNpI-EPZ.js";

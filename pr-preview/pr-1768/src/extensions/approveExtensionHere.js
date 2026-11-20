@@ -1,1 +1,0 @@
-export{VP as approveExtensionHere}from"../../chunks/app-CfxVrkhC.js";

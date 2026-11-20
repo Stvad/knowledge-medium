@@ -1,1 +1,0 @@
-export{tQ as annotationMarginOpenProp,nQ as annotationMarginShareProp}from"../../../chunks/app-jNpI-EPZ.js";

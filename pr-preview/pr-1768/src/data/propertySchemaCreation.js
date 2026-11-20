@@ -1,1 +1,0 @@
-export{cK as adoptOrCreatePropertySchema}from"../../chunks/app-CfxVrkhC.js";

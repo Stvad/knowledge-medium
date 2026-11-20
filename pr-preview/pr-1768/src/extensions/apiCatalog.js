@@ -1,1 +1,0 @@
-export{Xh as extensionApiCatalog,Zh as extensionApiRuntimeExports}from"../../chunks/app-CfxVrkhC.js";
