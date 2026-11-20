@@ -1,0 +1,1 @@
+export{IR as BlockInfoDialog}from"../../../chunks/app-Bf6M6fNT.js";

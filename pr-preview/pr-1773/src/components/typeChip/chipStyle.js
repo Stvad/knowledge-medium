@@ -1,0 +1,1 @@
+export{XN as chipStyle}from"../../../chunks/app-Bf6M6fNT.js";
