@@ -148,8 +148,8 @@ interface SourcePlan {
   referencesChanged: boolean
 }
 
-/** A new-page mark whose seat cannot be minted — no key on this device (which
- *  has already locked the workspace), or the mode turned sealed between the
+/** A new-page mark whose seat cannot be minted — no key could be read on this
+ *  device (`WorkspaceKeyUnavailableError`), or the mode turned sealed between the
  *  read phase and the lock — stays underived (`null`); the rest of the source
  *  still derives. Any other failure is rethrown. */
 const leaveSeatOut = (err: unknown, sourceId: string): null => {
