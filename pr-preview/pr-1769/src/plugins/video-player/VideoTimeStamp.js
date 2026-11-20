@@ -1,1 +1,0 @@
-export{TC as default}from"../../../chunks/app-Dy5NUWxc.js";

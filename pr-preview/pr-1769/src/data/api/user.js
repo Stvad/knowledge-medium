@@ -1,1 +1,0 @@
-export{udt as SYSTEM_AUTHOR_PREFIX,ddt as isSystemAuthor,fdt as systemAuthor}from"../../../chunks/app-Dy5NUWxc.js";
