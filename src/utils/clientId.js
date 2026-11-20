@@ -1,1 +1,1 @@
-export{Xit as deviceSurface,Zit as getClientId,Qit as getDeviceLabel,$it as isClientIdPersistent,eat as resetClientIdCache}from"../../chunks/app-RDTb6lSj.js";
+export{Qit as deviceSurface,$it as getClientId,eat as getDeviceLabel,tat as isClientIdPersistent,nat as resetClientIdCache}from"../../chunks/app-DWjcNifg.js";

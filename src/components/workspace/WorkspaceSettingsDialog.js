@@ -1,1 +1,1 @@
-export{AE as WorkspaceSettingsDialog}from"../../../chunks/app-RDTb6lSj.js";
+export{AE as WorkspaceSettingsDialog}from"../../../chunks/app-DWjcNifg.js";

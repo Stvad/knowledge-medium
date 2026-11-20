@@ -1,1 +1,1 @@
-export{EN as chipStyle}from"../../../chunks/app-RDTb6lSj.js";
+export{EN as chipStyle}from"../../../chunks/app-DWjcNifg.js";

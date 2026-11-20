@@ -1,1 +1,1 @@
-export{QR as blockEditSettled,$R as notifyBlockEditSettled}from"../../chunks/app-RDTb6lSj.js";
+export{QR as blockEditSettled,$R as notifyBlockEditSettled}from"../../chunks/app-DWjcNifg.js";
