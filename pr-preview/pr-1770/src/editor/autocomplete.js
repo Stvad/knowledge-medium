@@ -1,1 +1,1 @@
-export{GP as editorAutocompleteExtension}from"../../chunks/app-BLSyjOgL.js";
+export{WP as editorAutocompleteExtension}from"../../chunks/app-CfKaESW3.js";

@@ -1,1 +1,1 @@
-export{Ko as ConfirmMigrationDialog}from"../../../chunks/app-BLSyjOgL.js";
+export{Go as ConfirmMigrationDialog}from"../../../chunks/app-CfKaESW3.js";

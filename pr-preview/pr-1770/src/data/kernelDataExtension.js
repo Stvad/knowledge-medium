@@ -1,1 +1,1 @@
-export{z8 as kernelDataExtension}from"../../chunks/app-BLSyjOgL.js";
+export{V8 as kernelDataExtension}from"../../chunks/app-CfKaESW3.js";

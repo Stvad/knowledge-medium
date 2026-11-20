@@ -1,1 +1,1 @@
-export{FC as attachmentObjectPath,IC as authenticatedObjectUrl,LC as deriveObjectKey,RC as storageObjectUrl}from"../../../chunks/app-BLSyjOgL.js";
+export{PC as attachmentObjectPath,FC as authenticatedObjectUrl,IC as deriveObjectKey,LC as storageObjectUrl}from"../../../chunks/app-CfKaESW3.js";

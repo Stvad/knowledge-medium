@@ -1,1 +1,1 @@
-export{Sf as applyHeading,Cf as collectContentRefUids,wf as rewriteRoamContent,Tf as rewriteRoamHashtags}from"../../../chunks/app-BLSyjOgL.js";
+export{xf as applyHeading,Sf as collectContentRefUids,Cf as rewriteRoamContent,wf as rewriteRoamHashtags}from"../../../chunks/app-CfKaESW3.js";

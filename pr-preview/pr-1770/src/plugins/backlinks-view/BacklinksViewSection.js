@@ -1,1 +1,1 @@
-export{Oy as BacklinksViewSection,ky as backlinksViewFooterContribution}from"../../../chunks/app-BLSyjOgL.js";
+export{Dy as BacklinksViewSection,Oy as backlinksViewFooterContribution}from"../../../chunks/app-CfKaESW3.js";
