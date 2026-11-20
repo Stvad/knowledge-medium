@@ -41,6 +41,7 @@
 import type { CycleDetectedEvent } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import type { InvalidationRule } from '@/data/invalidation.js'
+import { mergeChangeNotifications, type ChangeNotification } from '@/data/internals/handleStore.js'
 import { cycleScanSql } from '@/data/internals/treeQueries.js'
 import {
   materializeStagingRows,
@@ -67,6 +68,18 @@ const DEFAULT_THROTTLE_MS = 100
  *  fill in as it goes: the queue is consumed per window, so an interrupted drain
  *  resumes from the last committed window instead of restarting from zero. */
 const DEFAULT_DRAIN_CHUNK = 1000
+
+/** During a multi-window drain every window marks the handles it affects
+ *  stale at once, and the re-runs of their loaders are merged and delivered
+ *  after the drain's first window, then at most this often, then at the drain's
+ *  end. Each delivery re-runs the live queries it matches, on the read
+ *  connection the drain itself reads from; a single-window drain delivers
+ *  immediately.
+ *
+ *  Only what subscribers SEE waits. A handle awaited through `load()` and the
+ *  block cache are both current with every committed window, because writes
+ *  are decided from them. */
+const DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS = 10_000
 
 /** The device's materialization backlog: staged changes the drain hasn't
  *  applied to `blocks` yet. Counts down to 0 as the drain catches up; a plain
@@ -109,10 +122,16 @@ export interface SyncDrainStats {
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
+/** The handle store as the observer drives it: `markStale` for every window,
+ *  `invalidate` when the held changes are delivered. */
+export type SyncHandleStore = SyncInvalidationTarget & {
+  markStale(change: ChangeNotification): void
+}
+
 export interface BlocksSyncedObserverArgs {
   readonly db: PowerSyncDb
   readonly cache: SyncCache
-  readonly handleStore: SyncInvalidationTarget
+  readonly handleStore: SyncHandleStore
   readonly deps: MaterializeDeps
   /** Plugin invalidation rules, read fresh each drain (plugins can register
    *  after the observer starts). */
@@ -125,6 +144,8 @@ export interface BlocksSyncedObserverArgs {
   /** Max changes materialized per drain window (default {@link DEFAULT_DRAIN_CHUNK}).
    *  Tests shrink it to exercise multi-window backlogs. */
   readonly drainChunkSize?: number
+  /** See {@link DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS}. Tests set it. */
+  readonly backlogInvalidationIntervalMs?: number
   readonly onError?: (err: unknown) => void
   /** Hears every drain that ran at least one window. A throw is reported
    *  through `onError` and changes nothing about the drain. */
@@ -282,6 +303,8 @@ export const startBlocksSyncedObserver = (
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
   const drainChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
   const rules = (): readonly InvalidationRule[] => getInvalidationRules?.() ?? []
+  const invalidationIntervalMs =
+    args.backlogInvalidationIntervalMs ?? DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS
   const onError = args.onError ?? ((err: unknown) => {
     if (!isConnectionClosedError(err)) console.warn('[blocksSyncedObserver] drain error:', err)
   })
@@ -295,6 +318,24 @@ export const startBlocksSyncedObserver = (
    *  apply is not tracked here: it is written to the staging row itself, in the
    *  transaction that decides it (`STAGING_NEEDS_APPLY_COLUMN`). */
   const workspaceRescans = new Map<string, number>()
+
+  /** Handle invalidations merged since the last delivery — see
+   *  {@link DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS}. */
+  let heldInvalidation: ChangeNotification | null = null
+  let invalidationsDeliveredAt = -Infinity
+  const heldInvalidations: SyncInvalidationTarget = {
+    invalidate: (change) => {
+      handleStore.markStale(change)
+      heldInvalidation = heldInvalidation ? mergeChangeNotifications(heldInvalidation, change) : change
+    },
+  }
+  const deliverInvalidations = (): void => {
+    const change = heldInvalidation
+    if (!change) return
+    heldInvalidation = null
+    invalidationsDeliveredAt = performance.now()
+    handleStore.invalidate(change)
+  }
 
   /** §4.7 detection-only telemetry. One bounded, truncation-safe scan per
    *  workspace whose parent_id mutations might have closed a loop. A scan
@@ -320,7 +361,8 @@ export const startBlocksSyncedObserver = (
   const applyOutcome = async (
     outcome: MaterializeOutcome,
   ): Promise<void> => {
-    applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
+    applySyncInvalidation(cache, heldInvalidations, outcome.snapshots, rules())
+    if (performance.now() - invalidationsDeliveredAt >= invalidationIntervalMs) deliverInvalidations()
     await runCycleScan(outcome.snapshots)
   }
 
@@ -369,11 +411,16 @@ export const startBlocksSyncedObserver = (
       readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
     }
     const startedAt = performance.now()
+    // Per drain, not per observer: each drain's first window delivers at once.
+    invalidationsDeliveredAt = -Infinity
     try {
       const result = await drain(meter)
       meter.completed = true
       return result
     } finally {
+      // Whatever the last windows held back: their rows are committed, so the
+      // queries over them are stale however the drain ended.
+      try { deliverInvalidations() } catch (err) { onError(err) }
       if (meter.windows > 0) {
         meter.wallMs = performance.now() - startedAt
         meter.endedAtMs = Date.now()
