@@ -1,9 +1,7 @@
-// File-scoped IndexedDB polyfill, as in `@/utils/idbKeyedStore.test.ts`. Records
-// here hold plain objects where the browser holds `CryptoKey`s, which Node
-// cannot structured-clone.
-import 'fake-indexeddb/auto'
-
-import { describe, expect, it, vi } from 'vitest'
+// Records here hold plain objects where the browser holds `CryptoKey`s, which
+// Node cannot structured-clone.
+import { IDBKeyRange as FakeIDBKeyRange, indexedDB as fakeIndexedDB } from 'fake-indexeddb'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { IdbKeyedStore } from '@/utils/idbKeyedStore.js'
 import {
   IndexedDbWorkspaceKeyStore,
@@ -21,6 +19,16 @@ const sealRecord = (userId: string, workspaceId: string) =>
     .tx('readwrite', store => store.put(null, keyStoreRecordId(userId, workspaceId)))
 
 describe('IndexedDbWorkspaceKeyStore', () => {
+  // Stubbed and restored, not `fake-indexeddb/auto`: this file shares a worker,
+  // and a later file must still find Node without IndexedDB.
+  beforeAll(() => {
+    vi.stubGlobal('indexedDB', fakeIndexedDB)
+    vi.stubGlobal('IDBKeyRange', FakeIDBKeyRange)
+  })
+  afterAll(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('throws for a record that is stored but reads as null, rather than calling it absent', async () => {
     await sealRecord('u', 'never-read')
 
