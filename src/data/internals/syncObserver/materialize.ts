@@ -483,11 +483,10 @@ export const materializeStagingRows = async (
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
   await db.writeTransaction(async tx => {
     // Bracket the writes in a source-NULL tx_context so the upload triggers
-    // skip them. NULL is already the resting state between local txns, but
-    // set it explicitly to defend against any stale value.
-    // DEFENCE IN DEPTH: `scope` is written on every pass, not only a bulk one,
-    // so a value left by anything else cannot decide whether this window's
-    // creates are logged.
+    // skip them, with the scope that says whether this window is a bulk load.
+    // DEFENCE IN DEPTH, both columns: NULL is their resting state between
+    // local transactions, and each is written on every pass so a value left
+    // by anything else decides nothing here.
     const bulkLoadScope = syncBulkLoadScope(options.bulkLoadWorkspaceIds ?? [])
     await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [bulkLoadScope])
 

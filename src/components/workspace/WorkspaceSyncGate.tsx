@@ -51,7 +51,7 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
   // One kick in flight: every status tick of a long drain re-runs the ask, and
   // each flush would otherwise queue its own pass behind that drain.
   const kicking = useRef<Promise<void> | null>(null)
-  // The gate stands where the app would be, so nothing is waiting to write.
+  // A bulk load while the gate is up — see `BlocksSyncedObserver.holdBulkLoad`.
   useEffect(() => repo.holdBulkSyncLoad(workspaceId), [repo, workspaceId])
 
   const kickDrain = useCallback((): Promise<void> => {

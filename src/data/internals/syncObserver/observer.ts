@@ -252,10 +252,14 @@ export interface BlocksSyncedObserver {
   /** Treat `workspaceId`'s deliveries as a bulk load until the returned release
    *  is called: no 'create' event for the rows inserted into it
    *  (`syncBulkLoadScope`), and bulk-sized windows for the whole drain, since
-   *  windows are not per workspace. For a caller that knows this device is
-   *  receiving that workspace for the first time and that nothing is waiting
-   *  on the write lock: a gate shown INSTEAD of the app, with no editor or
-   *  plugin mounted. Holds nest. */
+   *  windows are not per workspace.
+   *
+   *  For a gate, which renders INSTEAD of the app: with no editor or plugin
+   *  mounted nothing is waiting on the write lock, and what its workspace
+   *  receives meanwhile is reaching `blocks` for the first time. Neither is
+   *  checked. A gate's drain can outlive the gate, and a second tab can have
+   *  the app open: local writes then wait behind each bulk window, and that
+   *  workspace's arrivals go unlogged whichever tab drains them. Holds nest. */
   holdBulkLoad(workspaceId: string): () => void
   /** Stop the subscription. Idempotent. */
   dispose(): void
@@ -320,8 +324,9 @@ export const startBlocksSyncedObserver = (
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
   const liveChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
   const bulkChunk = Math.max(1, args.bulkDrainChunkSize ?? DEFAULT_BULK_DRAIN_CHUNK)
-  /** Holds out per workspace — see {@link BlocksSyncedObserver.holdBulkLoad}. */
-  const bulkHolds = new Map<string, number>()
+  /** The holds out — see {@link BlocksSyncedObserver.holdBulkLoad}. One object
+   *  per hold, so releasing one twice releases nothing further. */
+  const bulkHolds = new Set<{readonly workspaceId: string}>()
   /** Read per window, so a hold taken or released mid-drain applies from the
    *  next one. */
   const windowSize = (): number => (bulkHolds.size > 0 ? bulkChunk : liveChunk)
@@ -398,7 +403,7 @@ export const startBlocksSyncedObserver = (
     upserted: readonly string[],
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds: [...bulkHolds.keys()] })
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds: [...new Set([...bulkHolds].map(hold => hold.workspaceId))] })
     // Counted as soon as the window has committed: a failure in the steps
     // below does not undo it.
     meter.windows++
@@ -609,15 +614,9 @@ export const startBlocksSyncedObserver = (
     isRematerializingWorkspace: (workspaceId: string) =>
       (workspaceRescans.get(workspaceId) ?? 0) > 0,
     holdBulkLoad(workspaceId) {
-      bulkHolds.set(workspaceId, (bulkHolds.get(workspaceId) ?? 0) + 1)
-      let held = true
-      return () => {
-        if (!held) return
-        held = false
-        const left = (bulkHolds.get(workspaceId) ?? 1) - 1
-        if (left > 0) bulkHolds.set(workspaceId, left)
-        else bulkHolds.delete(workspaceId)
-      }
+      const hold = {workspaceId}
+      bulkHolds.add(hold)
+      return () => { bulkHolds.delete(hold) }
     },
     dispose() {
       if (disposed) return

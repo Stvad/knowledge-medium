@@ -14,6 +14,7 @@ import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import { constMat, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
 import type { SyncDrainStats } from './observer.js'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
+import { syncBulkLoadScope } from '@/data/internals/clientSchema'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -1002,7 +1003,7 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     // DEFENCE IN DEPTH: no ChangeScope is the bulk scope, but a scope is a
     // string an extension passes, and an unlogged local create has no undo.
     await env.db.writeTransaction(async (tx) => {
-      await tx.execute(`UPDATE tx_context SET source = 'user', scope = 'sync-bulk:ws:', tx_seq = 1 WHERE id = 1`)
+      await tx.execute(`UPDATE tx_context SET source = 'user', scope = '${syncBulkLoadScope(['ws'])}', tx_seq = 1 WHERE id = 1`)
       await tx.execute(
         `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
            created_at, updated_at, created_by, updated_by, deleted)
@@ -1025,22 +1026,40 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
       await tx.execute(`UPDATE blocks SET ${set} WHERE id = 'bulk'`)
       await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
     })
-    await stamp('sync-bulk:ws:', `reference_target_id = 't1'`)
+    await stamp(syncBulkLoadScope(['ws']), `reference_target_id = 't1'`)
     expect(await events()).toEqual([])
     // Outside a bulk load the same stamp is an event, as it always was.
     await stamp(null, `reference_target_id = 't2'`)
     // And inside one, a change to a synced column still is.
-    await stamp('sync-bulk:ws:', `content = 'changed', reference_target_id = 't3'`)
+    await stamp(syncBulkLoadScope(['ws']), `content = 'changed', reference_target_id = 't3'`)
     expect(await events()).toEqual([
       { block_id: 'bulk', kind: 'update' },
       { block_id: 'bulk', kind: 'update' },
     ])
   })
 
+  it('logs nothing for a held row whose reference the window itself stamps', async () => {
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      referenceTargetLookups: () => ({ aliasTargetId: async () => null }),
+    })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'ref', workspaceId: 'ws', content: '((t1))' }))
+    await observer.flush()
+    release()
+
+    // The stamp happened, in the window's own transaction...
+    expect(await env.db.get<{ reference_target_id: string | null }>(
+      `SELECT reference_target_id FROM blocks WHERE id = 'ref'`,
+    )).toEqual({ reference_target_id: 't1' })
+    // ...and while its bulk scope was still set.
+    expect(await events()).toEqual([])
+  })
+
   it('logs a create on a live pass whatever scope was left behind', async () => {
     // DEFENCE IN DEPTH: nothing leaves a bulk scope committed, so this state is
     // written by hand.
-    await env.db.execute(`UPDATE tx_context SET scope = 'sync-bulk:ws:' WHERE id = 1`)
+    await env.db.execute('UPDATE tx_context SET scope = ? WHERE id = 1', [syncBulkLoadScope(['ws'])])
     const { observer } = start({ getMaterializability: constMat('copy') })
     await put(data({ id: 'live', workspaceId: 'ws' }))
     await observer.flush()
