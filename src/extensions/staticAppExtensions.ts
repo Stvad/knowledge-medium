@@ -68,6 +68,7 @@ import { dbMirrorPlugin } from '@/plugins/db-mirror'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
 import { propertyRowsPlugin } from '@/plugins/property-rows'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
+import { syncMetricsPlugin } from '@/plugins/sync-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
 import { observeWorkspaceEffectContribution } from '@/plugins/interaction-metrics/sessionContext'
 import { perfMonitorPlugin } from '@/plugins/perf-monitor'
@@ -181,6 +182,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   propertiesMigrationPlugin({repo}),
   propertyRowsPlugin,
   startupMetricsPlugin,
+  syncMetricsPlugin,
   interactionMetricsPlugin,
   perfMonitorPlugin({repo}),
   // Deliberately OUTSIDE both metrics toggles: the rule that page-global
