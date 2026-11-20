@@ -1,1 +1,1 @@
-export{vb as referencesMarkdownExtension}from"../../../../chunks/app-7XW1YvkF.js";
+export{vb as referencesMarkdownExtension}from"../../../../chunks/app-Re9W9S3y.js";

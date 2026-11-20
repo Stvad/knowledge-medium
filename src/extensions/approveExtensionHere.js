@@ -1,1 +1,1 @@
-export{nF as approveExtensionHere}from"../../chunks/app-7XW1YvkF.js";
+export{nF as approveExtensionHere}from"../../chunks/app-Re9W9S3y.js";

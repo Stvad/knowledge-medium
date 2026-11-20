@@ -1,1 +1,1 @@
-export{IP as BlockFocusShellDecorator,LP as blockFocusShellDecorator,RP as shouldScrollFocusedBlockIntoView}from"../../chunks/app-7XW1YvkF.js";
+export{IP as BlockFocusShellDecorator,LP as blockFocusShellDecorator,RP as shouldScrollFocusedBlockIntoView}from"../../chunks/app-Re9W9S3y.js";

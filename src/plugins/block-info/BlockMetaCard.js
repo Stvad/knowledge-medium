@@ -1,1 +1,1 @@
-export{iy as BlockMetaCard}from"../../../chunks/app-7XW1YvkF.js";
+export{iy as BlockMetaCard}from"../../../chunks/app-Re9W9S3y.js";
