@@ -1,1 +1,1 @@
-export{$n as builtinCountProfiles,er as characterCountProfilesFacet,tr as profileFrom,nr as profileLabel,rr as rawCharacterCountProfile,ir as textCountProfile,ar as wordsCountProfile}from"../../../chunks/app-BXX_wY85.js";
+export{Qn as builtinCountProfiles,$n as characterCountProfilesFacet,er as profileFrom,tr as profileLabel,nr as rawCharacterCountProfile,rr as textCountProfile,ir as wordsCountProfile}from"../../../chunks/app-BfXb9bIu.js";

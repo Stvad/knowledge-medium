@@ -1,1 +1,1 @@
-export{Wx as richPasteDecisionContribution}from"../../../chunks/app-BXX_wY85.js";
+export{Ux as richPasteDecisionContribution}from"../../../chunks/app-BfXb9bIu.js";

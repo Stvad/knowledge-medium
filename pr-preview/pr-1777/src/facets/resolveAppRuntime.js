@@ -1,1 +1,1 @@
-export{ZF as resolveAppRuntime,QF as resolveAppRuntimeSync}from"../../chunks/app-BXX_wY85.js";
+export{XF as resolveAppRuntime,ZF as resolveAppRuntimeSync}from"../../chunks/app-BfXb9bIu.js";

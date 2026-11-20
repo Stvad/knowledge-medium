@@ -1,1 +1,1 @@
-export{Lt as WORKSPACE_FIRST_SYNC_MARKER_PREFIX,Rt as readWorkspaceFirstSync,zt as recordWorkspaceFirstSync,Bt as workspaceCaughtUp}from"../../chunks/app-BXX_wY85.js";
+export{Lt as forgetWorkspaceFirstSync,Rt as readWorkspaceFirstSync,zt as recordWorkspaceFirstSync}from"../../chunks/app-BfXb9bIu.js";
