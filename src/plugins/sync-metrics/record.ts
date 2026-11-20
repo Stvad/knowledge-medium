@@ -13,7 +13,7 @@ import { appVersion } from '@/appVersion.js'
 import { getClientId, getDeviceLabel } from '@/utils/clientId.js'
 import { awaitRecordingAllowed, NoLongerEligible } from '@/plugins/interaction-metrics/sessionContext.js'
 import { appendClientRecord } from '@/plugins/interaction-metrics/recordStore.js'
-import type { DownloadTimings } from './downloadTracker.ts'
+import type { DownloadTimings } from '@/data/internals/initialDownload.js'
 
 /** Identity of the device and build a sample came from. */
 export interface SyncRecordHeader {
@@ -25,15 +25,30 @@ export interface SyncRecordHeader {
   deviceLabel: string
 }
 
-export type SyncDrainRecordData = SyncRecordHeader & {
-  kind: 'drain'
-  /** Epoch ms when the stats arrived. */
+/** The drain fields a record persists. Listed here rather than derived from
+ *  `SyncDrainStats`, so a field added to the kernel type is not stored
+ *  without a decision. */
+export interface SyncDrainRecordFields {
+  source: SyncDrainStats['source']
+  completed: boolean
+  /** Epoch ms when the drain ended. */
   endedAtMs: number
-  /** `performance.now()` when the stats arrived: how far into the page's life. */
-  sinceBootMs: number
-  /** Whether the initial download had completed when the stats arrived. */
-  hasSynced: boolean
-} & SyncDrainStats
+  wallMs: number
+  windows: number
+  rows: number
+  applied: number
+  deferred: number
+  skippedStale: number
+  quarantined: number
+  deleted: number
+  readMs: number
+  decodeMs: number
+  writeMs: number
+  invalidateMs: number
+  bookkeepingMs: number
+}
+
+export type SyncDrainRecordData = SyncRecordHeader & { kind: 'drain' } & SyncDrainRecordFields
 
 export type SyncDownloadRecordData = SyncRecordHeader & {
   kind: 'download'
@@ -46,7 +61,7 @@ export type SyncMetricsRecordData = SyncDrainRecordData | SyncDownloadRecordData
 export const syncMetricsRecordProp = seedProperty<SyncMetricsRecordData | undefined>({
   seedKey: 'system:sync-metrics/property/sync-metrics-record',
   revision: 1,
-  name: 'syncMetricsRecord',
+  name: 'sync-metrics:record',
   preset: 'optional-json',
   defaultValue: undefined,
   // Automation scope (not UiState) so the record is visible in the property panel.
@@ -79,9 +94,14 @@ export const SYNC_METRICS_RETAIN = 500
  *  drain (rows) or a slow one (wallMs) is worth a block. */
 export const DRAIN_RECORD_MIN_ROWS = 1000
 export const DRAIN_RECORD_MIN_WALL_MS = 5000
+/** A record's own upload echo comes back as a drain of a few rows, and `writeMs`
+ *  includes the write-lock wait, so without a row floor a slow echo under lock
+ *  contention would record itself again. */
+export const DRAIN_RECORD_SLOW_MIN_ROWS = 50
 
 export const isWorthRecording = (stats: Pick<SyncDrainStats, 'rows' | 'wallMs'>): boolean =>
-  stats.rows >= DRAIN_RECORD_MIN_ROWS || stats.wallMs >= DRAIN_RECORD_MIN_WALL_MS
+  stats.rows >= DRAIN_RECORD_MIN_ROWS
+  || (stats.wallMs >= DRAIN_RECORD_MIN_WALL_MS && stats.rows >= DRAIN_RECORD_SLOW_MIN_ROWS)
 
 export const currentHeader = (): SyncRecordHeader => ({
   recordedAt: Date.now(),
@@ -91,19 +111,25 @@ export const currentHeader = (): SyncRecordHeader => ({
   deviceLabel: getDeviceLabel(),
 })
 
-/** Pure: stats + arrival context -> storable record, ms rounded to integers. */
+/** Pure: stats -> storable record, ms rounded to integers. Fields are listed
+ *  explicitly (see {@link SyncDrainRecordFields}). */
 export const buildDrainRecord = (
   stats: SyncDrainStats,
-  arrival: { endedAtMs: number; sinceBootMs: number; hasSynced: boolean },
   header: SyncRecordHeader,
 ): SyncDrainRecordData => ({
   ...header,
   kind: 'drain',
-  endedAtMs: Math.round(arrival.endedAtMs),
-  sinceBootMs: Math.round(arrival.sinceBootMs),
-  hasSynced: arrival.hasSynced,
-  ...stats,
+  source: stats.source,
+  completed: stats.completed,
+  endedAtMs: Math.round(stats.endedAtMs),
   wallMs: Math.round(stats.wallMs),
+  windows: stats.windows,
+  rows: stats.rows,
+  applied: stats.applied,
+  deferred: stats.deferred,
+  skippedStale: stats.skippedStale,
+  quarantined: stats.quarantined,
+  deleted: stats.deleted,
   readMs: Math.round(stats.readMs),
   decodeMs: Math.round(stats.decodeMs),
   writeMs: Math.round(stats.writeMs),

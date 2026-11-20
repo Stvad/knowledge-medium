@@ -205,7 +205,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:srs-review/property/deck-tag', 'srs-review:deck-tag', 'string', 'string'],
   ['system:srs-review/property/progress', 'srs-review:progress', 'json', 'object'],
   ['system:startup-metrics/property/startup-record', 'startupRecord', 'optional-json', 'object'],
-  ['system:sync-metrics/property/sync-metrics-record', 'syncMetricsRecord', 'optional-json', 'object'],
+  ['system:sync-metrics/property/sync-metrics-record', 'sync-metrics:record', 'optional-json', 'object'],
   ['system:todo/property/status', 'status', 'strict-enum', 'enum'],
   ['system:update-indicator/property/current-load-time', 'currentLoadTime', 'optional-number', 'number'],
   ['system:update-indicator/property/previous-load-time', 'previousLoadTime', 'optional-number', 'number'],

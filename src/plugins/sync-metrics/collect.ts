@@ -1,7 +1,7 @@
 import type { AppEffect } from '@/extensions/core.js'
 import type { Repo } from '@/data/repo'
+import { takeInitialDownloadTimings } from '@/data/internals/initialDownload.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
-import { createDownloadTracker, type DownloadStatusSample } from './downloadTracker.ts'
 import {
   buildDownloadRecord,
   buildDrainRecord,
@@ -25,60 +25,41 @@ const writeDeferred = (
   })
 }
 
-/** Structural PowerSync status surface (as `firstSync.ts` does), so no PowerSync import. */
-interface StatusDb {
-  currentStatus?: DownloadStatusSample
-  registerListener: (l: { statusChanged?: (s: DownloadStatusSample) => void }) => () => void
-}
-
 export interface SyncMetricsCollectorDeps {
   write?: typeof writeSyncMetricsRecord
+  takeDownload?: typeof takeInitialDownloadTimings
 }
 
+/** Capture lives in core (drain stats replay to a late subscriber, the download
+ *  is timed from connect); this only persists what it hands over. */
 export const startSyncMetricsCollector = (
   repo: Repo,
   workspaceId: string,
   deps: SyncMetricsCollectorDeps = {},
 ): (() => void) => {
   const write = deps.write ?? writeSyncMetricsRecord
-  const db = repo.db as unknown as StatusDb
+  const takeDownload = deps.takeDownload ?? takeInitialDownloadTimings
   const cleanups: Array<() => void> = []
 
   cleanups.push(repo.onSyncDrainStats((stats) => {
     if (!isWorthRecording(stats)) return
-    const record = buildDrainRecord(
-      stats,
-      {
-        endedAtMs: Date.now(),
-        sinceBootMs: performance.now(),
-        hasSynced: db.currentStatus?.hasSynced === true,
-      },
-      currentHeader(),
-    )
-    writeDeferred(repo, workspaceId, write, record)
+    writeDeferred(repo, workspaceId, write, buildDrainRecord(stats, currentHeader()))
   }))
 
-  if (db.currentStatus?.hasSynced !== true) {
-    const tracker = createDownloadTracker()
-    let finished = false
-    const feed = (status: DownloadStatusSample) => {
-      if (finished) return
-      const timings = tracker.sample(status)
-      if (!timings) return
-      finished = true
-      dispose()
-      const record = buildDownloadRecord(timings, currentHeader())
+  const download = takeDownload(repo.db)
+  if (download) {
+    // `workspaceId` may no longer be current once torn down, so nothing is
+    // written then; the timings are lost, which is accepted.
+    let stopped = false
+    cleanups.push(() => { stopped = true })
+    void download.then(async (timings) => {
       // The record is a block in the workspace this download just delivered:
       // write it once the drain has materialized that workspace, not into the
       // half-empty one. A failed drain still leaves the record worth keeping.
-      void repo.flushSyncObserver().catch(() => {})
-        .then(() => writeDeferred(repo, workspaceId, write, record))
-    }
-    const dispose = db.registerListener({ statusChanged: feed })
-    cleanups.push(() => { finished = true; dispose() })
-    // The listener only hears changes; take the current sample so progress
-    // already in flight is not missed.
-    if (db.currentStatus) feed(db.currentStatus)
+      await repo.flushSyncObserver().catch(() => {})
+      if (stopped) return
+      writeDeferred(repo, workspaceId, write, buildDownloadRecord(timings, currentHeader()))
+    })
   }
 
   return () => { for (const c of cleanups.splice(0)) c() }

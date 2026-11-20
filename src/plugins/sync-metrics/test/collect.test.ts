@@ -1,87 +1,105 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SyncDrainStats } from '@/data/internals/syncObserver/observer'
+import type { DownloadTimings } from '@/data/internals/initialDownload.js'
 import { startSyncMetricsCollector } from '../collect'
+import { DRAIN_RECORD_MIN_ROWS } from '../record'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 
 const stats = (over: Partial<SyncDrainStats>): SyncDrainStats => ({
-  source: 'queue', completed: true, wallMs: 10, windows: 1, rows: 5,
+  source: 'queue', completed: true, endedAtMs: 1000, wallMs: 10, windows: 1, rows: 5,
   applied: 5, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
   readMs: 1, decodeMs: 1, writeMs: 1, invalidateMs: 1, bookkeepingMs: 1, ...over,
 })
 
-type DrainCb = (s: SyncDrainStats) => void
-type StatusCb = (s: { hasSynced?: boolean }) => void
+const timings: DownloadTimings = { startedAtMs: 1, totalMs: 100 }
 
-const fakeRepo = (hasSynced: boolean) => {
+type DrainCb = (s: SyncDrainStats) => void
+
+const fakeRepo = () => {
   let drain: DrainCb | undefined
-  let status: StatusCb | undefined
-  const disposeStatus = vi.fn()
   let finishDrain!: () => void
   const drained = new Promise<void>((resolve) => { finishDrain = resolve })
   const repo = {
-    db: {
-      currentStatus: { hasSynced },
-      registerListener: (l: { statusChanged: StatusCb }) => { status = l.statusChanged; return disposeStatus },
-    },
+    db: {},
     onSyncDrainStats: (cb: DrainCb) => { drain = cb; return () => { drain = undefined } },
     flushSyncObserver: () => drained,
   }
-  return { repo: repo as never, drain: (s: SyncDrainStats) => drain!(s), status: (s: { hasSynced?: boolean }) => status!(s), disposeStatus, finishDrain, hasDrainListener: () => drain !== undefined }
+  return { repo: repo as never, drain: (s: SyncDrainStats) => drain!(s), finishDrain, hasDrainListener: () => drain !== undefined }
 }
 
-afterEach(() => vi.useRealTimers())
+/** A turn queued after the one under test: anything unheld would have run by now. */
+const idleTurn = () => new Promise<void>((resolve) => { scheduleIdle(() => resolve()) })
 
 describe('startSyncMetricsCollector', () => {
-  it('persists a qualifying drain as a drain record and ignores a small one', async () => {
+  it('persists a qualifying drain as a drain record', async () => {
     const write = vi.fn(async () => 'id')
-    const f = fakeRepo(true)
-    startSyncMetricsCollector(f.repo, 'ws', { write })
+    const f = fakeRepo()
+    startSyncMetricsCollector(f.repo, 'ws', { write, takeDownload: () => null })
 
-    f.drain(stats({ rows: 10, wallMs: 20 }))
-    await new Promise(r => setTimeout(r, 5))
-    expect(write).not.toHaveBeenCalled()
-
-    f.drain(stats({ rows: 2000, wallMs: 20 }))
+    f.drain(stats({ rows: DRAIN_RECORD_MIN_ROWS }))
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1))
     const [, workspaceId, data] = write.mock.calls[0] as unknown as [unknown, string, Record<string, unknown>]
     expect(workspaceId).toBe('ws')
-    expect(data).toMatchObject({ kind: 'drain', rows: 2000, hasSynced: true })
+    expect(data).toMatchObject({ kind: 'drain', rows: DRAIN_RECORD_MIN_ROWS, endedAtMs: 1000 })
+  })
+
+  it('ignores a small drain', async () => {
+    const write = vi.fn(async () => 'id')
+    const f = fakeRepo()
+    startSyncMetricsCollector(f.repo, 'ws', { write, takeDownload: () => null })
+    f.drain(stats({ rows: 10 }))
+    await idleTurn()
+    expect(write).not.toHaveBeenCalled()
   })
 
   it('does not throw into the listener when the write rejects', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const write = vi.fn(async () => { throw new Error('boom') })
-    const f = fakeRepo(true)
-    startSyncMetricsCollector(f.repo, 'ws', { write })
-    expect(() => f.drain(stats({ rows: 5000 }))).not.toThrow()
-    await vi.waitFor(() => expect(warn).toHaveBeenCalled())
-    warn.mockRestore()
+    try {
+      const write = vi.fn(async () => { throw new Error('boom') })
+      const f = fakeRepo()
+      startSyncMetricsCollector(f.repo, 'ws', { write, takeDownload: () => null })
+      expect(() => f.drain(stats({ rows: 5000 }))).not.toThrow()
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled())
+    } finally {
+      warn.mockRestore()
+    }
   })
 
-  it('writes one download record once the drain has caught up after hasSynced, then unregisters', async () => {
+  it('writes the download record only once the drain has caught up', async () => {
     const write = vi.fn(async () => 'id')
-    const f = fakeRepo(false)
-    startSyncMetricsCollector(f.repo, 'ws', { write })
-    f.status({ hasSynced: false })
-    f.status({ hasSynced: true })
-    f.status({ hasSynced: true })
+    const f = fakeRepo()
+    startSyncMetricsCollector(f.repo, 'ws', { write, takeDownload: () => Promise.resolve(timings) })
     // Held until the drain has materialized what the download delivered.
-    expect(f.disposeStatus).toHaveBeenCalled()
-    // An idle turn queued after the status change: an unheld write would have run by now.
-    await new Promise<void>((resolve) => { scheduleIdle(() => resolve()) })
+    await idleTurn()
     expect(write).not.toHaveBeenCalled()
     f.finishDrain()
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1))
     expect((write.mock.calls[0] as unknown as unknown[])[2]).toMatchObject({ kind: 'download' })
-    expect(f.disposeStatus).toHaveBeenCalled()
   })
 
-  it('does not track a download on an already-synced device, and teardown stops the drain listener', () => {
-    const f = fakeRepo(true)
-    const stop = startSyncMetricsCollector(f.repo, 'ws', { write: vi.fn() })
-    expect(() => f.status({ hasSynced: true })).toThrow() // never registered
+  it('writes no download record when none was tracked', async () => {
+    const write = vi.fn(async () => 'id')
+    const f = fakeRepo()
+    startSyncMetricsCollector(f.repo, 'ws', { write, takeDownload: () => null })
+    f.finishDrain()
+    await idleTurn()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('writes no download record when stopped before the timings resolve', async () => {
+    const write = vi.fn(async () => 'id')
+    const f = fakeRepo()
+    let resolveTimings!: (t: DownloadTimings) => void
+    const download = new Promise<DownloadTimings>((resolve) => { resolveTimings = resolve })
+    const stop = startSyncMetricsCollector(f.repo, 'ws', { write, takeDownload: () => download })
     stop()
+    resolveTimings(timings)
+    f.finishDrain()
+    await download
+    await idleTurn()
+    await idleTurn()
+    expect(write).not.toHaveBeenCalled()
     expect(f.hasDrainListener()).toBe(false)
   })
 })
