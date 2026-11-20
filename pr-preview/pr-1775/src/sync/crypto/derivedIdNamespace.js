@@ -1,1 +1,0 @@
-export{Yst as deriveWorkspaceIdNamespace}from"../../../chunks/app-ByHD_PaJ.js";

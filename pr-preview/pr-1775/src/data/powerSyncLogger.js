@@ -1,1 +1,0 @@
-export{X2 as powerSyncLogger}from"../../chunks/app-ByHD_PaJ.js";

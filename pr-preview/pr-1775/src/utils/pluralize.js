@@ -1,1 +1,0 @@
-export{x7 as agree,S7 as pluralize}from"../../chunks/app-ByHD_PaJ.js";

@@ -1,1 +1,0 @@
-export{nd as blockTagsConfigUi}from"../../../chunks/app-ByHD_PaJ.js";

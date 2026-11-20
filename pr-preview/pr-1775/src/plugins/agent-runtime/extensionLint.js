@@ -1,1 +1,0 @@
-export{Lg as lintExtensionSource}from"../../../chunks/app-ByHD_PaJ.js";

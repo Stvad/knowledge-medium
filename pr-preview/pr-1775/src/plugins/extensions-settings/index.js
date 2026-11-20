@@ -1,1 +1,0 @@
-export{mg as extensionsOverridesProp,hg as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-ByHD_PaJ.js";

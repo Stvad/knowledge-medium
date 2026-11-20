@@ -1,1 +1,0 @@
-export{Kw as COLEMAK_KEYBINDINGS_PLUGIN_ID,qw as colemakKeybindingsPlugin,Jw as colemakMovementKeybindingOverrides}from"../../../chunks/app-ByHD_PaJ.js";

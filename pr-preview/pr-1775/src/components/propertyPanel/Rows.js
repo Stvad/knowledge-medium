@@ -1,1 +1,0 @@
-export{YV as MetadataRow,XV as PropertySectionLabel}from"../../../chunks/app-ByHD_PaJ.js";

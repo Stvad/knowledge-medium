@@ -1,1 +1,0 @@
-export{Bo as propertiesMigrationPlugin}from"../../../chunks/app-ByHD_PaJ.js";

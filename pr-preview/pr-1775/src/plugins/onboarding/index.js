@@ -1,1 +1,0 @@
-export{iM as EXTENSIONS_PAGE_TITLE,aM as TUTORIAL_DEFAULT_TITLE,oM as TUTORIAL_VIM_TITLE,xw as onboardingPlugin,rM as seedTutorial}from"../../../chunks/app-ByHD_PaJ.js";

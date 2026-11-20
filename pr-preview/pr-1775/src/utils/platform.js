@@ -1,1 +1,0 @@
-export{TG as isIOS,EG as isMacPlatform}from"../../chunks/app-ByHD_PaJ.js";

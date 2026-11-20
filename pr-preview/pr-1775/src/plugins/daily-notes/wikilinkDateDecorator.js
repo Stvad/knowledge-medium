@@ -1,1 +1,0 @@
-export{ej as dailyDateWikilinkDecorator}from"../../../chunks/app-ByHD_PaJ.js";

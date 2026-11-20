@@ -1,1 +1,0 @@
-export{C$ as RAW_CHARACTER_COUNT_PROFILE_ID,w$ as WORDS_COUNT_PROFILE_ID,T$ as charLimitProp,E$ as charProfileProp,D$ as charScopeProp}from"../../../chunks/app-ByHD_PaJ.js";

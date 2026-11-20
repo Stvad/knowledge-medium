@@ -1,1 +1,0 @@
-export{_$ as characterCounterDataExtension}from"../../../chunks/app-ByHD_PaJ.js";
