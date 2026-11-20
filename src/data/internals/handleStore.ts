@@ -59,6 +59,33 @@ export interface ChangeNotification {
   plugin?: PluginInvalidationMap
 }
 
+/** The union of two notifications: everything either would invalidate. For a
+ *  producer that delivers several commits' worth of changes in one call. */
+export const mergeChangeNotifications = (
+  a: ChangeNotification,
+  b: ChangeNotification,
+): ChangeNotification => {
+  const union = (
+    x: ReadonlySet<string> | readonly string[] | undefined,
+    y: ReadonlySet<string> | readonly string[] | undefined,
+  ): ReadonlySet<string> | undefined => (x || y ? new Set([...(x ?? []), ...(y ?? [])]) : undefined)
+  const plugin = new Map<string, Set<string>>()
+  for (const map of [a.plugin, b.plugin]) {
+    for (const [channel, keys] of map ?? []) {
+      const merged = plugin.get(channel) ?? new Set<string>()
+      for (const key of keys) merged.add(key)
+      plugin.set(channel, merged)
+    }
+  }
+  return {
+    rowIds: union(a.rowIds, b.rowIds),
+    parentIds: union(a.parentIds, b.parentIds),
+    workspaceIds: union(a.workspaceIds, b.workspaceIds),
+    tables: union(a.tables, b.tables),
+    ...(plugin.size > 0 ? {plugin} : {}),
+  }
+}
+
 /** Context handed to a handle's loader. The loader calls `depend(...)`
  *  during resolve so the store can route future invalidations. */
 export interface ResolveContext {

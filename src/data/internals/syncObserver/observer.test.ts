@@ -855,3 +855,46 @@ describe('blocksSyncedObserver — drain stats', () => {
   })
 
 })
+
+describe('blocksSyncedObserver — handle invalidation during a backlog', () => {
+  const stageFive = async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+  }
+  const rowIds = (n: { rowIds?: ReadonlySet<string> | readonly string[] }) => [...(n.rowIds ?? [])].sort()
+
+  it('delivers the first window at once and the rest of the drain together', async () => {
+    await stageFive()
+    const { observer, notifications, cache } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
+    })
+    await observer.flush()
+
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3', 'b4']])
+    // The cache is not part of what waits.
+    expect(cache.getSnapshot('b4')).toMatchObject({ content: 'c4' })
+  })
+
+  it('delivers every window once the interval has passed', async () => {
+    await stageFive()
+    const { observer, notifications } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 0,
+    })
+    await observer.flush()
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3'], ['b4']])
+  })
+
+  it('still delivers what a failed drain had held back', async () => {
+    await stageFive()
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 3) throw new Error('boom')
+      return 'copy'
+    }
+    const { observer, notifications } = start({
+      getMaterializability, drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000, onError: () => {},
+    })
+    await observer.flush().catch(() => {})
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3']])
+  })
+})

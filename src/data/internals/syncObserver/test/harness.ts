@@ -109,6 +109,7 @@ export interface StartObserverOpts {
   drainChunkSize?: number
   onError?: (err: unknown) => void
   onDrainStats?: BlocksSyncedObserverArgs['onDrainStats']
+  backlogInvalidationIntervalMs?: number
   getInvalidationRules?: () => readonly InvalidationRule[]
   throttleMs?: number
   /** Derive-at-arrival lookups. Omitted by default so
@@ -163,6 +164,7 @@ export const setupObserverTestDb = () => {
       drainChunkSize: opts.drainChunkSize,
       onError: opts.onError,
       onDrainStats: opts.onDrainStats,
+      backlogInvalidationIntervalMs: opts.backlogInvalidationIntervalMs,
       getInvalidationRules: opts.getInvalidationRules,
     })
     observers.push(observer)
