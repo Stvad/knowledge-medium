@@ -1,1 +1,1 @@
-export{DI as MarkdownImage}from"../../chunks/app-BAFV6B31.js";
+export{UI as MarkdownImage}from"../../chunks/app-BLSyjOgL.js";

@@ -1,1 +1,1 @@
-export{kP as editorAutocompleteExtension}from"../../chunks/app-BAFV6B31.js";
+export{GP as editorAutocompleteExtension}from"../../chunks/app-BLSyjOgL.js";

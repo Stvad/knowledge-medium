@@ -1,1 +1,1 @@
-export{Pc as SystemStatusHeaderItem}from"../../../chunks/app-BAFV6B31.js";
+export{Xc as SystemStatusHeaderItem}from"../../../chunks/app-BLSyjOgL.js";

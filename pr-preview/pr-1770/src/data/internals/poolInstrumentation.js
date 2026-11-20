@@ -1,1 +1,1 @@
-export{O2 as instrumentAdapter}from"../../../chunks/app-BAFV6B31.js";
+export{W2 as instrumentAdapter}from"../../../chunks/app-BLSyjOgL.js";

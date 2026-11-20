@@ -1,1 +1,1 @@
-export{oM as CommandPalette}from"../../../chunks/app-BAFV6B31.js";
+export{SM as CommandPalette}from"../../../chunks/app-BLSyjOgL.js";

@@ -1,1 +1,1 @@
-export{kx as CleanupAttachmentsDialog}from"../../../chunks/app-BAFV6B31.js";
+export{Gx as CleanupAttachmentsDialog}from"../../../chunks/app-BLSyjOgL.js";
