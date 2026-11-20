@@ -1,0 +1,1 @@
+export{tK as usePropertySchemas}from"../../chunks/app-D74yNxP1.js";

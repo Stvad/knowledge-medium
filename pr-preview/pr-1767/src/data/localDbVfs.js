@@ -1,0 +1,1 @@
+export{i2 as LOCAL_DB_VFS_OVERRIDE_KEY,a2 as LocalDbVfsHandoffError,o2 as asLostWriteAheadSupport,s2 as handoffErrorUserId,c2 as isLocalDbVfsHandoffError,l2 as markDbOpenFailure,u2 as prepareLocalDbForVfs,d2 as readLocalDbFileSizes,f2 as readLocalDbVfsOverride,p2 as resolveLocalDbVfs,m2 as supportsWriteAheadVfs,h2 as tagHandoffErrorUserId}from"../../chunks/app-D74yNxP1.js";
