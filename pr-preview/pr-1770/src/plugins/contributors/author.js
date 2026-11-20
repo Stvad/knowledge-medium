@@ -1,0 +1,1 @@
+export{zg as authorIdOf}from"../../../chunks/app-DSwhArCn.js";

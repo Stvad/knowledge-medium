@@ -1,0 +1,1 @@
+export{vI as BlockLoadingPlaceholder}from"../../chunks/app-DSwhArCn.js";

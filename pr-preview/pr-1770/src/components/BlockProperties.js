@@ -1,0 +1,1 @@
+export{EV as BlockProperties}from"../../chunks/app-DSwhArCn.js";

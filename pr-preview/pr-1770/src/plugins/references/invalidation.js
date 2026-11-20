@@ -1,0 +1,1 @@
+export{Oq as REFERENCES_TARGET_INVALIDATION_CHANNEL,kq as referencesInvalidationRule}from"../../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{wC as videoPlayerMarkdownExtension}from"../../../chunks/app-DSwhArCn.js";

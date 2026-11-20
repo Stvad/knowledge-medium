@@ -1,0 +1,1 @@
+export{mdt as SYSTEM_AUTHOR_PREFIX,hdt as isSystemAuthor,gdt as systemAuthor}from"../../../chunks/app-DSwhArCn.js";

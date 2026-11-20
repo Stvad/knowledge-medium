@@ -1,0 +1,1 @@
+export{Kf as moveCommentToOwnThread}from"../../../chunks/app-DSwhArCn.js";

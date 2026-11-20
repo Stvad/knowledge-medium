@@ -1,0 +1,1 @@
+export{zw as spatialNavigationShellDecorator}from"../../../chunks/app-DSwhArCn.js";

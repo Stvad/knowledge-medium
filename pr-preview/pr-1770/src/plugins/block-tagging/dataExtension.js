@@ -1,0 +1,1 @@
+export{Wu as blockTaggingDataExtension}from"../../../chunks/app-DSwhArCn.js";

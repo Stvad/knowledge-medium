@@ -1,0 +1,1 @@
+export{hf as annotationsPlugin}from"../../../chunks/app-DSwhArCn.js";

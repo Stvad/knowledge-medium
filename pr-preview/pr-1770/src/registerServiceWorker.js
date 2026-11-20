@@ -1,0 +1,1 @@
+export{tF as checkForAppUpdate,nF as registerServiceWorker}from"../chunks/app-DSwhArCn.js";

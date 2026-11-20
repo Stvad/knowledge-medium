@@ -1,0 +1,1 @@
+export{Vu as blockTagsConfigUi}from"../../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{sb as remarkWikilinks}from"../../../../../chunks/app-DSwhArCn.js";

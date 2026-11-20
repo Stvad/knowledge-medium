@@ -1,0 +1,1 @@
+export{Lot as getOrCreateTypesPage,Rot as typesPageBlockId,zot as typesPageSpec}from"../../chunks/app-DSwhArCn.js";

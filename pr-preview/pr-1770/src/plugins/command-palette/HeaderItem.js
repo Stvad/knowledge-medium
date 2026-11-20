@@ -1,0 +1,1 @@
+export{MM as CommandPaletteHeaderItem}from"../../../chunks/app-DSwhArCn.js";

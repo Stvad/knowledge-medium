@@ -1,0 +1,1 @@
+export{iy as backlinksPlugin}from"../../../chunks/app-DSwhArCn.js";

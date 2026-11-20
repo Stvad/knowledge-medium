@@ -1,0 +1,1 @@
+export{oE as PromotableBreadcrumbList}from"../../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{Hu as BlockTagsConfigEditor}from"../../../chunks/app-DSwhArCn.js";

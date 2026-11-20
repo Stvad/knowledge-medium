@@ -1,0 +1,1 @@
+export{Bot as getOrCreatePropertiesPage,Vot as propertiesPageBlockId,Hot as propertiesPageSpec}from"../../chunks/app-DSwhArCn.js";

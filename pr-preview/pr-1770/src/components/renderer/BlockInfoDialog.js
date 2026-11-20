@@ -1,0 +1,1 @@
+export{xR as BlockInfoDialog}from"../../../chunks/app-DSwhArCn.js";

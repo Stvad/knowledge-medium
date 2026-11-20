@@ -1,0 +1,1 @@
+export{C8 as kernelDataExtension}from"../../chunks/app-DSwhArCn.js";

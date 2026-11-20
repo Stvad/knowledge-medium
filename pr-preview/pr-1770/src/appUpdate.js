@@ -1,0 +1,1 @@
+export{rF as appUpdate,iF as useAppUpdateAvailable}from"../chunks/app-DSwhArCn.js";

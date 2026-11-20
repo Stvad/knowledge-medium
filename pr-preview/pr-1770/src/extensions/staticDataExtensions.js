@@ -1,0 +1,1 @@
+export{fq as staticDataExtensions}from"../../chunks/app-DSwhArCn.js";

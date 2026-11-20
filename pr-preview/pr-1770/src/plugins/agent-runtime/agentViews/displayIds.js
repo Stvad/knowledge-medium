@@ -1,0 +1,1 @@
+export{W_ as boundDisplayId,G_ as idMark}from"../../../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{vk as useAncestorCrumbs}from"../../chunks/app-DSwhArCn.js";

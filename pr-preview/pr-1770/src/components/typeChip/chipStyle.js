@@ -1,0 +1,1 @@
+export{FN as chipStyle}from"../../../chunks/app-DSwhArCn.js";

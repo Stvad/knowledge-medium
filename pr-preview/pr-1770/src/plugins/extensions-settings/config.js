@@ -1,0 +1,1 @@
+export{Qh as extensionsOverridesPresetCore,$h as extensionsOverridesProp,eg as extensionsPrefsType,tg as overridesCodec}from"../../../chunks/app-DSwhArCn.js";

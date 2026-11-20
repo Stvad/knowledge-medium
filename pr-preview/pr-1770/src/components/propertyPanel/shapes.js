@@ -1,0 +1,1 @@
+export{sK as propertyShapeLabel}from"../../../chunks/app-DSwhArCn.js";

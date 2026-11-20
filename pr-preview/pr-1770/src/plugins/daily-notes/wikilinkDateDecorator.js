@@ -1,0 +1,1 @@
+export{MA as dailyDateWikilinkDecorator}from"../../../chunks/app-DSwhArCn.js";

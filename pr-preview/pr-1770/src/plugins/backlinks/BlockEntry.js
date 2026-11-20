@@ -1,0 +1,1 @@
+export{wy as LazyBlockEntry}from"../../../chunks/app-DSwhArCn.js";

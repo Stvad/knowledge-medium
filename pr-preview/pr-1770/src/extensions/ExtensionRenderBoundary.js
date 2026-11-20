@@ -1,0 +1,1 @@
+export{oB as ExtensionRenderBoundary}from"../../chunks/app-DSwhArCn.js";

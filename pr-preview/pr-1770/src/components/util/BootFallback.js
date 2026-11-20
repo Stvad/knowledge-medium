@@ -1,0 +1,1 @@
+export{UK as BootFallback}from"../../../chunks/app-DSwhArCn.js";

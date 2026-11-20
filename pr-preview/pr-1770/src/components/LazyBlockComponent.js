@@ -1,0 +1,1 @@
+export{fI as LazyBlockComponent}from"../../chunks/app-DSwhArCn.js";

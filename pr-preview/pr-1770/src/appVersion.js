@@ -1,0 +1,1 @@
+export{Jc as appVersion}from"../chunks/app-DSwhArCn.js";

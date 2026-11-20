@@ -1,0 +1,1 @@
+export{Yk as Label}from"../../../chunks/app-DSwhArCn.js";

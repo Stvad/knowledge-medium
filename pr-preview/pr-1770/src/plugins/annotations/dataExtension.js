@@ -1,0 +1,1 @@
+export{EX as annotationsDataExtension}from"../../../chunks/app-DSwhArCn.js";

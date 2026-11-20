@@ -1,0 +1,1 @@
+export{O2 as instrumentAdapter}from"../../../chunks/app-DSwhArCn.js";

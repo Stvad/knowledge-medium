@@ -1,0 +1,1 @@
+export{kF as resolveAppRuntime,AF as resolveAppRuntimeSync}from"../../chunks/app-DSwhArCn.js";

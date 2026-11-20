@@ -1,0 +1,1 @@
+export{Hv as blockInfoPlugin}from"../../../chunks/app-DSwhArCn.js";

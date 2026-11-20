@@ -1,0 +1,1 @@
+export{MZ as adoptTypedBlock,NZ as createTypedChild,Zst as derivedBlockId,PZ as getOrCreateTypedChild}from"../../chunks/app-DSwhArCn.js";

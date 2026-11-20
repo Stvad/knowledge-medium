@@ -1,0 +1,1 @@
+export{KO as openRecentsPage}from"../../../chunks/app-DSwhArCn.js";

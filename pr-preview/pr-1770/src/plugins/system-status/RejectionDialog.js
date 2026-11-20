@@ -1,0 +1,1 @@
+export{Rc as RejectionDialog}from"../../../chunks/app-DSwhArCn.js";

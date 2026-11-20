@@ -1,0 +1,1 @@
+export{Uot as aliasSeatNamespacesInTx,Wot as resolveAliasSeatNamespaces}from"../../chunks/app-DSwhArCn.js";

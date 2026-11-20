@@ -1,0 +1,1 @@
+export{KP as appUpdatePromptExtension}from"../../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{$h as extensionsOverridesProp,eg as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DSwhArCn.js";

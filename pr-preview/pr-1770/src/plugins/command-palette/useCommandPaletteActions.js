@@ -1,0 +1,1 @@
+export{sM as useCommandPaletteActions}from"../../../chunks/app-DSwhArCn.js";

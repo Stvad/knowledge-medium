@@ -1,0 +1,1 @@
+export{mF as gestureBindingDescriptor,hF as matchesGestureEvent}from"../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{pz as useShortcutSurfaceActivations}from"../../chunks/app-DSwhArCn.js";

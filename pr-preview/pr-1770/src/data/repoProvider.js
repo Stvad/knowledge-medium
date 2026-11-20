@@ -1,0 +1,1 @@
+export{qK as BATCH_SENTINEL_SQL,JK as closePowerSyncDbIfOpen,YK as ensurePowerSyncReady,XK as getActiveSyncResolver,ZK as getActiveUserId,QK as getPowerSyncDb,$K as initializeClientSchema,eq as isRemoteSyncActive,tq as syncObserverDepsFor,nq as syncResolverForUser,rq as webDatabaseOptions}from"../../chunks/app-DSwhArCn.js";

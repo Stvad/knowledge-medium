@@ -1,0 +1,1 @@
+export{_k as BlockCrumbs}from"../../chunks/app-DSwhArCn.js";

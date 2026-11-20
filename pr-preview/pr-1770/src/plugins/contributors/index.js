@@ -1,0 +1,1 @@
+export{Zm as contributorsPlugin}from"../../../chunks/app-DSwhArCn.js";

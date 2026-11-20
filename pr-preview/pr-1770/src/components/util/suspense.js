@@ -1,0 +1,1 @@
+export{WK as SuspenseFallback}from"../../../chunks/app-DSwhArCn.js";

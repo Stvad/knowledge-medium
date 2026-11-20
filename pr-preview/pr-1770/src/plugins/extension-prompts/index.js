@@ -1,0 +1,1 @@
+export{MP as ExtensionPromptSurface,NP as extensionPromptsExtension}from"../../../chunks/app-DSwhArCn.js";

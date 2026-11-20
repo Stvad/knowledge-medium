@@ -1,0 +1,1 @@
+export{KS as useAssetObjectUrl}from"../../../chunks/app-DSwhArCn.js";

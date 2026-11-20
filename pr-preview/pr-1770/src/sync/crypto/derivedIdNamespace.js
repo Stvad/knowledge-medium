@@ -1,0 +1,1 @@
+export{Sst as deriveWorkspaceIdNamespace}from"../../../chunks/app-DSwhArCn.js";

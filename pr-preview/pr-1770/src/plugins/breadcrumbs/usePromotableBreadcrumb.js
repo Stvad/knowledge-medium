@@ -1,0 +1,1 @@
+export{aE as usePromotableBreadcrumb}from"../../../chunks/app-DSwhArCn.js";

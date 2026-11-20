@@ -1,0 +1,1 @@
+export{Kb as useIsReadOnly}from"../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{PN as TypeChip}from"../../../chunks/app-DSwhArCn.js";

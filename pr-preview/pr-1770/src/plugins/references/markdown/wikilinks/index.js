@@ -1,0 +1,1 @@
+export{ab as wikilinkMarkdownExtension}from"../../../../../chunks/app-DSwhArCn.js";

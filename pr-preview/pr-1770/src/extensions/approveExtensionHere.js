@@ -1,0 +1,1 @@
+export{VP as approveExtensionHere}from"../../chunks/app-DSwhArCn.js";

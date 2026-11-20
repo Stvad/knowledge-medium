@@ -1,0 +1,1 @@
+export{QN as ensureMetricsConsoleHook}from"../../chunks/app-DSwhArCn.js";

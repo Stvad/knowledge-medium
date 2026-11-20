@@ -1,0 +1,1 @@
+export{Ib as blockDragPlugin}from"../../../chunks/app-DSwhArCn.js";

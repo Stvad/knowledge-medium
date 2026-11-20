@@ -1,0 +1,1 @@
+export{OQ as contributorsDataExtension}from"../../../chunks/app-DSwhArCn.js";

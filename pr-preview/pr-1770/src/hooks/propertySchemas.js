@@ -1,0 +1,1 @@
+export{rK as usePropertySchemas}from"../../chunks/app-DSwhArCn.js";

@@ -1,0 +1,1 @@
+export{Jp as confirmThreadDeletion}from"../../../chunks/app-DSwhArCn.js";
