@@ -1,0 +1,12 @@
+a[data-vim-link-hint]::before {
+  content: attr(data-vim-link-hint) / "";
+  display: inline-block;
+  margin-inline-end: 0.3em;
+  border: 1px solid hsl(var(--muted-foreground));
+  border-radius: 0.25em;
+  padding-inline: 0.3em;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: 700 0.8em/1.2 ui-monospace, monospace;
+  pointer-events: none;
+}
