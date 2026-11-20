@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SyncDrainStats } from '@/data/internals/syncObserver/observer'
 import { startSyncMetricsCollector } from '../collect'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
 
 const stats = (over: Partial<SyncDrainStats>): SyncDrainStats => ({
   source: 'queue', completed: true, wallMs: 10, windows: 1, rows: 5,
@@ -16,14 +17,17 @@ const fakeRepo = (hasSynced: boolean) => {
   let drain: DrainCb | undefined
   let status: StatusCb | undefined
   const disposeStatus = vi.fn()
+  let finishDrain!: () => void
+  const drained = new Promise<void>((resolve) => { finishDrain = resolve })
   const repo = {
     db: {
       currentStatus: { hasSynced },
       registerListener: (l: { statusChanged: StatusCb }) => { status = l.statusChanged; return disposeStatus },
     },
     onSyncDrainStats: (cb: DrainCb) => { drain = cb; return () => { drain = undefined } },
+    flushSyncObserver: () => drained,
   }
-  return { repo: repo as never, drain: (s: SyncDrainStats) => drain!(s), status: (s: { hasSynced?: boolean }) => status!(s), disposeStatus, hasDrainListener: () => drain !== undefined }
+  return { repo: repo as never, drain: (s: SyncDrainStats) => drain!(s), status: (s: { hasSynced?: boolean }) => status!(s), disposeStatus, finishDrain, hasDrainListener: () => drain !== undefined }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -55,13 +59,19 @@ describe('startSyncMetricsCollector', () => {
     warn.mockRestore()
   })
 
-  it('writes one download record when hasSynced turns true, then unregisters', async () => {
+  it('writes one download record once the drain has caught up after hasSynced, then unregisters', async () => {
     const write = vi.fn(async () => 'id')
     const f = fakeRepo(false)
     startSyncMetricsCollector(f.repo, 'ws', { write })
     f.status({ hasSynced: false })
     f.status({ hasSynced: true })
     f.status({ hasSynced: true })
+    // Held until the drain has materialized what the download delivered.
+    expect(f.disposeStatus).toHaveBeenCalled()
+    // An idle turn queued after the status change: an unheld write would have run by now.
+    await new Promise<void>((resolve) => { scheduleIdle(() => resolve()) })
+    expect(write).not.toHaveBeenCalled()
+    f.finishDrain()
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1))
     expect((write.mock.calls[0] as unknown as unknown[])[2]).toMatchObject({ kind: 'download' })
     expect(f.disposeStatus).toHaveBeenCalled()

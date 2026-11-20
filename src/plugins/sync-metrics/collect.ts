@@ -67,7 +67,12 @@ export const startSyncMetricsCollector = (
       if (!timings) return
       finished = true
       dispose()
-      writeDeferred(repo, workspaceId, write, buildDownloadRecord(timings, currentHeader()))
+      const record = buildDownloadRecord(timings, currentHeader())
+      // The record is a block in the workspace this download just delivered:
+      // write it once the drain has materialized that workspace, not into the
+      // half-empty one. A failed drain still leaves the record worth keeping.
+      void repo.flushSyncObserver().catch(() => {})
+        .then(() => writeDeferred(repo, workspaceId, write, record))
     }
     const dispose = db.registerListener({ statusChanged: feed })
     cleanups.push(() => { finished = true; dispose() })
