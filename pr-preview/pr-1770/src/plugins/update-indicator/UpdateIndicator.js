@@ -1,1 +1,1 @@
-export{Gv as UpdateIndicator}from"../../../chunks/app-DSwhArCn.js";
+export{Gv as UpdateIndicator}from"../../../chunks/app-BAFV6B31.js";

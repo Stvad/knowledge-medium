@@ -1,1 +1,1 @@
-export{Qm as contributorsCodeMirrorExtensions}from"../../../chunks/app-DSwhArCn.js";
+export{Qm as contributorsCodeMirrorExtensions}from"../../../chunks/app-BAFV6B31.js";

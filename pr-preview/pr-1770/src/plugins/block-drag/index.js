@@ -1,1 +1,1 @@
-export{Ib as blockDragPlugin}from"../../../chunks/app-DSwhArCn.js";
+export{Ib as blockDragPlugin}from"../../../chunks/app-BAFV6B31.js";

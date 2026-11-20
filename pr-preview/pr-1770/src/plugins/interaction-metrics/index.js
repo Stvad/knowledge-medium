@@ -1,1 +1,1 @@
-export{ia as interactionMetricsPlugin}from"../../../chunks/app-DSwhArCn.js";
+export{ia as interactionMetricsPlugin}from"../../../chunks/app-BAFV6B31.js";

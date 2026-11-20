@@ -1,1 +1,1 @@
-export{fy as BacklinksViewSection,py as backlinksViewFooterContribution}from"../../../chunks/app-DSwhArCn.js";
+export{fy as BacklinksViewSection,py as backlinksViewFooterContribution}from"../../../chunks/app-BAFV6B31.js";

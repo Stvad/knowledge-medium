@@ -1,1 +1,1 @@
-export{SJ as htmlDocumentDataExtension}from"../../../chunks/app-DSwhArCn.js";
+export{SJ as htmlDocumentDataExtension}from"../../../chunks/app-BAFV6B31.js";

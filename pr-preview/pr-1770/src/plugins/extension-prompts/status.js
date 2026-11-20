@@ -1,1 +1,1 @@
-export{PP as extensionPromptDiagnosticContribution,FP as extensionPromptDiagnosticSource}from"../../../chunks/app-DSwhArCn.js";
+export{PP as extensionPromptDiagnosticContribution,FP as extensionPromptDiagnosticSource}from"../../../chunks/app-BAFV6B31.js";

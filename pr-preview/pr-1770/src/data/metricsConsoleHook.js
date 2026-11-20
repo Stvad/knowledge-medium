@@ -1,1 +1,1 @@
-export{QN as ensureMetricsConsoleHook}from"../../chunks/app-DSwhArCn.js";
+export{QN as ensureMetricsConsoleHook}from"../../chunks/app-BAFV6B31.js";

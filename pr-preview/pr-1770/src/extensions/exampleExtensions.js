@@ -1,1 +1,1 @@
-export{sP as exampleExtensions,cP as insertExampleExtensionsUnder}from"../../chunks/app-DSwhArCn.js";
+export{sP as exampleExtensions,cP as insertExampleExtensionsUnder}from"../../chunks/app-BAFV6B31.js";

@@ -1,1 +1,1 @@
-export{UK as BootFallback}from"../../../chunks/app-DSwhArCn.js";
+export{UK as BootFallback}from"../../../chunks/app-BAFV6B31.js";

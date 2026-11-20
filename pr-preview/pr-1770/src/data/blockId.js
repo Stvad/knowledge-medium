@@ -1,1 +1,1 @@
-export{zit as InvalidBlockIdError,Bit as assertCanonicalBlockId}from"../../chunks/app-DSwhArCn.js";
+export{zit as InvalidBlockIdError,Bit as assertCanonicalBlockId}from"../../chunks/app-BAFV6B31.js";

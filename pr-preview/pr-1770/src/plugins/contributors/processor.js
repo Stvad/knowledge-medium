@@ -1,1 +1,1 @@
-export{jQ as CHOOSE_CONTRIBUTOR_MESSAGE,MQ as contributorAttributionProcessor}from"../../../chunks/app-DSwhArCn.js";
+export{jQ as CHOOSE_CONTRIBUTOR_MESSAGE,MQ as contributorAttributionProcessor}from"../../../chunks/app-BAFV6B31.js";

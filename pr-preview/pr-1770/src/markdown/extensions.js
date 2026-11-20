@@ -1,1 +1,1 @@
-export{yV as markdownExtensionsFacet,bV as resolveMarkdownRenderConfig}from"../../chunks/app-DSwhArCn.js";
+export{yV as markdownExtensionsFacet,bV as resolveMarkdownRenderConfig}from"../../chunks/app-BAFV6B31.js";

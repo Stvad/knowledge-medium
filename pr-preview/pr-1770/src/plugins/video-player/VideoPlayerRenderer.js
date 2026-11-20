@@ -1,1 +1,1 @@
-export{MC as VideoPlayerContentRenderer,NC as VideoPlayerRenderer,PC as isPlayableVideoBlock}from"../../../chunks/app-DSwhArCn.js";
+export{MC as VideoPlayerContentRenderer,NC as VideoPlayerRenderer,PC as isPlayableVideoBlock}from"../../../chunks/app-BAFV6B31.js";

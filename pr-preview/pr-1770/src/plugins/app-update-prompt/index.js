@@ -1,1 +1,1 @@
-export{KP as appUpdatePromptExtension}from"../../../chunks/app-DSwhArCn.js";
+export{KP as appUpdatePromptExtension}from"../../../chunks/app-BAFV6B31.js";

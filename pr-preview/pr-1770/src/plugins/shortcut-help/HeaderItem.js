@@ -1,1 +1,1 @@
-export{Qj as ShortcutHelpHeaderItem}from"../../../chunks/app-DSwhArCn.js";
+export{Qj as ShortcutHelpHeaderItem}from"../../../chunks/app-BAFV6B31.js";

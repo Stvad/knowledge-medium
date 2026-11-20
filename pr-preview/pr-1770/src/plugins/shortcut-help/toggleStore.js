@@ -1,1 +1,1 @@
-export{$j as shortcutHelpToggle}from"../../../chunks/app-DSwhArCn.js";
+export{$j as shortcutHelpToggle}from"../../../chunks/app-BAFV6B31.js";

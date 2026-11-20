@@ -1,1 +1,1 @@
-export{Eo as MigrationGate}from"../../../chunks/app-DSwhArCn.js";
+export{Eo as MigrationGate}from"../../../chunks/app-BAFV6B31.js";

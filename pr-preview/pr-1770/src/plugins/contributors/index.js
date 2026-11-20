@@ -1,1 +1,1 @@
-export{Zm as contributorsPlugin}from"../../../chunks/app-DSwhArCn.js";
+export{Zm as contributorsPlugin}from"../../../chunks/app-BAFV6B31.js";

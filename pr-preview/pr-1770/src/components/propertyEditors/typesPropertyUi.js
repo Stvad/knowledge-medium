@@ -1,1 +1,1 @@
-export{kN as kernelPropertyUiExtension,AN as typesPropertyUi,jN as typesPropertyUiExtension}from"../../../chunks/app-DSwhArCn.js";
+export{kN as kernelPropertyUiExtension,AN as typesPropertyUi,jN as typesPropertyUiExtension}from"../../../chunks/app-BAFV6B31.js";
