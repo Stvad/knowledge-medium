@@ -1,1 +1,1 @@
-export{oL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,sL as openExtensionsSettings}from"../../chunks/app-D_pKA27D.js";
+export{pL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,mL as openExtensionsSettings}from"../../chunks/app-DtzPb22-.js";

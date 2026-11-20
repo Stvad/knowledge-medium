@@ -1,1 +1,1 @@
-export{Db as Wikilink}from"../../../../../chunks/app-D_pKA27D.js";
+export{Pb as Wikilink}from"../../../../../chunks/app-DtzPb22-.js";

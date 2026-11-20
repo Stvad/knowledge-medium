@@ -1,1 +1,1 @@
-export{Ey as inlineBacklinkCountsExtension}from"../../../../chunks/app-D_pKA27D.js";
+export{Ny as inlineBacklinkCountsExtension}from"../../../../chunks/app-DtzPb22-.js";
