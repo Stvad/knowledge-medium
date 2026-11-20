@@ -298,17 +298,15 @@ const blockTypeInSql = `
      AND bt.type IN (SELECT value FROM json_each(?))
 `
 
-/** Which property rows a content search returns. `'all'` (the default)
- *  searches them like any other block: a property's value is a block and its
- *  text is content. `'none'` leaves out recognized field rows and the value
- *  rows directly under them, for a surface that lists note text and reads
- *  property values off their owner instead. */
-export type SearchPropertyChildrenView = 'all' | 'none'
+/** A content search's property rows: `'all'` (the default) searches them like
+ *  any other block; `'none'` leaves them out. */
+export type SearchPropertyChildrenView = Exclude<PropertyChildrenView, 'non-hidden'>
 
-/** The `'none'` view's clause. In the statement, ahead of the LIMIT: a short
- *  property value outranks a sentence that merely contains the query, so a
- *  caller filtering a fetched window gets back a page of values and none of
- *  the prose they crowded out. Binds {@link RecognitionParams} twice. */
+/** The `'none'` view's clause: a recognized field row, or a value row — a
+ *  DIRECT child of one. A block nested under a value row is ordinary content
+ *  and stays, where `core.subtree`'s `'none'` prunes the whole branch: that
+ *  one answers what an outline draws, this one what counts as note text.
+ *  Binds {@link RecognitionParams} twice. */
 const NOT_PROPERTY_ROW_SQL = `
     AND NOT (${recognizedFieldRowSql('b')})
     AND NOT EXISTS (
@@ -1521,7 +1519,7 @@ export const searchByContentQuery = defineQuery<
       excludeTypes: z.array(z.string()).optional(),
       underId: z.string().optional(),
     }).optional(),
-    propertyChildren: z.enum(['all', 'none']).optional(),
+    propertyChildren: propertyChildrenViewSchema.exclude(['non-hidden']).optional(),
   }),
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, query, limit = 50, filter, propertyChildren = 'all'}, ctx) => {
@@ -1540,22 +1538,21 @@ export const searchByContentQuery = defineQuery<
     // the query rank as literals); the exact `= LOWER(?)` rank takes the
     // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a
     // tiebreaker over the already-matched rows.
-    // A filter reads types and ancestry, which the content channel does not
-    // announce — so a filtered handle depends on the whole workspace.
+    // A filter reads types and ancestry, and the `'none'` view reads each
+    // match's parent, none of which the content channel announces — so such a
+    // handle depends on the whole workspace.
     const active = isActiveSearchFilter(filter) ? filter : undefined
-    if (active) ctx.depend({kind: 'workspace', workspaceId})
-    const recognition = propertyChildren === 'none' ? dependOnRecognitionParams(ctx) : null
+    if (active || propertyChildren === 'none') ctx.depend({kind: 'workspace', workspaceId})
+    const recognition = propertyChildren === 'none' ? dependOnRecognitionParams(ctx) : []
     const rows = await ctx.db.getAll<BlockRow>(
-      active || propertyChildren === 'none'
-        ? selectBlocksByContentSql(active, propertyChildren)
-        : SELECT_BLOCKS_BY_CONTENT_SQL,
+      selectBlocksByContentSql(active, propertyChildren),
       [
         ...(active?.underId !== undefined ? [active.underId, workspaceId] : []),
         workspaceId,
         compiledQuery.matchQuery,
         ...(active?.types?.length ? [JSON.stringify(active.types)] : []),
         ...(active?.excludeTypes?.length ? [JSON.stringify(active.excludeTypes)] : []),
-        ...(propertyChildren === 'none' ? [...recognition!, ...recognition!] : []),
+        ...recognition, ...recognition,
         compiledQuery.rankQuery,
         escapeLikePattern(compiledQuery.rankQuery),
         limit,
