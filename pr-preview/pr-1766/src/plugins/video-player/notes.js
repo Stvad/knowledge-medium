@@ -1,1 +1,1 @@
-export{zC as closeVideoNotesView,BC as ensureEditableVideoNoteChild,VC as enterVideoNotesView,HC as focusVideoNote}from"../../../chunks/app-aK9-91Gy.js";
+export{zC as closeVideoNotesView,BC as ensureEditableVideoNoteChild,VC as enterVideoNotesView,HC as focusVideoNote}from"../../../chunks/app-CpWMA5gG.js";

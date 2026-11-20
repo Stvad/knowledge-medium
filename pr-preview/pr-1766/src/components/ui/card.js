@@ -1,1 +1,1 @@
-export{t as Card,n as CardContent,r as CardDescription,i as CardFooter,a as CardHeader,o as CardTitle}from"../../../chunks/card-8LACBS2T.js";
+export{t as Card,n as CardContent,r as CardDescription,i as CardFooter,a as CardHeader,o as CardTitle}from"../../../chunks/card-BvjkXh2Z.js";

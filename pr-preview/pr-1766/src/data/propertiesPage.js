@@ -1,1 +1,1 @@
-export{Iot as getOrCreatePropertiesPage,Lot as propertiesPageBlockId,Rot as propertiesPageSpec}from"../../chunks/app-aK9-91Gy.js";
+export{Iot as getOrCreatePropertiesPage,Lot as propertiesPageBlockId,Rot as propertiesPageSpec}from"../../chunks/app-CpWMA5gG.js";

@@ -1,1 +1,1 @@
-export{AP as ExtensionPromptSurface,jP as extensionPromptsExtension}from"../../../chunks/app-aK9-91Gy.js";
+export{AP as ExtensionPromptSurface,jP as extensionPromptsExtension}from"../../../chunks/app-CpWMA5gG.js";
