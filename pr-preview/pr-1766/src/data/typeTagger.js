@@ -1,1 +1,0 @@
-export{M4 as TypeTagger,N4 as applyTypeTagInTx}from"../../chunks/app-CpWMA5gG.js";

@@ -1,1 +1,0 @@
-export{KQ as characterCounterDataExtension}from"../../../chunks/app-CpWMA5gG.js";

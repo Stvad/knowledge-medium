@@ -1,1 +1,0 @@
-export{AM as CommandPaletteHeaderItem}from"../../../chunks/app-CpWMA5gG.js";

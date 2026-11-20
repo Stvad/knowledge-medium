@@ -1,1 +1,0 @@
-export{Kp as confirmThreadDeletion}from"../../../chunks/app-CpWMA5gG.js";

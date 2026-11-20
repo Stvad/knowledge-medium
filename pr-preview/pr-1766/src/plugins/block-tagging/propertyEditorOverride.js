@@ -1,1 +1,0 @@
-export{zu as blockTagsConfigUi}from"../../../chunks/app-CpWMA5gG.js";

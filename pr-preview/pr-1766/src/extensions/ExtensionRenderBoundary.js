@@ -1,1 +1,0 @@
-export{iB as ExtensionRenderBoundary}from"../../chunks/app-CpWMA5gG.js";

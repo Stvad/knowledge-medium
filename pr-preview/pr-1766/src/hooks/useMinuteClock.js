@@ -1,1 +1,0 @@
-export{HO as useMinuteClock}from"../../chunks/app-CpWMA5gG.js";

@@ -1,1 +1,0 @@
-export{rE as usePromotableBreadcrumb}from"../../../chunks/app-CpWMA5gG.js";

@@ -1,1 +1,0 @@
-export{MN as TypeChip}from"../../../chunks/app-CpWMA5gG.js";

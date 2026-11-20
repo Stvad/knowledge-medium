@@ -1,1 +1,0 @@
-export{vst as deriveWorkspaceIdNamespace}from"../../../chunks/app-CpWMA5gG.js";

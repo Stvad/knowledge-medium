@@ -1,1 +1,0 @@
-export{bg as lintExtensionSource}from"../../../chunks/app-CpWMA5gG.js";

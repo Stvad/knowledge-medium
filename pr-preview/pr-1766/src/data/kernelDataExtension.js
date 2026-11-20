@@ -1,1 +1,0 @@
-export{x8 as kernelDataExtension}from"../../chunks/app-CpWMA5gG.js";

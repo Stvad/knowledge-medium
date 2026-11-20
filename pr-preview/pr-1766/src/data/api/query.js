@@ -1,1 +1,0 @@
-export{gdt as defineQuery}from"../../../chunks/app-CpWMA5gG.js";

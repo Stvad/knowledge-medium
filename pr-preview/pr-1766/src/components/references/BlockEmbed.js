@@ -1,1 +1,0 @@
-export{CN as BlockEmbed}from"../../../chunks/app-CpWMA5gG.js";

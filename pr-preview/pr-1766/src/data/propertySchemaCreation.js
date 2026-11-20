@@ -1,1 +1,0 @@
-export{oK as adoptOrCreatePropertySchema}from"../../chunks/app-CpWMA5gG.js";

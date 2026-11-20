@@ -1,1 +1,0 @@
-export{$P as checkForAppUpdate,eF as registerServiceWorker}from"../chunks/app-CpWMA5gG.js";

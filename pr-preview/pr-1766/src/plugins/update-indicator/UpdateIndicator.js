@@ -1,1 +1,0 @@
-export{Uv as UpdateIndicator}from"../../../chunks/app-CpWMA5gG.js";
