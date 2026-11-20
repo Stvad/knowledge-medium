@@ -1,1 +1,1 @@
-export{PI as PropertySchemaBlockRenderer,FI as PropertySchemaContentRenderer}from"../../../chunks/app-Dgx6ap-c.js";
+export{PI as PropertySchemaBlockRenderer,FI as PropertySchemaContentRenderer}from"../../../chunks/app-BBxFVD_I.js";

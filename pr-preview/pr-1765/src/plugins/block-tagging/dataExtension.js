@@ -1,1 +1,1 @@
-export{Hu as blockTaggingDataExtension}from"../../../chunks/app-Dgx6ap-c.js";
+export{Hu as blockTaggingDataExtension}from"../../../chunks/app-BBxFVD_I.js";

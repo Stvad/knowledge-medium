@@ -1,1 +1,1 @@
-export{DN as kernelPropertyUiExtension,ON as typesPropertyUi,kN as typesPropertyUiExtension}from"../../../chunks/app-Dgx6ap-c.js";
+export{DN as kernelPropertyUiExtension,ON as typesPropertyUi,kN as typesPropertyUiExtension}from"../../../chunks/app-BBxFVD_I.js";

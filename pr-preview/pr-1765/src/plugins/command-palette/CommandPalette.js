@@ -1,1 +1,1 @@
-export{iM as CommandPalette}from"../../../chunks/app-Dgx6ap-c.js";
+export{iM as CommandPalette}from"../../../chunks/app-BBxFVD_I.js";

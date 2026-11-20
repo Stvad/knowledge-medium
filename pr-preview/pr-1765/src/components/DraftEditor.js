@@ -1,1 +1,1 @@
-export{ip as DraftEditor}from"../../chunks/app-Dgx6ap-c.js";
+export{ip as DraftEditor}from"../../chunks/app-BBxFVD_I.js";

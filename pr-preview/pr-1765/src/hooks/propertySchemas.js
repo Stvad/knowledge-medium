@@ -1,1 +1,1 @@
-export{tK as usePropertySchemas}from"../../chunks/app-Dgx6ap-c.js";
+export{tK as usePropertySchemas}from"../../chunks/app-BBxFVD_I.js";

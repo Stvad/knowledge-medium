@@ -1,1 +1,1 @@
-export{Jh as extensionApiCatalog,Yh as extensionApiRuntimeExports}from"../../chunks/app-Dgx6ap-c.js";
+export{Jh as extensionApiCatalog,Yh as extensionApiRuntimeExports}from"../../chunks/app-BBxFVD_I.js";

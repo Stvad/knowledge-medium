@@ -1,1 +1,1 @@
-export{tb as referencesMarkdownExtension}from"../../../../chunks/app-Dgx6ap-c.js";
+export{tb as referencesMarkdownExtension}from"../../../../chunks/app-BBxFVD_I.js";

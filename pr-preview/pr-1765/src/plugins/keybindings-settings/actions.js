@@ -1,1 +1,1 @@
-export{Wj as openKeybindingsSettingsAction}from"../../../chunks/app-Dgx6ap-c.js";
+export{Wj as openKeybindingsSettingsAction}from"../../../chunks/app-BBxFVD_I.js";

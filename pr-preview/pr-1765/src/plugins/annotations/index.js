@@ -1,1 +1,1 @@
-export{pf as annotationsPlugin}from"../../../chunks/app-Dgx6ap-c.js";
+export{pf as annotationsPlugin}from"../../../chunks/app-BBxFVD_I.js";

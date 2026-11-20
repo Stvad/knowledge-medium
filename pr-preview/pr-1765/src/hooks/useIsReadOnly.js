@@ -1,1 +1,1 @@
-export{Wb as useIsReadOnly}from"../../chunks/app-Dgx6ap-c.js";
+export{Wb as useIsReadOnly}from"../../chunks/app-BBxFVD_I.js";

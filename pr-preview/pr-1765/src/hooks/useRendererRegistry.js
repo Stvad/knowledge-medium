@@ -1,1 +1,1 @@
-export{yI as defaultRegistry,_I as refreshRendererRegistry,vI as useRenderer}from"../../chunks/app-Dgx6ap-c.js";
+export{yI as defaultRegistry,_I as refreshRendererRegistry,vI as useRenderer}from"../../chunks/app-BBxFVD_I.js";

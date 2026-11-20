@@ -1,1 +1,1 @@
-export{l8 as applySyncInvalidation}from"../../../../chunks/app-Dgx6ap-c.js";
+export{l8 as applySyncInvalidation}from"../../../../chunks/app-BBxFVD_I.js";

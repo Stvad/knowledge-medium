@@ -1,1 +1,1 @@
-export{_V as markdownExtensionsFacet,vV as resolveMarkdownRenderConfig}from"../../chunks/app-Dgx6ap-c.js";
+export{_V as markdownExtensionsFacet,vV as resolveMarkdownRenderConfig}from"../../chunks/app-BBxFVD_I.js";

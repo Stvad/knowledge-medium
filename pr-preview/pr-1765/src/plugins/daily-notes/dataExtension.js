@@ -1,1 +1,1 @@
-export{iX as dailyNotesDataExtension}from"../../../chunks/app-Dgx6ap-c.js";
+export{iX as dailyNotesDataExtension}from"../../../chunks/app-BBxFVD_I.js";

@@ -1,1 +1,1 @@
-export{pE as blockEditingContentRenderer}from"../../../chunks/app-Dgx6ap-c.js";
+export{pE as blockEditingContentRenderer}from"../../../chunks/app-BBxFVD_I.js";

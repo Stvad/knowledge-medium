@@ -1,1 +1,1 @@
-export{TC as default}from"../../../chunks/app-Dgx6ap-c.js";
+export{TC as default}from"../../../chunks/app-BBxFVD_I.js";
