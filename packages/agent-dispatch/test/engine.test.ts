@@ -42,7 +42,10 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const graph: Graph & ReplyWriter = {
     ensureMemoryBlock: vi.fn(async () => 'mem-1'),
     propertyValueBlocks: async () => new Set(),
-    memoryOutline: vi.fn(async () => ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n')),
+    memoryOutline: vi.fn(async () => ({
+      text: ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n'),
+      sharedRoots: [],
+    })),
     memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
@@ -247,7 +250,7 @@ describe('watcher memory', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(finalReply(fake.reconciles)).toMatch(/Reply text\n\nMemory has more than \d+ blocks/)
+    expect(finalReply(fake.reconciles)).toMatch(/Reply text\n\nMemory and the shared notes it embeds have more than \d+ blocks/)
   })
 
   it('reads and shows no memory for a watcher that turns it off', async () => {

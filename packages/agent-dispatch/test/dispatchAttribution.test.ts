@@ -352,6 +352,119 @@ describe('watcher memory against the app', () => {
     )
     expect(reply.map(row => row.content).join('\n')).toMatch(/Memory changed during this run: saved \[Prefers suggestions\.\]\(\(\([0-9a-f-]+\)\)\)/)
   })
+
+  describe('shared notes it embeds', () => {
+    const SHARED_PAGE = '3f2a9c1d-0000-4000-8000-0000000000e1'
+    const SHARED = '3f2a9c1d-0000-4000-8000-0000000000e2'
+    const SHARED_CHILD = '3f2a9c1d-0000-4000-8000-0000000000e3'
+    const FOREIGN = '3f2a9c1d-0000-4000-8000-0000000000f1'
+    const FOREIGN_CHILD = '3f2a9c1d-0000-4000-8000-0000000000f2'
+    const FOREIGN_NOTE = '3f2a9c1d-0000-4000-8000-0000000000f3'
+    const OWN_DEEP = '3f2a9c1d-0000-4000-8000-0000000000a1'
+
+    /** A `Shared` page with a note and a sub-note, and the watcher's memory
+     *  holding one note per given content. */
+    const seedMemory = async (...notes: string[]): Promise<string> => {
+      await repo.tx(async tx => {
+        await tx.create({id: SHARED_PAGE, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Shared',
+          properties: {[typesProp.name]: [PAGE_TYPE], [aliasesProp.name]: ['Shared']}})
+        await tx.create({id: SHARED, workspaceId: WS, parentId: SHARED_PAGE, orderKey: 'a0', content: 'Cite sources.'})
+        await tx.create({id: SHARED_CHILD, workspaceId: WS, parentId: SHARED, orderKey: 'a0', content: 'As links.'})
+      }, opts)
+      const memoryId = await repo.mutate.createChild({parentId: CLAUDE, content: 'Memory'})
+      for (const note of notes) await repo.mutate.createChild({parentId: memoryId, content: note})
+      await repo.awaitProcessors()
+      return memoryId
+    }
+
+    const replyText = async () => (await db.db.getAll<{content: string}>(
+      `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
+      [MENTION],
+    )).map(row => row.content).join('\n')
+
+    const runOnce = async (run: (prompt: string) => Promise<void>) => {
+      const prompts: string[] = []
+      const engine = engineFor(async options => {
+        prompts.push(options.prompt)
+        await run(options.prompt)
+        return result({resultText: 'Done.'})
+      })
+      await engine.tick()
+      await engine.drain()
+      return prompts
+    }
+
+    const edit = (id: string, content: string) => inProcessClient().runCommand({type: 'update-block', id, content})
+
+    it.each([
+      ['a block embed', `!((${SHARED}))`, SHARED],
+      ['a page embed', '![[Shared]]', SHARED_PAGE],
+    ])('shows the notes %s brings in as shared, and reports an edit made through one', async (_, embed, shownRoot) => {
+      await seedMemory(embed)
+      const prompts = await runOnce(async () => {
+        await edit(SHARED_CHILD, 'As links, never bare URLs.')
+      })
+
+      expect(prompts[0]).toContain(`^${shownRoot}`)
+      // The notes a page embed brings in, not just its title.
+      expect(prompts[0]).toContain(`Cite sources.  ^${SHARED}`)
+      expect(prompts[0]).toContain('↳ embedded; lives in:')
+      expect(prompts[0]).toMatch(/"↳ embedded; lives in: …" is a shared note/)
+      expect(await replyText()).toContain(`Memory changed during this run: edited [As links, never bare URLs.](((${SHARED_CHILD})))`)
+    })
+
+    it('reports no edit to a block of another workspace: embedded, under the memory block or under a shared note', async () => {
+      await repo.tx(async tx => {
+        await tx.create({id: FOREIGN, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere.'})
+        await tx.create({id: FOREIGN_CHILD, workspaceId: 'ws-2', parentId: FOREIGN, orderKey: 'a0', content: 'Foreign child.'})
+        await tx.create({id: FOREIGN_NOTE, workspaceId: 'ws-2', parentId: FOREIGN, orderKey: 'a1', content: 'Foreign note.'})
+      }, {...opts, allowUnloadedWorkspace: true})
+      const memoryId = await seedMemory(`!((${FOREIGN}))`, `!((${SHARED}))`)
+      // Rows as sync applies them, verbatim: blocks of another workspace
+      // under the memory block and under a shared note.
+      await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [SHARED, FOREIGN_CHILD])
+      await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [memoryId, FOREIGN_NOTE])
+
+      await runOnce(async () => {
+        await db.db.execute('UPDATE blocks SET content = ? WHERE id IN (?, ?, ?)', ['Changed.', FOREIGN, FOREIGN_CHILD, FOREIGN_NOTE])
+        await edit(SHARED, 'Cite sources, always.')
+      })
+
+      expect((await repo.load(FOREIGN))?.content).toBe('Changed.')
+      expect(await replyText()).toMatch(new RegExp(
+        `^Memory changed during this run: edited \\[Cite sources, always\\.\\]\\(\\(\\(${SHARED}\\)\\)\\)$`, 'm'))
+    })
+
+    it('reports a note once when the memory embeds one of its own', async () => {
+      const memoryId = await seedMemory('Topic', `!((${OWN_DEEP}))`)
+      const [topic] = await repo.query['core.childIds']({id: memoryId}).load()
+      await repo.tx(async tx => {
+        const sub = await tx.create({workspaceId: WS, parentId: topic, orderKey: 'a0', content: 'Subtopic'})
+        await tx.create({id: OWN_DEEP, workspaceId: WS, parentId: sub, orderKey: 'a0', content: 'Deep note.'})
+      }, opts)
+
+      const prompts = await runOnce(async () => {
+        await edit(OWN_DEEP, 'Deep note, revised.')
+      })
+
+      // Shown as a row the embed brings in, so it is a shared note too.
+      expect(prompts[0]).toMatch(new RegExp(`Deep note\\.  \\^${OWN_DEEP}\\n\\s*↳ embedded`))
+      expect(await replyText()).toMatch(new RegExp(
+        `^Memory changed during this run: edited \\[Deep note, revised\\.\\]\\(\\(\\(${OWN_DEEP}\\)\\)\\)$`, 'm'))
+    })
+
+    it('reports an embed the run adds or removes as that note, not as the shared notes appearing or going', async () => {
+      const memoryId = await seedMemory(`!((${SHARED}))`)
+      const [embedRow] = await repo.query['core.childIds']({id: memoryId}).load()
+      await runOnce(async () => {
+        await inProcessClient().runCommand({type: 'delete-block', id: embedRow})
+        await inProcessClient().runCommand({type: 'append-markdown', target: memoryId, markdown: '![[Shared]]'})
+      })
+
+      const text = await replyText()
+      expect(text).toMatch(/Memory changed during this run: saved \[embedded Shared\]\(\(\([\w-]+\)\)\); removed "embedded block" \(`[\w-]+`\)$/m)
+    })
+  })
 })
 
 describe('dispatch writes and the person\'s undo stack', () => {
