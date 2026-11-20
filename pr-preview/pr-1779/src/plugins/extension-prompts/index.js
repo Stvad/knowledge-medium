@@ -1,1 +1,1 @@
-export{oF as ExtensionPromptSurface,sF as extensionPromptsExtension}from"../../../chunks/app-BRU_m-vA.js";
+export{oF as ExtensionPromptSurface,sF as extensionPromptsExtension}from"../../../chunks/app-bAaplrjn.js";

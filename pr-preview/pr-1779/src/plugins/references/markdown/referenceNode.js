@@ -1,1 +1,1 @@
-export{Lb as EmbedComponent,Rb as referenceTargetOf}from"../../../../chunks/app-BRU_m-vA.js";
+export{Lb as EmbedComponent,Rb as referenceTargetOf}from"../../../../chunks/app-bAaplrjn.js";

@@ -1,1 +1,1 @@
-export{Rf as quotedInFooterContribution}from"../../../chunks/app-BRU_m-vA.js";
+export{Rf as quotedInFooterContribution}from"../../../chunks/app-bAaplrjn.js";

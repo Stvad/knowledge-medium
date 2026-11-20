@@ -1,1 +1,1 @@
-export{KI as BlockLoadingPlaceholder}from"../../chunks/app-BRU_m-vA.js";
+export{KI as BlockLoadingPlaceholder}from"../../chunks/app-bAaplrjn.js";

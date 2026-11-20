@@ -1,1 +1,1 @@
-export{Kr as extensionsDataExtension}from"../../../chunks/app-BRU_m-vA.js";
+export{Kr as extensionsDataExtension}from"../../../chunks/app-bAaplrjn.js";

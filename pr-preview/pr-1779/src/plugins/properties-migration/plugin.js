@@ -1,1 +1,1 @@
-export{Ko as propertiesMigrationPlugin}from"../../../chunks/app-BRU_m-vA.js";
+export{Ko as propertiesMigrationPlugin}from"../../../chunks/app-bAaplrjn.js";

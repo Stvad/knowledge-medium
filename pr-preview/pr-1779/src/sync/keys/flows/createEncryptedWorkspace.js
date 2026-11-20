@@ -1,1 +1,1 @@
-export{jD as createEncryptedWorkspace}from"../../../../chunks/app-BRU_m-vA.js";
+export{jD as createEncryptedWorkspace}from"../../../../chunks/app-bAaplrjn.js";

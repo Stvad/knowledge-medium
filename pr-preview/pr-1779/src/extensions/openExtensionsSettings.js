@@ -1,1 +1,1 @@
-export{pL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,mL as openExtensionsSettings}from"../../chunks/app-BRU_m-vA.js";
+export{pL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,mL as openExtensionsSettings}from"../../chunks/app-bAaplrjn.js";
