@@ -1,1 +1,0 @@
-export{DF as resolveAppRuntime,OF as resolveAppRuntimeSync}from"../../chunks/app-DTCf7gv4.js";

@@ -1,1 +1,0 @@
-export{hf as quotedInFooterContribution}from"../../../chunks/app-BFmexsxb.js";

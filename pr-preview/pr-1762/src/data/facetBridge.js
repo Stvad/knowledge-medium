@@ -1,1 +1,0 @@
-export{v4 as FacetBridge}from"../../chunks/app-BFmexsxb.js";

@@ -1,1 +1,0 @@
-export{oft as CHANGE_SCOPE_POLICIES,sft as ChangeScope,cft as isChangeScope,lft as policyForScope,uft as scopeAllowedInReadOnly,dft as scopeIsUndoable,fft as scopePoliciesEquivalent,pft as scopeUploadsToServer,mft as sourceForScope}from"../../../chunks/app-DTCf7gv4.js";

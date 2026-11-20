@@ -1,1 +1,0 @@
-export{MP as approveExtensionHere}from"../../chunks/app-BFmexsxb.js";

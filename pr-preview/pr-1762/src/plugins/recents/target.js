@@ -1,1 +1,0 @@
-export{LO as openRecentsPage}from"../../../chunks/app-BFmexsxb.js";

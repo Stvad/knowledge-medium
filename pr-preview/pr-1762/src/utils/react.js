@@ -1,1 +1,0 @@
-export{aR as useIsMobile,oR as usePointerCoarse}from"../../chunks/app-BFmexsxb.js";

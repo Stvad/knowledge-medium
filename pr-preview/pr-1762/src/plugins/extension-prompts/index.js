@@ -1,1 +1,0 @@
-export{CP as ExtensionPromptSurface,wP as extensionPromptsExtension}from"../../../chunks/app-BFmexsxb.js";

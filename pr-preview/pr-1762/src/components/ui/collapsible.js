@@ -1,1 +1,0 @@
-"use client";export{pV as Collapsible,mV as CollapsibleContent,hV as CollapsibleTrigger}from"../../../chunks/app-BFmexsxb.js";

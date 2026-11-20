@@ -1,1 +1,0 @@
-export{nft as CHANGE_SCOPE_POLICIES,rft as ChangeScope,ift as isChangeScope,aft as policyForScope,oft as scopeAllowedInReadOnly,sft as scopeIsUndoable,cft as scopePoliciesEquivalent,lft as scopeUploadsToServer,uft as sourceForScope}from"../../../chunks/app-BFmexsxb.js";

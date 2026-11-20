@@ -1,1 +1,0 @@
-export{m8 as kernelDataExtension}from"../../chunks/app-BFmexsxb.js";

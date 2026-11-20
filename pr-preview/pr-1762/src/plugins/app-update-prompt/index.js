@@ -1,1 +1,0 @@
-export{LP as appUpdatePromptExtension}from"../../../chunks/app-BFmexsxb.js";

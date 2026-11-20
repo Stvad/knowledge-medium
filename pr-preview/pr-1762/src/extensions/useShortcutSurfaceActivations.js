@@ -1,1 +1,0 @@
-export{iz as useShortcutSurfaceActivations}from"../../chunks/app-BFmexsxb.js";

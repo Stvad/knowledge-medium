@@ -1,1 +1,0 @@
-export{CM as CommandPaletteHeaderItem}from"../../../chunks/app-BFmexsxb.js";

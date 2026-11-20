@@ -1,1 +1,0 @@
-export{JG as usePropertySchemas}from"../../chunks/app-BFmexsxb.js";

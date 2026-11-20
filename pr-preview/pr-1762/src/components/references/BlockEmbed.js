@@ -1,1 +1,0 @@
-export{gN as BlockEmbed}from"../../../chunks/app-BFmexsxb.js";

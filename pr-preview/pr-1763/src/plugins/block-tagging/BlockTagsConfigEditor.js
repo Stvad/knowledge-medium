@@ -1,1 +1,0 @@
-export{Bu as BlockTagsConfigEditor}from"../../../chunks/app-DTCf7gv4.js";

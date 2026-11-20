@@ -1,1 +1,0 @@
-export{_V as BlockProperties}from"../../chunks/app-BFmexsxb.js";

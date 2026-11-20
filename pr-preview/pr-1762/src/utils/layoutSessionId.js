@@ -1,1 +1,0 @@
-export{rat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,iat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,aat as __resetLayoutSessionIdForTesting,oat as getLayoutSessionId,sat as isInstalledAppDisplayMode,cat as readOrCreateLayoutSessionId}from"../../chunks/app-BFmexsxb.js";

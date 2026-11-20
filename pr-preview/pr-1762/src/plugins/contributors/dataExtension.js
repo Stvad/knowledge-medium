@@ -1,1 +1,0 @@
-export{yQ as contributorsDataExtension}from"../../../chunks/app-BFmexsxb.js";

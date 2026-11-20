@@ -1,1 +1,0 @@
-export{oU as MOBILE_BREAKPOINT_QUERY,sU as POINTER_COARSE_QUERY,cU as isMobileViewport,lU as isPointerCoarse}from"../../chunks/app-DTCf7gv4.js";

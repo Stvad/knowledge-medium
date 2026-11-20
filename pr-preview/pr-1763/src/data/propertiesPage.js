@@ -1,1 +1,0 @@
-export{Pot as getOrCreatePropertiesPage,Fot as propertiesPageBlockId,Iot as propertiesPageSpec}from"../../chunks/app-DTCf7gv4.js";

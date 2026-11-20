@@ -1,1 +1,0 @@
-export{sF as dispatchPointerAction,cF as setPointerActionDispatcher}from"../../chunks/app-BFmexsxb.js";

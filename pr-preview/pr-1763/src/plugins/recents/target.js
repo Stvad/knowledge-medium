@@ -1,1 +1,0 @@
-export{WO as openRecentsPage}from"../../../chunks/app-DTCf7gv4.js";

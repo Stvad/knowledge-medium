@@ -1,1 +1,0 @@
-export{zQ as characterCounterDataExtension}from"../../../chunks/app-BFmexsxb.js";

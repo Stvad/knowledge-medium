@@ -1,1 +1,0 @@
-export{mE as WorkspaceSwitcherSidebarSection,hE as pendingInvitationsHeaderItem,gE as workspaceHeaderPlugin,_E as workspaceSwitcherSidebarSection}from"../../../chunks/app-DTCf7gv4.js";

@@ -1,1 +1,0 @@
-export{yat as MIGRATIONS_PAGE_ALIAS,bat as getOrCreateMigrationsPage,xat as migrationsPageBlockId,Sat as migrationsPageSpec}from"../../chunks/app-BFmexsxb.js";

@@ -1,1 +1,0 @@
-export{Bv as blockInfoPlugin}from"../../../chunks/app-DTCf7gv4.js";

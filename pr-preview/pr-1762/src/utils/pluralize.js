@@ -1,1 +1,0 @@
-export{B5 as agree,V5 as pluralize}from"../../chunks/app-BFmexsxb.js";

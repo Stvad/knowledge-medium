@@ -1,1 +1,0 @@
-export{Pot as DerivedIdNamespaceUnavailableError,Fot as derivedIdNamespaceInTx,Iot as resolveDerivedIdNamespace}from"../../chunks/app-BFmexsxb.js";

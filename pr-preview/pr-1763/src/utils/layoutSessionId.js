@@ -1,1 +1,0 @@
-export{cat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,lat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,uat as __resetLayoutSessionIdForTesting,dat as getLayoutSessionId,fat as isInstalledAppDisplayMode,pat as readOrCreateLayoutSessionId}from"../../chunks/app-DTCf7gv4.js";

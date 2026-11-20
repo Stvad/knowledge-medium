@@ -1,1 +1,0 @@
-"use client";export{bV as Collapsible,xV as CollapsibleContent,SV as CollapsibleTrigger}from"../../../chunks/app-DTCf7gv4.js";

@@ -1,1 +1,0 @@
-export{XT as usePromotableBreadcrumb}from"../../../chunks/app-BFmexsxb.js";

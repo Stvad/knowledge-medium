@@ -1,1 +1,0 @@
-export{SC as videoPlayerMarkdownExtension}from"../../../chunks/app-BFmexsxb.js";

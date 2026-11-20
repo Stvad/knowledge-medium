@@ -1,1 +1,0 @@
-export{$G as floatingAnchorFromRect,eK as useAnchoredFloating}from"../../../chunks/app-DTCf7gv4.js";

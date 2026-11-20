@@ -1,1 +1,0 @@
-export{Mot as aliasSeatNamespacesInTx,Not as resolveAliasSeatNamespaces}from"../../chunks/app-BFmexsxb.js";
