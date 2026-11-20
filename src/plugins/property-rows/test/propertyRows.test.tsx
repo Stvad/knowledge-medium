@@ -545,6 +545,35 @@ describe('resetting the block switch', () => {
 })
 
 describe('switching views', () => {
+  it.each(['before', 'after'] as const)('hides a field when focus moves to the owner %s narrowing the block view', async focusTiming => {
+    const owner = repo.block(OWNER)
+    const secret = await fieldRow(secretProp.name)
+    const [value] = await repo.query.children({id: secret.id}).load()
+    await setBlockPropertyDisplay([owner], 'all')
+    mount()
+    await screen.findByText(propertyDisplayProp.name)
+    const note = await outlineSettled()
+
+    const status = await fieldRow(statusProp.name)
+    const [statusValue] = await repo.query.children({id: status.id}).load()
+    await act(() => focusBlock(repo.block(PANEL), statusValue.id, {edit: true}))
+    await editorFor(statusValue.id)
+    await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
+    const editor = await editorFor(value.id)
+    const focusOwner = () => act(() => focusBlock(repo.block(PANEL), OWNER))
+    if (focusTiming === 'before') await focusOwner()
+
+    await act(() => setBlockPropertyDisplay([owner], 'non-hidden'))
+    if (focusTiming === 'after') {
+      await waitFor(() => expect(shownRows()).not.toContain(propertyDisplayProp.name))
+      expect(await editorFor(value.id)).toBe(editor)
+      await focusOwner()
+    }
+
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
+    expect(screen.getByText('a note')).toBe(note)
+  })
+
   it('keeps the children both views show mounted across show-non-hidden → show-all', async () => {
     const view = mount({workspace: 'non-hidden'})
     await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
