@@ -1,1 +1,1 @@
-export{Cx as attachmentsPlugin}from"../../../chunks/app-By7M7RmE.js";
+export{Tx as attachmentsPlugin}from"../../../chunks/app-Bo90AGWM.js";

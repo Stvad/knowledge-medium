@@ -1,1 +1,1 @@
-export{AM as CommandPaletteHeaderItem}from"../../../chunks/app-By7M7RmE.js";
+export{MM as CommandPaletteHeaderItem}from"../../../chunks/app-Bo90AGWM.js";
