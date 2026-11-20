@@ -10,6 +10,7 @@ import { createPropertyRenderer, formatPropertyPairs, type PropertyLine } from '
 import { idMark } from './displayIds.ts'
 import { clampInt, crumbLine, joinDisplayLines, loadRoot, siblingLines } from './shared.ts'
 import { formatCount, snippet } from './text.ts'
+import { createRefResolver, refSuffix, REFS_LEGEND, ROW_REFS, type RowRefs } from './refs.ts'
 
 export interface SearchParams {
   query: string
@@ -18,6 +19,8 @@ export interface SearchParams {
   types?: string[]
   under?: string
   includeExtensions?: boolean
+  /** Note each reference's text after its hit (default true). */
+  expandRefs?: boolean
 }
 
 export interface SearchDuplicate {
@@ -27,7 +30,7 @@ export interface SearchDuplicate {
   place: string | null
 }
 
-export interface SearchHit {
+export interface SearchHit extends RowRefs {
   id: string
   breadcrumb: string[]
   snippet: string
@@ -169,8 +172,9 @@ export const buildSearchView = async (
   const shown = page.map(group => group[0])
   const shownIds = shown.map(block => block.id)
   const duplicateIds = page.flatMap(group => group.slice(1, 1 + MAX_DUPLICATES_SHOWN).map(block => block.id))
-  const [renderer, crumbs, siblings] = await Promise.all([
+  const [renderer, refs, crumbs, siblings] = await Promise.all([
     createPropertyRenderer(repo, shown, 'brief'),
+    createRefResolver(repo, workspaceId, shown.map(block => block.content), params.expandRefs !== false),
     loadCrumbs(repo, [...shownIds, ...duplicateIds], workspaceId),
     recordSiblings(repo, shownIds, records, workspaceId),
   ])
@@ -192,6 +196,7 @@ export const buildSearchView = async (
         id: block.id,
         breadcrumb: crumbs.get(block.id) ?? [],
         snippet: snippet(block.content, params.query),
+        ...refs.notes(block.content, ROW_REFS),
         types: renderer.typeLabels(block),
         properties: properties.visible,
         omittedProperties: properties.omitted,
@@ -242,9 +247,10 @@ export const renderSearchView = (view: SearchView): string => {
       ? `  (+${formatCount(hit.duplicateCount)}${view.duplicateCountsComplete ? '' : ' or more'} identical: ${listed.join('; ')}${unlisted > 0 ? `; …+${formatCount(unlisted)} more` : ''})`
       : ''
     lines.push(`${view.offset + index + 1}. ${idMark(hit.id)}  ${crumbLine(hit.breadcrumb)}${duplicates}`)
-    lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}`)
+    lines.push(`   ${hit.snippet}${meta ? `  ${meta}` : ''}${refSuffix(hit)}`)
     lines.push(...siblingLines(hit.siblings))
   })
   if (capNote) lines.push(capNote)
+  if (view.hits.some(hit => hit.refs.length > 0)) lines.push(REFS_LEGEND)
   return joinDisplayLines(lines)
 }
