@@ -104,6 +104,7 @@ describe('contentMarks', () => {
   it('leaves out references inside code, which the renderer shows as text', () => {
     const id = uuid('c0000001', 4)
     expect(contentMarks(`\`![[Shared]]\` and \`((${id}))\`\n\n\`\`\`\n!((${id}))\n\`\`\``)).toEqual([])
+    expect(contentMarks(`>     ![[Shared]]\n\n-     ((${id}))`)).toEqual([])
     expect(contentMarks(`\`code\` then ((${id}))`)).toEqual([{kind: 'ref', id}])
   })
 

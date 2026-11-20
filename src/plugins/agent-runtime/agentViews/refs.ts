@@ -30,14 +30,14 @@ export type ContentMark =
   | {kind: 'ref' | 'embed', id: string}
   | {kind: 'page-embed', alias: string}
 
-/** Cheap pre-checks, so the common block (no reference, no code) parses nothing. */
+/** A cheap pre-check, so the common block (no reference) parses nothing. Code
+ *  gets none: what is code is CommonMark's to decide (an indented block inside
+ *  a quote or a list item), and only content with a reference pays for it. */
 const MAYBE_MARK = /\(\(|!\[\[/
-const MAYBE_CODE = /`|~~~|^(?: {4}|\t)/m
 
 /** `content` with its code spans and blocks blanked, offsets kept: the
  *  renderer shows a reference inside code as literal text. */
 const withoutCode = (content: string): string => {
-  if (!MAYBE_CODE.test(content)) return content
   const ranges: Array<[number, number]> = []
   visit(unified().use(remarkParse).parse(content), ['code', 'inlineCode'], node => {
     const start = node.position?.start.offset
