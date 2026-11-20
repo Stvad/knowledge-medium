@@ -1,1 +1,1 @@
-export{II as defaultRegistry,PI as refreshRendererRegistry,FI as useRenderer}from"../../chunks/app-8hMDne2u.js";
+export{YI as defaultRegistry,qI as refreshRendererRegistry,JI as useRenderer}from"../../chunks/app-D_kWQoYj.js";
