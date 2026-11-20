@@ -1,0 +1,1 @@
+export{NE as usePromotableBreadcrumb}from"../../../chunks/app-BRU_m-vA.js";

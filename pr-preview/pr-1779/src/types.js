@@ -1,0 +1,1 @@
+export{Act as isChildBackedPropertiesWorkspace}from"../chunks/app-BRU_m-vA.js";

@@ -1,0 +1,1 @@
+export{My as backlinksPlugin}from"../../../chunks/app-BRU_m-vA.js";

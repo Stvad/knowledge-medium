@@ -1,0 +1,1 @@
+export{gN as SwipeActionMenu}from"../../../chunks/app-BRU_m-vA.js";

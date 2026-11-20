@@ -1,0 +1,1 @@
+export{wf as resolveDailyPage}from"../../../chunks/app-BRU_m-vA.js";

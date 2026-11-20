@@ -1,0 +1,1 @@
+export{i0 as aliasDataExtension}from"../../../chunks/app-BRU_m-vA.js";

@@ -1,0 +1,1 @@
+export{nn as typeChipsDecoratorContribution}from"../../../chunks/app-BRU_m-vA.js";

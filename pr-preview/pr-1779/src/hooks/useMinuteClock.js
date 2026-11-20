@@ -1,0 +1,1 @@
+export{_k as useMinuteClock}from"../../chunks/app-BRU_m-vA.js";

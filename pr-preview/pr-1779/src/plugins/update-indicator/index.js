@@ -1,0 +1,1 @@
+export{vy as updateIndicatorPlugin}from"../../../chunks/app-BRU_m-vA.js";

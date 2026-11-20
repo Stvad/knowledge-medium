@@ -1,0 +1,1 @@
+export{bF as appUpdatePromptExtension}from"../../../chunks/app-BRU_m-vA.js";

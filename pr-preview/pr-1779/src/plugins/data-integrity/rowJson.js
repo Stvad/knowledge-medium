@@ -1,0 +1,1 @@
+export{yc as parsePropertiesJson}from"../../../chunks/app-BRU_m-vA.js";

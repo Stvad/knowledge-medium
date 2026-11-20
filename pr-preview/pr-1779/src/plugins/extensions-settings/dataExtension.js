@@ -1,0 +1,1 @@
+export{Kr as extensionsDataExtension}from"../../../chunks/app-BRU_m-vA.js";

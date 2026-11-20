@@ -1,0 +1,1 @@
+export{Rf as quotedInFooterContribution}from"../../../chunks/app-BRU_m-vA.js";

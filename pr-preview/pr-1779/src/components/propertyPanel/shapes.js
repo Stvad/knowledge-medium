@@ -1,0 +1,1 @@
+export{FK as propertyShapeLabel}from"../../../chunks/app-BRU_m-vA.js";

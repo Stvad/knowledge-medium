@@ -1,0 +1,1 @@
+export{WF as dispatchPointerAction,GF as setPointerActionDispatcher}from"../../chunks/app-BRU_m-vA.js";

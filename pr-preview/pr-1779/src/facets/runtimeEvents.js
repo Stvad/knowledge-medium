@@ -1,0 +1,1 @@
+export{zK as appRuntimeUpdateEvent,BK as refreshAppRuntime}from"../../chunks/app-BRU_m-vA.js";

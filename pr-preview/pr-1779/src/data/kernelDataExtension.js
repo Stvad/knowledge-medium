@@ -1,0 +1,1 @@
+export{r5 as kernelDataExtension}from"../../chunks/app-BRU_m-vA.js";

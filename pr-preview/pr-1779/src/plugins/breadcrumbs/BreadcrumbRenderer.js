@@ -1,0 +1,1 @@
+export{FE as BreadcrumbRenderer}from"../../../chunks/app-BRU_m-vA.js";

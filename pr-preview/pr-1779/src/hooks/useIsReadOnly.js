@@ -1,0 +1,1 @@
+export{bx as useIsReadOnly}from"../../chunks/app-BRU_m-vA.js";

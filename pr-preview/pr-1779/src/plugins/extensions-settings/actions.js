@@ -1,0 +1,1 @@
+export{ri as openExtensionsSettingsAction}from"../../../chunks/app-BRU_m-vA.js";

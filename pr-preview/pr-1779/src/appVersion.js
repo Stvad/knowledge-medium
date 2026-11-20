@@ -1,0 +1,1 @@
+export{hl as appVersion}from"../chunks/app-BRU_m-vA.js";

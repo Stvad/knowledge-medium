@@ -1,0 +1,1 @@
+export{EP as ensureMetricsConsoleHook}from"../../chunks/app-BRU_m-vA.js";

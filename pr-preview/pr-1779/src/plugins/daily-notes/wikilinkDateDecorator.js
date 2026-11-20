@@ -1,0 +1,1 @@
+export{aj as dailyDateWikilinkDecorator}from"../../../chunks/app-BRU_m-vA.js";

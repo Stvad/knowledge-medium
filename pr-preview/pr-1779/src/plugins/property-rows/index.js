@@ -1,0 +1,1 @@
+export{xo as propertyRowsPlugin}from"../../../chunks/app-BRU_m-vA.js";

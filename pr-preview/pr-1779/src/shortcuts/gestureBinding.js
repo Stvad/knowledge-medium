@@ -1,0 +1,1 @@
+export{HF as gestureBindingDescriptor,UF as matchesGestureEvent}from"../../chunks/app-BRU_m-vA.js";

@@ -1,0 +1,1 @@
+export{MQ as annotationMarginOpenProp,NQ as annotationMarginShareProp}from"../../../chunks/app-BRU_m-vA.js";

@@ -1,0 +1,1 @@
+export{YI as defaultRegistry,XI as defaultRendererContributions,ZI as defaultRenderersExtension}from"../../chunks/app-BRU_m-vA.js";

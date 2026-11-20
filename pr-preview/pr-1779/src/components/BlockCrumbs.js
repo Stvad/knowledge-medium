@@ -1,0 +1,1 @@
+export{Wk as BlockCrumbs}from"../../chunks/app-BRU_m-vA.js";

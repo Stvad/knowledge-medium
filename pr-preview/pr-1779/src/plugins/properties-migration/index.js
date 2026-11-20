@@ -1,0 +1,1 @@
+export{Xo as migratePropertiesToBlocksAction,Ko as propertiesMigrationPlugin}from"../../../chunks/app-BRU_m-vA.js";

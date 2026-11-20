@@ -1,0 +1,1 @@
+export{ZJ as htmlDocumentTypeSeed}from"../../../chunks/app-BRU_m-vA.js";

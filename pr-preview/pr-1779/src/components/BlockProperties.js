@@ -1,0 +1,1 @@
+export{eH as BlockProperties}from"../../chunks/app-BRU_m-vA.js";

@@ -1,0 +1,1 @@
+export{Gw as vimLinkHintsPlugin}from"../../../chunks/app-BRU_m-vA.js";

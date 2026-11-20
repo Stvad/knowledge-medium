@@ -1,0 +1,1 @@
+export{ma as ResponsivenessTotals,ha as SLOW_MS,ga as observeResponsiveness}from"../../../chunks/app-BRU_m-vA.js";

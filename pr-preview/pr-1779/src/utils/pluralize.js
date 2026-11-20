@@ -1,0 +1,1 @@
+export{k7 as agree,A7 as pluralize}from"../../chunks/app-BRU_m-vA.js";

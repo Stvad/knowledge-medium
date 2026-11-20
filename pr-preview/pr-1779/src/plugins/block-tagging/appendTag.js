@@ -1,0 +1,1 @@
+export{ad as appendTagToBlocks,od as appendTagToContent}from"../../../chunks/app-BRU_m-vA.js";
