@@ -2293,6 +2293,28 @@ describe('markStale()', () => {
   })
 })
 
+describe('markStale() on a handle that asked to rerun', () => {
+  it('re-runs it for its subscriber at once', async () => {
+    const store = makeStore()
+    let v = 1
+    const h = store.getOrCreate('stale-eager', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-eager',
+        loader: async (ctx) => { ctx.depend({ kind: 'row', id: 'r1' }); return v },
+      }),
+    )
+    h.rerunOnStaleMark()
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await waitFor(() => expect(fired).toEqual([1]))
+
+    v = 2
+    store.markStale({ rowIds: ['r1'] })
+    await waitFor(() => expect(fired).toEqual([1, 2]))
+  })
+})
+
 describe('markStale() during a load', () => {
   it('lets a subscribed load in flight settle stale instead of running it again', async () => {
     const store = makeStore()

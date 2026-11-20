@@ -398,7 +398,8 @@ export class HandleStore {
   /** Everything `invalidate(change)` would invalidate is marked out of date,
    *  and nothing is re-run: a caller that then awaits `load()` or `loadFresh()`
    *  gets a fresh result, while subscribers keep their current value until an
-   *  `invalidate` covering the same change follows. For a producer that
+   *  `invalidate` covering the same change follows — except a handle that
+   *  asked for `rerunOnStaleMark`, which is re-run now. For a producer that
    *  commits faster than its subscribers' loaders are worth re-running — the
    *  producer owes that later `invalidate`. */
   markStale(change: ChangeNotification): void {
@@ -539,6 +540,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  stale mark overlapped settles STALE, with no rerun — the rerun is what
    *  `markStale`'s caller is holding back. */
   private staleMarkedDuringLoad = false
+  private rerunsOnStaleMark = false
   private staleMarksDuringLoad: ChangeNotification[] = []
 
   /** Set when an invalidation lands on a handle with zero subscribers
@@ -997,8 +999,20 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (this.inflight) this.staleMarksDuringLoad.push(change)
   }
 
+  /** From now on a stale mark re-runs this handle at once, as `invalidate`
+   *  would. For a subscriber whose notifications feed what local writes are
+   *  decided from: it cannot be left behind a mark the way a view can. Sticky
+   *  for the handle's life, since it is the subscriber's need, not a mode. */
+  rerunOnStaleMark(): void {
+    this.rerunsOnStaleMark = true
+  }
+
   markStale(): void {
     if (this.disposed) return
+    if (this.rerunsOnStaleMark) {
+      this.invalidate()
+      return
+    }
     // A load in flight may have read before the change committed, so it must
     // not settle as current — and must not rerun either.
     if (this.inflight) this.staleMarkedDuringLoad = true
