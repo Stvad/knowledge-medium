@@ -166,7 +166,10 @@ const App = () => {
   if (initial.kind === 'syncing') {
     return (
       <WorkspaceSyncGate
-        key={initial.workspaceId}
+        // One instance per workspace AND phase: the gate opens at most once, so
+        // the instance that opened for the row must not carry into the wait
+        // for the first sync.
+        key={`${initial.workspaceId}:${initial.awaitingRow}`}
         workspaceId={initial.workspaceId}
         workspaceName={initial.workspaceName}
         awaitingRow={initial.awaitingRow}
