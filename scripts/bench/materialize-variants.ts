@@ -114,14 +114,16 @@ export const readPragma = async (db: PowerSyncDb, name: string) => {
   return {writer: pick(writer?.rows?._array ?? []), reader: pick(reader)}
 }
 
-export const cacheInfo = async (db: PowerSyncDb) => {
+/** `connections` is how many connections hold a cache of their own: on a
+ *  single-connection runner the writer and reader pragmas describe one cache. */
+export const cacheInfo = async (db: PowerSyncDb, connections: 1 | 2) => {
   const pageSize = Number((await readPragma(db, 'page_size')).reader)
   const pageCount = Number((await readPragma(db, 'page_count')).reader)
   const cache = await readPragma(db, 'cache_size')
   const fileKb = Math.round(pageSize * pageCount / 1024)
   // cache_size < 0 means KiB, > 0 means pages
   const kb = (v: unknown) => (Number(v) < 0 ? -Number(v) : Number(v) * pageSize / 1024)
-  const cachedKb = kb(cache.writer) + kb(cache.reader)
+  const cachedKb = connections === 1 ? kb(cache.writer) : kb(cache.writer) + kb(cache.reader)
   return {
     pageSize, pageCount, fileKb, cacheSize: cache,
     cachedFraction: fileKb > 0 ? round(Math.min(1, cachedKb / fileKb)) : null,
@@ -139,6 +141,8 @@ export interface VariantSample {
 }
 
 export interface VariantEnv {
+  /** Connections with their own page cache (writer, plus a reader if any). */
+  connections: 1 | 2
   db: PowerSyncDb
   resetDb: () => Promise<void>
   fixture: MaterializeFixture
@@ -182,7 +186,7 @@ export const runVariantSamples = async (env: VariantEnv, reps: number) => {
         })
         const validation = await validateMaterializeDb(db, fixture, {skipDerivedReferenceChecks})
         const extra: Record<string, unknown> = {...variantInfo}
-        if (options.cacheKb !== undefined || options.dropIndexes) extra.cache = await cacheInfo(db)
+        if (options.cacheKb !== undefined || options.dropIndexes) extra.cache = await cacheInfo(db, env.connections)
         if (options.dropIndexes) extra.droppedIndexNames = indexes.map(i => i.name)
         if (options.rebuildDerived) {
           const before = await derivedCounts(db)

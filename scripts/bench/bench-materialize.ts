@@ -96,6 +96,7 @@ const main = async () => {
     for (const mode of modes) prepared.set(mode, await makeMaterializeWireRows(fixture, mode, key))
     await runVariantSamples({
       db, resetDb: () => resetTestDb(env.db), fixture, key, prepared, options,
+      connections: 2,
       onSample: ({scenario, mode, sample, result, validation, extra}) => {
         if (sample >= 0) printMetric(scenario, mode, records, result, validation, window, extra)
       },

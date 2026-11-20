@@ -13,6 +13,7 @@ import type { InvalidationRule } from '@/data/invalidation'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import { constMat, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
 import type { SyncDrainStats } from './observer.js'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -872,6 +873,27 @@ describe('blocksSyncedObserver — handle invalidation during a backlog', () => 
     expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3', 'b4']])
     // The cache is not part of what waits.
     expect(cache.getSnapshot('b4')).toMatchObject({ content: 'c4' })
+  })
+
+  it('delivers the first window of a later drain at once too', async () => {
+    await stageFive()
+    const { observer, notifications } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
+    })
+    await observer.flush()
+    notifications.length = 0
+
+    // One transaction, so the second batch is one delivery and one drain.
+    await env.db.writeTransaction(async (tx) => {
+      for (let i = 5; i < 10; i++) {
+        await tx.execute(
+          BLOCKS_SYNCED_RAW_TABLE.put.sql,
+          blockToSyncedRowParams(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` })),
+        )
+      }
+    })
+    await observer.flush()
+    expect(notifications.map(rowIds)).toEqual([['b5', 'b6'], ['b7', 'b8', 'b9']])
   })
 
   it('delivers every window once the interval has passed', async () => {

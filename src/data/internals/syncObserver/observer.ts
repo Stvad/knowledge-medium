@@ -404,6 +404,8 @@ export const startBlocksSyncedObserver = (
       readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
     }
     const startedAt = performance.now()
+    // Per drain, not per observer: each drain's first window delivers at once.
+    invalidationsDeliveredAt = -Infinity
     try {
       const result = await drain(meter)
       meter.completed = true

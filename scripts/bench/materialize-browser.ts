@@ -93,11 +93,18 @@ export async function runBrowserMaterializeBench(
     for (const mode of options.modes) prepared.set(mode, await core.makeMaterializeWireRows(fixture, mode, key))
     await runVariantSamples({
       db: testDb, fixture, key, prepared, options, getCek: resolver.getCek,
+      connections: vfs === 'write-ahead' ? 2 : 1,
       resetDb: () => db.writeTransaction(async tx => {
         await tx.execute('DELETE FROM blocks')
         await tx.execute('DELETE FROM blocks_synced')
         await tx.execute('DELETE FROM blocks_synced_changes')
         await tx.execute('DELETE FROM row_events')
+        // Not left to the delete triggers: a variant may have dropped them.
+        const derived = ['block_aliases', 'block_references', 'block_types', 'blocks_fts', 'blocks_fts_rowids']
+        const present = await tx.getAll<{name: string}>(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${derived.map(() => '?').join(', ')})`, derived,
+        )
+        for (const {name} of present) await tx.execute(`DELETE FROM ${name}`)
       }),
       onSample: ({mode, scenario, sample, result, validation, extra}) => {
         if (sample < 0) return
