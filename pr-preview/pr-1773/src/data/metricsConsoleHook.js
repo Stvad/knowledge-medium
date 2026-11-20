@@ -1,1 +1,1 @@
-export{EP as ensureMetricsConsoleHook}from"../../chunks/app-D_kWQoYj.js";
+export{EP as ensureMetricsConsoleHook}from"../../chunks/app-lwi3Y0dD.js";
