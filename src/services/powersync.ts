@@ -215,7 +215,33 @@ const assertSupabase = () => {
   return supabase
 }
 
-/** Re-throw a Supabase/PostgREST error with the HTTP `status` attached.
+/** A failed PostgREST upload request, as a named `Error`.
+ *
+ *  postgrest-js returns its errors as plain objects (the PostgREST envelope, or
+ *  any other JSON error body as is). PowerSync's worker reports a thrown value
+ *  without a string `name` and `message` as "Non-Error rejection", dropping the
+ *  message, so the upload path never throws those objects raw. `toJSON` is the
+ *  envelope a quarantine record stores in `ps_crud_rejected.error_message`,
+ *  which the rejection dialog parses back into message, code, details and hint. */
+class PostgrestUploadError extends Error {
+  readonly code: unknown
+  readonly details: unknown
+  readonly hint: unknown
+
+  constructor(body: Record<string, unknown>, readonly status: number) {
+    super(typeof body.message === 'string' && body.message !== '' ? body.message : JSON.stringify(body))
+    this.name = 'PostgrestError'
+    this.code = body.code
+    this.details = body.details
+    this.hint = body.hint
+  }
+
+  toJSON() {
+    return {message: this.message, code: this.code, details: this.details, hint: this.hint, status: this.status}
+  }
+}
+
+/** Throw a Supabase/PostgREST error with the HTTP `status` attached.
  *
  *  PostgREST returns the HTTP status as a SIBLING of `{error}` in the
  *  response tuple — it is never a field on the `PostgrestError` object
@@ -227,13 +253,9 @@ const assertSupabase = () => {
  *  PowerSync would retry the same batch forever — the original queue jam. With
  *  the status attached, the classifier routes a non-retryable 4xx to
  *  `ambiguous` (bounded retry, then quarantine) and keeps the retryable subset
- *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190.
- *
- *  It is thrown as a named `Error` because postgrest-js returns its errors as
- *  plain objects, and PowerSync's worker reports a thrown value without a
- *  string `name` as "Non-Error rejection", dropping the message. */
-const throwWithHttpStatus = (error: {message: string}, status: number): never => {
-  throw Object.assign(new Error(error.message), {...error, name: 'PostgrestError', status})
+ *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190. */
+const throwWithHttpStatus = (error: object, status: number): never => {
+  throw new PostgrestUploadError(error as Record<string, unknown>, status)
 }
 
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
@@ -678,6 +700,7 @@ const errorCodeOf = (error: unknown): string | null => {
 }
 
 const errorMessageOf = (error: unknown): string => {
+  if (error instanceof PostgrestUploadError) return JSON.stringify(error)
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
   try {

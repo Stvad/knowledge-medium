@@ -953,6 +953,19 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     expect(classifyUploadError(thrown)).toBe('transient')
   })
 
+  it('falls back to the whole body as the message when an error body has no string message', async () => {
+    // postgrest-js returns any JSON error body as is, e.g. a gateway's own shape.
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {error: 'upstream unavailable'}, status: 503})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('upstream unavailable')
+    expect(classifyUploadError(thrown)).toBe('transient')
+  })
+
   it('retries an ambiguous codeless 4xx across the budget, then quarantines it (#190)', async () => {
     // A codeless non-retryable 4xx is `ambiguous`: we can't confirm it's
     // permanent from a code, so the orchestrator retries it across a few upload
@@ -1293,6 +1306,27 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     expect(inserts.every(c => /INSERT INTO ps_crud_rejected/.test(c.sql))).toBe(true)
     expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
     expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
+  })
+
+  it('keeps a PostgREST error envelope in error_message, which the rejection dialog parses', async () => {
+    const fkViolation = {
+      message: 'insert or update on table "blocks" violates foreign key constraint',
+      details: 'Key (parent_id) is not present in table "blocks".',
+      hint: 'Create the parent first',
+      code: '23503',
+    }
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: fkViolation, status: 409})
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+    const {db, calls} = collectWrites()
+    const tx = fakeTx(42, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'B'})])
+
+    await __recordRejectionToTableForTest(db, tx as unknown as CrudTransaction, thrown)
+
+    const [, , , errorCode, errorMessage] = calls[1]!.params
+    expect(errorCode).toBe('23503')
+    expect(JSON.parse(errorMessage as string)).toMatchObject(fkViolation)
   })
 })
 
