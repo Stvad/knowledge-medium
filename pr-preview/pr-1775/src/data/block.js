@@ -1,1 +1,1 @@
-export{K8 as Block,q8 as requireLoadedBlock}from"../../chunks/app-BIUkVETT.js";
+export{K8 as Block,q8 as requireLoadedBlock}from"../../chunks/app-ByHD_PaJ.js";

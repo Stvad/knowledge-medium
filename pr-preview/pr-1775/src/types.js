@@ -1,1 +1,1 @@
-export{Sct as isChildBackedPropertiesWorkspace}from"../chunks/app-BIUkVETT.js";
+export{Sct as isChildBackedPropertiesWorkspace}from"../chunks/app-ByHD_PaJ.js";

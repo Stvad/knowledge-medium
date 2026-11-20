@@ -1,1 +1,1 @@
-export{eF as ExtensionPromptSurface,tF as extensionPromptsExtension}from"../../../chunks/app-BIUkVETT.js";
+export{eF as ExtensionPromptSurface,tF as extensionPromptsExtension}from"../../../chunks/app-ByHD_PaJ.js";

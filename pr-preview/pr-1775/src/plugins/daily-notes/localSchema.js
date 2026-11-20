@@ -1,1 +1,1 @@
-export{kX as dailyNotesLocalSchema}from"../../../chunks/app-BIUkVETT.js";
+export{kX as dailyNotesLocalSchema}from"../../../chunks/app-ByHD_PaJ.js";

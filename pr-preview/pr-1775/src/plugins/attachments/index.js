@@ -1,1 +1,1 @@
-export{qx as attachmentsPlugin}from"../../../chunks/app-BIUkVETT.js";
+export{qx as attachmentsPlugin}from"../../../chunks/app-ByHD_PaJ.js";

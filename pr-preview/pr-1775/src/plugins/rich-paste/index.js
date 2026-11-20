@@ -1,1 +1,1 @@
-export{Ux as richPastePlugin}from"../../../chunks/app-BIUkVETT.js";
+export{Ux as richPastePlugin}from"../../../chunks/app-ByHD_PaJ.js";

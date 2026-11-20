@@ -1,1 +1,1 @@
-export{pc as parsePropertiesJson}from"../../../chunks/app-BIUkVETT.js";
+export{pc as parsePropertiesJson}from"../../../chunks/app-ByHD_PaJ.js";

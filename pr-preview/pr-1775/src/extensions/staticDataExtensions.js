@@ -1,1 +1,1 @@
-export{Pq as staticDataExtensions}from"../../chunks/app-BIUkVETT.js";
+export{Pq as staticDataExtensions}from"../../chunks/app-ByHD_PaJ.js";

@@ -1,1 +1,1 @@
-export{Lg as lintExtensionSource}from"../../../chunks/app-BIUkVETT.js";
+export{Lg as lintExtensionSource}from"../../../chunks/app-ByHD_PaJ.js";

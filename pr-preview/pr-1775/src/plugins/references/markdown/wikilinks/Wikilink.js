@@ -1,1 +1,1 @@
-export{Ob as Wikilink}from"../../../../../chunks/app-BIUkVETT.js";
+export{Ob as Wikilink}from"../../../../../chunks/app-ByHD_PaJ.js";

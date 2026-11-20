@@ -1,1 +1,1 @@
-export{GC as videoPlayerPlugin}from"../../../chunks/app-BIUkVETT.js";
+export{GC as videoPlayerPlugin}from"../../../chunks/app-ByHD_PaJ.js";

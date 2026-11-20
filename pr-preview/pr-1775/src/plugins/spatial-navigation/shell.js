@@ -1,1 +1,1 @@
-export{sT as spatialNavigationShellDecorator}from"../../../chunks/app-BIUkVETT.js";
+export{sT as spatialNavigationShellDecorator}from"../../../chunks/app-ByHD_PaJ.js";

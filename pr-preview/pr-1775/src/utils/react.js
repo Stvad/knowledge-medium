@@ -1,1 +1,1 @@
-export{IR as useIsMobile,LR as usePointerCoarse}from"../../chunks/app-BIUkVETT.js";
+export{IR as useIsMobile,LR as usePointerCoarse}from"../../chunks/app-ByHD_PaJ.js";

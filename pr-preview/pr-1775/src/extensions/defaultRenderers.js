@@ -1,1 +1,1 @@
-export{UI as defaultRegistry,WI as defaultRendererContributions,GI as defaultRenderersExtension}from"../../chunks/app-BIUkVETT.js";
+export{UI as defaultRegistry,WI as defaultRendererContributions,GI as defaultRenderersExtension}from"../../chunks/app-ByHD_PaJ.js";

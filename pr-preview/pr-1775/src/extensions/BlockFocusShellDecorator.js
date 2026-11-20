@@ -1,1 +1,1 @@
-export{UP as BlockFocusShellDecorator,WP as blockFocusShellDecorator,GP as shouldScrollFocusedBlockIntoView}from"../../chunks/app-BIUkVETT.js";
+export{UP as BlockFocusShellDecorator,WP as blockFocusShellDecorator,GP as shouldScrollFocusedBlockIntoView}from"../../chunks/app-ByHD_PaJ.js";

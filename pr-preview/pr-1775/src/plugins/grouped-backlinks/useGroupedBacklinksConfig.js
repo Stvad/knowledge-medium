@@ -1,1 +1,1 @@
-export{Ty as useGroupedBacklinksConfig}from"../../../chunks/app-BIUkVETT.js";
+export{Ty as useGroupedBacklinksConfig}from"../../../chunks/app-ByHD_PaJ.js";
