@@ -16,7 +16,7 @@ import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 import { memoizeAsync } from '@/utils/memoize.js'
-import { readWorkspaceFirstSync, recordWorkspaceFirstSync } from '@/data/workspaceFirstSync.js'
+import { forgetWorkspaceFirstSync, readWorkspaceFirstSync, recordWorkspaceFirstSync } from '@/data/workspaceFirstSync.js'
 
 export const getCurrentHash = (): string =>
   typeof window === 'undefined' ? '' : window.location.hash
@@ -30,9 +30,9 @@ export type InitialLayout =
       reason: EntryLockReason
       canary: string | null
     }
+  // Not caught up on this device (`workspaceFirstSync`), or — with
+  // `awaitingRow` — its row has not arrived, so access is not decided yet.
   | {
-      /** Not caught up on this device (`workspaceFirstSync`), or — with
-       *  `awaitingRow` — its row has not arrived, so access is not decided yet. */
       kind: 'syncing'
       workspaceId: string
       workspaceName: string | null
@@ -54,8 +54,13 @@ export const resolveInitialLayout = async (
     useRemoteSync,
   )
   repo.setActiveWorkspaceId(workspaceId)
-  // Every gated layout is read-only; only `ready` takes the role, below.
-  repo.setReadOnly(true)
+  // Read-only is set once the gates decide, not before: across the awaits the
+  // outgoing workspace's tree is only hidden, and a commit it lands then must
+  // not be refused. Every gated layout is read-only; `ready` takes the role.
+  const gated = (layout: InitialLayout): InitialLayout => {
+    repo.setReadOnly(true)
+    return layout
+  }
 
   // Phase 2 — §6 rule 3 access gate, BEFORE any bootstrap write: those writes
   // (daily note, properties/types/recents pages, ui-state) would otherwise land
@@ -66,21 +71,18 @@ export const resolveInitialLayout = async (
   )
   markStartup('workspaceResolved')
   if (entry.kind === 'locked') {
-    return {
+    return gated({
       kind: 'locked',
       workspaceId,
       workspaceName: entry.workspaceName,
       reason: entry.reason,
       canary: entry.canary,
-    }
+    })
   }
-  const syncing = async (awaitingRow: boolean): Promise<InitialLayout> => ({
-    kind: 'syncing',
-    workspaceId,
-    workspaceName: (await getLocalWorkspace(repo, workspaceId))?.name ?? null,
-    awaitingRow,
-  })
-  if (entry.kind === 'waiting') return syncing(true)
+  if (entry.kind === 'waiting') {
+    await forgetWorkspaceFirstSync(repo.db, workspaceId)
+    return gated({kind: 'syncing', workspaceId, workspaceName: null, awaitingRow: true})
+  }
 
   // Phase 3 — the first-sync gate: bootstrap's get-or-creates must find the
   // server's rows, not race them. Past the access gate, so recording is safe.
@@ -88,7 +90,14 @@ export const resolveInitialLayout = async (
     await recordWorkspaceFirstSync(repo.db, workspaceId)
   } else if (useRemoteSync) {
     const firstSync = await readWorkspaceFirstSync(repo, workspaceId)
-    if (firstSync.kind === 'pending') return syncing(false)
+    if (firstSync.kind === 'pending') {
+      return gated({
+        kind: 'syncing',
+        workspaceId,
+        workspaceName: (await getLocalWorkspace(repo, workspaceId))?.name ?? null,
+        awaitingRow: false,
+      })
+    }
     if (firstSync.kind === 'caught-up') await recordWorkspaceFirstSync(repo.db, workspaceId)
   }
 

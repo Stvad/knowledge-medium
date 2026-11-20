@@ -18,17 +18,18 @@ interface Props {
   /** The workspace row has not arrived, so access is undecided: open (to
    *  re-resolve) when it lands, whether or not the workspace is caught up. */
   awaitingRow: boolean
-  /** Re-resolve the layout. Called at most once, and only on a real
-   *  transition — every re-resolve re-suspends the app. */
+  /** Re-resolve the layout. Called only once the gate should lift, possibly
+   *  more than once: the host makes it idempotent per resolve. */
   onReady: () => void
   /** The host's way out — its workspace menu. */
   footer?: ReactNode
 }
 
-/** The one-shot re-materialization of rows the drain deferred. */
+/** The re-materialization of rows the drain deferred. A pass starts only from
+ *  `idle`, so `running` blocks a second and `left`/`failed` wait for the user. */
 type Repair =
   | {readonly kind: 'idle' | 'running'}
-  /** A completed pass left rows unapplied: the one case that may open anyway. */
+  // A completed pass left rows unapplied: the one case that may open anyway.
   | {readonly kind: 'left'; readonly unapplied: number}
   | {readonly kind: 'failed'; readonly message: string}
 
@@ -43,70 +44,61 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
   const [repair, setRepair] = useState<Repair>({kind: 'idle'})
   const [drainError, setDrainError] = useState<string | null>(null)
   const [asks, setAsks] = useState(0)
-
-  const opened = useRef(false)
-  const open = useCallback(() => {
-    if (opened.current) return
-    opened.current = true
-    onReady()
-  }, [onReady])
-
-  const repairStarted = useRef(false)
-  const repairRunning = useRef(false)
-  const startRepair = useCallback(() => {
-    if (repairStarted.current) return
-    repairStarted.current = true
-    repairRunning.current = true
-    setRepair({kind: 'running'})
-    repo.rematerializeWorkspace(workspaceId, {scope: 'unapplied'})
-      .then(
-        pass => {
-          setRepair(pass.unappliedAfter > 0 ? {kind: 'left', unapplied: pass.unappliedAfter} : {kind: 'idle'})
-          setAsks(n => n + 1)
-        },
-        (err: unknown) => setRepair({kind: 'failed', message: errorMessage(err)}),
-      )
-      .finally(() => { repairRunning.current = false })
-  }, [repo, workspaceId])
+  const askAgain = () => setAsks(n => n + 1)
 
   // Kicks the observer: a drain window that failed retries only on the next
   // arrival, and once the download ends there is none.
-  const flushing = useRef<Promise<void> | null>(null)
-  const flush = useCallback((): Promise<void> => {
-    flushing.current ??= repo.flushSyncObserver().then(
+  // One kick in flight: every status tick of a long drain re-runs the ask, and
+  // each flush would otherwise queue its own pass behind that drain.
+  const kicking = useRef<Promise<void> | null>(null)
+  const kickDrain = useCallback((): Promise<void> => {
+    kicking.current ??= repo.flushSyncObserver().then(
       () => setDrainError(null),
       (err: unknown) => setDrainError(errorMessage(err)),
-    ).finally(() => { flushing.current = null })
-    return flushing.current
+    ).finally(() => { kicking.current = null })
+    return kicking.current
   }, [repo])
 
   useEffect(() => {
     if (awaitingRow) {
-      if (rowLanded) open()
+      if (rowLanded) onReady()
       return
     }
-    let live = true
     /** Acts on one answer; true when it is waiting on the drain alone. */
     const settle = (state: WorkspaceFirstSync): boolean => {
-      if (!live) return false
       if (state.kind !== 'pending') {
-        open()
+        onReady()
         return false
       }
-      if (state.gap?.transient === false) startRepair()
-      return state.gap?.transient === true && !repairRunning.current
+      if (state.gap?.transient === false) setRepair(current => (current.kind === 'idle' ? {kind: 'running'} : current))
+      return state.gap?.transient === true
     }
     void (async () => {
       if (!settle(await readWorkspaceFirstSync(repo, workspaceId))) return
-      await flush()
+      await kickDrain()
       settle(await readWorkspaceFirstSync(repo, workspaceId))
     })().catch((err: unknown) => console.error('[WorkspaceSyncGate] first-sync check failed', err))
-    return () => { live = false }
-  }, [repo, workspaceId, awaitingRow, rowLanded, status, backlog, asks, open, startRepair, flush])
+  }, [repo, workspaceId, awaitingRow, rowLanded, status, backlog, asks, onReady, kickDrain])
 
+  useEffect(() => {
+    if (repair.kind !== 'running') return
+    repo.rematerializeWorkspace(workspaceId, {scope: 'unapplied'}).then(
+      pass => {
+        setRepair(pass.unappliedAfter > 0 ? {kind: 'left', unapplied: pass.unappliedAfter} : {kind: 'idle'})
+        setAsks(n => n + 1)
+      },
+      (err: unknown) => setRepair({kind: 'failed', message: errorMessage(err)}),
+    )
+  }, [repair.kind, repo, workspaceId])
+
+  const stuck = drainError !== null || repair.kind === 'failed' || repair.kind === 'left'
+  const tryAgain = () => {
+    setRepair(current => (current.kind === 'running' ? current : {kind: 'idle'}))
+    askAgain()
+  }
   const openAnyway = async () => {
     await recordWorkspaceFirstSync(repo.db, workspaceId)
-    open()
+    onReady()
   }
 
   const name = workspaceName ? `"${workspaceName}"` : 'this workspace'
@@ -117,7 +109,7 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
           ? 'Waiting for this workspace to arrive from the server.'
           : 'Getting this workspace onto this device. It opens once everything has arrived.'}
       </Explanation>
-      <SyncProgress>
+      <SyncProgress showConnection>
         {repair.kind === 'running' && <ProgressRow label="Re-applying downloaded rows" detail={null}/>}
       </SyncProgress>
       {drainError && <p className="text-sm text-destructive">Applying synced changes failed: {drainError}</p>}
@@ -125,15 +117,20 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
         <p className="text-sm text-destructive">Re-applying downloaded rows failed: {repair.message}</p>
       )}
       {repair.kind === 'left' && (
-        <>
-          <p className="text-sm text-destructive">
-            {repair.unapplied.toLocaleString()} downloaded row(s) of this workspace could not be applied on
-            this device. Opening it now may show it incomplete.
-          </p>
-          <Button type="button" variant="secondary" className="w-full" onClick={() => void openAnyway()}>
-            Open anyway
-          </Button>
-        </>
+        <p className="text-sm text-destructive">
+          {repair.unapplied.toLocaleString()} downloaded row(s) of this workspace could not be applied on
+          this device. Opening it now may show it incomplete.
+        </p>
+      )}
+      {repair.kind === 'left' && (
+        <Button type="button" variant="secondary" className="w-full" onClick={() => void openAnyway()}>
+          Open anyway
+        </Button>
+      )}
+      {stuck && (
+        <Button type="button" variant="secondary" className="w-full" onClick={tryAgain}>
+          Try again
+        </Button>
       )}
     </GateCard>
   )

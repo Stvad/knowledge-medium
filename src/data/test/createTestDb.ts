@@ -59,11 +59,13 @@ import {
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
+  WORKSPACE_FIRST_SYNC_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
   ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
+  grandfatherWorkspaceFirstSync,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
@@ -77,7 +79,6 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
-import { WORKSPACE_FIRST_SYNC_MARKER_PREFIX } from '@/data/workspaceFirstSync'
 
 // Keep the native addon loaded in the parent while PowerSync workers exit.
 // better-sqlite3 12 can unload it before V8's final worker GC (#1477 upstream).
@@ -171,6 +172,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
+  await grandfatherWorkspaceFirstSync(backfillDb)
   await applyLocalSchemaContributions(
     backfillDb,
     localSchemaContributions,

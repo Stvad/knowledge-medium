@@ -1252,6 +1252,30 @@ export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
  *  client. */
 export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
 
+/** Per-workspace: this device has caught up on the workspace's first sync, so
+ *  it opens without the sync gate (`workspaceFirstSync.ts`). Keyed
+ *  `workspace_first_sync_v1:<workspaceId>`. */
+export const WORKSPACE_FIRST_SYNC_MARKER_PREFIX = 'workspace_first_sync_v1:'
+
+/** One-shot: workspaces this device already holds blocks for were opened here
+ *  before the sync gate existed, so they are recorded as caught up rather than
+ *  gated — the gate's repair pass can write a staged row over an unechoed
+ *  local edit, which only a never-opened workspace is free of. A workspace
+ *  mid-first-sync at the upgrade is recorded too, as it would have opened
+ *  before. */
+export const WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY = 'workspace_first_sync_grandfathered_v1'
+
+const SELECT_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL = markerDoneSql(WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY)
+
+const RECORD_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL = recordMarkerSql(WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY)
+
+const GRANDFATHER_WORKSPACE_FIRST_SYNC_SQL = `
+  INSERT OR IGNORE INTO client_schema_state (key, completed_at)
+  SELECT '${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}' || w.id, strftime('%s', 'now') * 1000
+    FROM workspaces w
+   WHERE EXISTS (SELECT 1 FROM blocks b WHERE b.workspace_id = w.id)
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).
@@ -1452,6 +1476,14 @@ export const backfillBlocksFtsIfEmpty = async (
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
+}
+
+export const grandfatherWorkspaceFirstSync = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<void> => {
+  if (await isMarkerSet(db, SELECT_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL)) return
+  await db.execute(GRANDFATHER_WORKSPACE_FIRST_SYNC_SQL)
+  await db.execute(RECORD_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL)
 }
 
 /**

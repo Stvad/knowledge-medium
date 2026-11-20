@@ -5,10 +5,18 @@ import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { releaseTestRepos } from '@/data/test/testRepoScope'
-import { clearSyncState, serverBlock, serverWorkspace, syncServer } from '@/data/test/syncCheckpoint'
-import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness'
-import { makeBlockData } from '@/data/test/factories'
-import type { WorkspaceRow } from '@/data/workspaceSchema'
+import {
+  clearSyncState,
+  drainStaged,
+  hasFirstSyncMarker,
+  insertWorkspaceRow,
+  serverBlock,
+  serverWorkspace,
+  stagedBlock as stagedBlockIn,
+  syncServer,
+  testWorkspaceRow,
+} from '@/data/test/syncCheckpoint'
+import { recordWorkspaceFirstSync } from '@/data/workspaceFirstSync'
 import { setModePin } from '@/sync/keys/modePin'
 import { buildAppHash } from '@/utils/routing'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
@@ -37,12 +45,8 @@ describe('prepareInitialLayout', () => {
 const WS = 'ws-layout'
 const USER = 'user-1'
 
-const workspaceRow: WorkspaceRow = {
-  id: WS, name: 'test', owner_user_id: USER, create_time: 1, update_time: 1,
-  encryption_mode: 'none', wk_canary: null, properties_migration: 'children',
-}
-const stagedBlock = (id: string) =>
-  serverBlock(makeBlockData({id, workspaceId: WS, content: id, createdAt: 1, updatedAt: 1, userUpdatedAt: 1}))
+const workspaceRow = testWorkspaceRow(WS, USER)
+const stagedBlock = (id: string) => stagedBlockIn(id, WS)
 
 let shared: TestDb
 let repo: Repo
@@ -60,14 +64,9 @@ beforeEach(async () => {
 })
 
 const open = (useRemoteSync = true) => resolveInitialLayout(repo, buildAppHash(WS), useRemoteSync)
-const drain = () => drainStagingWindowOnce(shared.db, {getMaterializability: constMat('copy'), getCek: noKey})
-const marked = async () =>
-  (await shared.db.getOptional('SELECT 1 FROM client_schema_state WHERE key = ?', [`workspace_first_sync_v1:${WS}`])) !== null
-const primeRow = () => shared.db.execute(
-  `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration)
-   VALUES (?, 'test', ?, 1, 1, 'none', 'children')`,
-  [WS, USER],
-)
+const drain = () => drainStaged(shared.db)
+const marked = () => hasFirstSyncMarker(shared.db, WS)
+const primeRow = () => insertWorkspaceRow(shared.db, WS, USER)
 const localBlockCount = async () => (await shared.db.get<{n: number}>('SELECT count(*) AS n FROM blocks')).n
 
 // The first bootstrap in the file measured ~1.3s alone (a cold landing runtime).
@@ -83,10 +82,20 @@ describe('resolveInitialLayout — first sync', {timeout: 20_000}, () => {
     expect(await shared.db.getAll('SELECT id FROM ps_crud')).toEqual([])
   })
 
-  it('holds a workspace whose row has not arrived, awaiting the row', async () => {
+  it('holds a workspace whose row has not arrived, awaiting the row, and forgets its old marker', async () => {
+    await recordWorkspaceFirstSync(shared.db, WS)
     vi.mocked(resolveWorkspace).mockResolvedValueOnce({id: WS, freshlyCreated: false})
 
     expect(await open()).toEqual({kind: 'syncing', workspaceId: WS, workspaceName: null, awaitingRow: true})
+    expect(repo.isReadOnly).toBe(true)
+    expect(await marked()).toBe(false)
+  })
+
+  it('holds a locked workspace read-only', async () => {
+    await primeRow()
+    localStorage.clear() // unpinned: quarantined
+
+    expect((await open()).kind).toBe('locked')
     expect(repo.isReadOnly).toBe(true)
   })
 
@@ -98,11 +107,12 @@ describe('resolveInitialLayout — first sync', {timeout: 20_000}, () => {
     expect(await marked()).toBe(true)
   })
 
-  it('opens without a sync check in a local-only session', async () => {
+  it('opens without a sync check in a local-only session, never read-only on the way', async () => {
     await primeRow()
+    const readOnly = vi.spyOn(repo, 'setReadOnly')
 
     expect((await open(false)).kind).toBe('ready')
-    expect(repo.isReadOnly).toBe(false)
+    expect(readOnly.mock.calls).toEqual([[false]])
   })
 
   it('records the workspace the first time it is caught up, and opens it on that record after', async () => {

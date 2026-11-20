@@ -1,7 +1,8 @@
 /**
  * What a gate shows while it waits on this device's sync: the download, the
- * apply backlog, and why neither is moving. The gate's own work goes in as
- * `children`, one more row.
+ * apply backlog and — for a gate waiting on the server (`showConnection`) —
+ * why the download is not moving. The gate's own work goes in as `children`,
+ * one more row.
  *
  * No "N of M" for the backlog: its peak moves while the download feeds it.
  */
@@ -15,7 +16,7 @@ import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog'
  *  PowerSync's fraction can pass 1 after a compaction. */
 const percent = (fraction: number): string => `${Math.floor(Math.min(fraction, 1) * 100)}%`
 
-export function SyncProgress({children}: {children?: ReactNode}) {
+export function SyncProgress({showConnection = false, children}: {showConnection?: boolean; children?: ReactNode}) {
   const status = useStatus()
   const applying = useMaterializeBacklog()
   const downloadFraction = status.downloadProgress?.downloadedFraction ?? null
@@ -33,11 +34,11 @@ export function SyncProgress({children}: {children?: ReactNode}) {
           fraction={downloadFraction}
         />
       )}
-      {status.downloadError ? (
+      {showConnection && (status.downloadError ? (
         <ProgressRow label={`Download failed, retrying: ${status.downloadError.message}`} detail={null}/>
       ) : status.connected === false && !status.connecting && (
         <ProgressRow label="Offline" detail="Waiting for a connection"/>
-      )}
+      ))}
       {applying > 0 && (
         <ProgressRow label="Applying synced changes" detail={`${applying.toLocaleString()} left`}/>
       )}

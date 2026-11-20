@@ -10,6 +10,15 @@ import type { Block } from '@/data/block'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
+import {
+  clearSyncState,
+  drainStaged,
+  insertWorkspaceRow,
+  serverWorkspace,
+  stagedBlock,
+  syncServer,
+  testWorkspaceRow,
+} from '@/data/test/syncCheckpoint'
 
 // App's ready path fans out through workspace resolution, the §6 access
 // gate, and the bootstrap-write phase — each its own module with its own
@@ -78,6 +87,26 @@ vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({
   },
 }))
 
+// The real sync gate, with the `onReady` each instance was handed recorded, so a
+// test can call a gate's open after a later resolve has hidden it.
+const syncGates = vi.hoisted(() => ({onReady: [] as Array<() => void>}))
+vi.mock('@/components/workspace/WorkspaceSyncGate.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/components/workspace/WorkspaceSyncGate')>()
+  return {
+    WorkspaceSyncGate: (props: import('react').ComponentProps<typeof actual.WorkspaceSyncGate>) => {
+      if (syncGates.onReady.at(-1) !== props.onReady) syncGates.onReady.push(props.onReady)
+      return <actual.WorkspaceSyncGate {...props}/>
+    },
+  }
+})
+
+// Off unless a test turns it on: whether this session syncs with a server.
+const remoteSync = vi.hoisted(() => ({enabled: false}))
+vi.mock('@/services/powersync.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/services/powersync.js')>(),
+  remoteSyncEnabled: () => remoteSync.enabled,
+}))
+
 // AppRuntimeProvider pulls in the full extension-resolution machinery
 // (staticAppExtensions, dynamic-extension loading, localStorage-backed
 // overrides). That's the exact kind of thing this test isn't about — swap it
@@ -126,6 +155,7 @@ describe('App / LayoutRootContext provision', () => {
   afterAll(async () => { await sharedDb.cleanup() })
 
   beforeEach(async () => {
+    await clearSyncState(sharedDb.db)
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
     repoRef.current = repo
@@ -137,6 +167,18 @@ describe('App / LayoutRootContext provision', () => {
     cleanup()
     repoRef.current = undefined
     vi.clearAllMocks()
+    syncGates.onReady = []
+    remoteSync.enabled = false
+  })
+
+  const renderSyncedApp = () => act(async () => {
+    render(
+      <PowerSyncContext value={sharedDb.db as unknown as AbstractPowerSyncDatabase}>
+        <Suspense fallback={<div>loading</div>}>
+          <App/>
+        </Suspense>
+      </PowerSyncContext>,
+    )
   })
 
   it('wraps the ready layout in LayoutRootContext with the resolved root block id and a callback', async () => {
@@ -245,27 +287,65 @@ describe('App / LayoutRootContext provision', () => {
   it('opens a workspace the sync gate held by its id, though the URL names none', async () => {
     // An empty-hash resolve goes through the ensure-personal RPC, which throws offline.
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
-    await act(async () => {
-      render(
-        <PowerSyncContext value={sharedDb.db as unknown as AbstractPowerSyncDatabase}>
-          <Suspense fallback={<div>loading</div>}>
-            <App/>
-          </Suspense>
-        </PowerSyncContext>,
-      )
-    })
+    await renderSyncedApp()
     expect(await screen.findByRole('heading', {name: /opening/i})).toBeInTheDocument()
     expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBeUndefined()
 
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
-    await act(async () => {
-      await sharedDb.db.execute(
-        `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode)
-         VALUES ('ws-1', 'Vault', 'user-1', 1, 1, 'none')`,
-      )
-    })
+    await act(async () => { await insertWorkspaceRow(sharedDb.db, 'ws-1') })
 
     expect(await screen.findByTestId('app-block-component')).toBeInTheDocument()
     expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBe('ws-1')
+  })
+
+  it('opens a gated workspace once: a gate that already opened re-resolves nothing', async () => {
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
+    await renderSyncedApp()
+    await screen.findByRole('heading', {name: /opening/i})
+    const [open] = syncGates.onReady
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
+    await act(async () => open!())
+    await screen.findByTestId('app-block-component')
+    const resolves = vi.mocked(resolveWorkspace).mock.calls.length
+
+    await act(async () => open!())
+
+    expect(vi.mocked(resolveWorkspace).mock.calls.length).toBe(resolves)
+  })
+
+  it('cannot be pulled back into a gated workspace the user left', async () => {
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
+    await renderSyncedApp()
+    await screen.findByRole('heading', {name: /opening/i})
+    const [open] = syncGates.onReady
+    vi.mocked(resolveWorkspace).mockResolvedValueOnce({id: 'ws-2', freshlyCreated: false})
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
+    await act(async () => switcher.gate!.onLeave())
+    await screen.findByTestId('app-block-component')
+    const resolves = vi.mocked(resolveWorkspace).mock.calls.length
+
+    await act(async () => open!())
+
+    expect(vi.mocked(resolveWorkspace).mock.calls.length).toBe(resolves)
+  })
+
+  it('opens a workspace first gated on its row once its first sync then materializes', async () => {
+    remoteSync.enabled = true
+    const deliver = syncServer(sharedDb.db)
+    vi.mocked(resolveWorkspaceEntry).mockImplementation(async () =>
+      (await sharedDb.db.getOptional("SELECT 1 FROM workspaces WHERE id = 'ws-1'")) ? {kind: 'ready'} : {kind: 'waiting'})
+    window.location.hash = buildAppHash('ws-1')
+    await renderSyncedApp()
+    await screen.findByRole('heading', {name: /opening/i})
+
+    // The row lands with the first sync still unmaterialized: the next gate holds it.
+    await act(async () => { await deliver([serverWorkspace(testWorkspaceRow('ws-1')), stagedBlock('b1', 'ws-1')]) })
+    await vi.waitFor(() => expect(syncGates.onReady).toHaveLength(2))
+    expect(screen.queryByTestId('app-block-component')).toBeNull()
+
+    await drainStaged(sharedDb.db)
+    await act(async () => { await deliver([serverWorkspace(testWorkspaceRow('ws-1'))]) })
+
+    expect(await screen.findByTestId('app-block-component')).toBeInTheDocument()
   })
 })

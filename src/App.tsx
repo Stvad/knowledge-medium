@@ -13,7 +13,7 @@ import { useSearchParam } from 'react-use'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { remoteSyncEnabled } from '@/services/powersync.js'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.js'
-import { buildAppHash, layoutWorkspaceChanged, parseLayout } from '@/utils/routing.js'
+import { hashOpeningWorkspace, layoutWorkspaceChanged } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
@@ -128,33 +128,34 @@ const App = () => {
     }
   }, [])
 
-  // Re-resolve the initial layout (bumping the version busts the cache) — used
-  // when the key gate is resolved.
-  // Keeps the snapshot's hash, not the URL's: after `resolveDefaultWorkspace`
-  // the URL still names the workspace just left.
-  const reResolve = useCallback(() => {
-    setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
+  // Re-resolve at the hash `pick` derives from the snapshot's (bumping the
+  // version busts the cache). With `atVersion`, only while the snapshot is
+  // still at it: a gate opens at most once, and only for the resolve that
+  // rendered it — a gate hidden by a later resolve (Leave, Back) must not pull
+  // the user back.
+  const reResolveAt = useCallback((pick: (hash: string) => string, atVersion?: number) => {
+    setHashSnapshot(current => (atVersion !== undefined && current.version !== atVersion
+      ? current
+      : {hash: pick(current.hash), version: current.version + 1}))
   }, [])
-  // Re-resolve as if no workspace were named — the remembered one, else the
-  // personal one. For leaving a gated workspace just deleted.
-  const resolveDefaultWorkspace = useCallback(() => {
-    setHashSnapshot(current => ({hash: '', version: current.version + 1}))
-  }, [])
-  // Re-resolve the gated workspace BY ID: while gated nothing is remembered and
-  // the snapshot hash may be empty, which would resolve through the
-  // ensure-personal RPC — a throw offline.
-  const openGatedWorkspace = useCallback(() => {
-    setHashSnapshot(current => ({
-      hash: parseLayout(current.hash).workspaceId === activeWorkspaceId ? current.hash : buildAppHash(activeWorkspaceId),
-      version: current.version + 1,
-    }))
-  }, [activeWorkspaceId])
-  // Re-resolve an OPEN workspace at the URL, which projects its current layout.
-  // Not `reResolve`: same-workspace navigation never updates the snapshot, so
-  // its hash is the layout the workspace opened at.
-  const closeOpenWorkspace = useCallback(() => {
-    setHashSnapshot(current => ({hash: getCurrentHash(), version: current.version + 1}))
-  }, [])
+  // The snapshot's hash, not the URL's: after `resolveDefaultWorkspace` the URL
+  // still names the workspace just left. For the key gate once resolved.
+  const reResolve = useCallback(() => reResolveAt(hash => hash), [reResolveAt])
+  // As if no workspace were named — the remembered one, else the personal one.
+  // For leaving a gated workspace just deleted.
+  const resolveDefaultWorkspace = useCallback(() => reResolveAt(() => ''), [reResolveAt])
+  // The gated workspace BY ID: while gated nothing is remembered and the
+  // snapshot hash may be empty, which would resolve through the ensure-personal
+  // RPC — a throw offline.
+  const snapshotVersion = hashSnapshot.version
+  const openGatedWorkspace = useCallback(
+    () => reResolveAt(hash => hashOpeningWorkspace(hash, activeWorkspaceId), snapshotVersion),
+    [reResolveAt, activeWorkspaceId, snapshotVersion],
+  )
+  // An OPEN workspace at the URL, which projects its current layout. Not the
+  // snapshot's hash: same-workspace navigation never updates it, so it is the
+  // layout the workspace opened at.
+  const closeOpenWorkspace = useCallback(() => reResolveAt(getCurrentHash), [reResolveAt])
 
   // A workspace the server converts to e2ee while it's open here closes into
   // the gate: until this device's pin is upgraded it can't sync the workspace.
@@ -166,10 +167,10 @@ const App = () => {
   if (initial.kind === 'syncing') {
     return (
       <WorkspaceSyncGate
-        // One instance per workspace AND phase: the gate opens at most once, so
-        // the instance that opened for the row must not carry into the wait
-        // for the first sync.
-        key={`${initial.workspaceId}:${initial.awaitingRow}`}
+        // A fresh instance per resolve, so no repair or error state carries
+        // into the next. Defence in depth: `reResolveAt`'s version check is
+        // what confines a gate's open to the resolve that rendered it.
+        key={`${initial.workspaceId}:${snapshotVersion}`}
         workspaceId={initial.workspaceId}
         workspaceName={initial.workspaceName}
         awaitingRow={initial.awaitingRow}

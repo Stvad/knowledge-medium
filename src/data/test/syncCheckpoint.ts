@@ -9,6 +9,10 @@ import type { PowerSyncDatabase } from '@powersync/node'
 import { BLOCK_STORAGE_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
 import type { BlockData } from '@/data/api'
 import { WORKSPACE_COLUMNS, type WorkspaceRow } from '@/data/workspaceSchema'
+import { WORKSPACE_FIRST_SYNC_MARKER_PREFIX } from '@/data/internals/clientSchema'
+import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness'
+import { makeBlockData } from '@/data/test/factories'
+import type { Materializability } from '@/sync/transform'
 
 const BUCKET = 'user_workspaces[]'
 
@@ -86,3 +90,28 @@ export const syncServer = (db: PowerSyncDatabase) => {
     await reloadSyncStatus(db)
   }
 }
+
+// Fixtures for the first-sync gate's tests.
+
+export const testWorkspaceRow = (id: string, ownerUserId = 'user-1'): WorkspaceRow => ({
+  id, name: 'test', owner_user_id: ownerUserId, create_time: 1, update_time: 1,
+  encryption_mode: 'none', wk_canary: null, properties_migration: 'children',
+})
+
+export const stagedBlock = (id: string, workspaceId: string): ServerRow =>
+  serverBlock(makeBlockData({id, workspaceId, content: id, createdAt: 1, updatedAt: 1, userUpdatedAt: 1}))
+
+/** The row a resolve primes from the ensure-personal RPC, before sync has it. */
+export const insertWorkspaceRow = (db: PowerSyncDatabase, id: string, ownerUserId = 'user-1') => db.execute(
+  `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode, properties_migration)
+   VALUES (?, 'test', ?, 1, 1, 'none', 'children')`,
+  [id, ownerUserId],
+)
+
+/** One drain window over the staging queue, outside any observer. */
+export const drainStaged = (db: PowerSyncDatabase, materializability: Materializability = 'copy') =>
+  drainStagingWindowOnce(db, {getMaterializability: constMat(materializability), getCek: noKey})
+
+export const hasFirstSyncMarker = async (db: PowerSyncDatabase, workspaceId: string): Promise<boolean> =>
+  (await db.getOptional('SELECT 1 FROM client_schema_state WHERE key = ?',
+    [`${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}${workspaceId}`])) !== null
