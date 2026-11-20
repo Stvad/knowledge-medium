@@ -1,1 +1,1 @@
-export{qM as CommandPaletteHeaderItem}from"../../../chunks/app-g3Rf1KA1.js";
+export{qM as CommandPaletteHeaderItem}from"../../../chunks/app-BoBO8tOL.js";
