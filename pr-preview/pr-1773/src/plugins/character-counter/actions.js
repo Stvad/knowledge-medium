@@ -1,1 +1,1 @@
-export{nr as addWordCounterAction,rr as counterActions}from"../../../chunks/app-BmarZ9R1.js";
+export{nr as addWordCounterAction,rr as counterActions}from"../../../chunks/app-CXtK5QVp.js";

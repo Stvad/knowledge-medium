@@ -1,1 +1,1 @@
-export{I_ as buildBlockView,L_ as renderBlockView}from"../../../../chunks/app-BmarZ9R1.js";
+export{I_ as buildBlockView,L_ as renderBlockView}from"../../../../chunks/app-CXtK5QVp.js";
