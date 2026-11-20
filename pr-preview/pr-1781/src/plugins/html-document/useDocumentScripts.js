@@ -1,1 +1,1 @@
-export{vn as hasScripts,yn as useDocumentScripts}from"../../../chunks/app-DyfIB3Yy.js";
+export{vn as hasScripts,yn as useDocumentScripts}from"../../../chunks/app-Bn5XB1sD.js";
