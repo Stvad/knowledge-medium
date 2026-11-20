@@ -1,1 +1,1 @@
-export{zdt as defineQuery}from"../../../chunks/app-Re9W9S3y.js";
+export{zdt as defineQuery}from"../../../chunks/app-Bg8Raxgd.js";
