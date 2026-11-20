@@ -1,52 +1,44 @@
 import { Block } from '../data/block'
-import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type SubtreeRow } from '@/data/api'
 import { armCut, disarmCut } from '@/paste/armedCut.js'
+import { clipboardHtmlFor, clipboardTextFor } from '@/paste/clipboardOutline.js'
 import { copiedSubtree, type PropertyCopy } from '@/data/drawnSubtree.js'
 
-const createIndentedContent = (content: string, depth: number): string => {
-  const indentBy = '  '
-  const indentation = depth > 0 ? indentBy.repeat(depth) : ''
-  return `${indentation}- ${content.split('\n').join('\n' + indentation + indentBy)}`
+export interface ClipboardData {
+  markdown: string
+  blocks: SubtreeRow[]
 }
 
-/** The subtree under `block` as clipboard text. WYSIWYG: by default exactly
+const clipboardDataFor = (blocks: SubtreeRow[]): ClipboardData => ({markdown: clipboardTextFor(blocks), blocks})
+
+/** The rows under `block` that a copy carries. WYSIWYG: by default exactly
  *  what the copying surface draws (`properties` is its display scope), so a
  *  drawn property row travels with its whole subtree, content nested under
  *  its values included, and a row the surface leaves out prunes whole —
  *  content under it too, as the outline shows none of it. `'all'` is the
  *  explicit "with hidden properties" copy. Rows come in document order with
  *  root-relative depths. */
-export const serializeBlock = async (
-  block: Block,
-  properties?: PropertyCopy,
-): Promise<ClipboardData> => {
+const subtreeRows = async (block: Block, properties?: PropertyCopy): Promise<SubtreeRow[]> => {
   const blocks = await copiedSubtree(block.repo, block.id, properties)
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
 
-  if (blocks.length === 1) {
-    return {
-      markdown: blocks[0].content,
-      blocks,
-    }
-  }
-
-  return {
-    markdown: blocks.map(b => createIndentedContent(b.content, b.depth)).join('\n'),
-    blocks,
-  }
+  return blocks
 }
 
-const createClipboardItem = (data: ClipboardData): ClipboardItem =>
-  new ClipboardItem({
-    'text/plain': new Blob([data.markdown], {type: 'text/plain'}),
-    // Todo
-    // 'application/json': new Blob([JSON.stringify(data.blocks)], {type: 'application/json'}),
+export const serializeBlock = async (block: Block, properties?: PropertyCopy): Promise<ClipboardData> =>
+  clipboardDataFor(await subtreeRows(block, properties))
+
+const createClipboardItem = ({markdown, blocks}: ClipboardData): ClipboardItem => {
+  const html = clipboardHtmlFor(blocks, markdown)
+  return new ClipboardItem({
+    'text/plain': new Blob([markdown], {type: 'text/plain'}),
+    ...(html === undefined ? {} : {'text/html': new Blob([html], {type: 'text/html'})}),
   })
+}
 
 const writeToClipboard = async (data: ClipboardData): Promise<void> =>
   // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
@@ -91,12 +83,12 @@ export const serializeSelectedBlocks = async (
   repo: Repo,
   properties?: PropertyCopy,
 ): Promise<ClipboardData> => {
-  const blockResults = await Promise.all(
+  const rowsPerBlock = await Promise.all(
     blockIds
       .map(id => repo.block(id))
       .map(async block => {
         try {
-          return await serializeBlock(block, properties)
+          return await subtreeRows(block, properties)
         } catch (error) {
           console.error(`Failed to serialize block ${block.id}:`, error)
           return null
@@ -104,25 +96,13 @@ export const serializeSelectedBlocks = async (
       }),
   )
 
-  const validResults = blockResults.filter((result): result is ClipboardData => result !== null)
+  const validRows = rowsPerBlock.filter(rows => rows !== null)
 
-  if (validResults.length === 0) {
+  if (validRows.length === 0) {
     throw new Error('No block data could be serialized for copying')
   }
 
-  // Next to other roots a bare single line is re-read as markdown on paste (a
-  // childless `b` before `- a` adopts `a`), so it is bulleted. A multi-line
-  // lone block stays bare: a fence, quote or table pastes back whole only
-  // unbulleted.
-  if (validResults.length === 1) return validResults[0]
-  const bulletsAsRoot = (r: ClipboardData): boolean =>
-    r.blocks.length === 1 && !r.blocks[0].content.includes('\n')
-  return {
-    markdown: validResults
-      .map(r => bulletsAsRoot(r) ? createIndentedContent(r.blocks[0].content, 0) : r.markdown)
-      .join('\n'),
-    blocks: validResults.flatMap(r => r.blocks),
-  }
+  return clipboardDataFor(validRows.flat())
 }
 
 export const copySelectedBlocksToClipboard = async (
@@ -164,8 +144,8 @@ export const copyBlockIdsToClipboard = async (
  *  claim.
  *
  *  `'empty'`: the blocks serialize to no text (one blank, childless block),
- *  and a paste of no text never reaches the paste handlers, so nothing could
- *  complete the cut. Nothing is written or armed. */
+ *  and an armed cut is matched by its text, so any paste carrying no text (a
+ *  lone file) would complete it. Nothing is written or armed. */
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,

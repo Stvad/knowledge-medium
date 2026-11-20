@@ -20,6 +20,7 @@
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
+import { normalizeLineEndings } from '@/utils/string.js'
 import { showInfo } from '@/utils/toast.js'
 
 /** The record. `rootIds` are the cut roots in document order (descendants
@@ -138,12 +139,8 @@ export const subscribeArmedCut = (listener: () => void): (() => void) => {
   }
 }
 
-/** Line endings are the one thing platforms rewrite on the way through the
- *  clipboard (CRLF on Windows). */
-const normalize = (text: string): string => text.replace(/\r\n?/g, '\n')
-
 const digest = async (text: string): Promise<string> => {
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalize(text)))
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalizeLineEndings(text)))
   return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 

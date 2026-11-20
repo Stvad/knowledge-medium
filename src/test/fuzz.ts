@@ -175,3 +175,13 @@ export const statefulFuzzGuard = (): {
   afterEach(barrier, fuzzTestTimeout())
   return {barrier, run}
 }
+
+/** A step for a long property that parses with happy-dom, which it calls once
+ *  per case: every so often it ends the task. happy-dom's `WeakRef`s stay alive
+ *  until the task ends, so a deep run that never yields exhausts the heap. */
+export const happyDomGcYield = (): (() => Promise<void>) => {
+  let cases = 0
+  return async () => {
+    if (++cases % 500 === 0) await new Promise(resolve => setTimeout(resolve, 0))
+  }
+}

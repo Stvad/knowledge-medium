@@ -1,0 +1,107 @@
+/*
+ * A copied outline's structure on the clipboard, for a paste in this app to
+ * rebuild exactly. The text/plain the copy writes can't carry it: a multi-line
+ * block's continuation lines read back as children, and parsing trims edge
+ * whitespace and reads a block's own markers as structure.
+ *
+ * It rides in a text/html item because that is the one carrier every engine's
+ * `ClipboardItem` takes that a paste event can read synchronously; a web custom
+ * format is Chromium-only, and only `clipboard.read()` sees it. Within the html
+ * it is a `<meta>`, which an editor's insert drops: an attribute or comment
+ * stays in the document it is pasted into, holding text the user then deletes.
+ *
+ * Rich apps read that html instead of the text, so it goes on the clipboard
+ * only for a copy whose text does not parse back exactly. Any other copy stays
+ * text/plain alone.
+ */
+
+import { escape as escapeHtml } from 'lodash-es'
+import {
+  outlineFromTokens,
+  parseMarkdownToBlocks,
+  type OutlineNode,
+  type OutlineToken,
+} from '@/utils/markdownParser.js'
+import { normalizeLineEndings } from '@/utils/string.js'
+
+/** One copied block, in document order; `depth` is below its copied root. */
+export interface OutlineEntry {
+  readonly depth: number
+  readonly content: string
+}
+
+const OUTLINE_META_NAME = 'km-outline'
+
+const bulleted = ({depth, content}: OutlineEntry): string => {
+  const indent = '  '.repeat(depth)
+  return `${indent}- ${content.split('\n').join(`\n${indent}  `)}`
+}
+
+/** The text/plain of a copy: every block is a bullet indented by depth, except
+ *  a childless root that is the copy's only root, or that spans lines. Next to
+ *  other roots a bare single line is re-read as markdown on paste (a childless
+ *  `b` before `- a` adopts `a`), while a fence, quote or table pastes back whole
+ *  to another app only unbulleted. */
+export const clipboardTextFor = (entries: readonly OutlineEntry[]): string => {
+  const severalRoots = entries.filter(entry => entry.depth === 0).length > 1
+  return entries
+    .map((entry, index) => {
+      const childlessRoot = entry.depth === 0 && (entries[index + 1]?.depth ?? 0) === 0
+      return childlessRoot && (!severalRoots || entry.content.includes('\n')) ? entry.content : bulleted(entry)
+    })
+    .join('\n')
+}
+
+const parsesBack = (entries: readonly OutlineEntry[], text: string): boolean => {
+  const parsed = parseMarkdownToBlocks(text)
+  const depthById = new Map<string | undefined, number>([[undefined, -1]])
+  return parsed.length === entries.length && parsed.every((block, index) => {
+    const depth = depthById.get(block.parentId)! + 1
+    depthById.set(block.id, depth)
+    // Depth is defence in depth: no text the copy writes parses to the right
+    // contents at the wrong depths.
+    return depth === entries[index].depth && block.content === entries[index].content
+  })
+}
+
+/** The text/html of a copy, or undefined when `text` parses back to exactly
+ *  `entries` and needs none. A rich app sees the same lines as `text`. Carries
+ *  only depth and content, no ids or properties. */
+export const clipboardHtmlFor = (entries: readonly OutlineEntry[], text: string): string | undefined => {
+  if (parsesBack(entries, text)) return undefined
+  const payload = JSON.stringify(entries.map(({depth, content}) => ({depth, content})))
+  const lines = text.split('\n').map(line => `<div>${escapeHtml(line) || '<br>'}</div>`).join('')
+  return `<meta name="${OUTLINE_META_NAME}" content="${escapeHtml(payload)}"><div style="white-space:pre-wrap">${lines}</div>`
+}
+
+const isOutlineEntries = (value: unknown): value is OutlineEntry[] =>
+  Array.isArray(value) && value.length > 0 && value.every((entry: Partial<OutlineEntry> | null) =>
+    typeof entry?.content === 'string' && Number.isInteger(entry.depth) && entry.depth! >= 0)
+
+/** The indentation `entries` serialize to, the one part of the text that grows
+ *  beyond the payload's own size: a chain of N entries is N² of it. Bounding it
+ *  by the text beside it, before serializing, keeps a crafted payload linear. */
+const indentationWidth = (entries: readonly OutlineEntry[]): number =>
+  entries.reduce((width, {depth, content}) => width + 2 * depth * content.split('\n').length, 0)
+
+/** The outline this app copied, when `html` carries one that serializes to
+ *  exactly `text`: anything else on the clipboard (a stale or foreign html
+ *  item, text rewritten since, a leading BOM a browser stripped from the text)
+ *  reads as null, and the text pastes as usual. */
+export const outlineFromClipboard = (html: string | undefined, text: string): OutlineNode[] | null => {
+  if (!html?.includes(OUTLINE_META_NAME)) return null
+  let entries: unknown
+  try {
+    const carrier = new DOMParser().parseFromString(html, 'text/html').querySelector(`meta[name="${OUTLINE_META_NAME}"]`)
+    entries = JSON.parse(carrier?.getAttribute('content') ?? '')
+  } catch {
+    return null
+  }
+  if (!isOutlineEntries(entries)) return null
+  if (indentationWidth(entries) > text.length) return null
+  if (normalizeLineEndings(clipboardTextFor(entries)) !== normalizeLineEndings(text)) return null
+  // Line endings normalize as they do on the text path: an editor can't hold a
+  // `\r`, so one would put a caret offset past the end of its document.
+  return outlineFromTokens(entries.map(({depth, content}): OutlineToken =>
+    ({kind: 'list-item', indent: depth, content: normalizeLineEndings(content)})))
+}

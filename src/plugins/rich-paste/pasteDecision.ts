@@ -7,13 +7,14 @@ import { convertClipboardHtml } from './htmlToOutline.js'
  * the chain whenever the HTML adds nothing, the user asked for plain text
  * (Cmd/Ctrl+Shift+V), or the chain captures the paste as media — whoever owns
  * the files decides that, so with capture off a spreadsheet's image doesn't
- * cost its table.
+ * cost its table. Likewise when the chain has already built the tree from the
+ * clipboard (this app's own copy).
  */
 export const richPasteDecisionContribution = pasteDecisionVerb.decorator(
   next => request => {
     if (request.intent === 'single-block' || !request.html) return next(request)
     const downstream = next(request) as PasteDecision
-    if (downstream.kind === 'media') return downstream
+    if (downstream.kind === 'media' || (downstream.kind === 'split' && downstream.blocks)) return downstream
 
     const converted = convertClipboardHtml(request.html, request.text)
     if (converted.kind === 'plain') return downstream
