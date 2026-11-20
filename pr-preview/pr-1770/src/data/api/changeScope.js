@@ -1,1 +1,0 @@
-export{jft as CHANGE_SCOPE_POLICIES,Mft as ChangeScope,Nft as isChangeScope,Pft as policyForScope,Fft as scopeAllowedInReadOnly,Ift as scopeIsUndoable,Lft as scopePoliciesEquivalent,Rft as scopeUploadsToServer,zft as sourceForScope}from"../../../chunks/app-CfKaESW3.js";

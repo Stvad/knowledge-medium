@@ -1,1 +1,0 @@
-export{ho as propertyRowsPlugin}from"../../../chunks/app-CfKaESW3.js";

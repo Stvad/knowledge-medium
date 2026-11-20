@@ -1,1 +1,0 @@
-export{Mf as quotedInFooterContribution}from"../../../chunks/app-CfKaESW3.js";

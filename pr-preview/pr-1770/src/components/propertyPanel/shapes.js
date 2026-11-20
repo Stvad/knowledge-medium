@@ -1,1 +1,0 @@
-export{SK as propertyShapeLabel}from"../../../chunks/app-CfKaESW3.js";

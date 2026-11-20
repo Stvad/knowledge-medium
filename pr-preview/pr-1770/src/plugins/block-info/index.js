@@ -1,1 +1,0 @@
-export{ry as blockInfoPlugin}from"../../../chunks/app-CfKaESW3.js";

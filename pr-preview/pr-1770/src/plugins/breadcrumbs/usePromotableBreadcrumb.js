@@ -1,1 +1,0 @@
-export{bE as usePromotableBreadcrumb}from"../../../chunks/app-CfKaESW3.js";

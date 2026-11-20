@@ -1,1 +1,0 @@
-export{pc as parsePropertiesJson}from"../../../chunks/app-CfKaESW3.js";

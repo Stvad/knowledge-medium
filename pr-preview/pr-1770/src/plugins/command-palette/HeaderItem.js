@@ -1,1 +1,0 @@
-export{qM as CommandPaletteHeaderItem}from"../../../chunks/app-CfKaESW3.js";

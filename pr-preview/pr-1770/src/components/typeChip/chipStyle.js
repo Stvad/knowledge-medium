@@ -1,1 +1,0 @@
-export{XN as chipStyle}from"../../../chunks/app-CfKaESW3.js";

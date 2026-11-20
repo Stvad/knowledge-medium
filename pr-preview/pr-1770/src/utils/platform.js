@@ -1,1 +1,0 @@
-export{vG as isIOS,yG as isMacPlatform}from"../../chunks/app-CfKaESW3.js";

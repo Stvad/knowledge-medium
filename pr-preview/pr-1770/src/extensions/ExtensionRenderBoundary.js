@@ -1,1 +1,0 @@
-export{xB as ExtensionRenderBoundary}from"../../chunks/app-CfKaESW3.js";

@@ -1,1 +1,0 @@
-export{SM as useCommandPaletteActions}from"../../../chunks/app-CfKaESW3.js";

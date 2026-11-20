@@ -1,1 +1,0 @@
-export{Q$ as pluginPrefsExtension,$$ as pluginUIStateExtension}from"../../chunks/app-CfKaESW3.js";

@@ -1,1 +1,0 @@
-export{WP as editorAutocompleteExtension}from"../../chunks/app-CfKaESW3.js";

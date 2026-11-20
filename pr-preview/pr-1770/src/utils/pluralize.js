@@ -1,1 +1,0 @@
-export{p7 as agree,m7 as pluralize}from"../../chunks/app-CfKaESW3.js";

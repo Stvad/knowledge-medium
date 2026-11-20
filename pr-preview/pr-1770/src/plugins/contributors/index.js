@@ -1,1 +1,0 @@
-export{fh as contributorsPlugin}from"../../../chunks/app-CfKaESW3.js";

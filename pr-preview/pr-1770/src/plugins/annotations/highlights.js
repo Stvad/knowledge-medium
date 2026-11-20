@@ -1,1 +1,0 @@
-export{nh as HIGHLIGHT_CLASS,rh as MOVED_HIGHLIGHT_CLASS,ih as SUGGESTION_HIGHLIGHT_CLASS,ah as coveringStyle,oh as highlightClasses,sh as highlightField,ch as highlightRange,lh as highlightRanges,uh as threadHighlights,dh as threadHighlightsContribution}from"../../../chunks/app-CfKaESW3.js";

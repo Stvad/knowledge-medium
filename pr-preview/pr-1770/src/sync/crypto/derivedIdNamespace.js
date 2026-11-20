@@ -1,1 +1,0 @@
-export{Bst as deriveWorkspaceIdNamespace}from"../../../chunks/app-CfKaESW3.js";

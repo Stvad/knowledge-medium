@@ -1,1 +1,0 @@
-export{VV as BlockProperties}from"../../chunks/app-CfKaESW3.js";

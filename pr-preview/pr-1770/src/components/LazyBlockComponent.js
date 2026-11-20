@@ -1,1 +1,0 @@
-export{DI as LazyBlockComponent}from"../../chunks/app-CfKaESW3.js";

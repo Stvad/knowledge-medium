@@ -1,1 +1,0 @@
-export{BN as BlockEmbed}from"../../../chunks/app-CfKaESW3.js";

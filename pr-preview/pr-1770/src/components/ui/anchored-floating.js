@@ -1,1 +1,0 @@
-export{gK as floatingAnchorFromRect,_K as useAnchoredFloating}from"../../../chunks/app-CfKaESW3.js";

@@ -1,1 +1,0 @@
-export{Dq as staticDataExtensions}from"../../chunks/app-CfKaESW3.js";

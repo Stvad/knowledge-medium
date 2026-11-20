@@ -1,1 +1,0 @@
-export{gF as checkForAppUpdate,_F as registerServiceWorker}from"../chunks/app-CfKaESW3.js";

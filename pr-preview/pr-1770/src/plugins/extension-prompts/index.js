@@ -1,1 +1,0 @@
-export{qP as ExtensionPromptSurface,JP as extensionPromptsExtension}from"../../../chunks/app-CfKaESW3.js";

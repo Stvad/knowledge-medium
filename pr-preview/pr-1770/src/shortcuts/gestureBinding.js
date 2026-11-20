@@ -1,1 +1,0 @@
-export{kF as gestureBindingDescriptor,AF as matchesGestureEvent}from"../../chunks/app-CfKaESW3.js";
