@@ -6,7 +6,7 @@
  *  reconciled against what the blocks say.
  */
 
-import type {PrescribedExercise, Prescription, SessionType} from '../engine/types'
+import {countOccurrences, type PrescribedExercise, type Prescription, type SessionType} from '../engine/types'
 
 export interface PlannedSet {
   /** What to load. 0 when there's no history to derive one from — the block
@@ -62,7 +62,7 @@ const setsFor = (exercise: PrescribedExercise): PlannedSet[] => {
   const rows: PlannedSet[] = []
   for (let i = 0; i < Math.max(0, exercise.sets); i += 1) {
     // The RPE prompt goes on the LEFT row only. `progressionSets` drops
-    // `side: 'R'` rows and `allSetsAtOrBelowRpe` reads through it, so a rating
+    // `side: 'R'` rows and the catch-up reads through it, so a rating
     // on the right is never read by anything — asking for it breaks the rule
     // the control exists under (it appears only where it can change a future
     // prescription) and costs a tap per set on the narrowest screen there is.
@@ -80,26 +80,23 @@ export const planFromPrescription = (
   prescription: Prescription,
   unit: string,
 ): SessionPlan => {
-  const seen = new Map<string, number>()
-  const lifts = prescription.exercises.map((exercise): PlannedLift => {
-    const key = exercise.defId ?? exercise.exercise
-    const occurrence = seen.get(key) ?? 0
-    seen.set(key, occurrence + 1)
-    // Taken from the expanded rows rather than recomputed from the rep range:
-    // `setsFor` already resolved the fallbacks a carry needs, and two places
-    // deriving "what reps did we ask for" is two places to disagree.
-    const sets = setsFor(exercise)
-    return {
-      exercise: exercise.exercise,
-      ...(exercise.defId !== undefined ? {definitionId: exercise.defId} : {}),
-      occurrence,
-      unit,
-      ...(exercise.weight !== undefined ? {prescribedWeight: exercise.weight} : {}),
-      prescribedSets: exercise.sets,
-      ...(sets[0] !== undefined ? {prescribedReps: sets[0].reps} : {}),
-      sets,
-    }
-  })
+  const lifts = countOccurrences(prescription.exercises, e => e.defId ?? e.exercise)
+    .map(({item: exercise, occurrence}): PlannedLift => {
+      // Taken from the expanded rows rather than recomputed from the rep range:
+      // `setsFor` already resolved the fallbacks a carry needs, and two places
+      // deriving "what reps did we ask for" is two places to disagree.
+      const sets = setsFor(exercise)
+      return {
+        exercise: exercise.exercise,
+        ...(exercise.defId !== undefined ? {definitionId: exercise.defId} : {}),
+        occurrence,
+        unit,
+        ...(exercise.weight !== undefined ? {prescribedWeight: exercise.weight} : {}),
+        prescribedSets: exercise.sets,
+        ...(sets[0] !== undefined ? {prescribedReps: sets[0].reps} : {}),
+        sets,
+      }
+    })
   return {day: prescription.day, session: prescription.session, lifts}
 }
 

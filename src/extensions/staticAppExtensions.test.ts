@@ -7,12 +7,13 @@
 // runtime. This composes the REAL production plugin set
 // (`staticAppExtensions`) through the same resolver `AppRuntimeProvider` uses
 // and asserts it both succeeds and actually produces contributions.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { AGENT_PROPS } from '@/plugins/agent-dispatch-companion/chipState'
 import {
-  resolveAnalyzeArmingProbes,
+  resolveAnalyzeTables,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
@@ -20,6 +21,8 @@ import { referencesLocalSchema } from '@/plugins/references/localSchema.js'
 import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
+import { findKeybindingConflicts } from '@/shortcuts/keybindingConflicts.js'
+import * as platform from '@/utils/platform.js'
 import { ALIAS_SYNC_PROCESSOR } from '@/plugins/alias'
 import { RENAME_BACKLINKS_PROCESSOR } from '@/plugins/references/renameProcessor.js'
 
@@ -28,6 +31,13 @@ beforeAll(async () => { shared = await createTestDb() })
 afterAll(async () => { await shared.cleanup() })
 
 describe('app boot composition', () => {
+  it('keeps every dispatch property seed registered after the app runtime replaces bootstrap data facets', () => {
+    const { repo } = createTestRepo({ db: shared.db })
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+    const names = runtime.read(definitionSeedsFacet).map(seed => seed.name)
+    expect(names).toEqual(expect.arrayContaining(Object.values(AGENT_PROPS)))
+  })
+
   it('composes the full production plugin set into a runtime that has contributions', () => {
     const { repo } = createTestRepo({ db: shared.db })
     const extensions = staticAppExtensions({ repo })
@@ -43,6 +53,36 @@ describe('app boot composition', () => {
     // legitimately remove enough plugins to fall below them.
     expect(runtime.read(actionsFacet).length).toBeGreaterThan(100)
     expect(runtime.read(appMountsFacet).length).toBeGreaterThan(8)
+  })
+
+  // `$mod` is Cmd on a Mac and Control elsewhere, so two defaults can collide
+  // on one platform only.
+  describe('default keybindings', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it.each([true, false])('overlap only for ordered property-display fallbacks (mac: %s)', mac => {
+      vi.spyOn(platform, 'isMacPlatform').mockReturnValue(mac)
+      const { repo } = createTestRepo({ db: shared.db })
+      const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+      const actions = runtime.read(actionsFacet)
+      const conflicts = findKeybindingConflicts(actions)
+      const alternatives = ['property-rows.block.cycle', 'toggle_properties']
+      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([['t', alternatives]])
+      // The cycle must precede the panel toggle in both contexts; a declined
+      // cycle leaves the panel as the first dispatchable candidate.
+      for (const prefix of ['', 'multi_select.']) {
+        const ids = alternatives.map(id => `${prefix}${id}`)
+        const candidates = actions.filter(action => ids.includes(action.id))
+        expect(candidates.map(action => action.id)).toEqual(ids)
+        for (const childBacked of [true, false]) {
+          const first = candidates.find(action => !action.canDispatch || action.canDispatch({
+            uiStateBlock: repo.block('panel'),
+            propertyDisplay: {childBacked, workspace: 'inherit', panel: 'inherit'},
+          }))
+          expect(first?.id).toBe(childBacked ? ids[0] : ids[1])
+        }
+      }
+    })
   })
 
   // Same-tx processors run in facet INSERTION order, so a plugin-list
@@ -87,18 +127,11 @@ describe('app boot composition', () => {
     const contributed = (referencesLocalSchema.analyzeTables ?? []).map(t => t.probe)
     expect(contributed).not.toHaveLength(0)
 
-    expect(resolveAnalyzeArmingProbes(runtime.read(localSchemaFacet)))
+    const probesOf = (contributions: Parameters<typeof resolveAnalyzeTables>[0]) =>
+      resolveAnalyzeTables(contributions).map(table => table.probe)
+    expect(probesOf(runtime.read(localSchemaFacet)))
       .not.toEqual(expect.arrayContaining(contributed))
-    expect(resolveAnalyzeArmingProbes(resolveLocalSchemaContributions(staticDataExtensions)))
+    expect(probesOf(resolveLocalSchemaContributions(staticDataExtensions)))
       .toEqual(expect.arrayContaining(contributed))
-  })
-
-  it('still composes in safe mode (degraded-boot path)', () => {
-    const { repo } = createTestRepo({ db: shared.db })
-    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
-      overrides: new Map(),
-      safeMode: true,
-    })
-    expect(runtime).toBeTruthy()
   })
 })

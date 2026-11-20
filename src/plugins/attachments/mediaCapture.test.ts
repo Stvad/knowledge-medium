@@ -13,6 +13,7 @@ import { isBlockRefId, parseBlockRefs } from '@/plugins/references/referencePars
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
 import { deriveContentKey } from '@/sync/crypto/contentKey.js'
 import { deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
+import { WorkspaceKeyUnavailableError } from '@/sync/keys/openWorkspaceKeys.js'
 import type { GetMaterializability, Materializability } from '@/sync/transform.js'
 import { InMemoryByteStore } from './byteStore.js'
 import {
@@ -150,6 +151,16 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     expect(hasBlockType(container!, ASSETS_TYPE)).toBe(true)
   })
 
+  it('is one undo step that leaves the Assets container, which other devices file assets under', async () => {
+    const before = env.repo.undoManager.depths(ChangeScope.BlockDefault).undo
+    const result = await captureMedia({ workspaceId: WS, source: { bytes: bytesOf(21), mime: 'image/png' } }, deps())
+    expect(result.ok).toBe(true)
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(before + 1)
+    expect(await env.repo.undo()).toBe(true)
+    if (result.ok) expect(await env.repo.load(result.assetBlockId)).toBeNull()
+    expect(await env.repo.load(kernelPageBlockId(WS, ASSETS_NS))).not.toBeNull()
+  })
+
   it('mints a UUID-shaped asset id, so the renderer’s ((id)) reference parses — not literal text', async () => {
     // The block-ref grammar only matches UUID-shaped targets, so the asset id MUST
     // be a UUID or the `((id))` reference renders as literal text, not the media block.
@@ -208,6 +219,7 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     const WS2 = 'ws-2'
 
     const a = await captureMedia({ workspaceId: WS, source: { bytes, mime: 'image/png' } }, deps())
+    env.repo.setActiveWorkspaceId(WS2)
     const b = await captureMedia({ workspaceId: WS2, source: { bytes, mime: 'image/png' } }, deps())
 
     expect(a.ok && b.ok).toBe(true)
@@ -288,10 +300,13 @@ describe('captureMedia — e2ee + guards', () => {
     expect(result).toEqual({ ok: false, reason: 'workspace-locked' })
   })
 
-  it('rejects an e2ee capture with no K_id on this device (the §10 re-paste migration)', async () => {
+  it('rejects an e2ee capture when the key read finds no K_id on this device', async () => {
     const result = await captureMedia(
       { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' } },
-      deps({ getMaterializability: mat('decrypt'), getContentKeyHmac: async () => null }),
+      deps({
+        getMaterializability: mat('decrypt'),
+        getContentKeyHmac: async () => { throw new WorkspaceKeyUnavailableError(WS) },
+      }),
     )
     expect(result).toEqual({ ok: false, reason: 'no-content-key' })
   })

@@ -10,14 +10,9 @@
  * `deleteSubtreeInTx`, so a guarded block sitting under a deleted ancestor goes
  * with it, unasked. That's deliberate — this is a UI affordance stopping a
  * keystroke from doing something pointless, not an immortality bit — but don't
- * read the guards as a subtree-wide protection when adding one. The
- * previous shape — each handler calling `block.delete()` and remembering to ask
- * first — lasted one commit before diverging: `delete_block` checked,
- * `delete_empty_block_cm` and `cut_selected_blocks` did not, so `Delete` on a
- * daily note was refused while `d` on the same selection destroyed it.
+ * read the guards as a subtree-wide protection when adding one.
  *
- * The CONFIRMATION is scoped the other way round, to everything that will be
- * tombstoned — see {@link confirmBulkDeleteThroughUi}.
+ * The confirmation looks through the entire subtree to count deleted content.
  *
  * Why this is a UI affordance rather than a data-layer guard, and what IS
  * unbypassable instead, is on `BlockDeletionGuard` in `@/extensions/core` —
@@ -28,6 +23,8 @@
  */
 import type { SubtreeRow } from '@/data/api'
 import type { Block } from '@/data/block.js'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
+import { isPropertyFieldInstance } from '@/data/propertyChildren'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { resolveDeletionRefusal } from '@/extensions/core.js'
@@ -40,14 +37,7 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
  *  by id). */
 const REFUSAL_TOAST_ID = 'block-deletion-refused'
 
-/** How many blocks one gesture may remove before it has to ask. Counted over
- *  the whole affected set, so the number means the same thing whether the user
- *  selected 30 blocks or pressed Delete on one collapsed page holding 30.
- *
- *  Sized for a confirmation that stays worth reading: one met often enough to
- *  click through without looking is worse than none. If it starts asking about
- *  deletes that look small, read `countBlocksRemovedBy` before changing this
- *  number — what it counts is the likelier cause. */
+/** Ask at this count of affected blocks, as measured by `countBlocksRemovedBy`. */
 export const BULK_DELETE_CONFIRM_THRESHOLD = 20
 
 export interface DeleteThroughUiOptions {
@@ -57,19 +47,18 @@ export interface DeleteThroughUiOptions {
    *  callback renders under the frozen page snapshot, where it cannot be
    *  clicked, and the gesture waits on a promise nobody can resolve. */
   animate?: boolean
-  /** Work that must happen while the blocks still exist — a cut's clipboard
-   *  write, a focus target read out of the subtree about to vanish. Runs after
+  /** Work that must happen while the blocks still exist — a focus target
+   *  read out of the subtree about to vanish. Runs after
    *  the guards and the confirmation, so a refused or cancelled gesture never
    *  reaches it, and before the write, which is the only window in which it is
-   *  correct. Callers used to sequence this themselves and each had to
-   *  remember the same order. */
+   *  correct. */
   beforeWrite?: () => Promise<void> | void
 }
 
 /**
  * Ask the guards, confirm if the delete is big, then delete. Returns whether
  * the delete happened, so callers can skip follow-up work (focus moves,
- * clipboard writes, selection resets) when it didn't.
+ * selection resets) when it didn't.
  *
  * Loads the block first: guards inspect types and workspace id, and an unloaded
  * block would answer "no types" and be waved through.
@@ -82,7 +71,7 @@ export const deleteBlockThroughUi = async (
 
 /** Batch form: refuses the WHOLE call if any block is protected, rather than
  *  half-deleting the set. One toast, and the user's selection is intact so they
- *  can narrow it and retry — a partial cut is not something they can undo by
+ *  can narrow it and retry — a partial delete is not something they can undo by
  *  re-selecting.
  *
  *  All-or-nothing describes the GUARDS, not the writes. The deletes are N
@@ -91,11 +80,7 @@ export const deleteBlockThroughUi = async (
  *  1..K-1 tombstoned. Making that atomic is the same open item as
  *  `applyToAllBlocksInSelection`'s "one tx so undo collapses the batch" todo.
  *
- *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
- *  selection here directly; `multi_select.delete_block` fans out per block
- *  through `applyToAllBlocksInSelection`, so it runs the same check once over
- *  the selection as that helper's `preflight` before any block is touched.
- *  `Delete` and `d` on the same selection must not disagree. */
+ *  The multi-select `Delete` passes its whole selection here directly. */
 export const deleteBlocksThroughUi = async (
   blocks: readonly Block[],
   {animate = false, beforeWrite}: DeleteThroughUiOptions = {},
@@ -110,10 +95,9 @@ export const deleteBlocksThroughUi = async (
   if (!await confirmBulkDeleteThroughUi(targets)) return false
   if (beforeWrite) {
     await beforeWrite()
-    // Caller work of unbounded duration — the cut path serializes every
-    // selected subtree and awaits the clipboard API — so the guards are
-    // resolved again rather than writing on a decision taken before it. Gated
-    // on there being such work: without it this is the pass above.
+    // Caller work awaits (it walks the tree), so the guards are resolved
+    // again rather than writing on a decision taken before it. Gated on there
+    // being such work: without it this is the pass above.
     if (!await ensureDeletableThroughUi(targets)) return false
   }
   const write = async (): Promise<void> => {
@@ -129,9 +113,8 @@ export const deleteBlocksThroughUi = async (
 
 /**
  * The guard check on its own, toast included. Use this when the gesture has
- * work to do BETWEEN deciding and deleting — `cut_selected_blocks` has to write
- * the clipboard while the blocks still exist, and must not write it at all for
- * a cut the guards will refuse.
+ * work to do BETWEEN deciding and deleting that must not happen for a delete
+ * the guards will refuse (a merge's picker, a merge into the previous block).
  */
 export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   await Promise.all(blocks.map(block => block.load()))
@@ -147,9 +130,7 @@ export const ensureDeletableThroughUi = async (blocks: readonly Block[]): Promis
 
 /**
  * User consent for a delete big enough to be worth a second look — true,
- * without asking, for the small deletes that are nearly every gesture. Measured
- * over what the delete REMOVES (`countBlocksRemovedBy`), not over the blocks
- * the gesture names.
+ * without asking, when `countBlocksRemovedBy` is below the threshold.
  *
  * Deliberately not folded into `ensureDeletableThroughUi`: merge runs those
  * guards to veto destroying its source block, but REPARENTS the children, so
@@ -180,34 +161,30 @@ const confirmBulkDeleteThroughUi = async (blocks: readonly Block[]): Promise<boo
   return ensureDeletableThroughUi(blocks)
 }
 
-/** Live blocks the delete would tombstone — the single owner of what "how many
- *  blocks" means here; `BULK_DELETE_CONFIRM_THRESHOLD` and
- *  `confirmBulkDeleteThroughUi` both defer to it.
- *
- *  The FULL subtree, matching `deleteSubtreeInTx`'s walk, NOT the visible view.
- *  The visible view prunes at a recognized field row and takes that row's whole
- *  branch, including any authored comment thread under a property value — which
- *  the delete removes regardless. Undercounting is the one direction of error
- *  that matters: it can drop the total under the threshold and skip the
- *  question entirely. The price is that machinery rows count too, so a
- *  property-heavy block reads higher than what is on screen; if that starts
- *  asking about deletes that look small, the fix is a data-layer count that
- *  drops machinery without pruning its authored descendants, never a field-row
- *  classifier restated here (issue #738).
- *
- *  Deduping is a saving, not a correctness condition — the count is the same
- *  either way, but a page selected with its 200 children costs 1 query instead
- *  of 201. It only pays when targets arrive ancestor-first, so callers pass
- *  selection order and leave the leaf-first ordering to the delete. */
+/** Recognized field rows count only when directly targeted. Read the structural
+ *  subtree so values and their descendants still count under omitted fields.
+ *  Long chains of field rows can push counted blocks beyond the query's depth limit.
+ *  Deduplication also skips redundant queries for an ancestor-first selection. */
 const countBlocksRemovedBy = async (blocks: readonly Block[]): Promise<number> => {
-  const ids = new Set<string>()
+  const targets = new Set(blocks.map(block => block.id))
+  const seen = new Set<string>()
+  let count = 0
   for (const block of blocks) {
-    if (ids.has(block.id)) continue
+    if (seen.has(block.id)) continue
     const rows = await block.repo.runQuery<SubtreeRow[]>(
       'core.subtree',
       {id: block.id},
     )
-    for (const row of rows) ids.add(row.id)
+    const [root] = rows
+    if (!root) continue
+    const isFieldDefinition = repoFieldDefinitionTest(block.repo, root.workspaceId)
+    for (const row of rows) {
+      if (seen.has(row.id)) continue
+      seen.add(row.id)
+      if (targets.has(row.id) || !isPropertyFieldInstance(row, isFieldDefinition)) {
+        count++
+      }
+    }
   }
-  return ids.size
+  return count
 }

@@ -74,7 +74,7 @@ describe('watch-events registry', () => {
     await vi.advanceTimersByTimeAsync(999)
     expect(emitted).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
-    expect(emitted).toEqual([{type: 'watcher-settled', consumer: 'daemon', watcher: 'inbox', settledBlocks: ['b']}])
+    expect(emitted).toEqual([{type: 'watcher-settled', consumer: 'daemon', watcher: 'inbox'}])
   })
 
   it('does not emit when a change signal re-resolves to the same result set', async () => {
@@ -160,7 +160,7 @@ describe('watch-events registry', () => {
     // Reference-table-only changes reach it too.
     await change([{id: 'src-1', edited_at: 5}], 'block_references')
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(emitted).toEqual([{type: 'watcher-settled', consumer: 'daemon', watcher: 'claude-mentions', settledBlocks: ['src-1']}])
+    expect(emitted).toEqual([{type: 'watcher-settled', consumer: 'daemon', watcher: 'claude-mentions'}])
   })
 
   it('expires a registration whose TTL lapsed without a refresh', async () => {
@@ -193,89 +193,6 @@ describe('watch-events registry', () => {
     await change([{id: 'a'}, {id: 'b'}, {id: 'c'}])
     await vi.advanceTimersByTimeAsync(1_000)
     expect(emitted).toHaveLength(1)
-  })
-
-  it('blur flushes the settle window and reports only the blurred block', async () => {
-    fake.setRows([{id: 'a'}])
-    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
-
-    await change([{id: 'a'}, {id: 'b'}, {id: 'c'}])
-    registry.notifyBlockSettled('b')
-    await vi.advanceTimersByTimeAsync(0)
-    // Immediate emit — no settleMs wait — but only 'b' is blur-confirmed;
-    // 'c' (e.g. a concurrent sync edit) must not ride the exemption.
-    expect(emitted).toEqual([
-      {type: 'watcher-settled', consumer: 'daemon', watcher: 'inbox', settledBlocks: ['b']},
-    ])
-
-    // 'c' keeps its normal settle window and time-confirms later.
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(emitted).toHaveLength(2)
-    expect(emitted[1]).toMatchObject({settledBlocks: ['c']})
-
-    // Nothing further pending: no duplicate emits.
-    await vi.advanceTimersByTimeAsync(5_000)
-    expect(emitted).toHaveLength(2)
-  })
-
-  it('a blur that lands BEFORE the debounced commit is caught by the recheck', async () => {
-    fake.setRows([{id: 'a'}])
-    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
-
-    registry.notifyBlockSettled('b') // editor unmounted; commit still in flight
-    await vi.advanceTimersByTimeAsync(0)
-    expect(emitted).toEqual([])
-
-    await change([{id: 'a'}, {id: 'b'}]) // the flushed commit lands
-    await vi.advanceTimersByTimeAsync(600) // recheck pass flushes it
-    expect(emitted).toEqual([
-      {type: 'watcher-settled', consumer: 'daemon', watcher: 'inbox', settledBlocks: ['b']},
-    ])
-  })
-
-  it('re-entering the editor revokes the blur exemption (bounce-back typo pattern)', async () => {
-    fake.setRows([{id: 'a'}])
-    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
-
-    // User leaves block b; the debounced commit lands just after.
-    registry.notifyBlockSettled('b')
-    await change([{id: 'a'}, {id: 'b'}])
-
-    // ...but they bounce right back to fix a typo and keep typing. The
-    // blur's 600ms recheck (and any other flush) must no longer treat
-    // b's quiet as user-confirmed.
-    registry.notifyBlockEditing('b')
-    await vi.advanceTimersByTimeAsync(600)
-    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([])
-
-    // The block still time-confirms once genuinely quiet for settleMs.
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([
-      expect.objectContaining({settledBlocks: ['b']}),
-    ])
-  })
-
-  it('a same-stack settle→resume (editor remount) never emits the block as settled', async () => {
-    fake.setRows([{id: 'a'}])
-    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
-
-    // Mid-typing: a debounced commit landed, settle window armed.
-    await change([{id: 'a'}, {id: 'b'}])
-
-    // Indent/reorder remounts the actively-edited editor: React fires
-    // ALL effect destroys before ALL creates on ONE synchronous stack —
-    // settled(b) then resumed(b), user still typing throughout.
-    registry.notifyBlockSettled('b')
-    registry.notifyBlockEditing('b')
-
-    await vi.advanceTimersByTimeAsync(600) // immediate flush + recheck
-    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([])
-
-    // Genuine quiet still time-confirms via the settle window.
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([
-      expect.objectContaining({settledBlocks: ['b']}),
-    ])
   })
 
   it('an identical re-registration only confirms once the original finished baselining', async () => {
@@ -377,57 +294,6 @@ describe('watch-events registry', () => {
     fake.setRows([{id: 'a'}])
     const revived = await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
     expect(revived.registered).toEqual(['inbox'])
-  })
-
-  it('a blur flush holding a stale snapshot must not prune a fresh successor registration', async () => {
-    const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
-    fake.setRows([{id: 'a'}])
-    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
-    await registry.register(fake.db, {
-      consumer: 'other',
-      watchers: [sqlWatcher({name: 'aux', tables: ['other_table']})],
-      ttlMs: 1_000,
-    })
-
-    // Let `other` expire, and leave `daemon` with an unconsumed change:
-    // a transient query failure whose coalesced second signal parks
-    // pendingChange with no compute running.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await vi.advanceTimersByTimeAsync(1_001)
-    let failCompute!: (error: Error) => void
-    getAll.mockImplementationOnce(() => new Promise((_, reject) => { failCompute = reject }))
-    fake.fireChange()
-    await vi.advanceTimersByTimeAsync(0)
-    fake.fireChange() // coalesces into pendingChange
-    failCompute(new Error('transient'))
-    await vi.advanceTimersByTimeAsync(0)
-    warn.mockRestore()
-
-    // The blur flush snapshots [...entries], then awaits daemon's
-    // recompute — while it is parked, a fresh registration replaces
-    // the expired `other`.
-    let releaseFlushCompute!: (rows: unknown[]) => void
-    getAll.mockImplementationOnce(() => new Promise(resolve => { releaseFlushCompute = resolve }))
-    registry.notifyBlockSettled('a')
-    await vi.advanceTimersByTimeAsync(0) // microtask flush parks on the recompute
-    const successor = await registry.register(fake.db, {
-      consumer: 'other',
-      watchers: [sqlWatcher({name: 'aux2', tables: ['other_table']})],
-    })
-    expect(successor.registered).toEqual(['aux2'])
-
-    // The flush resumes and reaches `other`'s STALE snapshot entry —
-    // pruning it must not kill the fresh successor.
-    releaseFlushCompute([{id: 'a'}])
-    await vi.advanceTimersByTimeAsync(0)
-    const auxSubs = fake.subscriptions.filter(entry => !entry.disposed && entry.tables.includes('other_table'))
-    expect(auxSubs).toHaveLength(1)
-
-    // Liveness fence: the successor still detects and emits.
-    fake.setRows([{id: 'a'}, {id: 'b'}])
-    fake.fireChange('other_table')
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(emitted.filter(event => event['watcher'] === 'aux2')).toHaveLength(1)
   })
 
   it('a failing baseline query rejects the registration and leaves nothing armed', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAssetResolver, type AssetResolverDeps } from './resolver.js'
 import { NO_REMOTE_BLOB_STORE } from './assetResolver.js'
-import { ENTRY_SETTLE_MS, InMemoryByteStore } from './byteStore.js'
+import { InMemoryByteStore } from './byteStore.js'
 import type { BlobStore } from './blobStore.js'
 import { encodeBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
@@ -88,7 +88,7 @@ describe('createAssetResolver — happy paths', () => {
     expect(await byteStore.get(USER, WS, key)).toEqual(plain) // decrypted at rest
   })
 
-  it('serves a local hit WITHOUT fetching (already verified when stored, §8)', async () => {
+  it('serves a local hit WITHOUT fetching', async () => {
     const plain = bytes(4, 2)
     const contentHash = await hashOf(plain)
     const byteStore = new InMemoryByteStore()
@@ -114,6 +114,11 @@ describe('createAssetResolver — happy paths', () => {
 })
 
 describe('NO_REMOTE_BLOB_STORE — local-only build (no Supabase)', () => {
+  it('refuses every write, a delete included: none may read as done with nothing done', async () => {
+    await expect(NO_REMOTE_BLOB_STORE.delete('ws', 'k', undefined)).rejects.toThrow(/no remote/)
+    await expect(NO_REMOTE_BLOB_STORE.put('ws', 'k', new Uint8Array(1))).rejects.toThrow(/no remote/)
+  })
+
   it('serves a locally-captured paste from the byte store with no remote object store', async () => {
     const plain = bytes(7, 7, 7)
     const contentHash = await hashOf(plain)
@@ -236,71 +241,24 @@ describe('createAssetResolver — fail-closed (the §7.3/§5.1 acceptance gate)'
   })
 })
 
-describe('createAssetResolver — a local copy is verified before it is served (a poisoned store)', () => {
-  // The write path is not atomic on every engine: an entry can exist that was never
-  // written (empty), was cut short, or holds other bytes. THE HASH is the authority
-  // (`media:size` is cosmetic and user-editable). A defect is a miss — re-fetched under
-  // the same fail-closed rule the download path applies (§5.1) — and the entry is deleted
-  // once it is old enough not to be a write in flight.
-  const OLD = () => Date.now() - ENTRY_SETTLE_MS - 1
-  const poisoned = async (mode: 'none' | 'e2ee', contentHash: string, local: Uint8Array<ArrayBuffer>, now: () => number = OLD) => {
-    const byteStore = new InMemoryByteStore({ now })
+describe('createAssetResolver — a local copy is served only if it hashes to the block', () => {
+  // An entry can exist that was never written (empty), was cut short, or holds
+  // other bytes. Any of them is a miss: re-fetched under the download path's rule.
+  const stored = async (mode: 'none' | 'e2ee', contentHash: string, local: Uint8Array<ArrayBuffer>) => {
+    const byteStore = new InMemoryByteStore()
     const key = await contentKeyFor(mode, contentHash)
     await byteStore.put(USER, WS, key, local)
     return { byteStore, key }
   }
 
-  it('an EMPTY local copy is a miss: deleted, re-fetched, verified, re-stored, served', async () => {
+  it.each([
+    ['empty', bytes()],
+    ['cut short', bytes(1, 2)],
+    ['the right length but other bytes', bytes(9, 9, 9, 9)],
+  ])('a local copy that is %s is re-fetched, and the fetched bytes replace it', async (_what, local) => {
     const plain = bytes(1, 2, 3, 4)
     const contentHash = await hashOf(plain)
-    const { byteStore, key } = await poisoned('none', contentHash, bytes())
-    const del = vi.spyOn(byteStore, 'delete')
-    const { resolver, blobGet } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => seal('none', plain, contentHash),
-    })
-
-    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
-    expect(blobGet).toHaveBeenCalledTimes(1)
-    expect(del).toHaveBeenCalledWith(USER, WS, key)
-    expect(await byteStore.get(USER, WS, key)).toEqual(plain) // healed
-  })
-
-  it('an EMPTY local copy with the remote unreachable fails closed — empty bytes are NEVER served', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    const { byteStore, key } = await poisoned('none', contentHash, bytes())
-    const { resolver } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => {
-        throw new Error('offline')
-      },
-    })
-
-    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
-    expect(await byteStore.has(USER, WS, key)).toBe(false) // the poison is gone either way
-  })
-
-  it('a SHORT local copy (a write cut short) is caught by the hash', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    const { byteStore } = await poisoned('none', contentHash, bytes(1, 2))
-    const { resolver, blobGet } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => seal('none', plain, contentHash),
-    })
-
-    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
-    expect(blobGet).toHaveBeenCalledTimes(1)
-  })
-
-  it('a local copy of the RIGHT length but the WRONG bytes is a miss (hash mismatch) — e2ee too', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    const { byteStore, key } = await poisoned('e2ee', contentHash, bytes(9, 9, 9, 9))
+    const { byteStore, key } = await stored('e2ee', contentHash, local)
     const { resolver, blobGet } = build({
       getMaterializability: mat('decrypt'),
       byteStore,
@@ -312,67 +270,36 @@ describe('createAssetResolver — a local copy is verified before it is served (
     expect(await byteStore.get(USER, WS, key)).toEqual(plain)
   })
 
-  it('a hash-matching local copy is served as-is, whatever any size claim says — the hash is the authority', async () => {
-    const plain = bytes(4, 2)
+  it('with the remote unreachable it fails closed: the bad copy is never served', async () => {
+    const plain = bytes(1, 2, 3, 4)
     const contentHash = await hashOf(plain)
-    const byteStore = new InMemoryByteStore()
+    const { byteStore } = await stored('none', contentHash, bytes())
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => {
+        throw new Error('offline')
+      },
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+  })
+
+  it('a bad copy under the keyed name does not hide a good pre-conversion copy under the raw one', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore } = await stored('e2ee', contentHash, bytes())
     await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
-    const del = vi.spyOn(byteStore, 'delete')
-    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+    const { resolver, blobGet } = build({ getMaterializability: mat('decrypt'), byteStore })
 
     expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
     expect(blobGet).not.toHaveBeenCalled()
-    expect(del).not.toHaveBeenCalled()
   })
 
-  it('a defective YOUNG entry (a write possibly in flight) is a miss but is NOT deleted', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    // Stamped "now": what a peer's truncated-mid-write file looks like from here.
-    const { byteStore } = await poisoned('none', contentHash, bytes(1, 2), () => Date.now())
-    const del = vi.spyOn(byteStore, 'delete')
-    const { resolver, blobGet } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => seal('none', plain, contentHash),
-    })
-
-    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
-    expect(blobGet).toHaveBeenCalledTimes(1) // still a miss — served from the network
-    expect(del).not.toHaveBeenCalled() // the peer's write is left to finish
-  })
-
-  it('an entry whose store tracks no timestamp (lastModified 0) is treated as old — deleted', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    const { byteStore, key } = await poisoned('none', contentHash, bytes(), () => 0)
-    const del = vi.spyOn(byteStore, 'delete')
-    const { resolver } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => seal('none', plain, contentHash),
-    })
-    await resolver.resolve({ workspaceId: WS, contentHash })
-    expect(del).toHaveBeenCalledWith(USER, WS, key)
-  })
-
-  it('a failed delete of the bad copy does not block the re-fetch', async () => {
-    const plain = bytes(1, 2, 3, 4)
-    const contentHash = await hashOf(plain)
-    const { byteStore } = await poisoned('none', contentHash, bytes())
-    vi.spyOn(byteStore, 'delete').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
-    const { resolver } = build({
-      getMaterializability: mat('copy'),
-      byteStore,
-      serve: async () => seal('none', plain, contentHash),
-    })
-    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
-  })
-
-  it('replicate: an EMPTY local entry is not "present" — it is fetched and replicated', async () => {
+  it('replicate: an empty local entry is not "present" — it is fetched and replicated', async () => {
     const plain = bytes(5, 5, 5)
     const contentHash = await hashOf(plain)
-    const { byteStore, key } = await poisoned('none', contentHash, bytes())
+    const { byteStore, key } = await stored('none', contentHash, bytes())
     const { resolver, blobGet } = build({
       getMaterializability: mat('copy'),
       byteStore,
@@ -651,5 +578,71 @@ describe('createAssetResolver — concurrency', () => {
 
     release()
     await Promise.all([pA, pB])
+  })
+})
+
+// A workspace converted in place (docs/workspace-e2ee-conversion.md §6.2): bytes
+// stored on this device before the conversion sit under the raw name, while the
+// e2ee address is the keyed one.
+describe('createAssetResolver — bytes stored before an in-place conversion', () => {
+  it('a pre-conversion local byte renders after the upgrade, with no download', async () => {
+    const plain = bytes(4, 4, 4)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const { resolver, blobGet } = build({
+      byteStore,
+      getMaterializability: mat('decrypt'),
+      serve: async () => { throw new Error('must not download') },
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('the keyed name is read first, and a miss on both fetches the KEYED object only', async () => {
+    const plain = bytes(5, 6)
+    const contentHash = await hashOf(plain)
+    const served = await seal('e2ee', plain, contentHash)
+    const { resolver, blobGet, byteStore } = build({ getMaterializability: mat('decrypt'), serve: async () => served })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    const keyed = await contentKeyFor('e2ee', contentHash)
+    expect(blobGet).toHaveBeenCalledWith(WS, keyed)
+    expect(await byteStore.get(USER, WS, keyed)).toEqual(plain)
+  })
+
+  it('the backlog lane counts a raw-named local entry as present, from the hint or a probe, without reading it', async () => {
+    const plain = bytes(7, 7)
+    const contentHash = await hashOf(plain)
+    const raw = await contentKeyFor('none', contentHash)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, raw, plain)
+    const { resolver, blobGet } = build({
+      byteStore,
+      getMaterializability: mat('decrypt'),
+      serve: async () => { throw new Error('must not download') },
+    })
+
+    // Without reading the bytes: the down-lane walks every media block each pass,
+    // so a presence miss here would read every pre-conversion file in full.
+    const read = vi.spyOn(byteStore, 'get')
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, new Set([raw])))
+      .toEqual({ ok: true, status: 'present' })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }))
+      .toEqual({ ok: true, status: 'present' })
+    expect(read).not.toHaveBeenCalled()
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a plaintext workspace never looks under a keyed name', async () => {
+    // The fallback only widens e2ee lookups: a plaintext resolve reads one name.
+    const plain = bytes(8)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    const get = vi.spyOn(byteStore, 'get')
+    const { resolver } = build({ byteStore, getMaterializability: mat('copy'), serve: async () => plain })
+    await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(get.mock.calls.map(([, , key]) => key)).toEqual([await contentKeyFor('none', contentHash)])
   })
 })

@@ -57,6 +57,7 @@ const enumPresetCodec = (options: readonly EnumOption[]): Codec<string> => {
     encode: value => value === '' ? '' : configured.encode(value),
     decode: json => json === '' ? '' : configured.decode(json),
     where: {
+      storage: 'text',
       encode: value => value === '' ? '' : configured.where!.encode(value),
     },
   }

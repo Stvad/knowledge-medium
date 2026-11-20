@@ -1,17 +1,10 @@
 import {describe, expect, it} from 'vitest'
 import {
-  kernelTypeAssetDeclarations,
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from '../src/kernelDts'
 
 describe('kernel type tree helpers', () => {
-  it('ships asset module declarations alongside the emitted tree', () => {
-    expect(kernelTypeAssetDeclarations).toContain("declare module '*.css'")
-    expect(kernelTypeAssetDeclarations).toContain("declare module '*.svg'")
-    expect(kernelTypeAssetDeclarations).toContain("declare module '*.png'")
-  })
-
   it('prints the tsconfig paths mapping for a materialized declaration tree', () => {
     const out = renderKernelTypesInstallSummary({
       outDir: '/tmp/project/agent-extensions/kernel-types',

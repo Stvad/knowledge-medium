@@ -119,6 +119,23 @@ const derivedIdDynamicImportRestriction = {
   message: derivedIdMessage,
 }
 
+// Every in-app clipboard write goes through `@/utils/copy.js`: writing the
+// clipboard replaces a cut that was on it, and only that module disarms the cut
+// (`@/paste/armedCut.js`), so a write that bypasses it can make the next paste
+// move the old cut's blocks instead of pasting what was just copied.
+const clipboardWriteRestriction = {
+  selector: "MemberExpression[object.property.name='clipboard'][property.name=/^(write|writeText)$/]",
+  message: 'Write the clipboard through `writeTextToClipboard` (@/utils/copy), which disarms a pending cut once the write resolves.',
+}
+
+// Test files only: fast-check builds a reverse map of every code point the
+// first time a file constructs the `'binary'` unit; `codePointUnitArb`
+// generates and shrinks the same values seed for seed without it.
+const fcBinaryUnitRestriction = {
+  selector: "CallExpression[callee.object.name='fc'][callee.property.name='string'] Property[key.name='unit'][value.value='binary']",
+  message: "Use `fc.string({unit: codePointUnitArb})` (@/test/arbitraries/utf16): same values and shrinking per seed, without the reverse map `'binary'` builds per test file (cost: docs/fuzzing.md).",
+}
+
 const uiDeleteSubtreeRestriction = {
   selector: "CallExpression[callee.name='deleteSubtreeInTx']",
   message: uiDeleteMessage,
@@ -230,11 +247,9 @@ export default tseslint.config(
     },
   },
   {
-    // Child-visibility guardrail. `tx.childrenOf` /
-    // `repo.query.{children,subtree,childIds}` default to the structural
-    // everything-view (hidden property field-row machinery included); the
-    // visible/outline view is opt-in (`hidePropertyChildren` / the
-    // `visibleChildrenOf` helper).
+    // Child-view guardrail. `tx.childrenOf` /
+    // `repo.query.{children,subtree,childIds}` answer every child (property
+    // field rows included) unless the caller names a view (`propertyChildren`).
     //
     // Split by ALTITUDE, not by directory (the first cut scoped this to a
     // list of display dirs and two consecutive reviews found bare traversals
@@ -243,13 +258,12 @@ export default tseslint.config(
     //
     //   - a `repo.query.{children,subtree,childIds}({id})` is a READ-OUT —
     //     rendered, serialized, or handed to an agent. Every such call site in
-    //     `src/` wants the visible view, so guard the query handles EVERYWHERE
+    //     `src/` wants a view it can name, so guard the query handles EVERYWHERE
     //     and let new consumers inherit the check for free.
     //   - `tx.childrenOf` is the low-level primitive. Mixed data-layer files
     //     (mutators, paste, panelLayoutProjection, agent-runtime) call it
     //     structurally on purpose — order-key and sibling math must see every
-    //     row — so it is only guarded in the pure display dirs below, and the
-    //     mixed files spell visible intent with the `visibleChildrenOf` helper.
+    //     row — so it is only guarded in the pure display dirs below.
     files: [SOURCE_GLOB],
     plugins: {'child-view': childView},
     rules: {
@@ -269,6 +283,7 @@ export default tseslint.config(
         uiDeleteRestriction,
         uiMutateDeleteRestriction,
         derivedIdDynamicImportRestriction,
+        clipboardWriteRestriction,
       ],
     },
   },
@@ -292,6 +307,7 @@ export default tseslint.config(
         uiTxDeleteRestriction,
         uiDeleteSubtreeRestriction,
         derivedIdDynamicImportRestriction,
+        clipboardWriteRestriction,
       ],
     },
   },
@@ -470,7 +486,7 @@ export default tseslint.config(
       '**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
     ],
     rules: {
-      'no-restricted-syntax': 'off',
+      'no-restricted-syntax': ['error', fcBinaryUnitRestriction],
       'callback-set/prefer-callback-set': 'off',
       'synced-write/no-raw-synced-table-writes': 'off',
       'boundary/no-core-to-plugin-imports': 'off',

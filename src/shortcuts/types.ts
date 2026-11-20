@@ -5,6 +5,8 @@ import type {
   SVGProps,
 } from 'react';
 import { Block } from '../data/block';
+import type { FocusedBlockLocation } from '../data/properties';
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
@@ -154,6 +156,10 @@ export interface BaseShortcutDependencies {
    *  primitives use it so they don't descend into a collapsed nested
    *  root whose children aren't rendered. Defaults to true (focal). */
   scopeRootForcesOpen?: boolean;
+  /** The property display scope of the surface (`PropertyDisplayScope`), so
+   *  a structural gesture or copy acts on the list that surface draws.
+   *  Injected beside `scopeRootId`; absent means mode `none`. */
+  propertyDisplay?: PropertyDisplayScopeLevels;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
@@ -189,6 +195,11 @@ export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
  */
 export interface BlockPointerDependencies extends BlockShortcutDependencies {
   targetElement: HTMLElement;
+  /** The cursor a range gesture extends from when no selection is active, in
+   *  place of the focused row. Set by a dispatch decorator that knows focus was
+   *  moved without the user choosing it (cursor-follows-scroll), so the range
+   *  starts where the user left the cursor rather than where it was carried. */
+  rangeOrigin?: FocusedBlockLocation;
 }
 
 export interface ShortcutDependenciesMap {

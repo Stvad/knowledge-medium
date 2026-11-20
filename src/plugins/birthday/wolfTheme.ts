@@ -7,9 +7,9 @@
     works, and whatever he picks wins). But it is deliberately NOT
     contributed via `themesFacet`, so it never joins the toggle cycle or
     the command-palette theme list. Because it's unregistered,
-    `applyTheme('wolf')` (which resolves ids through the registry) wouldn't
-    find it — so we set `data-theme` / persist directly via `setThemeId`,
-    and inject the palette ourselves under `[data-theme="wolf"]`.
+    `applyTheme('wolf')` wouldn't know its mode — so we apply the
+    `WOLF_THEME` definition itself, and inject the palette ourselves under
+    `[data-theme="wolf"]`.
   - Pop stack, not an override layer: on the birthday we save the user's
     current theme and switch to wolf; after the birthday we restore it —
     but ONLY if he never touched it (live theme is still wolf). If he
@@ -18,9 +18,16 @@
     normal theme switcher double as the escape hatch.
 */
 
-import { THEME_STORAGE_KEY } from '@/plugins/theme-toggle/theme.js'
+import {
+  applyTheme,
+  THEME_STORAGE_KEY,
+  type ThemeDefinition,
+} from '@/plugins/theme-toggle/theme.js'
+import { DEFAULT_THEME_ID_LIGHT } from '@/themeBootDefaults.js'
 
 export const WOLF_THEME_ID = 'wolf'
+
+const WOLF_THEME: ThemeDefinition = { id: WOLF_THEME_ID, label: 'Wolf', mode: 'dark' }
 
 const PREV_KEY = 'birthday:wolf:prev'
 const ACTIVE_KEY = 'birthday:wolf:active'
@@ -28,7 +35,7 @@ const STYLE_EL_ID = 'birthday-wolf-theme'
 
 /** Restore target of last resort, if storage was cleared mid-celebration
  *  and we have no saved previous theme. Matches the app's runtime default. */
-const DEFAULT_RESTORE = 'sunset-warm-light'
+const DEFAULT_RESTORE = DEFAULT_THEME_ID_LIGHT
 
 /** Complete midnight-wolf palette. A partial token set inherits the
  *  `:root` (light) default for any missing key and produces a half-lit
@@ -126,25 +133,13 @@ function liveThemeId(): string {
   return document.documentElement.dataset.theme ?? ''
 }
 
-/** Set `data-theme` and persist it, bypassing the theme registry (wolf is
- *  intentionally unregistered; restore ids are real themes whose palette
- *  CSS exists regardless of registry-population order at startup). */
-function setThemeId(id: string): void {
-  document.documentElement.dataset.theme = id
-  try {
-    window.localStorage?.setItem(THEME_STORAGE_KEY, id)
-  } catch {
-    // best-effort; the visual switch still took effect
-  }
-}
-
 /** Re-apply the wolf theme on demand (the command-palette entry). Just
  *  flips the live theme — it doesn't touch the pop-stack markers, so the
  *  saved "restore to" theme is preserved. Safe to call any number of
  *  times; the stylesheet injection is idempotent. */
 export function applyWolfTheme(): void {
   ensureWolfStylesheet()
-  setThemeId(WOLF_THEME_ID)
+  applyTheme(WOLF_THEME)
 }
 
 function read(key: string): string | null {
@@ -194,7 +189,7 @@ export function syncWolfTheme(isBirthday: boolean, cycle: string): void {
         live === WOLF_THEME_ID ? read(PREV_KEY) ?? DEFAULT_RESTORE : live
       write(PREV_KEY, prev)
       write(ACTIVE_KEY, cycle)
-      setThemeId(WOLF_THEME_ID)
+      applyTheme(WOLF_THEME)
     }
     // Already active: respect whatever theme is live — the user may have
     // switched away himself, and we never re-force wolf.
@@ -202,10 +197,11 @@ export function syncWolfTheme(isBirthday: boolean, cycle: string): void {
   }
 
   if (marker) {
-    // Celebration window has passed. Restore only if untouched; if the
-    // user picked another theme during the day, that IS his choice.
-    if (liveThemeId() === WOLF_THEME_ID) {
-      setThemeId(read(PREV_KEY) ?? DEFAULT_RESTORE)
+    // Celebration window has passed. Restore only if untouched: wolf is
+    // still live here, or still persisted by another tab that applied it.
+    // If the user picked another theme during the day, that choice stands.
+    if (liveThemeId() === WOLF_THEME_ID || read(THEME_STORAGE_KEY) === WOLF_THEME_ID) {
+      applyTheme(read(PREV_KEY) ?? DEFAULT_RESTORE)
     }
     remove(ACTIVE_KEY)
     remove(PREV_KEY)

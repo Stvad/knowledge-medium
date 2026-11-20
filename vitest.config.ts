@@ -1,6 +1,13 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { listIsolatedTestFiles } from './scripts/vitest-isolation.ts'
+
+export const SUPABASE_STACK_TESTS = 'src/**/*.supabase.test.ts'
+export const BROWSER_TESTS = 'src/**/*.browser.test.ts'
+
+const TEST_FILES = '**/*.{test,spec}.{ts,tsx}'
+const isolatedTestFiles = listIsolatedTestFiles(TEST_FILES, import.meta.dirname)
 
 export default defineConfig({
   plugins: [react()],
@@ -19,8 +26,15 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['**/*.{test,spec}.{ts,tsx}'],
     maxWorkers: '100%',
+    // Sharing a worker between test files skips re-evaluating their common
+    // modules. `scripts/vitest-isolation.ts` decides which files cannot share.
+    // `shared` takes whatever that leaves, so a misfiled test can run slower or
+    // less isolated but can never drop out of the suite.
+    projects: [
+      {extends: true, test: {name: 'isolated', include: isolatedTestFiles}},
+      {extends: true, test: {name: 'shared', isolate: false, include: [TEST_FILES], exclude: isolatedTestFiles}},
+    ],
     // Node ≥25 ships its own Web Storage: `localStorage`/`sessionStorage`
     // become own keys of globalThis (returning undefined unless node runs with
     // `--localstorage-file`). The jsdom environment skips window keys that
@@ -51,12 +65,17 @@ export default defineConfig({
     // That makes this a compile/import contract on the flat extensions against
     // `src`; it is NOT the installed extension's importmap resolution, and a
     // green run doesn't mean the copy installed in the user's DB was updated
-    // (see AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
+    // (see agent-extensions/AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
     // next to an extension — gitignored, and skipped here so a leftover one
     // can't redden an unrelated run.
+    // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
+    // starts one and runs those through vitest.supabase.config.ts.
+    // `*.browser.test.ts` needs browser binaries: vitest.browser.config.ts.
     exclude: [
-      '**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**',
+      '**/node_modules/**', '**/dist/**', '**/.git/**', '.claude/**', '.codex/**', 'tmp/**',
       'agent-extensions/*/**', 'agent-extensions/*.probe.*',
+      SUPABASE_STACK_TESTS,
+      BROWSER_TESTS,
     ],
     coverage: {
       reporter: ['text', 'json', 'html'],
@@ -65,7 +84,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, './src')
+      '@': resolve(import.meta.dirname, './src'),
+      // Same as vite.config.ts: the app reads the wire protocol from the
+      // agent-cli SOURCE, not its last build in dist/.
+      '@knowledge-medium/agent-cli/protocol': resolve(import.meta.dirname, './packages/agent-cli/src/protocol.ts'),
     }
   }
 })

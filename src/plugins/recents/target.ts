@@ -2,8 +2,8 @@ import type { Repo } from '@/data/repo'
 import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 
 /** Materialize the workspace's Recents page and say where to open it; `null`
- *  when no workspace is active. `ensureSystemPages` may have SKIPPED this page,
- *  so it can be absent for the rest of the session — see the `SystemPage` doc.
+ *  when no workspace is active. The kernel-page registry (`SystemPage`) marks
+ *  it eager, but bootstrap may skip a failed create; point-of-use retries it.
  *
  *  The PIN, not `activeWorkspaceIdPreferringHash`: that helper routes a command
  *  to the workspace the hash names mid-switch, which is right for a gesture that

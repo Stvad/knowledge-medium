@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
-import { resolveEditModeKeepalive } from '@/components/editModeKeepalive'
+import { __resetEditModeKeepaliveForTests, resolveEditModeKeepalive } from '@/components/editModeKeepalive'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { Repo } from '@/data/repo'
+import { keysBetween } from '@/data/orderKey'
+import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { ConfirmBulkDeleteDialog } from '@/components/ConfirmBulkDeleteDialog'
@@ -15,6 +17,7 @@ import {
 } from '@/utils/deleteBlockThroughUi'
 import { __resetDialogsForTests, getDialogQueue, subscribeDialogs } from '@/utils/dialogs'
 import * as viewTransition from '@/utils/viewTransition'
+import { waitFor } from '@/test/waitFor'
 
 const WS = 'ws-1'
 
@@ -38,14 +41,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** `count` children of `parentId`, ids `<prefix>-0…`. */
+/** `count` children of a CHILDLESS `parentId`, ids `<prefix>-0…`, in one tx. */
 const seedChildren = async (parentId: string, count: number, prefix: string): Promise<string[]> => {
-  const ids: string[] = []
-  for (let i = 0; i < count; i++) {
-    const id = `${prefix}-${i}`
-    await repo.mutate.createChild({parentId, id, content: id})
-    ids.push(id)
-  }
+  const ids = Array.from({length: count}, (_, i) => `${prefix}-${i}`)
+  const orderKeys = keysBetween(null, null, count)
+  await repo.tx(async tx => {
+    for (const [i, id] of ids.entries()) {
+      await tx.create({id, workspaceId: WS, parentId, orderKey: orderKeys[i], content: id})
+    }
+  }, {scope: ChangeScope.BlockDefault})
   return ids
 }
 
@@ -68,11 +72,18 @@ describe('bulk-delete confirmation', () => {
     expect(await isBlockDeleted(repo, ids[0])).toBe(true)
   })
 
+  it('accepts a target whose subtree is already deleted', async () => {
+    await repo.mutate.delete({id: 'root'})
+
+    expect(await deleteBlockThroughUi(repo.block('root'))).toBe(true)
+    expect(getDialogQueue()).toHaveLength(0)
+  })
+
   it('asks before deleting a selection at the threshold, and deletes nothing until answered', async () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()?.Component).toBe(ConfirmBulkDeleteDialog))
+    await waitFor(() => expect(pendingDialog()?.Component).toBe(ConfirmBulkDeleteDialog))
     // The whole point: nothing is tombstoned while the question is on screen.
     expect(await isBlockDeleted(repo, ids[0])).toBe(false)
 
@@ -90,7 +101,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     answerDialog(null)
 
     expect(await deleting).toBe(false)
@@ -103,7 +114,7 @@ describe('bulk-delete confirmation', () => {
     await seedChildren('page', BULK_DELETE_CONFIRM_THRESHOLD - 1, 'child')
 
     const deleting = deleteBlockThroughUi(repo.block('page'))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     expect(pendingDialog()?.props).toEqual({
       targetCount: 1,
       totalCount: BULK_DELETE_CONFIRM_THRESHOLD,
@@ -115,16 +126,17 @@ describe('bulk-delete confirmation', () => {
   })
 
   it('counts a block and its own descendant once', async () => {
-    // A selection can hold both; the delete visits each row once, so the count
-    // has to as well. Sized so double-counting the overlap crosses the
-    // threshold and deduping does not: the subtree is one short of it, and the
-    // child is picked up a second time by being selected in its own right.
+    // Child-first order makes both subtree queries run. Counting their overlap
+    // twice would push the delete to the threshold.
     await repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent'})
     const kids = await seedChildren('parent', BULK_DELETE_CONFIRM_THRESHOLD - 2, 'kid')
 
-    expect(await deleteBlocksThroughUi([repo.block('parent'), repo.block(kids[0])])).toBe(true)
-
-    expect(getDialogQueue()).toHaveLength(0)
+    const stop = subscribeDialogs(() => pendingDialog()?.finalize(null))
+    try {
+      expect(await deleteBlocksThroughUi([repo.block(kids[0]), repo.block('parent')])).toBe(true)
+    } finally {
+      stop()
+    }
     expect(await isBlockDeleted(repo, kids[0])).toBe(true)
   })
 
@@ -139,7 +151,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)), {animate: true})
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     expect(seen).toEqual([])
     answerDialog(true)
 
@@ -183,7 +195,7 @@ describe('bulk-delete confirmation', () => {
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     // setFacetRuntime REPLACES the registries, so the kernel data contribution
     // has to be re-included or `core.subtree` stops resolving.
     repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -210,60 +222,70 @@ describe('bulk-delete confirmation', () => {
     const deleting = deleteBlocksThroughUi(
       [repo.block('parent'), ...kids.map(id => repo.block(id))],
     )
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     answerDialog(true)
     await deleting
 
     expect(runQuery.mock.calls.filter(([name]) => name === 'core.subtree')).toHaveLength(1)
   })
 
-  it('counts authored descendants hanging under a property field row', async () => {
-    // The visible view prunes the whole branch under a field row, comment
-    // thread included; the delete takes them anyway. See `countBlocksRemovedBy`.
+  const seedPropertyBranch = async (descendantCount: number): Promise<string[]> => {
+    repo.setActiveWorkspaceId(WS)
+    await repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
     await repo.tx(async tx => {
       await tx.create({
-        id: 'def', workspaceId: WS, parentId: 'root', orderKey: 'b0', content: 'a property',
-        properties: {types: ['property-schema']},
+        id: 'def', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'a property',
+        properties: {types: ['property-schema'], 'property-schema:name': 'note', 'property-schema:preset': 'string'},
       })
       await tx.create({
         id: 'field', workspaceId: WS, parentId: 'root', orderKey: 'c0',
         content: '::((def))', referenceTargetId: 'def', isFieldForm: true,
       })
       await tx.create({id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0', content: 'v'})
-      // Authored content under the value — the part the visible view drops.
-      for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
-        await tx.create({
-          id: `comment-${i}`, workspaceId: WS, parentId: 'value', orderKey: `a${i}`,
-          content: `comment ${i}`,
-        })
-      }
     }, {scope: ChangeScope.BlockDefault})
+    await waitFor(() => expect(repo.propertyDefinitions?.definitionsByFieldId.has('def')).toBe(true))
+    return seedChildren('value', descendantCount, 'comment')
+  }
 
-    // Precondition: the field row really is recognized as machinery, or this
-    // test proves nothing — the visible view would include the branch anyway.
-    const visible = await repo.runQuery('core.subtree', {id: 'root', hidePropertyChildren: true})
-    expect((visible as {id: string}[]).map(row => row.id)).not.toContain('comment-0')
+  it('deletes without asking when only an incidental property field row reaches the threshold', async () => {
+    const children = await seedPropertyBranch(BULK_DELETE_CONFIRM_THRESHOLD - 3)
+    const stop = subscribeDialogs(() => pendingDialog()?.finalize(null))
+    try {
+      expect(await deleteBlockThroughUi(repo.block('root'))).toBe(true)
+    } finally {
+      stop()
+    }
+    for (const id of ['root', 'field', 'value', ...children]) {
+      expect(await isBlockDeleted(repo, id)).toBe(true)
+    }
+  })
 
-    const deleting = deleteBlockThroughUi(repo.block('root'))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+  it.each([
+    {scenario: 'values and authored descendants', targets: ['root']},
+    {scenario: 'an explicitly selected field row', targets: ['root', 'field']},
+  ])('counts $scenario toward the warning', async ({targets}) => {
+    await seedPropertyBranch(BULK_DELETE_CONFIRM_THRESHOLD - targets.length - 1)
+
+    const deleting = deleteBlocksThroughUi(targets.map(id => repo.block(id)))
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
+    const props = pendingDialog()?.props
     answerDialog(null)
-    await deleting
+    expect(await deleting).toBe(false)
+    expect(props).toEqual({targetCount: targets.length, totalCount: BULK_DELETE_CONFIRM_THRESHOLD})
   })
 
   it('keeps the editor in edit mode while the dialog holds focus', async () => {
     // Reached from Backspace on an emptied block, the dialog takes DOM focus off
     // a live CodeMirror editor, which the blur handler reads as "editing ended".
     const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
-    // The latch is process-global and each hold lingers 400ms past its dialog
+    // The latch is process-global and each hold lingers past its dialog
     // closing, so every earlier test here leaves one behind. Drain first or
     // this reads someone else's hold and stays green with the keepalive gone.
-    await vi.waitFor(
-      () => expect(resolveEditModeKeepalive()).toBe('exit'),
-      {timeout: 2000},
-    )
+    __resetEditModeKeepaliveForTests()
+    expect(resolveEditModeKeepalive()).toBe('exit')
 
     const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)))
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     // 'yield', not 'refocus': snapping focus back to the editor would take it
     // off the dialog the user still has to answer.
     expect(resolveEditModeKeepalive()).toBe('yield')
@@ -271,9 +293,9 @@ describe('bulk-delete confirmation', () => {
     await deleting
   })
 
-  // `beforeWrite` exists so a gesture's interstitial work (a cut's clipboard
-  // write, a focus target read out of the doomed subtree) sits in the one
-  // window where it is correct. Both edges are load-bearing.
+  // `beforeWrite` exists so a gesture's interstitial work (a focus target read
+  // out of the doomed subtree) sits in the one window where it is correct.
+  // Both edges are load-bearing.
   describe('beforeWrite', () => {
     it('runs after the question and before the write', async () => {
       const ids = await seedChildren('root', BULK_DELETE_CONFIRM_THRESHOLD, 'many')
@@ -285,7 +307,7 @@ describe('bulk-delete confirmation', () => {
           seen.push(`deleted:${await isBlockDeleted(repo, ids[0])}`)
         },
       })
-      await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+      await waitFor(() => expect(pendingDialog()).toBeDefined())
       expect(seen, 'not before the user has answered').toEqual([])
       answerDialog(true)
       await deleting
@@ -299,7 +321,7 @@ describe('bulk-delete confirmation', () => {
       const beforeWrite = vi.fn()
 
       const deleting = deleteBlocksThroughUi(ids.map(id => repo.block(id)), {beforeWrite})
-      await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+      await waitFor(() => expect(pendingDialog()).toBeDefined())
       answerDialog(null)
 
       expect(await deleting).toBe(false)
@@ -307,8 +329,7 @@ describe('bulk-delete confirmation', () => {
     })
 
     it('re-resolves the guards after it, not just before it', async () => {
-      // The cut path writes the clipboard in here: unbounded caller work, and
-      // the pass this consolidation replaced used to sit after it.
+      // Caller work awaits, so a guard can change its answer meanwhile.
       const ids = await seedChildren('root', 3, 'few')
 
       const deleted = await deleteBlocksThroughUi(ids.map(id => repo.block(id)), {
@@ -351,7 +372,7 @@ describe('bulk-delete confirmation', () => {
     const repeated = Array.from({length: 25}, () => repo.block('page'))
 
     const deleting = deleteBlocksThroughUi(repeated)
-    await vi.waitFor(() => expect(pendingDialog()).toBeDefined())
+    await waitFor(() => expect(pendingDialog()).toBeDefined())
     expect(pendingDialog()?.props.targetCount).toBe(1)
     answerDialog(true)
 

@@ -6,30 +6,28 @@
  *
  * ──── Contract, grounded at the call sites ────
  *
- * `matchCharTrigger` (triggerMatch.ts:73-133) is the ONE shared
- * backward-walk implementation behind two thin per-char wrappers:
- * `matchAtTrigger` (src/plugins/geo/placeAutocomplete.ts:121-122, no
- * extra opts) and `matchHashTrigger`
- * (src/plugins/supertags/typeAutocomplete.ts:78-79,
- * `{rejectDoubledTrigger: true}`). Both wrappers feed it a single line's
+ * `matchCharTrigger` is the ONE shared backward-walk implementation
+ * behind the production wrappers listed in `PRODUCTION_SOURCES` below:
+ * the `@` family (src/editor/atTrigger.ts) and `matchHashTrigger` (`#`,
+ * src/plugins/supertags/typeAutocomplete.ts). All feed it a single line's
  * text plus an in-line cursor position, exactly as generated below (no
  * `\n` in the generated text, so `text`/`pos` here stand in for a
  * completion source's `lineText`/`linePos`).
  *
  * The module's own docblock states the ownership invariant this suite
- * differentials against (triggerMatch.ts:14-16): "spans owned by other
+ * differentials against (triggerMatch.ts): "spans owned by other
  * autocompletes — unclosed `[[` wikilinks and `((` blockrefs — never
- * fire a char trigger." The `TRIGGER_CHARS` comment (triggerMatch.ts:34-39)
+ * fire a char trigger." The `TRIGGER_CHARS` comment (triggerMatch.ts)
  * is the sibling half of the same ownership story (trigger-vs-trigger,
  * not trigger-vs-bracket-span) and isn't independently re-tested here —
  * `triggerMatch.test.ts` already pins the "nearest trigger wins" example
  * cases; this suite's differential is the bracket-span half.
  *
  * `matchCharTrigger` claims to implement that wikilink half via
- * `isInsideUnclosedWikilink` (triggerMatch.ts:52-68) and the blockref
+ * `isInsideUnclosedWikilink` (triggerMatch.ts) and the blockref
  * half via a same-shape regex the docblock says "mirrors
  * blockrefAutocomplete's own matcher exactly"
- * (triggerMatch.ts:125-129). Property B below checks that claim against
+ * (triggerMatch.ts). Property B below checks that claim against
  * the ACTUAL sibling regexes rather than trusting the docblock:
  *   - `backlinkCompletionSource`'s open-bracket match,
  *     src/utils/backlinkAutocomplete.ts:56: `/\[\[([^\]]*?)$/` against
@@ -49,7 +47,7 @@
  * `matchCharTrigger` used to return `{from: 6, query: 'tag'}`, but
  * `beforeCursor.match(/\[\[([^\]]*?)$/)` matches at index 3 (the second
  * `[[`), claiming span `[3, 10)` — which contains `from = 6`. Root
- * cause: `isInsideUnclosedWikilink` (triggerMatch.ts:55-68, pre-fix)
+ * cause: `isInsideUnclosedWikilink` (triggerMatch.ts, pre-fix)
  * counted `[[` and `]]` occurrences as a flat pair-count (`opens >
  * closes`) rather than tracking whether the LAST bracket pair before
  * `triggerPos` is an unmatched open. The leading, unmatched `]]` there
@@ -57,7 +55,7 @@
  * `[[` in the count, so `opens (1) > closes (1)` was false even though
  * position 6 sits inside a genuinely-unclosed `[[` span. This was a
  * real product bug (the module's own stated invariant,
- * triggerMatch.ts:14-16, disagreed with the code). Fixed in
+ * triggerMatch.ts, disagreed with the code). Fixed in
  * `triggerMatch.ts` by rewriting `isInsideUnclosedWikilink` to the
  * anchored regex `/\[\[[^\]]*$/` (mirroring the sibling wikilink
  * matcher exactly, instead of pair-counting). The counterexample above
@@ -79,7 +77,9 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
-import { matchCharTrigger, type CharTriggerOptions } from '../triggerMatch'
+import type { TriggerMatch } from '../triggerMatch'
+import { matchBareAt, matchMentionTrigger, matchPlaceTrigger } from '../atTrigger'
+import { matchHashTrigger } from '@/plugins/supertags/typeAutocomplete'
 
 const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', '/', ' ', '\t', 'a', 'b'] as const
 
@@ -106,39 +106,37 @@ const caseArb: fc.Arbitrary<Case> = fc.oneof(
   {weight: 8, arbitrary: randomCaseArb},
 )
 
-const triggerArb: fc.Arbitrary<'@' | '#'> = fc.constantFrom('@', '#')
+/** The real wrappers, each with the trigger prefix its span starts with. */
+const PRODUCTION_SOURCES: ReadonlyArray<{name: string, prefix: string, match: (text: string, pos: number) => TriggerMatch | null}> = [
+  {name: 'mention @query', prefix: '@', match: matchMentionTrigger},
+  {name: 'bare @', prefix: '@', match: matchBareAt},
+  {name: 'place @@', prefix: '@@', match: matchPlaceTrigger},
+  {name: 'type #', prefix: '#', match: matchHashTrigger},
+]
 
-/** Mirrors the real wrappers' fixed opts per trigger
- *  (placeAutocomplete.ts:121-122, typeAutocomplete.ts:78-79) rather than
- *  fuzzing `opts` independently — the property is about span ownership,
- *  which is orthogonal to `rejectDoubledTrigger`, and this keeps the
- *  suite differentialing against what production code actually calls. */
-const optsFor = (trigger: '@' | '#'): CharTriggerOptions =>
-  trigger === '#' ? {rejectDoubledTrigger: true, allowWordCharBefore: true} : {}
+const sourceArb = fc.constantFrom(...PRODUCTION_SOURCES)
 
 describe('matchCharTrigger', () => {
-  it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts:73-133)', () => {
+  it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts)', () => {
     fc.assert(
-      fc.property(caseArb, triggerArb, ({text, pos}, trigger) => {
-        const result = matchCharTrigger(text, pos, trigger, optsFor(trigger))
+      fc.property(caseArb, sourceArb, ({text, pos}, {prefix, match}) => {
+        const result = match(text, pos)
         if (result === null) return
-        // `from` is the trigger char's own position, strictly before
-        // `pos` (triggerMatch.ts:19-21, 115).
+        // `from` is the (first) trigger char's own position, strictly
+        // before `pos`, and the replaced span is exactly the trigger
+        // prefix followed by the query.
         expect(result.from).toBeGreaterThanOrEqual(0)
         expect(result.from).toBeLessThan(pos)
-        expect(text[result.from]).toBe(trigger)
-        // `query = text.slice(i, pos)` where `i = from + 1`
-        // (triggerMatch.ts:110).
-        expect(result.query).toBe(text.slice(result.from + 1, pos))
+        expect(text.slice(result.from, pos)).toBe(prefix + result.query)
       }),
       fuzzParams(300),
     )
   }, fuzzTestTimeout())
 
-  it('a match never falls inside a span backlinkAutocomplete or blockrefAutocomplete claims as an unclosed bracket sequence (triggerMatch.ts:14-16 ownership invariant, differentialed against backlinkAutocomplete.ts:56 and blockrefAutocomplete.ts:38)', () => {
+  it('a match never falls inside a span backlinkAutocomplete or blockrefAutocomplete claims as an unclosed bracket sequence (triggerMatch.ts ownership invariant, differentialed against backlinkAutocomplete.ts:56 and blockrefAutocomplete.ts:38)', () => {
     fc.assert(
-      fc.property(caseArb, triggerArb, ({text, pos}, trigger) => {
-        const result = matchCharTrigger(text, pos, trigger, optsFor(trigger))
+      fc.property(caseArb, sourceArb, ({text, pos}, {match}) => {
+        const result = match(text, pos)
         if (result === null) return
 
         // Both completion sources compute this exact slice from their
@@ -170,25 +168,24 @@ describe('matchCharTrigger', () => {
     )
   }, fuzzTestTimeout())
 
-  it('the two production wrappers never both fire at one cursor position (sibling ownership: at most one trigger owns any position — no merged double-fire dropdown)', () => {
+  it('no two production wrappers fire at one cursor position, except the bare @ the hand-off and mentions share by design (sibling ownership — no merged double-fire dropdown)', () => {
     // `autocompletion()` is installed once with no `override`
-    // (src/editor/autocomplete.ts), so if BOTH the `@` and `#` sources
-    // returned a match at the same cursor they'd merge into one dropdown
-    // and each fire a query for the other's text. The sibling-ownership
-    // walk exists precisely to make at most one trigger own any position.
-    // This is the invariant the afterPos-vs-pos boundary bug violated:
-    // it let `@` and `#` fire together on `@C#`-shaped input (the `#`'s
-    // empty-query match plus `@`'s `C#` place query). Note this catches
-    // DOUBLE-fires only; the missing-slash-guard bug was the opposite
-    // failure — a dead zone (BOTH null on `@a/b#c`) — which this property
-    // can't see, so that class is pinned by the example tests in
-    // triggerMatch.test.ts instead. The `/` now in the alphabet exercises
-    // the URL-path branch either bug could hide behind.
+    // (src/editor/autocomplete.ts), so if two sources returned a match
+    // at the same cursor they'd merge into one dropdown and each fire a
+    // query for the other's text. The sibling-ownership walk (between
+    // `@` and `#`) and the `@` family split (src/editor/atTrigger.ts)
+    // exist to make at most one source own any position. The one
+    // deliberate exception is a bare `@`, where geo's unfiltered hand-off
+    // ranks above the filtered contributor list (atTrigger.ts). This
+    // catches DOUBLE-fires only; dead zones (every source null, e.g.
+    // `@a/b#c`) are pinned by the example tests in triggerMatch.test.ts.
     fc.assert(
       fc.property(caseArb, ({text, pos}) => {
-        const atFires = matchCharTrigger(text, pos, '@', optsFor('@')) !== null
-        const hashFires = matchCharTrigger(text, pos, '#', optsFor('#')) !== null
-        expect(atFires && hashFires).toBe(false)
+        const firing = PRODUCTION_SOURCES
+          .filter(({match}) => match(text, pos) !== null)
+          .map(s => s.name)
+        if (firing.includes('bare @')) expect(firing).toEqual(['mention @query', 'bare @'])
+        else expect(firing.length).toBeLessThanOrEqual(1)
       }),
       fuzzParams(300),
     )

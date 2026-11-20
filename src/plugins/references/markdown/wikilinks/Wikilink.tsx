@@ -7,6 +7,7 @@ import {
   resolveWikilinkDisplay,
 } from './wikilinkDecorator.ts'
 import type { Block } from '@/data/block'
+import { BlockLink } from '@/components/references/BlockLink'
 
 export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDisplay = false, children}: {
   alias: string
@@ -45,9 +46,9 @@ export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDis
   return (
     <>
       {before}
-      <a href={href} className="wikilink" data-alias={alias} onClick={onClick}>
+      <BlockLink blockId={blockId} workspaceId={workspaceId} href={href} className="wikilink" data-alias={alias} onClick={onClick}>
         {display}
-      </a>
+      </BlockLink>
       {after}
     </>
   )

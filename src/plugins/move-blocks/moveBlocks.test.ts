@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
- * Core `moveBlocksTo` behavior: sequential `core.move` calls under one
- * `repo.undoGroup`, descendant pruning (defence in depth — see the
- * module doc on `moveBlocksTo`), and the cycle backstop for a
- * destination inside the movers' own subtree.
+ * Core `moveBlocksTo` behavior: one transaction of `core.move` calls
+ * (all-or-nothing, one undo entry), descendant pruning (defence in
+ * depth — see the module doc on `moveBlocksTo`), and the cycle backstop
+ * for a destination inside the movers' own subtree.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -13,7 +13,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
 import { isCollapsedProp } from '@/data/properties.js'
-import { moveBlocksTo, PartialMoveError } from './moveBlocks.ts'
+import { moveBlocksTo } from './moveBlocks.ts'
 
 const WS = 'ws-1'
 
@@ -83,7 +83,7 @@ describe('moveBlocksTo', () => {
 
     const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
-    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'] })
+    expect(result).toEqual({ movedIds: ['c2', 'c1', 'c3'] })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
     expect(await childIds('src')).toEqual([])
   })
@@ -97,7 +97,7 @@ describe('moveBlocksTo', () => {
 
     // Only 'a' actually moves; 'b' rides along as a's child, not as a
     // separate move.
-    expect(result).toEqual({ moved: 1, movedIds: ['a'] })
+    expect(result).toEqual({ movedIds: ['a'] })
     expect(await childIds('dest')).toEqual(['a'])
     expect(await parentOf('b')).toBe('a')
   })
@@ -135,35 +135,22 @@ describe('moveBlocksTo', () => {
     expect(await parentOf('a')).toBeNull()
   })
 
-  it('reports how many moved when the batch fails part-way, and one undo reverts them', async () => {
-    // 'x' moves into 'd' fine; 'p' then can't, because 'd' is its own
-    // descendant. So move 1 commits and move 2 throws.
+  it('moves nothing when a later root in the batch fails', async () => {
+    // 'x' could move into 'd' on its own; 'p' can't, because 'd' is its
+    // own descendant. The batch is one transaction, so x stays put too.
     await seed('x', null)
     await seed('p', null)
     await seed('d', 'p')
     repo.undoManager.clear()
 
-    const error = await moveBlocksTo(repo, ['x', 'p'], {parentId: 'd', position: {kind: 'last'}}).then(
-      () => { throw new Error('expected the batch to fail part-way') },
-      (e: unknown) => e,
-    )
-    expect(error).toBeInstanceOf(PartialMoveError)
-    expect((error as PartialMoveError).moved).toBe(1)
-    // The ids, not just the count — the action layer needs them to take
-    // the relocated prefix out of the ui-state selection.
-    expect((error as PartialMoveError).movedIds).toEqual(['x'])
-    expect((error as PartialMoveError).cause).toBeInstanceOf(CycleError)
+    await expect(
+      moveBlocksTo(repo, ['x', 'p'], {parentId: 'd', position: {kind: 'last'}}),
+    ).rejects.toThrow(CycleError)
 
-    // The prefix really did commit — this is the state the bare
-    // "failed" message used to hide.
-    expect(await parentOf('x')).toBe('d')
-    expect(await parentOf('p')).toBeNull()
-
-    // ...and the committed prefix is recoverable with a single cmd-Z,
-    // which is what the error message promises.
-    expect(depths()).toEqual({ undo: 1, redo: 0 })
-    expect(await repo.undo()).toBe(true)
     expect(await parentOf('x')).toBeNull()
+    expect(await parentOf('p')).toBeNull()
+    expect(await childIds('d')).toEqual([])
+    expect(depths()).toEqual({ undo: 0, redo: 0 })
   })
 
   // The ordering rule (see the module doc). `last` / `before` survive a
@@ -237,15 +224,7 @@ describe('moveBlocksTo', () => {
     expect(depths()).toEqual({ undo: 1, redo: 0 })
   })
 
-  // The reveal sits after the FIRST move, not after the loop: each move
-  // commits its own tx, so an end-of-loop reveal is skipped by a
-  // mid-batch failure and the blocks that DID land stay hidden — while
-  // the error says "Moved 1 block".
-  it('reveals a collapsed destination even when the batch fails part-way', async () => {
-    // Destination 'd' is collapsed AND lives inside 'p'. Moving [x, p]
-    // into it commits x, then throws CycleError on p — so the reveal has
-    // to have happened before that failure, or x sits in 'd' invisibly
-    // while the error claims a block moved.
+  it('leaves a collapsed destination collapsed when the batch fails', async () => {
     await seed('x', null)
     await seed('p', null)
     await seed('d', 'p')
@@ -253,21 +232,15 @@ describe('moveBlocksTo', () => {
 
     await expect(
       moveBlocksTo(repo, ['x', 'p'], {parentId: 'd', position: {kind: 'last'}}),
-    ).rejects.toThrow(PartialMoveError)
+    ).rejects.toThrow(CycleError)
 
     await repo.block('d').load()
-    expect(repo.block('d').peekProperty(isCollapsedProp)).toBe(false)
-    expect(await childIds('d')).toEqual(['x'])
+    expect(repo.block('d').peekProperty(isCollapsedProp)).toBe(true)
   })
 
-  // The `load()` inside `revealDestination` is load-bearing and the test
-  // above does NOT pin it: writing the collapse through `block().set()`
-  // populates the facade cache, so `peekProperty` answers correctly even
-  // with the load removed. Evicting the snapshot reproduces the real
-  // path — a destination this session never rendered, which is exactly
-  // what the picker's search hands back — where a cold `peek()` reports
-  // `undefined` for a genuinely collapsed row and silently skips the
-  // reveal. Without this test the line can be deleted with a green suite.
+  // A destination this session never rendered (what the picker's search
+  // hands back): the collapse flag must be read from the database, not
+  // from the Block facade's cache.
   it('reveals a collapsed destination that is not in the block cache', async () => {
     await seed('dest', null)
     await seed('src', null)
@@ -296,6 +269,6 @@ describe('moveBlocksTo', () => {
   it('is a no-op for an empty selection', async () => {
     await seed('dest', null)
     const result = await moveBlocksTo(repo, [], INTO_DEST)
-    expect(result).toEqual({ moved: 0, movedIds: [] })
+    expect(result).toEqual({ movedIds: [] })
   })
 })

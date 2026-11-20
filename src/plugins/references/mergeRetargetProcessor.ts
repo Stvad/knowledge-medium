@@ -22,21 +22,15 @@ import {
   type SpanReplacement,
 } from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
-import { inlineDeletedBlockRefsProcessor } from './inlineDeletedBlockRefsProcessor.ts'
+import { hasSourceContent } from '@/data/blockTypes'
+import {
+  SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
+  inlineDeletedBlockRefsProcessor,
+} from './inlineDeletedBlockRefsProcessor.ts'
 import { projectedIdOf } from './referenceProjection.ts'
 
 export const RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR =
   'references.retargetMergedBlockReferences'
-
-const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
-  SELECT DISTINCT br.source_id AS id
-  FROM block_references br
-  JOIN blocks source ON source.id = br.source_id
-  WHERE br.workspace_id = ?
-    AND br.target_id = ?
-    AND source.deleted = 0
-  ORDER BY source.order_key, source.id
-`
 
 /** Resolve each `fromAlias → toAlias` pair to a verified span
  *  replacement, once per merge event (the decision depends only on
@@ -217,10 +211,10 @@ const retargetSource = async (
   event: CoreBlockMergedEvent,
   aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-): Promise<void> => {
+): Promise<RetargetedBag | null> => {
   const tx = ctx.tx
   const current = await tx.get(sourceId)
-  if (current === null || current.deleted) return
+  if (current === null || current.deleted) return null
 
   // Property-derived refs (sourceField set) project from the property
   // VALUE (`projectPropertyReferences`), so a retargeted ref entry whose
@@ -241,7 +235,7 @@ const retargetSource = async (
   // does unconditionally. Gating the cell here but not the child made the
   // two disagree (the child's `((from))` retargeted, PROJECT then rebuilt
   // the cell the guard had "protected"); dropping the gate makes cell and
-  // child converge. The value lands via the raw `properties` patch below in
+  // child converge. The value lands via a raw `properties` write in
   // THIS tx's scope (BlockDefault), which makes the retarget
   // undoable-with-the-merge — the correct semantics: undoing the merge
   // restores the pointer. A plain `set` picks the field's default
@@ -283,12 +277,14 @@ const retargetSource = async (
     }
   }
 
-  const nextContent = retargetReferenceContent(
-    current.content,
-    event.fromId,
-    event.intoId,
-    aliasReplacements,
-  )
+  const nextContent = hasSourceContent(current)
+    ? current.content
+    : retargetReferenceContent(
+      current.content,
+      event.fromId,
+      event.intoId,
+      aliasReplacements,
+    )
   // Aliases this merge MEANT to rewrite whose span is still standing in
   // the rewritten content. Two ways in, one treatment:
   //   - the replacement could not be rendered at all (`null`), so the span
@@ -314,39 +310,31 @@ const retargetSource = async (
   )
 
   const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId' | 'isFieldForm'>> = {}
-  if (nextContent !== current.content) {
-    patch.content = nextContent
-    // `core.deriveReferenceTarget` already ran earlier in this same tx pass
-    // (kernel processors precede plugin ones) and stamped the column from
-    // the PRE-retarget content. A whole-block `((old))` row would otherwise
-    // keep `referenceTargetId: old` even though content now reads
-    // `((new))` — recompute from the rewritten content so the column and
-    // content never disagree.
-    const lookups = sameTxReferenceTargetLookups(tx)
-    const derived = await deriveReferenceColumns(nextContent, current.workspaceId, lookups)
-    // This is always an update of an existing row (never a create), so an
-    // unresolvable alias (`undefined`) clears the column rather than
-    // preserving a caller-provided id the way the derive processor's
-    // create path does.
-    const nextTargetId = derived.targetId ?? null
-    if ((current.referenceTargetId ?? null) !== nextTargetId) {
-      patch.referenceTargetId = nextTargetId
-    }
-    if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
-      patch.isFieldForm = derived.isFieldForm
-    }
+  if (nextContent !== current.content) patch.content = nextContent
+  // An inherited alias can keep its spelling while its target changes.
+  // Resolve every source before owner bags reconcile their member rows.
+  const derived = await deriveReferenceColumns(
+    nextContent, current.workspaceId, sameTxReferenceTargetLookups(tx),
+  )
+  const nextTargetId = derived.targetId ?? null
+  if ((current.referenceTargetId ?? null) !== nextTargetId) {
+    patch.referenceTargetId = nextTargetId
   }
-  // This write (including the properties bag) runs under the merge tx's
-  // BlockDefault scope, so if a canonical seed bag ever gains a ref/
-  // refList-typed field, merging a block referenced BY a seed definition
-  // would abort at the commit-time seed guard (assertNoSeedDefinitionWrites).
-  // Unreachable today: canonical bags carry no ref-typed fields.
-  if (propertiesChanged) patch.properties = nextProperties
+  if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
+    patch.isFieldForm = derived.isFieldForm
+  }
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
   }
-  if (Object.keys(patch).length === 0) return
-  await tx.update(current.id, patch, {skipMetadata: true})
+  if (Object.keys(patch).length > 0) await tx.update(current.id, patch, {skipMetadata: true})
+  return propertiesChanged ? {id: current.id, properties: nextProperties} : null
+}
+
+/** A source's rewritten properties bag, written only once every source's
+ *  content is (see `retargetMergedBlockReferences`). */
+interface RetargetedBag {
+  readonly id: string
+  readonly properties: Record<string, unknown>
 }
 
 const retargetMergedBlockReferences = async (
@@ -357,19 +345,32 @@ const retargetMergedBlockReferences = async (
     SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
     [event.workspaceId, event.fromId],
   )
-  // The merge TARGET is always a source candidate, backlink row or not:
-  // mergeProperties can have copied a ref/refList property from `from`
-  // onto `into` (target lacked the key) whose value names `fromId` —
-  // `into` has no stored reference entry yet, so the block_references
-  // lookup above can't see it, and without a rewrite the follow-up
-  // parse would project a backlink to the tombstoned merge source.
-  // retargetSource no-ops when nothing matches.
-  const sourceIds = new Set(sourceRows.map(row => row.id))
+  // Exact targets are stamped in the editing transaction; backlink parsing
+  // follows later. Both indexes must contribute before bags are reconciled.
+  const exactSources = await ctx.db.getAll<{id: string}>(`
+    SELECT id FROM blocks
+    WHERE workspace_id = ? AND reference_target_id = ? AND deleted = 0
+  `, [event.workspaceId, event.fromId])
+  const sourceIds = new Set([...sourceRows, ...exactSources].map(row => row.id))
+  // The merge target can inherit ref properties before backlink parsing indexes them.
   sourceIds.add(event.intoId)
 
   const aliasReplacements = resolveAliasReplacements(event.aliasRewrites, event.intoId)
+  const bags: RetargetedBag[] = []
   for (const id of sourceIds) {
-    await retargetSource(ctx, id, event, aliasReplacements, ctx.propertySchemas)
+    const bag = await retargetSource(ctx, id, event, aliasReplacements, ctx.propertySchemas)
+    if (bag !== null) bags.push(bag)
+  }
+  // Bags follow all content and target updates, regardless of source order.
+  // List members are matched by value, so a member still denoting the source
+  // would be reaped as removed, nested
+  // content and all. These writes run under the merge tx's BlockDefault scope:
+  // if a canonical seed bag ever gains a ref/refList-typed field, merging a
+  // block referenced BY a seed definition would abort at the commit-time seed
+  // guard (assertNoSeedDefinitionWrites). Unreachable today: canonical bags
+  // carry no ref-typed fields.
+  for (const {id, properties} of bags) {
+    await ctx.tx.update(id, {properties}, {skipMetadata: true})
   }
 }
 

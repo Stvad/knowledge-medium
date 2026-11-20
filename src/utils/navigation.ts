@@ -49,6 +49,8 @@ import { navigateInPanel } from './panelHistory'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import { parseAppHash } from '@/utils/routing'
 import { isMobileViewport } from '@/utils/viewport'
+import { zoomSurfaceIn, zoomSurfaceOut } from '@/utils/surfaceZoom'
+import { blockLinkClickIntent, type BlockLinkClickModifierState } from '@/utils/linkClickGestures.js'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
@@ -75,7 +77,17 @@ interface NavigateBaseInput {
    *  decorators redirect/observe by source, not just by resolved target.
    *  Optional — untagged navigations are still redirectable by target/block. */
   origin?: string
+  /** The render scope the gesture was made in (the clicked row's, the focused
+   *  block's), where there is one. A surface nested in a panel shares the
+   *  panel's id; this tells a navigation made inside it from the panel's own. */
+  sourceRenderScopeId?: string
 }
+
+/** `origin` of a zoom into a block of the view the gesture was made in: its
+ *  bullet, Zoom In. */
+export const ZOOM_ORIGIN = 'zoom'
+/** `origin` of a zoom out of that view, to its root's parent. */
+export const ZOOM_OUT_ORIGIN = 'zoom-out'
 
 export interface NavigatePanelInput extends NavigateBaseInput {
   target: 'panel'
@@ -142,6 +154,19 @@ export interface NavigationRequest {
   input: ResolvedNavigateInput
 }
 
+/** Applies a zoom made inside a zoomable surface (`@/utils/surfaceZoom`),
+ *  which zooms that surface and leaves its panel as it is, returning that
+ *  panel. Only one aimed at the surface's own panel: a bullet opened in a new
+ *  panel is a navigation. Null when the navigation is the panel's after all. */
+const zoomSurface = async (repo: Repo, input: NavigateInput): Promise<string | null> => {
+  const renderScopeId = input.sourceRenderScopeId
+  if (input.target !== 'panel' || renderScopeId === undefined) return null
+  const zoomed = input.origin === ZOOM_ORIGIN
+    ? await zoomSurfaceIn(repo, {renderScopeId, blockId: input.blockId, panelId: input.panelId})
+    : input.origin === ZOOM_OUT_ORIGIN && await zoomSurfaceOut(repo, renderScopeId)
+  return zoomed ? input.panelId : null
+}
+
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   return getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
@@ -160,7 +185,7 @@ const panelRowsForLayoutSession = async (
   layoutSessionBlock: Block,
 ) => allPanelRowsInLayoutOrder(
   layoutSessionBlock.id,
-  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
+  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load(),
 )
 
 /** The panel rows the user can actually SEE — never index raw row order, which
@@ -348,6 +373,13 @@ export const navigate = async (
   const request: NavigationRequest = {repo, input: {...input, workspaceId}}
   const runtime = repo.facetRuntime
   try {
+    // Ahead of the verb: a zoom of a surface nested in the panel is not a
+    // navigation, so no decorator has to know to leave it alone.
+    const zoomedPanelId = await zoomSurface(repo, request.input)
+    if (zoomedPanelId !== null) {
+      const shown = repo.block(zoomedPanelId).peekProperty(topLevelBlockIdProp) ?? input.blockId
+      return {panelId: zoomedPanelId, blockId: shown, workspaceId}
+    }
     return runtime
       ? await navigationVerb.run(runtime, request)
       : await applyNavigation(request)
@@ -365,46 +397,6 @@ export const useNavigate = () => {
 // ---------------------------------------------------------------------------
 // Intent layer: gesture → NavigateInput (the navigation POLICY).
 // ---------------------------------------------------------------------------
-
-export interface BlockLinkClickModifierState {
-  shiftKey: boolean
-  altKey: boolean
-  metaKey: boolean
-  ctrlKey: boolean
-  button: number
-}
-
-/** The raw modifier→target matrix. Shared by the default navigation policy and
- *  by surfaces (e.g. quick-find) that map the same gesture onto their own
- *  target vocabulary.
- *    - shift+alt+primary  → new side panel
- *    - shift+primary      → Roam-style vertical sidebar stack
- *    - alt+primary        → main panel
- *    - plain primary      → role decides (see `defaultNavigationIntent`)
- *    - cmd / ctrl / non-primary → `'native'`: let the browser handle the href
- *      (new tab, middle-click) */
-export type BlockLinkClickIntent =
-  | 'new-panel'
-  | 'sidebar-stack'
-  | 'main'
-  | 'default'
-  | 'native'
-
-export const blockLinkClickIntent = (
-  event: BlockLinkClickModifierState,
-): BlockLinkClickIntent => {
-  if (event.shiftKey && event.altKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
-    return 'new-panel'
-  }
-  if (event.shiftKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
-    return 'sidebar-stack'
-  }
-  if (event.altKey && !event.metaKey && !event.ctrlKey && event.button === 0) {
-    return 'main'
-  }
-  if (event.metaKey || event.ctrlKey || event.button !== 0) return 'native'
-  return 'default'
-}
 
 /** What a plain (no-modifier) primary click should do — also the surface's
  *  navigation *role*, used as the default `origin` of the resulting navigation.
@@ -435,6 +427,12 @@ export interface NavigationGesture {
   /** The panel the gesture came from, if any (follow-link uses it as the
    *  navigation target; modifier opens use it as the insertion anchor). */
   panelId?: string
+  /** The render scope the gesture was made in
+   *  (`NavigateInput.sourceRenderScopeId`). */
+  renderScopeId?: string
+  /** The resulting navigation's `origin`, where the surface means something
+   *  narrower than its role (a bullet is a follow-link that zooms). */
+  origin?: string
   blockId: string
   workspaceId: string
   viewport: NavigationViewport
@@ -510,7 +508,12 @@ export const defaultNavigationIntent = (
   gesture: NavigationGesture,
 ): NavigationDecision => {
   const {role, modifiers, panelId, blockId, workspaceId, viewport} = gesture
-  const base = {blockId, workspaceId, origin: role}
+  const base = {
+    blockId,
+    workspaceId,
+    origin: gesture.origin ?? role,
+    ...(gesture.renderScopeId === undefined ? {} : {sourceRenderScopeId: gesture.renderScopeId}),
+  }
   switch (blockLinkClickIntent(modifiers)) {
     case 'native':
       return PASSTHROUGH
@@ -541,6 +544,7 @@ const isNavigateInput = (value: unknown): value is NavigateInput => {
   // can't slip through to `insertPanelRow`.
   if (typeof v.blockId !== 'string') return false
   if (!isOptionalString(v.workspaceId) || !isOptionalString(v.origin)) return false
+  if (!isOptionalString(v.sourceRenderScopeId)) return false
   switch (v.target) {
     case 'main':
     case 'active':
@@ -756,6 +760,8 @@ export interface OpenBlockContext {
 
 export interface BlockOpenerOptions {
   plainClick?: BlockOpenerPlainClick
+  /** See `NavigationGesture.origin`. */
+  origin?: string
 }
 
 /** The standard way for plugins and components to wire a clickable surface
@@ -769,9 +775,9 @@ export interface BlockOpenerOptions {
  *  `useBlockOpener` instead and pass the block at call time. */
 export const useOpenBlock = (
   {blockId, workspaceId}: OpenBlockContext,
-  {plainClick = 'follow-link'}: BlockOpenerOptions = {},
+  {plainClick = 'follow-link', origin}: BlockOpenerOptions = {},
 ) => {
-  const opener = useBlockOpener({plainClick})
+  const opener = useBlockOpener({plainClick, origin})
   return useCallback(
     (e: MouseEvent) => opener(e, {blockId, workspaceId}),
     [opener, blockId, workspaceId],
@@ -791,7 +797,10 @@ export const openBlockFromEvent = (
   repo: Repo,
   e: MouseEvent,
   {blockId, workspaceId}: OpenBlockContext,
-  {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
+  {plainClick = 'follow-link', origin, panelId, renderScopeId}: BlockOpenerOptions & {
+    panelId?: string
+    renderScopeId?: string
+  } = {},
 ): void => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
   if (!resolvedWorkspaceId) return
@@ -799,6 +808,8 @@ export const openBlockFromEvent = (
     role: plainClick,
     modifiers: modifiersFromMouseEvent(e),
     panelId,
+    renderScopeId,
+    origin,
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
@@ -809,12 +820,12 @@ export const openBlockFromEvent = (
  *  that resolve the target block from the event (lists, breadcrumbs, map
  *  markers rendered in a loop). Single subscription per component instead
  *  of one hook per item. */
-export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
+export const useBlockOpener = ({plainClick = 'follow-link', origin}: BlockOpenerOptions = {}) => {
   const repo = useRepo()
-  const {panelId} = useBlockContext()
+  const {panelId, renderScopeId} = useBlockContext()
   return useCallback(
     (e: MouseEvent, target: OpenBlockContext) =>
-      openBlockFromEvent(repo, e, target, {plainClick, panelId}),
-    [repo, panelId, plainClick],
+      openBlockFromEvent(repo, e, target, {plainClick, origin, panelId, renderScopeId}),
+    [repo, panelId, renderScopeId, plainClick, origin],
   )
 }

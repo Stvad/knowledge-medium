@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import {
   ChangeScope,
-  CORE_BLOCK_DELETED_EVENT,
+  CORE_BLOCK_SPLIT_EVENT,
   defineMutator,
   type AnyMutator,
   type BlockData,
@@ -19,9 +19,9 @@ import {
 import { BlockNotFoundError } from '@/data/api'
 import {
   keyAtEnd,
-  keyAtStart,
   keyBetween,
   keysBetween,
+  unlistedIndexAmong,
 } from './orderKey'
 import {
   keyImmediatelyAfter,
@@ -32,10 +32,15 @@ import {
 import { isCollapsedProp } from '@/data/properties'
 import { visibleChildrenOf } from '@/data/visibleChildren'
 import {
+  displayScopeOf,
+  propertyDisplayScopeSchema,
+  type PropertyDisplayScopeLevels,
+} from '@/data/propertyDisplayMode'
+import {
   mergeBlocksInTx,
   type ContentStrategy,
 } from './blockMerge'
-import { deleteSubtreeInTx } from './subtreeDelete'
+import { deleteSubtreeAnnouncedInTx } from './subtreeDelete'
 
 // ──── Common helpers ────
 
@@ -98,15 +103,26 @@ export const orderKeyForInsert = async (
   workspaceId: string,
   position: InsertPosition,
   excludeId?: string,
-): Promise<string> => {
+): Promise<string> => (await orderKeysForInsert(tx, parentId, workspaceId, position, 1, excludeId))[0]
+
+/** {@link orderKeyForInsert} for a contiguous run of `n` new siblings, in
+ *  ascending order — one sibling read for the whole run. */
+export const orderKeysForInsert = async (
+  tx: Tx,
+  parentId: string | null,
+  workspaceId: string,
+  position: InsertPosition,
+  n: number,
+  excludeId?: string,
+): Promise<string[]> => {
   const all = await tx.childrenOf(parentId, workspaceId)
   const siblings = excludeId === undefined ? all : all.filter(s => s.id !== excludeId)
 
   if (position.kind === 'first') {
-    return keyAtStart(siblings[0]?.orderKey ?? null)
+    return keysBetween(null, siblings[0]?.orderKey ?? null, n)
   }
   if (position.kind === 'last') {
-    return keyAtEnd(siblings.at(-1)?.orderKey ?? null)
+    return keysBetween(siblings.at(-1)?.orderKey ?? null, null, n)
   }
   // after / before — locate the anchor sibling and place exactly adjacent.
   const ix = siblings.findIndex(s => s.id === position.siblingId)
@@ -116,8 +132,8 @@ export const orderKeyForInsert = async (
     )
   }
   return position.kind === 'after'
-    ? keyImmediatelyAfter(tx, parentId, siblings, ix)
-    : keyImmediatelyBefore(tx, parentId, siblings, ix)
+    ? keysImmediatelyAfter(tx, parentId, siblings, ix, n)
+    : keysImmediatelyBefore(tx, parentId, siblings, ix, n)
 }
 
 const positionSchema = z.discriminatedUnion('kind', [
@@ -204,36 +220,13 @@ export const setProperty = defineMutator<
 
 // ──── delete (subtree-aware soft-delete) ────
 
-/** Subtree-aware soft-delete via the shared `deleteSubtreeInTx` walk
- *  (property field/value rows included — docs/properties-as-blocks-migration.html §9).
- *
- *  Each freshly soft-deleted block emits `CORE_BLOCK_DELETED_EVENT` so
- *  same-tx consumers can react atomically with the delete — the
- *  references plugin uses it to inline a deleted block's content into the
- *  blocks that referenced it (`((id))`), keeping those referrers readable
- *  instead of leaving dangling block-refs. The `!block.deleted` guard only
- *  ever skips an already-tombstoned root (children come back live from
- *  `childrenOf`, which is always live-only). */
-const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> =>
-  // deleteSubtreeInTx fetches the root itself (for the payload) and surfaces
-  // BlockNotFoundError via tx.delete on a missing root, so no separate
-  // existence pre-check is needed here.
-  deleteSubtreeInTx(tx, rootId, (block: BlockData) => {
-    if (!block.deleted) {
-      tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {
-        workspaceId: block.workspaceId,
-        blockId: block.id,
-      })
-    }
-  })
-
 export const deleteBlock = defineMutator<{id: string}, void>({
   name: 'core.delete',
   argsSchema: z.object({id: z.string()}),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `delete ${id} (subtree)`,
   apply: async (tx, {id}) => {
-    await softDeleteSubtree(tx, id)
+    await deleteSubtreeAnnouncedInTx(tx, id)
   },
 })
 
@@ -402,22 +395,9 @@ export const insertChildren = defineMutator<InsertChildrenArgs, string[]>({
   apply: async (tx, args) => {
     if (args.items.length === 0) return []
     const parent = await requireBlock(tx, args.parentId)
-    const siblings = await tx.childrenOf(args.parentId)
-    const position = args.position ?? {kind: 'last'}
-
-    const n = args.items.length
-    const keys = await (async (): Promise<string[]> => {
-      if (position.kind === 'first') return keysBetween(null, siblings[0]?.orderKey ?? null, n)
-      if (position.kind === 'last')  return keysBetween(siblings.at(-1)?.orderKey ?? null, null, n)
-      const ix = siblings.findIndex(s => s.id === position.siblingId)
-      if (ix < 0) throw new Error(`sibling ${position.siblingId} not found under ${args.parentId}`)
-      // Place the whole run exactly adjacent to the anchor (between it and its
-      // neighbour on that side), breaking a tie by re-keying the run when one
-      // blocks the slot (A1).
-      return position.kind === 'after'
-        ? keysImmediatelyAfter(tx, args.parentId, siblings, ix, n)
-        : keysImmediatelyBefore(tx, args.parentId, siblings, ix, n)
-    })()
+    const keys = await orderKeysForInsert(
+      tx, args.parentId, parent.workspaceId, args.position ?? {kind: 'last'}, args.items.length,
+    )
     const ids: string[] = []
     for (let i = 0; i < args.items.length; i++) {
       const item = args.items[i]
@@ -483,6 +463,50 @@ export const move = defineMutator<MoveArgs, void>({
   },
 })
 
+/** Where a batch of moved blocks lands: a parent (`null` = workspace root)
+ *  plus the placement of the FIRST block within that parent's child list.
+ *  Later blocks chain after it — see {@link moveBlocksInTx}. */
+export interface MoveTarget {
+  parentId: string | null
+  position: InsertPosition
+}
+
+/**
+ * Move `ids` to `target` inside `tx`, keeping their order. `ids` must be
+ * roots: none may be a descendant of another, or it is pulled out of its
+ * ancestor. Every user-facing move (the move command, drag-and-drop, a cut
+ * completed by paste) lands through here, inside the caller's one tx.
+ *
+ * ## The ordering rule
+ *
+ * Only the FIRST block goes to the requested position; every later block
+ * is placed `{kind: 'after'}` its predecessor. Reusing the requested
+ * position for all N is the obvious loop and it is WRONG for two of the
+ * four position kinds — it silently reverses the batch:
+ *
+ * | position          | naive loop (A,B,C) | chained (A,B,C) |
+ * |-------------------|--------------------|-----------------|
+ * | `last`            | A,B,C ✓            | A,B,C ✓         |
+ * | `before X`        | A,B,C,X ✓          | A,B,C,X ✓       |
+ * | `first`           | **C,B,A** ✗        | A,B,C ✓         |
+ * | `after X`         | X,**C,B,A** ✗      | X,A,B,C ✓       |
+ *
+ * `first` and `after X` re-target the same slot every iteration and stack
+ * up backwards; chaining is uniform, so no caller has to know which kind
+ * is order-safe.
+ */
+export const moveBlocksInTx = async (
+  tx: Tx,
+  ids: readonly string[],
+  target: MoveTarget,
+): Promise<void> => {
+  let position = target.position
+  for (const id of ids) {
+    await tx.run(move, {id, parentId: target.parentId, position})
+    position = {kind: 'after', siblingId: id}
+  }
+}
+
 // ──── setOrderKey (direct) ────
 
 export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
@@ -498,41 +522,63 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
 
 // ──── outline gestures: indent / outdent / moveVertical ────
 
-/**
+/*
  * The three relative gestures resolve their anchors against the sibling list
- * **the caller sees** — the visible view, with recognized property machinery
- * filtered (docs/properties-as-blocks-migration.html §9, "movement anchors on the list the caller sees"). A
- * hidden row can therefore neither be picked as a gesture's target nor absorb
- * a step aimed past it; where a moved block lands *physically* relative to a
- * hidden row carries no semantics.
+ * **the caller sees**: `visibleChildrenOf` under the `propertyDisplay` scope of
+ * the surface the gesture ran in (none given: mode `none`, every property row
+ * left out). A hidden row can therefore neither be picked as a gesture's
+ * target nor absorb a step aimed past it; where a moved block lands
+ * *physically* relative to a hidden row carries no semantics. A drawn property
+ * row is an ordinary row to all three, values included: a block moved in among
+ * a field row's values becomes one, a value moved out leaves the property.
  *
- * Corollary: when the subject or the anchor is absent from that list, the
- * gesture is a clean **no-op** rather than a surprising relocation. Outdenting
- * a property VALUE row anchors on its field row, which the caller cannot see —
- * acting on the raw list instead hoists the value out of the property and the
- * next projection silently drops the key. `indent` and `moveVertical` already
- * no-op this way; `outdent` joining them resolves the asymmetry #404 flagged.
+ * The SUBJECT is always on the list: one the mode leaves out — the focused row
+ * the outline keeps showing (`BlockChildren`) — sits where the outline draws
+ * it ({@link withSubject}). An ANCHOR absent from the list makes the gesture a
+ * clean **no-op** rather than a surprising relocation.
  *
  * Deliberate machinery movement is not blocked, it just doesn't go through an
  * outline gesture: `core.move` places a block at an explicit position on the
  * structural list, which is what materialization, merge, and the bridge use.
  */
 
+const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
+
+/** `siblings` with the gesture's subject on it, and its index: a subject the
+ *  drawn list leaves out goes where the outline draws it (`unlistedIndexAmong`,
+ *  the rule `BlockChildren` and the selection walkers use). */
+const withSubject = (
+  siblings: readonly BlockData[],
+  self: BlockData,
+): {siblings: BlockData[]; index: number} => {
+  const listed = siblings.findIndex(s => s.id === self.id)
+  if (listed >= 0) return {siblings: [...siblings], index: listed}
+  const index = unlistedIndexAmong(siblings, self)
+  return {siblings: [...siblings.slice(0, index), self, ...siblings.slice(index)], index}
+}
+
 // ──── indent ────
 
-export const indent = defineMutator<{id: string}, void>({
+interface IndentArgs {
+  id: string
+  /** The display scope of the surface the gesture ran in (see the section
+   *  note above). */
+  propertyDisplay?: PropertyDisplayScopeLevels
+}
+
+export const indent = defineMutator<IndentArgs, void>({
   name: 'core.indent',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({id: z.string(), ...propertyDisplayArg}),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `indent ${id}`,
-  apply: async (tx, {id}) => {
+  apply: async (tx, {id, propertyDisplay}) => {
     const self = await requireBlock(tx, id)
     if (self.parentId === null) {
       // No parent — can't indent the root. Legacy was a no-op here.
       return
     }
-    const siblings = await visibleChildrenOf(tx, self.parentId)
-    const ix = siblings.findIndex(s => s.id === id)
+    const {siblings, index: ix} = withSubject(
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
     const newParentChildren = await tx.childrenOf(newParent.id)
@@ -554,6 +600,8 @@ interface OutdentArgs {
    *  the workspace root for root-level views). Returns `false` in that
    *  case so callers can fall back. */
   scopeRootId?: string
+  /** See {@link IndentArgs.propertyDisplay}. */
+  propertyDisplay?: PropertyDisplayScopeLevels
 }
 
 export const outdent = defineMutator<OutdentArgs, boolean>({
@@ -561,11 +609,12 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
   argsSchema: z.object({
     id: z.string(),
     scopeRootId: z.string().optional(),
+    ...propertyDisplayArg,
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `outdent ${id}`,
-  apply: async (tx, {id, scopeRootId}) => {
+  apply: async (tx, {id, scopeRootId, propertyDisplay}) => {
     const self = await requireBlock(tx, id)
     if (self.parentId === null) return false  // already at root
     // Refuse to outdent past the surface boundary — a direct child of
@@ -573,11 +622,6 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     // workspace root), exiting the visible scope.
     if (scopeRootId !== undefined && self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    // Gesture anchoring (see the section note above): the subject must be a row
-    // the caller can see, so a hidden field row isn't outdentable here while it
-    // is un-indentable — `core.move` is the structural path.
-    const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId)
-    if (!siblings.some(s => s.id === id)) return false
     // Move under grandparent, positioned right after current parent.
     // tx.childrenOf(null) enumerates root-level siblings of the pinned
     // workspace, so the same logic works for both nested and root
@@ -585,13 +629,11 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     const grandparent = parent.parentId
     // Pass self.workspaceId so the null-grandparent case scopes
     // correctly even before this tx pins a workspace.
-    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId)
+    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId, displayScopeOf({propertyDisplay}))
     const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
-    // The anchor — the current parent — isn't on the caller's list: either a
-    // hidden parent (outdenting a property value out of its field row, which
-    // would drop the key at the next projection) or a stale read. Both are
-    // no-ops; the old "fall back to last position under the grandparent" is
-    // exactly the silent relocation this rule exists to prevent.
+    // The anchor — the current parent — isn't on the caller's list (a hidden
+    // parent, or a stale read): a no-op, not a fallback to the grandparent's
+    // end, which would be exactly the silent relocation this rule prevents.
     if (parentIx < 0) return false
     // Place the outdented block immediately after its parent (between the
     // parent and the parent's next sibling), breaking a tie by re-keying the
@@ -613,6 +655,8 @@ interface MoveVerticalArgs {
    *  never moves above/below this root, and a direct child of it won't
    *  cross out of the scope. */
   scopeRootId?: string
+  /** See {@link IndentArgs.propertyDisplay}. */
+  propertyDisplay?: PropertyDisplayScopeLevels
 }
 
 /**
@@ -652,19 +696,19 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     id: z.string(),
     direction: z.union([z.literal(-1), z.literal(1)]),
     scopeRootId: z.string().optional(),
+    ...propertyDisplayArg,
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id, direction}) => `move ${id} ${direction === -1 ? 'up' : 'down'}`,
-  apply: async (tx, {id, direction, scopeRootId}) => {
+  apply: async (tx, {id, direction, scopeRootId, propertyDisplay}) => {
     const self = await requireBlock(tx, id)
     if (self.parentId === null) return false
     // The scope root anchors the view; it can't move within itself.
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
-    const siblings = await visibleChildrenOf(tx, self.parentId)
-    const idx = siblings.findIndex(s => s.id === id)
-    if (idx === -1) return false
+    const {siblings, index: idx} = withSubject(
+      await visibleChildrenOf(tx, self.parentId, self.workspaceId, displayScopeOf({propertyDisplay})), self)
 
     const up = direction === -1
     const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
@@ -693,12 +737,11 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // shallower level (changing indentation), so it's also a no-op.
     if (scopeRootId === undefined || self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId)
+    const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId, displayScopeOf({propertyDisplay}))
     const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
-    // The parent isn't on the caller's list — the value-row edge (its field row
-    // is hidden), or a stale read. Without this guard the DOWN branch reads
-    // `parentSiblings[-1 + 1]`, adopting the first VISIBLE sibling as the new
-    // parent: a property value silently relocated under an unrelated block.
+    // The parent isn't on the caller's list (a hidden parent, or a stale read).
+    // Without this guard the DOWN branch reads `parentSiblings[-1 + 1]`,
+    // adopting the first VISIBLE sibling as the new parent.
     if (pIdx < 0) return false
     const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
     if (!neighbourParent) return false
@@ -712,12 +755,55 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
 
 // ──── split ────
 
+/** Where the new block goes, and so which half of the text it takes:
+ *  - `siblingBefore`: just before the original, holding `before`; the
+ *    original keeps `after`, and its children.
+ *  - `firstChild`: the original's first child, holding `after`; the original
+ *    keeps `before`. For a scope root, whose preceding sibling is outside the
+ *    surface the user is looking at. */
+export const SPLIT_PLACEMENTS = ['siblingBefore', 'firstChild'] as const
+export type SplitPlacement = typeof SPLIT_PLACEMENTS[number]
+
 interface SplitArgs {
   id: string
-  /** Content for the new sibling-before (the prefix). */
+  /** The text before the cut. */
   before: string
-  /** New content for the original block (the suffix). */
+  /** The text after the cut. */
   after: string
+  /** Defaults to `siblingBefore`. */
+  placement?: SplitPlacement
+}
+
+const splitIntoSiblingBefore = async (tx: Tx, self: BlockData, before: string, after: string): Promise<string> => {
+  await tx.update(self.id, {content: after})
+  // Compute order_key for the new prefix sibling — between self and
+  // its previous sibling. Pass self.workspaceId for the null-parent
+  // case so the root-sibling lookup is workspace-scoped (the
+  // pinned-meta would also work here since tx.update above already
+  // pinned, but the explicit pass is clearer and less brittle).
+  const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
+  const ix = siblings.findIndex(s => s.id === self.id)
+
+  // The prefix sibling must sort IMMEDIATELY before `self` at its current
+  // position. When `self` ties with its predecessor there's no key strictly
+  // between them, so `keyImmediatelyBefore` breaks the tie (re-keying `self`
+  // and its tied successors just past the run) to open the slot — keeping a
+  // mid-run split in place instead of overshooting its successors, and never
+  // throwing/rolling back the typed edit. (`ix < 0` only on a stale read.)
+  const orderKey = ix < 0
+    ? keyBetween(null, self.orderKey)
+    : await keyImmediatelyBefore(tx, self.parentId, siblings, ix)
+  return tx.create({
+    workspaceId: self.workspaceId,
+    parentId: self.parentId,
+    orderKey,
+    content: before,
+  })
+}
+
+const splitIntoFirstChild = async (tx: Tx, self: BlockData, before: string, after: string): Promise<string> => {
+  await tx.update(self.id, {content: before})
+  return tx.run(createChild, {parentId: self.id, content: after, position: {kind: 'first'}, revealParent: true})
 }
 
 export const split = defineMutator<SplitArgs, string>({
@@ -726,6 +812,7 @@ export const split = defineMutator<SplitArgs, string>({
     id: z.string(),
     before: z.string(),
     after: z.string(),
+    placement: z.enum(SPLIT_PLACEMENTS).optional(),
   }),
   resultSchema: z.string(),
   scope: ChangeScope.BlockDefault,
@@ -733,34 +820,23 @@ export const split = defineMutator<SplitArgs, string>({
   // Callers pass the live `before`/`after` strings (e.g. from CodeMirror's
   // current doc, sliced at the cursor). The mutator does NOT slice
   // self.content — debounced editors can leave SQL stale, and slicing
-  // there would split the wrong text and lose the live edits. See
-  // §13.3 / phase-1 review feedback.
-  apply: async (tx, {id, before, after}) => {
+  // there would split the wrong text and lose the live edits.
+  apply: async (tx, {id, before, after, placement = 'siblingBefore'}) => {
     const self = await requireBlock(tx, id)
-    await tx.update(id, {content: after})
-    // Compute order_key for the new prefix sibling — between self and
-    // its previous sibling. Pass self.workspaceId for the null-parent
-    // case so the root-sibling lookup is workspace-scoped (the
-    // pinned-meta would also work here since tx.update above already
-    // pinned, but the explicit pass is clearer and less brittle).
-    const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
-    const ix = siblings.findIndex(s => s.id === id)
-
-    // The prefix sibling must sort IMMEDIATELY before `self` at its current
-    // position. When `self` ties with its predecessor there's no key strictly
-    // between them, so `keyImmediatelyBefore` breaks the tie (re-keying `self`
-    // and its tied successors just past the run) to open the slot — keeping a
-    // mid-run split in place instead of overshooting its successors, and never
-    // throwing/rolling back the typed edit. (`ix < 0` only on a stale read.)
-    const orderKey = ix < 0
-      ? keyBetween(null, self.orderKey)
-      : await keyImmediatelyBefore(tx, self.parentId, siblings, ix)
-    return tx.create({
+    const newId = placement === 'firstChild'
+      ? await splitIntoFirstChild(tx, self, before, after)
+      : await splitIntoSiblingBefore(tx, self, before, after)
+    const [beforeId, afterId] = placement === 'firstChild' ? [id, newId] : [newId, id]
+    tx.emitEvent(CORE_BLOCK_SPLIT_EVENT, {
       workspaceId: self.workspaceId,
-      parentId: self.parentId,
-      orderKey,
-      content: before,
+      blockId: id,
+      content: before + after,
+      pieces: [
+        {blockId: beforeId, start: 0, end: before.length},
+        {blockId: afterId, start: before.length, end: before.length + after.length},
+      ],
     })
+    return newId
   },
 })
 

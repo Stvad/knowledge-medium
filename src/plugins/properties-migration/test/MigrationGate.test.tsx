@@ -59,6 +59,7 @@ import {
 } from '@/data/properties'
 import { graphBackfillClaimBlockId } from '@/data/internals/graphBackfillClaim'
 import { getClientId } from '@/utils/clientId'
+import { getUIStateBlock } from '@/data/stateBlocks'
 import { PROPERTY_CELL_BACKFILL_ID } from '@/data/internals/propertyCellBackfill'
 import { MigrationGate } from '../MigrationGate.tsx'
 import {
@@ -190,11 +191,19 @@ const claimHasBeenRead = async (): Promise<void> => {
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
+const openRepo = async (isReadOnly: boolean): Promise<void> => {
+  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly}).repo
+  repo.setActiveWorkspaceId(WS)
+  // Workspace bootstrap resolves the root ui-state before any mount reads it,
+  // as here; left cold, the dialog's first render suspends on it and React
+  // holds the reveal for its fallback throttle in every test.
+  await getUIStateBlock(repo, WS, {id: 'user-1'}, {})
+}
+
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   __resetLocalMigrationRunForTests()
-  repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}}).repo
-  repo.setActiveWorkspaceId(WS)
+  await openRepo(false)
 })
 afterEach(() => {
   cleanup()
@@ -494,8 +503,7 @@ describe('the way out of a claim nobody will release', () => {
 
   it('lets a device that can do NOTHING about the claim out of the modal', async () => {
     // Why this matters: see MigrationGateDialog.tsx's "Hide this" comment.
-    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
-    repo.setActiveWorkspaceId(WS)
+    await openRepo(true)
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')
@@ -510,8 +518,7 @@ describe('the way out of a claim nobody will release', () => {
     // The escape exists only for a device that can do nothing about the claim.
     // A viewer promoted mid-run is the device that COULD release a stranded
     // one, so a dismissal must not outlive the state it was given for.
-    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
-    repo.setActiveWorkspaceId(WS)
+    await openRepo(true)
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')
@@ -534,8 +541,7 @@ describe('the way out of a claim nobody will release', () => {
 
   it('is not offered where this device may not write, which names who can', async () => {
     // Why this matters: see MigrationGateDialog.tsx's release prop comment.
-    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, isReadOnly: true}).repo
-    repo.setActiveWorkspaceId(WS)
+    await openRepo(true)
     await seedClaimInBlocks()
     renderGate()
     await screen.findByRole('dialog')

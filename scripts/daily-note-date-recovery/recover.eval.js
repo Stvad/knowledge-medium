@@ -11,12 +11,12 @@
 //
 // Run via the agent bridge (the target tab must be focused/connected):
 //   DRY-RUN (default — reports the candidate count, writes nothing):
-//     pnpm agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js
+//     pnpm agent --profile <profile> eval --file scripts/daily-note-date-recovery/recover.eval.js
 //   APPLY (performs the writes — HELD until explicitly approved):
-//     pnpm agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js \
+//     pnpm agent --profile <profile> eval --file scripts/daily-note-date-recovery/recover.eval.js \
 //       --data-json '{"apply":true}'
 //   Scope to a specific workspace (defaults to the active one):
-//     ... --data-json '{"apply":true,"workspaceId":"ef43b424-80ba-4967-b587-a4c32efd8071"}'
+//     ... --data-json '{"apply":true,"workspaceId":"<workspace-id>"}'
 
 const {ChangeScope} = await import('@/data/api')
 const {dailyNoteDateValue} = await import('@/plugins/daily-notes/dailyNotes.js')

@@ -50,6 +50,20 @@ describe('canonicalizeChord', () => {
     expect(canonicalizeChord('Meta+k')).not.toBe(canonicalizeChord('$mod+k'))
   })
 
+  it('folds Control into $mod off-Mac, where tinykeys binds $mod to Control', () => {
+    stubPlatform('Win32')
+    expect(canonicalizeChord('Control+k')).toBe(canonicalizeChord('$mod+k'))
+    expect(canonicalizeChord('ctrl+Shift+k')).toBe(canonicalizeChord('Shift+cmd+k'))
+    // The installed spelling keeps Control: it is stored and synced, and on a
+    // Mac `$mod` would mean Cmd.
+    expect(normalizeChordSequence('ctrl+k')).toBe('Control+k')
+  })
+
+  it('keeps Control distinct from $mod on macOS', () => {
+    stubPlatform('MacIntel')
+    expect(canonicalizeChord('Control+k')).not.toBe(canonicalizeChord('$mod+k'))
+  })
+
   it('distinguishes the same chord on different phases', () => {
     expect(canonicalizeChord('s', 'hold')).not.toBe(canonicalizeChord('s', 'keyup'))
     expect(canonicalizeChord('s')).toBe('s')
@@ -62,7 +76,7 @@ describe('canonicalizeChord', () => {
     // them would (a) let a dead `Control+Shift+digit1` strip the working
     // `Control+Shift+Digit1` default and (b) is meaningless — they must
     // stay exact-cased and in their own bucket.
-    expect(canonicalizeChord('Control+Shift+Digit1')).toBe('Control+Shift+Digit1')
+    expect(canonicalizeChord('Alt+Shift+Digit1')).toBe('Alt+Shift+Digit1')
     expect(canonicalizeChord('Control+Shift+Digit1'))
       .not.toBe(canonicalizeChord('Control+Shift+digit1'))
     expect(canonicalizeChord('$mod+Shift+Period')).toBe('$mod+Shift+Period')

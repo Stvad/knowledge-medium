@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { ChangeScope } from '@/data/api'
 import { PAGE_TYPE, TYPES_PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { getOrCreateTypesPage, typesPageBlockId } from '@/data/typesPage'
@@ -33,6 +34,11 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 
 describe('getOrCreateTypesPage', () => {
+  it('creates the container outside the undo history', async () => {
+    await getOrCreateTypesPage(env.repo, WS)
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+
   it('creates the singleton as both a page and a Types page', async () => {
     const block = await getOrCreateTypesPage(env.repo, WS)
 

@@ -16,3 +16,15 @@ export const isMobileViewport = (): boolean =>
   typeof window !== 'undefined' &&
   typeof window.matchMedia === 'function' &&
   window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
+
+/** A touch-primary device (phone, tablet, a convertible in tablet mode): the
+ *  primary pointer is coarse. Shared by `usePointerCoarse` (`react.tsx`) and
+ *  {@link isPointerCoarse}. */
+export const POINTER_COARSE_QUERY = '(pointer: coarse)'
+
+/** The synchronous read of {@link POINTER_COARSE_QUERY}, for the same
+ *  non-React call sites as {@link isMobileViewport}. */
+export const isPointerCoarse = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia(POINTER_COARSE_QUERY).matches

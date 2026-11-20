@@ -249,6 +249,12 @@ describe('buildInteractionRecord', () => {
     })
   })
 
+  // Absent, not empty: a reader distinguishes "not measured" from "measured
+  // nothing" by the key's presence.
+  it('stores no main-thread key when nothing observed it', () => {
+    expect('responsiveness' in buildInteractionRecord(metricsFixture(), META)).toBe(false)
+  })
+
   it('bounds the stored set so a pathological session cannot grow the record', () => {
     const queries: Record<string, ReturnType<typeof queryTiming>> = {}
     for (let i = 0; i < 200; i++) queries[`q${i}`] = queryTiming({ totalMs: i })
@@ -301,6 +307,18 @@ describe('writeInteractionSample', () => {
       clientId: getClientId(),
       writes: expect.any(Number),
     })
+  })
+
+  // Sampled with the counters on every write, so the in-place update carries
+  // the current totals rather than the first sample's.
+  it('stores the main-thread summary on every sample', async () => {
+    let count = 0
+    const source = {
+      sample: () => ({ observedMs: 1, longFrames: { count: ++count, totalMs: 0, blockingMs: 0, forcedLayoutMs: 0, maxMs: 0 } }),
+    }
+    const blockId = (await writeInteractionSample(repo, WS, source))!
+    await writeInteractionSample(repo, WS, source)
+    expect((await stored(blockId))!.responsiveness?.longFrames?.count).toBe(2)
   })
 
   // The session's record is a single point in the series, refined as the

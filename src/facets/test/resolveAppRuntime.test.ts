@@ -3,8 +3,8 @@
  *
  * Walks live in resolveAppRuntime.ts. These tests verify only the
  * extra semantics over the bare facet collectors: BOUNDARY skip,
- * essential override, sync-vs-async function policy, dedup, and
- * `enables` recursion gated on parent acceptance.
+ * essential override, sync-vs-async function policy and dedup.
+ * `enables` recursion, gated on parent acceptance: enables.test.ts.
  */
 import {describe, expect, it, vi} from 'vitest'
 import {defineFacet} from '@/facets/facet.js'
@@ -203,65 +203,6 @@ describe('resolveAppRuntime — dedup + validation parity', () => {
 
       expect(error).toHaveBeenCalledTimes(1)
       expect(runtime.read(numbers)).toBe(5)
-    } finally {
-      error.mockRestore()
-    }
-  })
-})
-
-describe('resolveAppRuntime — FacetContribution.enables', () => {
-  it('recurses into enables when the parent contribution is accepted', () => {
-    const labels = defineFacet<string, string>({
-      id: 'test.enables',
-      combine: vs => vs.join(','),
-      empty: () => '',
-    })
-    const numbers = defineFacet<number, number>({
-      id: 'test.enables-parent',
-      combine: vs => vs.reduce((a, b) => a + b, 0),
-      empty: () => 0,
-      validate: (v): v is number => typeof v === 'number',
-    })
-
-    const parent = numbers.of(1)
-    // enables is a slice-7 field; we attach it inline for this test.
-    const parentWithEnables = {
-      ...parent,
-      enables: [labels.of('child-of-accepted')],
-    }
-
-    const runtime = resolveAppRuntimeSync([parentWithEnables], {overrides: empty})
-
-    expect(runtime.read(numbers)).toBe(1)
-    expect(runtime.read(labels)).toBe('child-of-accepted')
-  })
-
-  it('drops enables when the parent contribution fails validation', () => {
-    const labels = defineFacet<string, string>({
-      id: 'test.enables-drop',
-      combine: vs => vs.join(','),
-      empty: () => '',
-    })
-    const numbers = defineFacet<number, number>({
-      id: 'test.enables-drop-parent',
-      combine: vs => vs.reduce((a, b) => a + b, 0),
-      empty: () => 0,
-      validate: (v): v is number => typeof v === 'number',
-    })
-
-    const invalidParentWithEnables = {
-      type: 'facet-contribution' as const,
-      facet: {id: numbers.id, validate: numbers.validate},
-      value: 'not a number' as unknown as number,
-      enables: [labels.of('child-orphaned')],
-    }
-
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    try {
-      const runtime = resolveAppRuntimeSync([invalidParentWithEnables], {
-        overrides: empty,
-      })
-      expect(runtime.read(labels)).toBe('')
     } finally {
       error.mockRestore()
     }

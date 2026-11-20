@@ -6,7 +6,7 @@ import { typeSeedsFacet } from '@/data/facets.js'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { moveSrsState } from '../moveSrsState.ts'
 import {
   SRS_SM25_TYPE,

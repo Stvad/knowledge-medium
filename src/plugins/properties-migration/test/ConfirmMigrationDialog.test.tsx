@@ -37,6 +37,13 @@ describe('what the consent screen names', () => {
     expect(copy()).toContain('"demo:from-import", "demo:orphan"')
   })
 
+  it('warns that enabling a code-only property owner does not prevent synthesis', () => {
+    show({synthesizedKeys: {count: 1, names: ['demo:from-extension']}})
+
+    expect(copy()).toContain('code-only declarations remain invisible')
+    expect(copy()).toMatch(/audit-properties.*cannot identify code-only owners/)
+  })
+
   it('names the keys with a broken definition', () => {
     show({repairableKeys: {count: 1, names: ['demo:broken']}})
 
@@ -88,5 +95,15 @@ describe('what the consent screen names', () => {
     show()
 
     expect(copy()).not.toMatch(/no definition|cannot be given|cannot read/)
+  })
+
+  it('keeps the migration consequences visible in the shorter consent copy', () => {
+    show({childBacked: false})
+
+    expect(copy()).toMatch(/Offline.*edits can be lost/)
+    expect(copy()).toContain('cannot be undone in the app')
+    expect(copy()).toContain('run it again on this device')
+    expect(copy()).toContain('undo history is cleared')
+    expect(copy()).toContain('Reload other tabs and devices')
   })
 })

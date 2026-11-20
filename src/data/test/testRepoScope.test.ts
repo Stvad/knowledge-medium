@@ -7,7 +7,7 @@
  * asks for a shuffled or isolated run.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type AnyPostCommitProcessor } from '@/data/api'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import type { Repo } from '@/data/repo'
 import type { Materializability } from '@/sync/transform'
@@ -114,6 +114,40 @@ describe('per-test Repo scope', () => {
     await closing
 
     expect(order).toEqual(['drain', 'scope-closed'])
+  })
+
+  it('cancels a delayed processor whose timer has not fired', async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const fired: string[] = []
+      const delayed: AnyPostCommitProcessor = {
+        name: 'test.delayed',
+        watches: {kind: 'explicit'},
+        scheduledArgsSchema: {parse: (v: unknown) => v as string},
+        apply: async event => { fired.push(event.scheduledArgs as string) },
+      }
+      const {repo} = createTestRepo({db: shared.db})
+      repo.__setProcessorsForTesting([delayed])
+      repo.setActiveWorkspaceId(WS)
+      const arm = (label: string) => repo.tx(async tx => {
+        await tx.create({id: label, workspaceId: WS, parentId: null, orderKey: 'a0'})
+        tx.afterCommit('test.delayed', label, {delayMs: 4000})
+      }, {scope: ChangeScope.BlockDefault})
+
+      // A job armed in a live scope fires, so the absence below is the cancel.
+      await arm('kept')
+      await vi.advanceTimersByTimeAsync(4000)
+      await repo.awaitProcessors()
+      expect(fired).toEqual(['kept'])
+
+      await arm('dropped')
+      await endTestRepoScope()
+      await vi.advanceTimersByTimeAsync(4000)
+      await repo.awaitProcessors()
+      expect(fired).toEqual(['kept'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('refuses to open a second scope over the first', () => {

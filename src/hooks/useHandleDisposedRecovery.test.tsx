@@ -107,8 +107,7 @@ describe('useHandle recovers from a disposed handle', () => {
     )
 
     const { rerender } = render(<Harness hidden={false} tick={0}/>)
-    await act(async () => {})
-    expect(screen.getByTestId('out').textContent).toBe('3')
+    await waitFor(() => expect(screen.getByTestId('out').textContent).toBe('3'))
     const createdWhileVisible = created
 
     // Hide: effects unmount, the subscription is released, GC is scheduled.

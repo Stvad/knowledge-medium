@@ -14,11 +14,28 @@ import { CodecError } from './errors'
  *  here makes that mistake unrepresentable. */
 export type WhereValue = string | number
 
+/** The cell shape a where-capable codec writes, and so the only shape its
+ *  comparators admit. SQLite orders `json_extract` results ACROSS storage
+ *  classes — numbers below text, JSON booleans extracting as 1/0, an array as
+ *  its JSON text — so a cell of another shape (what a re-type leaves behind)
+ *  would compare anyway: a stale `'abc'` is `> 3`. The typed-query compiler
+ *  owns the SQL test for each.
+ *
+ *  - `text`: a JSON string.
+ *  - `number`: a JSON number.
+ *  - `boolean`: JSON `true` / `false`.
+ *  - `iso-date`: a JSON string in `toISOString()` form with a four-digit
+ *    year, the one spelling whose text order is chronological. The test is
+ *    on the shape, not the calendar. */
+export type WhereStorage = 'text' | 'number' | 'boolean' | 'iso-date'
+
 export interface WhereCapability<T> {
+  readonly storage: WhereStorage
   /** Encode a decoded value to its scalar SQLite-comparable form. The
    *  caller can pass any runtime value, so this MUST validate that the
-   *  input is actually a value of type T and throw `CodecError`
-   *  otherwise — the same shape as `decode` validating its JSON input. */
+   *  input is actually a value of type T that `storage` can compare, and
+   *  throw `CodecError` otherwise — the same shape as `decode` validating
+   *  its JSON input. */
   encode(value: T): WhereValue
 }
 
@@ -103,6 +120,7 @@ const stringCodec: Codec<string> = {
     return j
   },
   where: {
+    storage: 'text',
     encode: v => {
       if (typeof v !== 'string') throw new CodecError('string', v)
       return v
@@ -121,7 +139,7 @@ const numberCodec: Codec<number> = {
   type: 'number',
   encode: requireFiniteNumber,
   decode: requireFiniteNumber,
-  where: { encode: requireFiniteNumber },
+  where: {storage: 'number', encode: requireFiniteNumber},
 }
 
 const booleanCodec: Codec<boolean> = {
@@ -132,6 +150,7 @@ const booleanCodec: Codec<boolean> = {
     return j
   },
   where: {
+    storage: 'boolean',
     encode: v => {
       if (typeof v !== 'boolean') throw new CodecError('boolean', v)
       return v ? 1 : 0
@@ -155,6 +174,7 @@ const dateCodec: Codec<Date | undefined> = {
     return d
   },
   where: {
+    storage: 'iso-date',
     encode: v => {
       // null is short-circuited to IS NULL by the typed-query compiler
       // before reaching where.encode. undefined arriving here is a
@@ -168,13 +188,14 @@ const dateCodec: Codec<Date | undefined> = {
       // would break every saved date-range filter on reload. Both
       // shapes normalise to the same ISO string so storage stays
       // bit-stable. Strings that don't parse as dates still throw.
-      if (typeof v === 'string') {
-        const d = new Date(v)
-        if (Number.isNaN(d.getTime())) throw new CodecError('date', v)
-        return d.toISOString()
-      }
-      if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v)
-      return v.toISOString()
+      const d = typeof v === 'string' ? new Date(v) : v
+      if (!(d instanceof Date) || Number.isNaN(d.getTime())) throw new CodecError('date', v)
+      // Past year 9999 (or before 0) `toISOString()` spells a signed
+      // six-digit year, which sorts before every four-digit one and which
+      // no `iso-date` comparator admits — so it is refused, not compared.
+      const year = d.getUTCFullYear()
+      if (year < 0 || year > 9999) throw new CodecError('date in years 0000-9999', v)
+      return d.toISOString()
     },
   },
 }
@@ -302,7 +323,7 @@ const enumCodec = <const T extends string>(
     options: normalized,
     encode: requireMember,
     decode: requireString,
-    where: {encode: requireMember},
+    where: {storage: 'text', encode: requireMember},
   }
 }
 
@@ -369,7 +390,7 @@ const urlCodec: Codec<string> = {
   type: 'url',
   encode: validateUrlString,
   decode: validateUrlString,
-  where: { encode: validateUrlString },
+  where: {storage: 'text', encode: validateUrlString},
 }
 
 /** Explicitly unsafe identity codec. Reserved for kernel-internal use where
@@ -398,6 +419,7 @@ const optionalStringCodec: Codec<string | undefined> = {
     return j
   },
   where: {
+    storage: 'text',
     encode: v => {
       if (v === undefined) throw new CodecError('string (use null for unset)', v)
       if (typeof v !== 'string') throw new CodecError('string', v)
@@ -416,6 +438,7 @@ const optionalNumberCodec: Codec<number | undefined> = {
     return j
   },
   where: {
+    storage: 'number',
     encode: v => {
       if (v === undefined) throw new CodecError('number (use null for unset)', v)
       if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v)

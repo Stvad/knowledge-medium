@@ -8,7 +8,7 @@
  *   - the parse error you get for a bad / unknown `type`
  */
 import {describe, expect, it} from 'vitest'
-import {knownCommandSchema, sqlModeSchema} from '../src/protocol'
+import {knownCommandSchema} from '../src/protocol'
 
 describe('knownCommandSchema — branch acceptance', () => {
   // One representative valid body per variant. The point of the
@@ -22,7 +22,12 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['sql (allowSyncedWrite)', {type: 'sql', sql: 'UPDATE blocks SET x = 1', mode: 'execute', allowSyncedWrite: true}],
     ['get-block', {type: 'get-block', id: 'b-1'}],
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
+    ['read-media', {type: 'read-media', ref: 'b-1'}],
+    ['add-media', {type: 'add-media', base64: 'AQID'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
+    ['create-contributor', {type: 'create-contributor', name: 'Vlad'}],
+    ['list-contributors', {type: 'list-contributors'}],
+    ['create-block (top level, as move-block spells it)', {type: 'create-block', parentId: null, content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
     ['move-block', {type: 'move-block', id: 'b-1', parentId: 'p-1', position: {kind: 'last'}}],
     ['delete-block', {type: 'delete-block', id: 'b-1'}],
@@ -53,6 +58,12 @@ describe('knownCommandSchema — branch acceptance', () => {
 })
 
 describe('knownCommandSchema — rejection', () => {
+  it('preserves explicit nullable contributor attribution on write commands', () => {
+    expect(knownCommandSchema.parse({type: 'create-block', contributorId: null})).toMatchObject({contributorId: null})
+    expect(knownCommandSchema.parse({type: 'create-block', contributorId: 'contrib-1'})).toMatchObject({contributorId: 'contrib-1'})
+    expect(knownCommandSchema.parse({type: 'create-contributor', name: 'A', kind: 'automation'})).toMatchObject({kind: 'automation'})
+  })
+
   it('rejects an unknown command type', () => {
     const result = knownCommandSchema.safeParse({type: 'not-a-real-command'})
     expect(result.success).toBe(false)
@@ -159,20 +170,6 @@ describe('knownCommandSchema — rejection', () => {
       expect(data.filter).toBe('stored')
       expect(data.grouping).toEqual({excludedTags: ['x']})
     }
-  })
-})
-
-describe('sqlModeSchema', () => {
-  it('accepts the four valid modes', () => {
-    for (const mode of ['all', 'get', 'optional', 'execute']) {
-      expect(sqlModeSchema.safeParse(mode).success).toBe(true)
-    }
-  })
-
-  it('rejects anything else', () => {
-    expect(sqlModeSchema.safeParse('truncate').success).toBe(false)
-    expect(sqlModeSchema.safeParse('').success).toBe(false)
-    expect(sqlModeSchema.safeParse(undefined).success).toBe(false)
   })
 })
 

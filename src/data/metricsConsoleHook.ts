@@ -19,6 +19,7 @@
  */
 
 import { Repo } from './repo'
+import { omnilinerNamespace } from '@/utils/omnilinerNamespace'
 
 interface MetricsConsoleAPI {
   /** Raw frozen snapshot — same shape as `repo.metrics()`. */
@@ -35,16 +36,11 @@ interface MetricsConsoleAPI {
   printDb: () => void
 }
 
-// The `__omniliner` window slot is shared with `roamImport/runtime.ts`.
-// Use `Window['__omniliner']` & {…extension…} via reading-then-writing
-// at runtime (see `ensureMetricsConsoleHook` below) instead of trying
-// to declaration-merge the interface (TS rejects mismatched per-file
-// shapes for the same property; we'd need to keep both files in sync).
-//
-// At type level we cast the namespace to a wider shape inside the hook.
-interface OmnilinerWindowExtension {
-  metrics?: MetricsConsoleAPI
-  repo?: Repo
+declare module '@/utils/omnilinerNamespace' {
+  interface OmnilinerNamespace {
+    metrics?: MetricsConsoleAPI
+    repo?: Repo
+  }
 }
 
 let installed = false
@@ -120,10 +116,9 @@ export const ensureMetricsConsoleHook = (repo: Repo): void => {
     },
   }
 
-  const ns = (window.__omniliner ?? {}) as Record<string, unknown> & OmnilinerWindowExtension
+  const ns = omnilinerNamespace()
   ns.metrics = api
   ns.repo = repo
-  window.__omniliner = ns as Window['__omniliner']
 
   // One-shot bootstrap log so the dev sees the API is live without
   // having to inspect the namespace.

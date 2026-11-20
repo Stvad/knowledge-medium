@@ -3,7 +3,8 @@
  * pages under it, and the bootstrap behavior of landing on today's
  * daily note when the user opens the app with an empty layout hash.
  *
- * Public surface (stable; other plugins import from here):
+ * Public app surface (stable). Headless callers import data helpers from
+ * dailyNotes.ts, schema.ts, or dataExtension.ts directly:
  *   - `DAILY_NOTE_TYPE` — block-type id. The plugin contributes the
  *     type via `dailyNotesDataExtension`; SRS uses it to constrain
  *     `srsNextReviewDateProp` ref targets.

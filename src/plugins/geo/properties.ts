@@ -9,7 +9,7 @@
  *      keeping coords scalar lets the map-view query stay on the typed-
  *      query path instead of synthesising a json_extract clause.
  *    - `googlePlaceId` and `googleMapsUrl` are both optional. Google POIs
- *      created via the `@` autocomplete have the `ChIJ…` id; Roam
+ *      created via the `@@` autocomplete have the `ChIJ…` id; Roam
  *      imports carry only the legacy `?cid=…` URL; ad-hoc pins have
  *      neither.
  *    - `categories` mirrors Google's `types[]` and Roam's `isa`. List of

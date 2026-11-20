@@ -40,9 +40,10 @@ import {
   valuePresetCoresFacet,
   workspaceBackfillsFacet,
 } from './facets'
-import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
-import { getOrCreateTypesPage } from '@/data/typesPage'
-import { getOrCreateRecentsPage } from '@/data/recentsPage'
+import { propertiesPageSpec } from '@/data/propertiesPage'
+import { typesPageSpec } from '@/data/typesPage'
+import { recentsPageSpec } from '@/data/recentsPage'
+import { migrationsPageSpec } from '@/data/migrationsPage'
 import { propertyCellBackfill } from './internals/propertyCellBackfill'
 import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
@@ -82,9 +83,11 @@ export const kernelDataExtension: AppExtension = systemToggle({
   // `Repo.ensureSystemPages` (before the landing/seed) so wiki-links to their
   // reserved aliases resolve to the canonical page instead of auto-creating a
   // rival (alias.collision). Each get-or-create is idempotent + deterministic-id.
-  systemPagesFacet.of({id: 'kernel:properties', ensure: getOrCreatePropertiesPage}, {source: 'kernel'}),
-  systemPagesFacet.of({id: 'kernel:types', ensure: getOrCreateTypesPage}, {source: 'kernel'}),
-  systemPagesFacet.of({id: 'kernel:recents', ensure: getOrCreateRecentsPage}, {source: 'kernel'}),
+  systemPagesFacet.of({spec: propertiesPageSpec, eager: true}, {source: 'kernel'}),
+  systemPagesFacet.of({spec: typesPageSpec, eager: true}, {source: 'kernel'}),
+  systemPagesFacet.of({spec: recentsPageSpec, eager: true}, {source: 'kernel'}),
+  // Migration claims create their container only when first needed.
+  systemPagesFacet.of({spec: migrationsPageSpec, eager: false}, {source: 'kernel'}),
   // Definition-block projectors (issue #90): user-defined property
   // schemas and block types mirror into their facets' user-data buckets
   // through the shared `ProjectorRuntime`. Registered schemas-before-

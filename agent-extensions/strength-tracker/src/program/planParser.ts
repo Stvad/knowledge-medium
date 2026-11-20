@@ -110,6 +110,33 @@ const strProp = (properties: Record<string, unknown> | undefined, key: string): 
   const value = properties?.[key]
   return typeof value === 'string' ? value : undefined
 }
+/** A count or a step, which only means something above zero. */
+const positiveProp = (properties: Record<string, unknown> | undefined, key: string): number | undefined => {
+  const value = numProp(properties, key)
+  return value !== undefined && value > 0 ? value : undefined
+}
+/** A load: zero is bodyweight, and only a negative one is not a load. */
+const loadProp = (properties: Record<string, unknown> | undefined, key: string): number | undefined => {
+  const value = numProp(properties, key)
+  return value !== undefined && value >= 0 ? value : undefined
+}
+/** A list of loads, ascending and deduplicated. The list editor writes text,
+ *  one entry per item — but "20, 25, 35" typed into a single item is the same
+ *  statement, so each entry is split on commas and spaces. A word ("lb",
+ *  "kb") is not a load and is skipped. */
+const loadsProp = (properties: Record<string, unknown> | undefined, key: string): number[] | undefined => {
+  const value = properties?.[key]
+  if (!Array.isArray(value)) return undefined
+  const tokens: unknown[] = value.flatMap((entry: unknown) =>
+    typeof entry === 'string' ? entry.split(/[\s,]+/) : [entry])
+  const loads = tokens
+    .map(token => typeof token === 'number' ? token
+      : typeof token === 'string' ? Number(/^\d+(?:\.\d+)?/.exec(token)?.[0])
+      : NaN)
+    // Zero stays: it is bodyweight, the bottom rung of a bodyweight lift.
+    .filter(load => Number.isFinite(load) && load >= 0)
+  return loads.length > 0 ? [...new Set(loads)].sort((a, b) => a - b) : undefined
+}
 const boolProp = (properties: Record<string, unknown> | undefined, key: string): boolean | undefined => {
   const value = properties?.[key]
   return typeof value === 'boolean' ? value : undefined
@@ -169,11 +196,15 @@ export const parseExercise = (
   if (sets === undefined) return null
 
   const repMin = numProp(props, FIELD.repMin) ?? proseRepMin
-  const repMax = numProp(props, FIELD.repMax) ?? proseRepMax
+  const statedRepMax = numProp(props, FIELD.repMax)
+  const repMax = statedRepMax ?? proseRepMax
   const increment = numProp(props, FIELD.increment) ?? incrementFor(name, increments.upper, increments.lower)
   const perSide = boolProp(props, FIELD.perSide) ?? PER_SIDE.test(rest)
-  const kind = strProp(props, FIELD.kind)
-  const freeform = kind === 'carry' || kind === 'bodyweight' ? true : repMax === undefined || FREEFORM.test(rest)
+  // `kind` decides nothing here. A rep window stated as a property always
+  // load-progresses — it outranks the line's "carry"/"lengths" wording, and for
+  // a carry the reps are lengths. A window read only from prose does not, on a
+  // line that reads as rounds, lengths or carries.
+  const freeform = repMax === undefined || (statedRepMax === undefined && FREEFORM.test(rest))
 
   // Description: the line's own prose tail, plus every child's plain text —
   // a description sub-bullet ("light, knee-friendly") or a demo link lives
@@ -197,6 +228,10 @@ export const parseExercise = (
     note: noteParts.length > 0 ? noteParts.join('\n') : undefined,
     catchUpIncrement: numProp(props, FIELD.catchUpIncrement),
     catchUpRpe: numProp(props, FIELD.catchUpRpe),
+    totalRepsThreshold: positiveProp(props, FIELD.totalRepsThreshold),
+    microIncrement: positiveProp(props, FIELD.microIncrement),
+    ladder: loadsProp(props, FIELD.ladder),
+    startWeight: loadProp(props, FIELD.startWeight),
     videos: videos.length > 0 ? videos : undefined,
     // Only a real block can be referenced back to; the line-only wrapper
     // below passes an empty id and gets no definition link.
@@ -794,11 +829,27 @@ const resolveAltGroups = (
   return {...config, exercises}
 }
 
+/** A micro step is SMALLER than what topping out earns. One at or above the
+ *  lift's increment would pay a session that fell short more than one that
+ *  cleared every set — so that lift loses the total-reps rule, and says so. */
+const withSaneMicroSteps = (config: ProgramConfig, warnings: string[]): ProgramConfig => ({
+  ...config,
+  exercises: config.exercises.map(exercise => {
+    if (exercise.microIncrement === undefined || exercise.microIncrement < exercise.increment) return exercise
+    warnings.push(
+      `"${exercise.name}": \`${FIELD.microIncrement}\` ${exercise.microIncrement} is not smaller than its `
+      + `increment ${exercise.increment}, so the total-reps rule is off for it until it is.`,
+    )
+    return {...exercise, microIncrement: undefined, totalRepsThreshold: undefined}
+  }),
+})
+
 export const configFromPlan = (
   root: PlanNode,
   altChoices: Record<string, string> = {},
 ): {config: ProgramConfig; warnings: readonly string[]} => {
   const overlay = parsePlan(root)
-  const config = resolveAltGroups(mergePlan(overlay), overlay.altDefaults ?? {}, altChoices)
-  return {config, warnings: overlay.warnings}
+  const warnings = [...overlay.warnings]
+  const resolved = resolveAltGroups(mergePlan(overlay), overlay.altDefaults ?? {}, altChoices)
+  return {config: withSaneMicroSteps(resolved, warnings), warnings}
 }

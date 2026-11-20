@@ -36,6 +36,7 @@ import { panelRenderScopeId } from '@/utils/renderScope'
 import { CallbackSet } from '@/utils/callbackSet'
 import { withMoveTransition } from '@/utils/viewTransition'
 import { isBlockTombstoned } from '@/data/blockLiveness'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 
 /** Per-(panel, block-visit) ephemeral state captured at navigation time
  *  and replayed on back/forward. New fields can be added freely; consumers
@@ -495,6 +496,7 @@ const transactPanelContent = (
   options?: WritePanelContentOptions,
 ): Promise<void> =>
   withMoveTransition(async () => {
+    flushPendingEditorContent()
     await panelBlock.repo.tx(async tx => {
       await writePanelContent(tx, panelBlock.id, blockId, state, options)
     }, {scope: ChangeScope.UiState, description})

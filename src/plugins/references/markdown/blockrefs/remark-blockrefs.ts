@@ -7,7 +7,6 @@ const buildNode = (
   tag: 'blockref' | 'blockembed',
   blockId: string,
   raw: string,
-  occurrenceId: string,
   children?: RootContent[],
 ): RootContent => ({
   type: tag,
@@ -17,7 +16,6 @@ const buildNode = (
     hName: tag,
     hProperties: {
       blockId,
-      occurrenceId,
       ...(children ? {aliased: true} : {}),
     },
   },
@@ -34,7 +32,6 @@ export const remarkBlockrefs: Plugin = () => (tree) => {
       'blockref',
       blockId,
       `[…](${node.url})`,
-      `link:${node.position?.start.offset ?? index}`,
       node.children as RootContent[],
     ))
     return [SKIP, index + 1]
@@ -57,7 +54,6 @@ export const remarkBlockrefs: Plugin = () => (tree) => {
         ref.embed ? 'blockembed' : 'blockref',
         ref.blockId,
         src.slice(ref.startIndex, ref.endIndex),
-        `text:${(node.position?.start.offset ?? 0) + ref.startIndex}`,
         ref.label ? [{type: 'text', value: ref.label}] : undefined,
       ))
       last = ref.endIndex

@@ -11,19 +11,25 @@ interface DefaultingProperty<T> extends DecodableProperty<T> {
   readonly defaultValue: T
 }
 
+/** The value stored under `name`, or `undefined` when the bag has no such key.
+ *  Own keys only: property names are user-chosen, and a bare `properties[name]`
+ *  reads `Object.prototype` for a property called `constructor` or `toString`. */
+export const storedPropertyValue = (
+  properties: Readonly<Record<string, unknown>>,
+  name: string,
+): unknown => Object.hasOwn(properties, name) ? properties[name] : undefined
+
 /** Decode a property's stored value straight off a raw row, or `undefined` when
- *  the property is absent. Same logic as `Block.peekProperty` minus the
- *  cache-backed facade — a projector subscription already hands us the
- *  authoritative `BlockData`, so reading it directly avoids the hydration race
- *  where `repo.block(id)` could transiently read an un-hydrated facade
- *  (`peekProperty` → undefined) and drop a freshly-created row from the rebuild.
+ *  the property is absent. Reads the cell under the schema's own name: no
+ *  winner resolution (that is `peekResolvedProperty`) and no cache-backed
+ *  facade, so a caller holding authoritative `BlockData` reads exactly it.
  *  A decode error PROPAGATES: the caller decides whether a malformed value is
  *  fatal. */
 export const peekRowProperty = <T>(
   row: Pick<BlockData, 'properties'>,
   property: DecodableProperty<T>,
 ): T | undefined => {
-  const raw = row.properties[property.name]
+  const raw = storedPropertyValue(row.properties, property.name)
   return raw === undefined ? undefined : property.codec.decode(raw)
 }
 
@@ -36,7 +42,7 @@ export const decodeRowProperty = <T>(
   row: Pick<BlockData, 'properties'>,
   property: DefaultingProperty<T>,
 ): T => {
-  const raw = row.properties[property.name]
+  const raw = storedPropertyValue(row.properties, property.name)
   return raw === undefined ? property.defaultValue : property.codec.decode(raw)
 }
 

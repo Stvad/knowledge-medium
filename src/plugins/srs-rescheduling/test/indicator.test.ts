@@ -36,10 +36,6 @@ describe('srsBarClass', () => {
     expect(srsBarClass(state({reviewCount: 1, interval: 365}))).toContain('border-sky-500/15')
   })
 
-  it('keeps a small left gap so text does not touch the bar', () => {
-    expect(srsBarClass(state({reviewCount: 1, interval: 7}))).toContain('pl-1')
-  })
-
   it('archived takes precedence over unreviewed', () => {
     const cls = srsBarClass(state({archived: true, reviewCount: 0}))
     expect(cls).toContain('border-muted-foreground/40')
@@ -63,11 +59,6 @@ describe('srsIndicatorTitle', () => {
       .toBe('SRS · 4.8d interval · 2.5 factor · 1 review')
   })
 
-  it('drops trailing zero for whole-day intervals', () => {
-    expect(srsIndicatorTitle(state({reviewCount: 3, interval: 7, factor: 2.5})))
-      .toBe('SRS · 7d interval · 2.5 factor · 3 reviews')
-  })
-
   it('rounds factor to two decimal places', () => {
     expect(srsIndicatorTitle(state({reviewCount: 2, interval: 6, factor: 2.456789})))
       .toBe('SRS · 6d interval · 2.46 factor · 2 reviews')
@@ -75,7 +66,7 @@ describe('srsIndicatorTitle', () => {
       .toBe('SRS · 6d interval · 1.3 factor · 2 reviews')
   })
 
-  it('shows interval, factor, and singular vs plural review count', () => {
+  it('shows interval (whole days without a decimal), factor, and singular vs plural review count', () => {
     expect(srsIndicatorTitle(state({reviewCount: 1, interval: 4, factor: 2.5})))
       .toBe('SRS · 4d interval · 2.5 factor · 1 review')
     expect(srsIndicatorTitle(state({reviewCount: 7, interval: 45, factor: 2.8})))

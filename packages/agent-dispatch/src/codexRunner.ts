@@ -24,8 +24,7 @@
  * of claude's --strict-mcp-config rather than an equivalent.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
-import { envForBilling, humanizeToolName } from './runner.js'
-import type { AgentRunResult, CommonRunOptions, RunEvent } from './runner.js'
+import { envForBilling, humanizeToolName, tokenCount, type AgentRunResult, type CommonRunOptions, type RunEvent, type RunUsage } from './runner.js'
 import type { CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
 export type { SpawnImpl }
@@ -147,29 +146,33 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
     }
   }
 
-  /** Best-effort tool name for an mcp_tool_call item — the shape wasn't
-   *  observed live, so try a few plausible string fields before
-   *  falling back to a generic label. */
+  /** Preserve the server prefix so km tools use the bridge timeout in the chip. */
   const mcpToolActivityLabel = (item: Record<string, unknown>): string => {
+    const server = item.server
+    if (typeof server === 'string' && server.length > 0) {
+      const toolField = item.tool ?? item.toolName
+      const suffix = typeof toolField === 'string' && toolField.length > 0 ? `: ${toolField}` : ''
+      return `${server}${suffix}`
+    }
     const tool = item.tool
     if (typeof tool === 'string' && tool.length > 0) return humanizeToolName(tool)
     const name = item.name
     if (typeof name === 'string' && name.length > 0) return humanizeToolName(name)
-    const server = item.server
-    if (typeof server === 'string' && server.length > 0) {
-      const toolField = item.toolName
-      const suffix = typeof toolField === 'string' && toolField.length > 0 ? `: ${toolField}` : ''
-      return `${server}${suffix}`
-    }
     return 'Using a tool'
   }
 
-  const activityForItem = (item: Record<string, unknown>) => {
+  const activityForItem = (item: Record<string, unknown>, eventType: 'item.started' | 'item.updated' | 'item.completed') => {
     const type = item.type
-    if (type === 'command_execution') emit({kind: 'activity', label: 'Running a command'})
-    else if (type === 'web_search') emit({kind: 'activity', label: 'Searching the web'})
-    else if (type === 'mcp_tool_call') emit({kind: 'activity', label: mcpToolActivityLabel(item)})
-    else if (type === 'reasoning') emit({kind: 'activity', label: 'Thinking'})
+    const stepId = item.id
+    if (typeof stepId !== 'string' || !stepId || (type !== 'command_execution' && type !== 'web_search' && type !== 'mcp_tool_call')) return
+    if (eventType === 'item.completed') {
+      emit({kind: 'activity-end', stepId})
+      return
+    }
+    const label = type === 'command_execution' ? 'Running a command'
+      : type === 'web_search' ? 'Searching the web'
+        : mcpToolActivityLabel(item)
+    emit({kind: 'activity', label, stepId})
   }
 
   const handleLine = (line: Record<string, unknown>) => {
@@ -202,7 +205,7 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
         }
         return
       }
-      activityForItem(itemRecord)
+      activityForItem(itemRecord, type)
       return
     }
 
@@ -277,6 +280,21 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
   return {feed, finish}
 }
 
+/** The usage on codex's `turn.completed` line. Its input_tokens INCLUDES
+ *  the cached ones, and codex reports no cache writes. */
+export const codexUsageFrom = (raw: Record<string, unknown>): RunUsage | null => {
+  const usage = raw.type === 'turn.completed' ? raw.usage : undefined
+  if (!usage || typeof usage !== 'object') return null
+  const counts = usage as Record<string, unknown>
+  const cached = tokenCount(counts.cached_input_tokens)
+  return {
+    inputTokens: Math.max(0, tokenCount(counts.input_tokens) - cached),
+    cacheReadTokens: cached,
+    cacheWriteTokens: null,
+    outputTokens: tokenCount(counts.output_tokens),
+  }
+}
+
 export const runCodex = async (
   options: CodexRunOptions,
   spawnImpl?: SpawnImpl,
@@ -317,5 +335,6 @@ export const runCodex = async (
     timedOut,
     stderr: effectiveStderr,
     raw: parsed.raw,
+    usage: codexUsageFrom(parsed.raw),
   }
 }

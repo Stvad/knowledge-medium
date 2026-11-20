@@ -7,6 +7,8 @@
  */
 import {describe, expect, it} from 'vitest'
 import {
+  BRIDGE_DEFAULT_MAX_BODY_BYTES,
+  MEDIA_BRIDGE_MAX_BYTES,
   commandPayloadSchema,
   commandStatusResponseSchema,
   knownAgentCommandSchema,
@@ -15,6 +17,12 @@ import {
   registerTokenSpecSchema,
   whoamiInfoSchema,
 } from '../src/protocol'
+
+describe('MEDIA_BRIDGE_MAX_BYTES', () => {
+  it('fits the bridge body limit once base64-encoded, with room for the envelope', () => {
+    expect(Math.ceil(MEDIA_BRIDGE_MAX_BYTES / 3) * 4 + 64 * 1024).toBeLessThanOrEqual(BRIDGE_DEFAULT_MAX_BODY_BYTES)
+  })
+})
 
 describe('commandPayloadSchema', () => {
   it('requires a string `type` discriminator', () => {

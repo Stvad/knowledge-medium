@@ -10,7 +10,8 @@
  * loop works for non-kernel contributions.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { waitFor } from '@/test/waitFor'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -232,13 +233,13 @@ describe('repo.query.ancestors', () => {
     const handle = env.repo.query.ancestors({id: 'leaf'})
     const seen: string[][] = []
     handle.subscribe(walk => seen.push(walk.ancestors.map(a => a.id)))
-    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    await waitFor(() => expect(handle.status()).toBe('ready'))
     expect(handle.peek()!.ancestors.map(a => a.id)).toEqual(['mid'])
     expect(handle.peek()!.stoppedAtParentId).toBe('r')
 
     await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
 
-    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['mid', 'r']))
+    await waitFor(() => expect(seen.at(-1)).toEqual(['mid', 'r']))
   })
 
   it('re-resolves when the first hop of an EMPTY chain comes back', async () => {
@@ -252,13 +253,13 @@ describe('repo.query.ancestors', () => {
     const handle = env.repo.query.ancestors({id: 'child'})
     const seen: string[][] = []
     handle.subscribe(walk => seen.push(walk.ancestors.map(a => a.id)))
-    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    await waitFor(() => expect(handle.status()).toBe('ready'))
     expect(handle.peek()!.ancestors.map(a => a.id)).toEqual([])
     expect(handle.peek()!.stoppedAtParentId).toBe('top')
 
     await env.repo.tx(tx => tx.restore('top'), {scope: ChangeScope.BlockDefault})
 
-    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['top']))
+    await waitFor(() => expect(seen.at(-1)).toEqual(['top']))
   })
 })
 
@@ -303,12 +304,12 @@ describe('repo.query.manyAncestors', () => {
     const handle = env.repo.query.manyAncestors({ids: ['cut', 'intact']})
     const seen: string[][] = []
     handle.subscribe(entries => seen.push(entries.map(e => e.ancestors.map(a => a.id).join('>'))))
-    await vi.waitFor(() => expect(handle.status()).toBe('ready'))
+    await waitFor(() => expect(handle.status()).toBe('ready'))
     expect(handle.peek()!.find(e => e.startId === 'cut')!.ancestors).toEqual([])
 
     await env.repo.tx(tx => tx.restore('r'), {scope: ChangeScope.BlockDefault})
 
-    await vi.waitFor(() => expect(seen.at(-1)).toEqual(['r', '']))
+    await waitFor(() => expect(seen.at(-1)).toEqual(['r', '']))
   })
 })
 
@@ -653,7 +654,7 @@ describe('repo.query.recentActivity', () => {
         {scope: ChangeScope.BlockDefault},
       )
 
-      await vi.waitFor(async () => {
+      await waitFor(async () => {
         expect((await handle.load()).map(b => b.id)).not.toContain('note')
       })
     })
@@ -678,7 +679,7 @@ describe('repo.query.recentActivity', () => {
 
       await env.repo.tx(tx => tx.restore('page'), {scope: ChangeScope.BlockDefault})
 
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(entryFor(handle.peek())!.ancestors.map(a => a.id)).toEqual(['page'])
       })
     })
@@ -1130,7 +1131,7 @@ describe('repo.query.blockTypesByIds', () => {
         })
       }, {scope: ChangeScope.BlockDefault})
 
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(handle.peek()).toEqual([{blockId: 'untyped', type: 'person'}])
       })
     } finally {
@@ -1183,7 +1184,7 @@ describe('repo.query.aliasClaimants', () => {
     expect((await handle.load()).map(block => block.id)).toEqual(['canonical'])
 
     await env.repo.tx(tx => tx.delete('canonical'), {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(await handle.load()).toEqual([])
     })
   })
@@ -1239,7 +1240,7 @@ describe('invalidation', () => {
       // under full-suite parallelism — the loader's reader-pool
       // round-trip can take longer than 10 ms when 65+ files are
       // contending for PowerSync's worker threads.
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['r', 'c1', 'gc'])
       })
       value = asBlocks(handle.peek())
@@ -1276,7 +1277,7 @@ describe('invalidation', () => {
       // surface as an extra one. (Replaces a 10 ms sleep that raced the
       // reader pool under full-suite parallelism.)
       await create({id: 'c3', parentId: 'p', orderKey: 'a2'})
-      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['c1', 'c2', 'c3']))
+      await waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['c1', 'c2', 'c3']))
       expect(fired.length).toBe(1)
     } finally {
       unsub()
@@ -1293,7 +1294,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
       await env.repo.tx(tx => tx.update('c1', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(1))
+      await waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(1))
     } finally {
       unsub()
     }
@@ -1312,7 +1313,7 @@ describe('invalidation', () => {
         tx => tx.update('c1', {content: 'published'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => expect(asBlockOrNull(handle.peek())?.id).toBe('c1'))
+      await waitFor(() => expect(asBlockOrNull(handle.peek())?.id).toBe('c1'))
       expect(fired.some(value => value?.id === 'c1')).toBe(true)
     } finally {
       unsub()
@@ -1329,7 +1330,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe((v) => { fired.push(v as BlockData[]) })
     try {
       await create({id: 'b', type: 'note'})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
       })
       value = asBlocks(handle.peek())
@@ -1364,7 +1365,7 @@ describe('invalidation', () => {
       // surface as an extra one. (Replaces a 30 ms "give it a chance to
       // misfire" sleep with a deterministic positive control.)
       await create({id: 'b', type: 'note'})
-      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
+      await waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
       expect(fired.length).toBe(1)
     } finally {
       unsub()
@@ -1391,7 +1392,7 @@ describe('invalidation', () => {
       // emission; had the non-matching content edit leaked 'plain' into the
       // result, it would surface as an earlier (wrong-valued) emission.
       await create({id: 'b', type: 'note'})
-      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
+      await waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
       expect(fired.length).toBe(1)
     } finally {
       unsub()
@@ -1412,7 +1413,7 @@ describe('invalidation', () => {
         }),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
@@ -1430,13 +1431,13 @@ describe('invalidation', () => {
     const unsub = handle.subscribe((value) => { fired.push(asBlocks(value).map(b => b.id)) })
     try {
       await env.repo.tx(tx => tx.delete('a'), {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual([])
       })
       expect(env.repo.block('a').peek()).toBeNull()
 
       await env.repo.tx(tx => tx.restore('a'), {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
       })
       expect(fired).toContainEqual([])
@@ -1463,7 +1464,7 @@ describe('invalidation', () => {
         tx => tx.update('a', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
@@ -1496,7 +1497,7 @@ describe('invalidation', () => {
         tx => tx.update('a', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
       })
       expect(fired.length).toBe(1)
@@ -1529,7 +1530,7 @@ describe('invalidation', () => {
         tx => tx.update('src', {references: [{id: 'target', alias: 'target'}]}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['src'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
@@ -1562,7 +1563,7 @@ describe('invalidation', () => {
       // the result; the content edit above must not have fired, so the
       // create is the sole emission. (Replaces a 30 ms sleep.)
       await create({id: 'src2', references: [{id: 'target', alias: 'target'}]})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect([...asIds(handle.peek())].sort()).toEqual(['src', 'src2'])
       })
       expect(fired.length).toBe(1)
@@ -1598,7 +1599,7 @@ describe('invalidation', () => {
         tx => tx.move('src', {parentId: 'plain-parent', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asIds(handle.peek())).toEqual([])
       })
       expect(fired).toContainEqual([])
@@ -1626,12 +1627,12 @@ describe('invalidation', () => {
     const unsub = handle.subscribe((value) => { fired.push(value) })
     try {
       await env.repo.tx(tx => tx.delete('context'), {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asIds(handle.peek())).toEqual([])
       })
 
       await env.repo.tx(tx => tx.restore('context'), {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asIds(handle.peek())).toEqual(['src'])
       })
       expect(fired).toContainEqual(['src'])
@@ -1678,7 +1679,7 @@ describe('invalidation', () => {
         tx => tx.move('src', {parentId: 'plain-parent', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asIds(handle.peek())).toEqual([])
       })
       expect(fired.length).toBe(1)
@@ -1715,7 +1716,7 @@ describe('invalidation', () => {
       // the unrelated non-note create above must not have fired.
       // (Replaces a 30 ms sleep.)
       await create({id: 'b', type: 'note'})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
       })
       expect(fired.length).toBe(1)
@@ -1737,7 +1738,7 @@ describe('invalidation', () => {
         tx => tx.update('b', {content: 'hello again'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
@@ -1772,7 +1773,7 @@ describe('invalidation', () => {
         tx => tx.update('panel', {content: 'hello world'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'panel'])
       })
       expect(fired.length).toBe(1)
@@ -1804,7 +1805,7 @@ describe('invalidation', () => {
       // membership); the UiState write above must not have fired, so the
       // create is the sole emission. (Replaces a 30 ms sleep.)
       await create({id: 'b', content: 'bb'})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
       })
       expect(fired.length).toBe(1)
@@ -1844,7 +1845,7 @@ describe('invalidation', () => {
       // each handle once; the parent move above must not have fired.
       // (Replaces a 30 ms sleep.)
       await create({id: 'c', content: 'hello again'})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(fired).toContain('search')
         expect(fired).toContain('recent')
       })
@@ -1874,7 +1875,7 @@ describe('invalidation', () => {
         tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(fired.length).toBeGreaterThan(0)
         expect(chainOf('a')).toEqual(['p2'])
       })
@@ -1902,7 +1903,7 @@ describe('invalidation', () => {
         tx => tx.move('p1', {parentId: 'p2', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(fired.length).toBeGreaterThan(0)
         expect(handle.peek()?.find(e => e.block.id === 'a')?.ancestors.map(b => b.id))
           .toEqual(['p1', 'p2'])
@@ -1940,7 +1941,7 @@ describe('invalidation', () => {
       // each handle once; the non-content property edit above must not
       // have. (Replaces a 30 ms sleep.)
       await create({id: 'c', content: 'hello again'})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(fired).toContain('search')
         expect(fired).toContain('recent')
       })
@@ -1967,7 +1968,7 @@ describe('invalidation', () => {
       // Adding a new aliased block fires kernel.aliases on the create
       // path (live flip + `hasAlias` true).
       await create({id: 'b', aliases: ['farewell']})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(fired).toContain('matches')
         expect(fired).toContain('distinct')
       })
@@ -2000,7 +2001,7 @@ describe('invalidation', () => {
         tx => tx.update('a', {properties: {[aliasesProp.name]: aliasesProp.codec.encode([])}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(asBlockOrNull(handle.peek())).toBeNull()
       })
       expect(fired.length).toBe(1)
@@ -2021,7 +2022,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
       await create({id: 'a', aliases: ['']})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(handle.peek()?.map(r => r.alias)).toEqual([''])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
@@ -2046,7 +2047,7 @@ describe('invalidation', () => {
         tx => tx.update('a', {content: 'new'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(handle.peek()?.map(r => r.content)).toEqual(['new'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
@@ -2078,7 +2079,7 @@ describe('invalidation', () => {
       // the non-alias property edit above must not have fired. (Replaces a
       // 30 ms sleep.)
       await create({id: 'c', aliases: ['farewell']})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(handle.peek()?.map(r => r.alias).sort()).toEqual(['farewell', 'greeting'])
       })
       expect(fired.length).toBe(1)
@@ -2164,7 +2165,7 @@ describe('plugin queries via setFacetRuntime', () => {
     const unsub = handle.subscribe((v) => { fired.push(v as number) })
     try {
       await env.repo.tx(tx => tx.delete('goner'), {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => expect(handle.peek()).toBe(1))
+      await waitFor(() => expect(handle.peek()).toBe(1))
       expect(fired.length).toBeGreaterThanOrEqual(1)
     } finally {
       unsub()

@@ -224,6 +224,33 @@ describe('codecs.ref', () => {
   })
 })
 
+describe('codecs.optionalRef', () => {
+  it('round-trips a target id and exposes ref metadata', () => {
+    const inner = codecs.optionalRef({targetTypes: ['place', 'page']})
+    expect(inner.encode('block-123')).toBe('block-123')
+    expect(inner.decode('block-123')).toBe('block-123')
+    expect(inner.type).toBe('ref')
+    expect(inner.targetTypes).toEqual(['place', 'page'])
+    expect(codecs.optionalRef().targetTypes).toEqual([])
+  })
+
+  it('stores absence, and the editor clear value, as null', () => {
+    const inner = codecs.optionalRef()
+    expect(inner.encode(undefined)).toBeNull()
+    expect(inner.encode('')).toBeNull()
+    expect(inner.decode(null)).toBeUndefined()
+    expect(inner.decode(undefined)).toBeUndefined()
+    expect(inner.decode('')).toBeUndefined()
+  })
+
+  it('rejects non-string, non-null targets', () => {
+    const inner = codecs.optionalRef()
+    expect(() => inner.decode(42)).toThrow(CodecError)
+    expect(() => inner.decode({id: 'x'})).toThrow(CodecError)
+    expect(() => inner.decode(['a'])).toThrow(CodecError)
+  })
+})
+
 describe('codecs.refList', () => {
   it('round-trips target id arrays and exposes ref-list metadata', () => {
     const inner = codecs.refList({targetTypes: ['task']})

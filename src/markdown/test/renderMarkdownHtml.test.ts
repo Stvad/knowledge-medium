@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import type { Components } from 'react-markdown'
 import type { Block } from '@/data/block'
+import { useBlockContext } from '@/context/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type { BlockContextType } from '@/types'
@@ -11,6 +12,7 @@ import { renderMarkdownHtml } from '../renderMarkdownHtml'
 const testContext = (content: string): MarkdownRenderContext => ({
   block: {} as Block,
   blockContext: {} as BlockContextType,
+  input: {},
   data: {content, references: [], workspaceId: 'ws-test'},
 })
 
@@ -22,6 +24,9 @@ const RuntimeReadingParagraph: Components['p'] = ({children}) => {
   const hasResolver = typeof runtime.read(markdownExtensionsFacet) === 'function'
   return createElement('p', {'data-runtime-context': hasResolver ? 'yes' : 'no'}, children)
 }
+
+const BlockContextReadingParagraph: Components['p'] = ({children}) =>
+  createElement('p', {'data-panel': useBlockContext().panelId ?? 'none'}, children)
 
 describe('renderMarkdownHtml', () => {
   it('renders GitHub-flavored markdown to a static HTML fragment', () => {
@@ -69,6 +74,35 @@ describe('renderMarkdownHtml', () => {
     })
 
     expect(html).toContain('data-runtime-context="yes"')
+  })
+
+  it('provides the render context\'s block context to contributed app-mode components', () => {
+    const runtime = resolveFacetRuntimeSync(
+      markdownExtensionsFacet.of(() => ({
+        components: {p: BlockContextReadingParagraph},
+      }), {source: 'test'}),
+    )
+
+    const html = renderMarkdownHtml('hello', {
+      runtime,
+      context: {...testContext('hello'), blockContext: {panelId: 'panel-1'}},
+    })
+
+    expect(html).toContain('data-panel="panel-1"')
+  })
+
+  it('keeps the app\'s table scroller out of the external profile', () => {
+    expect(renderMarkdownHtml('| a |\n|:--|\n| 1 |', {mode: 'external'}))
+      .toBe('<table><thead><tr><th style="text-align:left">a</th></tr></thead>'
+        + '<tbody><tr><td style="text-align:left">1</td></tr></tbody></table>')
+  })
+
+  it('keeps the app\'s list marks out of the external profile', () => {
+    const html = renderMarkdownHtml('1. one\n\n- two\n\n- [ ] task', {mode: 'external'})
+
+    expect(html).not.toContain('markdown-list')
+    expect(html).toContain('<ol>')
+    expect(html).toContain('<ul class="contains-task-list">')
   })
 
   it('can force the minimal external profile even when runtime is supplied', () => {

@@ -3,7 +3,7 @@ import CodeMirror from '@uiw/react-codemirror'
 import { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
-import { createTypeScriptConfig } from '@/utils/codemirror.js'
+import { createTypeScriptConfig, keepOutlineEditKeysInEditor } from '@/utils/codemirror.js'
 import { useExtensionLoadError } from '@/extensions/extensionLoadErrors.js'
 import { useContent } from '@/hooks/block.js'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
@@ -53,7 +53,7 @@ const ExtensionViewer = ({block}: BlockRendererProps) => {
   )
 }
 
-const ExtensionEditor = ({block}: BlockRendererProps) => {
+export const ExtensionEditor = ({block}: BlockRendererProps) => {
   const extensions = useMemo(() => createTypeScriptConfig(), [])
 
   return (
@@ -66,6 +66,7 @@ const ExtensionEditor = ({block}: BlockRendererProps) => {
         basicSetup={extensionBasicSetup}
         indentWithTab={true}
         autoFocus={false}
+        onKeyDown={keepOutlineEditKeysInEditor}
       />
     </ExtensionFrame>
   )

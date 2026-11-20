@@ -12,7 +12,7 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { getLocalMemberRole, getLocalWorkspace } from '@/data/workspaces.js'
 import { parseLayout } from '@/utils/routing.js'
-import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
+import { resolveWorkspaceEntry, type EntryLockReason } from '@/sync/keys/resolveWorkspaceEntry.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 import { markStartup } from '@/utils/startupTimeline.js'
@@ -27,7 +27,7 @@ export type InitialLayout =
       kind: 'locked'
       workspaceId: string
       workspaceName: string | null
-      reason: 'key-required' | 'quarantine'
+      reason: EntryLockReason
       canary: string | null
     }
   | {kind: 'waiting'; workspaceId: string}

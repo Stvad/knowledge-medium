@@ -1,5 +1,6 @@
 import { createClient, Session, User as SupabaseAuthUser } from '@supabase/supabase-js'
 import { User } from '@/types.js'
+import { withAuthRequestDeadline } from '@/services/authRequestDeadline.js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim()
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()
@@ -13,6 +14,7 @@ export const supabase = hasSupabaseAuthConfig
         persistSession: true,
         detectSessionInUrl: true,
       },
+      global: {fetch: withAuthRequestDeadline((input, init) => fetch(input, init))},
     })
   : null
 

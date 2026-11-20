@@ -19,7 +19,6 @@ import {
   judgedBaselineCount,
   lacksBaseline,
   lacksUncontendedSamples,
-  baselineWindow,
   fanoutRegression,
   median,
   queryRegressions,
@@ -213,8 +212,9 @@ export const runPerfAnalysis = async (
 
   // Graph size is REPORTED, not corrected for — filtering would disable the
   // monitor on a normal growing graph, and there's no cost model to normalize
-  // against. Measured over the WHOLE baseline window, so it's a hint ("code or data?"), not a per-metric baseline.
-  const baseCount = median(baselineWindow(history).map((r) => r.blockCount).filter((n) => n > 0))
+  // against. Measured over the whole loaded history, so it's a hint ("code or
+  // data?"), not a per-metric baseline — each comparison picks its own sessions.
+  const baseCount = median(history.map((r) => r.blockCount).filter((n) => n > 0))
   // Counted live, not off the newest record — the current side of every comparison is live too.
   const liveCount = await countLiveBlocks(repo, workspaceId)
   const graphGrowth = baseCount > 0 && liveCount > 0 ? liveCount / baseCount : null

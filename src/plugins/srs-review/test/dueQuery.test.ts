@@ -99,6 +99,11 @@ describe('buildTaggedCandidatesQuery', () => {
 })
 
 describe('selectNewCards', () => {
+  it('skips a block whose content is a copy of other text', () => {
+    expect(selectNewCards([block('plain', []), block('quote', ['annotation:thread'])], ['annotation:thread']).map(b => b.id))
+      .toEqual(['plain'])
+  })
+
   const block = (
     id: string,
     types: string[],

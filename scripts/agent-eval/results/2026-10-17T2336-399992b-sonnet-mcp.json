@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 5,
+  "label": "2026-10-17T2336-399992b-sonnet-mcp",
+  "startedAt": "2026-10-17T23:36:47.206Z",
+  "finishedAt": "2026-10-17T23:37:08.951Z",
+  "git": {
+    "sha": "399992b8d956913e7168c8e9337aa8bc68f0170a",
+    "branch": "claude/optimistic-khorana-4c3ab5",
+    "dirty": false
+  },
+  "model": "sonnet",
+  "conditions": {
+    "fixture": "9d499d1fadc8",
+    "importedFixture": "b7fdfa24fe35",
+    "surface": "mcp",
+    "tools": "6e105f9959e3",
+    "model": "claude-sonnet-5-5",
+    "effort": "default",
+    "mcpOutputTokens": 25000,
+    "bashOutputChars": 30000,
+    "timeoutMs": 600000,
+    "workers": 4
+  },
+  "claudeCodeVersion": "2.1.285",
+  "allowedTools": [
+    "mcp__km__get_block",
+    "mcp__km__subtree",
+    "mcp__km__backlinks",
+    "mcp__km__grouped_backlinks",
+    "mcp__km__page",
+    "mcp__km__daily_note",
+    "mcp__km__search",
+    "mcp__km__guide",
+    "mcp__km__sql_query",
+    "mcp__km__create_block",
+    "mcp__km__update_block",
+    "mcp__km__move_block",
+    "mcp__km__delete_block",
+    "mcp__km__restore_block",
+    "mcp__km__append_markdown",
+    "mcp__km__edit_block",
+    "mcp__km__create_page",
+    "mcp__km__recent_changes",
+    "mcp__km__block_history"
+  ],
+  "taskHashes": {
+    "reading-log-filter": "190a1c7a59b5"
+  },
+  "outputSizes": {
+    "search:pricing": 677,
+    "search:kestrel": 1651,
+    "backlinks:Meeting": 2647,
+    "backlinks:Kestrel": 2406,
+    "subtree:Reading Log": 9559,
+    "subtree:pasted source": 471,
+    "subtree:daily note": 1212,
+    "subtree:project page": 1690,
+    "subtree:design doc": 1872,
+    "page:Project Orchard": 571
+  },
+  "probeHashes": {
+    "search:pricing": "31bb52c81619",
+    "search:kestrel": "f6ca516143cf",
+    "backlinks:Meeting": "c52958f5a382",
+    "backlinks:Kestrel": "ac22d82ee278",
+    "subtree:Reading Log": "76396684b332",
+    "subtree:pasted source": "6ff7df904bba",
+    "subtree:daily note": "8f114897c8fd",
+    "subtree:project page": "35067d3b027b",
+    "subtree:design doc": "da55b7f140a2",
+    "page:Project Orchard": "22e6163754c4"
+  },
+  "runs": [
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 3,
+      "graphCommands": {
+        "view-outline": 1,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 25708,
+      "maxSeenChars": 24227,
+      "cappedCalls": 0,
+      "returnedChars": 25708,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 23716,
+        "cacheRead": 33138,
+        "output": 767,
+        "contextTotal": 56860,
+        "peakContext": 23718
+      },
+      "elapsedMs": 17354,
+      "costUsd": 0.10917360000000001,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2336-399992b-sonnet-mcp/transcripts/reading-log-filter-1.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 3,
+      "graphCommands": {
+        "view-outline": 1,
+        "sql": 1,
+        "view-search": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 25694,
+      "maxSeenChars": 24214,
+      "cappedCalls": 0,
+      "returnedChars": 25694,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 23375,
+        "cacheRead": 32709,
+        "output": 654,
+        "contextTotal": 56090,
+        "peakContext": 23377
+      },
+      "elapsedMs": 14858,
+      "costUsd": 0.1065938,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2336-399992b-sonnet-mcp/transcripts/reading-log-filter-2.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 2,
+      "graphCommands": {
+        "view-outline": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 25556,
+      "maxSeenChars": 24227,
+      "cappedCalls": 0,
+      "returnedChars": 25556,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 23522,
+        "cacheRead": 33142,
+        "output": 823,
+        "contextTotal": 56670,
+        "peakContext": 23524
+      },
+      "elapsedMs": 14835,
+      "costUsd": 0.1089584,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2336-399992b-sonnet-mcp/transcripts/reading-log-filter-3.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 4,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 2,
+      "graphCommands": {
+        "view-outline": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 25556,
+      "maxSeenChars": 24227,
+      "cappedCalls": 0,
+      "returnedChars": 25556,
+      "apiCalls": 3,
+      "tokens": {
+        "input": 6,
+        "cacheCreation": 23516,
+        "cacheRead": 33130,
+        "output": 675,
+        "contextTotal": 56652,
+        "peakContext": 23518
+      },
+      "elapsedMs": 13641,
+      "costUsd": 0.10745199999999999,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2336-399992b-sonnet-mcp/transcripts/reading-log-filter-4.jsonl"
+    }
+  ]
+}

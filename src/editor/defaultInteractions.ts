@@ -1,4 +1,6 @@
-import { useMemo } from 'react'
+import { useContext, useMemo } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { MouseEvent, TouchEvent } from 'react'
 import {
   blockContentSurfacePropsFacet,
@@ -50,6 +52,7 @@ const isBlockSelectionGesture = (event: MouseEvent<HTMLElement>): boolean =>
 export const createBlockSelectionShellState = (
   resolveContext: BlockResolveContext,
   state: BlockShellState,
+  propertyDisplay?: PropertyDisplayScopeLevels,
 ): BlockShellState => ({
   shellProps: {
     ...state.shellProps,
@@ -69,7 +72,7 @@ export const createBlockSelectionShellState = (
       // block-pointer context's pointerTargetFilter keeps interactive descendants
       // native (no candidate matches). Fall back to any residual facet click
       // handler only when nothing claims the gesture.
-      if (!dispatchPointerAction(event, blockPointerDepsFrom(resolveContext, event))) {
+      if (!dispatchPointerAction(event, blockPointerDepsFrom(resolveContext, event.currentTarget, propertyDisplay))) {
         state.shellProps.onClick?.(event)
       }
     },
@@ -82,9 +85,10 @@ export function BlockSelectionShellDecorator({
   state,
   children,
 }: BlockShellDecoratorProps) {
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const nextState = useMemo(
-    () => createBlockSelectionShellState(resolveContext, state),
-    [resolveContext, state],
+    () => createBlockSelectionShellState(resolveContext, state, propertyDisplay),
+    [resolveContext, state, propertyDisplay],
   )
 
   return children(nextState)
@@ -132,7 +136,7 @@ const isTap = (start: ContentTouchStart, end: ContentTouchStart): boolean =>
  */
 export const blockContentPointerGestures: BlockContentSurfaceContribution = context => {
   const dispatchGesture = (event: PointerGestureEvent): void => {
-    dispatchPointerAction(event, blockPointerDepsFrom(context, event))
+    dispatchPointerAction(event, blockPointerDepsFrom(context, event.currentTarget))
   }
 
   /** Events on a nested block's surface belong to that block, not to us (see
@@ -160,6 +164,11 @@ export const blockContentPointerGestures: BlockContentSurfaceContribution = cont
     },
     onTouchStart: (event: TouchEvent<HTMLDivElement>) => {
       if (!isOurs(event)) return
+      // A second finger makes the whole touch something other than a tap.
+      if (event.touches.length > 1) {
+        contentTouchStarts.delete(context.block.id)
+        return
+      }
       const touch = event.touches[0]
       if (!touch) return
       contentTouchStarts.set(context.block.id, {

@@ -29,10 +29,8 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
-import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
-import type { Block } from '@/data/block'
-import type { BlockPointerDependencies } from '@/shortcuts/types.js'
+import { blockPointerDepsFrom, isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
+import { isEditingBlock } from '@/data/properties.js'
 import { pickBlockDateAdapter } from './blockDateAdapter.ts'
 import {
   computeDeltaDays,
@@ -50,18 +48,6 @@ export const DATE_SCRUB_GESTURE_ID = DATE_SCRUB_GESTURE
 const HORIZONTAL_LOCK_PX = 10
 /** Vertical midpoint travel past which an active scrub reads as "cancel". */
 const VERTICAL_CANCEL_PX = 60
-
-const isBlockEditing = (blockId: string, uiStateBlock: Block, renderScopeId?: string): boolean =>
-  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
-  Boolean(uiStateBlock.peekProperty(isEditingProp))
-
-/** Links / video are allowed (a two-finger gesture there is still ours); buttons
- *  and the editor keep their own touch handling. Mirrors the swipe recognizer. */
-const isScrubSurfaceEvent = (target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
-  const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  return Boolean(element?.closest('a[href],video'))
-}
 
 interface ScrubAnchor {
   readonly idA: number
@@ -88,34 +74,15 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   let anchor: ScrubAnchor | null = null
   let scrubbing = false
 
-  const editing = (): boolean => isBlockEditing(block.id, uiStateBlock, renderScopeId)
+  const editing = (): boolean => isEditingBlock(uiStateBlock, block.id, renderScopeId)
 
   // Per-event ownership: a scrub is a TOUCH gesture, so a mouse/pen pointer
   // isn't ours. The coarse applicability gate (mobile + not editing) lives in
   // `isEnabled` below — the loop won't even call these handlers when it's false.
-  // The per-POINTER interactive check is separate again (isEligibleSurface),
+  // The per-POINTER interactive check is separate again (isGestureSurfaceTarget),
   // applied to each anchor finger at lock time so a finger that began on a
   // button/editor can't be half of the pair.
   const isTouch = (ctx: GestureEventContext): boolean => ctx.event.pointerType === 'touch'
-
-  // A finger may anchor a scrub only if it began OFF interactive content (links
-  // and video excepted). Touch pointers get implicit capture, so a pointer's
-  // session `target` stays its down target — reliable to check at lock time.
-  const isEligibleSurface = (target: EventTarget | null): boolean =>
-    isScrubSurfaceEvent(target) || !isInteractiveContentEvent({target})
-
-  // The swiped/scrubbed block's deps for the gesture-bound actions: a
-  // `block-pointer` action validates `BlockPointerDependencies`. The actions
-  // drive the module-singleton overlay, so they only read `block`, but the full
-  // shape keeps the deps valid for dispatch (mirrors the swipe recognizer).
-  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies => ({
-    block,
-    uiStateBlock,
-    scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: ctx.element,
-    ...(renderScopeId ? { renderScopeId } : {}),
-  })
 
   const progressTick = (
     dx: number,
@@ -125,7 +92,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   ): GesturePhaseResult => ({
     status: 'progress',
     gesture: DATE_SCRUB_GESTURE,
-    deps: depsFor(ctx),
+    deps: blockPointerDepsFrom(context, ctx.element),
     event: dateScrubProgressTickEvent({
       deltaDays: computeDeltaDays(dx),
       cancelIntent: Math.abs(dy) > VERTICAL_CANCEL_PX,
@@ -137,8 +104,10 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   // session positions (so a finger that drifted before its partner landed doesn't
   // leave a stale midpoint). A finger resting on an interactive control is skipped,
   // so a two-finger scrub can't start with one finger on a control it would consume.
+  // Touch pointers get implicit capture, so a pointer's session `target` stays its
+  // down target — reliable to check at lock time.
   const lockAnchor = (session: GestureSession): void => {
-    const [a, b] = session.pointers.filter(p => isEligibleSurface(p.target))
+    const [a, b] = session.pointers.filter(p => isGestureSurfaceTarget(p.target))
     if (!a || !b) return
     const mid = midpointOf(a, b)
     anchor = { idA: a.pointerId, idB: b.pointerId, midX: mid.x, midY: mid.y, lastMidX: mid.x, lastMidY: mid.y }
@@ -234,7 +203,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
       // commit also lets the loop swallow the trailing synthesized click.
       return cancel
         ? GESTURE_CANCEL
-        : { status: 'commit', gesture: DATE_SCRUB_COMMIT_GESTURE, deps: depsFor(ctx) }
+        : { status: 'commit', gesture: DATE_SCRUB_COMMIT_GESTURE, deps: blockPointerDepsFrom(context, ctx.element) }
     },
 
     onPointerCancel(session) {

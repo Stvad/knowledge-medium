@@ -12,6 +12,7 @@ import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/wor
 import type { InvalidationRule } from '@/data/invalidation'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import { constMat, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
+import type { SyncDrainStats } from './observer.js'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -220,6 +221,21 @@ describe('blocksSyncedObserver — defer + drainWorkspace', () => {
     // Window 1 (b0,b1) committed; window 2's throw didn't roll it back.
     expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }, { id: 'b1', content: 'c1' }])
     expect(errors.some(e => e instanceof Error && e.message === 'boom')).toBe(true)
+  })
+
+  it('reports its progress once the pass has its id set and after every committed window', async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    const { observer } = start({ getMaterializability: constMat('copy'), drainChunkSize: 2 })
+    await observer.flush()
+
+    const seen: Array<{ done: number; total: number }> = []
+    await observer.drainWorkspace('ws', 'all', progress => seen.push({ ...progress }))
+    expect(seen).toEqual([
+      { done: 0, total: 5 },
+      { done: 2, total: 5 },
+      { done: 4, total: 5 },
+      { done: 5, total: 5 },
+    ])
   })
 })
 
@@ -776,4 +792,66 @@ describe('blocksSyncedObserver — cycle detection (§4.7)', () => {
 
     expect(events).toEqual([])
   })
+})
+
+describe('blocksSyncedObserver — drain stats', () => {
+  it('reports one summary per drain, summed over its windows', async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, onDrainStats: stats => seen.push(stats),
+    })
+    await observer.flush()
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({
+      source: 'queue', completed: true, windows: 3, rows: 5, applied: 5, deferred: 0, deleted: 0,
+    })
+    const { wallMs, readMs, decodeMs, writeMs, invalidateMs, bookkeepingMs } = seen[0]!
+    for (const stage of [readMs, decodeMs, writeMs, invalidateMs, bookkeepingMs]) {
+      expect(stage).toBeGreaterThan(0)
+    }
+    expect(readMs + decodeMs + writeMs + invalidateMs + bookkeepingMs).toBeLessThanOrEqual(wallMs)
+
+    // A flush with nothing queued ran no window, so it has nothing to report.
+    await observer.flush()
+    expect(seen).toHaveLength(1)
+
+    await observer.drainWorkspace('ws', 'all')
+    expect(seen[1]).toMatchObject({ source: 'workspace', completed: true, windows: 3, rows: 5, applied: 0 })
+  })
+
+  it('reports the windows a failed drain got through, marked incomplete', async () => {
+    for (let i = 0; i < 4; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 2) throw new Error('boom')
+      return 'copy'
+    }
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability, drainChunkSize: 2, onError: () => {}, onDrainStats: stats => seen.push(stats),
+    })
+    await expect(observer.flush()).rejects.toThrow('boom')
+    // The observer's own start-up drain may be the one that threw; either way
+    // exactly the first window was applied before the failure.
+    expect(seen[0]).toMatchObject({ source: 'queue', completed: false, windows: 1, rows: 2, applied: 2 })
+  })
+
+  it('keeps a drain intact when its stats listener throws', async () => {
+    await put(data({ id: 'b0', workspaceId: 'ws', content: 'c0' }))
+    const errors: unknown[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onError: e => errors.push(e),
+      onDrainStats: () => { throw new Error('listener') },
+    })
+    await observer.flush().catch(() => {})
+    errors.length = 0
+    // A pass of our own, so the promise under test is the one that reported.
+    await expect(observer.drainWorkspace('ws', 'all')).resolves.toMatchObject({ scanned: 1 })
+    expect(errors).toEqual([new Error('listener')])
+  })
+
 })

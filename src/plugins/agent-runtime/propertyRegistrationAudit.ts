@@ -23,13 +23,17 @@
  * bounds that), and it adds a fix per key plus provenance for the keys the
  * sample reaches.
  *
+ * PAST THE FLIP it also reports COVERAGE — registered cells with no live
+ * field row (`surveyPropertyCellCoverage`). A cell-only write leaves those
+ * while every key still registers, so the key scan cannot see them.
+ *
  * Deliberately no exemption list. `grainAudit` skips `system:*` / `agent:*`
  * to keep a per-extension report readable; here an exemption would hide keys
  * the flip still has to carry, which is the failure mode this verb exists to
  * fix. Registered keys drop out by being registered.
  *
- * WHAT THIS DOES NOT DETECT. The contract is "keys the registry does not
- * resolve", nothing wider. Two adjacent definition problems are outside it,
+ * WHAT THE KEY HALF DOES NOT DETECT. Its contract is "keys the registry does
+ * not resolve", nothing wider. Two adjacent definition problems are outside it,
  * and both are invisible here rather than mis-reported:
  *   - a SHADOWED definition (two definition blocks competing for one name):
  *     the name still resolves, via the winner, so no key is listed. The
@@ -58,6 +62,10 @@ import {
   type PropertyKeyScan, type UnresolvedPropertyKey,
 } from '@/data/internals/propertyKeyScan'
 import type { Repo } from '@/data/repo'
+import {
+  surveyPropertyCellCoverage, type PropertyCellCoverage,
+} from '@/data/internals/propertyCellBackfill'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export interface UnregisteredPropertyTypeUsage {
   /** A type carried by blocks holding this key. */
@@ -107,6 +115,12 @@ export interface PropertyRegistrationAudit
   syncedThrough: string | null
   unregistered: UnregisteredProperty[]
   unregisteredCells: number
+  /** Registered cells with no live field row, once the workspace reads as
+   *  switched to property blocks — a gap this registry audit is otherwise blind
+   *  to, since every key involved registers. `missing` is what a re-run of
+   *  "Migrate properties to child blocks" writes. Null before the flip, where
+   *  no cell is expected to have blocks yet. */
+  coverage: PropertyCellCoverage | null
 }
 
 /** Keys we read provenance (types + samples) for, highest cell count first.
@@ -157,8 +171,9 @@ const hopelessKeyFix = (reason: string): string =>
 
 /** Reason → what to do.
  *
- *  Only `definition-unavailable` is reachable through this module: it asks the
- *  resolver by NAME, and `resolveName`
+ *  Only `definition-unavailable` and `behavior-unavailable` are reachable
+ *  through this module, and both fall through to the definition-count split
+ *  at the end: it asks the resolver by NAME, and `resolveName`
  *  (`src/data/internals/propertySchemaResolution.ts`) cannot return the other
  *  two. `shadowed` requires resolving a non-winner's own fieldId directly —
  *  a name always routes to its group head, so the head trivially matches
@@ -255,6 +270,9 @@ export const auditPropertyRegistration = async (
     syncedThrough: repo.lastSyncedAt?.toISOString() ?? null,
     unregistered,
     unregisteredCells: unregistered.reduce((sum, entry) => sum + entry.cells, 0),
+    coverage: await readIsChildBackedWorkspace(repo.db, workspaceId)
+      ? await surveyPropertyCellCoverage(repo, workspaceId)
+      : null,
   }
 }
 

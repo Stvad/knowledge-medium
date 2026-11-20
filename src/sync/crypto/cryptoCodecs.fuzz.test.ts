@@ -62,9 +62,9 @@
  *
  * A note on the string domain used here: `fc.string()` (default
  * `'grapheme-ascii'` unit — printable ASCII only) and
- * `fc.string({unit: 'binary'})` (full Unicode code-point range) both
- * produce well-formed Unicode (the latter explicitly excludes half
- * surrogate pairs per its fast-check docs). That matters for the AAD tuple-level
+ * `fc.string({unit: codePointUnitArb})` (full Unicode code-point range) both
+ * produce well-formed Unicode (the latter excludes the surrogate block, so
+ * its astral characters are always correctly paired). That matters for the AAD tuple-level
  * injectivity property: `canonicalAad` UTF-8-encodes fields via
  * `TextEncoder`, which *silently* replaces an unpaired surrogate with
  * U+FFFD — so two distinct JS strings that differ only in how they spell
@@ -81,6 +81,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
+import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import { bytesToBase64Url, base64UrlToBytes } from './base64url.js'
 import { bytesToBase32, base32ToBytes } from './base32.js'
 import { bytesToHex, hexToBytes } from './hex.js'
@@ -105,11 +106,11 @@ import { contentAad, assetBytesAad, canaryAad } from './aad.js'
 
 /** Well-formed-Unicode "nasty" strings: default (`'grapheme-ascii'`,
  *  printable ASCII) unit, plus the full Unicode code-point range
- *  (`'binary'`, still well-formed — see docblock above) and 0000-00FF
+ *  (`codePointUnitArb`, still well-formed — see docblock above) and 0000-00FF
  *  including ASCII control characters (`'binary-ascii'`). */
 const junkStringArb = fc.oneof(
   fc.string(),
-  fc.string({ unit: 'binary' }),
+  fc.string({ unit: codePointUnitArb }),
   fc.string({ unit: 'binary-ascii' }),
 )
 
@@ -363,7 +364,7 @@ describe('decode totality: returns or throws only a documented Error', () => {
 describe('AAD injectivity (aad.ts canonical length-prefixed encoding)', () => {
   // Well-formed-Unicode field values — see the top-of-file docblock for why
   // this (not arbitrary UTF-16) is the right domain for this property.
-  const fieldArb = fc.oneof(fc.string(), fc.string({ unit: 'binary' }))
+  const fieldArb = fc.oneof(fc.string(), fc.string({ unit: codePointUnitArb }))
 
   it('contentAad: equal argument tuples byte-equal, unequal tuples byte-unequal', () => {
     fc.assert(

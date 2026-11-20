@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   __setCompileImplForTest,
+  __setTranspileImplForTest,
   compileForVerification,
   createCompileCache,
   evictBlockFromCache,
@@ -127,35 +128,21 @@ describe('compileForVerification — eviction', () => {
   })
 })
 
-describe('compileForVerification — default Babel+blob path', () => {
-  it('revokes the blob URL after the dynamic import resolves', async () => {
+describe('compileForVerification — default blob instantiate', () => {
+  it('revokes the blob URL once the dynamic import settles', async () => {
     const realCreate = URL.createObjectURL
     const realRevoke = URL.revokeObjectURL
-    const created: string[] = []
+    const moduleUrl = `data:text/javascript,${encodeURIComponent("export default 'stub'")}`
     const revoked: string[] = []
-
-    const fakeUrl = 'blob:fake-url'
-    URL.createObjectURL = vi.fn(() => {
-      created.push(fakeUrl)
-      return fakeUrl
-    })
-    URL.revokeObjectURL = vi.fn((url: string) => {
-      revoked.push(url)
-    })
-
-    const restore = __setCompileImplForTest(async () => {
-      const url = URL.createObjectURL(new Blob([''], {type: 'text/javascript'}))
-      try {
-        return {default: 'stub'}
-      } finally {
-        URL.revokeObjectURL(url)
-      }
-    })
+    URL.createObjectURL = vi.fn(() => moduleUrl)
+    URL.revokeObjectURL = vi.fn((url: string) => { revoked.push(url) })
+    // Transpile is the identity, so the real instantiate step runs on the source.
+    const restore = __setTranspileImplForTest(async content => content)
 
     try {
-      await compileForVerification('any', 'block-1', cache)
-      expect(created).toEqual([fakeUrl])
-      expect(revoked).toEqual([fakeUrl])
+      const {module} = await compileForVerification("export default 'stub'", 'block-1', cache)
+      expect(module.default).toBe('stub')
+      expect(revoked).toEqual([moduleUrl])
     } finally {
       restore()
       URL.createObjectURL = realCreate

@@ -1,6 +1,7 @@
-import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, systemPagesFacet, typeSeedsFacet } from '@/data/facets.js'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
 import type { AppExtension } from '@/facets/facet.js'
+import { reviewDeckSpec } from './deck.ts'
 import {
   dailyNoteDecksProp,
   reviewDeckStartedProp,
@@ -12,6 +13,7 @@ import {
 } from './schema.ts'
 
 export const srsReviewDataExtension: AppExtension = [
+  systemPagesFacet.of({spec: reviewDeckSpec, eager: false}, {source: 'srs-review'}),
   definitionSeedsFacet.of(reviewDeckTagProp, {source: 'srs-review'}),
   definitionSeedsFacet.of(reviewDeckStartedProp, {source: 'srs-review'}),
   definitionSeedsFacet.of(reviewProgressProp, {source: 'srs-review'}),

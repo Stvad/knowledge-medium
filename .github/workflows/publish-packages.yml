@@ -51,14 +51,14 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Build the exact commit Run Tests validated (falls back to the ref a
           # manual dispatch selected).
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6.1.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -73,8 +73,8 @@ jobs:
       # the two packages (not the whole app — agent-dispatch pulls agent-cli via
       # its project reference) plus agent-cli's generated kernel-types (which
       # still walk the app's @/ source, so the app types shipped to consumers
-      # stay correct). Same dist each package's prepublishOnly would build; the
-      # publish job never has to build. compile:packages shares its build-
+      # stay correct). Equivalent to the dist each package's prepublishOnly
+      # builds with its own TS 6 tsc; the publish job never has to build. compile:packages shares its build-
       # kernel-types + chmod tail with `compile` (compile:post), so it can't
       # drift from the full build.
       - name: Build packages
@@ -121,7 +121,7 @@ jobs:
       id-token: write # OIDC trusted publishing; auto-attaches provenance
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 

@@ -4,8 +4,8 @@ import { blockLayoutFacet, type BlockLayout, type BlockLayoutSlots } from '@/ext
 import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { defineVariant } from '@/facets/variantFacet.js'
 
-// blockLayoutFacet contributions arrange the four slots (Content,
-// Properties, Children, Footer) inside a block's body. Each slot is
+// blockLayoutFacet contributions arrange the slots (Content, Properties,
+// BelowContent, Children, Footer) inside a block's body. Each slot is
 // already wrapped in its own ErrorBoundary + interaction provider
 // boundary, so swapping the layout doesn't change shortcut-surface
 // scoping or accidentally nest descendant blocks inside the parent's
@@ -25,12 +25,13 @@ const layoutProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-const SplitLayout: BlockLayout = ({ Content, Children, Properties, Footer }: BlockLayoutSlots) => (
+const SplitLayout: BlockLayout = ({ Content, Children, Properties, BelowContent, Footer }: BlockLayoutSlots) => (
   <div>
     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <Content />
         {Properties && <Properties />}
+        <BelowContent />
       </div>
       <div style={{ flex: 1, minWidth: 0, borderLeft: '1px solid #444', paddingLeft: 12 }}>
         <Children />

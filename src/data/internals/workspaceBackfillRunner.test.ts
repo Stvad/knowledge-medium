@@ -7,6 +7,7 @@ import { Repo, type OperatorBackfillResult } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { spyOnOverfullLog } from '@/data/test/overfullWriteAheadLog'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 
 /** Properties of the shared `WorkspaceBackfill` runner, independent of any one
@@ -385,16 +386,24 @@ describe('workspace backfill runner — sync gating', () => {
       },
     })
     await seedTarget(repo)
-    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => (
-      batches.length === 1
-        ? {reason: 'synced rows are still draining into `blocks`', transient: true}
-        : null
-    ))
+    let gapReported = false
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementation(async () => {
+      if (batches.length !== 1) return null
+      gapReported = true
+      return {reason: 'synced rows are still draining into `blocks`', transient: true}
+    })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const result = await repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    const running = repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
+    // The runner takes its deadline when it first asks for the gap, after
+    // batch 0 COMMITS. Time advanced before that never reaches the deadline, so
+    // fence on the ask, not on batch 0's body having run.
+    await vi.waitFor(() => expect(gapReported).toBe(true))
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    const result = await running
     warn.mockRestore()
 
+    expect(batches).toEqual([0])
     expect(result).toMatchObject({outcome: 'deferred', retryable: true})
   })
 
@@ -696,6 +705,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -731,6 +741,7 @@ describe('workspace backfill runner — sync gating', () => {
       user: {id: 'user-1'},
       backfillSyncGate: g.gate,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => {
           if (claimed.has(id)) return 'declined' as const
           claimed.add(id)
@@ -1146,6 +1157,82 @@ describe('workspace backfill runner — operator trigger', () => {
   })
 })
 
+describe('workspace backfill runner — write-ahead log', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('waits for a log a long read kept growing to be checkpointed before EVERY batch', async () => {
+    const events: string[] = []
+    const repo = makeRepo({
+      id: 'operator-chunked-v1',
+      trigger: 'operator',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) await tx(async () => { events.push(`batch ${i}`) }, {})
+      },
+    })
+    await seedTarget(repo)
+    // The RAW database, which `repo.db` meters through a proxy, and restored
+    // after: every test in this file shares it.
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
+    try {
+      expect((await repo.runWorkspaceBackfillNow(WS, 'operator-chunked-v1')).outcome).toBe('ran')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0', 'checkpoint', 'batch 1'])
+  })
+
+  it('does not wait on the log for a batch whose run the user already left', async () => {
+    // The wait can last as long as any read; a run that is aborting anyway
+    // must not hold the writer for it.
+    const events: string[] = []
+    const repo: Repo = makeRepo({
+      id: 'chunked-left-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => {
+        for (let i = 0; i < 2; i++) {
+          if (i === 1) repo.setActiveWorkspaceId(OTHER_WS)
+          await tx(async () => { events.push(`batch ${i}`) }, {})
+        }
+      },
+    }, cb => { cb(); return () => {} })
+    await seedTarget(repo)
+    const spy = spyOnOverfullLog(sharedDb.db, () => { events.push('checkpoint') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint', 'batch 0'])
+  })
+
+  it('asks whether the device is still caught up AFTER that wait, which lasts as long as any read', async () => {
+    const events: string[] = []
+    let caughtUp = true
+    const repo = makeRepo({
+      id: 'chunked-wa-v1',
+      trigger: 'workspace-open',
+      run: async ({tx}) => { await tx(async () => { events.push('batch') }, {}) },
+    }, cb => { if (caughtUp) cb(); return () => {} })
+    await seedTarget(repo)
+    const spy = spyOnOverfullLog(sharedDb.db, () => {
+      events.push('checkpoint')
+      // A download starts while the writer waits out the read.
+      caughtUp = false
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await drain(repo)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(events).toEqual(['checkpoint'])
+  })
+})
+
 describe('workspace backfill runner — operator outcomes', () => {
   it('does not claim while this device is behind the server', async () => {
     // `tryClaim` WRITES (the Migrations page, then the claim row). Claiming
@@ -1161,6 +1248,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       user: {id: 'user-1'},
       backfillSyncGate: neverSettles,
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async (_ws, id) => { claimAttempts.push(id); return 'minted' as const },
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1192,6 +1280,7 @@ describe('workspace backfill runner — operator outcomes', () => {
 
   // Records attempts so these can assert the runner never reached the claim.
   const recordingClaim = (attempts: string[]) => ({
+    stillOwned: async () => true,
     tryClaim: async (_ws: string, id: string) => { attempts.push(id); return 'minted' as const },
     markComplete: async () => {},
     releaseClaim: async () => {},
@@ -1281,6 +1370,7 @@ describe('workspace backfill runner — operator outcomes', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1317,6 +1407,7 @@ describe('workspace backfill runner — concurrent operator invocations', () => 
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => 'minted' as const,
         markComplete: async () => {},
         releaseClaim: async () => {},
@@ -1355,6 +1446,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
   /** Records the claim seam's calls in order, so a test can assert the claim
    *  came before the body rather than merely that both happened. */
   const spyClaim = (events: string[], {won = true}: {won?: boolean} = {}) => ({
+    stillOwned: async () => true,
     // A win MINTS. `inherited` is a separate axis with its own test below —
     // folding it in here would silence every release assertion at once.
     tryClaim: async () => { events.push('tryClaim'); return won ? 'minted' as const : 'declined' as const },
@@ -1463,6 +1555,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
         markComplete: async () => { events.push('markComplete') },
         releaseClaim: async () => { events.push('releaseClaim') },
@@ -1491,6 +1584,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { events.push('tryClaim'); return 'inherited' as const },
         markComplete: async () => { events.push('markComplete') },
         releaseClaim: async () => { events.push('releaseClaim') },
@@ -1574,6 +1668,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => {
           throw new DeterministicIdCrossWorkspaceError('claim-id', 'ws-other', WS)
         },
@@ -1629,6 +1724,7 @@ describe('workspace backfill runner — a claim held across a gesture', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       backfillCompletionClaim: {
+        stillOwned: async () => true,
         tryClaim: async () => { throw new Error('claim write failed') },
         markComplete: async () => {},
         releaseClaim: async () => { events.push('releaseClaim') },

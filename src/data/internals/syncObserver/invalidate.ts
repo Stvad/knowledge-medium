@@ -9,12 +9,13 @@
  * `repo.tx` fast path uses — `snapshotsToChangeNotification` — instead of
  * re-deriving them from a serialized audit row.
  *
- * One gate, not two: `materializeStagingRows` already consulted `ps_crud` /
- * `updated_at` to decide what to write to disk, so `snapshots` only contains
- * rows that won that gate. The cache write here is `applyIfNewer(after,
+ * One gate, not two: `materializeStagingRows` already consulted `ps_crud` and
+ * compared the row to decide what to write to disk, so `snapshots` only
+ * contains rows it actually wrote. The cache write here is `applyIfNewer(after,
  * 'sync')` — the in-memory LWW: it heals a 0-stamped pristine default LIVE for
- * free (any real server value out-stamps 0), while REJECTING an older-stamped
- * delivery over a newer local cache value.
+ * free (any real server value out-stamps 0), takes an EQUAL-stamped row the
+ * drain found different (#1163), and REJECTS an older-stamped delivery over a
+ * newer local cache value.
  *
  * That reject is load-bearing: the disk gate is server-monotonic but
  * INDISCRIMINATE toward a strictly-newer local row — it can apply an older

@@ -6,6 +6,7 @@
 //   return await window.__omniliner.roamImport.run(json)
 
 import { Repo } from '@/data/repo'
+import { omnilinerNamespace } from '@/utils/omnilinerNamespace'
 import { importRoam, type RoamImportOptions, type RoamImportSummary } from './import'
 import { planImport } from './plan'
 import type { RoamExport } from './types'
@@ -21,11 +22,9 @@ interface RoamImportWindowAPI {
   plan: typeof planImport
 }
 
-declare global {
-  interface Window {
-    __omniliner?: {
-      roamImport?: RoamImportWindowAPI
-    }
+declare module '@/utils/omnilinerNamespace' {
+  interface OmnilinerNamespace {
+    roamImport?: RoamImportWindowAPI
   }
 }
 
@@ -35,8 +34,7 @@ export const ensureRoamImportWindowHook = (repo: Repo) => {
   if (installed) return
   installed = true
 
-  window.__omniliner = window.__omniliner ?? {}
-  window.__omniliner.roamImport = {
+  omnilinerNamespace().roamImport = {
     run: (pages, options = {}) => {
       const workspaceId = options.workspaceId ?? repo.activeWorkspaceId
       if (!workspaceId) {

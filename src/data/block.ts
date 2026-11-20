@@ -4,8 +4,8 @@
  *
  * Block satisfies the Handle interface structurally (peek/load/subscribe/
  * read/status/key) AND adds the OO sugar that 95% of imperative call
- * sites use: `data` (sync, throws), `childIds` / `children` / `parent`
- * (sync tree relatives), `get` / `peekProperty` (typed property reads),
+ * sites use: `data` (sync, throws), `parent`
+ * (sync tree relative), `get` / `peekProperty` (typed property reads),
  * `set` / `setContent` / `delete` (single-block write sugar). Picking one
  * object that does both jobs (vs. a separate `Handle` and `Block`) keeps
  * the call-site surface uniform and unifies "row reactivity" with "row
@@ -32,12 +32,24 @@ import {
   type Unsubscribe,
 } from '@/data/api'
 import type { Repo } from './repo'
-import type { LoaderHandle } from './internals/handleStore'
 import { getBlockTypes } from './properties'
+import type { LoaderHandle } from './internals/handleStore'
+import { getResolvedProperty, peekResolvedProperty } from './internals/propertySchemaResolution'
 
 const liveSnapshot = (snapshot: BlockData | undefined): BlockData | undefined | null => {
   if (snapshot === undefined) return undefined
   return snapshot.deleted ? null : snapshot
+}
+
+const warnedChildGetters = new Set<string>()
+/** Once per getter per session: an installed extension still reading it is
+ *  what the deprecation window exists to surface. */
+const warnDeprecatedChildGetter = (getter: 'childIds' | 'children'): void => {
+  if (warnedChildGetters.has(getter)) return
+  warnedChildGetters.add(getter)
+  console.warn(
+    `[Block.${getter}] is deprecated and will be removed: it lists children without property rows. `
+    + `Use repo.query.${getter}({id, propertyChildren: 'none'}) for that list.`)
 }
 
 export class Block implements Handle<BlockData | null> {
@@ -204,13 +216,8 @@ export class Block implements Handle<BlockData | null> {
    *  fallback. Throws BlockNotLoadedError if the row isn't loaded. */
   get<T>(schema: PropertySchema<T>): T {
     const data = this.data  // throws if not loaded
-    const resolution = this.repo.propertySchemaResolverFor(data.workspaceId)
-      .resolveBoundary(schema)
-    if (resolution.status === 'identity-unavailable') return schema.defaultValue
-    const resolvedSchema = resolution.schema
-    const stored = data.properties[resolvedSchema.name]
-    if (stored === undefined) return resolvedSchema.defaultValue
-    return resolvedSchema.codec.decode(stored)
+    return getResolvedProperty(
+      this.repo.propertySchemaResolverFor(data.workspaceId), data.properties, schema)
   }
 
   /** Like `get` but doesn't substitute the default — returns undefined
@@ -218,13 +225,8 @@ export class Block implements Handle<BlockData | null> {
   peekProperty<T>(schema: PropertySchema<T>): T | undefined {
     const snap = this.peek()
     if (snap === undefined || snap === null) return undefined
-    const resolution = this.repo.propertySchemaResolverFor(snap.workspaceId)
-      .resolveBoundary(schema)
-    if (resolution.status === 'identity-unavailable') return undefined
-    const resolvedSchema = resolution.schema
-    const stored = snap.properties[resolvedSchema.name]
-    if (stored === undefined) return undefined
-    return resolvedSchema.codec.decode(stored)
+    return peekResolvedProperty(
+      this.repo.propertySchemaResolverFor(snap.workspaceId), snap.properties, schema)
   }
 
   get types(): readonly string[] {
@@ -238,27 +240,26 @@ export class Block implements Handle<BlockData | null> {
 
   // ──── Tree relatives ────
 
-  /** Reactive child-id list. Delegates to `repo.query.childIds({id})` —
-   *  the LoaderHandle owns SQL + caching + invalidation, so call sites
-   *  never need to ask the BlockCache about children directly.
-   *  Imperative call sites do `await block.childIds.load()`; reactive
-   *  ones use `useChildIds(block)` (which subscribes to the same
-   *  handle).
-   *
-   *  Facade getters speak the visible/outline view (property field rows
-   *  excluded, §9); drop to `repo.query.*` / `tx.childrenOf` for the
-   *  structural everything-view. */
+  // A list of children is always a VIEW (which property rows it includes), so
+  // the reader names it: a fixed view is `repo.query.children /
+  // childIds({id, propertyChildren})`, the list a surface draws is
+  // `visibleChildIds(block, scope)` (`@/data/visibleChildren`). The two getters
+  // below answer one view without saying which.
+
+  /** @deprecated Removal planned for 2026-11-20. The mode-`none` child ids
+   *  (no property field row). Say the view instead:
+   *  `repo.query.childIds({id, propertyChildren: 'none'})`. */
   get childIds(): LoaderHandle<string[]> {
-    return this.repo.query.childIds({id: this.id, hidePropertyChildren: true})
+    warnDeprecatedChildGetter('childIds')
+    return this.repo.query.childIds({id: this.id, propertyChildren: 'none'})
   }
 
-  /** Reactive children-rows list. Same shape as `childIds` but loads
-   *  the full BlockData rows (per-row deps included), suitable for
-   *  imperative tree walks that need content / properties without an
-   *  extra `repo.block(id).load()` per child. Callers wanting Block
-   *  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
+  /** @deprecated Removal planned for 2026-11-20. The mode-`none` child rows
+   *  (no property field row). Say the view instead:
+   *  `repo.query.children({id, propertyChildren: 'none'})`. */
   get children(): LoaderHandle<BlockData[]> {
-    return this.repo.query.children({id: this.id, hidePropertyChildren: true})
+    warnDeprecatedChildGetter('children')
+    return this.repo.query.children({id: this.id, propertyChildren: 'none'})
   }
 
   /** Parent as Block, or null only if this block has no parent

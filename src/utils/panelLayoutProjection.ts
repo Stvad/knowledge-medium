@@ -3,6 +3,7 @@ import type { Repo } from '@/data/repo'
 import type { BlockData, Tx, Unsubscribe } from '@/data/api'
 import { ChangeScope } from '@/data/api'
 import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
+import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
@@ -29,8 +30,9 @@ import { isBlockConfirmedDeleted, panelHistory, writePanelContent } from '@/util
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
-import { visibleChildrenOf } from '@/data/visibleChildren'
 import { layoutSessionBlockIdForKey, layoutSessionsContainerBlockId } from '@/data/stateBlocks'
+import { peekRowProperty } from '@/data/rowProperty'
+import { applyPanelUrlFlags, panelUrlFlags, panelUrlFlagsFromRow, samePanelUrlFlags, type PanelUrlFlag } from '@/utils/panelUrlFlags'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'cancelled' | 'deferred' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -49,17 +51,11 @@ interface ReconciliationPlan {
 export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
   hasBlockType(row, PANEL_STACK_TYPE)
 
-export const panelBlockId = (row: BlockData): string | undefined => {
-  const stored = row.properties[topLevelBlockIdProp.name]
-  if (stored === undefined) return undefined
-  return topLevelBlockIdProp.codec.decode(stored)
-}
+export const panelBlockId = (row: BlockData): string | undefined =>
+  peekRowProperty(row, topLevelBlockIdProp)
 
-const panelViewMode = (row: BlockData): string | undefined => {
-  const stored = row.properties[panelViewModeProp.name]
-  if (stored === undefined) return undefined
-  return normalizeViewMode(panelViewModeProp.codec.decode(stored))
-}
+const panelViewMode = (row: BlockData): string | undefined =>
+  normalizeViewMode(peekRowProperty(row, panelViewModeProp))
 
 
 /**
@@ -106,11 +102,8 @@ export const visiblePanelRows = (
  *  in ONE tx, but two subscriptions can deliver them in either order, and any
  *  logic comparing them (which pane is maximized, which pane is active) then
  *  runs against a half-applied commit. */
-export const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
-  const stored = row?.properties[activePanelIdProp.name]
-  if (stored === undefined) return undefined
-  return activePanelIdProp.codec.decode(stored)
-}
+export const sessionActivePanelId = (row: BlockData | undefined): string | undefined =>
+  row && peekRowProperty(row, activePanelIdProp)
 
 /** The session points at a panel row that is not in its subtree. */
 const hasDanglingActivePanel = (session: BlockData, rows: readonly BlockData[]): boolean => {
@@ -306,15 +299,14 @@ const degradeSublayoutSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
 //   and earns its own history entry, so Back un-maximizes (design §4.4).
 // - 'topology': kind + blockId only — routes context-only inbound diffs
 //   away from destructive materialization.
-// `rest` deliberately never participates: rows have nowhere to store
-// unknown context entries, so they live in the URL only and must never
-// make two otherwise-identical layouts compare unequal.
+// Only registered flags in `rest` participate; unknown entries live in the URL alone.
 type SlotComparisonStrictness = 'exact' | 'ignore-active' | 'topology'
 
 const sameLayoutSlots = (
   left: readonly LayoutSlot[],
   right: readonly LayoutSlot[],
   strictness: SlotComparisonStrictness = 'exact',
+  flags: readonly PanelUrlFlag[] = [],
 ): boolean =>
   left.length === right.length && left.every((slot, index) => {
     const other = right[index]
@@ -322,12 +314,13 @@ const sameLayoutSlots = (
     if (slot.kind === 'leaf' && other.kind === 'leaf') {
       if (slot.blockId !== other.blockId) return false
       if (strictness === 'topology') return true
-      return slot.viewMode === other.viewMode &&
+      return samePanelUrlFlags(slot.rest, other.rest, flags) &&
+        slot.viewMode === other.viewMode &&
         (slot.maximized === true) === (other.maximized === true) &&
         (strictness === 'ignore-active' || (slot.active === true) === (other.active === true))
     }
-    if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children, strictness)
-    if (slot.kind === 'sublayout' && other.kind === 'sublayout') return sameLayoutSlots(slot.columns, other.columns, strictness)
+    if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children, strictness, flags)
+    if (slot.kind === 'sublayout' && other.kind === 'sublayout') return sameLayoutSlots(slot.columns, other.columns, strictness, flags)
     return false
   })
 
@@ -349,6 +342,7 @@ const countLeavesByBlockId = (slots: readonly LayoutSlot[]): Map<string, number>
 const withRestFromUrl = (
   urlSlots: readonly LayoutSlot[],
   rowSlots: readonly LayoutSlot[],
+  flags: readonly PanelUrlFlag[],
 ): readonly LayoutSlot[] => {
   const urlLeaves = collectLeafSlots(urlSlots)
   const rowLeaves = collectLeafSlots(rowSlots)
@@ -359,12 +353,15 @@ const withRestFromUrl = (
   if (!aligned || !urlLeaves.some(leaf => leaf.kind === 'leaf' && leaf.rest !== undefined)) {
     return rowSlots
   }
+  const ownedKeys = new Set(flags.map(flag => flag.key))
   let leafIndex = 0
   const walk = (slots: readonly LayoutSlot[]): LayoutSlot[] => slots.map(slot => {
     if (slot.kind === 'stack') return {kind: 'stack', children: walk(slot.children)}
     if (slot.kind === 'sublayout') return {kind: 'sublayout', columns: walk(slot.columns)}
     const source = urlLeaves[leafIndex++]
-    return source.kind === 'leaf' && source.rest !== undefined ? {...slot, rest: source.rest} : slot
+    const unknownEntries = (source.rest ?? []).filter(entry => !ownedKeys.has(entry.split('=')[0]))
+    const rest = [...(slot.rest ?? []), ...unknownEntries].sort()
+    return rest.length ? {...slot, rest} : slot
   })
   return walk(rowSlots)
 }
@@ -372,6 +369,7 @@ const withRestFromUrl = (
 export const layoutSlotsFromRows = (
   rootId: string,
   rows: readonly BlockData[],
+  flags: readonly PanelUrlFlag[] = [],
 ): LayoutSlot[] => {
   const childrenByParent = buildChildrenByParent(rows)
   // Subtree reads include the root (query.subtree is includeRoot,
@@ -396,10 +394,12 @@ export const layoutSlotsFromRows = (
     const blockId = panelBlockId(row)
     if (!blockId) return null
     const viewMode = panelViewMode(row)
+    const rest = panelUrlFlagsFromRow(row, flags)
     return {
       kind: 'leaf',
       blockId,
       ...(viewMode !== undefined ? {viewMode} : {}),
+      ...(rest.length ? {rest} : {}),
       ...(isPanelRowMaximized(row) ? {maximized: true} : {}),
       ...(row.id === activePanelId ? {active: true} : {}),
     }
@@ -419,7 +419,7 @@ const loadSubtreeRowsInTx = async (
 ): Promise<BlockData[]> => {
   const rows: BlockData[] = [root]
   const visit = async (parentId: string): Promise<void> => {
-    const children = await visibleChildrenOf(tx, parentId, root.workspaceId)
+    const children = await tx.childrenOf(parentId, root.workspaceId, {propertyChildren: 'none'})
     for (const child of children) {
       rows.push(child)
       await visit(child.id)
@@ -568,7 +568,7 @@ export const insertPanelRow = async (
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
     await clearMaximizedPanelsInTx(tx, parent)
 
-    const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {propertyChildren: 'none'})
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
@@ -599,7 +599,7 @@ const insertPanelAtStartOfStackInTx = async (
     blockId: string
   },
 ): Promise<string> => {
-  const children = await visibleChildrenOf(tx, args.stackId, args.workspaceId)
+  const children = await tx.childrenOf(args.stackId, args.workspaceId, {propertyChildren: 'none'})
   const orderKey = keyBetween(null, children[0]?.orderKey ?? null)
   return createPanelRowInTx(repo, tx, {
     workspaceId: args.workspaceId,
@@ -634,7 +634,7 @@ export const insertSidebarStackedPanel = async (
       }
 
       if (source?.parentId === layoutSessionBlock.id) {
-        const topLevelSiblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
+        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {propertyChildren: 'none'})
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
@@ -669,7 +669,7 @@ export const insertSidebarStackedPanel = async (
       }
     }
 
-    const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {propertyChildren: 'none'})
     const previous = siblings.at(-1)
     const stackId = await createPanelStackRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
@@ -931,6 +931,7 @@ export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
 ): Promise<void> => {
+  flushPendingEditorContent()
   await repo.tx(async tx => {
     const row = await tx.get(panelId)
     if (!row) return
@@ -983,6 +984,7 @@ export const reconcilePanelRows = async (
    *  costs no extra read. */
   knownRows?: readonly BlockData[],
 ): Promise<{changed: boolean}> => {
+  const flags = panelUrlFlags(repo)
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
   )
@@ -996,12 +998,12 @@ export const reconcilePanelRows = async (
   // skipped as already applied, and that write's outbound projection would
   // then push its layout over the user's URL. Rows that differ reach the tx,
   // which re-reads under the lock.
-  const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  const preRows = knownRows ?? await repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load()
   const preParent = preRows.find(row => row.id === layoutSessionBlock.id)
   if (preParent && !repo.hasWriteInFlight) {
     if (
       !hasDanglingActivePanel(preParent, preRows) &&
-      sameLayoutSlots(layoutSlotsFromRows(layoutSessionBlock.id, preRows), targetSlots, 'exact')
+      sameLayoutSlots(layoutSlotsFromRows(layoutSessionBlock.id, preRows, flags), targetSlots, 'exact', flags)
     ) {
       return {changed: false}
     }
@@ -1026,15 +1028,14 @@ export const reconcilePanelRows = async (
 
     const currentRows = await loadSubtreeRowsInTx(tx, parent)
     const activePanelId = sessionActivePanelId(parent)
-    const currentLayoutSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
+    const currentLayoutSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows, flags)
 
     // ── Targeted context pass ──
     // Topology-equal targets (same kinds + block ids) must NEVER take the
     // destructive materialization below: real sessions always have an
     // active panel, so any inbound hash without `;active` (old bookmark,
-    // shared link) would otherwise delete+recreate stack rows (React
-    // remounts), re-key rows via tx.move (junk UiState uploads), and
-    // un-stack singleton stacks. Context diffs are applied surgically.
+    // shared link) would otherwise re-key rows via tx.move (junk UiState
+    // uploads) and un-stack singleton stacks. Context diffs are applied surgically.
     const targetLeaves = collectLeafSlots(targetSlots)
     const currentLeafRows = allPanelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
       .filter(row => panelBlockId(row) !== undefined)
@@ -1048,6 +1049,7 @@ export const reconcilePanelRows = async (
         const row = currentLeafRows[index]
         const leaf = targetLeaves[index]
         if (leaf.kind !== 'leaf') continue
+        if (await applyPanelUrlFlags(tx, row, leaf.rest, flags)) wrote = true
         if (panelViewMode(row) !== leaf.viewMode) {
           await tx.setProperty(row.id, panelViewModeProp, leaf.viewMode)
           wrote = true
@@ -1088,20 +1090,35 @@ export const reconcilePanelRows = async (
     const currentSlots = currentRows
       .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
       .map(row => ({row, blockId: panelBlockId(row)}))
-    const stackRowsToDelete = currentRows
+    const currentStackRows = new Map(currentRows
       .filter(row => row.id !== layoutSessionBlock.id && isPanelStackRow(row))
+      .map(row => [row.id, row]))
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
+
+    /** The current stack a target stack keeps, given the target leaves it
+     *  holds: the first one's whose reused panel row is in a stack no earlier
+     *  target took. A stack's row carries the column's UiState (its width),
+     *  which belongs with its panels rather than with the URL; a target
+     *  stack none of whose panels was stacked gets a new row. */
+    const reusableStackRow = (firstLeafIndex: number, leafCount: number): BlockData | undefined => {
+      for (let index = firstLeafIndex; index < firstLeafIndex + leafCount; index++) {
+        const parentId = rowsByTargetIndex.get(index)?.row.parentId
+        const stack = parentId ? currentStackRows.get(parentId) : undefined
+        if (stack) return stack
+      }
+      return undefined
+    }
 
     // Removed layout rows are deleted WITH their whole subtree
     // (`deleteLayoutRowSubtreeInTx`), same as `deletePanelRow`. Hierarchical
     // editing: anything meant to survive a reconcile is moved out of the doomed
-    // subtree FIRST — the reused panels are relocated into the freshly-built
-    // stacks by `materializeSlots` (`tx.move`), and unmatched panels are leaves
+    // subtree FIRST — the reused panels and kept stacks are relocated to their
+    // targets by `materializeSlots` (`tx.move`), and unmatched panels are leaves
     // with nothing to preserve. So by delete time each doomed row's subtree
     // holds only what should go: its hidden property-field machinery (a flipped
-    // workspace's materialized UiState props) and husk stacks that are their own
-    // `stackRowsToDelete` entries (idempotent re-delete). A bare `tx.delete`
+    // workspace's materialized UiState props) and husk stacks that are deleted
+    // again below if no target stack keeps them (idempotent). A bare `tx.delete`
     // would instead strand that machinery live under the tombstone (#8).
     for (const slot of rowsToDelete) {
       await deleteLayoutRowSubtreeInTx(tx, slot.row.id)
@@ -1117,7 +1134,14 @@ export const reconcilePanelRows = async (
         const target = slots[index]
         const orderKey = orderKeys[index]
         if (target.kind === 'stack') {
-          const stackId = await createPanelStackRowInTx(repo, tx, {
+          const kept = reusableStackRow(targetLeafIndex, collectLeafSlots(target.children).length)
+          if (kept) {
+            currentStackRows.delete(kept.id)
+            if (kept.orderKey !== orderKey || kept.parentId !== parentId) {
+              await tx.move(kept.id, {parentId, orderKey})
+            }
+          }
+          const stackId = kept?.id ?? await createPanelStackRowInTx(repo, tx, {
             workspaceId: parent.workspaceId,
             parentId,
             orderKey,
@@ -1145,10 +1169,14 @@ export const reconcilePanelRows = async (
             viewMode: target.viewMode,
             maximized: target.maximized,
           })
+          const created = await tx.get(createdId)
+          if (!created) throw new Error('Created panel row missing')
+          await applyPanelUrlFlags(tx, created, target.rest, flags)
           if (target.active && urlActiveRowId === undefined) urlActiveRowId = createdId
           continue
         }
 
+        await applyPanelUrlFlags(tx, slot.row, target.rest, flags)
         if (target.active && urlActiveRowId === undefined) urlActiveRowId = slot.row.id
         if (slot.row.orderKey !== orderKey || slot.row.parentId !== parentId) {
           await tx.move(slot.row.id, {parentId, orderKey})
@@ -1183,7 +1211,7 @@ export const reconcilePanelRows = async (
 
     await materializeSlots(targetSlots, layoutSessionBlock.id)
 
-    for (const stackRow of stackRowsToDelete) {
+    for (const stackRow of currentStackRows.values()) {
       await deleteLayoutRowSubtreeInTx(tx, stackRow.id)
     }
 
@@ -1201,6 +1229,7 @@ export const reconcilePanelRows = async (
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
+  flushPendingEditorContent()
   const changed = await runTx()
 
   // History effects only after the tx committed: ANY in-tx throw
@@ -1340,6 +1369,7 @@ export const applyCurrentLayoutUrl = async ({
   replaceHash,
   isCancelled,
 }: ApplyCurrentLayoutUrlArgs): Promise<ApplyLayoutResult> => {
+  const flags = panelUrlFlags(repo)
   const route = parseLayout(hash)
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
@@ -1356,9 +1386,9 @@ export const applyCurrentLayoutUrl = async ({
     ? degradeSublayoutSlots(route.slots)
     : route.slots
 
-  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load()
   if (isCancelled?.()) return {kind: 'cancelled'}
-  const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
+  const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows, flags)
 
   if (targetSlots.length === 0) {
     if (currentSlots.length > 0) {
@@ -1388,14 +1418,14 @@ export const applyCurrentLayoutUrl = async ({
   // re-attached (rows can't store either). Cannot loop: replaceState fires
   // no event, and a second pass over the replaced hash compares equal.
   const finalRows = changed
-    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load()
     : currentRows
   // Cancelled after the tx committed (during the final load): the committed
   // rows stand — they targeted our own session with the hash this apply
   // started from (see the isCancelled arg doc) — but the URL is off-limits.
   if (isCancelled?.()) return {kind: 'cancelled'}
-  const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows)
-  const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots), route.wsContext)
+  const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows, flags)
+  const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots, flags), route.wsContext)
   if (canonical !== `#${splitHashRouteAndParams(hash).route}`) {
     replaceHash?.(preserveHashQueryParams(canonical, hash))
     return {kind: 'normalized'}
@@ -1467,9 +1497,9 @@ export class PanelLayoutProjection {
 
   async start(): Promise<void> {
     if (this.unsubscribeRows || this.unsubscribeUrl) return
-    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true})
+    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, propertyChildren: 'none'})
     const initialRows = await rowsHandle.load()
-    this.lastSlots = layoutSlotsFromRows(this.layoutSessionBlock.id, initialRows)
+    this.lastSlots = layoutSlotsFromRows(this.layoutSessionBlock.id, initialRows, panelUrlFlags(this.repo))
     this.unsubscribeRows = rowsHandle.subscribe(rows => {
       this.handleRowsChanged(rows)
     })
@@ -1541,7 +1571,7 @@ export class PanelLayoutProjection {
             // the generation check skips the pass when a live subscription
             // event was processed after drain (its rows are newer).
             const generationAtDrain = this.outboundGeneration
-            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true}).load()
+            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, propertyChildren: 'none'}).load()
             // Re-check after the await: a NEW inbound may have queued during
             // the load (and rows events suppressed under it re-set the flag),
             // or the projection may have been disposed mid-load. Bail WITHOUT
@@ -1623,8 +1653,9 @@ export class PanelLayoutProjection {
     }
     this.outboundGeneration++
 
-    const slots = layoutSlotsFromRows(this.layoutSessionBlock.id, rows)
-    if (sameLayoutSlots(this.lastSlots, slots)) return
+    const flags = panelUrlFlags(this.repo)
+    const slots = layoutSlotsFromRows(this.layoutSessionBlock.id, rows, flags)
+    if (sameLayoutSlots(this.lastSlots, slots, 'exact', flags)) return
     this.lastSlots = slots
 
     // Echo guard by ROUTE EQUIVALENCE, not raw string compare: the current
@@ -1632,7 +1663,7 @@ export class PanelLayoutProjection {
     // rows can't represent — a raw compare would push over them, erasing
     // them and double-pushing history entries. (viewMode and active DO
     // round-trip through rows now, so they participate in the comparison;
-    // `rest` entries never do.)
+    // only registered flags from `rest` participate.)
     const current = parseLayout(this.getHash())
     const sameWorkspace = current.workspaceId === this.workspaceId
     // Outbound mirror of the inbound addressing rule (isRouteAddressee):
@@ -1647,7 +1678,7 @@ export class PanelLayoutProjection {
     // push.
     if (sameWorkspace
       && !isRouteAddressee(this.repo, this.workspaceId, current.wsContext, this.layoutSessionBlock.id)) return
-    if (sameWorkspace && sameLayoutSlots(current.slots, slots)) return
+    if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'exact', flags)) return
 
     // Same carry rule as slot `rest`: the current hash's ws-context (e.g.
     // `;persp=`) has no row representation, so every outbound hash rebuilt
@@ -1655,10 +1686,10 @@ export class PanelLayoutProjection {
     // the perspective lane off every history entry the projection writes
     // (breaking Back's lane attribution). Skipped on a workspace mismatch:
     // the context belongs to the other workspace's token.
-    const outboundSlots = sameWorkspace ? withRestFromUrl(current.slots, slots) : slots
+    const outboundSlots = sameWorkspace ? withRestFromUrl(current.slots, slots, flags) : slots
     const nextHash = buildLayoutFromSlots(
       this.workspaceId, outboundSlots, sameWorkspace ? current.wsContext : undefined)
-    if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'ignore-active')) {
+    if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'ignore-active', flags)) {
       // Active-only diff: which pane is focused is not a history entry —
       // rewrite the current one instead of pushing.
       this.replaceHash(nextHash)

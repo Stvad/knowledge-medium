@@ -25,7 +25,8 @@ import { ChangeScope, type BlockData, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
+import { waitFor } from '@/test/waitFor'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
 import {
@@ -37,6 +38,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { buildLayoutFromSlots } from '@/utils/routing'
+import { registerPendingContentFlush } from '@/data/pendingEditorContent'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
@@ -47,6 +49,7 @@ import {
   deletePanelRow,
   insertPanelRow,
   insertSidebarStackedPanel,
+  isPanelStackRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
@@ -131,7 +134,7 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
   }, {scope: ChangeScope.UiState, description: 'seed panel rows'})
 }
 
-const rows = async () => layoutSessionBlock().children.load()
+const rows = async () => childrenOf(env.repo, env.layoutSessionBlockId)
 const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
 
 const startProjection = (initialHash: string) => {
@@ -356,7 +359,7 @@ describe('applyCurrentLayoutUrl', () => {
 
     // Slot-bearing lane deep link: must NOT materialize rows in base.
     expect((await apply('#ws-1;persp=lane/b1')).kind).toBe('deferred')
-    expect(await base.children.load()).toEqual([])
+    expect(await childrenOf(env.repo, base.id)).toEqual([])
 
     // Slot-less lane URL over persisted BASE rows: must NOT normalize the
     // lane URL from them (that would smuggle base's layout into the lane).
@@ -596,7 +599,7 @@ describe('applyCurrentLayoutUrl', () => {
       repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=lane/b1',
     })
     expect(result.kind).toBe('deferred')
-    expect(await base.children.load()).toEqual([])
+    expect(await childrenOf(env.repo, base.id)).toEqual([])
     env.repo.setLayoutSessionRouter(null)
   })
 
@@ -820,6 +823,29 @@ describe('applyCurrentLayoutUrl', () => {
   })
 })
 
+describe('reconcilePanelRows: an open editor', () => {
+  it('saves its pending text ahead of a Back navigation that replaces it', async () => {
+    await createPanelRows(['a', 'b'])
+    await env.repo.tx(tx => tx.create({
+      id: 'edited', workspaceId: WS, parentId: null, orderKey: 'n0', content: 'stored',
+    }).then(() => undefined), {scope: ChangeScope.BlockDefault, description: 'seed edited block'})
+    const stop = registerPendingContentFlush(() => {
+      void env.repo.mutate.setContent({id: 'edited', content: 'typed'})
+    })
+    try {
+      await reconcilePanelRows(env.repo, layoutSessionBlock(), ['c', 'b'])
+    } finally {
+      stop()
+    }
+    const order = (await env.h.db.getAll<{description: string}>(
+      'SELECT description FROM command_events ORDER BY rowid',
+    )).map(row => row.description)
+    expect(order).toContain('set content on edited')
+    expect(order.indexOf('set content on edited'))
+      .toBeLessThan(order.indexOf('reconcile panel layout from URL'))
+  })
+})
+
 describe('reconcilePanelRows: no-op guard', () => {
   it('does not open a tx when rows already match the target slots and active pointer', async () => {
     await createPanelRows(['a', 'b'])
@@ -846,7 +872,7 @@ describe('reconcilePanelRows: no-op guard', () => {
     const txSpy = vi.spyOn(env.repo, 'tx')
     try {
       const pending = reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
-      await vi.waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
       release()
       await inFlight
       expect(await pending).toEqual({changed: true})
@@ -881,7 +907,7 @@ describe('reconcilePanelRows: no-op guard', () => {
     const txSpy = vi.spyOn(env.repo, 'tx')
     try {
       const pending = reconcilePanelRows(env.repo, layoutSessionBlock(), ['a', 'b'])
-      await vi.waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(txSpy).toHaveBeenCalledTimes(1))
       release()
       await inFlight
       await pending
@@ -1041,6 +1067,52 @@ describe('layoutSlotsFromRows normalization', () => {
     expect(result.kind).toBe('noop')
     const idsAfter = (await layoutRows()).map(row => row.id).sort()
     expect(idsAfter).toEqual(idsBefore) // the stack row silently survives
+  })
+})
+
+describe('stack rows across a reconcile', () => {
+  const stackIds = async () => (await layoutRows()).filter(isPanelStackRow).map(row => row.id)
+
+  it('keeps the row of a stack whose panels stay together when a pane changes content', async () => {
+    await applyUrl('#ws-1/a/x,b/c')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/a/x,d/c')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'x', 'd', 'c'])
+  })
+
+  it('keeps the row of a stack when a column is opened before it', async () => {
+    await applyUrl('#ws-1/a/x,b')
+    const [stackId] = await stackIds()
+
+    await applyUrl('#ws-1/n/a/x,b')
+
+    expect(await stackIds()).toEqual([stackId])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'n'},
+      {kind: 'leaf', blockId: 'a'},
+      {kind: 'stack', children: [{kind: 'leaf', blockId: 'x'}, {kind: 'leaf', blockId: 'b'}]},
+    ])
+  })
+
+  it('makes a new row for a stack whose panels were in none', async () => {
+    await applyUrl('#ws-1/a/b/c')
+
+    await applyUrl('#ws-1/a,b/c')
+
+    expect(await stackIds()).toHaveLength(1)
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a', 'b', 'c'])
+  })
+
+  it('deletes the row of a stack its panels left', async () => {
+    await applyUrl('#ws-1/x,b/c')
+
+    await applyUrl('#ws-1/x/b/c')
+
+    expect(await stackIds()).toEqual([])
+    expect(panelBlockIds(await rows())).toEqual(['x', 'b', 'c'])
   })
 })
 
@@ -1429,7 +1501,7 @@ describe('togglePanelMaximized', () => {
     await togglePanelMaximized(env.repo, rowA)
 
     // `;active` rides along because the toggle activates what it maximizes.
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;active;max/b']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/a;active;max/b']))
     expect(replaces).toEqual([])
     projection.dispose()
   })
@@ -1489,7 +1561,7 @@ describe('view-mode navigation semantics', () => {
       await env.repo.block('a').delete()
       await navigateInPanel(panelBlock(rowA), 'b')
 
-      await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/b']))
+      await waitFor(() => expect(replaces).toEqual(['#ws-1/b']))
       expect(pushes).toEqual([])
       panelHistory.clear(rowA)
       projection.dispose()
@@ -1515,7 +1587,7 @@ describe('view-mode navigation semantics', () => {
 
       // Recovery's own retarget is the write that must not push — that's the
       // entry the user would otherwise be sent back to.
-      await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/landing']))
+      await waitFor(() => expect(replaces).toEqual(['#ws-1/landing']))
       expect(pushes).toEqual([])
       panelHistory.clear(rowA)
       projection.dispose()
@@ -1535,7 +1607,7 @@ describe('view-mode navigation semantics', () => {
 
       await navigateInPanel(panelBlock(row), 'b')
 
-      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+      await waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
       expect(replaces).toEqual([])
       panelHistory.clear(row)
       projection.dispose()
@@ -1555,7 +1627,7 @@ describe('view-mode navigation semantics', () => {
       await env.repo.block('dup').delete()
       await navigateInPanel(env.repo.block(rowA.id), 'landing')
 
-      await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/landing/dup']))
+      await waitFor(() => expect(replaces).toEqual(['#ws-1/landing/dup']))
       expect(pushes).toEqual([])
       panelHistory.clear(rowA.id)
       projection.dispose()
@@ -1574,7 +1646,7 @@ describe('view-mode navigation semantics', () => {
       await env.repo.block('stuck').delete() // pane 2 is stranded
       await navigateInPanel(panelBlock(rowA), 'b') // pane 1 navigates normally
 
-      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b/stuck']))
+      await waitFor(() => expect(pushes).toEqual(['#ws-1/b/stuck']))
       expect(replaces).toEqual([])
       panelHistory.clear(rowA)
       projection.dispose()
@@ -1594,7 +1666,7 @@ describe('view-mode navigation semantics', () => {
       await env.repo.block('stuck').delete() // pane 2 is stranded
       await deletePanelRow(env.repo, rowA) // pane 1 closes; 'stuck' shifts 1 → 0
 
-      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/stuck']))
+      await waitFor(() => expect(pushes).toEqual(['#ws-1/stuck']))
       expect(replaces).toEqual([])
       projection.dispose()
     })
@@ -1608,7 +1680,7 @@ describe('view-mode navigation semantics', () => {
 
     await navigateInPanel(panelBlock(rowA), 'video-block', {viewMode: 'video-notes'})
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/video-block;view=video-notes']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/video-block;view=video-notes']))
     expect(replaces).toEqual([])
     expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('video-notes')
     expect(panelHistory.getSnapshot(rowA).back).toEqual([
@@ -1626,7 +1698,7 @@ describe('view-mode navigation semantics', () => {
 
     await navigateInPanel(panelBlock(rowA), 'b')
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
     expect(replaces).toEqual([])
     expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
     // strict: the entry must not even carry a viewModeEnter KEY
@@ -1645,7 +1717,7 @@ describe('view-mode navigation semantics', () => {
 
     await navigateInPanel(panelBlock(rowA), 'a', {viewMode: 'm'})
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m']))
     expect(replaces).toEqual([])
     expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
     expect(env.repo.block(rowA).peekProperty(topLevelBlockIdProp)).toBe('a')
@@ -1664,7 +1736,7 @@ describe('view-mode navigation semantics', () => {
 
     // fence: a real change must still push, and it must be the ONLY push
     await navigateInPanel(panelBlock(rowA), 'b')
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
     expect(replaces).toEqual([])
     panelHistory.clear(rowA)
     projection.dispose()
@@ -1685,7 +1757,7 @@ describe('view-mode navigation semantics', () => {
     // The explicit clear-only form (slice-5 close) removes the mode without
     // a panelHistory entry; the browser-level entry comes from the push.
     await navigateInPanel(panelBlock(rowA), 'a', {viewMode: undefined})
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/a']))
     expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
     expect(panelHistory.getSnapshot(rowA)).toStrictEqual({back: [], forward: []})
     projection.dispose()
@@ -1735,18 +1807,18 @@ describe('view-mode navigation semantics', () => {
     await projection.start()
 
     await navigateInPanel(panelBlock(row), 'plain')
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/plain']))
     expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
 
     await goBackInPanel(panelBlock(row))
     expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
     expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBe('m')
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m']))
 
     await goForwardInPanel(panelBlock(row))
     expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('plain')
     expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m', '#ws-1/plain']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m', '#ws-1/plain']))
 
     unregister()
     panelHistory.clear(row)
@@ -2077,7 +2149,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(row.id, topLevelBlockIdProp, 'b')
     }, {scope: ChangeScope.UiState, description: 'navigate panel'})
 
-    await vi.waitFor(() => expect(pushed).toBe('#ws-1/b'))
+    await waitFor(() => expect(pushed).toBe('#ws-1/b'))
     expect(notified).toBeGreaterThan(0)
     unsubscribe()
     projection.dispose()
@@ -2097,7 +2169,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(row.id, topLevelBlockIdProp, 'b')
     }, {scope: ChangeScope.UiState, description: 'navigate panel'})
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1;persp=lane/b']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1;persp=lane/b']))
     projection.dispose()
   })
 
@@ -2125,7 +2197,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(rowB, topLevelBlockIdProp, 'y')
     }, {scope: ChangeScope.UiState, description: 'navigate nested panel'})
 
-    await vi.waitFor(() => expect(pushed).toBe('#ws-1/a/x,y'))
+    await waitFor(() => expect(pushed).toBe('#ws-1/a/x,y'))
     projection.dispose()
   })
 
@@ -2138,7 +2210,7 @@ describe('PanelLayoutProjection', () => {
       seen.push(layoutBlockIdsFromRows(env.layoutSessionBlockId, rows))
     })
     return {
-      waitFor: (ids: readonly string[]) => vi.waitFor(() => {
+      waitFor: (ids: readonly string[]) => waitFor(() => {
         expect(seen.some(entry => entry.join('/') === ids.join('/'))).toBe(true)
       }),
       unsubscribe,
@@ -2173,7 +2245,7 @@ describe('PanelLayoutProjection', () => {
     // Fence: a REAL layout change must push. (Whether viewMode survives
     // in-panel navigation is slice-3's semantic — only pin the block id.)
     await navigatePanel(rowB, 'c')
-    await vi.waitFor(() => expect(pushes.length).toBe(1))
+    await waitFor(() => expect(pushes.length).toBe(1))
     expect(pushes[0]).toMatch(/^#ws-1\/c/)
     observer.unsubscribe()
     projection.dispose()
@@ -2190,7 +2262,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, rowB)
     }, {scope: ChangeScope.UiState, description: 'activate pane b'})
 
-    await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/a/b;active']))
+    await waitFor(() => expect(replaces).toEqual(['#ws-1/a/b;active']))
     expect(pushes).toEqual([])
 
     // Full-cycle stabilization: inbound the corrected hash is a noop —
@@ -2212,7 +2284,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(rowA, panelViewModeProp, 'm')
     }, {scope: ChangeScope.UiState, description: 'switch view mode'})
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m/b']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m/b']))
     expect(replaces).toEqual([])
     projection.dispose()
   })
@@ -2231,7 +2303,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, rowB)
     }, {scope: ChangeScope.UiState, description: 'switch mode and activate'})
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m/b;active']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m/b;active']))
     expect(replaces).toEqual([])
     projection.dispose()
   })
@@ -2244,7 +2316,7 @@ describe('PanelLayoutProjection', () => {
     if (!rowA) throw new Error('missing a row')
 
     await navigatePanel(rowA, 'b')
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
     projection.dispose()
   })
 
@@ -2261,7 +2333,7 @@ describe('PanelLayoutProjection', () => {
     expect(pushes).toEqual([])
 
     await navigatePanel(rowA, 'c') // fence
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
     observer.unsubscribe()
     projection.dispose()
   })
@@ -2277,7 +2349,7 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, rowB)
     }, {scope: ChangeScope.UiState, description: 'activate pane b'})
 
-    await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/a;foo=1/b;active']))
+    await waitFor(() => expect(replaces).toEqual(['#ws-1/a;foo=1/b;active']))
     expect(pushes).toEqual([])
     projection.dispose()
   })
@@ -2312,7 +2384,7 @@ describe('PanelLayoutProjection', () => {
 
     // Outbound still lives after the drain (the suppression is not sticky).
     await navigatePanel(rowA, 'c')
-    await vi.waitFor(() => expect(pushes.length).toBe(1))
+    await waitFor(() => expect(pushes.length).toBe(1))
     expect(pushes[0]).toMatch(/^#ws-1\/c/)
     projection.dispose()
   })
@@ -2393,7 +2465,7 @@ describe('PanelLayoutProjection', () => {
     await inboundA
     await inboundB
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
     projection.dispose()
   })
 
@@ -2413,7 +2485,7 @@ describe('PanelLayoutProjection', () => {
     await navigatePanel(rowA, 'c')
     await pending
 
-    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
+    await waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
     projection.dispose()
   })
 
@@ -2438,10 +2510,10 @@ describe('PanelLayoutProjection', () => {
     currentHash = '#ws-1/(x/y)'
     listener!() // must not produce an unhandled rejection
 
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['x', 'y'])
     })
-    await vi.waitFor(() => expect(currentHash).toBe('#ws-1/x,y'))
+    await waitFor(() => expect(currentHash).toBe('#ws-1/x,y'))
     projection.dispose()
   })
 
@@ -2518,7 +2590,7 @@ describe('PanelLayoutProjection', () => {
       if (!rowA) throw new Error('missing a row')
       await navigatePanel(rowA, 'c')
 
-      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1;persp=lane/c/b'])) // ONE entry, no double
+      await waitFor(() => expect(pushes).toEqual(['#ws-1;persp=lane/c/b'])) // ONE entry, no double
       expect(replaces).toEqual(['#ws-1;persp=lane/a/b']) // still just the one normalization
       projection.dispose()
     })

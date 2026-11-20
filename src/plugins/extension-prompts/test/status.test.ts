@@ -1,8 +1,8 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import {afterEach, describe, expect, it} from 'vitest'
 import {extensionPromptStore} from '../store.js'
 import {extensionPromptDiagnosticSource} from '../status.js'
-import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/plugins/extensions-settings/actions.js'
+import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/extensions/openExtensionsSettings.js'
 
 const prompt = (blockId: string, dismissed = false) => ({
   blockId,

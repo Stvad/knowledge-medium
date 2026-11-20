@@ -1,4 +1,5 @@
-import { useMemo, type ClipboardEvent } from 'react'
+import { useContext, useMemo, type ClipboardEvent } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import {
   isInteractiveContentEvent,
   type BlockShellDecoratorContribution,
@@ -7,8 +8,8 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { focusBlock, isFocusedBlock } from '@/data/properties.js'
-import { pasteMultilineText, resolvePasteWithMediaCapture } from '@/paste/operations.js'
-import type { PasteRequest } from '@/paste/decision.js'
+import { readClipboardContent, shellPasteRequest } from '@/paste/clipboard.js'
+import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations.js'
 
 /**
  * Block-shell paste, as a shell decorator rather than a hardcoded handler on the
@@ -29,6 +30,7 @@ export function BlockPasteShellDecorator({
 }: BlockShellDecoratorProps) {
   const runtime = useAppRuntime()
   const { block, repo, uiStateBlock, scopeRootId, blockContext } = resolveContext
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const renderScopeId = typeof blockContext?.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -39,31 +41,29 @@ export function BlockPasteShellDecorator({
       if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
 
       e.preventDefault()
-      // File(s) on the clipboard (a pasted image) carry no text/plain — read them
-      // before the no-text early return so an image paste isn't dropped.
-      const files = e.clipboardData.files
-      const fileList = files && files.length > 0 ? Array.from(files) : []
-      const pastedText = e.clipboardData.getData('text/plain')
-      if (!pastedText && fileList.length === 0) return
-      const html = e.clipboardData.getData('text/html') || undefined
+      const content = readClipboardContent(e.clipboardData)
+      if (!content) return
 
-      // Block-shell paste (block focused, NOT in edit mode) has no text caret, so
-      // the chord intent is always 'split'. Resolve the decision, capturing any
-      // pasted media first (its reference text is spliced in, landing per the text
-      // policy — NOT a forced child). `null` ⇒ nothing to paste.
-      const request: PasteRequest = { text: pastedText, html, files: fileList, intent: 'split', surface: 'shell' }
+      const cutPaste = await pasteArmedCut(content.text, block, repo, { scopeRootId, propertyDisplay })
+      if (cutPaste) {
+        if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
+          void focusBlock(uiStateBlock, cutPaste.blocks[0].id, { renderScopeId })
+        }
+        return
+      }
+
+      // Block-shell paste (block focused, NOT in edit mode) has no text caret. Resolve
+      // the decision, capturing any pasted media first (its reference text is spliced
+      // in, landing per the text policy — NOT a forced child). `null` ⇒ nothing to paste.
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-      const resolved = await resolvePasteWithMediaCapture(runtime, request, { repo, workspaceId })
+      const resolved = await resolvePasteWithMediaCapture(runtime, shellPasteRequest(content, block), { repo, workspaceId })
       if (!resolved) return
-      const pasted = await pasteMultilineText(resolved.text, block, repo, {
-        scopeRootId,
-        asSingleBlock: resolved.decision.kind === 'single-block',
-      })
+      const pasted = await pasteResolvedDecision(resolved, block, repo, { scopeRootId, propertyDisplay })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, { renderScopeId })
       }
     },
-    [block, renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
+    [block, propertyDisplay, renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
   )
 
   const nextState = useMemo<BlockShellState>(

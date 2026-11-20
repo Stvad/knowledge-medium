@@ -17,5 +17,8 @@
   // it's kept (not deleted) only as a base for a future harness resurrection
   // against `createTestDb`'s Layout B setup. Everything else under scripts/ is
   // part of the `tsc -b` gate.
-  "exclude": ["scripts/bench"]
+  "exclude": ["scripts/bench"],
+  // scripts/agent-eval imports the agent-cli and agent-dispatch sources, and
+  // agent-dispatch's own imports resolve through agent-cli's emitted `dist`.
+  "references": [{"path": "./packages/agent-cli"}, {"path": "./packages/agent-dispatch"}]
 }

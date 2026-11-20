@@ -4,15 +4,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
-  codecs,
-  defineProperty,
-  seedType,
+  seedProperty,
 } from '@/data/api'
 import { useEffect } from 'react'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typeSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
@@ -22,7 +20,14 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
-import { blockContentRendererFacet, blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import {
+  blockBelowContentFacet,
+  blockChildrenFooterFacet,
+  blockContentRendererFacet,
+  blockHeaderFacet,
+  blockLayoutFacet,
+  type BlockLayout,
+} from '@/extensions/blockInteraction'
 import { defineVariant } from '@/facets/variantFacet'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
@@ -30,10 +35,11 @@ import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteMultilineText } from '@/paste/operations'
+import { pasteArmedCut, pasteResolvedDecision, resolvePasteWithMediaCapture } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -77,8 +83,17 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
+const isMobileRef = vi.hoisted(() => ({current: false}))
+
+vi.mock('@/utils/react.tsx', async () => ({
+  ...await vi.importActual<typeof import('@/utils/react.js')>('@/utils/react.tsx'),
+  useIsMobile: () => isMobileRef.current,
+}))
+
 vi.mock('@/paste/operations.ts', () => ({
-  pasteMultilineText: vi.fn(async () => []),
+  // Not the armed cut unless a test says so: fall through to the text paste.
+  pasteArmedCut: vi.fn(async () => null),
+  pasteResolvedDecision: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
   // The renderer resolves the decision (+ any media capture) through this; for a
   // plain text paste it returns the split decision and the text unchanged.
@@ -88,8 +103,8 @@ vi.mock('@/paste/operations.ts', () => ({
   })),
 }))
 
-const statusProp = defineProperty<string>('test:status', {
-  codec: codecs.string,
+const statusProp = seedProperty({
+  seedKey: 'test/property/status', revision: 1, name: 'test:status', preset: 'string',
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
 })
@@ -108,11 +123,11 @@ const TestContentRenderer = ({block}: BlockRendererProps) => (
   <div>{block.id}</div>
 )
 
-const dispatchPaste = (target: Element, text: string): Event => {
+const dispatchPaste = (target: Element, text: string, html = ''): Event => {
   const event = new Event('paste', {bubbles: true, cancelable: true})
   Object.defineProperty(event, 'clipboardData', {
     value: {
-      getData: (type: string) => type === 'text/plain' ? text : '',
+      getData: (type: string) => type === 'text/plain' ? text : type === 'text/html' ? html : '',
     },
   })
   target.dispatchEvent(event)
@@ -134,7 +149,7 @@ describe('DefaultBlockRenderer paste handling', () => {
   let runtime: FacetRuntime
 
   beforeEach(async () => {
-    vi.mocked(pasteMultilineText).mockClear()
+    vi.mocked(pasteResolvedDecision).mockClear()
 
     await resetTestDb(sharedDb.db)
     h = sharedDb
@@ -142,10 +157,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
-      typeSeedsFacet.of(
-        seedType({seedKey: 'test/type/test-status-prop', revision: 1, id: 'test:status-prop', label: 'Test Status Prop', properties: [statusProp]}),
-        {source: 'test'},
-      ),
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},
@@ -230,7 +242,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     })
 
     expect(event?.defaultPrevented).toBe(false)
-    expect(pasteMultilineText).not.toHaveBeenCalled()
+    expect(pasteResolvedDecision).not.toHaveBeenCalled()
   })
 
   it('still handles paste on the focused block shell', async () => {
@@ -247,13 +259,45 @@ describe('DefaultBlockRenderer paste handling', () => {
     // preventDefault is synchronous; the apply now runs after the async
     // paste-verb decision, so wait for the call.
     expect(event?.defaultPrevented).toBe(true)
-    await vi.waitFor(() => expect(pasteMultilineText).toHaveBeenCalledTimes(1))
-    expect(pasteMultilineText).toHaveBeenCalledWith(
-      'first\nsecond',
+    await vi.waitFor(() => expect(pasteResolvedDecision).toHaveBeenCalledTimes(1))
+    expect(pasteResolvedDecision).toHaveBeenCalledWith(
+      {decision: {kind: 'split'}, text: 'first\nsecond'},
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root', asSingleBlock: false},
+      {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE},
     )
+  })
+
+  it('completes an armed cut on the focused block shell instead of pasting its text', async () => {
+    vi.mocked(pasteArmedCut).mockResolvedValueOnce({kind: 'moved', blocks: [repo.block('block-1')]})
+    renderBlock()
+
+    const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    act(() => {
+      dispatchPaste(shell!, '- cut text')
+    })
+
+    await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE})
+    // A cut leaves the originals in place, so a text paste here would duplicate them.
+    // Every mock here is already resolved, so one macrotask runs the handler's
+    // whole continuation; the absence checks below can't run before it.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(resolvePasteWithMediaCapture).not.toHaveBeenCalled()
+    expect(pasteResolvedDecision).not.toHaveBeenCalled()
+  })
+
+  it('pastes an html-only clipboard on the focused block shell', async () => {
+    renderBlock()
+
+    const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    act(() => {
+      dispatchPaste(shell!, '', '<img src="https://e.com/a.png">')
+    })
+
+    await vi.waitFor(() => expect(pasteResolvedDecision).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(resolvePasteWithMediaCapture).mock.lastCall?.[1])
+      .toMatchObject({text: '', html: '<img src="https://e.com/a.png">'})
   })
 
   it('applies the default focused-block shell highlight without visual navigation', () => {
@@ -303,17 +347,26 @@ const CountingContentRenderer = ({block}: BlockRendererProps) => {
 // prop (isCollapsed) — i.e. the exact shape the default layout has. Toggling the
 // prop recreates the layout's `<Shell>` render-prop closure; the content must
 // NOT remount as a result (stable-identity invariant).
-const ContentShellLayout: BlockLayout = ({Content, Shell, block}) => {
+const ContentShellLayout: BlockLayout = ({Content, Properties, Header, BelowContent, Footer, Shell, block}) => {
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
   return (
     <Shell>
       {(shellProps) => (
-        <div {...shellProps} data-collapsed={String(isCollapsed)}>
+        <div {...shellProps} data-collapsed={String(isCollapsed)} data-has-properties={String(Boolean(Properties))}>
+          <Header />
           <Content />
+          <BelowContent />
+          <Footer />
         </div>
       )}
     </Shell>
   )
+}
+
+let sectionMountCount = 0
+const CountingSection = () => {
+  useEffect(() => { sectionMountCount++ }, [])
+  return null
 }
 
 describe('DefaultBlockRenderer slot identity', () => {
@@ -322,6 +375,7 @@ describe('DefaultBlockRenderer slot identity', () => {
 
   beforeEach(async () => {
     contentMountCount = 0
+    sectionMountCount = 0
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
       db: sharedDb.db,
@@ -329,6 +383,9 @@ describe('DefaultBlockRenderer slot identity', () => {
       newId: () => crypto.randomUUID(),
       extensions: [
         defaultEditorInteractionExtension,
+        blockHeaderFacet.of(() => CountingSection, {source: 'test'}),
+        blockBelowContentFacet.of(() => CountingSection, {source: 'test'}),
+        blockChildrenFooterFacet.of(() => CountingSection, {source: 'test'}),
         // The real alias sync processor: a content edit on an aliased block
         // rewrites its `alias` property in the SAME tx, which is what makes
         // the page case below a live-data scenario and not a synthetic one.
@@ -392,6 +449,30 @@ describe('DefaultBlockRenderer slot identity', () => {
       expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
     )
     expect(contentMountCount).toBe(1)
+  })
+
+  it('does not remount section slots when the renderer re-renders', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+    await waitFor(() => expect(sectionMountCount).toBe(3))
+    const shown = repo.block('block-1').peekProperty(showPropertiesProp)
+
+    // The renderer reads this itself, and hands the layout a changed slot.
+    await act(async () => {
+      await repo.block('block-1').set(showPropertiesProp, !shown)
+    })
+
+    await waitFor(() =>
+      expect(document.querySelector(`[data-has-properties="${String(!shown)}"]`)).toBeTruthy(),
+    )
+    expect(sectionMountCount).toBe(3)
   })
 
   // A page's title edit rewrites its own `alias` in the same tx (alias.sync),
@@ -1076,5 +1157,91 @@ describe('a layout that drops shellProps', () => {
     await waitFor(() => expect(document.querySelector('.dropped-shell')).not.toBeNull())
     expect(error).not.toHaveBeenCalled()
     error.mockRestore()
+  })
+})
+
+// Review cards render Content with no Controls and never collapse.
+const ContentOnlyLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell>
+    {({className, ...shellProps}) => (
+      <div {...shellProps} className={`content-only ${className ?? ''}`}>
+        <Content />
+      </div>
+    )}
+  </Shell>
+)
+
+describe('the mobile expand button', () => {
+  let repo: Repo
+  const runtimeWith = (layout?: BlockLayout) => createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    newId: () => crypto.randomUUID(),
+    extensions: [
+      defaultEditorInteractionExtension,
+      ...(layout ? [blockLayoutFacet.of(() => ({id: 'test-layout', label: 'Test', render: layout}), {source: 'test'})] : []),
+    ],
+  }).repo.facetRuntime!
+
+  beforeEach(async () => {
+    isMobileRef.current = true
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, newId: () => crypto.randomUUID()}).repo
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Root'})
+      await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Parent'})
+      await tx.create({id: 'child-1', workspaceId: 'ws-1', parentId: 'block-1', orderKey: 'a0', content: 'Child'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'mobile expand fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    isMobileRef.current = false
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderParent = (runtime: FacetRuntime) => render(
+    <AppRuntimeContextProvider value={runtime}>
+      <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <ActiveContextsProvider>
+          <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={TestContentRenderer}/>
+        </ActiveContextsProvider>
+      </BlockContextProvider>
+    </AppRuntimeContextProvider>,
+  )
+
+  it('sits in the gutter, last, allowed to overlay', async () => {
+    renderParent(runtimeWith())
+
+    const parentHost = () => document.querySelector('[data-block-id="block-1"] .km-gutter-host')
+    await waitFor(() => expect(parentHost()?.querySelector('.expand-collapse-button')).not.toBeNull())
+    const slots = parentHost()!.querySelectorAll(':scope > .km-gutter-top-right > [data-gutter-item]')
+    expect(slots[slots.length - 1].hasAttribute('data-gutter-overlay')).toBe(true)
+    expect(document.querySelector('[data-block-id="block-1"] .block-controls .expand-collapse-button')).toBeNull()
+  })
+
+  it('stays off the focal block, which renders no bullet row', async () => {
+    await repo.block('ui-state').set(topLevelBlockIdProp, 'block-1')
+    renderParent(runtimeWith())
+
+    await waitFor(() => expect(screen.getByText('block-1')).toBeTruthy())
+    expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host')).not.toBeNull()
+    expect(document.querySelector('[data-block-id="block-1"] .km-gutter-host > .km-gutter-top-right')).toBeNull()
+  })
+
+  it('is absent from a layout that renders content but never collapses', async () => {
+    renderParent(runtimeWith(ContentOnlyLayout))
+
+    await waitFor(() => expect(document.querySelector('.content-only')).not.toBeNull())
+    await waitFor(() => expect(screen.getByText('block-1')).toBeTruthy())
+    expect(document.querySelector('.expand-collapse-button')).toBeNull()
   })
 })

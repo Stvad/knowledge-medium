@@ -49,12 +49,14 @@ export interface TypedChildSpec {
    *  NOT the way to write a deterministic-id record, despite the shape:
    *  this path mints an ordinary `updated_at`, and a second call with the
    *  same id throws `DuplicateIdError` rather than adopting. That is exactly
-   *  the creator shape `syncObserver/reconcile.ts` names as the remaining I1
-   *  gap — two devices minting one id in the same millisecond produce equal
-   *  nonzero stamps from different writes, and the loser strands. Use
-   *  `getOrCreateTypedChild`, which stamps 0 and adopts. */
+   *  the creator shape `blocksAlreadyReflects` names (#744) — two devices
+   *  minting one id in the same millisecond produce equal nonzero stamps from
+   *  different writes, which a reader that cannot decode the row takes for one
+   *  write. Use `getOrCreateTypedChild`, which stamps 0 and adopts. */
   id?: string
   references?: readonly BlockReference[]
+  /** Expand the parent, for a record the user should see land. */
+  revealParent?: boolean
   /** Reuse one registry snapshot across a batch of records. Optional — the
    *  type tagger takes its own when this is absent; passing one just avoids
    *  re-snapshotting per record in a loop. */
@@ -93,6 +95,7 @@ export const createTypedChild = async (
     ...(spec.id !== undefined ? {id: spec.id} : {}),
     ...(spec.position !== undefined ? {position: spec.position} : {}),
     ...(spec.references !== undefined ? {references: [...spec.references]} : {}),
+    ...(spec.revealParent !== undefined ? {revealParent: spec.revealParent} : {}),
   })
 
   // Types first: a property whose schema the type contributes should find
@@ -359,13 +362,12 @@ export const getOrCreateTypedChild = async (
   )
   // `createOrGet`, not `createChild`: this is the insert the platform means
   // by a deterministic-id mint. It carries `systemMint` — which `createChild`
-  // has no way to pass — and stamping 0 is not optional here. Per
-  // `syncObserver/reconcile.ts`, two devices that mint the SAME derived id in
-  // the same millisecond produce equal nonzero stamps from DIFFERENT writes,
-  // which invariant I1 misreads as the same write and skips; the insert-or-
-  // skip loser then strands, permanently divergent from the server. A
-  // 0-stamped row always yields instead. It also gives us the cross-workspace
-  // guard and insert-or-fetch atomicity for free.
+  // has no way to pass — and stamping 0 is not optional here: two devices that
+  // mint the SAME derived id in the same millisecond produce equal nonzero
+  // stamps from DIFFERENT writes, which a reader that cannot decode the row
+  // takes for one write (`blocksAlreadyReflects`, #744). Stamp 0 never vouches.
+  // It also gives us the cross-workspace guard and insert-or-fetch atomicity
+  // for free.
   let inserted: boolean
   try {
     ;({inserted} = await tx.createOrGet({

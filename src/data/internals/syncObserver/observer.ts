@@ -46,6 +46,7 @@ import {
   materializeStagingRows,
   type MaterializeDeps,
   type MaterializeOutcome,
+  type MaterializeTimings,
   type SyncSnapshot,
 } from './materialize.js'
 import {
@@ -54,6 +55,7 @@ import {
   type SyncInvalidationTarget,
 } from './invalidate.js'
 import { WORKSPACE_UNAPPLIED_IDS_SQL } from './reconcile.js'
+import { createSyncGrowthAnalyzeOwer } from './analyzeOwedOnGrowth.js'
 
 /** Drain-throttle window (ms) — coalesces sync-burst arrivals into one batched
  *  drain. */
@@ -65,6 +67,47 @@ const DEFAULT_THROTTLE_MS = 100
  *  fill in as it goes: the queue is consumed per window, so an interrupted drain
  *  resumes from the last committed window instead of restarting from zero. */
 const DEFAULT_DRAIN_CHUNK = 1000
+
+/** The device's materialization backlog: staged changes the drain hasn't
+ *  applied to `blocks` yet. Counts down to 0 as the drain catches up; a plain
+ *  single-table COUNT(*), cheap even at a large initial-sync backlog. */
+export const MATERIALIZE_QUEUE_COUNT_SQL = 'SELECT COUNT(*) AS count FROM blocks_synced_changes'
+
+/** What one drain did and where its wall time went — the real-device
+ *  counterpart of `scripts/bench/bench-materialize.ts`. One per drain that ran
+ *  at least one window, whether it finished or not.
+ *
+ *  The stage fields sum to less than `wallMs`: the remainder is synchronous
+ *  work between the stages and time yielded to the event loop. */
+export interface SyncDrainStats {
+  /** `queue`: deliveries drained from `blocks_synced_changes`. `workspace`: a
+   *  {@link BlocksSyncedObserver.drainWorkspace} pass over staged rows. */
+  readonly source: 'queue' | 'workspace'
+  /** False when the drain threw or was cut short by `dispose()`. */
+  readonly completed: boolean
+  /** Epoch ms at which the drain ended. */
+  readonly endedAtMs: number
+  readonly wallMs: number
+  readonly windows: number
+  /** Distinct staged changes fed to the materializer, summed over windows. */
+  readonly rows: number
+  readonly applied: number
+  readonly deferred: number
+  readonly skippedStale: number
+  readonly quarantined: number
+  readonly deleted: number
+  /** Summed {@link MaterializeTimings}. */
+  readonly readMs: number
+  readonly decodeMs: number
+  readonly writeMs: number
+  /** Cache + handle invalidation and the cycle scan. */
+  readonly invalidateMs: number
+  /** Around the windows: reading and consuming `blocks_synced_changes` (or a
+   *  workspace pass's id read), and the ANALYZE-owed check after each one. */
+  readonly bookkeepingMs: number
+}
+
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
 export interface BlocksSyncedObserverArgs {
   readonly db: PowerSyncDb
@@ -83,6 +126,9 @@ export interface BlocksSyncedObserverArgs {
    *  Tests shrink it to exercise multi-window backlogs. */
   readonly drainChunkSize?: number
   readonly onError?: (err: unknown) => void
+  /** Hears every drain that ran at least one window. A throw is reported
+   *  through `onError` and changes nothing about the drain. */
+  readonly onDrainStats?: (stats: SyncDrainStats) => void
 }
 
 /** Which of a workspace's staged rows a {@link BlocksSyncedObserver.drainWorkspace}
@@ -134,6 +180,15 @@ export interface RematerializeReport {
   readonly reflagged: number
 }
 
+/** How far a {@link BlocksSyncedObserver.drainWorkspace} pass has got: `done`
+ *  of the `total` staged rows its id set holds. */
+export interface RematerializeProgress {
+  readonly done: number
+  readonly total: number
+}
+
+export type RematerializeProgressListener = (progress: RematerializeProgress) => void
+
 export interface BlocksSyncedObserver {
   /** Drain the pending queue once. Awaitable settle barrier (awaits every
    *  drain enqueued before it). */
@@ -145,8 +200,14 @@ export interface BlocksSyncedObserver {
    *  separate healing mode.
    *
    *  REJECTS if the pass did not finish — see {@link startBlocksSyncedObserver}'s
-   *  enqueue. */
-  drainWorkspace(workspaceId: string, scope: RematerializeScope): Promise<RematerializeReport>
+   *  enqueue. `onProgress` hears nothing while the pass waits its turn on the
+   *  chain, then once with `done: 0` and after every committed window. It runs
+   *  inside the pass, so it must not throw: a throw rejects the pass. */
+  drainWorkspace(
+    workspaceId: string,
+    scope: RematerializeScope,
+    onProgress?: RematerializeProgressListener,
+  ): Promise<RematerializeReport>
   /** Is a {@link drainWorkspace} pass for `workspaceId` outstanding (running OR
    *  queued behind another unit)? The one thing a reader cannot learn from the
    *  queue: that path rewrites `blocks` straight from `blocks_synced` and
@@ -225,6 +286,7 @@ export const startBlocksSyncedObserver = (
     if (!isConnectionClosedError(err)) console.warn('[blocksSyncedObserver] drain error:', err)
   })
 
+  const oweAnalyzeOnGrowth = createSyncGrowthAnalyzeOwer(db)
   let disposed = false
   let unsubscribe: (() => void) | null = null
   let chain: Promise<void> = Promise.resolve()
@@ -267,21 +329,70 @@ export const startBlocksSyncedObserver = (
    *  workspace-rescan {@link materializeWorkspace}); they differ only in where
    *  the window's ids come from and what bookkeeping follows it. */
   const applyWindow = async (
+    meter: Mutable<SyncDrainStats>,
     upserted: readonly string[],
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
-    await applyOutcome(outcome)
+    // Counted as soon as the window has committed: a failure in the steps
+    // below does not undo it.
+    meter.windows++
+    meter.rows += upserted.length + removed.length
+    for (const stage of ['readMs', 'decodeMs', 'writeMs'] as const satisfies readonly (keyof MaterializeTimings)[]) {
+      meter[stage] += outcome.timings[stage]
+    }
+    for (const count of ['applied', 'deferred', 'skippedStale', 'quarantined', 'deleted'] as const) {
+      meter[count] += outcome[count].length
+    }
+    const materializedAt = performance.now()
+    try {
+      await applyOutcome(outcome)
+    } finally {
+      meter.invalidateMs += performance.now() - materializedAt
+    }
+    const invalidatedAt = performance.now()
+    // Bookkeeping, not materialization: a failure here must not re-queue a window.
+    await oweAnalyzeOnGrowth(outcome).catch(onError)
+    meter.bookkeepingMs += performance.now() - invalidatedAt
     return outcome
   }
 
-  const drainQueueOnce = async (): Promise<void> => {
+  /** Run one drain under a meter and report it — on every exit, since a drain
+   *  that throws or is torn down mid-backlog still did the work it measured. */
+  const metered = async <T>(
+    source: SyncDrainStats['source'],
+    drain: (meter: Mutable<SyncDrainStats>) => Promise<T>,
+  ): Promise<T> => {
+    const meter: Mutable<SyncDrainStats> = {
+      source, completed: false, endedAtMs: 0, wallMs: 0, windows: 0, rows: 0,
+      applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
+      readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
+    }
+    const startedAt = performance.now()
+    try {
+      const result = await drain(meter)
+      meter.completed = true
+      return result
+    } finally {
+      if (meter.windows > 0) {
+        meter.wallMs = performance.now() - startedAt
+        meter.endedAtMs = Date.now()
+        // Guarded here rather than trusted: a throw from a `finally` would
+        // replace the drain's own result or error.
+        try { args.onDrainStats?.({...meter}) } catch (err) { onError(err) }
+      }
+    }
+  }
+
+  const drainQueueOnce = (): Promise<void> => metered('queue', async meter => {
     for (;;) {
       if (disposed) throw disposedMidDrain()
+      const readAt = performance.now()
       const rows = await db.getAll<QueueRow>(
         'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?',
         [drainChunk],
       )
+      meter.bookkeepingMs += performance.now() - readAt
       if (rows.length === 0) return
       const maxSeq = rows[rows.length - 1]!.seq
 
@@ -295,24 +406,28 @@ export const startBlocksSyncedObserver = (
       const removed: string[] = []
       for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
 
-      await applyWindow(upserted, removed)
+      await applyWindow(meter, upserted, removed)
 
       // Consume only this window. Rows appended mid-drain have seq > maxSeq and
       // survive for a later window. Done last so a throw above leaves this window
       // queued (prior committed windows are not rolled back).
+      const consumeAt = performance.now()
       await db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
+      meter.bookkeepingMs += performance.now() - consumeAt
 
       // A short final window means the queue is drained; stop without an extra
       // empty read. (Rows arriving after this still re-trigger via onChange.)
       if (rows.length < drainChunk) return
     }
-  }
+  })
 
-  const materializeWorkspace = async (
+  const materializeWorkspace = (
     workspaceId: string,
     scope: RematerializeScope,
-  ): Promise<RematerializeReport> => {
+    onProgress: RematerializeProgressListener | undefined,
+  ): Promise<RematerializeReport> => metered('workspace', async meter => {
     if (disposed) throw disposedMidDrain()
+    const readAt = performance.now()
     // The id set is read ONCE, before the first window. A delivery that lands
     // mid-pass is therefore not in it — correctly: that one is in the QUEUE,
     // which the queue drain owns, and picking it up here would mean a pass
@@ -323,14 +438,18 @@ export const startBlocksSyncedObserver = (
         : 'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
       [workspaceId],
     )).map(row => row.id)
+    meter.bookkeepingMs += performance.now() - readAt
     const totals = {
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
     }
+    onProgress?.({ done: 0, total: ids.length })
     // Same bounded windows as the queue drain; a re-invocation resumes because
     // already-materialized rows LWW-skip.
     for (let i = 0; i < ids.length; i += drainChunk) {
       if (disposed) throw disposedMidDrain()
-      const outcome = await applyWindow(ids.slice(i, i + drainChunk), [])
+      const batch = ids.slice(i, i + drainChunk)
+      const outcome = await applyWindow(meter, batch, [])
+      onProgress?.({ done: i + batch.length, total: ids.length })
       totals.applied += outcome.applied.length
       totals.deferred += outcome.deferred.length
       totals.skippedStale += outcome.skippedStale.length
@@ -339,7 +458,7 @@ export const startBlocksSyncedObserver = (
       totals.reflagged += outcome.reflagged.length
     }
     return { scope, scanned: ids.length, ...totals }
-  }
+  })
 
   // Serialize all work on one chain so drains never overlap and flush() awaits
   // everything enqueued before it.
@@ -383,6 +502,7 @@ export const startBlocksSyncedObserver = (
     // defaults to 'unapplied' — so a reader who learned one would have the
     // other wrong.
     scope: RematerializeScope,
+    onProgress?: RematerializeProgressListener,
   ): Promise<RematerializeReport> => {
     // Counted from ENQUEUE rather than from the first window: a rescan waiting
     // its turn on the chain will still rewrite `blocks` with nothing in the
@@ -396,7 +516,7 @@ export const startBlocksSyncedObserver = (
     const bump = (by: number) =>
       workspaceRescans.set(workspaceId, (workspaceRescans.get(workspaceId) ?? 0) + by)
     bump(1)
-    const done = enqueue(() => materializeWorkspace(workspaceId, scope))
+    const done = enqueue(() => materializeWorkspace(workspaceId, scope, onProgress))
     void done.finally(() => bump(-1)).catch(() => {})
     return done
   }
@@ -406,10 +526,7 @@ export const startBlocksSyncedObserver = (
   // landed while the observer was down (durable queue). Both serialize, and
   // the drain is idempotent, so the overlap is harmless.
   unsubscribe = db.onChange(
-    {
-      onChange: () => { void flush() },
-      onError,
-    },
+    { onChange: () => { void flush() } },
     { tables: ['blocks_synced_changes'], throttleMs },
   )
   void flush()

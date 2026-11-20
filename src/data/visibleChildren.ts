@@ -1,29 +1,39 @@
 import type { BlockData, Tx } from '@/data/api'
+import type { Block } from '@/data/block'
+import { childrenViewIn, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 
 /**
- * The visible / outline view of a parent's children. Named counterpart to
- * the raw `tx.childrenOf`, whose default returns EVERY child — the
- * structural everything-view.
+ * The children a surface DRAWS under a parent: the parent's own display
+ * setting over the surface's `scope` (`childrenViewIn`). The owner of that
+ * list for imperative code — the outline hooks (`useChildIds`) resolve the
+ * same view reactively.
  *
- * Today this filters EVERY recognized property row, not only hidden-tier
- * ones — an accepted interim until the tier-aware predicate lands. Read an
- * exclusion here as "machinery, for now", not as "property rows are
- * machinery".
+ * Reach for these in anything a gesture drives: every walk and anchor resolves
+ * against the list the user is looking at, so a row the surface leaves out can
+ * neither absorb nor deflect a gesture, and a drawn property row is an
+ * ordinary row. `scope` is required — a caller with no surface says so
+ * (`displayScopeOf`), it does not get a default here.
  *
- * Reach for this in outline / movement / display code: §10's movement rule
- * is that every gesture resolves its anchors against the sibling list the
- * CALLER sees, so a hidden row can neither absorb nor deflect a gesture.
- * Use the bare `tx.childrenOf` for the structural view — copy/merge/delete,
- * order-key math, machinery surgery, and programmatic callers (agent
- * bridge, plugins) for whom a deliberate move of machinery just works.
- *
- * The `block/require-explicit-child-view` lint enforces this choice in
- * pure-display modules; elsewhere the two spellings document intent
- * side by side.
+ * A FIXED view is not this: read it by name, `tx.childrenOf(id, ws,
+ * {propertyChildren})` / `repo.query.childIds({id, propertyChildren})`.
  */
-export const visibleChildrenOf = (
+export const visibleChildrenOf = async (
   tx: Tx,
   parentId: string | null,
-  workspaceId?: string,
-): Promise<BlockData[]> =>
-  tx.childrenOf(parentId, workspaceId, {hidePropertyChildren: true})
+  workspaceId: string | undefined,
+  scope: PropertyDisplayScopeLevels,
+): Promise<BlockData[]> => {
+  // A cell-backed scope is mode `none` whatever the parent says: skip the read.
+  const parent = parentId === null || !scope.childBacked ? null : await tx.get(parentId)
+  return tx.childrenOf(parentId, workspaceId, {propertyChildren: childrenViewIn(scope, parent)})
+}
+
+/** {@link visibleChildrenOf} outside a transaction, as ids in
+ *  `(orderKey, id)` order. */
+export const visibleChildIds = async (
+  parent: Block,
+  scope: PropertyDisplayScopeLevels,
+): Promise<string[]> => {
+  const data = scope.childBacked ? await parent.load() : null
+  return parent.repo.query.childIds({id: parent.id, propertyChildren: childrenViewIn(scope, data)}).load()
+}

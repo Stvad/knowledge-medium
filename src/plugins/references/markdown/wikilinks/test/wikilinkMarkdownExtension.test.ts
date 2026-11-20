@@ -47,6 +47,7 @@ describe('wikilinkMarkdownExtension', () => {
     const config = wikilinkMarkdownExtension({
       block: staleBlock([]),
       blockContext: {} as BlockContextType,
+      input: {},
       data: {
         content: '[[Target]]',
         references: [{ id: 'target-id', alias: 'Target' }],
@@ -64,6 +65,7 @@ describe('wikilinkMarkdownExtension', () => {
     const config = wikilinkMarkdownExtension({
       block: staleBlock([]),
       blockContext: {} as BlockContextType,
+      input: {},
       data: {
         content: '[[abc-id]]',
         references: [{ id: 'abc-id', alias: 'abc-id' }],

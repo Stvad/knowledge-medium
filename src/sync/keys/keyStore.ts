@@ -15,15 +15,13 @@
  * no-IndexedDB fallback use {@link InMemoryWorkspaceKeyStore}.
  *
  * NOTE on testing: a `CryptoKey` is structured-cloneable in browsers but
- * NOT under Node's `structuredClone`, so the `CryptoKey`-storing path below
- * can only be exercised in a real browser. Its keying logic is factored into
- * the pure {@link keyStoreRecordId} (unit-tested), and the IndexedDB plumbing
- * now lives in the shared {@link IdbKeyedStore} (Node-tested via fake-indexeddb).
- * What remains browser-only is this store's wiring of that plumbing to a
- * `CryptoKey` value — browser-validated via the §8 flows (unlock → reload →
- * still unlocked).
+ * NOT under Node's `structuredClone`, so a `CryptoKey` round trip through the
+ * store can only be exercised in a real browser — browser-validated via the
+ * §8 flows (unlock → reload → still unlocked). Everything else about the
+ * IndexedDB store is Node-tested over fake-indexeddb with plain-object records.
  */
 
+import type {WorkspaceObjectKeys} from '../crypto/contentKey.js'
 import {IdbKeyedStore, idbKeyPrefix, idbRecordId} from '@/utils/idbKeyedStore.js'
 
 /**
@@ -50,6 +48,11 @@ export interface WorkspaceKeyRecord {
   readonly contentKeyHmac: CryptoKey | null
 }
 
+/** The keys that seal and name a workspace's objects, or null for a record
+ *  with no K_id yet (the legacy shape). */
+export const objectKeysOf = (record: WorkspaceKeyRecord): WorkspaceObjectKeys | null =>
+  record.contentKeyHmac ? {cek: record.wk, contentKeyHmac: record.contentKeyHmac} : null
+
 /** Normalize a raw stored value to a {@link WorkspaceKeyRecord}: a new-shape
  *  record passes through; a LEGACY bare `CryptoKey` (pre-K_id) becomes
  *  `{ wk, contentKeyHmac: null }`; `null`/`undefined` stays `null`. Exported for
@@ -62,7 +65,52 @@ export const normalizeKeyRecord = (stored: unknown): WorkspaceKeyRecord | null =
   return { wk: stored as CryptoKey, contentKeyHmac: null }
 }
 
+/**
+ * The stored record if it can open the workspace fully: a WK AND its K_id. A
+ * LEGACY record (no K_id) can decrypt text but not media, and K_id can't be
+ * re-derived from the stored non-extractable WK — only a re-paste repopulates
+ * it — so it counts as no key: the gate prompts the re-paste instead of opening
+ * into permanently-broken media. Throws when the store can't be read.
+ */
+export const getUsableKeyRecord = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  const record = await keyStore.get(userId, workspaceId)
+  return record?.contentKeyHmac ? record : null
+}
+
+/** {@link getUsableKeyRecord}, reading an unreadable store (IndexedDB
+ *  unavailable / corrupt / quota, a record the device cannot read) as "no key"
+ *  — for callers that fail closed on absence and must not throw. The entry
+ *  gate is one: it asks for the key rather than open a workspace it cannot
+ *  decrypt. */
+export const readUsableKeyRecord = async (
+  keyStore: WorkspaceKeyStore,
+  userId: string,
+  workspaceId: string,
+): Promise<WorkspaceKeyRecord | null> => {
+  try {
+    return await getUsableKeyRecord(keyStore, userId, workspaceId)
+  } catch (err) {
+    console.warn(`[keyStore] key read failed for ${workspaceId}; treating as absent`, err)
+    return null
+  }
+}
+
+/** The record is stored but cannot be read right now: a locked iOS device
+ *  reads a stored record as `null`, without an error. */
+export class KeyRecordUnreadableError extends Error {
+  constructor(workspaceId: string) {
+    super(`the stored workspace key for ${workspaceId} cannot be read right now`)
+    this.name = 'KeyRecordUnreadableError'
+  }
+}
+
 export interface WorkspaceKeyStore {
+  /** The stored record, or null when there is none. Throws when the store
+   *  cannot say: an unreadable record is not an absent one. */
   get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null>
   put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void>
   delete(userId: string, workspaceId: string): Promise<void>
@@ -114,38 +162,57 @@ export class InMemoryWorkspaceKeyStore implements WorkspaceKeyStore {
 const DB_NAME = 'km-e2ee-keys'
 const STORE_NAME = 'workspace_keys'
 
-/** IndexedDB-backed store. Stores a `CryptoKey`-bearing record, so the
- *  round-trip can only run in a real browser (see the file header on testing);
- *  the cached connection + commit-durable `tx` come from {@link IdbKeyedStore}. */
+/** IndexedDB-backed store; the cached connection + commit-durable `tx` come
+ *  from {@link IdbKeyedStore}. See the file header on testing. */
 export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
   private readonly idb = new IdbKeyedStore(DB_NAME, STORE_NAME)
+  /** The last record each id read or wrote, served while the store cannot be
+   *  read. A page that outlives the screen lock (one playing audio) keeps
+   *  syncing, and without this every key read under the lock would fail. A
+   *  read that finds NO record clears it, so a real loss still shows. */
+  private readonly held = new Map<string, WorkspaceKeyRecord>()
 
   async get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null> {
+    const id = keyStoreRecordId(userId, workspaceId)
+    let stored: unknown
+    try {
+      stored = await this.idb.tx<unknown>('readonly', store => store.get(id))
+      // An absent record reads as `undefined`; `null` is never written.
+      if (stored === null) throw new KeyRecordUnreadableError(workspaceId)
+    } catch (err) {
+      const held = this.held.get(id)
+      if (held) return held
+      throw err
+    }
     // A value written before the K_id feature is a bare CryptoKey; normalize it
     // to the record shape (with no K_id) so legacy devices read back cleanly.
-    const result = await this.idb.tx<unknown>('readonly', store =>
-      store.get(keyStoreRecordId(userId, workspaceId)),
-    )
-    return normalizeKeyRecord(result)
+    const record = normalizeKeyRecord(stored)
+    if (record) this.held.set(id, record)
+    else this.held.delete(id)
+    return record
   }
 
   async put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void> {
-    await this.idb.tx('readwrite', store =>
-      store.put(record, keyStoreRecordId(userId, workspaceId)),
-    )
+    const id = keyStoreRecordId(userId, workspaceId)
+    await this.idb.tx('readwrite', store => store.put(record, id))
+    this.held.set(id, record)
   }
 
   async delete(userId: string, workspaceId: string): Promise<void> {
-    await this.idb.tx('readwrite', store =>
-      store.delete(keyStoreRecordId(userId, workspaceId)),
-    )
+    const id = keyStoreRecordId(userId, workspaceId)
+    await this.idb.tx('readwrite', store => store.delete(id))
+    this.held.delete(id)
   }
 
   async clearForUser(userId: string): Promise<void> {
     // Delete only this user's records (commit-durable — a caller may navigate/
     // reload right after). The store is shared across the profile's accounts, so
     // the prefix scoping is load-bearing: it must not touch another account.
-    await this.idb.deleteByPrefix(keyStoreUserPrefix(userId))
+    const prefix = keyStoreUserPrefix(userId)
+    await this.idb.deleteByPrefix(prefix)
+    for (const id of [...this.held.keys()]) {
+      if (id.startsWith(prefix)) this.held.delete(id)
+    }
   }
 }
 
@@ -166,7 +233,7 @@ export const createWorkspaceKeyStore = (): WorkspaceKeyStore => {
 // store so a WK pasted/minted in a flow is the same handle the observer and
 // upload connector resolve — an IndexedDB-backed instance is shared storage,
 // but a single instance also keeps the in-memory fallback coherent within a
-// session. Tests inject their own store and never touch this singleton.
+// session.
 let sharedKeyStore: WorkspaceKeyStore | null = null
 export const getWorkspaceKeyStore = (): WorkspaceKeyStore =>
   (sharedKeyStore ??= createWorkspaceKeyStore())

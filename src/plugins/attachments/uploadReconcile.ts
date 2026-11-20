@@ -31,7 +31,14 @@
  * `pending` records are left to {@link drainUploads}; `failed` to §9 recovery.
  */
 
+import type { Repo } from '@/data/repo.js'
 import type { ByteUploadStore } from './uploadStore.js'
+
+/** Whether a staged record's asset block is in this device's `blocks`. A staged
+ *  record without one never uploads: its capture crashed or threw before the
+ *  block, or the block hasn't materialized yet and promotes on a later boot. */
+export const isAssetBlockPresent = async (repo: Pick<Repo, 'load'>, blockId: string): Promise<boolean> =>
+  (await repo.load(blockId)) != null
 
 export interface UploadReconcileDeps {
   readonly store: ByteUploadStore

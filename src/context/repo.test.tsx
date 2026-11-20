@@ -24,6 +24,7 @@ import type { ReactNode } from 'react'
 import { RepoContext, useClientContext } from '@/context/repo.tsx'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { releaseTestRepos } from '@/data/test/testRepoScope'
 import type { Repo } from '@/data/repo'
 
 let db: TestDb
@@ -34,7 +35,10 @@ beforeAll(async () => {
   repo = createTestRepo({db: db.db, user: {id: 'user-1'}}).repo
 })
 
-afterAll(async () => { await db.cleanup() })
+afterAll(async () => {
+  await releaseTestRepos([repo])
+  await db.cleanup()
+})
 afterEach(() => {
   repo.setActiveWorkspaceId(null)
   repo.setActiveLayoutSessionId(null)

@@ -265,6 +265,7 @@ describe('groupedBacklinksDataExtension query', () => {
       label: 'reviewer',
       sourceIds: ['src'],
       fallback: false,
+      blockId: null,
     }])
   })
 
@@ -295,7 +296,29 @@ describe('groupedBacklinksDataExtension query', () => {
       label: 'reviewer',
       sourceIds: ['src-field'],
       fallback: false,
+      blockId: null,
     })
+    expect(out.groups.find(group => group.label === 'Project')?.blockId).toBe('project')
+  })
+
+  it('does not offer a block whose id spells a synthetic group id as a group', async () => {
+    await create({id: 'target', content: 'Target'})
+    // Sync can deliver a block with any id.
+    await create({id: 'field:reviewer', content: 'Planted'})
+    for (const id of ['src-ref-1', 'src-ref-2']) {
+      await create({id, references: [{id: 'target', alias: 'T'}, {id: 'field:reviewer', alias: 'Planted'}]})
+    }
+    await create({id: 'src-field', references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}]})
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({blockId: null, sourceIds: ['src-field']})
+    expect(out.groups.some(group => group.blockId === 'field:reviewer')).toBe(false)
+    const groupIds = out.groups.map(group => group.groupId)
+    expect(new Set(groupIds).size).toBe(groupIds.length)
   })
 
   it('keeps two source fields from the same source to the same target distinct', async () => {
@@ -343,12 +366,14 @@ describe('groupedBacklinksDataExtension query', () => {
         label: 'reviewer',
         sourceIds: ['parent'],
         fallback: false,
+        blockId: null,
       },
       {
         groupId: '__grouped_backlinks_other__',
         label: 'Other',
         sourceIds: ['child'],
         fallback: true,
+        blockId: null,
       },
     ])
   })
@@ -798,6 +823,7 @@ describe('groupedBacklinksDataExtension query', () => {
 
       const financeGroup = out.groups.find(group => group.label === 'Finance')
       expect(financeGroup).toBeDefined()
+      expect(financeGroup!.blockId).toBe('finance')
       expect(sorted(financeGroup!.sourceIds))
         .toEqual(['src-banking', 'src-investments', 'src-taxes'])
     })
@@ -946,6 +972,7 @@ describe('groupedBacklinksDataExtension query', () => {
       const projectGroup = out.groups.find(group => group.label === 'project')
       expect(projectGroup).toBeDefined()
       expect(projectGroup!.groupId).toBe('type:project')
+      expect(projectGroup!.blockId).toBeNull()
       expect(sorted(projectGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
     })
 
@@ -1149,12 +1176,7 @@ describe('groupedBacklinksDataExtension query', () => {
     })
   })
 
-  // Grouped backlinks resolve their own source ids instead of
-  // routing through `backlinks.forBlock`, so the flip-gated machinery
-  // exclusion has to be applied here too — otherwise a hidden property value
-  // row is filtered out of Linked References and the inline count but still
-  // shows up grouped, duplicating the owner's projected property backlink.
-  describe('property-machinery source exclusion (§9)', () => {
+  describe('property value backlinks', () => {
     const seedDefinitionAndFieldRow = async () => {
       await create({id: 'target', content: 'Target'})
       await create({id: 'defn', content: 'status'})
@@ -1173,6 +1195,10 @@ describe('groupedBacklinksDataExtension query', () => {
           id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
           content: '[[Target]]', references: [{id: 'target', alias: 'Target'}],
         })
+        await tx.create({
+          id: 'nested-note', workspaceId: WS, parentId: 'value', orderKey: 'a0',
+          content: 'A note linking to [[Target]]', references: [{id: 'target', alias: 'Target'}],
+        })
       }, {scope: ChangeScope.BlockDefault})
       await create({id: 'ordinary', references: [{id: 'target', alias: 'Target'}]})
     }
@@ -1185,7 +1211,7 @@ describe('groupedBacklinksDataExtension query', () => {
         [WS, state],
       )
 
-    it('drops a hidden value-row source in a flipped workspace', async () => {
+    it('includes property value and nested sources in the grouped results', async () => {
       await seedDefinitionAndFieldRow()
       await setFlip('children')
 
@@ -1194,14 +1220,10 @@ describe('groupedBacklinksDataExtension query', () => {
         id: 'target',
       }).load()
 
-      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['nested-note', 'ordinary', 'value'])
     })
 
-    it('drops it in an un-flipped workspace too, where the backfill mints it', async () => {
-      // Was asserted dormant, on the premise that an un-flipped workspace has
-      // no value rows. The backfill mints them before the flip. The exclusion
-      // is de-duplication, not machinery-hygiene: the owner already projects
-      // this edge from its cell, so the value row would state one fact twice.
+    it('includes property value and nested sources in an un-flipped workspace', async () => {
       await seedDefinitionAndFieldRow()
 
       const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
@@ -1209,7 +1231,7 @@ describe('groupedBacklinksDataExtension query', () => {
         id: 'target',
       }).load()
 
-      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['nested-note', 'ordinary', 'value'])
     })
   })
 })

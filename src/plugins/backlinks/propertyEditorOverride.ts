@@ -5,4 +5,5 @@ import { BacklinksFilterPropertyEditor } from './BacklinksFilterPropertyEditor.t
 export const dailyNoteBacklinksDefaultsUi = definePropertyEditorOverride(dailyNoteBacklinksDefaultsProp, {
   label: 'Daily note backlinks defaults',
   Editor: BacklinksFilterPropertyEditor,
+  InlineEditor: BacklinksFilterPropertyEditor,
 })

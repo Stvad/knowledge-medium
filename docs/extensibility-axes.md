@@ -10,7 +10,7 @@ Companion to `navigation-redesign.md` (which mentions `navigationFacet` as futur
 
 | Algebra | Meaning | Examples |
 |---|---|---|
-| **Sum** | All contributions, in order | `actionsFacet`, `headerItemsFacet`, `appMountsFacet`, `appEffectsFacet`, `actionContextsFacet`, `localSchemaFacet`, `invalidationRulesFacet`, `blockHeaderFacet`, `blockChildrenFooterFacet`, `shortcutSurfaceActivationsFacet`, `codeMirrorExtensionsFacet` |
+| **Sum** | All contributions, in order | `actionsFacet`, `headerItemsFacet`, `appMountsFacet`, `appEffectsFacet`, `actionContextsFacet`, `localSchemaFacet`, `invalidationRulesFacet`, `blockHeaderFacet`, `blockBelowContentFacet`, `blockChildrenFooterFacet`, `shortcutSurfaceActivationsFacet`, `codeMirrorExtensionsFacet` |
 | **Wrap** | Each contribution wraps the next (decorator stack) | `blockContentDecoratorsFacet` |
 | **Map** | Keyed registry, collisions = silent last-wins | `mutatorsFacet`, `queriesFacet`, `propertySchemasFacet`, `typesFacet`, `propertyEditorOverridesFacet`, `valuePresetsFacet`, `postCommitProcessorsFacet`, `blockRenderersFacet` |
 | **Pick** | All candidates exposed, consumer chooses | variant facets (`blockLayoutFacet`, `blockContentRendererFacet`, `backlinksViewFacet`) |

@@ -11,7 +11,7 @@
 
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
-import {EXTENSION_TYPE} from '@/data/blockTypes'
+import {declaresExtensionType, EXTENSION_TYPE} from '@/data/blockTypes'
 import type {BlockProperties} from '@/types.js'
 import {extensionName} from '@/extensions/extensionToggles.js'
 
@@ -54,7 +54,7 @@ export const findExtensionBlock = async (
       try { return JSON.parse(row.properties_json) as BlockProperties } catch { return {} }
     })()
     return {id: row.id, workspaceId, content: row.content ?? '', properties} as BlockData
-  })
+  }).filter(declaresExtensionType)
   const match = idHint
     ? candidates.find(block => block.id === idHint) ?? null
     : candidates.find(block => extensionName(block) === labelHint) ?? null

@@ -23,10 +23,9 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
-import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
-import type { Block } from '@/data/block'
-import type { BlockPointerDependencies } from '@/shortcuts/types.js'
+import { blockPointerDepsFrom, isGestureSurfaceTarget } from '@/extensions/blockInteraction.js'
+import { isEditingBlock } from '@/data/properties.js'
+import { hasBlockSelection } from '@/data/stateBlocks.js'
 import { swipeProgressTickEvent } from './events.ts'
 import { isMobileViewport } from '@/utils/viewport.js'
 
@@ -42,47 +41,12 @@ const DIRECTION_LOCK_PX = 8
 // read live so a resize doesn't leave a stale decision (the factory isn't
 // re-run on resize).
 
-const isBlockEditing = (blockId: string, uiStateBlock: Block, renderScopeId?: string): boolean =>
-  isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&
-  Boolean(uiStateBlock.peekProperty(isEditingProp))
-
-/** Links and video can occupy a large part of readable content; a tap on them
- *  still works (only a completed horizontal swipe preventDefaults), so they are
- *  NOT treated as interactive-content the way buttons/editor are. */
-const isSwipeSurfaceEvent = (target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
-  const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  return Boolean(element?.closest('a[href],video'))
-}
-
 interface SwipeStart {
   readonly x: number
   readonly y: number
   readonly pointerId: number
   decided: 'horizontal' | 'vertical' | null
   previewed: boolean
-}
-
-/**
- * Build the swiped block's deps. `BlockPointerDependencies` (block + the surface
- * element + render scope) so the gesture-bound actions can dispatch the menu's
- * DOM events on `targetElement` and run with the right block.
- */
-const dependenciesFor = (
-  context: Parameters<BlockGestureRecognizerContribution>[0],
-  ctx: GestureEventContext,
-): BlockPointerDependencies => {
-  const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
-    ? context.blockContext.renderScopeId
-    : undefined
-  return {
-    block: context.block,
-    uiStateBlock: context.uiStateBlock,
-    scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: ctx.element,
-    ...(renderScopeId ? {renderScopeId} : {}),
-  }
 }
 
 export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
@@ -92,7 +56,7 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
     : undefined
   let start: SwipeStart | null = null
 
-  const editing = (): boolean => isBlockEditing(block.id, uiStateBlock, renderScopeId)
+  const editing = (): boolean => isEditingBlock(uiStateBlock, block.id, renderScopeId)
 
   const recognizer: GestureRecognizer = {
     id: SWIPE_QUICK_ACTIONS_GESTURE_ID,
@@ -110,15 +74,20 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       // Touch only; a second pointer means this isn't a one-finger swipe, so
       // yield (drop any claim) and let a multi-finger gesture have it.
       if (ctx.event.pointerType !== 'touch') return GESTURE_IDLE
+      // While blocks are selected a gesture acts on the selection, not on one
+      // block. Not in isEnabled: the surface doesn't re-render when the
+      // selection changes, so its pan-y would go stale.
+      if (hasBlockSelection(uiStateBlock)) {
+        start = null
+        return GESTURE_IDLE
+      }
       if (session.pointers.length > 1) {
         start = null
         return GESTURE_CANCEL
       }
       // Don't intercept gestures starting on buttons / the editor / other
       // interactive descendants; links and video are the exception (taps work).
-      if (!isSwipeSurfaceEvent(ctx.event.target) && isInteractiveContentEvent(ctx.event)) {
-        return GESTURE_IDLE
-      }
+      if (!isGestureSurfaceTarget(ctx.event.target)) return GESTURE_IDLE
       start = {x: session.changed.x, y: session.changed.y, pointerId: session.changed.pointerId, decided: null, previewed: false}
       return GESTURE_IDLE
     },
@@ -150,7 +119,7 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       // action and needs no intermediate feedback, but still claims the block.
       if (dx < 0) {
         start.previewed = true
-        return {status: 'progress', gesture: 'swipe-left', deps: dependenciesFor(context, ctx), event: swipeProgressTickEvent(dx)}
+        return {status: 'progress', gesture: 'swipe-left', deps: blockPointerDepsFrom(context, ctx.element), event: swipeProgressTickEvent(dx)}
       }
       return {status: 'active'}
     },
@@ -166,10 +135,10 @@ export const swipeRecognizer: BlockGestureRecognizerContribution = context => {
       // Horizontal-only — vertical scrolls and taps are someone else's job.
       if (Math.abs(dx) > Math.abs(dy)) {
         if (dx <= -SWIPE_TRIGGER_PX) {
-          return {status: 'commit', gesture: 'swipe-left', deps: dependenciesFor(context, ctx)}
+          return {status: 'commit', gesture: 'swipe-left', deps: blockPointerDepsFrom(context, ctx.element)}
         }
         if (dx >= SWIPE_TRIGGER_PX) {
-          return {status: 'commit', gesture: 'swipe-right', deps: dependenciesFor(context, ctx)}
+          return {status: 'commit', gesture: 'swipe-right', deps: blockPointerDepsFrom(context, ctx.element)}
         }
       }
       // Released without committing — `cancel` settles an in-flight preview back.

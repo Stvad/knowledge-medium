@@ -2,13 +2,24 @@ import { ChangeScope, type BlockData, type Tx } from '@/data/api'
 import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
-import { revealChildren } from '@/data/mutators'
+import { decodeRowProperty } from '@/data/rowProperty'
+import { deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators'
+import { displayScopeOf, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import { visibleChildrenOf } from '@/data/visibleChildren'
-import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
+import { pluralize } from '@/utils/pluralize.js'
+import { showError, showInfo } from '@/utils/toast.js'
+import { disarmCut, markCutPasted, matchArmedCut } from './armedCut.js'
+import {
+  parseMarkdownToBlocks,
+  parsedBlocksFromOutline,
+  type OutlineNode,
+  type ParsedBlock,
+} from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
 import { captureMediaVerb } from './captureMediaVerb.js'
+import { isBlankContent, shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
@@ -20,6 +31,10 @@ interface PasteOptions {
    *  `BlockContextType.scopeRootId`). Paste uses this to avoid creating
    *  siblings outside the visible scope. */
   scopeRootId?: string
+  /** The property display scope of the surface pasted into, beside
+   *  `scopeRootId`: whether the target "has children" to paste among is
+   *  decided on the list that surface draws. */
+  propertyDisplay?: PropertyDisplayScopeLevels
   /** Only consulted for `position: 'after'`. `visible` (the default) follows
    *  outline navigation — "after" an expanded block IS its first-child slot.
    *  `sibling` keeps a range paste beside the selected range rather than
@@ -27,10 +42,6 @@ interface PasteOptions {
    *  also selects it internally when the absorbed root's children would
    *  otherwise collide with it. */
   placement?: PastePlacement
-  /** Treat the whole clipboard text as one block's content (newlines
-   *  kept) instead of parsing markdown into a tree. Used by the block-
-   *  shell paste when the paste decision is `single-block`. */
-  asSingleBlock?: boolean
 }
 
 interface ExistingParentInsertion {
@@ -110,12 +121,8 @@ export const planSingleBlockPaste = (
   }
 }
 
-const isBlankContent = (content: string): boolean => content.trim().length === 0
-
-const isCollapsed = (properties: Record<string, unknown>): boolean => {
-  const raw = properties[isCollapsedProp.name]
-  return raw === undefined ? isCollapsedProp.defaultValue : isCollapsedProp.codec.decode(raw)
-}
+const isCollapsed = (properties: Record<string, unknown>): boolean =>
+  decodeRowProperty({properties}, isCollapsedProp)
 
 const editorContentForFirstPastedLine = (
   pastedText: string,
@@ -164,6 +171,34 @@ const insertionForSiblingRun = (
 const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): boolean =>
   scopeRootId === target.id || target.parentId === null
 
+/** {@link PasteOptions} as the placement rule reads them: every field
+ *  decided. The public entry points resolve the caller's display scope
+ *  (`displayScopeOf`), so nothing below them can drop it. */
+interface PlacementOptions {
+  position: PastePosition
+  placement: PastePlacement
+  scopeRootId: string | undefined
+  propertyDisplay: PropertyDisplayScopeLevels
+}
+
+/** THE placement rule for a run of pasted roots: whether they land in
+ *  `target`'s own child list (its first-child slot) rather than beside it.
+ *  Shared by the text paste and by a paste that completes a cut, so the two
+ *  can't put the same paste in different places. */
+const rootsLandAsChildren = async (
+  tx: Tx,
+  target: BlockData,
+  {position, placement, scopeRootId, propertyDisplay}: PlacementOptions,
+): Promise<{asChildren: boolean; visibleChildren: BlockData[]}> => {
+  const visibleChildren = await visibleChildrenOf(tx, target.id, target.workspaceId, propertyDisplay)
+  const hasVisibleChildren = visibleChildren.length > 0 && !isCollapsed(target.properties)
+  // With no sibling slot, roots land in the target's child list whatever
+  // `placement` says.
+  const asChildren = hasNoSiblingSlot(target, scopeRootId) ||
+    (placement === 'visible' && position === 'after' && hasVisibleChildren)
+  return {asChildren, visibleChildren}
+}
+
 /** Pasted root a blank target absorbs (it BECOMES that root). The run is
  *  contiguous with the target, so the target takes whichever end it sits at:
  *  the head for `after`, the TAIL when the run lands strictly before it.
@@ -188,10 +223,11 @@ const resolveRootDestination = async (
   {
     position,
     scopeRootId,
+    propertyDisplay,
     placement,
     parsed,
     absorbedRootId,
-  }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId'> & {
+  }: PlacementOptions & {
     parsed: readonly ParsedBlock[]
     /** Pasted root the target absorbs (it BECOMES that root), if any. */
     absorbedRootId: string | undefined
@@ -206,14 +242,16 @@ const resolveRootDestination = async (
     parsed.some(block => block.parentId === absorbedRootId)
   const effectivePlacement = absorbedRootHasChildren ? 'sibling' : placement
 
-  const targetChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
-  const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
-  // With no sibling slot, roots #2..N land in the target's child list whatever
-  // `effectivePlacement` says — a nested clipboard still merges there.
+  // With no sibling slot, roots #2..N land in the target's child list even
+  // when absorption forced `sibling` — a nested clipboard still merges there.
   // Accepted: the alternative is to stop absorbing into a zoomed title, which
   // is a bigger behaviour change than this guard.
-  const rootsAsChildren = hasNoSiblingSlot(target, scopeRootId) ||
-    (effectivePlacement === 'visible' && position === 'after' && targetHasVisibleChildren)
+  const {asChildren: rootsAsChildren, visibleChildren: targetChildren} = await rootsLandAsChildren(tx, target, {
+    position,
+    placement: effectivePlacement,
+    scopeRootId,
+    propertyDisplay,
+  })
   // Type guard, not a live check: a parentless target always takes the branch
   // above, so the sibling branch always has a parent.
   const rootParentId = rootsAsChildren ? target.id : target.parentId
@@ -296,12 +334,14 @@ const planPastePlacement = async (
   return {blocksToCreate, finalParentId, orderKeysByParsedId}
 }
 
+/** `pasted` is clipboard text to parse as markdown, or a block tree a paste
+ *  decision already built. */
 export const planEditModeMultilinePaste = (
-  pastedText: string,
+  pasted: string | readonly OutlineNode[],
   currentContent: string,
   selection: EditModePasteSelection,
 ): EditModeMultilinePastePlan | null => {
-  const parsed = parseMarkdownToBlocks(pastedText)
+  const parsed = typeof pasted === 'string' ? parseMarkdownToBlocks(pasted) : parsedBlocksFromOutline(pasted)
   const absorbedRoot = parsed.find(block => !block.parentId)
   if (!absorbedRoot) return null
 
@@ -310,14 +350,14 @@ export const planEditModeMultilinePaste = (
   const prefix = currentContent.slice(0, from)
   const suffix = currentContent.slice(to)
   const createsAdditionalBlocks = parsed.some(block => block.id !== absorbedRoot.id)
-  // A multi-line absorbed root is a fenced code block (the only parse that
-  // yields one block spanning newlines). Its content is atomic — the
-  // "merge only the first source line" rule would drop the code body, so
-  // merge the whole block. Single-line roots keep the first-line merge
-  // (strips the bullet marker, preserves leading whitespace at the cursor).
-  const mergedFirstContent = absorbedRoot.content.includes('\n')
+  // A pre-built tree's root content is already final. A multi-line parsed
+  // root is an atomic token (`OutlineToken`'s `atomic` kind) — the "merge
+  // only the first source line" rule would drop its body, so merge it whole.
+  // Single-line parsed roots keep the first-line merge (strips the bullet
+  // marker, preserves leading whitespace at the cursor).
+  const mergedFirstContent = typeof pasted !== 'string' || absorbedRoot.content.includes('\n')
     ? absorbedRoot.content
-    : editorContentForFirstPastedLine(pastedText, absorbedRoot.content)
+    : editorContentForFirstPastedLine(pasted, absorbedRoot.content)
   const contentBeforeStructuralBreak = `${prefix}${mergedFirstContent}`
 
   return {
@@ -331,7 +371,37 @@ export const planEditModeMultilinePaste = (
   }
 }
 
-/** Paste markdown text into the outline around a target block.
+/** Paste markdown text into the outline around a target block, parsed into
+ *  a block tree and placed per {@link pasteParsedBlocks}. */
+export async function pasteMultilineText(
+  pastedText: string,
+  pasteTarget: Block,
+  repo: Repo,
+  options: PasteOptions = {},
+): Promise<Block[]> {
+  return pasteParsedBlocks(parseMarkdownToBlocks(pastedText), pasteTarget, repo, options)
+}
+
+/** Paste a resolved (non-media) decision around `pasteTarget`, placed per
+ *  {@link pasteParsedBlocks}. */
+export async function pasteResolvedDecision(
+  resolved: ResolvedTextPaste,
+  pasteTarget: Block,
+  repo: Repo,
+  options: PasteOptions = {},
+): Promise<Block[]> {
+  return pasteParsedBlocks(parsedBlocksFor(resolved), pasteTarget, repo, options)
+}
+
+/** The blocks a decision pastes: the tree it built, else its text parsed as
+ *  markdown, or kept whole as one block for `single-block`. Blank text pastes
+ *  nothing either way (a whitespace-only block would clobber a blank target). */
+const parsedBlocksFor = ({decision, text}: ResolvedTextPaste): ParsedBlock[] => {
+  if (decision.kind === 'split') return decision.blocks ? parsedBlocksFromOutline(decision.blocks) : parseMarkdownToBlocks(text)
+  return isBlankContent(text) ? [] : parsedBlocksFromOutline([{content: text}])
+}
+
+/** Paste parsed blocks into the outline around a target block.
  *
  *  Rewrites parsed blocks into one `repo.tx`:
  *   - Empty targets absorb a pasted root — the first, or the LAST when the
@@ -345,29 +415,20 @@ export const planEditModeMultilinePaste = (
  *  Returns the Block facades of the root-level pasted blocks in CLIPBOARD
  *  order (which is also their resulting visible order), the absorbed root
  *  appearing at its own position in that sequence rather than first. */
-export async function pasteMultilineText(
-  pastedText: string,
+async function pasteParsedBlocks(
+  parsed: readonly ParsedBlock[],
   pasteTarget: Block,
   repo: Repo,
   {
     position = 'after',
     scopeRootId,
+    propertyDisplay,
     placement = 'visible',
-    asSingleBlock = false,
-  }: PasteOptions = {},
+  }: PasteOptions,
 ): Promise<Block[]> {
+  if (parsed.length === 0) return []
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return []
-
-  // Blank clipboard is a no-op on both paths: `parseMarkdownToBlocks` drops
-  // all-blank input to `[]`, so `asSingleBlock` must too — otherwise it
-  // would create a whitespace-only block (or clobber a blank target).
-  if (asSingleBlock && isBlankContent(pastedText)) return []
-
-  const parsed = asSingleBlock
-    ? [singleParsedBlock(pastedText)]
-    : parseMarkdownToBlocks(pastedText)
-  if (parsed.length === 0) return []
 
   const parsedRoots = parsed.filter(block => !block.parentId)
 
@@ -383,6 +444,7 @@ export async function pasteMultilineText(
     const destination = await resolveRootDestination(tx, target, {
       position,
       scopeRootId,
+      propertyDisplay: displayScopeOf({propertyDisplay}),
       placement,
       parsed,
       absorbedRootId: absorbedRoot?.id,
@@ -423,7 +485,7 @@ export async function pasteEditModeMultilineText(
   plan: EditModeMultilinePastePlan,
   pasteTarget: Block,
   repo: Repo,
-  options: Pick<PasteOptions, 'scopeRootId'> = {},
+  options: Pick<PasteOptions, 'scopeRootId' | 'propertyDisplay'> = {},
 ): Promise<EditModeMultilinePasteResult | null> {
   const rootBlocks: Block[] = []
   let focusBlock = pasteTarget
@@ -440,6 +502,7 @@ export async function pasteEditModeMultilineText(
     const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
+      propertyDisplay: displayScopeOf(options),
       placement: 'visible',
       parsed: plan.parsed,
       absorbedRootId: plan.absorbedRoot.id,
@@ -472,6 +535,165 @@ export async function pasteEditModeMultilineText(
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text at editor selection'})
 
   return {pasted: rootBlocks, focusBlock, focusOffset}
+}
+
+// ──── a paste that completes a cut ────
+
+/** What a paste of the armed cut did. {@link pasteArmedCut} returns `null`
+ *  instead when the paste is not the cut: paste its text as usual. */
+export type CutPasteOutcome =
+  /** The cut blocks themselves now sit at the paste destination. */
+  | {kind: 'moved'; blocks: Block[]}
+  /** Recognised as the cut but declined, with a toast. Nothing changed, and
+   *  the caller must NOT paste the text instead: the originals are still in
+   *  place, so that would duplicate them. */
+  | {kind: 'refused'}
+
+type CutMoveResult =
+  | {kind: 'moved'; rootIds: string[]; missing: number}
+  /** Every cut block was deleted since the cut: nothing is left to
+   *  duplicate, so the text pastes as usual. */
+  | {kind: 'cut-gone'}
+  | {kind: 'refused'; message: string}
+
+/** Is `id` strictly inside one of `rootIds`' subtrees? Walks `parentId`
+ *  through the tx, with a `seen` guard against a corrupt cycle. */
+const isInsideAny = async (tx: Tx, id: string, rootIds: ReadonlySet<string>): Promise<boolean> => {
+  const seen = new Set<string>([id])
+  let current = (await tx.get(id))?.parentId ?? null
+  while (current !== null && !seen.has(current)) {
+    if (rootIds.has(current)) return true
+    seen.add(current)
+    current = (await tx.get(current))?.parentId ?? null
+  }
+  return false
+}
+
+/** Where the cut roots go for a paste at `target`: wherever this paste's
+ *  text roots would ({@link rootsLandAsChildren}), except that nothing
+ *  absorbs. A moved block can't BECOME the target the way pasted text does,
+ *  so a blank target with no children and no properties is replaced
+ *  instead: the roots take its slot and it is deleted. */
+const cutDestination = async (
+  tx: Tx,
+  target: BlockData,
+  options: PlacementOptions,
+): Promise<{move: MoveTarget; replacesTarget: boolean}> => {
+  const children = await tx.childrenOf(target.id, target.workspaceId)
+  // A referenced target is never replaced: deleting it would rewrite every
+  // `((ref))` to it into its (empty) text.
+  const replaceable = isBlankContent(target.content) && children.length === 0 &&
+    Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.scopeRootId) &&
+    !await tx.hasLiveReferrer(target.id, target.workspaceId)
+  if (replaceable) {
+    return {move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}}, replacesTarget: true}
+  }
+
+  const {asChildren, visibleChildren: visible} = await rootsLandAsChildren(tx, target, options)
+  if (asChildren) {
+    return {
+      move: {
+        parentId: target.id,
+        position: visible[0] ? {kind: 'before', siblingId: visible[0].id} : {kind: 'last'},
+      },
+      replacesTarget: false,
+    }
+  }
+  return {
+    move: {parentId: target.parentId, position: {kind: options.position, siblingId: target.id}},
+    replacesTarget: false,
+  }
+}
+
+/**
+ * Complete the armed cut (`./armedCut.ts`) as a MOVE when `text`, the
+ * clipboard text this paste would insert, is what the cut put there.
+ *
+ * Cut deletes nothing, so EVERY paste surface calls this before its text
+ * paste; one that skipped it would paste copies beside the originals. The
+ * callers: the block-shell paste, the editor's paste, and
+ * {@link pasteFromClipboard} (vim and multi-select `p`).
+ *
+ * One transaction, one undo step. Liveness, descendant pruning and the
+ * "inside the cut" refusal are decided inside it, against the rows it moves.
+ * A move doesn't consume the cut (`ArmedCut.pasted`): pasting it again moves
+ * the same blocks, and never copies them.
+ */
+export async function pasteArmedCut(
+  text: string,
+  pasteTarget: Block,
+  repo: Repo,
+  {position = 'after', placement = 'visible', scopeRootId, propertyDisplay}: PasteOptions = {},
+): Promise<CutPasteOutcome | null> {
+  const targetData = pasteTarget.peek() ?? await pasteTarget.load()
+  if (!targetData) return null
+  const match = await matchArmedCut(text, targetData.workspaceId)
+  if (!match) return null
+  if (match.kind === 'mismatch') {
+    // The clipboard has moved on, so this cut can't be pasted any more;
+    // dropping it also clears its dim.
+    disarmCut(match.cut.cutId)
+    return null
+  }
+  if (match.kind === 'other-workspace') {
+    showInfo("Blocks can't move between workspaces, so this pasted a copy")
+    return null
+  }
+  const {cut} = match
+
+  let result: CutMoveResult
+  try {
+    result = await repo.tx(async (tx): Promise<CutMoveResult> => {
+      const target = await tx.get(pasteTarget.id)
+      if (!target || target.deleted) {
+        return {kind: 'refused', message: 'The block you pasted at no longer exists'}
+      }
+      const live: string[] = []
+      for (const id of cut.rootIds) {
+        const row = await tx.get(id)
+        if (row && !row.deleted) live.push(id)
+      }
+      if (live.length === 0) return {kind: 'cut-gone'}
+
+      const liveSet = new Set(live)
+      if (liveSet.has(target.id) || await isInsideAny(tx, target.id, liveSet)) {
+        return {kind: 'refused', message: "Can't paste cut blocks inside themselves"}
+      }
+      const roots: string[] = []
+      for (const id of live) {
+        if (!await isInsideAny(tx, id, liveSet)) roots.push(id)
+      }
+
+      const destination = await cutDestination(tx, target, {
+        position, placement, scopeRootId, propertyDisplay: displayScopeOf({propertyDisplay}),
+      })
+      await moveBlocksInTx(tx, roots, destination.move)
+      if (destination.move.parentId === target.id) await revealChildren(tx, target.id)
+      if (destination.replacesTarget) await tx.run(deleteBlock, {id: target.id})
+      return {kind: 'moved', rootIds: roots, missing: cut.rootIds.length - live.length}
+    }, {scope: ChangeScope.BlockDefault, description: 'paste cut blocks'})
+  } catch (error) {
+    // DOM paste handlers `void` this after `preventDefault`, so a throw would
+    // drop the paste silently, and falling back to the text would duplicate.
+    console.error('[paste] completing the cut failed', error)
+    showError("Couldn't move the cut blocks. Nothing changed.")
+    return {kind: 'refused'}
+  }
+
+  if (result.kind === 'cut-gone') {
+    disarmCut(cut.cutId)
+    return null
+  }
+  if (result.kind === 'refused') {
+    showError(result.message)
+    return {kind: 'refused'}
+  }
+  // Not consumed: see `ArmedCut.pasted`.
+  markCutPasted(cut.cutId)
+  if (result.missing > 0) {
+    showInfo(`${pluralize(result.missing, 'cut block')} no longer existed; moved the rest`)
+  }
+  return {kind: 'moved', blocks: result.rootIds.map(id => repo.block(id))}
 }
 
 /** The applied paste once any media capture is done: a non-`media` decision plus
@@ -520,11 +742,14 @@ export async function resolvePasteWithMediaCapture(
 
   // Clipboard text first, then one reference per captured file — each on its own line.
   const text = [request.text, ...references].filter(Boolean).join('\n')
-  if (!text) return null // nothing captured and no text
+  // Once references are spliced in, the html no longer describes the text, and
+  // an html-aware override would rewrite them away. With none, it still does.
+  const html = references.length > 0 ? undefined : request.html
+  if (!text && !html) return null // nothing captured and nothing else to paste
 
   // Re-decide with files stripped + the spliced text, so the file half doesn't
   // re-trigger `media`.
-  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, files: [] })
+  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, html, files: [] })
   if (decision.kind === 'media') return null // a plugin returned media without files — nothing to paste
   return { decision, text: decision.text ?? text }
 }
@@ -550,18 +775,17 @@ export async function pasteFromClipboard(
 ): Promise<Block[]> {
   const text = await navigator.clipboard.readText()
   if (!text) return []
+  const cutPaste = await pasteArmedCut(text, pasteTarget, repo, options)
+  if (cutPaste) return cutPaste.kind === 'moved' ? cutPaste.blocks : []
 
   const runtime = repo.facetRuntime
   if (!runtime) return pasteMultilineText(text, pasteTarget, repo, options)
 
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
-  const decision = pasteDecisionVerb.runSync(runtime, {text, intent: 'split', surface: 'shell'})
+  const decision = pasteDecisionVerb.runSync(runtime, shellPasteRequest({text}, pasteTarget))
   // This path is text-only (navigator.clipboard.readText carries no files), so a
   // `media` decision can't arise — fall back to the text paste if one does.
   if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)
-  return pasteMultilineText(decision.text ?? text, pasteTarget, repo, {
-    ...options,
-    asSingleBlock: decision.kind === 'single-block',
-  })
+  return pasteResolvedDecision({decision, text: decision.text ?? text}, pasteTarget, repo, options)
 }

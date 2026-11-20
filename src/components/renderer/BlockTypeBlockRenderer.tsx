@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /** Renderer for `'block-type'` blocks (user-defined-types Phase 1).
  *  Wraps the default block layout and replaces the content area with a
  *  type editor — label input, description textarea, and a properties
@@ -19,6 +20,7 @@ import {
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { decodeRowProperty } from '@/data/rowProperty'
 import {
   assertNotGrammarShapedLabel,
   assertRoundTrippableReferenceLabel,
@@ -137,21 +139,15 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   const userSchemas = block.repo.userSchemas
 
   const label = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[blockTypeLabelProp.name]
-    return raw === undefined ? blockTypeLabelProp.defaultValue : blockTypeLabelProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypeLabelProp) : ''
   }, [data])
 
   const description = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[blockTypeDescriptionProp.name]
-    return raw === undefined ? blockTypeDescriptionProp.defaultValue : blockTypeDescriptionProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypeDescriptionProp) : ''
   }, [data])
 
   const propertyRefs = useMemo<readonly string[]>(() => {
-    if (!data) return []
-    const raw = data.properties[blockTypePropertiesProp.name]
-    return raw === undefined ? blockTypePropertiesProp.defaultValue : blockTypePropertiesProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypePropertiesProp) : []
   }, [data])
 
   // Resolve each block-id ref to its published schema. Unresolved refs
@@ -239,16 +235,8 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
   }, [propertyRefs, userSchemas, writeRefs])
 
   const handlePick = useCallback(async (args: AddPropertyArgs) => {
-    if (args.adopted) {
-      await appendSchema(args.adopted)
-      return
-    }
-    // Inline create: same path AddPropertyForm uses.
-    const created = await block.repo.userSchemas.addSchema({
-      name: args.name,
-      presetId: args.presetId,
-    })
-    await appendSchema(created)
+    const {schema} = await adoptOrCreatePropertySchema(block.repo, args)
+    await appendSchema(schema)
   }, [appendSchema, block])
 
   // Glyph-click: register the schema if it doesn't exist, then return it
@@ -265,12 +253,12 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
     )
     if (existing) return existing
     try {
-      return await userSchemas.addSchema({name: trimmed, presetId: args.presetId})
+      return (await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId: args.presetId})).schema
     } catch (err) {
       console.error(`[BlockTypeBlockRenderer] failed to register schema "${trimmed}":`, err)
       return undefined
     }
-  }, [userSchemas])
+  }, [block.repo, userSchemas])
 
   const removeRef = useCallback(async (refId: string) => {
     await writeRefs(propertyRefs.filter(r => r !== refId))

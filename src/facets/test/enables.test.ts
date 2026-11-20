@@ -1,12 +1,8 @@
 /**
- * Typed-surface tests for `FacetContributionOptions.enables`.
- *
- * The resolver already recurses into `enables` via a structural check
- * (see resolveAppRuntime.test.ts > 'recurses into enables when the
- * parent contribution is accepted'). These tests assert the public
- * type-level surface: an author can declare `enables` on `facet.of(...)`
- * without a type assertion, and the runtime threads the contained
- * AppExtension through the boundary-aware resolver.
+ * Tests for `FacetContributionOptions.enables`: an author declares
+ * `enables` on `facet.of(...)` without a type assertion, and the
+ * boundary-aware resolver pulls the contained AppExtension in only when the
+ * parent contribution is accepted.
  *
  * If the field is missing from `FacetContributionOptions`, this file
  * fails to compile (which is the point — TDD on the type).

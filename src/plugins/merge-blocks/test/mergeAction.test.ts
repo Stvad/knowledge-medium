@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 /**
  * "Merge into…" action — the thin handler that opens the merge-target picker
  * over the focused block. The merge *strategy* is covered in strategy.test.ts;

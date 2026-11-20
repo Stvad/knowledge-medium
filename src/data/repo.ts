@@ -50,8 +50,9 @@ import {
   ReadOnlyError,
   UndoHistoryDroppedError,
 } from './api/errors'
-import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { runTx, type PowerSyncDb, type RunTxParams, type TxLockHooks } from './internals/commitPipeline'
 import { STRANDED_CLAIM_RECOVERY } from './internals/graphBackfillClaim'
+import { countConsumingParents } from './internals/propertyDefinitionChangeProcessor'
 import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
@@ -91,14 +92,18 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
+  type RematerializeProgressListener,
   type RematerializeReport,
   type RematerializeScope,
+  type SyncDrainStats,
 } from '@/data/internals/syncObserver/observer'
 import {
+  readSyncDivergence,
   WORKSPACE_UNAPPLIED_COUNT_CAP,
   WORKSPACE_UNAPPLIED_EXACT_COUNT_SQL,
   viewGapReadsOver,
   type ViewGapReads,
+  type WorkspaceSyncDivergence,
 } from '@/data/internals/syncObserver/reconcile'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
@@ -116,9 +121,11 @@ import {
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
+import {referenceTargetLookupsVia} from './internals/referenceTargetLookups'
 import type { BlockIdPolicy } from './blockId'
 import {
   reprojectOwnersForRowStates,
+  PROPERTY_VALUES_RESOLVED_EVENT,
   type ProjectableRow,
   type ProjectionLookups,
 } from './internals/propertyChildrenProcessor'
@@ -130,21 +137,27 @@ import {
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
 import { UndoManager, type HistoryDrop, type UndoEntry } from './internals/undoManager'
+import { awaitWriteAheadHeadroom } from './writeAheadLog'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
-import type { TxImpl } from './internals/txEngine'
+import type { TxDb, TxImpl } from './internals/txEngine'
 import { CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { ancestorWalk } from './internals/ancestorBatch'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
-  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
-import type { InvalidationRule } from './invalidation'
+import {
+  KERNEL_FIELD_RECOGNITION_CHANNEL,
+  KERNEL_FIELD_OUTLINE_SKIP_KEY,
+  KERNEL_FIELD_RECOGNITION_KEY,
+  type InvalidationRule,
+} from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
+import { getOrCreateKernelPage } from './kernelPage'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
@@ -152,7 +165,11 @@ import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasServic
 import { UserTypesService, USER_TYPES_PROJECTOR_ID} from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
-import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
+import {
+  sameFieldRecognition,
+  sameOutlineSkips,
+  type PropertyDefinitionRegistrySnapshot,
+} from './propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
 import {buildUnboundTypes, materializingTypeSeeds} from './typeDefinitionRegistry'
 import {
@@ -252,6 +269,32 @@ const TX_LOG_CAPACITY = 64
  *  in practice — `repo.tx` only records under a pinned (non-null)
  *  workspace and `undo()`/`redo()` no-op when there's no active workspace. */
 const NO_ACTIVE_WORKSPACE = '__no_active_workspace__'
+
+/** The entry an undo/redo gesture saw at press time was gone once its replay
+ *  held the write lock: another gesture took it, or the history was cleared.
+ *  The gesture answers false; the replay transaction rolls back rather than
+ *  committing an audit row for a replay that never ran. */
+class NothingToReplay extends Error {}
+
+type TransactionRuntime = Pick<RunTxParams<unknown>,
+  | 'mutators' | 'processors' | 'sameTxProcessors' | 'propertySchemas' | 'valuePresets'
+  | 'contentReferencePrefill' | 'typeDefinitionsForWorkspace'
+  | 'propertyDefinitionRegistryForWorkspace' | 'propertySchemaWorkspaceId'
+  | 'propertyRegistryInitialized' | 'propertySeedNameCounts'
+> & {
+  queries: ReadonlyMap<string, AnyQuery>
+  types: ReadonlyMap<string, TypeContribution>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null
+}
+
+/** What `repo.tx` and `_replay` pass `runTx` beyond the public tx options. */
+interface RunAndDispatchInternals {
+  /** An undo/redo replay — see `RunTxParams.isReplay`. */
+  isReplay?: boolean
+  lockHooks?: TxLockHooks
+  runtime?: TransactionRuntime
+}
 
 /** Max `ctx.run` composition depth before we assume a cycle (a query
  *  composing itself, directly or transitively). Composition chains are
@@ -454,13 +497,13 @@ interface ReferenceTargetStampContext {
   readonly resolver: PropertySchemaResolver
 }
 
-/** Why this device's view of a workspace is incomplete — see
+/** Why this device cannot verify a complete local workspace view — see
  *  {@link Repo.workspaceViewGap}. */
 export interface ViewGap {
   /** The CAUSE only; callers state their own consequence. */
   readonly reason: string
   /** Will waiting clear it? True for work in flight or a download still
-   *  running. False for rows this device downloaded and never caught up with,
+   *  running. False for downloaded rows still flagged for local verification,
    *  which nothing is going to retry on its own — so a caller that re-arms
    *  itself on a deferral must not re-arm on this one, and a caller with a
    *  human to tell must not tell them to try again. */
@@ -513,6 +556,28 @@ export interface OperatorBackfillResult {
    *  that carry no reason. */
   retryable?: boolean
 }
+
+/** How long an operator run waits for a view gap with nothing moving. Renewed
+ *  while the sync pipeline makes progress — see `backfillViewGap`. */
+const OPERATOR_BACKFILL_SYNC_WAIT_MS = 5 * 60_000
+const BACKFILL_SYNC_POLL_MS = 100
+/** A wait this old is a backlog, not a blip: poll it less often, since every
+ *  poll reads the staging queue the drain is working through. */
+const BACKFILL_SYNC_SLOW_POLL_AFTER_MS = 30_000
+const BACKFILL_SYNC_SLOW_POLL_MS = 1_000
+
+/** The oldest row of each queue between this device and a caught-up view: its
+ *  uploads, and downloaded rows awaiting the drain. A head changes when its
+ *  oldest row leaves, or when an empty queue gains a row. */
+const SYNC_PIPELINE_HEADS_SQL = `
+  SELECT (SELECT min(id) FROM ps_crud) AS upload,
+         (SELECT min(seq) FROM blocks_synced_changes) AS staged`
+
+/** Which arms of the view-gap predicate to ask. `local` leaves out the one
+ *  that is DEVICE-wide and fed by the network — "not caught up with the
+ *  server" — and keeps every arm about rows already on this device (staged,
+ *  re-materializing, unapplied). */
+export type ViewGapArms = 'all' | 'local'
 
 /** Why a backfill cannot run at all when the composition root wired no claim
  *  seam. */
@@ -596,6 +661,17 @@ export type OperatorBackfillClaimOutcome<T = void> =
   | {readonly claimed: true; readonly value: T}
   | {readonly claimed: false; readonly result: OperatorBackfillResult}
 
+/** Options for {@link Repo.run}: `description` replaces the mutator's own
+ *  `describe` as the tx's audit text (the agent bridge attributes its
+ *  writes this way). */
+export interface RunOptions {
+  description?: string
+}
+
+/** Bound on {@link Repo.onSyncDrainStats}'s held drains, for a session in which
+ *  nothing ever subscribes. */
+const MAX_HELD_SYNC_DRAIN_STATS = 50
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -671,6 +747,9 @@ export class Repo {
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
   private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
   private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
+  private readonly syncDrainStatsListeners = new CallbackSet<[SyncDrainStats]>('Repo.syncDrainStats')
+  /** Drains that ended with nobody subscribed — see {@link onSyncDrainStats}. */
+  private readonly heldSyncDrainStats: SyncDrainStats[] = []
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -837,12 +916,9 @@ export class Repo {
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
    *  (a durable once-ever marker permanently missed definitions/aliases
-   *  that arrived while the app was closed or
-   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
-   *  the first run, but the LIKE prefilter itself is an O(table) scan on
-   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
-   *  deep idle, once per workspace open; a partial expression index on the
-   *  content-shape predicate is the escape hatch if it ever matters. */
+   *  that arrived while the app was closed or the workspace inactive).
+   *  Candidates are unresolved reference rows selected through the partial
+   *  reference-candidate index; the sweep runs once per workspace per session. */
   private readonly referenceTargetSweepDone = new Set<string>()
   /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
    *  in ONE batched scan per drain (never one scan per name). Names only
@@ -1116,7 +1192,7 @@ export class Repo {
     // dispatch). The runner reads its registry per-tx from the snapshot
     // baked into TxResult — we don't sync a registry into the runner
     // here.
-    this.processorRunner = new ProcessorRunner(this, this.db)
+    this.processorRunner = new ProcessorRunner(this.db)
     // Type-tagging engine (audit D1(b)). Repo keeps spec-pinned
     // delegating methods over this single instance.
     this.typeTagger = new TypeTagger(this)
@@ -1176,9 +1252,23 @@ export class Repo {
           !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
           !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey) ||
           !sameStringSet(this._typeDefinitionRegistry?.contestedSeedKeys, typeDefinitions?.contestedSeedKeys)
+        const recognitionChanged =
+          !sameFieldRecognition(this._propertyDefinitionRegistry, propertyDefinitions)
+        const outlineSkipsChanged =
+          !sameOutlineSkips(this._propertyDefinitionRegistry, propertyDefinitions)
         this._propertyDefinitionRegistry = propertyDefinitions
         this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
+        // After the swap: a handle re-resolving on this reads the new snapshot.
+        const recognitionKeys = [
+          ...(recognitionChanged ? [KERNEL_FIELD_RECOGNITION_KEY] : []),
+          ...(outlineSkipsChanged ? [KERNEL_FIELD_OUTLINE_SKIP_KEY] : []),
+        ]
+        if (recognitionKeys.length > 0) {
+          this.handleStore.invalidate({plugin: new Map([
+            [KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys],
+          ])})
+        }
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
@@ -1231,11 +1321,7 @@ export class Repo {
    *  flushing. */
   startSyncObserver(options?: SyncObserverOptions): BlocksSyncedObserver {
     if (this.syncObserver) this.syncObserver.dispose()
-    // Production passes the §6 mode/key resolver (initRepo). Tests omit it
-    // and fall back to plaintext copy-through with no key — the historical
-    // behavior, so non-e2ee tests are unaffected.
-    const policyDeps = this.syncObserverDeps
-      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
+    const policyDeps = this.materializationPolicy
     this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
@@ -1246,8 +1332,7 @@ export class Repo {
         // LOCAL `reference_target_id` column must track content for
         // sync-applied rows on every device, e2ee included (derivation runs
         // over decrypted content). Resolution mirrors
-        // `core.deriveReferenceTarget`: schema-name winner map first, then
-        // the `block_aliases` index read on the open write tx (so
+        // `core.deriveReferenceTarget`: the `block_aliases` index on the open write tx (so
         // same-window alias/definition arrivals resolve).
         referenceTargetLookups: policyDeps.referenceTargetLookups
           ?? (tx => this.referenceTargetLookupsVia(tx)),
@@ -1259,8 +1344,17 @@ export class Repo {
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
       onError: options?.onError,
+      onDrainStats: stats => this.reportSyncDrainStats(stats),
     })
     return this.syncObserver
+  }
+
+  /** Production passes the §6 mode/key resolver (initRepo). Tests omit it and
+   *  fall back to plaintext copy-through with no key — the historical
+   *  behavior, so non-e2ee tests are unaffected. */
+  private get materializationPolicy(): MaterializeDeps {
+    return this.syncObserverDeps
+      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
   }
 
   /** Dispose the active sync observer (no-op if none). Tests use this to
@@ -1272,6 +1366,32 @@ export class Repo {
     }
   }
 
+  /** Hear what each sync drain did and where its time went. Fires for every
+   *  drain that ran a window — per arrival in steady state — so a listener
+   *  that persists anything picks which ones are worth it.
+   *
+   *  The first subscriber is also handed the drains that ended before anyone
+   *  subscribed: an encrypted workspace's unlock drain, the largest a device
+   *  ever runs, finishes before the app runtime that hosts listeners mounts. */
+  onSyncDrainStats(cb: (stats: SyncDrainStats) => void): () => void {
+    const unsubscribe = this.syncDrainStatsListeners.add(cb)
+    for (const stats of this.heldSyncDrainStats.splice(0)) this.syncDrainStatsListeners.notify(stats)
+    return unsubscribe
+  }
+
+  private reportSyncDrainStats(stats: SyncDrainStats): void {
+    if (this.syncDrainStatsListeners.size > 0) {
+      this.syncDrainStatsListeners.notify(stats)
+      return
+    }
+    const held = this.heldSyncDrainStats
+    held.push(stats)
+    if (held.length > MAX_HELD_SYNC_DRAIN_STATS) {
+      // Over the bound, the smallest drain is the one least worth keeping.
+      held.splice(held.reduce((min, s, i) => (s.rows < held[min]!.rows ? i : min), 0), 1)
+    }
+  }
+
   /** Manually flush the sync observer — drains any pending `blocks_synced`
    *  changes into `blocks` and walks `handleStore.invalidate(...)`. Tests
    *  use this instead of waiting on the throttle window; it's a real settle
@@ -1280,17 +1400,20 @@ export class Repo {
     if (this.syncObserver) await this.syncObserver.flush()
   }
 
-  /** Re-materialize a workspace's staged `blocks_synced` rows after it becomes
-   *  materializable (WK pasted / plaintext confirmed via the §8.2 gate). No-op
-   *  if the observer isn't running.
-   *
-   *  `'all'`, not `'unapplied'`: this and the reconcile rescan are the paths for
-   *  a workspace whose FLAGS may be wrong — the deterministic-id shadow this
-   *  predates the flag entirely — so trusting the flag to name the work is the
-   *  one thing they must not do. Unpinned by any test (the two scopes agree on
-   *  every shape a test can build), which is why it is written here. */
-  async drainSyncWorkspace(workspaceId: string): Promise<void> {
-    if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId, 'all')
+  /** Re-materialize all staged rows after workspace unlock/verification.
+   *  Read every row: legacy shadows can incorrectly have `needs_apply = 0`.
+   *  A pass with no deferred/quarantined rows also satisfies one-time recovery.
+   *  Returns the pass's report, or null when no observer is running. */
+  async drainSyncWorkspace(
+    workspaceId: string,
+    onProgress?: RematerializeProgressListener,
+  ): Promise<RematerializeReport | null> {
+    if (!this.syncObserver) return null
+    const report = await this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress)
+    if (report.deferred === 0 && report.quarantined === 0) {
+      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
+    }
+    return report
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -1780,23 +1903,29 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    return this.transact(fn, opts)
+  }
+
+  private async transact<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    runtime?: TransactionRuntime,
+  ): Promise<R> {
     // Sampled once this transaction HOLDS the write lock — not when it was
-    // called — and compared at record time below.
+    // called — and compared when the entry is recorded, still under that lock.
     //
-    // What it protects against: a transaction can commit and release the lock
-    // ahead of a one-way pass's chunk and only reach its recording
-    // continuation after that chunk has written and cleared. The clear cannot
-    // reach an entry that does not exist yet, and neither can the epoch move
-    // that opened the drop, so the entry would land on the stack holding the
-    // whole PRE-pass row.
+    // What it protects against: a LOCKLESS history drop (the props-as-blocks
+    // flip is a server round trip) beginning or finishing while this
+    // transaction holds the lock. Its `before` rows were read before the pass's
+    // writes land, and the drop's end may already have emptied the stacks this
+    // entry is about to join. A pass that drops under the write lock cannot
+    // land in this window at all: recording happens before this transaction
+    // releases the lock.
     //
-    // Why inside the lock: the same two can be ordered the other way, with the
-    // edit merely INVOKED while a chunk holds the lock and executing after it
-    // commits. Sampled at call time, that edit reads the pre-clear epoch and is
-    // discarded although its `before` rows are the rewritten ones and it is
-    // perfectly safe to undo. Inside the lock, the sample is taken at the same
-    // moment as the rows the entry describes, which is what makes the two
-    // comparable at all.
+    // Why inside the lock: an edit merely INVOKED while a pass's chunk holds
+    // the lock executes after that chunk commits, so its `before` rows are the
+    // rewritten ones and it is perfectly safe to undo. Sampled at call time, it
+    // would read the pre-drop epoch and be discarded.
     /** Epoch per manager, EARLIEST sample kept — see the two calls below. */
     const epochAtLock = new Map<UndoManager, number>()
     const sampleEpoch = (manager: UndoManager): void => {
@@ -1831,41 +1960,46 @@ export class Repo {
           sampleEpoch(this.undoManagerFor(tx.meta.workspaceId))
         }
         return value
-      }, opts)
-    // Step 7 of the §10 pipeline — record undo entry into the tx's pinned
-    // workspace's manager, so a later cmd-Z only ever acts on entries from
-    // the workspace the user is looking at (issue #186). Non-undoable
-    // scopes are filtered inside `record`; zero-write txs have no pinned
-    // workspace (null) and nothing to undo, so skip them here. Replays go
-    // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null && !opts.skipUndo) {
-      const manager = this.undoManagerFor(result.workspaceId)
-      // Dropped rather than recorded: a pass cleared this workspace's history
-      // while this transaction was in flight, so its `before` rows are the ones
-      // that pass has since rewritten. Replaying them would revert its writes
-      // with its completion already recorded, which is the same loss the clear
-      // itself exists to prevent.
-      //
-      // A missing sample reads as a mismatch and drops the entry: defence in
-      // depth, since a tx that pinned a workspace was always sampled for it.
-      if (epochAtLock.get(manager) === manager.clearEpoch) manager.record({
-        scope: opts.scope,
-        txId: result.txId,
-        snapshots: result.snapshots,
-        description: opts.description,
-        // Group token (issue #306): entries sharing it merge at record
-        // time while the previous one is still top-of-stack, so a
-        // multi-tx composite reverts with one cmd-Z.
-        groupId: opts.groupId,
-      })
-    }
+      }, opts, {runtime, lockHooks: {
+        // Step 7 of the §10 pipeline — record the undo entry into the tx's
+        // pinned workspace's manager, so a later cmd-Z only ever acts on
+        // entries from the workspace the user is looking at (issue #186).
+        // Under the write lock, so entries land in commit order — see
+        // `TxLockHooks`. Non-undoable scopes are filtered inside `record`;
+        // zero-write txs have no pinned workspace (null) and nothing to undo.
+        // Replays go through `_replay`, not here, so they add no history.
+        beforeCommit: ({txId, workspaceId, snapshots}) => {
+          if (workspaceId === null || opts.skipUndo) return
+          const manager = this.undoManagerFor(workspaceId)
+          // Dropped rather than recorded: a pass dropped this workspace's
+          // history while this transaction held the lock, so its `before` rows
+          // predate that pass's writes. Replaying them would revert the pass
+          // with its completion already recorded, which is the same loss the
+          // drop itself exists to prevent.
+          //
+          // A missing sample reads as a mismatch and drops the entry: defence in
+          // depth, since a tx that pinned a workspace was always sampled for it.
+          if (epochAtLock.get(manager) !== manager.clearEpoch) return
+          manager.record({
+            scope: opts.scope,
+            txId,
+            snapshots,
+            description: opts.description,
+            // Group token (issue #306): entries sharing it merge at record
+            // time while the previous one is still top-of-stack, so a
+            // multi-tx composite reverts with one cmd-Z.
+            groupId: opts.groupId,
+          })
+        },
+      }})
     return result.value
   }
 
   /** Undo the most recent committed `repo.tx` for `scope` *in the active
    *  workspace*. Default scope is `BlockDefault` (the cmd-Z target).
    *  Resolves to true if an entry was popped + replayed, false if there
-   *  is no active workspace or its manager has no entry for `scope`.
+   *  is no active workspace or its manager has no entry for `scope` once
+   *  the replay holds the write lock.
    *
    *  Undo is per-workspace (issue #186): each workspace has its own
    *  `UndoManager`, and we operate on the active one — so a workspace
@@ -1888,7 +2022,7 @@ export class Repo {
    *  (Known pre-existing limitation: `isReadOnly` is updated by an async
    *  App effect, so it can briefly lag a just-switched-to workspace; a
    *  cmd-Z in that window may transiently `ReadOnlyError`, but the entry
-   *  is pushed back so a retry once the flag settles succeeds — see
+   *  never left its stack, so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
     return this.replayGesture('undo', scope)
@@ -1901,77 +2035,29 @@ export class Repo {
     return this.replayGesture('redo', scope)
   }
 
-  /** The body of {@link undo} and {@link redo}, which are mirror images: pop
-   *  from one stack, replay it, push it onto the other — and on failure put it
-   *  back where it came from.
-   *
-   *  One owner because every rule here is symmetric, and the asymmetry that
-   *  used to exist between the two copies was an omission rather than a
-   *  decision: only `undo` documented why it pushes a failed entry back. */
+  /** The body of {@link undo} and {@link redo}, which are mirror images: take
+   *  the top entry, replay it, move it onto the other stack — and on failure put
+   *  it back where it came from. The stack motion lives in {@link _replay},
+   *  under the write lock; this only answers the user. */
   private async replayGesture(
     action: 'undo' | 'redo',
     scope: ChangeScope,
   ): Promise<boolean> {
     if (this.client.activeWorkspaceId === null) return false
+    // Captured now so a workspace switch mid-replay cannot redirect the stack
+    // motion to another workspace's manager (#186).
     const manager = this.undoManager
-    // Sampled before the entry leaves the stack, so the whole gesture — pop,
-    // replay and push alike — sits inside the window this validates. A bare
-    // `clear()` moves it, and so does BEGINNING a `HistoryDrop`, which is how a
-    // replay queued behind a pass is refused before its stack is ever dropped.
-    // None of them can happen across the pop itself, so this is the same value
-    // either side.
-    // A drop is UNDER WAY: its pass's writes are landing right now and the
-    // stacks still hold entries from before them, so replaying one restores
-    // rows the pass is in the middle of replacing. The epoch cannot express
-    // this — it marks an instant, so a gesture STARTING mid-drop samples the
-    // already-moved value and passes every check. For the lockless flip that
-    // window is a server round trip wide.
-    //
-    // Refused rather than queued: the gesture is the user's, and answering
-    // "nothing happened" immediately is better than a cmd-Z that silently
-    // applies a minute later against rows it no longer describes.
-    if (manager.historyDropInProgress) return false
-    const clearEpoch = manager.clearEpoch
-    const opposite = action === 'undo' ? 'redo' : 'undo'
-    const entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
-    if (entry === null) return false
-    /** Put `entry` on a stack — unless the history was DROPPED while this
-     *  gesture was in flight.
-     *
-     *  Both pushes go through here, the success one onto the opposite stack and
-     *  the failure one back onto the stack it came from, because the hazard is
-     *  the same for either: the database can hand the write lock to a pass's
-     *  chunk while `_replay` is still resolving, so a clear can land between the
-     *  replay and this line. Pushing then REPOPULATES history the clear had just
-     *  emptied, with an entry describing a pre-pass row — and the next gesture
-     *  samples the new epoch, passes, and replays it over the pass's committed
-     *  writes. Dropping that entry is the whole point of the clear. */
-    const push = (onto: 'undo' | 'redo'): void => {
-      if (manager.clearEpoch !== clearEpoch) return
-      if (onto === 'undo') manager.pushUndo(scope, entry)
-      else manager.pushRedo(scope, entry)
-    }
+    // Empty at press time: answered without queuing for the write lock. Not
+    // the decision itself — the stack can still change before the lock is
+    // held, and `_replay` asks again there.
+    const top = action === 'undo' ? manager.peekUndo(scope) : manager.peekRedo(scope)
+    if (top === null) return false
     try {
-      await this._replay(entry, action, {manager, clearEpoch})
+      await this._replay(manager, action, scope)
     } catch (err) {
-      if (err instanceof UndoHistoryDroppedError) return false
-      // Replay failed — push the entry back so the user can retry
-      // (e.g. after toggling read-only off, fixing a missing parent).
-      // Known narrow hazard (pre-existing, issue #226 window): if a new
-      // tx recorded during the failed replay's await, this pushback
-      // lands the entry ABOVE it — chronologically inverted. With
-      // grouping the inversion additionally makes a same-group tx merge
-      // into the pushed-back entry rather than the newer one. We keep
-      // the groupId on pushback anyway: stripping it would break the
-      // legitimate retry path (RescheduleToast re-matches the restored
-      // entry by groupId once read-only clears), which is a far more
-      // common sequence than a mid-replay same-group commit.
-      push(action)
+      if (err instanceof UndoHistoryDroppedError || err instanceof NothingToReplay) return false
       throw err
     }
-    // True even when the push above was refused: the replay COMMITTED, so the
-    // gesture did what the user asked. All that is withheld is the inverse.
-    push(opposite)
     return true
   }
 
@@ -1996,36 +2082,54 @@ export class Repo {
     return fn(this.groupedFacade(this.newId()))
   }
 
+  /** Bind plugin context; tx options cannot replace it, but explicit rebinding supports source imports. */
+  withTxContext(context: NonNullable<RepoTxOptions['context']>): Repo {
+    const captured = Object.freeze({...context})
+    const facade = this.contextFacade((fn, opts) =>
+      this.tx(fn, {...opts, context: {...opts.context, ...captured}}))
+    facade.withTxContext = next => this.withTxContext({...captured, ...next})
+    return facade
+  }
+
+  /** Give context-bound hosts their own Block identity without retaining them in shared caches. */
+  private contextFacade(tx: Repo['tx']): Repo {
+    const facade = this.transactionFacade(tx)
+    const blocks = new Map<string, Block>()
+    facade.block = id => {
+      let block = blocks.get(id)
+      if (!block) { block = new Block(facade, id); blocks.set(id, block) }
+      return block
+    }
+    facade.undoGroup = async fn => fn(facade.groupedFacade(this.newId()))
+    return facade
+  }
+
   /** Build the group-injecting facade for {@link undoGroup}. */
   private groupedFacade(groupId: string): Repo {
+    const facade = this.transactionFacade((fn, opts) => this.tx(fn, {...opts, groupId}))
+    facade.withTxContext = context => this.withTxContext(context).groupedFacade(groupId)
+    return facade
+  }
+
+  /** Share the binding rules for transaction-scoped Repo hosts. */
+  private transactionFacade(tx: Repo['tx']): Repo {
     const facade = Object.create(this) as Repo
-    const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
-      this.tx(fn, {...opts, groupId})
-    const run = ((name: string, args: unknown) =>
-      this.dispatchMutator(name, groupId)(args)) as Repo['run']
-    const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
+    const run = ((name: string, args: unknown, options?: RunOptions) =>
+      facade.dispatchMutator(name, undefined, options)(args)) as Repo['run']
+    const mutate = nameDispatchProxy<MutateProxy>(name => facade.dispatchMutator(name))
     // Async so a synchronously-throwing callback rejects like the outer
     // `undoGroup` does instead of throwing through the caller.
     const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
       inner(facade)
-    // `block()` on a cache miss mints `new Block(this, id)` into the
-    // repo-wide `blockFacades` identity map. With the facade as `this`
-    // that would cache a facade-bound Block FOREVER — every later
-    // ordinary edit through it (`setContent`, `set`, `delete` route
-    // through `block.repo`) would carry this group's token and merge
-    // into the long-dead group's entry (one cmd-Z would then revert an
-    // unrelated edit plus the whole composite). Mint through the real
-    // repo so shared state only ever holds real-repo Blocks.
+    // Delegate identity to the parent host; never retain this transaction
+    // facade in the parent's Block map.
     const block = (id: string): Block => this.block(id)
-    // The TypeTagger convenience writes (`addType` & co.) open their own
-    // txs through the tagger's construction-captured host — the REAL
-    // repo — so on the facade they would silently escape the group and
-    // split it. A facade-hosted tagger (TypeTagger is a stateless
-    // wrapper; the facade satisfies TypeTaggerHost structurally, with
-    // grouped `tx`) keeps the documented "helpers join by being handed
-    // the facade" contract true for them. The `*InTx` variants write
-    // into a caller-provided tx and need no override.
+    // Constructor-bound helpers would escape through the parent's tx.
+    // Host the stateless tagger here so its writes use this facade.
     const groupedTagger = new TypeTagger(facade)
+    // Keep schema creation on this host while sharing its same-name reservation
+    // set with the Repo-owned service and any other transaction facade.
+    const userSchemas = this.userSchemas.withRepo(facade)
     const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
       groupedTagger.addType(blockId, typeId, initialValues)
     const removeType: Repo['removeType'] = (blockId, typeId) =>
@@ -2034,17 +2138,11 @@ export class Repo {
       groupedTagger.toggleType(blockId, typeId)
     const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
       groupedTagger.setBlockTypes(blockId, typeIds)
-    // Shared-state minting, part 2: `runQuery` (the dynamic dispatch
-    // entry point — exactly helper-shaped) would store a LoaderHandle
-    // whose loader and QueryCtx capture the facade into the SHARED
-    // handle store, where every future invalidation-driven re-resolve
-    // would see `ctx.repo` = the long-dead facade. Query resolution is
-    // never group-bound; delegate.
+    // Queries outlive transaction contexts, so their shared handles retain
+    // the parent host rather than this facade.
     const runQuery: Repo['runQuery'] = (name, args) => this.runQuery(name, args)
-    // Deferred-job scheduling captures `this` into shared job queues
-    // that fire long after the group's lifetime — a facade-bound job
-    // would open GROUPED txs minutes later and merge system writes into
-    // the dead entry. Never group-bound; delegate.
+    // Deferred maintenance selects its own runtime when it runs; it must not
+    // inherit this transaction policy.
     const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
       this.scheduleWorkspaceBackfills(ws)
     const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
@@ -2055,22 +2153,14 @@ export class Repo {
       this.scheduleReconcileRescan(ws)
     const scheduleReferenceTargetDerivePass: Repo['scheduleReferenceTargetDerivePass'] = (ws) =>
       this.scheduleReferenceTargetDerivePass(ws)
-    // Field-assigning members: run with the facade as `this`, the
-    // assignment would create a shadow property on the facade and the
-    // real repo would never see it (silent state divergence). Delegate
-    // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
-    // assigns `slowestTx` mid-flight; the sync-observer pair assigns
-    // `syncObserver` (a shadowed stop would strand the real repo with a
-    // disposed observer it believes is live). `setActiveWorkspaceId`
-    // still reassigns `seedMaterializationGeneration` on a switch.
-    // `setActiveLayoutSessionId`'s state moved onto the shared
-    // ClientContext (interior mutation — safe through the chain), but it
-    // stays delegated so the acting-as setter pair keeps one facade shape.
+    // Field-assigning methods run on the parent host, preserving shared state
+    // instead of shadowing it on this facade.
     const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
       this.setActiveWorkspaceId(id)
     const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
       this.setActiveLayoutSessionId(id)
     const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
+    // Replay restores recorded provenance exactly; the caller does not become a new author.
     const undo: Repo['undo'] = (scope) => this.undo(scope)
     const redo: Repo['redo'] = (scope) => this.redo(scope)
     const startSyncObserver: Repo['startSyncObserver'] = (options) =>
@@ -2080,12 +2170,38 @@ export class Repo {
     return Object.assign(facade, {
       tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
+      userSchemas,
       scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
       scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
       scheduleReferenceTargetDerivePass,
       setActiveWorkspaceId, setActiveLayoutSessionId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
+  }
+
+  /** Follow-up transactions keep the runtime that scheduled the processor. */
+  private processorFacade(runtime: TransactionRuntime): Repo {
+    const facade = this.contextFacade((fn, opts) => this.transact(fn, opts, runtime))
+    facade.mutators = new Map(runtime.mutators)
+    // Share invalidation, but never a loader bound to another runtime's host.
+    const querySnapshot = {registry: runtime.queries, cacheScope: `processor:${uuidv4()}`}
+    const query = nameDispatchProxy<QueryProxy>(name => facade.dispatchQuery(name, querySnapshot))
+    facade.runQuery = (name, args) => query[name](args).load()
+    Object.defineProperties(facade, {
+      query: {value: query},
+      types: {value: runtime.types},
+      propertySchemas: {value: runtime.propertySchemas},
+      propertyDefinitions: {value: runtime.propertyDefinitions},
+      typeDefinitions: {value: runtime.typeDefinitions},
+      valuePresetCores: {value: runtime.valuePresets},
+    })
+    facade.propertySchemaResolverFor = workspaceId => propertySchemaResolverForWorkspace(
+      runtime.propertyDefinitionRegistryForWorkspace(workspaceId), workspaceId,
+      runtime.propertySeedNameCounts,
+      runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
+    )
+    facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
+    return facade
   }
 
   private requestedWrites = 0
@@ -2118,23 +2234,17 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
-    isReplay = false,
+    internal: RunAndDispatchInternals = {},
   ) {
     this.requestedWrites++
     try {
-      return await this._runAndDispatchInner(fn, opts, isReplay)
+      return await this._runAndDispatchInner(fn, opts, internal)
     } finally {
       this.requestedWrites--
     }
   }
 
-  private async _runAndDispatchInner<R>(
-    fn: (tx: Tx) => Promise<R>,
-    opts: RepoTxOptions,
-    isReplay = false,
-  ) {
-    const txT0 = performance.now()
-    let result
+  private async captureTransactionRuntime(): Promise<TransactionRuntime> {
     // A workspace pin starts the definition projector asynchronously. Delay
     // active-workspace transactions at the one shared boundary so callers
     // cannot capture declaration-only seed winners during that short window.
@@ -2172,6 +2282,54 @@ export class Repo {
     const capturedTypeDefinitions = this._typeDefinitionRegistry
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
+    return {
+      queries: this.queries,
+      mutators: this.mutators,
+      processors: this.processors,
+      sameTxProcessors: this.sameTxProcessors,
+      propertySchemas: this._propertySchemas,
+      valuePresets: this._valuePresetCores,
+      contentReferencePrefill: contentReferencePrefillFor(
+        this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
+      ),
+      // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
+      // whether the source/destination actually OWN the tokens they look like
+      // they own, which their rows alone cannot answer. Keyed by the TX's
+      // workspace (which `TxImpl` pins from the first write) rather than the
+      // active one — answering from another workspace's registry would report
+      // every local token as unknown and silently disable the ownership gate.
+      typeDefinitionsForWorkspace: workspaceId =>
+        capturedTypeDefinitions?.workspaceId === workspaceId
+          ? capturedTypeDefinitions
+          : null,
+      // Serve the tx's active-at-start workspace, or the retained previous one,
+      // from their frozen snapshots; any other workspace resolves null (fail
+      // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
+      // resolution for the workspace the tx is operating on.
+      propertyDefinitionRegistryForWorkspace:
+        workspaceId => registryForWorkspace(
+          capturedActivePropertyDefinitions,
+          capturedPreviousPropertyDefinitions,
+          workspaceId,
+        ),
+      propertySchemaWorkspaceId: readinessWorkspaceId,
+      propertyRegistryInitialized: capturedActivePropertyDefinitions !== null
+        || capturedPreviousPropertyDefinitions !== null,
+      propertySeedNameCounts: this._propertySeedNameCounts,
+      types: this._types,
+      propertyDefinitions: capturedActivePropertyDefinitions,
+      typeDefinitions: capturedTypeDefinitions,
+    }
+  }
+
+  private async _runAndDispatchInner<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+    {isReplay = false, lockHooks, runtime: capturedRuntime}: RunAndDispatchInternals,
+  ) {
+    const txT0 = performance.now()
+    let result
+    const runtime = capturedRuntime ?? await this.captureTransactionRuntime()
     try {
       result = await runTx({
         db: this.db,
@@ -2189,40 +2347,12 @@ export class Repo {
         newId: this.newId,
         blockIdPolicy: this.blockIdPolicy,
         now: this.now,
-        mutators: this.mutators,
-        processors: this.processors,
-        sameTxProcessors: this.sameTxProcessors,
-        propertySchemas: this._propertySchemas,
-        valuePresets: this._valuePresetCores,
-        contentReferencePrefill: contentReferencePrefillFor(
-          this.facetRuntime?.read(contentReferencePrefillsFacet) ?? [],
-        ),
-        // Same tx-start boundary as `propertySchemas`; a merge needs it to ask
-        // whether the source/destination actually OWN the tokens they look like
-        // they own, which their rows alone cannot answer. Keyed by the TX's
-        // workspace (which `TxImpl` pins from the first write) rather than the
-        // active one — answering from another workspace's registry would report
-        // every local token as unknown and silently disable the ownership gate.
-        typeDefinitionsForWorkspace: workspaceId =>
-          capturedTypeDefinitions?.workspaceId === workspaceId
-            ? capturedTypeDefinitions
-            : null,
-        // Serve the tx's active-at-start workspace, or the retained previous one,
-        // from their frozen snapshots; any other workspace resolves null (fail
-        // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
-        // resolution for the workspace the tx is operating on.
-        propertyDefinitionRegistryForWorkspace:
-          workspaceId => registryForWorkspace(
-            capturedActivePropertyDefinitions,
-            capturedPreviousPropertyDefinitions,
-            workspaceId,
-          ),
-        propertySchemaWorkspaceId: this.client.activeWorkspaceId,
-        propertySeedNameCounts: this._propertySeedNameCounts,
+        ...runtime,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.
         isReplay,
+        lockHooks,
       })
     } catch (err) {
       const collision = parseAliasCollisionError(err)
@@ -2243,7 +2373,7 @@ export class Repo {
     // 'reproject ref-typed properties after schema swap', mutator names).
     // Cheaper than recording every tx; only the high-water mark wins.
     const txMs = performance.now() - txT0
-    const description = opts.description ?? null
+    const description = result.description ?? null
     if (txMs > this.slowestTx.ms) {
       this.slowestTx = {description, ms: txMs}
     }
@@ -2306,41 +2436,62 @@ export class Repo {
       afterCommitJobs: result.afterCommitJobs,
       processors: result.processors,
       propertySchemas: result.propertySchemas,
+      repo: result.workspaceId === null ? this : this.processorFacade(runtime),
     })
     return result
   }
 
-  /** Replay an undo / redo entry. Opens a tx in the entry's scope and
-   *  raw-applies each (id → snap.before) (undo) or (id → snap.after)
-   *  (redo) via the engine-internal `applyRaw` primitive. Replays do
-   *  NOT push themselves onto the undo stack — the caller manages
-   *  stack motion (manager.pushRedo / manager.pushUndo) so the same
-   *  entry shuttles symmetrically between stacks. */
+  /** Take the top entry of `action`'s stack, replay it, and move it onto the
+   *  other stack — every step of it inside one transaction, under the write
+   *  lock. Replays raw-apply each (id → snap.before) (undo) or (id →
+   *  snap.after) (redo) via the engine-internal `applyRaw` primitive and do
+   *  NOT record themselves: the same entry shuttles between the stacks.
+   *
+   *  Under the lock because `repo.tx` records there too, so the stacks change
+   *  in exactly the order the database commits (#227). Taken any earlier, the
+   *  entry can be one a transaction queued ahead of this replay has already
+   *  committed over, and the replay writes its stale snapshot across that
+   *  commit. Moved any later, a transaction committing in between records
+   *  first and the stacks invert: an entry lands on redo after a newer action,
+   *  or on undo above one. A failed replay puts its entry back from inside the
+   *  lock for the same reason, so a retry finds it exactly where it was —
+   *  which is what lets `RescheduleToast` re-match it by `groupId`.
+   *
+   *  Throws {@link NothingToReplay} when the stack is empty by the time the
+   *  lock is held, and `UndoHistoryDroppedError` when the workspace's history
+   *  is being or was dropped (see the checks below). */
   private async _replay(
-    entry: UndoEntry,
+    manager: UndoManager,
     action: 'undo' | 'redo',
-    /** Checked INSIDE the replay transaction, once the write lock is held.
-     *
-     *  `undo`/`redo` take the entry OFF its stack and then await this, so a
-     *  pass that drops the workspace's history in that window cannot reach the
-     *  entry any more — `clear()` only empties the manager. Left unchecked, the
-     *  replay lands after the pass's commit and restores the pre-pass state of
-     *  a row the pass has already recorded as done.
-     *
-     *  Inside the transaction rather than before it: `repo.tx` serialises on
-     *  the write lock, so a check taken before acquiring it is exactly the one
-     *  the pass's chunk can commit behind. */
-    invalidation: {manager: UndoManager; clearEpoch: number},
+    scope: ChangeScope,
   ): Promise<void> {
     const direction = action === 'undo' ? 'before' : 'after'
-    const description = entry.description
-      ? `${action}: ${entry.description}`
-      : action
+    const put = (onto: 'undo' | 'redo', entry: UndoEntry): void => {
+      if (onto === 'undo') manager.pushUndo(scope, entry)
+      else manager.pushRedo(scope, entry)
+    }
+    let entry: UndoEntry | null = null
+    let clearEpoch = 0
     await this._runAndDispatch(async (tx) => {
-      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
-        throw new UndoHistoryDroppedError(action)
-      }
+      // A drop is UNDER WAY: its pass's writes are landing and the stacks
+      // still hold entries from before them, so replaying one restores rows
+      // the pass is in the middle of replacing. The epoch cannot say this —
+      // it marks an instant, and a replay that starts mid-drop samples the
+      // already-moved value. Refused rather than deferred until the drop
+      // ends: answering "nothing happened" beats a cmd-Z that applies a
+      // minute later against rows it no longer describes.
+      //
+      // A drop that already ENDED emptied the stacks, so the pop below finds
+      // nothing it predates.
+      if (manager.historyDropInProgress) throw new UndoHistoryDroppedError(action)
+      clearEpoch = manager.clearEpoch
+      entry = action === 'undo' ? manager.popUndo(scope) : manager.popRedo(scope)
+      if (entry === null) throw new NothingToReplay()
+      const replaying = entry
       const txImpl = tx as TxImpl
+      if (replaying.description) {
+        txImpl.meta.description = `${action}: ${replaying.description}`
+      }
       // Start from replayApplicationOrder's topological order (see its
       // docblock in txSnapshots.ts for the parent-before-child
       // rationale), then worklist-retry rows a row-level trigger
@@ -2349,18 +2500,24 @@ export class Repo {
       // alias-carrying blocks must revert the target (releasing the
       // merged alias) before restoring the source (re-claiming it). A
       // statement-level RAISE(ABORT) only rolls back that statement, so
-      // deferring the aborted row and applying the rest is safe; the
-      // replay's end state is a previously-observed valid state, so
-      // every constraint-blocked row eventually unblocks — a full pass
-      // with zero progress means the entry itself is inconsistent, and
-      // we rethrow.
-      let pending = replayApplicationOrder(entry.snapshots, direction)
+      // deferring the aborted row and applying the rest is safe. When
+      // nothing wrote the entry's rows since, the end state is a
+      // previously-observed valid state, so every constraint-blocked row
+      // eventually unblocks; a row merged with a later write (field-level
+      // replay) can still collide with it. Either way a full pass with
+      // zero progress rethrows, failing the gesture rather than forcing it.
+      let pending = replayApplicationOrder(replaying.snapshots, direction)
+      const fromOf = (id: string): BlockData | null => {
+        const snap = replaying.snapshots.get(id)!
+        return direction === 'before' ? snap.after : snap.before
+      }
+      const merge = !await txImpl.replayEntryConflicts(pending.map(([id, target]) => [id, target, fromOf(id)] as const))
       while (pending.length > 0) {
         const deferred: typeof pending = []
         let lastError: unknown = null
         for (const [id, target] of pending) {
           try {
-            await txImpl.applyRaw(id, target)
+            await txImpl.applyRaw(id, target, fromOf(id), merge)
           } catch (err) {
             if (parseAliasCollisionError(err) !== null || parseParentDeletedError(err) !== null) {
               deferred.push([id, target])
@@ -2373,38 +2530,38 @@ export class Repo {
         if (deferred.length === pending.length) throw lastError
         pending = deferred
       }
-      // AGAIN, before this transaction commits. The check on entry cannot cover
-      // the loop above, which awaits once per row: a pass that begins its drop
-      // WITHOUT holding the write lock — the props-as-blocks flip is a server
-      // round trip — moves the epoch while this replay is mid-flight, and the
-      // entry check has already passed. Its `finish` can then only suppress the
-      // push; it cannot take back rows this transaction has written. Throwing
-      // here rolls them back instead, which is the only thing that actually
-      // abandons the replay.
-      //
-      // An IN-LOCK pass cannot move the epoch inside this window — it would
-      // need the lock this replay is holding — so this arm is reachable only
-      // from a lockless drop or a bare `clear()`, and abandoning is right for
-      // both.
-      //
-      // ACCEPTED RESIDUAL, same one the backfill's exit check records: this is
-      // the end of the replay's callback, not the commit boundary, and `runTx`
-      // awaits two more statements after it. A lockless drop landing in THOSE
-      // still commits the replay. Closing it needs a pre-commit hook in the
-      // pipeline rather than another check here — each one only moves the gap a
-      // few awaits along.
-      if (invalidation.manager.clearEpoch !== invalidation.clearEpoch) {
-        throw new UndoHistoryDroppedError(action)
-      }
-    }, {scope: entry.scope, description}, true)
+      await txImpl.assertReplayAcyclic()
+    }, {scope, description: action}, {isReplay: true, lockHooks: {
+      beforeCommit: () => {
+        // The history was dropped while this replay held the lock — only a
+        // LOCKLESS pass or a bare `clear()` can do that, since an in-lock pass
+        // needs the lock this replay is holding. The pop above was valid when
+        // it ran, but the rows it restores predate that pass's writes, so the
+        // replay is rolled back rather than committed over them.
+        //
+        // As late as the pipeline allows: the apply loop awaits once per row,
+        // and so do the audit and context writes after it. What is left is the
+        // COMMIT statement itself — see `TxLockHooks.beforeCommit`.
+        if (manager.clearEpoch !== clearEpoch) throw new UndoHistoryDroppedError(action)
+        put(action === 'undo' ? 'redo' : 'undo', entry!)
+      },
+      aborted: () => {
+        // Back where it came from, so a retry (read-only cleared, a missing
+        // parent restored) finds it. Unless the history was dropped meanwhile:
+        // pushing then REPOPULATES a history the drop just emptied with an
+        // entry describing a pre-pass row, and the next gesture replays it over
+        // the pass's writes.
+        if (entry !== null && manager.clearEpoch === clearEpoch) put(action, entry)
+      },
+    }})
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the
    *  TypeScript identity isn't available. `name` is the full mutator
    *  name (e.g. `'tasks:setDueDate'` or `'core.indent'`). Args are
    *  validated at the boundary via the mutator's argsSchema. */
-  async run<R = unknown>(name: string, args: unknown): Promise<R> {
-    return this.dispatchMutator(name)(args) as Promise<R>
+  async run<R = unknown>(name: string, args: unknown, options?: RunOptions): Promise<R> {
+    return this.dispatchMutator(name, undefined, options)(args) as Promise<R>
   }
 
   /** Dynamic query dispatch — `repo.query[name]` for runtime-loaded
@@ -2544,6 +2701,24 @@ export class Repo {
       [wsId, jsonPathForProperty(name)],
     )
     return row?.count ?? 0
+  }
+
+  /** How many blocks a change to the definition at `fieldId` would re-key —
+   *  the fan-out `core.migratePropertyDefinition` performs inside whatever
+   *  transaction edits that definition row, counted BEFORE the gesture commits
+   *  to it.
+   *
+   *  Not {@link countBlocksUsingProperty}, which counts cells by NAME. That is
+   *  the right question for a delete (the values that stay behind) and the
+   *  wrong one for a change: the fan-out walks FIELD ROWS, so it reaches a
+   *  parent the cell-to-children backfill has not got to yet exactly never,
+   *  and a name count would promise work that does not happen. The predicate
+   *  is shared with the walk itself. */
+  async countPropertyDefinitionConsumers(
+    fieldId: string,
+    workspaceId: string,
+  ): Promise<number> {
+    return countConsumingParents(this.db, workspaceId, fieldId)
   }
 
   /** Read-only handle on the currently-installed FacetRuntime. Used by
@@ -2963,11 +3138,11 @@ export class Repo {
   }
 
   /**
-   * Ensure every registered system page (`systemPagesFacet`) exists for
+   * Ensure every eager registered system page (`systemPagesFacet`) exists for
    * `workspaceId`. Called at workspace bootstrap BEFORE the landing resolver
    * seeds, so a `[[reserved alias]]` wiki-link (Journal/Properties/Types/
    * Locations) resolves to the canonical page instead of auto-creating a rival
-   * that takes the name. Each `ensure` get-or-creates at a deterministic id
+   * that takes the name. Each spec get-or-creates at a deterministic id
    * (idempotent), so repeated bootstraps and offline-converging clients all
    * land on the same rows.
    *
@@ -2980,7 +3155,7 @@ export class Repo {
    * a page whose derived id is held by a row from another of the user's own
    * workspaces renders confusingly, which does not outrank the app not opening.
    *
-   * A failing `ensure` is logged and skipped, and this resolves regardless:
+   * A failing create is logged and skipped, and this resolves regardless:
    * `bootstrapWorkspace` awaits it on the critical path with no catch, so a
    * throw here does not degrade one page's feature, it stops the app coming up.
    * No page is worth that. Console rather than `onUserError` because what
@@ -2992,16 +3167,16 @@ export class Repo {
   async ensureSystemPages(workspaceId: string): Promise<void> {
     if (!workspaceId) return
     const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
-    // `await` inside the try, not `return page.ensure(…)`: the catch has to
+    // `await` inside the try, not `return getOrCreateKernelPage(…)`: the catch has to
     // cover a rejected promise as well as a synchronous throw, and a returned
     // promise rejects after the try has already exited.
-    await Promise.all(pages.map(async page => {
+    await Promise.all(pages.filter(page => page.eager).map(async page => {
       try {
-        await page.ensure(this, workspaceId)
+        await getOrCreateKernelPage(this, workspaceId, page.spec, {skipUndo: true})
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         console.error(
-          `[ensureSystemPages] ${page.id} unavailable in workspace ${workspaceId} `
+          `[ensureSystemPages] ${page.spec.alias} unavailable in workspace ${workspaceId} `
           + `(will retry on the next workspace open): ${reason}`,
         )
       }
@@ -3299,10 +3474,13 @@ export class Repo {
    * all. {@link workspaceViewGap} answers both, and every caller that has a
    * workspace in hand takes that instead (km-fsxp).
    */
-  async syncViewGap(reads: ViewGapReads = viewGapReadsOver(this.db)): Promise<string | null> {
+  async syncViewGap(
+    reads: ViewGapReads = viewGapReadsOver(this.db),
+    arms: ViewGapArms = 'all',
+  ): Promise<string | null> {
     const staged = await reads.stagedSyncViewGap()
     if (staged !== null) return staged
-    if (!this.backfillSyncSettledNow()) {
+    if (arms === 'all' && !this.backfillSyncSettledNow()) {
       return 'this device is not caught up with the server '
         + '(still downloading, disconnected, or a download error)'
     }
@@ -3318,12 +3496,13 @@ export class Repo {
    * they arrived — workspace not yet unlocked, mode unresolved, a key-store
    * read that failed, ciphertext that would not decode — stay staged while the
    * drain consumes their queue entries, leaving a stable gap that no in-flight
-   * signal reports and no waiting clears.
+   * signal reports and no waiting clears. Conservatively seeded upgrade flags
+   * can also cover already-correct rows; a flag alone does not prove missing data.
    *
    * Supersedes rather than complements `syncViewGap`: it asks that first, so a
    * caller with a workspace in hand needs exactly one of the two. Every arm is
    * cheap — the durable one reads a flag the drain set, off a partial index
-   * holding only unapplied rows — so this is the predicate for BOTH the top of
+   * holding only flagged rows — so this is the predicate for BOTH the top of
    * a one-way pass and its per-transaction re-checks. There is deliberately no
    * cheaper approximation to reach for in the hot path; that split is what let
    * the two answers disagree.
@@ -3338,8 +3517,9 @@ export class Repo {
      *  pair. A caller already holding the write lock passes its own
      *  transaction (`Repo.assertBackfillMayWrite` states why it must). */
     reads: ViewGapReads = viewGapReadsOver(this.db),
+    arms: ViewGapArms = 'all',
   ): Promise<ViewGap | null> {
-    const inFlight = await this.syncViewGap(reads)
+    const inFlight = await this.syncViewGap(reads, arms)
     if (inFlight !== null) return {reason: inFlight, transient: true}
     // The queue cannot see this one: `observer.materializeWorkspace` rewrites
     // `blocks` straight from `blocks_synced` and stages nothing, so the arms
@@ -3364,10 +3544,10 @@ export class Repo {
     // its own, and every caller's answer is the same one, so stating it here
     // beats each of them remembering to.
     return {
-      reason: `${count} synced row(s) of this workspace have not reached \`blocks\` on `
-        + 'this device — never materialized, or still showing an older version — '
-        + 'and nothing is in flight to change that; the `rematerialize-workspace` '
-        + 'agent verb re-runs the drain over exactly these rows',
+      reason: `${count} downloaded row(s) of this workspace have not been verified locally — `
+        + 'they may be missing, outdated, or already correct — '
+        + 'and nothing is in flight to check them; run “Repair downloaded workspace data” '
+        + 'from the command palette to retry these rows',
       transient: false,
     }
   }
@@ -3377,8 +3557,8 @@ export class Repo {
    *
    * The remedy for {@link workspaceViewGap}'s durable arm: rows that reached
    * the drain, were not applied, and had their queue entry consumed, so nothing
-   * re-delivers them and every one-way pass on the workspace refuses for as
-   * long as they sit there.
+   * re-delivers them. It also rechecks conservatively seeded flags on legacy rows.
+   * Every one-way pass refuses until the drain clears those flags.
    *
    * A DERIVATION pass, not a data migration: it rebuilds this device's `blocks`
    * from rows this device already downloaded, writes with `tx_context.source`
@@ -3438,6 +3618,24 @@ export class Repo {
     }
   }
 
+  /**
+   * Per workspace, the downloaded rows `blocks` does not hold with nothing in
+   * flight to deliver them: the flagged ones {@link workspaceViewGap} refuses
+   * on, and the STRANDED ones it cannot see — the drain cleared their flag, so
+   * no reader that trusts it ever will. `rematerializeWorkspace` at scope
+   * `'all'` re-judges both.
+   *
+   * Device-wide, and a full scan of the staging table: for an operator triaging
+   * a client, never for a gate. `readSyncDivergence` owns what it reports.
+   */
+  syncDivergence(): Promise<WorkspaceSyncDivergence[]> {
+    return readSyncDivergence(this.db, {
+      materializabilityOf: this.materializationPolicy.getMaterializability,
+      isRematerializing: workspaceId =>
+        this.syncObserver?.isRematerializingWorkspace(workspaceId) ?? false,
+    })
+  }
+
   /** How many of `workspaceId`'s downloaded rows the drain has not applied —
    *  the number {@link workspaceViewGap}'s durable arm reports, capped the same
    *  way (so `>= WORKSPACE_UNAPPLIED_COUNT_CAP` reads as a floor, not a total). */
@@ -3486,11 +3684,67 @@ export class Repo {
     return null
   }
 
+  /** Wait outside the write lock while an already-claimed operator run catches up.
+   *  Background passes keep their scheduler-driven retry; durable gaps never wait.
+   *
+   *  The deadline renews while the sync pipeline moves: PowerSync applies no
+   *  downloaded checkpoint while `ps_crud` holds rows, so after a pass that
+   *  out-wrote its uploads the device reads "not caught up" for the whole
+   *  backlog, and then for the drain of its echoes. A window in which neither
+   *  queue's head moved is a stall, and times out. ACCEPTED: the signal is
+   *  device-wide, so uploads of unrelated edits also renew it — a wait outlives
+   *  5 minutes only while something is still syncing. */
+  private async backfillViewGap(
+    workspaceId: string,
+    generation: number,
+    waitForSync: boolean,
+    arms: ViewGapArms,
+  ): Promise<{gap: ViewGap | null; waited: boolean}> {
+    const pipelineHeads = async (): Promise<string> => {
+      const {upload, staged} = await this.db.get<{upload: number | null; staged: number | null}>(
+        SYNC_PIPELINE_HEADS_SQL)
+      return `${upload}:${staged}`
+    }
+    let waited = false
+    let waitStart = 0
+    let deadline = 0
+    let heads = ''
+    let gap = await this.workspaceViewGap(workspaceId, undefined, arms)
+    while (waitForSync && gap?.transient
+      && this.workspaceRunStaleReason(workspaceId, generation) === null
+      && !this.isReadOnly) {
+      const now = performance.now()
+      if (!waited) {
+        // Read when the wait begins, not per call: most calls never wait.
+        waited = true
+        waitStart = now
+        deadline = now + OPERATOR_BACKFILL_SYNC_WAIT_MS
+        heads = await pipelineHeads()
+      } else if (now >= deadline) {
+        const current = await pipelineHeads()
+        const minutes = OPERATOR_BACKFILL_SYNC_WAIT_MS / 60_000
+        if (current === heads) {
+          return {gap: {...gap, reason: `sync made no progress for ${minutes} minutes: ${gap.reason}`}, waited}
+        }
+        console.info(`[workspaceBackfills] still waiting for sync, which is making progress: ${gap.reason}`)
+        heads = current
+        deadline = now + OPERATOR_BACKFILL_SYNC_WAIT_MS
+      }
+      const pollMs = now - waitStart >= BACKFILL_SYNC_SLOW_POLL_AFTER_MS
+        ? BACKFILL_SYNC_SLOW_POLL_MS
+        : BACKFILL_SYNC_POLL_MS
+      await new Promise<void>(resolve => setTimeout(resolve, pollMs))
+      gap = await this.workspaceViewGap(workspaceId, undefined, arms)
+    }
+    return {gap, waited}
+  }
+
   private async assertBackfillMayWrite(
     workspaceId: string,
-    backfillId: string,
+    backfill: WorkspaceBackfill,
     generation: number,
-  ): Promise<void> {
+    {waitForSync, arms}: {waitForSync: boolean; arms: ViewGapArms},
+  ): Promise<boolean> {
     // Re-sampled per transaction, and NOT from inside one. That is now a
     // CHOICE rather than a constraint: `workspaceViewGap` takes a
     // `ViewGapReads`, so a caller holding the lock can pass its transaction
@@ -3500,24 +3754,19 @@ export class Repo {
     // rather than an un-undoable write. Callers run it immediately before
     // opening their transaction and re-assert the synchronous half
     // (`assertBackfillSessionUnchanged`) within.
-    const gap = await this.workspaceViewGap(workspaceId)
+    const {gap, waited} = await this.backfillViewGap(workspaceId, generation, waitForSync, arms)
+    // Waiting can outlive the active workspace or its write access.
+    this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
     if (gap !== null) {
       throw Object.assign(new Error(
-        `[workspaceBackfills] "${backfillId}" aborted: ${gap.reason}. This pass would scan ` +
+        `[workspaceBackfills] "${backfill.id}" aborted: ${gap.reason}. This pass would scan ` +
         `an incomplete view of the graph and upload a properties bag built from it.`,
         // A DURABLE gap is rows nothing is draining, so telling the operator to
         // run it again is the forever-retry the flag exists to prevent — the
         // same answer `retryableAfter` gives this refusal on the claim path.
       ), {kind: Repo.TRANSIENT, retryable: gap.transient})
     }
-    // AFTER the probe, not before it: `setActiveWorkspaceId` and a role change
-    // are synchronous field writes that land cleanly in the probe's await
-    // window, so a copy ahead of the probe would be describing a session this
-    // one has since left. Asking after strictly dominates asking before — a
-    // workspace that left and returned across the probe has moved its
-    // generation — so a second copy there would decide nothing and only look
-    // load-bearing.
-    this.assertBackfillSessionUnchanged(workspaceId, backfillId, generation)
+    return waited
   }
 
   /**
@@ -3597,6 +3846,7 @@ export class Repo {
     workspaceId: string,
     backfill: WorkspaceBackfill,
     generation: number,
+    claimHeldByCaller = false,
   ): Promise<BackfillClaimAttempt> {
     const runStale = (): string | null =>
       this.workspaceRunStaleReason(workspaceId, generation)
@@ -3641,7 +3891,13 @@ export class Repo {
     // mid-drain. The SAME predicate `assertBackfillMayWrite` re-asks per
     // transaction — there is deliberately no cheaper approximation for the hot
     // path, because that split is what let the two answers disagree.
-    const gap = await this.workspaceViewGap(workspaceId)
+    const {gap} = await this.backfillViewGap(workspaceId, generation, claimHeldByCaller, 'all')
+    // The wait must not authorize a claim for a departed or read-only session.
+    const staleNow = runStale()
+    if (staleNow !== null) {
+      return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
+    }
+    if (this.isReadOnly) return {status: 'refused', refusal: {kind: 'read-only'}}
     if (gap !== null) {
       console.warn(
         `[workspaceBackfills] "${backfill.id}" deferred: ${gap.reason}, so claiming ` +
@@ -3651,14 +3907,6 @@ export class Repo {
         status: 'refused',
         refusal: {kind: 'view-gap', reason: gap.reason, transient: gap.transient},
       }
-    }
-    // Re-evaluated: the gap check above AWAITS, and a switch across that await
-    // leaves the earlier evaluation stale — including a switch away and back,
-    // which restores the id and moves only the generation. Last statement
-    // before the claim write, nothing awaited in between.
-    const staleNow = runStale()
-    if (staleNow !== null) {
-      return {status: 'refused', refusal: {kind: 'stale', reason: staleNow}}
     }
     const won = await claim.tryClaim(workspaceId, backfill.id, {
       reclaimCompleted: backfill.trigger === 'operator',
@@ -3715,7 +3963,8 @@ export class Repo {
    * `graphBackfillClaim`'s header forbids by name and for a recorded reason.
    *
    * `body` runs with the claim held and does its own reporting; `pass.run()`
-   * runs the backfill under that same claim. The claim is handed back on every
+   * runs the backfill under that same claim. The claim is handed back (to the
+   * completion it displaced, for a re-run of a finished pass) on every
    * exit this process controls — return, throw, an early return inside the
    * body — except a pass that recorded completion, which `releaseClaim` leaves
    * alone so the graph keeps its record that the migration is done. A process
@@ -3935,7 +4184,9 @@ export class Repo {
       return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
     }
     for (const backfill of backfills) {
-      const attempt = await this.takeBackfillClaim(claim, workspaceId, backfill, generation)
+      const attempt = await this.takeBackfillClaim(
+        claim, workspaceId, backfill, generation, claimHeldByCaller,
+      )
       if (attempt.status === 'not-ours') continue
       if (attempt.status === 'refused') {
         const {refusal} = attempt
@@ -3961,21 +4212,45 @@ export class Repo {
         // so it would spin until the next open on a condition nothing is
         // working on. Either way this reaches `workspace-open` passes only;
         // an `operator` pass defers to a person who can be told to retry.
-        if (refusal.kind === 'view-gap' && refusal.transient) {
+        if (backfill.trigger === 'workspace-open' && refusal.kind === 'view-gap' && refusal.transient) {
           this.scheduleWorkspaceBackfills(workspaceId)
         }
         return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
       }
-      const resolver = this.propertySchemaResolverFor(workspaceId)
+      let resolver = this.propertySchemaResolverFor(workspaceId)
+      let syncWaitCount = 0
+      const assertMayWrite = async ({
+        waitForSync = backfill.trigger === 'operator',
+        arms = 'all',
+      }: {waitForSync?: boolean; arms?: ViewGapArms} = {}): Promise<void> => {
+        if (!await this.assertBackfillMayWrite(workspaceId, backfill, generation, {waitForSync, arms})) return
+        syncWaitCount += 1
+      }
+      // RELAXED GUARD: an operator batch does not wait on (or refuse for) the
+      // device being behind the server — only on rows already on this device.
+      // Its own uploads hold that arm open (each batch's echo, and the core
+      // applying no checkpoint while `ps_crud` holds rows), so asking it per
+      // batch would throttle the pass to one upload round trip per batch.
+      // DROPPED, accepted for a claimed run on a drained fleet:
+      // - a foreign row still mid-download when a batch starts. A download SEEN
+      //   is still counted, so the sweep it spans cannot prove convergence, and
+      //   `awaitCaughtUp` asks the full gate before every re-sweep.
+      // - a disconnected device: it keeps writing locally and uploads later.
+      // - the per-batch claim check reads the claim as of the last catch-up,
+      //   since no checkpoint applies while this pass's uploads are queued.
+      const perBatchArms: ViewGapArms = backfill.trigger === 'operator' ? 'local' : 'all'
+      const assertBatchMayWrite = async (): Promise<void> => {
+        await assertMayWrite({arms: perBatchArms})
+        if (perBatchArms === 'local' && !this.backfillSyncSettledNow()) syncWaitCount += 1
+      }
       // Announced once, not per batch: the history is gone either way, and
       // saying so repeatedly for a pass that runs for minutes is noise.
       let announcedUndoClear = false
       const ctx: WorkspaceBackfillContext = {
         workspaceId,
-        // One resolver for the whole run, through the canonical factory: the
-        // per-call version built a fresh one for every cell key (a pass over
-        // ~650k rows resolves that many times) and bypassed the
-        // previous-registry fallback every other site gets.
+        get syncWaitCount() { return syncWaitCount },
+        awaitCaughtUp: () => assertMayWrite(),
+        // Reuse one snapshot per batch, captured after acquiring its write lock.
         resolveNameSchema: (name) => {
           const resolution = resolver.resolve(name)
           return resolution.status === 'resolved' ? resolution.schema : undefined
@@ -4006,6 +4281,12 @@ export class Repo {
           // callback's return value never arrives on that path. Release beats
           // the guarantee; the `catch` below is the other half.
           let drop: HistoryDrop | undefined
+          // The wait below lasts as long as the longest read in flight, so a run
+          // already abandoned refuses before it, on the check that costs nothing.
+          this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+          // Before the precondition probe, which the wait can outlast — so the
+          // probe stays fresh for the write.
+          await awaitWriteAheadHeadroom(this.db)
           // OUTSIDE the transaction — see the method, which says why it cannot
           // be read from inside one.
           //
@@ -4013,9 +4294,17 @@ export class Repo {
           // that commits between this probe and the write is seen by the NEXT
           // batch's probe instead of this one. The synchronous half stays
           // inside, at both ends, where it costs no connection.
-          await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+          await assertBatchMayWrite()
           const value = await this.tx(async t => {
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
+            // The claim can change while waiting for this lock, even without
+            // an observed sync gap. Check every batch on this transaction's view.
+            if (!await claim.stillOwned(t, workspaceId, backfill.id)) {
+              throw Object.assign(new Error(
+                `[workspaceBackfills] "${backfill.id}" aborted: the migration claim is no longer held by this device`,
+              ), {kind: Repo.TRANSIENT, retryable: false})
+            }
+            resolver = this.propertySchemaResolverFor(workspaceId)
             const value = await fn(t)
             // AGAIN, now the body has returned — see the method. `fn` can span a
             // whole insert budget, so the entry check above is as stale by here
@@ -4086,9 +4375,10 @@ export class Repo {
         // no candidates — precisely what a partially materialized graph looks
         // like, since the rows are staged and not yet in `blocks` — would
         // otherwise sail through and record its one-shot marker as done.
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        await assertMayWrite()
         await backfill.run(ctx)
-        await this.assertBackfillMayWrite(workspaceId, backfill.id, generation)
+        // The scan is over: waiting here could admit rows it never examined.
+        await assertMayWrite({waitForSync: false})
         // Only after a clean run — a thrown backfill leaves the claim unset so
         // the next attempt retries (passes are idempotent per row).
         await claim.markComplete(workspaceId, backfill.id)
@@ -4123,7 +4413,7 @@ export class Repo {
           // still means "worth retrying", which is right for the transient DB
           // failures that make up the rest of this path.
           deferredRetryable = (err as {retryable?: boolean} | null)?.retryable ?? true
-          if (deferredRetryable) {
+          if (deferredRetryable && backfill.trigger === 'workspace-open') {
             // These clear on their own — the download finishes, the queue
             // drains. Logging and walking away would leave the pass undone for
             // the whole session even though its blocker is momentary, so re-arm
@@ -4131,10 +4421,7 @@ export class Repo {
             console.warn(`[workspaceBackfills] ${reason} — will retry when it clears`)
             this.scheduleWorkspaceBackfills(workspaceId)
           } else {
-            // A durable gap is rows nothing is draining, and a revoked role
-            // needs the role back — neither is waiting for anything, so a
-            // re-arm buys a run that will refuse again and the message would be
-            // telling the operator to wait for something that is not coming.
+            // Operator runs require a fresh invocation once their bounded wait ends.
             console.warn(`[workspaceBackfills] ${reason} — not retrying on its own`)
           }
           return {completed, undoHistoryCleared, deferred, deferredRetryable, failed}
@@ -4230,7 +4517,6 @@ export class Repo {
     }
 
     await this.stampReferenceTargets(updates, stampContext)
-
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
     // narrow accepted window: an alias/definition arriving between this
@@ -4239,30 +4525,16 @@ export class Repo {
     this.pendingNameRederives.delete(workspaceId)
   }
 
-  /** The one construction site for reference-target resolution outside a
-   *  repo.tx: the `block_aliases` index read on `reader` —
-   *  the open sync-arrival write tx, or the auto-commit connection for the
-   *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
-   *  resolves textually, `[[alias]]` through this lookup); the two must
-   *  resolve identically or the column diverges across write paths. */
+  /** Use the open arrival transaction, or this DB's snapshot for idle passes. */
   private referenceTargetLookupsVia(
-    reader: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>} = this.db,
+    reader: Pick<TxDb, 'getAll'> = this.db,
   ): ReferenceTargetLookups {
-    return {
-      aliasTargetId: async (alias, workspaceId) => {
-        if (alias === '' || workspaceId === '') return null
-        const row = await reader.getOptional<{id: string}>(
-          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
-          [workspaceId, alias],
-        )
-        return row?.id ?? null
-      },
-    }
+    return referenceTargetLookupsVia(reader)
   }
 
-  /** Chunked raw column stamps, materializer-style: source-NULL (upload
-   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
-   *  `updated_at` (the LWW row-version) for a purely local derivation.
+  /** Chunked raw column stamps without advancing `updated_at`.
+   * Field rows receive additive repair; named values dispatch settled
+   * projection so derived cell writes cannot materialize over source rows.
    *
    *  Compare-and-set per row (adversarial-review fix): callers scan/derive
    *  outside the write lock, so a concurrent local edit or sync arrival can
@@ -4350,6 +4622,10 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+      if (reproject) {
+        const valueIds = [...snapshots.values()].filter(({after}) => !after.isFieldForm).map(({after}) => after.id)
+        await this.reprojectResolvedPropertyValues(valueIds, context.workspaceId)
+      }
       if (newlyRecognized.length === 0) continue
       try {
         await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
@@ -4366,6 +4642,14 @@ export class Repo {
         )
       }
     }
+  }
+
+  private async reprojectResolvedPropertyValues(valueIds: readonly string[], workspaceId: string): Promise<void> {
+    if (valueIds.length === 0) return
+    await this.tx(async tx => {
+      if (this.isReadOnly || !(await tx.isPropertyChildBackedWorkspace(workspaceId))) return
+      tx.emitEvent(PROPERTY_VALUES_RESOLVED_EVENT, {workspaceId, valueIds}, workspaceId)
+    }, {scope: ChangeScope.References, description: 'project resolved named reference values'})
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
@@ -4470,12 +4754,8 @@ export class Repo {
       // yet — a generic alias minted mid-session (referencesProcessor enqueues
       // the name when it creates the seat) repairs `[[Foo]]` rows written
       // before page Foo existed. Re-pointing an ALREADY-stamped row is
-      // deliberately NOT done: `reference_target_id`'s only consumers are
-      // property field-row recognition (is-target-a-definition), and
-      // definitions aren't name-resolvable yet, so a non-NULL re-point would
-      // change nothing any reader observes. That reclaim (with the cell
-      // reprojection a raw stamp currently skips) belongs to the auto-claim
-      // work that makes definitions name-resolvable.
+      // deliberately NOT done here: existing bindings are maintained by
+      // the ordinary rename/merge paths; this drain only fills missing targets.
       // Alias forms only (`REFERENCE_TARGET_REDERIVE_CANDIDATES_SQL`): this
       // drain discards anything that isn't `kind === 'alias'` two lines below.
       const candidates = await this.db.getAll<{id: string; content: string}>(
@@ -4551,9 +4831,6 @@ export class Repo {
     if (done) return
     try {
       await this.drainSyncWorkspace(workspaceId)
-      // Marker only after a clean pass — a thrown/interrupted re-scan leaves it
-      // unset so the next open retries (drainSyncWorkspace is resumable + idempotent).
-      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [key])
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[reconcileRescan] workspace ${workspaceId} failed (will retry next open): ${reason}`)
@@ -4697,6 +4974,13 @@ export class Repo {
     await this.processorRunner.awaitIdle()
   }
 
+  /** Drop every `delayMs` post-commit job whose timer has not fired, so it
+   *  never runs. For a harness discarding this Repo and its db
+   *  (`releaseTestRepos`); the dropped work is skipped, not deferred. */
+  cancelDelayedProcessors(): void {
+    this.processorRunner.cancelArmed()
+  }
+
   /** Wait until every reprojection whose deferral timer has already
    *  fired has finished writing. Like `awaitProcessors()`, this does
    *  NOT advance timers — a reprojection only enters the pending set
@@ -4737,7 +5021,8 @@ export class Repo {
    *  NOT a fixed point across families, and NOT a cancel. Like its members it
    *  does not advance timers: work whose deferral timer has not fired is not
    *  pending yet, so an armed `delayMs` processor or idle callback survives
-   *  this (#892 — cancelling one needs a handle neither framework keeps). Nor
+   *  this. `cancelDelayedProcessors` drops the former; an armed idle callback
+   *  has no handle to cancel through (#892). Nor
    *  does it wait out a job PARKED on a signal only the outside world can send
    *  (`PendingIdleJobs.drain`) — the seed pass parks on the `workspace_members`
    *  row, which in a fixture never arrives, so awaiting it would be a hang. */
@@ -4773,7 +5058,11 @@ export class Repo {
    *  Throws `MutatorNotRegisteredError` if neither matches.
    *  `groupId` (from an `undoGroup` facade) stamps the dispatched tx so
    *  it merges into the group's undo entry. */
-  private dispatchMutator(name: string, groupId?: string): (args: unknown) => Promise<unknown> {
+  private dispatchMutator(
+    name: string,
+    groupId?: string,
+    options: RunOptions = {},
+  ): (args: unknown) => Promise<unknown> {
     return async (args: unknown) => {
       const m = this.mutators.get(name) ?? this.mutators.get(`core.${name}`)
       if (!m) throw new MutatorNotRegisteredError(name)
@@ -4781,7 +5070,7 @@ export class Repo {
       const scope = typeof m.scope === 'function' ? m.scope(validated) : m.scope
       return this.tx(tx => tx.run(m, validated) as Promise<unknown>, {
         scope,
-        description: m.describe?.(validated),
+        description: options.description ?? m.describe?.(validated),
         groupId,
       })
     }
@@ -4872,7 +5161,10 @@ export class Repo {
    *  query's `resolve` with a `QueryCtx` that forwards `depend` to the
    *  handle's `ResolveContext` and exposes `db` / `repo` /
    *  `hydrateBlocks`. */
-  private dispatchQuery(name: string): (args: unknown) => LoaderHandle<unknown> {
+  private dispatchQuery(
+    name: string,
+    snapshot?: {registry: ReadonlyMap<string, AnyQuery>; cacheScope: string},
+  ): (args: unknown) => LoaderHandle<unknown> {
     return (args: unknown) => {
       // Capture the registry snapshot for this handle. The loader (and
       // every `ctx.run` beneath it) resolves against THIS map, so the
@@ -4881,7 +5173,7 @@ export class Repo {
       // the factory on first create, so an existing handle keeps the
       // registry captured at ITS creation — re-keying via the bumped epoch
       // is what binds the next lookup to a new snapshot.
-      const registry = this.queries
+      const registry = snapshot?.registry ?? this.queries
       const q = registry.get(name) ?? registry.get(`core.${name}`)
       if (!q) throw new QueryNotRegisteredError(name)
       const validated = q.argsSchema.parse(args) as never
@@ -4893,7 +5185,7 @@ export class Repo {
       // produces a distinct handle slot for the NEXT lookup of every
       // query — old handles keep serving their captured snapshot and GC
       // once subscribers detach; fresh lookups bind to the new registry.
-      const key = handleKey(`query:${fullName}@${this.queryEpoch}`, validated)
+      const key = handleKey(`query:${fullName}@${snapshot?.cacheScope ?? this.queryEpoch}`, validated)
       return this.handleStore.getOrCreate(key, () => new LoaderHandle({
         store: this.handleStore,
         key,

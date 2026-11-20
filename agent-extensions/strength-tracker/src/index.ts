@@ -4,13 +4,15 @@
  *  A session is ordinary blocks in your daily note, logged by ticking the
  *  built-in todo checkboxes, and what this contributes is:
  *
- *   - the block schema (workout / exercise-entry / layoff / settings types
- *     and their properties), so a logged session is plain queryable data;
+ *   - the block schema (workout / exercise-entry / layoff / settings /
+ *     assessment types and their properties), so a logged session is plain
+ *     queryable data;
  *   - decorations on those blocks — the prescription line under a lift, tap
  *     controls on a set, the tally and Finish under a workout — all computed
  *     from what the blocks say, none of them holding state of their own;
- *   - one action that creates anything: "start a session", which asks what
- *     tonight is and then stamps it;
+ *   - two gestures that create anything: "start a session", which asks what
+ *     tonight is and then stamps it, and the log page's "Log an assessment",
+ *     which stamps the quarterly battery as one result block per test;
  *   - a history renderer for the Strength Log page.
  *
  *  The progression engine and the plan parser are pure and unit-tested; this

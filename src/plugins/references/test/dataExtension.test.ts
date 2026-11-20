@@ -107,10 +107,7 @@ describe('referencesPlugin', () => {
   it('owns reference markdown syntax and CodeMirror completions', () => {
     const runtime = resolveFacetRuntimeSync(referencesPlugin)
 
-    expect(runtime.contributions(markdownExtensionsFacet).map(c => c.source)).toEqual([
-      'references',
-      'references',
-    ])
+    expect(runtime.contributions(markdownExtensionsFacet).map(c => c.source)).toEqual(['references'])
     expect(runtime.contributions(codeMirrorExtensionsFacet).map(c => c.source)).toEqual(['references'])
   })
 })

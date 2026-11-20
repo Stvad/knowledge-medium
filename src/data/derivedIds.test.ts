@@ -21,7 +21,7 @@
 import { describe, expect, it } from 'vitest'
 import { v5 as uuidv5 } from 'uuid'
 
-import { derivedBlockId } from './derivedIds'
+import { derivedBlockId, propertyChildBlockId } from './derivedIds'
 import { kernelPageBlockId } from './kernelPage'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -29,13 +29,14 @@ import { recentsPageBlockId } from './recentsPage'
 import { propertyDefinitionBlockId, typeDefinitionBlockId } from './definitionSeeds'
 import { synthesizedPropertyDefinitionBlockId } from './internals/propertyDefinitionSynthesis'
 import { computeAliasSeatId } from './targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { stateChildBlockId, userPageBlockId } from './stateBlocks'
 import { locationsPageBlockId } from '@/plugins/geo/locationsPage'
 import { reviewDeckBlockId } from '@/plugins/srs-review/deck'
 import { ASSETS_NS } from '@/plugins/attachments/mediaBlock'
 import { pluginBlockId } from '@/extensions/pluginIds'
-import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes'
-import { roamBlockId } from '@/plugins/roam-import/ids'
+import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { roamBlockId } from '@/plugins/roam-import/blockIds'
 import { mediaBlockId } from '@/plugins/attachments/mediaCapture'
 import { shortcutsBlockId, journalShortcutBlockId } from '@/plugins/left-sidebar/shortcuts'
 
@@ -157,9 +158,9 @@ describe('the ids live rows are already at', () => {
 
   it('alias seats, at every probe slot', () => {
     const aliasNs = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
-    expect(computeAliasSeatId('Some Page', WS))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', WS))
       .toBe(uuidv5(`${WS}:Some Page:0`, aliasNs))
-    expect(computeAliasSeatId('Some Page', WS, 3))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', WS, 3))
       .toBe(uuidv5(`${WS}:Some Page:3`, aliasNs))
   })
 
@@ -198,6 +199,36 @@ describe('the ids live rows are already at', () => {
 })
 
 /**
+ * Property field rows and value children (§9). Pinned as hard-coded ids, not
+ * recomputed: a literal is the strongest pin, and the plaintext namespace is
+ * spelled out once more in `propertyChildMint.test.ts`, which also pins the
+ * sealed one. A change here re-points every machinery row minted since.
+ */
+describe('property machinery rows', () => {
+  const PLAINTEXT_PROPERTY_CHILD_NS = '4ddc11ad-ce83-4be7-813e-660f882e676d'
+  const OWNER = '0b9d2c41-6a3e-4f58-9c71-2d4e6f8a0b13'
+  const FIELD = '7e1f3a52-8c4d-4b69-a0e2-3f5a7c9e1d24'
+  const FIELD_ROW = '5c2e4a63-9d5f-4c7a-b1f3-4a6c8e0f2b35'
+
+  it('a field row, from (workspace, owner, definition)', () => {
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS, OWNER, {kind: 'field', fieldId: FIELD}))
+      .toBe('1f8652eb-7048-5e2a-9f8c-1d9065b1f2b9')
+  })
+
+  it('a scalar value, from (workspace, field row, occurrence 0, value key)', () => {
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS, FIELD_ROW,
+      {kind: 'value', occurrence: 0, valueKey: 'cdone'}))
+      .toBe('ee995d10-bc86-54ac-be63-54ea30e0ab2b')
+  })
+
+  it('a list member, from (workspace, field row, occurrence, value key)', () => {
+    expect(propertyChildBlockId(PLAINTEXT_PROPERTY_CHILD_NS, WS, FIELD_ROW,
+      {kind: 'value', occurrence: 1, valueKey: 'v"blue"'}))
+      .toBe('f78f97bc-8613-5694-b4e6-a355a9bde35d')
+  })
+})
+
+/**
  * Workspace scoping is the invariant most likely to be dropped by a refactor
  * that "simplifies" a key, and it fails quietly: the two workspaces don't
  * collide until both exist on one device, and then one finds its block already
@@ -211,8 +242,8 @@ describe('workspace scoping', () => {
     expect(roamBlockId(WS, 'abc123')).not.toBe(roamBlockId(OTHER_WS, 'abc123'))
     expect(mediaBlockId(WS, 'sha256-deadbeef'))
       .not.toBe(mediaBlockId(OTHER_WS, 'sha256-deadbeef'))
-    expect(computeAliasSeatId('Some Page', WS))
-      .not.toBe(computeAliasSeatId('Some Page', OTHER_WS))
+    expect(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', WS))
+      .not.toBe(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Some Page', OTHER_WS))
     expect(propertyDefinitionBlockId(WS, 'system:kernel-data/property/show-properties'))
       .not.toBe(propertyDefinitionBlockId(OTHER_WS, 'system:kernel-data/property/show-properties'))
     expect(synthesizedPropertyDefinitionBlockId(PLAINTEXT_SYNTHESIZED_NS, WS, 'demo:orphan'))

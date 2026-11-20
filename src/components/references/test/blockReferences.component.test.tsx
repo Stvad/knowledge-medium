@@ -1,15 +1,21 @@
-// @vitest-environment happy-dom
+// @vitest-environment jsdom
+// CodeMirror needs selectionchange delivered after its DOM update; happy-dom
+// dispatches it synchronously from Selection.collapse.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
 import type { ReactNode } from 'react'
+import { BlockComponent } from '@/components/BlockComponent'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   focusedBlockLocationProp,
+  focusBlock,
   isEditingProp,
+  propertyNameProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
@@ -31,14 +37,20 @@ import { blockRenderersFacet } from '@/extensions/core'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
+import { defaultActionContextsExtension } from '@/shortcuts/defaultShortcuts'
 import type { Block } from '@/data/block'
 import type { BlockRenderer, BlockRendererProps } from '@/types'
 import { BlockRefAncestorsProvider } from '../cycleGuard'
 import { BlockRef } from '../BlockRef'
 import { BlockEmbed } from '../BlockEmbed'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
+import { markdownExtensionsFacet } from '@/markdown/extensions'
+import { referencesMarkdownExtension } from '@/plugins/references/markdown/index.ts'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
+
+vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1'})}))
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -49,7 +61,6 @@ vi.mock('@/context/repo.tsx', () => ({
 
 vi.mock('@/data/globalState.ts', async () => {
   const actual = await vi.importActual<typeof import('@/data/globalState.js')>('@/data/globalState.ts')
-  const properties = await vi.importActual<typeof import('@/data/properties')>('@/data/properties')
 
   const uiStateBlock = () => {
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
@@ -66,11 +77,6 @@ vi.mock('@/data/globalState.ts', async () => {
         (value: T) => { void block.set(schema, value) },
       ]
     },
-    useInFocus: (blockId: string): boolean =>
-      properties.isFocusedBlock(uiStateBlock(), blockId),
-    useInEditMode: (blockId: string): boolean =>
-      properties.isFocusedBlock(uiStateBlock(), blockId) &&
-      Boolean(uiStateBlock().peekProperty(properties.isEditingProp)),
     useIsSelected: (): boolean => false,
   }
 })
@@ -109,6 +115,7 @@ const extensions = [
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultEditorInteractionExtension,
+  defaultActionContextsExtension,
   defaultRenderersExtension,
   plainOutlinerPlugin,
   blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
@@ -118,33 +125,29 @@ const extensions = [
     return null
   }, {source: 'test-spy'}),
   blockRenderersFacet.of({id: 'marker', renderer: MarkerRenderer}, {source: 'test-spy'}),
+  markdownExtensionsFacet.of(referencesMarkdownExtension, {source: 'references'}),
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {
   let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
-  let originalMatchMedia: typeof window.matchMedia
 
   beforeAll(async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {configurable: true, value: vi.fn()})
+    Object.assign(Range.prototype, {
+      getClientRects: () => [],
+      getBoundingClientRect: () => new DOMRect(),
+    })
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: false, media: query, addEventListener: () => {}, removeEventListener: () => {},
+      addListener: () => {}, removeListener: () => {},
+    }))
     sharedDb = await createTestDb()
-    // jsdom lacks matchMedia; the embed renders the full default layout, whose
-    // controls call `useIsMobile()` → `matchMedia`. Stub desktop (no match).
-    originalMatchMedia = window.matchMedia
-    window.matchMedia = ((query: string) => ({
-      matches: false,
-      media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      addListener: () => {},
-      removeListener: () => {},
-      onchange: null,
-      dispatchEvent: () => false,
-    })) as unknown as typeof window.matchMedia
   })
   afterAll(async () => {
-    window.matchMedia = originalMatchMedia
     await sharedDb.cleanup()
+    vi.unstubAllGlobals()
   })
 
   beforeEach(async () => {
@@ -197,7 +200,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
   const renderInSource = (node: ReactNode) =>
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'source'}}>
+        <BlockContextProvider initialValue={{panelId: 'ui-state', scopeRootId: 'source'}}>
           <ActiveContextsProvider>
             {node}
           </ActiveContextsProvider>
@@ -221,6 +224,40 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(content.closest('.block-content')).toBeNull()
     expect(document.body.querySelector('[data-editing]')).toBeNull()
     expect(document.body.querySelector('textarea, [contenteditable="true"], .cm-editor')).toBeNull()
+  })
+
+  it('cites a property schema by its current name and opens its editor on click', async () => {
+    const schemaId = '22222222-2222-4222-8222-222222222222'
+    await repo.tx(async tx => {
+      await tx.create({
+        id: schemaId, workspaceId: 'ws-1', parentId: null, orderKey: 'b0',
+        content: 'Schema block body',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': 'delivery-date',
+          'property-schema:preset': 'string',
+        },
+      })
+      await tx.update('source', {content: `The ((${schemaId})) property`})
+    }, {scope: ChangeScope.BlockDefault, description: 'create property schema reference'})
+
+    renderInSource(<MarkdownContentRenderer block={repo.block('source')}/>)
+    const link = await screen.findByRole('link')
+    expect(link).toHaveTextContent(/^delivery-date$/)
+    expect(link.querySelector('a, input, select, textarea, button, [contenteditable="true"]')).toBeNull()
+
+    await act(() => repo.block(schemaId).set(propertyNameProp, 'ship-date'))
+    expect(await screen.findByRole('link', {name: 'ship-date'})).toBe(link)
+
+    const panel = repo.block('ui-state')
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('source')
+    fireEvent.click(link)
+    await waitFor(() => expect(panel.peekProperty(topLevelBlockIdProp)).toBe(schemaId))
+
+    cleanup()
+    renderInSource(<BlockComponent blockId={schemaId}/>)
+    expect(await screen.findByPlaceholderText('property name')).toHaveValue('ship-date')
+    expect(screen.getByRole('button', {name: 'Delete schema'})).toBeEnabled()
   })
 
   it('renders an alias as a link WITHOUT mounting the target', async () => {
@@ -255,6 +292,19 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       expect(document.querySelector('.blockref--unresolved')).toBeTruthy()
     })
     expect(screen.getByText(/missing-/)).toBeTruthy()
+  })
+
+  it('marks a reference as missing only once its target is confirmed missing, not while it loads', async () => {
+    renderInSource(<BlockRef blockId="missing-block" sourceBlockId="source" occurrenceId="occ-1"/>)
+    await waitFor(() => expect(document.querySelector('.blockref--missing')).toBeTruthy())
+    cleanup()
+
+    // In the db but not the cache: the first render is still loading.
+    repo.cache.deleteSnapshot('target')
+    renderInSource(<BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>)
+    expect(document.querySelector('.blockref--unresolved')).toBeTruthy()
+    expect(document.querySelector('.blockref--missing')).toBeNull()
+    await screen.findByText('Hello world')
   })
 
   it('does NOT become editable when the target block is in edit mode elsewhere', async () => {
@@ -309,7 +359,7 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     // not inherit the reference layout (inline raw content, no shell).
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'source', isReference: true, isNestedSurface: true}}>
+        <BlockContextProvider initialValue={{panelId: 'ui-state', scopeRootId: 'source', isReference: true, isNestedSurface: true}}>
           <ActiveContextsProvider>
             <BlockEmbed blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>
           </ActiveContextsProvider>
@@ -348,6 +398,96 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(marker.closest('a.blockref')).toBeTruthy()
     // ...NOT the raw markdown content string the old BlockRef hardcoded.
     expect(screen.queryByText('plain markdown body')).toBeNull()
+  })
+
+  it.each(['append', 'prepend'] as const)('a %s edit to the source block keeps the references in its content mounted', async placement => {
+    const embedded = '22222222-2222-4222-8222-222222222222'
+    const content = `see !((${embedded})) and ((${embedded})) and ![[Target]] and [[Target]]`
+    await repo.tx(async tx => {
+      await tx.create({
+        id: embedded, workspaceId: 'ws-1', parentId: null, orderKey: 'b0', content: 'Embedded body',
+      })
+      await tx.create({
+        id: 'embedded-child', workspaceId: 'ws-1', parentId: embedded, orderKey: 'a0', content: 'Child content',
+      })
+      await tx.create({
+        id: 'host', workspaceId: 'ws-1', parentId: null, orderKey: 'b1', content,
+        references: [{id: 'target', alias: 'Target'}],
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create host'})
+    const host = repo.block('host')
+    await host.load()
+    renderInSource(<MarkdownContentRenderer block={host}/>)
+
+    const embeds = await waitFor(() => {
+      const found = [...document.querySelectorAll('.blockembed')]
+      expect(found).toHaveLength(2)
+      return found
+    })
+    const ref = document.querySelector('a.blockref')!
+    const wikilink = document.querySelector('a.wikilink')!
+    expect(ref).toBeTruthy()
+    expect(wikilink).toBeTruthy()
+    const embeddedChildren = await waitFor(() => {
+      const found = screen.getAllByText('Child content')
+      expect(found).toHaveLength(2)
+      return found.map(element => element.closest('[data-block-shell]')!)
+    })
+    expect(ref.textContent).toContain('Embedded body')
+
+    await repo.tx(async tx => {
+      await tx.update('host', {content: placement === 'append' ? `${content} edited` : `edited ${content}`})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit host'})
+    await screen.findByText(/edited/)
+
+    expect([...embeds, ref, wikilink, ...embeddedChildren].map(el => el.isConnected))
+      .toEqual([true, true, true, true, true, true])
+  })
+
+  it.each(['page', 'block'] as const)('an embedded editor keeps edit mode, focus and caret after a prepend (%s embed)', async kind => {
+    const embedded = '22222222-2222-4222-8222-222222222222'
+    const content = kind === 'page' ? 'see ![[Target]]' : `see !((${embedded}))`
+    const prefix = kind === 'page' ? 'prepended' : `![[Other !((${embedded}))]] prepended`
+    await repo.tx(async tx => {
+      await tx.create({id: embedded, workspaceId: 'ws-1', parentId: null, orderKey: 'b0', content: 'Embedded body'})
+      await tx.create({id: 'embedded-child', workspaceId: 'ws-1', parentId: embedded, orderKey: 'a0', content: 'Child content'})
+      await tx.update('source', {content, references: [{id: embedded, alias: 'Target'}]})
+    }, {scope: ChangeScope.BlockDefault, description: 'create editable embed'})
+    const host = repo.block('source')
+    await host.load()
+    renderInSource(<MarkdownContentRenderer block={host}/>)
+    const rowSelector = '.blockembed [data-block-id="embedded-child"][data-editing]'
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(rowSelector)
+      expect(found).not.toBeNull()
+      return found!
+    })
+    await act(() => focusBlock(repo.block('ui-state'), 'embedded-child', {
+      edit: true, renderScopeId: row.dataset.renderScopeId,
+    }))
+    const editor = await waitFor(() => {
+      const editingRow = document.querySelector<HTMLElement>(rowSelector)
+      const found = editingRow?.querySelector<HTMLElement>('.cm-editor')
+      expect(found).not.toBeNull()
+      expect(editingRow?.dataset.editing).toBe('true')
+      return EditorView.findFromDOM(found!)!
+    })
+    expect(editor.state.doc.toString()).toBe('Child content')
+    act(() => {
+      editor.dispatch({selection: {anchor: 4}})
+      editor.focus()
+    })
+    expect(document.activeElement).toBe(editor.contentDOM)
+
+    await act(() => repo.tx(async tx => {
+      await tx.update('source', {content: `${prefix} ${content}`})
+    }, {scope: ChangeScope.BlockDefault, description: 'prepend host text'}))
+    await screen.findByText(/prepended/)
+
+    expect(document.querySelector<HTMLElement>(rowSelector)?.dataset.editing).toBe('true')
+    expect(editor.dom.isConnected).toBe(true)
+    expect(document.activeElement).toBe(editor.contentDOM)
+    expect(editor.state.selection.main.anchor).toBe(4)
   })
 
   it('an embed runs the interactive shell (decorators + shortcut activations)', async () => {

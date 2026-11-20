@@ -18,7 +18,8 @@ export interface SyncStatusDb {
  *  currently BEHIND the server, as opposed to whether it has ever synced. */
 interface SettleStatus {
   connected?: boolean
-  dataFlowStatus?: { downloading?: boolean; downloadError?: unknown }
+  downloading?: boolean
+  downloadError?: unknown
 }
 
 interface SettleStatusDb {
@@ -33,8 +34,8 @@ interface SettleStatusDb {
  *  direction that matters. */
 const isSettled = (s: SettleStatus | undefined): boolean =>
   s?.connected === true
-  && s.dataFlowStatus?.downloading !== true
-  && s.dataFlowStatus?.downloadError == null
+  && s.downloading !== true
+  && s.downloadError == null
 
 /**
  * Run `cb` once this device's download queue looks drained — connected, with

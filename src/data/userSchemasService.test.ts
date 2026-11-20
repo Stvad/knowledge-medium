@@ -34,6 +34,7 @@ import {
   type UserSchemasService,
 } from './userSchemasService'
 import { Repo } from './repo'
+import { waitFor } from '@/test/waitFor'
 
 const WS = 'ws-user-schemas'
 const SUBSCRIPTION_TIMEOUT_MS = 3_000
@@ -196,6 +197,68 @@ describe('UserSchemasService.addSchema', () => {
     expect(tx).toHaveBeenCalled()
   })
 
+  it('persists schemas through its bound Repo host', async () => {
+    env = await setup()
+    const tx = vi.spyOn(env.repo, 'tx')
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+
+    await bound.userSchemas.addSchema({name: 'bound-schema', presetId: 'string'})
+
+    expect(tx).toHaveBeenCalledTimes(1)
+    const regularOptions = tx.mock.calls[0]?.[1]
+    expect(regularOptions?.context).toEqual({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+  })
+
+  it('keeps schema writes context-bound inside undoGroup facades', async () => {
+    env = await setup()
+    const tx = vi.spyOn(env.repo, 'tx')
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+
+    await bound.undoGroup(grouped =>
+      grouped.userSchemas.addSchema({name: 'grouped-bound-schema', presetId: 'string'}),
+    )
+
+    expect(tx).toHaveBeenCalledTimes(1)
+    const groupedOptions = tx.mock.calls[0]?.[1]
+    expect(groupedOptions?.context).toEqual({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+    expect(groupedOptions?.groupId).toEqual(expect.any(String))
+  })
+
+  it('shares same-name reservations between the Repo service and bound views', async () => {
+    env = await setup()
+    let release!: () => void
+    const primed = new Promise<void>(resolve => { release = resolve })
+    const handle = env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!
+    vi.spyOn(handle, 'whenPrimed').mockReturnValueOnce(primed)
+
+    const bound = env.repo.withTxContext({
+      contributorId: 'agent-schema-writer',
+      contributorSource: 'agent',
+    })
+    const first = bound.userSchemas.addSchema({name: 'shared-reservation', presetId: 'string'})
+    try {
+      await expect(env.service.addSchema({name: 'shared-reservation', presetId: 'string'}))
+        .rejects.toThrow('already being created')
+    } finally {
+      release()
+    }
+    await expect(first).resolves.toMatchObject({name: 'shared-reservation'})
+    expect(env.repo.propertyDefinitions?.definitionsByName.get('shared-reservation'))
+      .toHaveLength(1)
+  })
+
   it('rejects concurrent same-name creation before either call can persist', async () => {
     env = await setup()
     let release!: () => void
@@ -281,7 +344,7 @@ describe('UserSchemasService subscription', () => {
     env = await setup()
     // Add the schema block directly through a tx (simulates a sync arrival).
     await createExternalSchemaBlock('tags')
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get('tags')?.codec.type).toBe('string')
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
@@ -305,7 +368,7 @@ describe('UserSchemasService subscription', () => {
     // valuePresets-change -> rebuild chain does NOT settle synchronously
     // within setRuntimeContributions (it flakes under full-suite load), so
     // poll for the resolved schema.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
@@ -322,7 +385,7 @@ describe('UserSchemasService subscription', () => {
       },
     )
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertyDefinitions?.definitionsByFieldId.get(id)).toMatchObject({
         fieldId: id,
         workspaceId: WS,
@@ -354,7 +417,7 @@ describe('UserSchemasService subscription', () => {
       [malformedPresetId, 'bad:preset'],
       [throwingBuildId, 'bad:build'],
     ] as const) {
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(env.repo.propertyDefinitions?.definitionsByFieldId.get(id)?.name).toBe(name)
       }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
       expect(env.repo.propertySchemas.has(name)).toBe(false)
@@ -374,7 +437,7 @@ describe('UserSchemasService subscription', () => {
       {[propertyDefaultProp.name]: {not: 'a string'}},
     )
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get('bad:default')).toMatchObject({
         changeScope: ChangeScope.BlockDefault,
         defaultValue: '',
@@ -390,7 +453,7 @@ describe('UserSchemasService subscription', () => {
       [propertyDefaultProp.name]: 'from-definition',
     })
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get('scoped:title')).toMatchObject({
         changeScope: ChangeScope.UserPrefs,
         defaultValue: 'from-definition',
@@ -421,7 +484,7 @@ describe('UserSchemasService subscription', () => {
     env = await setup([normalizingPreset])
     await createExternalSchemaBlock(declaration.name, normalizingPreset.id)
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get(declaration.name)?.defaultValue)
         .toBe(declaration.defaultValue)
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
@@ -454,7 +517,7 @@ describe('UserSchemasService subscription', () => {
       }, {scope: ChangeScope.Automation})
     })
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemaResolverFor(WS).resolve('fallback:title')).toEqual({
         status: 'resolved',
         schema: expect.objectContaining({
@@ -509,7 +572,7 @@ describe('UserSchemasService subscription', () => {
     await env.service.addSchema({name: 'ambient-copy', presetId: 'string'})
     const captured = env.repo.propertySchemas.get('ambient-copy')!
     await env.service.addSchema({name: 'unrelated', presetId: 'string'})
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get('ambient-copy')).not.toBe(captured)
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
@@ -557,7 +620,7 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
     // waitForPropertySchemasChange resolves on the first change event, which
     // under full-suite load can precede the rebuild that registers this
     // schema. Poll the reverse-map rather than reading it synchronously.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const resolved = env.service.getSchemaForBlockId(id)
       expect(resolved?.name).toBe('tags')
       expect(resolved?.codec.type).toBe('string')
@@ -574,7 +637,7 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
     const winnerId = await createExternalSchemaBlock('collision', 'url')
     const loserId = await createExternalSchemaBlock('collision', 'number')
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const definitions = env.repo.propertyDefinitions
       expect(definitions?.definitionsByName.get('collision')?.map(({fieldId}) => fieldId))
         .toEqual([winnerId, loserId])
@@ -618,7 +681,7 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
         [seed],
       )
       await materializePropertySeeds(env.repo, WS, [seed])
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const definitions = env.repo.propertyDefinitions
         expect(definitions?.definitionsByName.get(seed.name)?.[0]?.fieldId).toBe(fieldId)
         expect(definitions?.definitionsByFieldId.get(fieldId)?.seedKey).toBe(seed.seedKey)
@@ -643,7 +706,7 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
   it('drops the reverse-map entry when a block stops resolving to a schema', async () => {
     env = await setup()
     const id = await createExternalSchemaBlock('tags')
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
@@ -655,7 +718,7 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
       }, {scope: ChangeScope.BlockDefault})
     })
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
@@ -671,7 +734,7 @@ describe('UserSchemasService workspace switch', () => {
     expect(env.repo.propertySchemas.get('workspace-only')).toBeUndefined()
 
     env.repo.setActiveWorkspaceId(WS)
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.propertySchemas.get('workspace-only')?.codec.type).toBe('url')
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
@@ -711,7 +774,7 @@ describe('UserSchemasService workspace switch', () => {
     })
 
     const pending = env.service.addSchema({name: 'late-switch', presetId: 'url'})
-    await vi.waitFor(() => { expect(tx).toHaveBeenCalled() })
+    await waitFor(() => { expect(tx).toHaveBeenCalled() })
     env.repo.setActiveWorkspaceId('ws-user-schemas-2')
     env.repo.setActiveWorkspaceId(WS)
     const claimant = seedProperty({
@@ -753,7 +816,7 @@ describe('UserSchemasService workspace switch', () => {
     })
 
     const pending = env.service.addSchema({name: 'late-seed', presetId: 'url'})
-    await vi.waitFor(() => { expect(tx).toHaveBeenCalled() })
+    await waitFor(() => { expect(tx).toHaveBeenCalled() })
     const claimant = seedProperty({
       seedKey: 'system:test-plugin/property/late-seed',
       revision: 1,

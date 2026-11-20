@@ -25,7 +25,7 @@
  * every one built in a `beforeEach` or in a helper those call. A Repo built in
  * `beforeAll` or at module scope is deliberately left alone: it exists to be
  * shared across the file, and releasing it after the first test would break
- * that. Such a file releases its own Repo in `afterAll`, before the db closes.
+ * that. Such a file must release its own Repo in `afterAll`, before the db closes.
  *
  * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
  * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
@@ -48,12 +48,14 @@
  * fresh `newId`/`newTxSeq` counters (both restart at `gen-1` / 1). Two Repos
  * sharing one db in the same test will therefore mint COLLIDING block ids and
  * tx-seqs. A two-device/convergence test must give at least one Repo distinct
- * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts).
+ * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts),
+ * or pass `appGenerators: true` for the app's own.
  * Tx ids are the exception: `Repo` mints those as uuids independently of
  * `newId` (#866), so no arrangement of Repos can collide on the
  * `command_events.tx_id` primary key.
  */
 
+import type { BlockData } from '@/data/api'
 import type { User } from '@/data/api/user.js'
 import { BlockCache } from '@/data/blockCache'
 import type { BackfillCompletionClaim } from '@/data/facets'
@@ -88,6 +90,11 @@ export interface CreateTestRepoOptions {
   backfillCompletionClaim?: BackfillCompletionClaim
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
+  /** The app's generators and id contract instead of the test defaults:
+   *  wall-clock `now`, uuid ids, a clock-seeded tx seq, canonical ids. For a
+   *  harness that runs the app rather than asserting on ids. Wins over the
+   *  four options below. */
+  appGenerators?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
    *  timestamps, ids, and tx-seqs are stable and ordered across a test. */
   now?: () => number
@@ -115,6 +122,14 @@ export const isBlockDeleted = async (repo: Repo, id: string): Promise<boolean> =
   return row?.deleted === 1
 }
 
+/** A block's children as the outline's hide-all-properties view lists them
+ *  (mode `none`): what most tests mean by "its children". */
+export const childIdsOf = (repo: Repo, id: string): Promise<string[]> =>
+  repo.query.childIds({id, propertyChildren: 'none'}).load()
+
+export const childrenOf = (repo: Repo, id: string): Promise<BlockData[]> =>
+  repo.query.children({id, propertyChildren: 'none'}).load()
+
 export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
   const cache = new BlockCache()
   let timeCursor = 1_700_000_000_000
@@ -124,11 +139,13 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     db: opts.db,
     cache,
     user: opts.user ?? { id: 'test-user' },
-    now: opts.now ?? (() => ++timeCursor),
-    newId: opts.newId ?? (() => `gen-${++idCursor}`),
-    // See the MNEMONIC IDS note in the module doc.
-    blockIdPolicy: opts.blockIdPolicy ?? 'any',
-    newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
+    ...(opts.appGenerators ? {} : {
+      now: opts.now ?? (() => ++timeCursor),
+      newId: opts.newId ?? (() => `gen-${++idCursor}`),
+      // See the MNEMONIC IDS note in the module doc.
+      blockIdPolicy: opts.blockIdPolicy ?? 'any',
+      newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
+    }),
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
     syncObserverDeps: opts.syncObserverDeps,
@@ -145,6 +162,7 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     // `in` rather than `??` so a test can pass `undefined` to mean "none
     // configured" and exercise the refusal, instead of silently getting the stub.
     backfillCompletionClaim: 'backfillCompletionClaim' in opts ? opts.backfillCompletionClaim : {
+      stillOwned: async () => true,
       // `reclaimCompleted` mirrors the production claim: a recorded completion
       // stops an unattended pass, never a human who asked for one. A stub that
       // ignored it made every operator re-run read as "already done", which is

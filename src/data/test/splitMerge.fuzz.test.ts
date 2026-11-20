@@ -191,7 +191,6 @@ const seedRoot = async (repo: Repo): Promise<void> => {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 

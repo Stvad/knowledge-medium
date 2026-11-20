@@ -152,22 +152,24 @@ const trendRegression = (
   }
 }
 
-/** The sessions a per-query comparison reads, in the two roles it reads them
- *  as. Named once: the caveat reports on exactly what the comparison consumed,
- *  and a second copy of this slicing is how the two would come to disagree
- *  about which samples were involved. */
-const comparisonWindows = <T>(history: readonly T[]): {
-  recentPast: readonly T[]
-  baselineSessions: readonly T[]
-} => ({
-  recentPast: history.slice(0, RECENT_WINDOW - 1),
-  baselineSessions: baselineWindow(history),
-})
-
-/** Entries used as BASELINE from a newest-first history. The leading entries
- *  are consumed smoothing "current", so describing the baseline must derive from this same slice. */
-export const baselineWindow = <T>(history: readonly T[]): readonly T[] =>
-  history.slice(RECENT_WINDOW - 1)
+/** The samples a comparison reads from a newest-first history, in the two roles
+ *  it reads them as: the latest ones smoothing the current reading, the rest as
+ *  baseline. Every comparison, and the caveat, windows through this; a second
+ *  copy of the slicing is how they would come to disagree about what was read.
+ *
+ *  Filtered BEFORE windowing: a session with no usable sample is routine — an
+ *  idle session for fan-out, a query that never ran uncontended, a boot hidden
+ *  until paint — and sliced first, one among the latest leaves the recent side
+ *  short and the metric unjudged for the sessions after it. Within the loaded
+ *  history only: reaching past `HISTORY_LIMIT` for more usable sessions would
+ *  judge against builds the recency cap exists to drop. */
+const comparisonWindows = <T, S>(
+  history: readonly T[],
+  sampleOf: (r: T) => S | null,
+): { recentPast: S[]; baseline: S[] } => {
+  const samples = history.map(sampleOf).filter((s): s is S => s !== null)
+  return { recentPast: samples.slice(0, RECENT_WINDOW - 1), baseline: samples.slice(RECENT_WINDOW - 1) }
+}
 
 /** A series is READY when at least one metric could be judged — row count alone isn't readiness; some rows carry no usable sample. */
 export const anyJudged = (results: readonly TrendResult[]): boolean =>
@@ -247,7 +249,6 @@ export const queryRegressions = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): QueryComparison => {
-  const { recentPast, baselineSessions } = comparisonWindows(history)
   const results: TrendResult[] = []
   const clusteredTail: string[] = []
   /** Current queries the comparison could not judge. KEPT, not dropped: see below. */
@@ -257,27 +258,22 @@ export const queryRegressions = (
     // `trendRegression` after the recent median, so one fast session can't drop a sustainably-regressed query.
     const currentSamples = comparableSamples(sample)
     if (currentSamples === null) { skipped.push(sample); continue }
-    // ONE statement of which sessions carry a usable sample for this query,
-    // read by both the comparison and the caveat below.
-    const sampleIn = (r: InteractionComparable) => comparableSamples(r.queries[name])
-    const measured = (r: InteractionComparable): number | null => sampleIn(r)?.p95Ms ?? null
-    const recent = [currentSamples.p95Ms, ...recentPast.map(measured).filter((v): v is number => v !== null)]
-    const baseline = baselineSessions.map(measured).filter((v): v is number => v !== null)
+    // ONE read of this query's samples, shared by the comparison and the caveat below.
+    const { recentPast, baseline } = comparisonWindows(history, (r) => comparableSamples(r.queries[name]))
     const result = trendRegression(
       // The label says WHICH p95: this is the query measured with no queue to
       // be in, which is a smaller number than the wall-clock the same session
       // stores and than what a user waited. Reading one as the other is the
       // confusion the whole change exists to end.
       { metric: `query:${name}`, label: `${name} p95 (uncontended)`, unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
-      recent,
-      baseline,
+      [currentSamples.p95Ms, ...recentPast.map((u) => u.p95Ms)],
+      baseline.map((u) => u.p95Ms),
     )
     results.push(result)
     // Only a comparison that reached a verdict can be qualified: telling a
     // reader to distrust a trend that was never produced points at nothing.
-    const consumed = [currentSamples, ...[...recentPast, ...baselineSessions].map(sampleIn)]
-    if (result.status !== 'insufficient' &&
-        consumed.some((q) => q !== null && hasClusteredTail(q))) {
+    const consumed = [currentSamples, ...recentPast, ...baseline]
+    if (result.status !== 'insufficient' && consumed.some((u) => hasClusteredTail(u))) {
       clusteredTail.push(name)
     }
   }
@@ -317,7 +313,7 @@ export const queryRegressions = (
 /** The costliest query in a session, by the p95 the comparison actually reads:
  *  the one measured with the DB connection pool free.
  *
- *  Lives HERE, beside `invalidationsPerWrite`, for that function's reason: a
+ *  Lives HERE, beside `reResolvesPerWrite`, for that function's reason: a
  *  table charting a different number than the alarm fires on is worse than no
  *  table, and two definitions of "the slowest query" is how they would come to
  *  differ.
@@ -344,27 +340,47 @@ export const slowestQuery = (
   return worst
 }
 
-/** Handle invalidations per write — catches a bug latency can't see: an
+/** Writes a session needs before its fan-out rate is compared. Below this the
+ *  rate is not a noisier sample of an editing session's but a different
+ *  population — idle sessions sit well under editing ones — and a median over
+ *  both measures the mix. */
+export const MIN_FANOUT_WRITES = 100
+
+/** Loader re-resolves per write — catches a bug latency can't see: an
  *  over-broad invalidation dep re-resolves on writes that don't concern it,
- *  so p95 never moves. `loaderInvalidations`, not `loaderRuns`, which a cold `load()` also bumps. */
-export const invalidationsPerWrite = (r: InteractionComparable): number | null =>
-  r.writes > 0 ? (r.fanout.loaderInvalidations ?? 0) / r.writes : null
+ *  so p95 never moves.
+ *
+ *  The re-resolves the synchronous invalidation walk STARTED — the only ones a
+ *  write can be charged with, since `fanout` is measured across that walk
+ *  alone. Anything a load's settle decides is left out, ACCEPTED: a rerun a
+ *  write queued behind a load in flight runs or is dropped by who is subscribed
+ *  THEN, and a change matched against a dep declared after the write was not a
+ *  dep when it landed. A write that finds the handle idle — the common case —
+ *  is counted against every dep the handle has registered, over-broad or not.
+ *  An exact count of queued reruns needs the handle store to count subscribed
+ *  invalidations at the write; not done, since records without that counter
+ *  could not be told from sessions where it never moved.
+ *
+ *  Not `loaderInvalidations`: an invalidation that finds no subscriber only
+ *  marks the handle stale, and how many such handles are alive moves with the
+ *  session, not the code. Not the page-wide `loaderRuns` either, which a
+ *  mount's cold `load()` also bumps; none lands inside the walk. */
+export const reResolvesPerWrite = (r: InteractionComparable): number | null =>
+  r.writes >= MIN_FANOUT_WRITES ? (r.fanout.loaderRuns ?? 0) / r.writes : null
 
 export const fanoutRegression = (
   current: InteractionComparable,
   history: readonly InteractionComparable[],
 ): TrendResult => {
-  const perWrite = invalidationsPerWrite
-  const now = perWrite(current)
-  // No writes means no rate to compare — a missing CURRENT sample, not short
+  const now = reResolvesPerWrite(current)
+  // Too few writes means no rate to compare — a missing CURRENT sample, not short
   // history: more stored sessions can't supply this session's rate, though a live edit can.
   if (now === null) return NO_CURRENT_SAMPLE
-  const rate = (rs: readonly InteractionComparable[]) =>
-    rs.map(perWrite).filter((v): v is number => v !== null)
+  const { recentPast, baseline } = comparisonWindows(history, reResolvesPerWrite)
   return trendRegression(
-    { metric: 'fanout:invalidationsPerWrite', label: 'handle invalidations per write', unit: 'ratio', minAbsolute: 0 },
-    [now, ...rate(history.slice(0, RECENT_WINDOW - 1))],
-    rate(baselineWindow(history)),
+    { metric: 'fanout:reResolvesPerWrite', label: 're-resolves per write', unit: 'ratio', minAbsolute: 0 },
+    [now, ...recentPast],
+    baseline,
   )
 }
 
@@ -389,11 +405,10 @@ export const startupRegression = (
   // and never in the baseline it is judged against. As a gate alone it would
   // report on the boots BEFORE this one — a slowdown starting now stays
   // invisible until enough later sessions have been recorded.
-  const gaps = (rs: readonly StartupRecordData[]) =>
-    rs.map(bootstrapGapMs).filter((v): v is number => v !== null)
+  const { recentPast, baseline } = comparisonWindows(series, bootstrapGapMs)
   return trendRegression(
     { metric: 'startup:bootstrapGapMs', label: 'repo-ready to first paint', unit: 'ms', minAbsolute: MIN_ABSOLUTE_MS },
-    [now, ...gaps(series.slice(0, RECENT_WINDOW - 1))],
-    gaps(baselineWindow(series)),
+    [now, ...recentPast],
+    baseline,
   )
 }

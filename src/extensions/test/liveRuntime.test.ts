@@ -282,9 +282,9 @@ describe('EffectReconciler', () => {
     r.reconcile(repo, runtimeWith([]), 'ws', false) // removed before start resolved → stopped
 
     resolveStart(cleanup)
-    await new Promise(res => setTimeout(res, 0)) // flush the start promise's .then
 
-    expect(cleanup).toHaveBeenCalledTimes(1) // not stranded — torn down on resolve
+    // Not stranded: torn down once the start promise resolves.
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1))
   })
 
   it('a throwing cleanup does not prevent the rest of stopAll', () => {

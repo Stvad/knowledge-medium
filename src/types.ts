@@ -124,6 +124,8 @@ export interface BlockContextType {
      *  inherit it like any context field; a mode renderer that embeds normal
      *  block content clears it in its own `NestedBlockContextProvider`. */
     panelViewMode?: string
+    /** Mount outside the editor when its surface clips tooltips. */
+    editorTooltipParent?: HTMLElement
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
      *  one rendered occurrence of that block, even when the same block is
@@ -140,10 +142,6 @@ export interface BlockContextType {
      *  layout boundary, before a panel sets it. See
      *  `resolveStructuralEditPolicy`. */
     scopeRootId?: string
-    /** Single visible panel mode: widen the panel's scroll target to the
-     *  whole layout surface while constraining its document content inside
-     *  the panel renderer. */
-    wideScrollSurface?: boolean
     /** Whether maximizing this pane would do anything, declared by the layout
      *  that owns the maximize rendering rule: false with a single pane
      *  (nothing to hide) and on mobile (`LayoutRenderer` already renders one

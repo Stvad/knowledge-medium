@@ -33,6 +33,7 @@ import {
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
+import { deleteSubtreeInTx } from '../subtreeDelete'
 
 const WS = 'ws-1'
 
@@ -124,6 +125,37 @@ describe('Same-tx runner — field-watching dispatch', () => {
 })
 
 describe('Same-tx runner — event dispatch', () => {
+  it('runs an event-only transaction in an explicitly writable workspace', async () => {
+    const seen: string[] = []
+    env.repo.__setSameTxProcessorsForTesting([{
+      name: 'test.eventOnly', watches: {kind: 'event', events: ['test.refresh']},
+      apply: async (event, ctx) => {
+        seen.push(event.workspaceId)
+        await ctx.tx.create({id: 'event-result', workspaceId: event.workspaceId, parentId: null, orderKey: 'a0', content: 'derived'})
+      },
+    }])
+    await env.repo.tx(async tx => {
+      tx.emitEvent('test.refresh', {}, WS)
+    }, {scope: ChangeScope.References})
+    expect(seen).toEqual([WS])
+    expect((await env.repo.load('event-result'))?.content).toBe('derived')
+  })
+
+  it('requires an explicit workspace before the first write and forbids repinning', async () => {
+    await env.repo.tx(async tx => {
+      expect(() => tx.emitEvent('test.refresh', {})).toThrow()
+      tx.emitEvent('test.refresh', {}, WS)
+      expect(() => tx.emitEvent('test.refresh', {}, 'other-workspace')).toThrow()
+    }, {scope: ChangeScope.References, allowUnloadedWorkspace: true})
+  })
+
+  it('rejects an event-only transaction targeting a workspace whose registry is not open', async () => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await env.repo.tx(async tx => {
+      expect(() => tx.emitEvent('test.refresh', {}, 'closed-workspace')).toThrow()
+    }, {scope: ChangeScope.References})
+  })
+
   it('fires event watchers inside the active tx with read-your-own-writes DB access', async () => {
     const seenPayloads: unknown[] = []
     const watcher: AnySameTxProcessor = {
@@ -399,5 +431,64 @@ describe('Same-tx runner — zero-write tx', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(log.events).toHaveLength(0)
+  })
+})
+
+describe('Same-tx runner — write-log reads', () => {
+  type ParentLiveness = 'live' | 'tombstoned' | undefined
+  const probing = (out: Map<string, ParentLiveness>): AnySameTxProcessor => ({
+    name: 'test.tombstoneProbe',
+    watches: {kind: 'field', table: 'blocks', fields: ['deleted']},
+    apply: async (event, ctx) => {
+      for (const row of event.changedRows) out.set(row.id, await ctx.parentLivenessWhenTombstoned(row.id))
+    },
+  })
+
+  const seedParentAndChild = (): Promise<void> => env.repo.tx(async tx => {
+    await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'parent'})
+    await tx.create({id: 'c', workspaceId: WS, parentId: 'p', orderKey: 'a0', content: 'child'})
+  }, {scope: ChangeScope.BlockDefault})
+
+  it('reads a row deleted under a parent the tx never wrote as deleted under a live parent', async () => {
+    await seedParentAndChild()
+    const probed = new Map<string, ParentLiveness>()
+    env.repo.__setSameTxProcessorsForTesting([probing(probed)])
+
+    await env.repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault})
+
+    expect(probed.get('c')).toBe('live')
+  })
+
+  it("reads a subtree delete's cascade as deleted under a tombstoned parent", async () => {
+    await seedParentAndChild()
+    const probed = new Map<string, ParentLiveness>()
+    env.repo.__setSameTxProcessorsForTesting([probing(probed)])
+
+    await env.repo.tx(tx => deleteSubtreeInTx(tx, 'p'), {scope: ChangeScope.BlockDefault})
+
+    expect(probed.get('c')).toBe('tombstoned')
+    // A root has no parent to read.
+    expect(probed.get('p')).toBeUndefined()
+  })
+
+  it('orders the writes of a settled processor, which share one dirty-row generation', async () => {
+    // A settled processor's writes do not advance the generation the re-run
+    // pass watermarks by, so ordering cannot be read off it.
+    await seedParentAndChild()
+    let answer: ParentLiveness
+    env.repo.__setSameTxProcessorsForTesting([{
+      name: 'test.settledDeleter',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      settledWrites: true,
+      apply: async (_event, ctx) => {
+        await ctx.tx.delete('c')
+        await ctx.tx.delete('p')
+        answer = await ctx.parentLivenessWhenTombstoned('c')
+      },
+    }])
+
+    await env.repo.tx(tx => tx.update('p', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+
+    expect(answer).toBe('live')
   })
 })

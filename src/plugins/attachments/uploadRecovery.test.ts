@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { encodeBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
+import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
 import type { GetCek, GetMaterializability, Materializability } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
 import { recoverFailedUploads } from './uploadRecovery.js'
@@ -8,8 +9,9 @@ import { InMemoryByteUploadStore, type StageInput } from './uploadStore.js'
 
 const USER = 'u1'
 const WS = 'ws1'
-const KEY = 'ck-deadbeef'
-const BLOCK = 'media:ck-deadbeef'
+const KEY = 'ab'.repeat(32)
+const BLOCK = 'media:ab'
+const kid = await deriveContentKeyHmac(new Uint8Array(32).fill(5) as Uint8Array<ArrayBuffer>)
 
 const bytes = (n: number) => new Uint8Array(Array.from({ length: n }, (_, i) => i & 0xff)) as Uint8Array<ArrayBuffer>
 
@@ -17,7 +19,7 @@ const stageInput = (over: Partial<StageInput> = {}): StageInput => ({
   userId: USER,
   assetBlockId: BLOCK,
   workspaceId: WS,
-  contentHash: 'sha256:placeholder',
+  contentHash: `sha256:${KEY}`,
   contentKey: KEY,
   ...over,
 })
@@ -38,8 +40,10 @@ class FakeBlobStore implements BlobStore {
    *  landing mid-probe (the interleaving the un-CAS'd `delete` must tolerate). */
   onProbe: (() => Promise<void>) | null = null
   probes = 0
-  async probe(): Promise<Uint8Array<ArrayBuffer> | null> {
+  probedKeys: string[] = []
+  async probe(_workspaceId: string, objectKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
     this.probes += 1
+    this.probedKeys.push(objectKey)
     if (this.probeThrows) this.probeThrows()
     if (this.onProbe) await this.onProbe()
     return this.probeResult
@@ -73,6 +77,7 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
     blobStore,
     getMaterializability: matCopy,
     getCek: noCek,
+    getContentKeyHmac: async () => kid,
     ...over,
   })
 
@@ -135,7 +140,7 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
   })
 
   it('PRESENT but UNDECODABLE (e2ee, wrong/absent key) → poisoned, stays failed', async () => {
-    // e2ee mode with no CEK: decodeBytes throws → treated as poisoned (§17), like the drain.
+    // e2ee mode with no CEK: the object can't be opened → treated as poisoned (§17), like the drain.
     await stageFailed(store, { contentHash: await computeContentHash(bytes(8)) })
     blobStore.probeResult = bytes(50) // not a valid encb envelope for this key
 
@@ -247,5 +252,33 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
     expect(summary).toMatchObject({ requeued: 1 })
     expect(blobStore.probes).toBe(1) // only u1's one failed record
     expect((await store.get('u2', 'media:theirs'))?.status).toBe('failed') // untouched
+  })
+
+  // Addresses are derived when used (docs/workspace-e2ee-conversion.md §6.2).
+  describe('the address, derived when used', () => {
+    it('probes the address the hash and the live mode give, not the record key', async () => {
+      await stageFailed(store, { contentKey: 'local-name' })
+      await recoverFailedUploads(USER, deps())
+      expect(blobStore.probedKeys).toEqual([KEY])
+    })
+
+    it('a record that failed before the workspace became e2ee probes the KEYED address', async () => {
+      await stageFailed(store)
+      const summary = await recoverFailedUploads(USER, deps({ getMaterializability: mat('decrypt') }))
+      expect(summary).toMatchObject({ requeued: 1 })
+      expect(blobStore.probedKeys).toEqual([
+        await deriveContentKey({ contentHash: `sha256:${KEY}`, mode: 'e2ee', contentKeyHmac: kid }),
+      ])
+    })
+
+    it('an e2ee workspace whose key record has no K_id defers, without a probe', async () => {
+      await stageFailed(store)
+      const summary = await recoverFailedUploads(USER, deps({
+        getMaterializability: mat('decrypt'),
+        getContentKeyHmac: async () => null,
+      }))
+      expect(summary).toMatchObject({ deferred: 1 })
+      expect(blobStore.probes).toBe(0)
+    })
   })
 })

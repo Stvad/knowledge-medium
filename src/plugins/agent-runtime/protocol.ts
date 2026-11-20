@@ -34,6 +34,11 @@ export interface UpdateBlockInput {
   content?: string
   properties?: BlockProperties
   replaceProperties?: boolean
+  /** Compare-and-set: refuse the whole update unless the block's content is
+   *  still exactly this, checked inside the writing transaction. */
+  expectedContent?: string
+  /** False: keep this write off the user's undo stack (`agentTxOptions`). */
+  undoable?: boolean
 }
 
 export type MoveBlockPosition =
@@ -79,6 +84,8 @@ export interface ReconcileMarkdownSubtreeInput {
   final?: boolean
   /** Applied (merged) to every created block alongside the subtree key. */
   properties?: BlockProperties
+  /** False: keep this write off the user's undo stack (`agentTxOptions`). */
+  undoable?: boolean
 }
 
 export interface ReconcileMarkdownSubtreeResult {

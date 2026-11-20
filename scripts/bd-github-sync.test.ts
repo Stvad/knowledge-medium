@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   allowsBeadIds,
   allowsIssueRefs,
@@ -11,10 +11,12 @@ import {
   buildDenyMessage,
   buildIssueRefsMessage,
   closeKeywordRefs,
+  coveredMs,
   extractIssueRefs,
+  foldRunLog,
   deriveLabelPriority,
-  detectReverts,
   extractBeadIds,
+  inPool,
   issueNumberFromRef,
   commitsInCommandPosition,
   matchesCommitCommand,
@@ -25,26 +27,31 @@ import {
   matchesAnyPublish,
   matchesApiPublish,
   matchesPrCommand,
+  publishableKinds,
   mirrorCommentBody,
   mirroredCommentIds,
   planCommentMirror,
   planClosePushes,
   planCloseReconciliation,
   bdVersion,
-  planLocalWins,
+  BUDGET_PER_MINT_OR_POST_MS,
   planLossyReapplies,
   pullWouldWrite,
-  planMintedNonOpen,
   planPrePullPush,
+  planPullSet,
+  planUnlandedPushes,
   planMintedRefs,
-  planReopenedClosed,
   planPriorityFixes,
-  planRestoreArgs,
   REPO,
   resolveBodyPath,
+  settleAll,
+  spawnAsync,
+  SYNC_RUN_LOG,
+  syncAlarm,
   type BeadRow,
   type IssueInfo,
 } from './bd-github-sync.mjs'
+import { RESOLVE } from './hook-test-support'
 
 const ref = (n: number) => `https://github.com/${REPO}/issues/${n}`
 const issues = (entries: [number, IssueInfo][]) => new Map<number, IssueInfo>(entries)
@@ -57,13 +64,6 @@ const bead = (over: Partial<BeadRow>): BeadRow => ({
 })
 const byId = (beads: BeadRow[]) => new Map(beads.map(b => [b.id, b]))
 
-// The two gh-side fixtures the hook tests reach for. Named because the whole
-// distinction is `pull_request` being present at all — a close keyword aimed
-// at a PR is the case the gate warns about, and spotting that in an inline
-// literal took a second look every time.
-const AN_ISSUE = { title: 'Real GC failure', state: 'open' }
-const A_PR = { title: 'Some PR', state: 'open', pull_request: {} }
-
 describe('extractBeadIds', () => {
   it('finds short and long-form ids, deduplicated, in order', () => {
     expect(
@@ -74,13 +74,46 @@ describe('extractBeadIds', () => {
   it('does not match inside larger words or hyphen chains', () => {
     // "km-" must start the token: a branch or package name containing the
     // letters must not trip the PR gate.
-    expect(extractBeadIds('vkm-abc akm-def wikm-1')).toEqual([])
+    expect(extractBeadIds('vkm-abcd akm-defg wikm-1234')).toEqual([])
     expect(extractBeadIds('beads-github-sync-workflow km-')).toEqual([])
   })
 
   it('matches ids embedded in punctuation but not uppercase variants', () => {
-    expect(extractBeadIds('(km-abc), km-def.')).toEqual(['km-abc', 'km-def'])
-    expect(extractBeadIds('KM-ABC')).toEqual([])
+    expect(extractBeadIds('(km-abcd), km-dt2e, km-defg.')).toEqual(['km-abcd', 'km-dt2e', 'km-defg'])
+    expect(extractBeadIds('KM-ABCD')).toEqual([])
+  })
+
+  // bd sizes a hash id to the tracker (adaptive length, 4 up to 8), and
+  // imports from GitHub carry a long timestamped form. Both are real ids.
+  it('matches every length bd can mint, its kinds, and the long import form', () => {
+    expect(extractBeadIds('km-7f3a8 km-7f3a86ab')).toEqual(['km-7f3a8', 'km-7f3a86ab'])
+    expect(extractBeadIds('km-1786746045106-1-1eb9b300')).toEqual(['km-1786746045106-1-1eb9b300'])
+    expect(extractBeadIds('km-wisp-abc123, km-mol-a1b2 and km-proto-9f8e7d')).toEqual(['km-wisp-abc123', 'km-mol-a1b2', 'km-proto-9f8e7d'])
+  })
+
+  it('does not read shorter or longer words as ids', () => {
+    expect(extractBeadIds('km-abc km-db km-7f3a86abc')).toEqual([])
+  })
+
+  // No bd id continues with a hyphenated suffix, so a name built that way is
+  // a file or a bin, not an id. Ids joined by a slash are still ids.
+  it('does not read a word a hyphen continues as an id', () => {
+    expect(extractBeadIds('--body-file tmp/km-a1b2-body.md; bin km-agent-dispatch; km-abcd-era')).toEqual([])
+    expect(extractBeadIds('tracks km-abcd/km-efgh')).toEqual(['km-abcd', 'km-efgh'])
+    expect(extractBeadIds('fixed km-abcd - and km-efgh.')).toEqual(['km-abcd', 'km-efgh'])
+    expect(extractBeadIds('> /private/tmp/km-merge/threads.txt')).toEqual(['km-merge'])
+  })
+
+  it('takes a child id whole', () => {
+    expect(extractBeadIds('see km-abcd.14, under km-abcd.')).toEqual(['km-abcd.14', 'km-abcd'])
+    expect(extractBeadIds('and km-1786746045106-1-1eb9b300.2')).toEqual(['km-1786746045106-1-1eb9b300.2'])
+    expect(extractBeadIds('km-abcd.14-notes.md')).toEqual([])
+  })
+
+  // A branch under an agent prefix names the branch, not a bead.
+  it('does not match a branch under an agent prefix', () => {
+    expect(extractBeadIds('--head claude/km-avrg-retain-measure')).toEqual([])
+    expect(extractBeadIds('origin codex/km-abcd')).toEqual([])
   })
 })
 
@@ -168,6 +201,23 @@ describe('allowsBeadIds', () => {
     expect(allowsIssueRefs(forged.replace('KM_ALLOW_BEAD_IDS', 'KM_ISSUE_REFS_OK'))).toBe(false)
   })
 
+  // A heredoc body is data even when a markdown table cell sets the marker
+  // off with pipes; a newline-separated command line is a real command.
+  it('honors a marker on its own command line, never one in heredoc data', () => {
+    const table = 'gh pr comment 5 --body-file - <<EOF\n| KM_ALLOW_BEAD_IDS=1 | x |\n| KM_ISSUE_REFS_OK=1 | y |\nEOF'
+    expect(allowsBeadIds(table)).toBe(false)
+    expect(allowsIssueRefs(table)).toBe(false)
+    expect(allowsIssueRefs('cd /r\nKM_ISSUE_REFS_OK=1 gh pr merge 1 --body x')).toBe(true)
+    // bash keeps a backslash before an ordinary character in double quotes,
+    // so this sets the variable to \\1, not 1; a quoted 1 is still 1
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK="\\1" gh pr merge 1 --body x')).toBe(false)
+    expect(allowsBeadIds('KM_ALLOW_BEAD_IDS="\\1" gh pr merge 1 --body x')).toBe(false)
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK="1" gh pr merge 1 --body x')).toBe(true)
+    // a bare assignment prefixes no command, however many there are
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1; gh pr merge 1 --body x')).toBe(false)
+    expect(allowsIssueRefs('KM_ISSUE_REFS_OK=1 X=1; gh pr merge 1 --body x')).toBe(false)
+  })
+
   it('ignores the marker quoted inside an argument (it would be published)', () => {
     expect(allowsBeadIds('gh pr create --body "mentions KM_ALLOW_BEAD_IDS=1 in prose"')).toBe(false)
     // quoted prose with a fake segment start must not smuggle the marker in
@@ -220,18 +270,230 @@ describe('carriesPublishableText', () => {
     expect(carriesPublishableText('gh release create v1')).toBe(true)
     // an EDIT really can carry no text, so it keeps the flag list
     expect(carriesPublishableText('gh pr edit 652 --add-label ui')).toBe(false)
-    // gh keeps the LAST -X/--method (measured: -X POST -X GET answers as a
-    // GET, the reverse 404s as a POST), so a read token earlier in the argv
-    // must not suppress the warning for what is actually a mutation
-    expect(
-      carriesPublishableText(`gh api -X GET -X PUT repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
-    ).toBe(true)
-    expect(
-      carriesPublishableText(`gh api -X PUT -X GET repos/Stvad/knowledge-medium/pulls/1/merge -f 'commit_title=t'`),
-    ).toBe(false)
     // gh documents nested key[subkey]=value fields, and gist file content is
     // its own example; FIELD_ANY captures the bracketed name whole
     expect(carriesPublishableText(`gh api gists -f public=true -f 'files[a.md][content]=Fixes #700'`)).toBe(true)
+  })
+})
+
+describe('graphql calls', () => {
+  it('reads a document with no mutation as publishing nothing, for both hooks', () => {
+    const read = `gh api graphql -f query='query($p:Int!){repository(owner:"o",name:"r"){pullRequest(number:$p){id}}}' -F p=5 --jq '.x | @sh'`
+    expect(matchesApiPublish(read)).toBe(false)
+    expect(matchesAnyPublish(read)).toBe(false)
+    // an expanded variable cannot turn a read into a write
+    expect(matchesAnyPublish(`for n in 1; do ${read.replace('-F p=5', '-F p="$n"')}; done`)).toBe(false)
+  })
+
+  // Shell quoting can split the keyword; the shell rejoins it for gh.
+  it('finds a mutation keyword that shell quoting splits', () => {
+    expect(matchesAnyPublish(`gh api graphql -f query='mut''ation{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+    expect(matchesAnyPublish(`gh api graphql -f query=mu\\tation'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+    // the shell drops a backslash-newline, joining the keyword again
+    expect(matchesAnyPublish(`gh api graphql -f query=muta\\\ntion'{addComment(input:{body:"x"}){clientMutationId}}'`)).toBe(true)
+  })
+
+  it('keeps a text-free mutation a publish, and uncovered', () => {
+    const loop = `for t in a; do gh api graphql -f query='${RESOLVE}' -f t="$t"; done`
+    expect(matchesAnyPublish(loop)).toBe(true)
+    expect(isPostVerifiable(loop)).toBe(false)
+  })
+})
+
+// A read publishes nothing wherever it sits: in a loop, a pipe, a
+// substitution, beside a redirect. Each gh api call is judged by its own argv
+// words, so an expansion that only continues a word, or one in another
+// command, does not make it a publish. Shapes from blocked agent commands.
+describe('gh api reads', () => {
+  it.each([
+    `for n in 449 466; do gh api -X GET "repos/${REPO}/issues/$n/timeline?per_page=100" --jq '.[] | .event' | tail -4; done`,
+    `for id in 41 42; do gh api repos/${REPO}/pulls/comments/$id --jq '"\\(.path)\\n\\(.body)"' | head -20; done`,
+    `gh api 'repos/${REPO}/contents/pr-preview?ref=gh-pages' --jq '.[].name' > $SP/dirs.txt; wc -l < $SP/dirs.txt`,
+    `gh pr view 1347 --json state --jq .state; gh api repos/${REPO}/commits/$(gh pr view 1347 --json mergeCommit --jq .mergeCommit.oid) --jq '.parents | length'`,
+    `r=$(gh api repos/${REPO}/pulls/1307/merge-async/abc --jq '.status'); echo "$r"`,
+    `for t in $(gh api graphql -f query='{repository(owner:"Stvad",name:"knowledge-medium"){pullRequest(number:1115){reviewThreads(first:60){nodes{id isResolved}}}}}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | .id'); do echo "$t"; done`,
+    `for n in 1320 1325; do gh api graphql -f query="query { repository(owner:\\"Stvad\\", name:\\"knowledge-medium\\") { pullRequest(number:$n) { reviews(last: 3) { nodes { submittedAt } } } } }" --jq '.data'; done`,
+    `gh pr checks 1332; gh pr diff 1332 | head; gh issue list --limit 5; gh api -X GET repos/${REPO}/pulls/1332/reviews -f per_page=100 | jq length`,
+    `gh api repos/${REPO}/issues/1 2>&1 | tail -3`,
+    // an expansion filling a value adds no flag
+    `for c in 1 2; do gh api repos/${REPO}/pulls/comments/$c -H "Authorization: $T" --jq ".id == $c" -F per_page=$n -X GET; done`,
+    `gh api -XGET repos/${REPO}/issues -fstate=$S`,
+    `gh api repos/${REPO}/issues/1 >| $OUT`,
+    `gh -X GET api rate_limit --jq .rate.limit`,
+    `gh api -iXGET repos/${REPO}/issues -fstate=open`,
+    `gh -iX GET api rate_limit --jq .rate.limit`,
+    `gh api repos/${REPO}/pulls/1 --jq '{number,title}'`,
+    // gh keeps the LAST method: a later GET makes the call a read
+    `gh api -X PUT -X GET repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
+    // a heredoc that only mentions a call reads as one, and one that reads
+    `git commit -F - <<'EOF'\nReplace the hand-rolled gh api graphql loop\nEOF`,
+    // a quoted heredoc's markdown backticks are text, not substitutions
+    "python3 - <<'EOF'\nrep(\"use `gh api` with a `-f` field here\")\nEOF",
+    // even after an apostrophe, which a line read as shell would open a quote on
+    "cat > notes.md <<'EOF'\nDon't use `gh api` with a `-f` field\nEOF",
+    // nor are a quoted heredoc's template literals, in source code that mentions a call
+    "python3 - <<'EOF'\nconsole.log(`gh api graphql: ${verb}`)\nEOF",
+  ])('is not a publish: %s', cmd => {
+    expect(matchesAnyPublish(cmd)).toBe(false)
+  })
+
+  it.each([
+    `for n in 1 2; do gh api repos/${REPO}/issues/$n/comments -f body="see #653"; done`,
+    // a read beside a write does not vouch for the write
+    `gh api repos/${REPO}/pulls/1/reviews --jq length; gh api repos/${REPO}/issues/1/comments -f body=hi`,
+    `gh api -X GET repos/${REPO}/issues/1 && gh api -X POST repos/${REPO}/issues/1/comments`,
+    // a word that STARTS with an expansion can be any flags at all
+    `for u in a; do gh api $u; done`,
+    `gh api "\${ARGS[@]}"`,
+    `gh api repos/${REPO}/issues/1/comments $(printf -- '-f body=x')`,
+    `gh api -X "$M" repos/${REPO}/issues/1`,
+    // an expansion that completes a flag, or sits outside a value
+    `flag=f; gh api repos/${REPO}/issues/1/comments -"$flag" body='see #653'`,
+    `gh api repos/${REPO}/issues/1/comments --$kind body=x`,
+    `gh api repos/${REPO}/issues/1/comments "$EXTRA"`,
+    // a graphql document the gate cannot read could be a mutation
+    `for q in a; do gh api graphql -f query="$Q"; done`,
+    `gh api graphql -F query=@q.graphql | jq .`,
+    `gh api graphql --input q.json | jq .`,
+    // flags after a substitution or an fd redirect still belong to the call
+    `gh api repos/${REPO}/issues/$(echo 1)/comments -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments 2>&1 -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments < <(printf x) -f body=y`,
+    `gh api repos/${REPO}/issues/1/comments >| out -f body=y`,
+    // an apostrophe in a comment or a $'…' string opens no quote
+    `# Reply to the reviewer (it's fixed)\ngh api repos/${REPO}/pulls/1385/comments/123/replies -f body="tracked in km-abcd"`,
+    `MSG=$'Don\\'t merge'\ngh api repos/${REPO}/issues/1/comments -f body="$MSG"`,
+    // a comment's words are no flags of the call
+    `gh api repos/${REPO}/issues/1/comments -f body=x # check after with -X GET`,
+    // gh takes api's own flags ahead of the word api
+    `gh -X POST -f body='see #653' api repos/${REPO}/issues/1/comments`,
+    `gh -f body=x api repos/${REPO}/issues/1/comments`,
+    // every spelling pflag reads: an `=` after a short flag, a short cluster
+    `gh api graphql -F=query=@body.gql`,
+    `gh api repos/${REPO}/issues/1/comments -iFbody='#123'`,
+    `gh api repos/${REPO}/issues/1/comments -iF body=x`,
+    `gh -iF body=x api repos/${REPO}/issues/1/comments`,
+    // a shell reading a quoted heredoc anywhere on its line runs the data
+    `cat <<'EOF' | bash\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // or one the line leaves open, to come after the data
+    `cat <<'EOF' |\necho x;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF\nbash`,
+    // a redirection between a flag and its value is no value
+    `gh api graphql -F > /tmp/out query=@doc.gql`,
+    // and its target is no flag, even flag-shaped
+    `gh api repos/${REPO}/issues/1/comments > -X -F body='#123'`,
+    // bash ends a word at an unquoted `>`: what follows is where output goes
+    `gh api -X POST repos/${REPO}/issues/1/comments -f body=x> -XGET`,
+    // a word the shell turns into a flag: an ANSI-C escape, a brace list
+    `gh api repos/${REPO}/issues/1/comments $'\\x2dF' body='#123'`,
+    `gh api repos/${REPO}/issues/1/comments {-i,-Fbody=x}`,
+    `gh api repos/${REPO}/issues/1/comments -{F,i}body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments {,}-XPOST -f body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments {{,}-XPOST,} -f body=x`,
+    `gh api -X GET repos/${REPO}/issues/1/comments -f \${x}{,body=x,-XPOST}`,
+    `gh api -X GET repos/${REPO}/issues/1/comments -f body=x --jq $'\\x2d'{,XPOST}`,
+    // and a read token earlier in the argv does not make a mutation one
+    `gh api -X GET -X PUT repos/${REPO}/pulls/1/merge -f 'commit_title=t'`,
+    // heredoc data is one call per line: a later GET line does not make the post a read
+    `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=x\ngh api repos/${REPO}/issues/1 --method GET\nEOF`,
+    // a quoted heredoc's data is not expanded, but a shell reading it runs it
+    `bash <<'EOF'\nx;gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // and a script's string spanning lines is its own, not a quote that hides the call
+    `bash <<'EOF'\necho 'a\nb'; gh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+    // an unquoted heredoc's backticks run
+    "cat <<EOF\nposted: `gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=y`\nEOF",
+    // a call the reader swallows (here: an unterminated quote) still counts
+    `echo \\#'\ngh api repos/${REPO}/issues/1/comments -f body=y`,
+    // an escaped `>` is text, and the `|` after it a pipe into the call
+    `echo \\>|gh api repos/${REPO}/issues/1/comments -f body=y`,
+    // a quoted ">" argument is no redirect, so the flag after it still counts
+    `gh api repos/${REPO}/issues/1/comments ">" -f body=y`,
+    // a method-like word another flag takes as its value is text
+    `gh api -X POST repos/${REPO}/issues/1/comments -f body=y --template --method=GET`,
+    // heredoc data that bash runs is a call
+    `bash <<'EOF'\ngh api repos/${REPO}/issues/1/comments -f body=y\nEOF`,
+  ])('is still a publish: %s', cmd => {
+    expect(matchesAnyPublish(cmd)).toBe(true)
+  })
+})
+
+// The repo's own review-reply command: one invocation whose output is the
+// reply's URL, so the read-back covers it like a single gh publish.
+describe('the pr:reply command', () => {
+  it('is a covered publish of a review comment when run bare', () => {
+    for (const cmd of ['pnpm pr:reply 1048 4040271733 body.md', 'node scripts/pr-reply.mjs 1048 4040271733 body.md']) {
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+      expect(isPostVerifiable(cmd), cmd).toBe(true)
+      expect(carriesPublishableText(cmd), cmd).toBe(true)
+      expect([...publishableKinds(cmd)], cmd).toEqual(['review-comment'])
+    }
+    expect(isPostVerifiable('cd x; pnpm pr:reply 1048 4040271733 body.md')).toBe(false)
+    expect(matchesAnyPublish("# it's posted below\npnpm pr:reply 1048 4040271733 body.md")).toBe(true)
+  })
+
+  // Its gh call runs where no hook sees it, so every spelling of the
+  // invocation must be seen here.
+  it('is seen however the invocation is spelled', () => {
+    for (const cmd of [
+      'pnpm "pr:reply" 1048 4040271733 body.md',
+      'npm run pr:reply -- 1048 4040271733 body.md',
+      'node "scripts/pr-reply.mjs" 1048 4040271733 body.md',
+      'cd scripts && node pr-reply.mjs 1048 4040271733 body.md',
+      'node "$(git rev-parse --show-toplevel)/scripts/pr-reply.mjs" 1048 4040271733 body.md',
+      'KM_ALLOW_BEAD_IDS=1 pnpm pr:reply 1048 4040271733 body.md',
+    ])
+      expect(matchesAnyPublish(cmd), cmd).toBe(true)
+  })
+
+  it('is not read out of prose or from commands that only touch the file', () => {
+    expect(matchesAnyPublish('git commit -m "use pnpm pr:reply for replies"')).toBe(false)
+    expect(matchesAnyPublish('sed -n 1,20p scripts/pr-reply.mjs')).toBe(false)
+    expect(matchesAnyPublish('pnpm vitest run scripts/pr-reply.test.ts')).toBe(false)
+    expect(matchesAnyPublish('npx eslint scripts/pr-reply.mjs scripts/pr-reply.test.ts')).toBe(false)
+    // a heredoc line is data, even one spelled like the invocation
+    expect(matchesAnyPublish('cat > notes.md <<EOF\npnpm pr:reply 1 2 body.md\nEOF')).toBe(false)
+    expect(matchesAnyPublish('pnpm exec prettier --check scripts/pr-reply.mjs')).toBe(false)
+  })
+})
+
+// Naming THIS repository, or moving into a directory first, changes nothing
+// the read-back depends on: it still finds the object in this repo's URLs.
+describe('this repository and a leading cd', () => {
+  it.each([
+    'gh pr create --repo Stvad/knowledge-medium --base master --title t --body-file b.md',
+    'gh pr edit 1368 --repo Stvad/knowledge-medium --body-file b.md',
+    'gh -R Stvad/knowledge-medium pr comment 12 --body-file b.md',
+    'gh pr comment 12 -RStvad/knowledge-medium --body-file b.md',
+    'gh pr comment 12 --repo=stvad/Knowledge-Medium --body-file b.md',
+    'gh pr comment 12 --repo "Stvad/knowledge-medium" --body-file b.md',
+    'gh pr comment 12 -R https://github.com/Stvad/knowledge-medium --body-file b.md',
+    'GH_REPO=Stvad/knowledge-medium gh pr comment 12 --body-file b.md',
+    'cd /Users/x/wt && gh pr create --title t --body-file b.md',
+    "cd '/Users/x/my wt' && pnpm pr:reply 1048 4040271733 body.md --resolve",
+  ])('is covered: %s', cmd => {
+    expect(isPostVerifiable(cmd)).toBe(true)
+  })
+
+  it.each([
+    'gh pr comment 12 --repo Stvad/knowledge-medium-beads --body-file b.md',
+    // the shell joins a quoted value to what follows it
+    'gh pr comment 12 --repo "Stvad/knowledge-medium"-beads --body-file b.md',
+    "gh pr comment 12 -R 'Stvad/knowledge-medium'x --body-file b.md",
+    'gh pr comment 12 --repo Stvad/knowledge-medium --repo other/x --body-file b.md',
+    'GH_REPO=other/x gh pr comment 12 --repo Stvad/knowledge-medium --body-file b.md',
+    // another host: the read-back looks on github.com only
+    'GH_HOST=ghe.example gh pr comment 12 -R Stvad/knowledge-medium --body-file b.md',
+    'gh pr comment 12 -R ghe.example/Stvad/knowledge-medium --body-file b.md',
+    'gh api --hostname ghe.example repos/Stvad/knowledge-medium/issues/1/comments -f body=x',
+    // -q is --jq, which hides the object the read-back reads
+    'gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=x -q .html_url',
+    'cd "$WT" && gh pr create --title t --body-file b.md',
+    // a cd that fails still runs the publish after `;`, from somewhere else
+    'cd x; gh pr create --title t --body-file b.md',
+    'cd x && cd y && gh pr create --title t --body-file b.md',
+    'cd x && gh pr create --title t --body-file b.md && echo done',
+    'echo x && gh pr create --title t --body-file b.md',
+  ])('stays uncovered: %s', cmd => {
+    expect(isPostVerifiable(cmd)).toBe(false)
   })
 })
 
@@ -444,13 +706,12 @@ describe('planClosePushes', () => {
 })
 
 describe('planPriorityFixes', () => {
-  it('restores beads this run flattened (pre ≠2 → post 2) to their pre-sync value', () => {
-    const pre = byId([bead({ id: 'km-flat', priority: 1 }), bead({ id: 'km-was2', priority: 2 })])
-    const post = [
-      bead({ id: 'km-flat', priority: 2 }), // flattened by this run → restore 1
-      bead({ id: 'km-was2', priority: 2 }), // was already 2 → possibly deliberate → untouched
-    ]
-    expect(planPriorityFixes(pre, post, issues([]))).toEqual([{ id: 'km-flat', to: 1 }])
+  // The pull is never handed a linked bead whose priority it would default,
+  // so a bead that existed before the run at 2 is 2 on purpose.
+  it('leaves every bead that existed before the run alone', () => {
+    const pre = byId([bead({ id: 'km-a', priority: 1, external_ref: ref(1) })])
+    const post = [bead({ id: 'km-a', priority: 2, external_ref: ref(1) })]
+    expect(planPriorityFixes(pre, post, issues([[1, { state: 'OPEN', labels: ['P1'] }]]))).toEqual([])
   })
 
   it('does not fight a deliberate P2 even when a stale hand label disagrees', () => {
@@ -465,6 +726,7 @@ describe('planPriorityFixes', () => {
       bead({ id: 'km-new-machine', priority: 2, external_ref: ref(2) }), // new + machine label → derive
       bead({ id: 'km-new-none', priority: 2, external_ref: ref(3) }), // new, no label → leave
       bead({ id: 'km-new-p2', priority: 2, external_ref: ref(4) }), // new, label agrees → leave
+      bead({ id: 'km-new-medium', priority: 2, external_ref: ref(5) }), // machine label says 2 → leave
       bead({ id: 'km-closed', status: 'closed', priority: 2, external_ref: ref(1) }), // closed → not ours
     ]
     expect(
@@ -476,6 +738,7 @@ describe('planPriorityFixes', () => {
           [2, { state: 'OPEN', labels: ['priority::high'] }],
           [3, { state: 'OPEN', labels: ['bug'] }],
           [4, { state: 'OPEN', labels: ['P2'] }],
+          [5, { state: 'OPEN', labels: ['priority::medium', 'P1'] }],
         ]),
       ),
     ).toEqual([
@@ -666,44 +929,6 @@ describe('buildIssueRefsMessage', () => {
   })
 })
 
-describe('planReopenedClosed', () => {
-  it('flags a closed bead whose linked issue is open (GitHub-side reopen)', () => {
-    const beads = [bead({ id: 'km-a', status: 'closed', external_ref: ref(9) })]
-    expect(planReopenedClosed(beads, issues([[9, { state: 'OPEN', labels: [] }]]))).toEqual([
-      { id: 'km-a', number: 9 },
-    ])
-  })
-
-  it('ignores open beads, closed issues, and unlinked beads', () => {
-    const map = issues([[9, { state: 'CLOSED', labels: [] }]])
-    expect(planReopenedClosed([bead({ id: 'km-a', status: 'closed', external_ref: ref(9) })], map)).toEqual([])
-    expect(planReopenedClosed([bead({ id: 'km-a', status: 'open', external_ref: ref(9) })], issues([[9, { state: 'OPEN', labels: [] }]]))).toEqual([])
-    expect(planReopenedClosed([bead({ id: 'km-a', status: 'closed', external_ref: null })], map)).toEqual([])
-  })
-})
-
-describe('planLocalWins', () => {
-  it('flags a bead whose local row is strictly newer than its GitHub copy', () => {
-    const beads = [bead({ id: 'km-a', external_ref: ref(1), updated_at: '2026-08-20T02:00:00Z' })]
-    const map = issues([[1, { state: 'OPEN', labels: [], updatedAt: '2026-08-20T01:00:00Z' }]])
-    expect(planLocalWins(beads, map)).toEqual([{ id: 'km-a', number: 1 }])
-  })
-
-  it('does not flag older-or-equal local rows, unmapped beads, or missing timestamps', () => {
-    const map = issues([[1, { state: 'OPEN', labels: [], updatedAt: '2026-08-20T01:00:00Z' }]])
-    expect(planLocalWins([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:59:00Z' })], map)).toEqual([])
-    expect(planLocalWins([bead({ external_ref: ref(1), updated_at: '2026-08-20T01:00:00Z' })], map)).toEqual([])
-    expect(planLocalWins([bead({ external_ref: null, updated_at: '2026-08-20T02:00:00Z' })], map)).toEqual([])
-    expect(planLocalWins([bead({ external_ref: ref(1) })], map)).toEqual([])
-    expect(
-      planLocalWins(
-        [bead({ external_ref: ref(2), updated_at: '2026-08-20T02:00:00Z' })],
-        issues([[2, { state: 'OPEN', labels: [] }]]),
-      ),
-    ).toEqual([])
-  })
-})
-
 describe('pullWouldWrite', () => {
   // A converged pair: bd's pull skips these, so every case below moves ONE
   // field and nothing else.
@@ -763,9 +988,216 @@ describe('pullWouldWrite', () => {
     }
   })
 
+  // gh rewrites control characters in every API response to caret notation,
+  // while bd reads the API raw: a bead holding CI output with ANSI colours
+  // never matched its own listing, and was handed to the pull every run.
+  it('compares text as gh prints it, so a control character is no divergence', () => {
+    const ansi = '\x1b[41m FAIL \x1b[49m'
+    expect(pullWouldWrite({ ...local, description: ansi }, { ...remote, body: '^[[41m FAIL ^[[49m' })).toBe(false)
+    expect(pullWouldWrite({ ...local, title: 'bell\x07 csi\x9b fs\x1c' }, { ...remote, title: 'bell^G csi^[ fs^\\' })).toBe(false)
+    // GitHub writes \b and \f as short escapes, which the sanitizer does not
+    // match; tab, newline, \v, \r and DEL it leaves alone.
+    const kept = 'a\bb\fc\td\ne\vf\rg\x7fh'
+    expect(pullWouldWrite({ ...local, description: kept }, { ...remote, body: kept })).toBe(false)
+    expect(pullWouldWrite({ ...local, description: ansi }, { ...remote, body: '^[[41m FAIL ^[[49m, edited' })).toBe(true)
+  })
+
   it('compares labels as bd does: scoped ones dropped, trimmed, deduplicated, order-free', () => {
     expect(pullWouldWrite({ ...local, labels: [' ui ', 'ui', ''] }, remote)).toBe(false)
     expect(pullWouldWrite({ ...local, labels: ['b', 'a'] }, { ...remote, labels: ['type::task', 'priority::high', 'a', 'b'] })).toBe(false)
+  })
+})
+
+// The run log reports time the run SPENT on a verb, so eight concurrent reads
+// of one second each are one second, not eight.
+describe('coveredMs', () => {
+  it('counts overlapping and nested intervals once, and gaps not at all', () => {
+    expect(coveredMs([[0, 10], [2, 5], [5, 12], [20, 25]])).toBe(17)
+    expect(coveredMs([[20, 25], [0, 10]])).toBe(15)
+    expect(coveredMs([])).toBe(0)
+  })
+})
+
+describe('inPool', () => {
+  // The comment read runs its chunks through this, so a tracker with thousands
+  // of commented issues still has at most `width` requests in flight.
+  it('runs every item, never more than width at once', async () => {
+    let inFlight = 0
+    let peak = 0
+    const seen: number[] = []
+    await inPool(Array.from({ length: 20 }, (_, i) => i), 8, async i => {
+      peak = Math.max(peak, ++inFlight)
+      await new Promise(resolve => setImmediate(resolve))
+      seen.push(i)
+      inFlight--
+    })
+    expect(peak).toBe(8)
+    expect(seen.sort((a, b) => a - b)).toEqual(Array.from({ length: 20 }, (_, i) => i))
+  })
+
+  // Every chunk is a child process: rejecting while siblings still run would
+  // let them outlive the lock and the run's timing record.
+  it('starts nothing after a failure, and rejects only once every started item has settled', async () => {
+    let inFlight = 0
+    const started: number[] = []
+    const tick = () => new Promise(resolve => setImmediate(resolve))
+    const pool = inPool(Array.from({ length: 20 }, (_, i) => i), 4, async i => {
+      started.push(i)
+      inFlight++
+      try {
+        await tick()
+        if (i === 1) throw new Error('chunk 1 failed')
+        await tick()
+        await tick()
+      } finally {
+        inFlight--
+      }
+    })
+    await expect(pool).rejects.toThrow('chunk 1 failed')
+    expect(inFlight).toBe(0)
+    expect(started).toEqual([0, 1, 2, 3])
+  })
+})
+
+describe('settleAll', () => {
+  it('waits for every promise before rejecting with the first failure', async () => {
+    let slowDone = false
+    const slow = new Promise(resolve => setTimeout(() => resolve((slowDone = true)), 20))
+    await expect(settleAll([Promise.reject(new Error('fast failure')), slow])).rejects.toThrow('fast failure')
+    expect(slowDone).toBe(true)
+    await expect(settleAll([Promise.resolve(1), Promise.resolve('two')])).resolves.toEqual([1, 'two'])
+  })
+})
+
+describe('spawnAsync', () => {
+  const print = (n: number) => [process.execPath, ['-e', `process.stdout.write('x'.repeat(${n}))`]] as const
+
+  // The same ceiling spawnSync's maxBuffer gives the sync readers: past it the
+  // child is killed and the result is an error, never an unbounded string.
+  // The child here never exits on its own, so only the kill settles it.
+  it('kills a child whose output crosses maxBuffer, and reports it as an error', async () => {
+    const endless = [process.execPath, ['-e', `setInterval(() => process.stdout.write('x'.repeat(1000)), 5)`]] as const
+    const r = await spawnAsync(...endless, { maxBuffer: 100 })
+    expect(r.error?.message).toContain('exceeded 100 bytes')
+    expect(r.stdout.length).toBeLessThanOrEqual(100)
+  })
+
+  it('returns output under the ceiling whole', async () => {
+    const r = await spawnAsync(...print(10_000), { maxBuffer: 20_000 })
+    expect(r.error).toBeUndefined()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toHaveLength(10_000)
+  })
+})
+
+describe('foldRunLog', () => {
+  const NOW = Date.parse('2026-09-27T12:00:00Z')
+  const start = (id: string, pid = 4242, at = '2026-09-27T11:59:00Z') => JSON.stringify({ id, event: 'start', pid, at, budgetMs: 15_000 })
+  const end = (id: string, over: object = {}) => JSON.stringify({ id, event: 'end', at: `at-${id}`, ms: 3_000, idleMs: 0, ok: true, budgetMs: 15_000, spawns: [], ...over })
+  const dead = () => false
+  const alive = () => true
+
+  // Runs in several worktrees start outside the sync lock and take it in
+  // another order; each start pairs with its own end, in the order they ended.
+  it('pairs each start with its own end, in the order the runs ended', () => {
+    const text = [start('a'), start('b'), start('c'), end('b', { ms: 2 }), end('a', { ms: 1 }), end('c', { ms: 3 })].join('\n')
+    expect(foldRunLog(text, dead, NOW).map(r => [r.id, r.ms])).toEqual([['b', 2], ['a', 1], ['c', 3]])
+  })
+
+  it('reads a start with no end as a run still going while its process lives, and as killed once it does not', () => {
+    expect(foldRunLog(start('a'), alive, NOW)).toEqual([])
+    expect(foldRunLog(start('a'), dead, NOW)).toMatchObject([{ id: 'a', ok: false, failure: expect.stringContaining('did not finish') }])
+  })
+
+  // A pid is not proof of life: pids are reused, and an orphan no init reaps
+  // stays a zombie that reads as alive. Past the staleness bound the lock also
+  // uses, a start with no end is a run that did not finish.
+  it('reads a start past the staleness bound as a run that did not finish, whatever its pid says', () => {
+    expect(foldRunLog(start('a', 4242, '2026-09-27T11:49:00Z'), alive, NOW)).toMatchObject([{ id: 'a', failure: expect.stringContaining('did not finish') }])
+  })
+
+  it('drops a run that never took the lock, and keeps an older build\'s id-less lines as runs', () => {
+    const legacy = JSON.stringify({ at: 'old', ms: 1, ok: true, budgetMs: 15_000, spawns: [] })
+    const text = [legacy, start('a'), JSON.stringify({ id: 'a', event: 'skipped' })].join('\n')
+    expect(foldRunLog(text, dead).map(r => r.at)).toEqual(['old'])
+  })
+})
+
+describe('syncAlarm', () => {
+  const record = (over: object) =>
+    JSON.stringify({ at: '2026-09-24T20:00:00.000Z', ms: 3_000, ok: true, budgetMs: 20_000, spawns: [], ...over })
+  const slow = (ms: number) =>
+    record({ ms, spawns: [{ cmd: 'bd show', calls: 2, ms: 20_300 }, { cmd: 'gh issue list', calls: 1, ms: 5_300 }] })
+
+  it('warns when the last two runs both blew the budget, naming the slowest spawns of the latest', () => {
+    const notice = syncAlarm([record({}), slow(35_900), slow(37_200)].join('\n') + '\n')
+    expect(notice).toContain('last two runs took 35.9s and 37.2s against budgets of 20s and 20s')
+    expect(notice).toContain('bd show ×2 20.3s, gh issue list 5.3s')
+  })
+
+  // One slow run is as often GitHub having a slow minute as a regression.
+  it('stays quiet on a single slow run, and once a run is back under', () => {
+    expect(syncAlarm([record({}), slow(37_200)].join('\n'))).toBe('')
+    expect(syncAlarm([slow(35_900), slow(37_200), record({})].join('\n'))).toBe('')
+    expect(syncAlarm(slow(37_200))).toBe('')
+  })
+
+  // A SessionStart that overlaps a sync still running must not read it as one
+  // that failed.
+  it('does not count a run that is still going', () => {
+    const running = JSON.stringify({ id: 'r', event: 'start', pid: 4242, at: '2026-09-27T11:59:00Z', budgetMs: 20_000 })
+    const failed = record({ ok: false, failure: 'network' })
+    const now = Date.parse('2026-09-27T12:00:00Z')
+    expect(syncAlarm([failed, running].join('\n'), () => true, now)).toBe('')
+    expect(syncAlarm([failed, running].join('\n'), () => false, now)).toContain('failed its last two runs')
+  })
+
+  // A sync that cannot run at all is the loudest case, and the latest run says
+  // which of the two the alarm is about.
+  it('reports two failed runs as a failing sync, naming the latest reason', () => {
+    const failed = (failure: string) => record({ ok: false, failure })
+    const notice = syncAlarm([failed('network'), failed('refusing to sync: bd reports 1.3.0')].join('\n'))
+    expect(notice).toContain('failed its last two runs')
+    expect(notice).toContain('refusing to sync: bd reports 1.3.0')
+    // A mixed pair says what each run was, not two failures.
+    const failedAfterSlow = syncAlarm([slow(35_900), failed('network')].join('\n'))
+    expect(failedAfterSlow).toContain('latest run failed')
+    expect(failedAfterSlow).toContain('network, after one that took 35.9s against its 20s budget')
+    const slowAfterFailed = syncAlarm([failed('network'), slow(37_200)].join('\n'))
+    expect(slowAfterFailed).toContain('over budget: the latest run took 37.2s against its 20s budget, after one that failed (network)')
+    expect(syncAlarm([record({}), failed('network')].join('\n'))).toBe('')
+  })
+
+  // A run's budget grows with the issues it minted and the comments it posted,
+  // so each run is judged, and reported, against its own.
+  it('judges each run against the budget it recorded', () => {
+    expect(syncAlarm([slow(35_900), record({ ms: 37_200, budgetMs: 40_000 })].join('\n'))).toBe('')
+    const notice = syncAlarm([slow(35_900), record({ ms: 57_200, budgetMs: 40_000 })].join('\n'))
+    expect(notice).toContain('the last two runs took 35.9s and 57.2s against budgets of 20s and 40s')
+  })
+
+  // Pacing a comment backlog, or waiting on another run's lock, is not the
+  // tracker getting slower: only the time the run spent working counts.
+  it('does not count deliberate waits against the budget', () => {
+    const draining = record({ ms: 52_000, idleMs: 47_000 })
+    expect(syncAlarm([draining, draining].join('\n'))).toBe('')
+    const working = record({ ms: 52_000, idleMs: 20_000 })
+    expect(syncAlarm([working, working].join('\n'))).toContain('32.0s and 32.0s')
+  })
+
+  // Valid JSON in an older or damaged shape must not throw: at session start
+  // a throw here would take the whole memory index down with the alarm.
+  it('formats records with a damaged spawns list instead of throwing', () => {
+    const damaged = (ms: number) => record({ ms, spawns: {} })
+    expect(syncAlarm([damaged(35_900), damaged(37_200)].join('\n'))).toContain('35.9s and 37.2s')
+    const odd = (ms: number) => record({ ms, spawns: [null, { cmd: 7 }, { cmd: 'bd show', calls: 2, ms: 20_300 }] })
+    expect(syncAlarm([odd(35_900), odd(37_200)].join('\n'))).toContain('Slowest spawns in the latest: bd show ×2 20.3s.')
+  })
+
+  it('reads past a torn or foreign line instead of failing session start', () => {
+    const noise = ['{"ms": 1', 'not json', '{"unrelated": true}', 'null', '{"ms": 50000}']
+    expect(syncAlarm([slow(35_900), ...noise, slow(37_200), ...noise].join('\n'))).toContain('35.9s and 37.2s')
+    expect(syncAlarm('')).toBe('')
   })
 })
 
@@ -870,6 +1302,15 @@ describe('planLossyReapplies', () => {
     expect(planLossyReapplies(closed, issues([[1, at('2026-09-11T01:00:00Z', { state: 'CLOSED' })]]))).toEqual([])
   })
 
+  // A withheld bead's report tells a human to compare the named fields by
+  // hand; text that differs only in gh's caret notation is not one of them.
+  it('names no overwrite for text that differs only as gh prints it', () => {
+    const assigned = [row({ id: 'km-a', assignee: 'Someone', title: 'T\x1b[0m', description: '\x1b[41m FAIL' })]
+    expect(planLossyReapplies(assigned, issues([[1, at('2026-09-11T01:00:00Z', { title: 'T^[[0m', body: '^[[41m FAIL' })]]))).toEqual([
+      { id: 'km-a', number: 1, losses: ['assignee'], overwrites: [] },
+    ])
+  })
+
   it('treats a GitHub-side assignment onto an unassigned bead as an import, not a loss', () => {
     const beads = [row({ id: 'km-a' })]
     expect(planLossyReapplies(beads, issues([[1, at('2026-09-11T01:00:00Z', { assignee: 'octocat' })]]))).toEqual([])
@@ -928,28 +1369,50 @@ describe('planPrePullPush', () => {
     expect(planPrePullPush([bead({ external_ref: ref(1), updated_at: '2026-08-20T00:00:00Z' })], map)).toEqual([])
   })
 
-  // A PATCH bd would make for no reason still re-stamps the issue, so it is
-  // skipped — but ONLY when the pull would also write nothing.
-  it('declines a push that would change nothing, when the pull would write nothing either', () => {
-    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-20T01:00:00Z' }
+  // bd would only spend a GET to skip it. A difference only the pull sees (the
+  // assignee, which GitHub never carries) is not the push's to fix either.
+  it('hands bd a local-newer row only when a pushed field differs', () => {
+    const converged = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
     const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
     expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual([])
     expect(planPrePullPush([{ ...row, title: 'edited locally' }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, labels: ['ui'] }], issues([[1, converged]]))).toEqual(['km-q'])
     expect(planPrePullPush([{ ...row, status: 'closed' }], issues([[1, converged]]))).toEqual(['km-q'])
+    expect(planPrePullPush([{ ...row, description: 'D\x1b[0m' }], issues([[1, { ...converged, body: 'D^[[0m' }]]))).toEqual([])
+    expect(planPrePullPush([{ ...row, title: 'T\x1b[0m' }], issues([[1, { ...converged, title: 'T^[[0m' }]]))).toEqual([])
   })
 
-  // The push carries no content here — its job is to move the ISSUE. bd's pull
-  // explicitly fetches a bead modified since last_sync whose issue the
-  // incremental query did not return, and those bypass its skip-locally-
-  // modified guard; the push is what puts the issue in that query. Without it
-  // the pull re-applies the row, clearing the assignee and restamping a close
-  // date nothing can restore.
-  it('pushes a content-identical local-newer row the pull would still write', () => {
-    const converged = { state: 'CLOSED' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', assignee: '', updatedAt: '2026-08-20T01:00:00Z' }
-    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task', status: 'closed' })
-    expect(planPrePullPush([row], issues([[1, converged]]))).toEqual([])
-    expect(planPrePullPush([{ ...row, assignee: 'Someone' }], issues([[1, converged]]))).toEqual(['km-q'])
+})
+
+describe('planUnlandedPushes', () => {
+  it('names a handed bead whose issue still differs after the push', () => {
+    const landed = { state: 'OPEN' as const, labels: ['type::task', 'priority::high'], title: 'T', body: 'D', updatedAt: '2026-08-26T00:00:00Z' }
+    const row = bead({ id: 'km-q', external_ref: ref(1), updated_at: '2026-08-25T00:00:00Z', title: 'T', description: 'D', priority: 1, issue_type: 'task' })
+    expect(planUnlandedPushes([row], issues([[1, landed]]))).toEqual([])
+    expect(planUnlandedPushes([{ ...row, title: 'not on GitHub' }], issues([[1, landed]]))).toEqual([{ id: 'km-q', number: 1 }])
+  })
+})
+
+describe('planPullSet', () => {
+  const gh = (updatedAt?: string): IssueInfo => ({ state: 'OPEN', labels: [], title: 'GitHub title', body: 'D', updatedAt })
+  const row = (id: string, n: number, updated_at?: string) =>
+    bead({ id, external_ref: ref(n), title: 'local title', description: 'D', updated_at })
+
+  it('hands the pull a faithful bead only when GitHub is not the older side', () => {
+    const map = issues([[1, gh('2026-08-20T01:00:00Z')], [2, gh('2026-08-20T01:00:00Z')], [3, gh()], [4, gh('2026-08-20T01:00:00Z')]])
+    const beads = [
+      row('km-local-newer', 1, '2026-08-21T00:00:00Z'),
+      row('km-github-newer', 2, '2026-08-19T00:00:00Z'),
+      row('km-no-gh-ts', 3, '2026-08-19T00:00:00Z'),
+    ]
+    // #4 has no bead: the GitHub→beads direction is always pulled.
+    expect(planPullSet(beads, map, new Set())).toEqual([2, 3, 4])
+  })
+
+  it('never names a withheld bead', () => {
+    const map = issues([[2, gh('2026-08-20T01:00:00Z')]])
+    expect(planPullSet([row('km-lossy', 2, '2026-08-19T00:00:00Z')], map, new Set(['km-lossy']))).toEqual([])
   })
 })
 
@@ -988,112 +1451,6 @@ describe('planMintedRefs', () => {
   })
 })
 
-describe('planMintedNonOpen', () => {
-  it('flags a non-open bead whose first issue the pre-push just minted', () => {
-    const pre = [bead({ id: 'km-a', status: 'closed', external_ref: null })]
-    const fresh = [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })]
-    expect(planMintedNonOpen(pre, fresh)).toEqual([{ id: 'km-a', number: 12 }])
-  })
-
-  it('covers every lifecycle status GitHub OPEN cannot represent', () => {
-    for (const status of ['in_progress', 'blocked', 'deferred']) {
-      const pre = [bead({ id: 'km-a', status, external_ref: null })]
-      const fresh = [bead({ id: 'km-a', status, external_ref: ref(12) })]
-      expect(planMintedNonOpen(pre, fresh)).toEqual([{ id: 'km-a', number: 12 }])
-    }
-  })
-
-  it('ignores open mints and pre-existing refs; a fresh-only non-open bead IS a suspect', () => {
-    expect(
-      planMintedNonOpen(
-        [bead({ id: 'km-a', status: 'open', external_ref: null })],
-        [bead({ id: 'km-a', status: 'open', external_ref: ref(12) })],
-      ),
-    ).toEqual([])
-    expect(
-      planMintedNonOpen(
-        [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
-        [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })],
-      ),
-    ).toEqual([])
-    expect(planMintedNonOpen([], [bead({ id: 'km-a', status: 'closed', external_ref: ref(12) })])).toEqual([
-      { id: 'km-a', number: 12 },
-    ])
-  })
-})
-
-describe('detectReverts', () => {
-  const snap = bead({
-    id: 'km-a',
-    status: 'in_progress',
-    priority: 1,
-    title: 'T',
-    description: 'D-new',
-    assignee: 'V',
-    updated_at: '2026-08-20T02:00:00Z',
-  })
-
-  it('reports a snapshot row whose issue-backed fields changed', () => {
-    for (const change of [
-      { status: 'open' },
-      { description: 'D-old' },
-      { title: 'T-old' },
-      { priority: 2 },
-      { issue_type: 'task' },
-      { assignee: undefined },
-    ] satisfies Partial<BeadRow>[]) {
-      expect(detectReverts([snap], byId([{ ...snap, ...change }]))).toEqual([snap])
-    }
-  })
-
-  it('stays quiet when nothing changed or the row vanished', () => {
-    expect(detectReverts([snap], byId([{ ...snap }]))).toEqual([])
-    expect(detectReverts([snap], byId([]))).toEqual([])
-  })
-
-  it('compares labels as a set — order-insensitive, content-sensitive', () => {
-    const labelled = { ...snap, labels: ['ui', 'bug'] }
-    expect(detectReverts([labelled], byId([{ ...labelled, labels: ['bug', 'ui'] }]))).toEqual([])
-    expect(detectReverts([labelled], byId([{ ...labelled, labels: ['bug'] }]))).toEqual([labelled])
-    expect(detectReverts([{ ...snap, labels: [] }], byId([{ ...snap, labels: ['stale'] }]))).toEqual([
-      { ...snap, labels: [] },
-    ])
-  })
-})
-
-describe('planRestoreArgs', () => {
-  it('restores an open-lifecycle row with one update carrying the status', () => {
-    const row = bead({ id: 'km-a', status: 'in_progress', priority: 1, title: 'T', description: 'D', assignee: 'V', issue_type: 'bug' })
-    expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '1', '-t', 'bug', '-a', 'V', '-s', 'in_progress'],
-    ])
-  })
-
-  it('restores a closed row via close, clearing the assignee it never had', () => {
-    const row = bead({ id: 'km-a', status: 'closed', priority: 2, title: 'T', description: 'D', close_reason: 'done' })
-    expect(planRestoreArgs(row)).toEqual([
-      ['update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', ''],
-      ['close', 'km-a', '-r', 'done'],
-    ])
-  })
-
-  it('replays the label delta against the post-pull row', () => {
-    const row = bead({ id: 'km-a', status: 'open', priority: 2, title: 'T', description: 'D', labels: ['ui', 'keep'] })
-    const post = bead({ ...row, labels: ['keep', 'stale'] })
-    expect(planRestoreArgs(row, post)[0]).toEqual([
-      'update', 'km-a', '--title', 'T', '-d', 'D', '-p', '2', '-a', '', '--add-label', 'ui', '--remove-label', 'stale', '-s', 'open',
-    ])
-  })
-
-  it('re-adds every snapshot label when the post row is unknown (conservative path)', () => {
-    const row = bead({ id: 'km-a', status: 'open', priority: 2, title: 'T', description: 'D', labels: ['ui'] })
-    const [update] = planRestoreArgs(row)
-    expect(update).toContain('--add-label')
-    expect(update).toContain('ui')
-    expect(update).not.toContain('--remove-label')
-  })
-})
-
 describe('mirroredCommentIds', () => {
   const a = '0000c0de-0000-7000-8000-000000000001'
   const b = '0000c0de-0000-7000-8000-000000000002'
@@ -1120,12 +1477,12 @@ describe('mirroredCommentIds', () => {
 
 describe('mirrorCommentBody', () => {
   const numbers = new Map([
-    ['km-abc', 12],
+    ['km-abcd', 12],
     ['km-1786746066130-174-003836b1', 502],
   ])
   // Ids to HOLD: beads whose issue is still to be minted.
-  const hold = new Set(['km-new'])
-  const comment = { id: '0000c0de-0000-7000-8000-000000000001', text: 'see km-abc and km-1786746066130-174-003836b1; km-zzz is nobody', created_at: '2026-09-03T20:16:36Z' }
+  const hold = new Set(['km-nw01'])
+  const comment = { id: '0000c0de-0000-7000-8000-000000000001', text: 'see km-abcd and km-1786746066130-174-003836b1; km-zzz9 is nobody', created_at: '2026-09-03T20:16:36Z' }
 
   it('opens with the marker, stamps the original time, and rewrites mapped bead ids to issue numbers', () => {
     const { body, unmapped, leftover } = mirrorCommentBody(comment, numbers, hold)
@@ -1133,22 +1490,22 @@ describe('mirrorCommentBody', () => {
     expect(body).toContain('2026-09-03 20:16 UTC')
     // An id that matches no bead is text (a fixture, a typo), not a reference
     // — published, and named as a leftover.
-    expect(body.endsWith('see #12 and #502; km-zzz is nobody')).toBe(true)
+    expect(body.endsWith('see #12 and #502; km-zzz9 is nobody')).toBe(true)
     expect(unmapped).toEqual([])
-    expect(leftover).toEqual(['km-zzz'])
+    expect(leftover).toEqual(['km-zzz9'])
   })
 
   it('reports an id that names a bead without an issue instead of publishing it', () => {
-    const { body, unmapped } = mirrorCommentBody({ ...comment, text: 'blocked on km-new (twice: km-new) and km-abc' }, numbers, hold)
-    expect(unmapped).toEqual(['km-new'])
-    expect(body.endsWith('blocked on km-new (twice: km-new) and #12')).toBe(true)
+    const { body, unmapped } = mirrorCommentBody({ ...comment, text: 'blocked on km-nw01 (twice: km-nw01) and km-abcd' }, numbers, hold)
+    expect(unmapped).toEqual(['km-nw01'])
+    expect(body.endsWith('blocked on km-nw01 (twice: km-nw01) and #12')).toBe(true)
   })
 
   it('rewrites inside code too, and does not count a held id as a leftover', () => {
-    const { body, unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-new and `bd show km-abc`, km-zzz' }, numbers, hold)
-    expect(body.endsWith('km-new and `bd show #12`, km-zzz')).toBe(true)
-    expect(unmapped).toEqual(['km-new'])
-    expect(leftover).toEqual(['km-zzz'])
+    const { body, unmapped, leftover } = mirrorCommentBody({ ...comment, text: 'km-nw01 and `bd show km-abcd`, km-zzz9' }, numbers, hold)
+    expect(body.endsWith('km-nw01 and `bd show #12`, km-zzz9')).toBe(true)
+    expect(unmapped).toEqual(['km-nw01'])
+    expect(leftover).toEqual(['km-zzz9'])
   })
 })
 
@@ -1160,33 +1517,51 @@ describe('planCommentMirror', () => {
   })
 })
 
-// Process-level pins for runSync's #647 guards: the push-before-pull ordering
-// and the snapshot→restore→push-back net, which unit tests on the plan
-// functions cannot see. bd and gh are PATH-fronted shims; the bd shim serves
-// a different `bd list` fixture per call so the post-pull list can show a
-// revert. Measured ~150ms per spawn solo; budgeted for the 6x load stretch.
+// Process-level pins for runSync's ordering and wiring, which unit tests on
+// the plan functions cannot see. bd and gh are PATH-fronted shims; the bd shim
+// serves a different `bd list` fixture per call so a listing can show what a
+// step changed. Measured ~150ms per spawn solo; budgeted for the 6x load
+// stretch.
 describe('runSync process behavior', { timeout: 20_000 }, () => {
   const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
 
   const makeSyncRepo = (opts: {
     issues: object[]
-    lists: object[][]
-    shows?: (object[] | string)[]
+    /** What `bd export` serves, one row set per read with the last repeating, each joined with its `comments` fixture. */
+    reads: object[][]
     failCloseId?: string
+    /** Beads bd's close policy refuses to close without --force (an open child or blocker). */
+    blockedCloseIds?: string[]
+    /** What the issue listing serves once a push has run — the state after the pre-pull push. */
+    issuesAfterPush?: object[]
+    /** Fail every issue-listing read once a push has run. */
+    failListAfterPush?: boolean
+    /** A GraphQL error every issue-listing chunk carries, nulling its first alias. */
+    listingError?: object
+    /** The number of the newest PR by creation date (default: none). */
+    newestPr?: number
     failFullSync?: boolean
     failPushCall?: number
-    failListCall?: number
+    failReadCall?: number
     /** Comment fixtures, keyed by bead id, joined into the `bd export` rows. */
     comments?: Record<string, object[]>
     /** `gh api graphql` responses, one per call (the last one repeats). */
     graphql?: object | object[]
     failPostCall?: number
+    /** Seconds each `gh api graphql` call takes, so overlapping calls show in `graphqlPeak`. */
+    graphqlDelay?: number
+    /** Seconds each issue-listing read takes, so overlapping reads show in `listingPeak`. */
+    issueListDelay?: number
+    /** `gh auth token` prints nothing, as on a machine that is logged out. */
+    noGhToken?: boolean
+    /** `bd --version` fails, as when bd is missing from PATH. */
+    bdBroken?: boolean
     /** Extra environment for the script (the mirror's post cap override). */
     env?: Record<string, string>
     /** What `bd --version` prints (default: a verified version). */
     bdVersionOutput?: string
-    /** Rows `bd export` serves, one set per call with the last repeating (default: the last listing), each joined with its `comments` fixture. */
-    exportRows?: object[] | object[][]
+    /** `bd dolt commit` reports an error. */
+    failCommit?: boolean
   }) => {
     const repo = mkdtempSync(join(tmpdir(), 'bd-sync-run-'))
     spawnSync('git', ['init', '-q'], { cwd: repo })
@@ -1196,23 +1571,49 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const shimLog = join(repo, 'shim.log')
     writeFileSync(shimLog, '')
     writeFileSync(join(repo, 'gh-issues.json'), JSON.stringify(opts.issues))
-    opts.lists.forEach((rows, i) => writeFileSync(join(repo, `list-${i + 1}.json`), JSON.stringify(rows)))
-    writeFileSync(join(repo, 'list-last.json'), JSON.stringify(opts.lists[opts.lists.length - 1]))
-    const shows = opts.shows ?? []
-    shows.forEach((rows, i) =>
-      writeFileSync(join(repo, `show-${i + 1}.json`), typeof rows === 'string' ? rows : JSON.stringify(rows, null, 2)),
+    if (opts.issuesAfterPush) writeFileSync(join(repo, 'gh-issues-after.json'), JSON.stringify(opts.issuesAfterPush))
+    // Answers the listing's GraphQL reads from the issue fixtures, as GitHub
+    // does: the newest number, or each aliased number as an issue or as null
+    // with a NOT_FOUND error (and gh's exit 1).
+    writeFileSync(
+      join(repo, 'gh-listing.mjs'),
+      [
+        "import { existsSync, readFileSync } from 'node:fs'",
+        `const repo = ${JSON.stringify(repo)}`,
+        "const query = process.argv.slice(2).find(a => a.startsWith('query=')).slice('query='.length)",
+        "const pushed = existsSync(repo + '/push-count')",
+        ...(opts.failListAfterPush ? ["if (pushed) { console.error('HTTP 502: Bad Gateway'); process.exit(1) }"] : []),
+        "const after = pushed && existsSync(repo + '/gh-issues-after.json')",
+        "const issues = JSON.parse(readFileSync(repo + (after ? '/gh-issues-after.json' : '/gh-issues.json'), 'utf8'))",
+        'const byNumber = new Map(issues.map(i => [i.number, i]))',
+        'let response',
+        "if (query.includes('orderBy:')) {",
+        // Newest by creation date: a fixture's createdAt where every one has
+        // it, its number otherwise.
+        '  const created = issues.every(i => i.createdAt) ? [...issues].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : [...issues].sort((a, b) => b.number - a.number)',
+        '  const nodes = created.slice(0, 1).map(i => ({ number: i.number }))',
+        `  response = { data: { repository: { issues: { nodes }, pullRequests: { nodes: ${JSON.stringify(opts.newestPr ? [{ number: opts.newestPr }] : [])} } } } }`,
+        '} else {',
+        '  const repository = {}',
+        '  const errors = []',
+        '  for (const [, n] of query.matchAll(/i(\\d+): issue\\(number:/g)) {',
+        '    const i = byNumber.get(Number(n))',
+        '    repository[`i${n}`] = i ? { ...i, labels: { nodes: i.labels ?? [] }, assignees: { nodes: i.assignees ?? [] } } : null',
+        "    if (!i) errors.push({ type: 'NOT_FOUND', path: ['repository', `i${n}`] })",
+        '  }',
+        ...(opts.listingError
+          ? [`  const first = Object.keys(repository)[0]; repository[first] = null; errors.push(${JSON.stringify(opts.listingError)})`]
+          : []),
+        '  response = { data: { repository }, ...(errors.length && { errors }) }',
+        '}',
+        'console.log(JSON.stringify(response))',
+        "process.exit(response.errors ? 1 : 0)",
+      ].join('\n') + '\n',
     )
-    const lastShow = shows[shows.length - 1] ?? []
-    writeFileSync(join(repo, 'show-last.json'), typeof lastShow === 'string' ? lastShow : JSON.stringify(lastShow, null, 2))
-    // One set of rows per `bd export` call, the last repeating — the wrapper
-    // reads the export more than once per run and expects different states
-    // (before the touches, after them).
-    const given = opts.exportRows ?? opts.lists[opts.lists.length - 1]
-    const exportCalls = (Array.isArray(given[0]) ? given : [given]) as { id: string }[][]
-    const serialize = (rows: { id: string }[]) =>
-      rows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[r.id] ?? [] })).join('\n') + '\n'
-    exportCalls.forEach((rows, i) => writeFileSync(join(repo, `export-${i + 1}.jsonl`), serialize(rows)))
-    writeFileSync(join(repo, 'export-last.jsonl'), serialize(exportCalls[exportCalls.length - 1]))
+    const serialize = (rows: object[]) =>
+      rows.map(r => JSON.stringify({ _type: 'issue', ...r, comments: opts.comments?.[(r as { id: string }).id] ?? [] })).join('\n') + '\n'
+    opts.reads.forEach((rows, i) => writeFileSync(join(repo, `export-${i + 1}.jsonl`), serialize(rows)))
+    writeFileSync(join(repo, 'export-last.jsonl'), serialize(opts.reads[opts.reads.length - 1]))
     const graphqlFixtures = Array.isArray(opts.graphql) ? opts.graphql : [opts.graphql ?? { data: { repository: {} } }]
     graphqlFixtures.forEach((g, i) => writeFileSync(join(repo, `gh-graphql-${i + 1}.json`), JSON.stringify(g)))
     writeFileSync(join(repo, 'gh-graphql-last.json'), JSON.stringify(graphqlFixtures[graphqlFixtures.length - 1]))
@@ -1223,17 +1624,9 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       [
         '#!/bin/sh',
         `echo "bd $@" >> "${shimLog}"`,
+        `echo "$1 \${BD_DOLT_AUTO_PUSH-unset}" >> "${repo}/bd-env.log"`,
         'case "$1" in',
-        `  --version) echo "${opts.bdVersionOutput ?? 'bd version 1.2.2 (shim)'}";;`,
-        '  list)',
-        `    n=$(cat "${repo}/list-count" 2>/dev/null || echo 0)`,
-        `    n=$((n+1)); echo $n > "${repo}/list-count"`,
-        `    if [ "$n" = "${opts.failListCall ?? 0}" ]; then echo "Error: list exploded";`,
-        `    elif [ -f "${repo}/list-$n.json" ]; then cat "${repo}/list-$n.json"; else cat "${repo}/list-last.json"; fi;;`,
-        '  show)',
-        `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
-        `    m=$((m+1)); echo $m > "${repo}/show-count"`,
-        `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
+        `  --version) ${opts.bdBroken ? 'exit 127' : `echo "${opts.bdVersionOutput ?? 'bd version 1.3.0 (shim)'}"`};;`,
         '  github)',
         '    case "$*" in *--push-only*)',
         `      k=$(cat "${repo}/push-count" 2>/dev/null || echo 0); k=$((k+1)); echo $k > "${repo}/push-count"`,
@@ -1243,10 +1636,14 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
         '  export)',
         `    e=$(cat "${repo}/export-count" 2>/dev/null || echo 0)`,
         `    e=$((e+1)); echo $e > "${repo}/export-count"`,
-        `    if [ -f "${repo}/export-$e.jsonl" ]; then cat "${repo}/export-$e.jsonl"; else cat "${repo}/export-last.jsonl"; fi;;`,
-        ...(opts.failCloseId
-          ? [`  close) if [ "$2" = "${opts.failCloseId}" ]; then echo "Error: cannot close"; else echo ok; fi;;`]
-          : []),
+        `    if [ "$e" = "${opts.failReadCall ?? 0}" ]; then echo "Error: export exploded";`,
+        `    elif [ -f "${repo}/export-$e.jsonl" ]; then cat "${repo}/export-$e.jsonl"; else cat "${repo}/export-last.jsonl"; fi;;`,
+        // bd's close policy: an unforced close of a blocked bead prints the
+        // refusal on stderr and exits 1.
+        '  close)',
+        `    case " ${(opts.blockedCloseIds ?? []).join(' ')} " in *" $2 "*) case "$*" in *--force*) ;; *) echo "cannot close $2: blocked (use --force to override)" >&2; exit 1;; esac;; esac`,
+        `    if [ "$2" = "${opts.failCloseId ?? ''}" ]; then echo "Error: cannot close"; else echo ok; fi;;`,
+        `  dolt) ${opts.failCommit ? 'echo "Error: commit exploded"' : 'echo Committed.'};;`,
         '  *) echo ok;;',
         'esac',
         'exit 0',
@@ -1256,14 +1653,29 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
       join(shimDir, 'gh'),
       [
         '#!/bin/sh',
-        `echo "gh $@" >> "${shimLog}"`,
+        // A listing read is logged by its kind: a chunk's query runs to ~14KB,
+        // and concurrent appends that long interleave in the log.
+        'case "$*" in',
+        `  *"number state updatedAt"*) echo "gh api graphql listing" >> "${shimLog}";;`,
+        `  *"orderBy:"*) echo "gh api graphql newest" >> "${shimLog}";;`,
+        `  *) echo "gh $@" >> "${shimLog}";;`,
+        'esac',
         'case "$1 $2" in',
-        '  "auth token") echo shim-token;;',
-        `  "issue list") cat "${repo}/gh-issues.json";;`,
+        `  "auth token") ${opts.noGhToken ? 'true' : 'echo shim-token'};;`,
         // The real gh exits 1 when any alias is NOT_FOUND but still prints
         // the data — the shim mirrors that exit so the parser is pinned to
         // stdout, not the status.
         '  "api graphql")',
+        '    case "$*" in *"number state updatedAt"*|*"orderBy:"*)',
+        ...(opts.issueListDelay
+          ? [`      echo + >> "${repo}/listing-flight.log"; sleep ${opts.issueListDelay}; echo - >> "${repo}/listing-flight.log"`]
+          : []),
+        `      exec node "${repo}/gh-listing.mjs" "$@";;`,
+        '    esac',
+        `    echo read >> "${repo}/comment-reads.log"`,
+        ...(opts.graphqlDelay
+          ? [`    echo + >> "${repo}/graphql-flight.log"; sleep ${opts.graphqlDelay}; echo - >> "${repo}/graphql-flight.log"`]
+          : []),
         `    g=$(cat "${repo}/graphql-count" 2>/dev/null || echo 0); g=$((g+1)); echo $g > "${repo}/graphql-count"`,
         `    f="${repo}/gh-graphql-$g.json"; [ -f "$f" ] || f="${repo}/gh-graphql-last.json"`,
         `    cat "$f"; grep -q '"errors"' "$f" && exit 1;;`,
@@ -1280,7 +1692,42 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     chmodSync(join(shimDir, 'gh'), 0o755)
     const env = { ...process.env, ...opts.env, PATH: `${shimDir}:${process.env.PATH}` }
     const run = (...args: string[]) => spawnSync('node', [script, ...args], { cwd: repo, env, encoding: 'utf8' })
-    return { run, shimCalls: () => readFileSync(shimLog, 'utf8'), posted: () => readFileSync(postedLog, 'utf8') }
+    // For a test that has to act while the sync runs (release a lock it waits on).
+    const runInBackground = (...args: string[]) => {
+      const child = spawn('node', [script, ...args], { cwd: repo, env, stdio: 'ignore' })
+      return { child, done: new Promise<number | null>(resolve => child.on('close', resolve)) }
+    }
+    // The records as the alarm reads them: each run's start folded with its end.
+    const runLog = () => {
+      const log = join(repo, SYNC_RUN_LOG)
+      return existsSync(log) ? (foldRunLog(readFileSync(log, 'utf8')) as ReturnType<typeof JSON.parse>[]) : []
+    }
+    // Most calls ever in flight at once, from a delay log.
+    const peakOf = (log: string) => () => {
+      let inFlight = 0
+      let peak = 0
+      for (const mark of readFileSync(join(repo, log), 'utf8').split('\n'))
+        if (mark === '+') peak = Math.max(peak, ++inFlight)
+        else if (mark === '-') inFlight--
+      return peak
+    }
+    const shimCalls = () => readFileSync(shimLog, 'utf8')
+    // GraphQL reads of issue comments — the listing's reads are GraphQL too.
+    const commentReads = () => (existsSync(join(repo, 'comment-reads.log')) ? readFileSync(join(repo, 'comment-reads.log'), 'utf8').split('\n').filter(Boolean).length : 0)
+    // Each bd command's verb with the BD_DOLT_AUTO_PUSH it ran under.
+    const bdAutoPush = () => readFileSync(join(repo, 'bd-env.log'), 'utf8').trim().split('\n')
+    return {
+      repo,
+      run,
+      runInBackground,
+      runLog,
+      graphqlPeak: peakOf('graphql-flight.log'),
+      listingPeak: peakOf('listing-flight.log'),
+      commentReads,
+      bdAutoPush,
+      shimCalls,
+      posted: () => readFileSync(postedLog, 'utf8'),
+    }
   }
 
   // Paired with syncRow to be CONVERGED: same title, body, priority and type,
@@ -1297,7 +1744,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     assignees: [],
   })
 
-  // The wider row shape `bd list --json` emits — the plan functions' BeadRow
+  // The wider row shape `bd export` emits — the plan functions' BeadRow
   // is a subset of it. Only the boilerplate lives here: external_ref and
   // updated_at stay at the call site because half these tests pin an ORDERING
   // between a local row and its GitHub issue, or the absence of a link, and
@@ -1316,9 +1763,12 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // and the pre-pull push declines it. A test whose subject is the push wants
   // this instead: the same row with one field GitHub does not yet have.
   const pushable = <T extends object>(over: T) => syncRow({ title: 'T (edited locally)', ...over })
+  // An issue with no bead: it is always handed to the pull, so the pull runs.
+  const unlinkedIssue = () => ghIssue(99, '2026-08-20T00:00:00Z')
 
-  // The pre-pull push and the push-back both spell `--push-only --issues`, so
-  // a push-back pin reads only the log AFTER the pull.
+  // The push-back is now only step 3's priority repair, which also spells
+  // `--push-only --issues`, so a push-back pin reads only the log AFTER the
+  // pull.
   const afterPull = (log: string) => {
     const i = log.indexOf('bd github sync --pull-only')
     expect(i).toBeGreaterThan(-1)
@@ -1330,18 +1780,21 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // silent assignee/close-date loss is not.
   it('refuses to sync on a bd version the guards were not verified against', () => {
     const row = syncRow({ id: 'km-v', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
-    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [[row]], bdVersionOutput: 'bd version 1.3.0' }
-    const { run, shimCalls } = makeSyncRepo(repo)
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], bdVersionOutput: 'bd version 1.2.2' }
+    const { run, shimCalls, runLog } = makeSyncRepo(repo)
     const r = run()
     expect(r.status).toBe(1)
-    expect(r.stderr).toContain('verified against bd 1.2.2')
-    expect(r.stderr).toContain('1.3.0')
+    expect(r.stderr).toContain('verified against bd 1.3.0')
+    expect(r.stderr).toContain('1.2.2')
+    // …and on record: a sync that refuses every run is the failure the alarm
+    // most needs to see.
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('refusing to sync') }])
     // Nothing was read or written past the probe.
     expect(shimCalls()).not.toContain('--pull-only')
     expect(shimCalls()).not.toContain('--push-only')
 
     // A prerelease of a verified release is a different engine.
-    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.2.2-rc.1' })
+    const rc = makeSyncRepo({ ...repo, bdVersionOutput: 'bd version 1.3.0-rc.2' })
     expect(rc.run().status).toBe(1)
     expect(rc.shimCalls()).not.toContain('--pull-only')
 
@@ -1362,7 +1815,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const row = syncRow({ id: 'km-t1', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
-      lists: [[row]],
+      reads: [[row]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1380,12 +1833,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // Position pin: the pre-pull push must run AFTER close-adoption — swapped,
   // a still-open bead's push would re-open its GitHub-closed issue (trap 1).
+  // km-t3 is blocked, so an unforced adoption would be refused and abort.
   it('adopts GitHub-side closes BEFORE the pre-pull push', () => {
     const row = pushable({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
+      blockedCloseIds: ['km-t3'],
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
-      lists: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
-      shows: [[{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
+      reads: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1397,12 +1851,71 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(close).toBeLessThan(pushOnly)
   })
 
+  // bd pushes its Dolt remote from inside whichever command is running when
+  // the push throttle lapses, so a run that writes at all would carry a
+  // git+ssh push on one of its steps.
+  it('runs every bd command of the sync with Dolt auto-push off', () => {
+    const row = pushable({ id: 'km-t3', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, bdAutoPush } = makeSyncRepo({
+      issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED'), unlinkedIssue()],
+      reads: [[row], [{ ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }]],
+    })
+    expect(run().status).toBe(0)
+    const commands = bdAutoPush().filter(l => !l.startsWith('--version'))
+    expect(new Set(commands.map(l => l.split(' ')[0]))).toEqual(new Set(['export', 'close', 'github', 'dolt']))
+    expect(commands.filter(l => !l.endsWith(' false'))).toEqual([])
+  })
+
+  describe('committing what bd github sync wrote', () => {
+    const unminted = pushable({ id: 'km-c', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const minted = { ...unminted, external_ref: ref(5) }
+    const mintRepo = { issues: [ghIssue(5, '2026-08-20T00:00:00Z')], reads: [[unminted], [minted]] }
+    // The sync and commit calls in order, without the reads around them.
+    const writes = (log: string) =>
+      log.split('\n').flatMap(l =>
+        /^bd dolt commit\b/.test(l) ? ['commit']
+        : /--push-only/.test(l) ? ['push']
+        : /--pull-only/.test(l) ? ['pull']
+        : [],
+      )
+
+    it('commits right after each sync, so a following bd dolt push carries the refs', () => {
+      const { run, shimCalls } = makeSyncRepo({ ...mintRepo, issues: [...mintRepo.issues, unlinkedIssue()] })
+      expect(run().status).toBe(0)
+      expect(writes(shimCalls())).toEqual(['push', 'commit', 'pull', 'commit'])
+    })
+
+    // A failed push can still have minted: an earlier chunk, or bd aborting midway.
+    it('commits after a failed sync too, and still reports the sync failure', () => {
+      const { run, shimCalls } = makeSyncRepo({ ...mintRepo, failPushCall: 1 })
+      const r = run()
+      expect(r.status).not.toBe(0)
+      expect(r.stderr).toContain('push exploded')
+      expect(writes(shimCalls())).toEqual(['push', 'commit'])
+    })
+
+    it('fails the run when the commit fails, keeping the minted mapping', () => {
+      const { run, runLog } = makeSyncRepo({ ...mintRepo, failCommit: true })
+      const r = run()
+      expect(r.status).not.toBe(0)
+      expect(r.stdout).toContain('minted: km-c → #5')
+      expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('commit exploded') }])
+    })
+
+    it('commits nothing on a dry run', () => {
+      const { run, shimCalls } = makeSyncRepo({ issues: [unlinkedIssue()], reads: [[unminted]] })
+      expect(run('--dry-run').status).toBe(0)
+      expect(shimCalls()).toContain('--pull-only')
+      expect(writes(shimCalls())).not.toContain('commit')
+    })
+  })
+
   it('prints the km→#N mapping for an issue this run minted', () => {
     const unminted = syncRow({ id: 'km-t5', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(5) }
     const { run } = makeSyncRepo({
       issues: [ghIssue(5, '2026-08-20T00:00:00Z')],
-      lists: [[unminted], [minted], [minted]],
+      reads: [[unminted], [minted], [minted]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1417,8 +1930,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const unminted = syncRow({ id: 'km-t5', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const minted = { ...unminted, external_ref: ref(5) }
     const { run } = makeSyncRepo({
-      issues: [ghIssue(5, '2026-08-20T00:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
-      lists: [[unminted], [minted], [minted]],
+      issues: [ghIssue(5, '2026-08-20T00:00:00Z'), unlinkedIssue()],
+      reads: [[unminted], [minted], [minted]],
       failFullSync: true,
     })
     const r = run()
@@ -1427,192 +1940,165 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('minted: km-t5 → #5')
   })
 
-  // Position pin: the print must sit ABOVE the snapshot-abort. A minted
-  // CLOSED bead is itself a snapshot suspect (planMintedNonOpen), so a bd
-  // show failure aborts the run right after the mint — below the abort, the
-  // mapping would be swallowed in exactly that case (the failFullSync test
-  // cannot catch this: it mints an OPEN bead, which is never a suspect).
-  it('prints the minted mapping even when the suspect snapshot aborts the run', () => {
-    const unminted = syncRow({ id: 'km-t6', status: 'closed', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
-    const minted = { ...unminted, external_ref: ref(6) }
-    const { run } = makeSyncRepo({
-      issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
-      lists: [[unminted], [minted], [minted]],
-      shows: ['not json — snapshot read fails'],
-    })
-    const r = run()
-    expect(r.status).toBe(1)
-    expect(r.stderr).toContain('aborting before pull')
-    expect(r.stdout).toContain('minted: km-t6 → #6')
-  })
-
-  it('restores a newer local row the pull reverted, then pushes it back out', () => {
-    const newer = { id: 'km-t2', status: 'in_progress', priority: 1, title: 'T', description: 'D-new', external_ref: ref(2), updated_at: '2026-08-20T02:00:00Z' }
-    const revertedRow = { ...newer, status: 'open', description: 'D-old' }
-    const snapshot = { ...newer, assignee: 'Vlad' }
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(2, '2026-08-20T01:00:00Z')],
-      lists: [[newer], [newer], [revertedRow]],
-      shows: [[snapshot], [revertedRow]],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('restored km-t2')
-    const log = shimCalls()
-    expect(log).toContain('bd show km-t2 --json')
-    expect(log).toContain('bd update km-t2 --title T -d D-new -p 1 -a Vlad -s in_progress')
-    expect(afterPull(log)).toContain('bd github sync --push-only --issues km-t2')
-  })
-
-  // A half-restored row must NOT be pushed: publishing it would stamp GitHub
-  // newer and bury the loss, while leaving GitHub older keeps the row a
-  // suspect so the next sync retries the restore. The revert also flattens
-  // priority here, so the id enters through the priority-fix leg too — the
-  // exclusion must hold for the whole union, not just restoredOk.
-  it('keeps a failed restore out of the push-back, including the priority-fix leg', () => {
-    const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z' })
-    const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
-      lists: [[closedLocal], [closedLocal], [revertedRow]],
-      shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
-      failCloseId: 'km-t4',
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('FAILED to restore')
-    expect(shimCalls()).toContain('bd update km-t4 -p 1')
-    expect(afterPull(shimCalls())).not.toContain('--issues km-t4')
-  })
-
-  // Assignment rides on `bd show` rows (list rows lack the field), and an
-  // unassigned snapshot must CLEAR a pulled stale assignee (-a '' does).
-  it('detects and restores an assignment-only revert', () => {
-    const newer = syncRow({ id: 'km-t9', external_ref: ref(9), updated_at: '2026-08-20T02:00:00Z' })
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(9, '2026-08-20T01:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
-      lists: [[newer], [newer], [newer]],
-      shows: [[newer], [{ ...newer, assignee: 'stale-import' }]],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('restored km-t9')
-    expect(shimCalls()).toContain('bd update km-t9 --title T -d D -p 1 -t task -a  -s open')
-    expect(afterPull(shimCalls())).toContain('--issues km-t9')
-  })
-
-  // Same reasoning as the close-adoption abort: pulling with the snapshot
-  // missing is exactly the undetectable loss the guard exists to prevent.
-  it('aborts before the pull when the suspect snapshot cannot be read', () => {
-    const newer = { id: 'km-t5', status: 'open', priority: 1, title: 'T', description: 'D-new', external_ref: ref(5), updated_at: '2026-08-20T02:00:00Z' }
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(5, '2026-08-20T01:00:00Z')],
-      lists: [[newer], [newer], [newer]],
-      shows: ['Error fetching km-t5: dolt exploded'],
-    })
-    const r = run()
-    expect(r.status).toBe(1)
-    expect(r.stderr).toContain('could not snapshot km-t5')
-    expect(shimCalls()).not.toContain('--pull-only')
-  })
-
-  it('restores a labels-only revert via the label delta', () => {
-    const newer = syncRow({ id: 'km-tA', external_ref: ref(10), updated_at: '2026-08-20T02:00:00Z', labels: ['ui'] })
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(10, '2026-08-20T01:00:00Z')],
-      lists: [[newer], [newer], [newer]],
-      shows: [[newer], [{ ...newer, labels: [] }]],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('restored km-tA')
-    expect(shimCalls()).toContain('--add-label ui')
-    expect(afterPull(shimCalls())).toContain('--issues km-tA')
-  })
-
-  // A failed post-pull read must not discard the snapshot — the DB may
-  // already hold the reverted row, and the next sync's snapshot would
-  // capture that, losing the newer local edit for good.
-  it('conservatively restores every suspect when the post-pull read fails', () => {
-    const newer = { id: 'km-tB', status: 'open', priority: 1, title: 'T', description: 'D-new', external_ref: ref(11), updated_at: '2026-08-20T02:00:00Z' }
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(11, '2026-08-20T01:00:00Z')],
-      lists: [[newer], [newer], [newer]],
-      shows: [[newer], 'Error fetching km-tB: transient'],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('conservatively restoring')
-    expect(r.stdout).toContain('restored km-tB')
-    expect(shimCalls()).toContain('bd update km-tB --title T -d D-new -p 1 -a  -s open')
-  })
-
-  // Trap 3 meets the pre-push: the mint creates the issue OPEN with a fresh
-  // timestamp, so the timestamp suspect test can never flag the closed bead
-  // — the minted-closed plan must snapshot it or the pull loses the close.
-  it('snapshots and restores a closed bead whose first issue the pre-push minted', () => {
-    const preRow = syncRow({ id: 'km-tC', status: 'closed', updated_at: '2026-08-19T00:00:00Z' })
-    const minted = { ...preRow, external_ref: ref(12) }
-    const revertedRow = { ...minted, status: 'open' }
-    const { run, shimCalls } = makeSyncRepo({
+  // The alarm's input: every real run leaves one line saying how long it took
+  // and where the time went, and a run over budget says so even under --quiet.
+  it('records each run with its slowest spawns, and flags one over budget', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, runLog } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
-      lists: [[preRow], [minted], [revertedRow]],
-      shows: [[{ ...minted, close_reason: 'done' }], [revertedRow]],
+      reads: [[row]],
+      env: { KM_BD_SYNC_BUDGET_MS: '1' },
     })
-    const r = run()
+    const r = run('--quiet')
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('restored km-tC')
-    expect(shimCalls()).toContain('bd close km-tC -r done')
-    expect(afterPull(shimCalls())).toContain('--issues km-tC')
+    expect(r.stdout).toMatch(/^bd-github-sync: slow run — [\d.]+s against a 0s budget; slowest: /m)
+    const [entry] = runLog()
+    expect(entry).toMatchObject({ ok: true, budgetMs: 1 })
+    expect(entry.spawns.map((s: { cmd: string }) => s.cmd)).toEqual(expect.arrayContaining(['gh api graphql (listing)', 'bd export']))
   })
 
-  // The documented asymmetry, enforced: a GitHub-side reopen bumps the issue
-  // timestamp, so the newer-local test cannot flag the closed bead — the
-  // reopened-closed plan must snapshot it so the restore closes the bead
-  // again and the push-back re-closes the issue.
-  it('undoes a GitHub-side reopen of a closed bead', () => {
-    const closedRow = syncRow({ id: 'km-tD', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
-    const revertedRow = { ...closedRow, status: 'open' }
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(14, '2026-08-20T05:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
-      lists: [[closedRow], [closedRow], [revertedRow]],
-      shows: [[{ ...closedRow, close_reason: 'done' }], [revertedRow]],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('restored km-tD')
-    expect(shimCalls()).toContain('bd close km-tD -r done')
-    expect(afterPull(shimCalls())).toContain('--issues km-tD')
-  })
-
-  // bd's partial-output shape: found rows on stdout, `Error…` for the rest,
-  // exit 0 — valid JSON that silently covers only some suspects.
-  it('aborts when the snapshot covers only part of the suspect set', () => {
-    const a = syncRow({ id: 'km-t7', external_ref: ref(7), updated_at: '2026-08-20T02:00:00Z' })
-    const b = { ...a, id: 'km-t8', external_ref: ref(8) }
-    const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(7, '2026-08-20T01:00:00Z'), ghIssue(8, '2026-08-20T01:00:00Z')],
-      lists: [[a, b], [a, b], [a, b]],
-      shows: [[a]],
+  // A failed tracker read must not finalize the run record while listing children remain.
+  it('settles the issue listing before recording a tracker-read failure', () => {
+    const { run, runLog } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      reads: [[]],
+      failReadCall: 1,
     })
     const r = run()
     expect(r.status).toBe(1)
-    expect(r.stderr).toContain('could not snapshot')
-    expect(shimCalls()).not.toContain('--pull-only')
+    expect(r.stderr).toContain('export exploded')
+    // The newest-number probe and both listing chunks must have exited.
+    expect(runLog()[0].spawns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cmd: 'bd export', calls: 1 }),
+      expect.objectContaining({ cmd: 'gh api graphql (listing)', calls: 3 }),
+    ]))
   })
 
-  // The pre-pull push is SELECTIVE: bd 1.2.2 GETs every linked issue it is
-  // handed and PATCHes only the local-newer ones, so beads whose listed
-  // GitHub copy is same-or-newer are skipped up front — the run's cost is
-  // proportional to what changed, not to the tracker.
+  // The log only grows by appends, so the run holding the lock trims it.
+  it('trims a log past twice its kept length back to the newest runs', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { repo, run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    const old = Array.from({ length: 4_001 }, (_, i) => JSON.stringify({ at: `old-${i}`, ms: 1, ok: true, budgetMs: 15_000, spawns: [] }))
+    writeFileSync(join(repo, SYNC_RUN_LOG), old.join('\n') + '\n')
+    expect(run().status).toBe(0)
+    const lines = readFileSync(join(repo, SYNC_RUN_LOG), 'utf8').trim().split('\n')
+    expect(lines.length).toBeLessThanOrEqual(2_002)
+    expect(lines.at(-1)).toContain('"event":"end"')
+  })
+
+  it('records a failed run as failed, and leaves no record for a dry run', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z'), unlinkedIssue()], reads: [[row]] }
+    const failed = makeSyncRepo({ ...repo, failFullSync: true })
+    expect(failed.run().status).toBe(1)
+    expect(failed.runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('pull exploded') }])
+    const dry = makeSyncRepo(repo)
+    expect(dry.run('--dry-run').status).toBe(0)
+    expect(dry.runLog()).toEqual([])
+  })
+
+  // A checkout with a beads DB whose bd cannot run has stopped syncing: that is
+  // on record, where a checkout with no DB at all stays silent.
+  it('records a run whose bd cannot run as failed', () => {
+    const { run, runLog, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[]], bdBroken: true })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('skipped (bd is not runnable')
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('bd is not runnable') }])
+    expect(shimCalls()).not.toContain('bd export')
+  })
+
+  // Past the lock wait, a live holder is contention: the run skips, and a run
+  // that did nothing leaves no record. A lock path nothing live holds that
+  // still cannot be taken is broken, and the run fails on record.
+  it('skips on a lock a live run holds, and fails on a lock path it cannot take', () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const repo = { issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]], env: { KM_BD_SYNC_LOCK_WAIT_MS: '1' } }
+
+    const held = makeSyncRepo(repo)
+    writeFileSync(join(held.repo, '.beads', 'github-sync.lock'), String(process.pid))
+    const skipped = held.run()
+    expect(skipped.status).toBe(0)
+    expect(skipped.stdout).toContain('skipped (lock at')
+    expect(held.runLog()).toEqual([])
+
+    const broken = makeSyncRepo(repo)
+    mkdirSync(join(broken.repo, '.beads', 'github-sync.lock'))
+    const failed = broken.run()
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain('could not take the sync lock')
+    expect(broken.runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('could not take the sync lock') }])
+  })
+
+  // A machine that lost its gh login stops syncing without failing anything:
+  // the run exits clean, and the record is what says it did nothing.
+  it('records a run with no gh token as failed, while still exiting clean', () => {
+    const { run, runLog } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[]], noGhToken: true })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('skipped (no gh token)')
+    expect(runLog()).toMatchObject([{ ok: false, failure: 'no gh token' }])
+  })
+
+  // The record is written as the run starts, so one killed before it ends —
+  // the SessionEnd hook's time limit, a crash — is still on the log.
+  it('leaves a killed run on record as one that did not finish', { timeout: 40_000 }, async () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { repo, runInBackground, runLog } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    // Parked on a lock this test holds, so the kill lands mid-run.
+    writeFileSync(join(repo, '.beads', 'github-sync.lock'), String(process.pid))
+    const { child, done } = runInBackground()
+    // While its process lives the run is left out of the records, so fence on
+    // the start line itself.
+    await vi.waitFor(() => expect(readFileSync(join(repo, SYNC_RUN_LOG), 'utf8')).toContain('"event":"start"'), {
+      timeout: 15_000,
+      interval: 50,
+    })
+    expect(runLog()).toEqual([])
+    child.kill('SIGKILL')
+    await done
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('did not finish') }])
+  })
+
+  // The documented asymmetry, enforced: the pull is never handed a closed
+  // bead whose issue was reopened (it would lose the close), and step 4
+  // re-closes the issue.
+  it('keeps a GitHub-side reopen of a closed bead from sticking', () => {
+    const closedRow = syncRow({ id: 'km-tD', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(14, '2026-08-20T05:00:00Z'), unlinkedIssue()],
+      reads: [[closedRow]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('withheld km-tD (#14) from the pull')
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 99\n')
+    expect(shimCalls()).toContain('gh api repos/Stvad/knowledge-medium/issues/14')
+  })
+
+  // Only the pull can flatten a priority, and it reaches only what it is
+  // named: a bead that went to 2 locally during the run is left alone.
+  it('repairs priorities only on beads the pull was handed', () => {
+    const p1 = syncRow({ id: 'km-p', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      // #9 has no bead, so a pull runs; #4 is converged and not in it.
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')],
+      // Run start, just before the pull, after it: set to P2 locally meanwhile.
+      reads: [[p1], [p1], [{ ...p1, priority: 2 }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 9\n')
+    expect(shimCalls()).not.toContain('bd update km-p')
+  })
+
   it('hands the pre-pull push only the beads bd could update', () => {
     const converged = pushable({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const newer = pushable({ id: 'km-n', external_ref: ref(2), updated_at: '2026-08-21T00:00:00Z' })
     const unlinked = pushable({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(2, '2026-08-20T00:00:00Z')],
-      lists: [[converged, newer, unlinked]],
-      shows: [[newer]],
+      reads: [[converged, newer, unlinked]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1622,8 +2108,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('skips the pre-pull push entirely when every bead is converged, and still pulls', () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
-      issues: [ghIssue(1, '2026-08-20T00:00:00Z'), ghIssue(99, '2026-08-20T00:00:00Z')],
-      lists: [[row]],
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z'), unlinkedIssue()],
+      reads: [[row]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1633,17 +2119,185 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(log).not.toContain('bd github sync\n')
   })
 
-  // A closed, assigned bead whose issue GitHub touched last: bd's pull would
-  // clear the assignee and restamp the close date, and neither comes back.
+  // A bead with no timestamp still goes to the push (bd decides with a fresh
+  // read), and the local-newer rule cannot judge it — so the push's own set is
+  // what keeps it out of the pull.
+  it('never names a bead the push carries out to the pull, even one with no timestamp', () => {
+    const row = pushable({ id: 'km-t', external_ref: ref(4) })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')],
+      reads: [[row]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    expect(log).toContain('bd github sync --push-only --issues km-t\n')
+    expect(log).toContain('bd github sync --pull-only --issues 9\n')
+  })
+
+  // The pull set comes from the run-start listing, so an issue this run's push
+  // minted is never in it: the mint creates the issue OPEN, and a pull of it
+  // would re-open the closed bead it was minted for.
+  it('never names an issue this run minted to the pull', () => {
+    const preRow = syncRow({ id: 'km-c', status: 'closed', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const minted = { ...preRow, external_ref: ref(12) }
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
+      reads: [[preRow], [minted]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-c → #12')
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 1\n')
+  })
+
+  // A bead the pull creates from a hand-filed issue lands at bd's default P2
+  // whatever the issue's hand label says; step 3 re-derives it and pushes the
+  // repaired row back out, after the pull.
+  it('re-derives the priority of a bead the pull created, and pushes it back out', () => {
+    const created = syncRow({ id: 'km-new', priority: 2, external_ref: ref(9), updated_at: '2026-08-20T00:00:01Z' })
+    const handFiled = { ...ghIssue(9, '2026-08-20T00:00:00Z'), labels: [{ name: 'P1' }] }
+    // Run start, just before the pull, after it.
+    const { run, shimCalls } = makeSyncRepo({ issues: [handFiled], reads: [[], [], [created]] })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('priority km-new → 1')
+    const log = afterPull(shimCalls())
+    expect(log).toContain('bd update km-new -p 1')
+    expect(log).toContain('bd github sync --push-only --issues km-new')
+  })
+
+  // The pull is planned on a read taken just before it, not the one the run
+  // started from: a bead another worktree edits in between is newer locally
+  // by then, and the pull would apply the older GitHub copy over the edit.
+  it('re-reads before the pull, and drops a bead edited locally since the run began', () => {
+    const before = syncRow({ id: 'km-e', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
+    const editedMeanwhile = { ...before, description: 'edited in another worktree', updated_at: '2026-08-21T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      // #4 was edited on GitHub, so the run-start plan pulls it; #9 has no bead.
+      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }, ghIssue(9, '2026-08-20T00:00:00Z')],
+      reads: [[before], [editedMeanwhile]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    expect(log.match(/^bd export/gm)?.length).toBeGreaterThanOrEqual(2)
+    expect(log).toContain('bd github sync --pull-only --issues 9\n')
+  })
+
+  // After a push the run waits on the network again (the landed check), so the
+  // pull is still planned on a read taken right before it.
+  it('re-reads before the pull after a push too', () => {
+    const pushed = pushable({ id: 'km-p', external_ref: ref(4), updated_at: '2026-08-21T00:00:00Z' })
+    const pulled = syncRow({ id: 'km-e', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z' })
+    const editedMeanwhile = { ...pulled, description: 'edited in another worktree', updated_at: '2026-08-22T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({
+      // #5 was edited on GitHub, so the run-start plan pulls it.
+      issues: [ghIssue(4, '2026-08-20T00:00:00Z'), { ...ghIssue(5, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }, unlinkedIssue()],
+      // Run start, after the push, just before the pull.
+      reads: [[pushed, pulled], [pushed, pulled], [pushed, editedMeanwhile]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    const log = shimCalls()
+    expect(log).toContain('bd github sync --push-only --issues km-p\n')
+    expect(log).toContain('bd github sync --pull-only --issues 99\n')
+  })
+
+  // Step 4 plans on a read taken right before it: a bead the user reopened in
+  // another worktree during the run is no longer closed, so its issue stays
+  // open (the documented way to undo a GitHub-side reopen is to reopen the
+  // bead; closing the issue here would have the next run close the bead again).
+  it('does not close an issue whose bead was reopened during the run', () => {
+    const closedRow = syncRow({ id: 'km-c', status: 'closed', external_ref: ref(14), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(14, '2026-08-20T00:00:00Z')],
+      // Run start, then just before step 4: reopened meanwhile.
+      reads: [[closedRow], [{ ...closedRow, status: 'open', updated_at: '2026-08-21T00:00:00Z' }]],
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(shimCalls()).not.toContain(`gh api repos/${REPO}/issues/14`)
+    expect(shimCalls()).not.toContain('gh issue close')
+  })
+
+  // A converged run's whole cost: the probes, the issue listing, one read of
+  // the tracker — nothing per bead, however many carry a local timestamp past
+  // their issue's (bd stamps a freshly minted bead a second after its issue, so
+  // that set only grows). The listing is the newest-number read and one read
+  // per 100 numbers, which run concurrently (next test).
+  it('makes only the fixed reads on a converged run, however many beads are locally newer', () => {
+    const rows = Array.from({ length: 250 }, (_, i) =>
+      syncRow({ id: `km-s${i}`, external_ref: ref(i + 1), updated_at: '2026-08-20T00:00:01Z' }),
+    )
+    const { run, shimCalls } = makeSyncRepo({
+      issues: rows.map((_, i) => ghIssue(i + 1, '2026-08-20T00:00:00Z')),
+      reads: [rows],
+    })
+    const r = run('--quiet')
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('')
+    // Sorted: the listing and the first read run concurrently.
+    const spawned = shimCalls().trim().split('\n').map(l => l.split(' ').slice(0, 3).join(' '))
+    expect(spawned.sort()).toEqual(['bd --version', 'bd export', ...Array(5).fill('gh api graphql'), 'gh auth token'])
+  })
+
+  // `gh issue list` paged through the tracker one request after another, a
+  // second per 100 issues on the live one.
+  it('reads the listing in concurrent chunks, at most eight in flight', () => {
+    const { run, listingPeak, shimCalls } = makeSyncRepo({
+      issues: Array.from({ length: 1000 }, (_, i) => ghIssue(i + 1, '2026-08-20T00:00:00Z')),
+      reads: [[]],
+      issueListDelay: 0.3,
+    })
+    expect(run().status).toBe(0)
+    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(11)
+    expect(listingPeak()).toBe(8)
+  })
+
+  // A transferred-in issue keeps its creation date but takes the next number,
+  // past every issue and PR that either creation-date ordering returns.
+  it('reads past the newest issue and PR by creation date, so a transferred-in issue is listed', () => {
+    const filed = [1, 2, 3].map(n => ({ ...ghIssue(n, '2026-08-20T00:00:00Z'), createdAt: `2026-08-0${n}T00:00:00Z` }))
+    const transferred = { ...ghIssue(150, '2026-08-20T00:00:00Z'), createdAt: '2020-01-01T00:00:00Z' }
+    const { run, shimCalls } = makeSyncRepo({ issues: [...filed, transferred], newestPr: 149, reads: [[]] })
+    expect(run().status).toBe(0)
+    expect(shimCalls()).toContain('bd github sync --pull-only --issues 1,2,3,150')
+  })
+
+  it('fails the run on an empty listing, before acting on anything', () => {
+    const row = syncRow({ id: 'km-e', external_ref: ref(1), status: 'closed', updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({ issues: [], reads: [[row]] })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('issue listing came back empty')
+    expect(shimCalls()).not.toContain('bd github sync')
+    expect(shimCalls()).not.toContain('gh api repos/')
+  })
+
+  // Close-adoption, the pull set and the close pushes all act on an issue's
+  // ABSENCE, so a number may read as absent only on GitHub saying so.
+  it('fails the run on a listing error other than NOT_FOUND, before acting on anything', () => {
+    const row = syncRow({ id: 'km-e', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { run, shimCalls } = makeSyncRepo({
+      issues: [ghIssue(1, '2026-08-20T00:00:00Z', 'CLOSED'), ghIssue(2, '2026-08-20T00:00:00Z')],
+      reads: [[row]],
+      listingError: { type: 'SERVICE_UNAVAILABLE', message: 'Something went wrong while executing your query.' },
+    })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('Something went wrong while executing your query.')
+    expect(shimCalls()).not.toContain('bd close')
+    expect(shimCalls()).not.toContain('bd github sync')
+  })
+
   // A closed, assigned bead: bd's pull would clear the assignee and restamp the
   // close date, and neither comes back — so it must never be handed to the pull.
   const lossyRepo = () => {
     const row = syncRow({ id: 'km-l', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     return makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED')],
-      lists: [[row]],
-      shows: [[row]],
-      exportRows: [{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }],
+      reads: [[{ ...row, assignee: 'Someone', closed_at: '2026-08-01T00:00:00Z' }]],
     })
   }
 
@@ -1665,8 +2319,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const { run, shimCalls } = makeSyncRepo({
       // #9 is on GitHub with no bead; #4 is converged, so it needs no pull.
       issues: [ghIssue(4, '2026-08-20T00:00:00Z'), ghIssue(9, '2026-08-20T00:00:00Z')],
-      lists: [[row]],
-      exportRows: [row],
+      reads: [[row]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1677,8 +2330,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const row = syncRow({ id: 'km-f', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z'), title: 'edited on GitHub' }],
-      lists: [[row]],
-      exportRows: [row],
+      reads: [[row]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1690,27 +2342,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const row = syncRow({ id: 'km-c', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(4, '2026-08-20T00:00:00Z')],
-      lists: [[row]],
-      exportRows: [row],
+      reads: [[row]],
     })
     const r = run()
     expect(r.status).toBe(0)
     // An empty id list must not fall through to a BULK pull — that is the one
     // thing that could reach a withheld bead.
     expect(shimCalls()).not.toContain('--pull-only')
-  })
-
-  it('says which fields a later push sends over a different GitHub value', () => {
-    const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
-    const { run } = makeSyncRepo({
-      issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
-      lists: [[row]],
-      shows: [[row]],
-      exportRows: [{ ...row, closed_at: '2026-08-01T00:00:00Z' }],
-    })
-    const r = run()
-    expect(r.status).toBe(0)
-    expect(r.stdout).toContain('its title also differ(s) on GitHub and the next push sends the local value')
   })
 
   // The set is computed from a listing taken AFTER close-adoption: a close
@@ -1721,8 +2359,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const closed = { ...row, status: 'closed', updated_at: '2026-08-21T00:00:00Z' }
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
-      lists: [[row], [closed]],
-      shows: [[closed]],
+      reads: [[row], [closed]],
     })
     const r = run()
     expect(r.status).toBe(0)
@@ -1737,7 +2374,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const row = syncRow({ id: 'km-a', external_ref: ref(3), updated_at: '2026-08-19T00:00:00Z' })
     const { run, shimCalls } = makeSyncRepo({
       issues: [ghIssue(3, '2026-08-20T00:00:00Z', 'CLOSED')],
-      lists: [[row]],
+      reads: [[row]],
     })
     const r = run('--dry-run')
     expect(r.status).toBe(0)
@@ -1745,6 +2382,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(r.stdout).toContain('[dry-run] would push 1 bead(s) out before the pull: km-a')
     expect(shimCalls()).not.toContain('bd close')
     expect(shimCalls()).not.toContain('--push-only')
+    // …and out of the pull, which a real close would have made it newer than.
+    expect(shimCalls()).not.toContain('--pull-only')
   })
 
   // bd takes the ids as ONE --issues argument, which has a per-argument
@@ -1752,7 +2391,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // spawn before bd starts.
   it('splits a large pre-pull set across several push invocations', () => {
     const rows = Array.from({ length: 250 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
-    const { run, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [rows] })
+    const { run, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [rows] })
     const r = run()
     expect(r.status).toBe(0)
     const pushes = shimCalls().split('\n').filter(l => l.startsWith('bd github sync --push-only --issues '))
@@ -1767,7 +2406,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('prints the mappings an earlier chunk minted when a later chunk fails', () => {
     const rows = Array.from({ length: 250 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
     const minted = rows.map((r, i) => (i < 200 ? { ...r, external_ref: ref(100 + i) } : r))
-    const { run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], lists: [rows, minted], failPushCall: 2 })
+    const { run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [rows, minted], failPushCall: 2 })
     const r = run()
     expect(r.status).toBe(1)
     expect(r.stderr).toContain('bd-github-sync: failed')
@@ -1776,19 +2415,27 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   })
 
   // The mapping is unrecoverable once the beads carry their refs, so a
-  // listing that cannot run has to say so rather than drop it silently.
-  it('reports a post-failure listing it could not run instead of dropping the mappings', () => {
+  // read that cannot run has to say so rather than drop it silently.
+  it('reports a post-failure read it could not run instead of dropping the mappings', () => {
     const rows = Array.from({ length: 3 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
     const { run } = makeSyncRepo({
       issues: [ghIssue(1, '2026-08-20T00:00:00Z')],
-      lists: [rows, rows],
+      reads: [rows, rows],
       failPushCall: 1,
-      failListCall: 2,
+      failReadCall: 2,
     })
     const r = run()
     expect(r.status).toBe(1)
-    expect(r.stderr).toContain('could not re-list beads')
+    expect(r.stderr).toContain('could not re-read beads')
     expect(r.stdout).not.toContain('minted:')
+  })
+
+  it('reports a read it could not run after a push that succeeded', () => {
+    const rows = Array.from({ length: 2 }, (_, i) => syncRow({ id: `km-b${i}`, external_ref: null }))
+    const { run } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [rows, rows], failReadCall: 2 })
+    const r = run()
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('could not re-read beads')
   })
 
   // Withholding is not an action: a bead that is simply not handed to the pull
@@ -1802,24 +2449,22 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
 
   // …but a withhold that also names a GitHub-side divergence is the warning
   // that makes the trade visible, and must survive --quiet.
-  it('speaks up under --quiet when a withheld bead also differs on GitHub', () => {
+  it('says which fields a later push sends over a different GitHub value, even under --quiet', () => {
     const row = syncRow({ id: 'km-o', status: 'closed', external_ref: ref(4), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
       issues: [{ ...ghIssue(4, '2026-08-20T00:00:00Z', 'CLOSED'), title: 'edited on GitHub' }],
-      lists: [[row]],
-      shows: [[row]],
-      exportRows: [{ ...row, closed_at: '2026-08-01T00:00:00Z' }],
+      reads: [[{ ...row, closed_at: '2026-08-01T00:00:00Z' }]],
     })
     const r = run('--quiet')
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('also differ(s) on GitHub')
+    expect(r.stdout).toContain("its title also differ(s) on GitHub and the bead's next push sends the local value")
   })
 
   it('stays silent under --quiet when a converged run changed nothing', () => {
     const row = syncRow({ id: 'km-t6', external_ref: ref(6), updated_at: '2026-08-19T00:00:00Z' })
     const { run } = makeSyncRepo({
       issues: [ghIssue(6, '2026-08-20T00:00:00Z')],
-      lists: [[row], [row], [row]],
+      reads: [[row], [row], [row]],
     })
     const r = run('--quiet')
     expect(r.status).toBe(0)
@@ -1829,16 +2474,16 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // ---- comment mirror (step 5) ----
   const C1 = '0000c0de-0000-7000-8000-000000000001'
   const C2 = '0000c0de-0000-7000-8000-000000000002'
-  const beadComment = (id: string, text: string, created_at: string) => ({ id, issue_id: 'km-m', author: 'A', text, created_at })
-  const twoComments = [beadComment(C2, 'second, mentions km-o', '2026-09-03T21:13:50Z'), beadComment(C1, 'first', '2026-09-03T20:16:36Z')]
+  const beadComment = (id: string, text: string, created_at: string) => ({ id, issue_id: 'km-mmmm', author: 'A', text, created_at })
+  const twoComments = [beadComment(C2, 'second, mentions km-oooo', '2026-09-03T21:13:50Z'), beadComment(C1, 'first', '2026-09-03T20:16:36Z')]
   const issueComments = (bodies: string[], next?: string) => ({
     comments: { pageInfo: { hasNextPage: !!next, endCursor: next ?? null }, nodes: bodies.map(body => ({ body })) },
   })
-  // A commented bead (km-m → #7) beside an uncommented one (km-o → #8) that
+  // A commented bead (km-mmmm → #7) beside an uncommented one (km-oooo → #8) that
   // exists only to be referenced from a comment.
   const commentedRows = () => [
-    syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 }),
-    syncRow({ id: 'km-o', external_ref: ref(8), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+    syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 }),
+    syncRow({ id: 'km-oooo', external_ref: ref(8), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
   ]
   // #3 has no bead, so the pull always has something to do — without it the
   // id list is empty, no pull runs, and the mirror's slot pins mean nothing.
@@ -1848,17 +2493,18 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   const postsOf = (log: string) => log.split(/^POST api /m).filter(Boolean)
 
   // Measured: the mirror pauses between posts on one issue, so a two-comment
-  // backfill costs one pause on top of the spawns.
+  // backfill costs one pause on top of the spawns — recorded as idle time, so
+  // a backlog drain does not read as the sync slowing down.
   it('mirrors unmirrored bead comments onto the issue oldest-first, marker-tagged, with bead ids rewritten', () => {
-    const { run, shimCalls, posted } = makeSyncRepo({
+    const { run, shimCalls, commentReads, posted, runLog } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
     expect(shimCalls()).toContain('bd export')
     // Slot pin: the pull comes first, so a waiting GitHub-side edit lands
     // before the post. The touch-push-repull dance the bulk pull used to need
@@ -1867,7 +2513,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const calls = shimCalls()
     expect(calls.match(/bd github sync --pull-only/g)).toHaveLength(1)
     expect(calls.indexOf('bd github sync --pull-only')).toBeLessThan(calls.indexOf('gh api -X POST'))
-    expect(calls).not.toContain('bd update km-m')
+    expect(calls).not.toContain('bd update km-mmmm')
     const log = posted()
     const posts = postsOf(log)
     expect(posts).toHaveLength(2)
@@ -1877,26 +2523,50 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     // Nothing was posted for the uncommented bead, and the mirror never
     // reads GitHub comments outside the one GraphQL call.
     expect(log).not.toContain('issues/8/comments')
-    expect(shimCalls().match(/gh api graphql/g)).toHaveLength(1)
+    expect(commentReads()).toBe(1)
+    // The pacing pause between the two posts is recorded as idle, not active, time.
+    const [entry] = runLog()
+    expect(entry.idleMs).toBeGreaterThanOrEqual(800)
+    expect(entry.idleMs).toBeLessThan(entry.ms)
+  })
+
+  // A filing session's mints and a backlog's posts are work no later run
+  // repeats, so they widen this run's budget instead of reading as the sync
+  // slowing down. A converged run keeps the base budget (pinned above).
+  it('widens the run budget for each issue minted and comment posted', () => {
+    const unminted = syncRow({ id: 'km-nw01', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const { run, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [[unminted, ...commentedRows()], [{ ...unminted, external_ref: ref(9) }, ...commentedRows()]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+      env: { KM_BD_SYNC_BUDGET_MS: '1000' },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-nw01 → #9')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
+    expect(runLog()).toMatchObject([{ ok: true, mintsAndPosts: 3, budgetMs: 1000 + 3 * BUDGET_PER_MINT_OR_POST_MS }])
   })
 
   // Position pin for the mirror's slot: after the pre-pull push (a post bumps
-  // the issue past the local row, and bd PATCHes only local-newer rows), and
-  // after the pull, so a waiting GitHub-side edit lands before the post.
+  // the issue past the local row, and the push is handed only local-newer
+  // rows), and after the pull, so a waiting GitHub-side edit lands before the
+  // post.
   it('mirrors after the pre-pull push has carried the bead out and the pull has run', () => {
-    const newer = pushable({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const newer = pushable({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
     const { run, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [[newer]],
-      shows: [[newer]],
-      comments: { 'km-m': twoComments },
+      issuesAfterPush: [{ ...ghIssue(7, '2026-08-21T00:00:01Z'), title: 'T (edited locally)' }, ...twoIssues().slice(1)],
+      reads: [[newer]],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
     const calls = shimCalls()
-    const push = calls.indexOf('bd github sync --push-only --issues km-m')
+    const push = calls.indexOf('bd github sync --push-only --issues km-mmmm')
     const pull = calls.indexOf('bd github sync --pull-only')
     const firstPost = calls.indexOf('gh api -X POST')
     expect(push).toBeGreaterThan(-1)
@@ -1904,30 +2574,154 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     expect(pull).toBeLessThan(firstPost)
   })
 
+  // Queueing behind another run is that run's time, not this one's. The lock
+  // is held under this test's own pid, which stays alive, and released by the
+  // test itself: no reaping to depend on. The release waits for the token
+  // probe, the last spawn before the lock, so the run is queued by then. The
+  // timeout clears the lock's 20s deadline, so a lock that is never released
+  // fails the assertion below (a skipped run writes no record), not the clock.
+  it('records a wait on another run\'s lock as idle time', { timeout: 40_000 }, async () => {
+    const row = syncRow({ id: 'km-c', external_ref: ref(1), updated_at: '2026-08-19T00:00:00Z' })
+    const { repo, runInBackground, runLog, shimCalls } = makeSyncRepo({ issues: [ghIssue(1, '2026-08-20T00:00:00Z')], reads: [[row]] })
+    const lock = join(repo, '.beads', 'github-sync.lock')
+    writeFileSync(lock, String(process.pid))
+    const { done } = runInBackground()
+    await vi.waitFor(() => expect(shimCalls()).toContain('gh auth token'), { timeout: 15_000, interval: 50 })
+    await new Promise(resolve => setTimeout(resolve, 1_200))
+    unlinkSync(lock)
+    expect(await done).toBe(0)
+    const [entry] = runLog()
+    expect(entry?.idleMs).toBeGreaterThanOrEqual(1000)
+  })
+
+  // bd only warns on a failed PATCH, and its push cache skips a bead equal to
+  // its last push: GitHub still holds the old copy, and a post would make it
+  // the newer side for the next pull.
+  it('holds back the comments of a bead whose push did not land, and says so', () => {
+    const newer = pushable({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const { run, posted, runLog, shimCalls } = makeSyncRepo({
+      issues: twoIssues(),
+      issuesAfterPush: twoIssues(),
+      reads: [[newer]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    // The re-read asks for the handed issue (one chunk), not the whole listing
+    // again (a newest-number read and two chunks).
+    expect(shimCalls().match(/^gh api graphql newest$/gm)).toHaveLength(1)
+    expect(shimCalls().match(/^gh api graphql listing$/gm)).toHaveLength(3)
+    expect(r.stdout).toContain('push did not land for km-mmmm (#7)')
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm: GitHub does not hold its local row this run')
+    expect(posted()).toBe('')
+    // A documented steady state, reported every run until it resolves — not a
+    // failure the alarm should count.
+    expect(runLog()).toMatchObject([{ ok: true }])
+  })
+
+  // The mapping is the run's only record of what it minted, so a failed
+  // re-read must neither lose it nor let a post through.
+  it('prints the minted mapping and holds comments when the post-push re-read fails', () => {
+    const unminted = syncRow({ id: 'km-nw01', external_ref: null, updated_at: '2026-08-19T00:00:00Z' })
+    const newer = pushable({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-21T00:00:00Z', comment_count: 2 })
+    const { run, posted, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      failListAfterPush: true,
+      reads: [[unminted, newer], [{ ...unminted, external_ref: ref(9) }, newer]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('minted: km-nw01 → #9')
+    expect(r.stdout).toContain('FAILED to re-read the pushed issues')
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('FAILED to re-read the pushed issues') }])
+    expect(r.stdout).not.toContain('push did not land')
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm')
+    expect(posted()).toBe('')
+  })
+
+  // A cross-reference touches the named issue as a post does.
+  it('holds a comment that names a bead whose push did not land', () => {
+    const quiet = syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })
+    const unlanded = pushable({ id: 'km-oooo', external_ref: ref(8), updated_at: '2026-08-21T00:00:00Z' })
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      issuesAfterPush: twoIssues(),
+      reads: [[quiet, unlanded]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain(`SKIPPED comment ${C2} of km-mmmm: it names bead(s) not referenceable this run (km-oooo)`)
+    expect(posted()).toContain(C1)
+    expect(posted()).not.toContain(C2)
+  })
+
+  // Posting makes GitHub the newer side, so a bead edited in another worktree
+  // during the run waits: its edit has not been pushed yet, and the next pull
+  // would take GitHub's copy over it.
+  it('holds the comments of a bead edited during the run', () => {
+    const [m, o] = commentedRows()
+    const edited = { ...m, description: 'edited in another worktree', updated_at: '2026-08-22T00:00:00Z' }
+    // Run start, just before the pull (#3 has no bead), after it, before the first post.
+    const { run, posted } = makeSyncRepo({
+      issues: twoIssues(),
+      reads: [[m, o], [m, o], [m, o], [edited, o]],
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm: edited during this run')
+    expect(posted()).toBe('')
+  })
+
+  // A re-read that fails is a failed step, not a bead edited meanwhile: nothing
+  // is posted, and the run is on record as failed.
+  it('stops the mirror, and records a failed run, when the pre-post re-read fails', () => {
+    const { run, posted, runLog } = makeSyncRepo({
+      issues: twoIssues(),
+      // Run start, just before the pull (#3 has no bead), after it, before the first post.
+      reads: [commentedRows()],
+      failReadCall: 4,
+      comments: { 'km-mmmm': twoComments },
+      graphql: { data: { repository: { i7: issueComments([]) } } },
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('FAILED to re-read the beads before posting')
+    expect(r.stdout).not.toContain('edited during this run')
+    expect(posted()).toBe('')
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining('FAILED to re-read the beads before posting') }])
+  })
+
   it('caps the posts of one run and leaves the rest for the next', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
       env: { KM_MIRROR_POST_CAP: '1' },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7 — 1 left for the next run (post cap)')
+    expect(r.stdout).toContain('mirrored 1 comment(s) of km-mmmm to #7 — 1 left for the next run (post cap)')
     expect(postsOf(posted())).toHaveLength(1)
   })
 
   it('publishes an id it cannot rewrite — unknown here — and says so', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': [beadComment(C1, 'see km-o; km-zzz is a fixture', '2026-09-03T20:16:36Z')] },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': [beadComment(C1, 'see km-oooo; km-zzz9 is a fixture', '2026-09-03T20:16:36Z')] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-zzz)`)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-mmmm to #7 with bead id(s) it could not resolve (km-zzz9)`)
     expect(postsOf(posted())).toHaveLength(1)
   })
 
@@ -1935,8 +2729,8 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const converged = syncRow({ id: 'km-c', external_ref: ref(9), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 })
     const { run, posted } = makeSyncRepo({
       issues: [...twoIssues(), ghIssue(9, '2026-08-20T00:00:00Z')],
-      lists: [[...commentedRows(), converged]],
-      comments: { 'km-m': twoComments },
+      reads: [[...commentedRows(), converged]],
+      comments: { 'km-mmmm': twoComments },
       graphql: {
         data: {
           repository: {
@@ -1948,7 +2742,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 1 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 1 comment(s) of km-mmmm to #7')
     const posts = postsOf(posted())
     expect(posts).toHaveLength(1)
     expect(posts[0]).toContain(`bd-comment ${C2}`)
@@ -1961,71 +2755,73 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const foreign = (n: number) => `<!-- bd-comment 0000c0de-0000-7000-8000-00000000f00${n} -->\nnot ours`
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([foreign(1), foreign(2)]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('mirrored 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('mirrored 2 comment(s) of km-mmmm to #7')
     expect(postsOf(posted())).toHaveLength(2)
   })
 
   it('never posts onto a number GraphQL cannot resolve as an issue, and reports the mis-pointed ref', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: null } }, errors: [{ type: 'NOT_FOUND', path: ['repository', 'i7'] }] },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('SKIPPED comments of km-m: #7 is not an issue')
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm: #7 is not an issue')
     expect(posted()).toBe('')
   })
 
   it('stops a bead at its first failed post so the thread keeps bead order, and leaves the rest for the next run', () => {
-    const { run, posted, shimCalls } = makeSyncRepo({
+    const { run, posted, shimCalls, runLog } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
       failPostCall: 1,
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-m to #7 — 2 left for the next run`)
+    expect(r.stdout).toContain(`FAILED to mirror comment ${C1} of km-mmmm to #7 — 2 left for the next run`)
     expect(r.stdout).not.toContain('mirrored ')
+    // The report reaches nobody, so the step it could not do is on record.
+    expect(runLog()).toMatchObject([{ ok: false, failure: expect.stringContaining(`FAILED to mirror comment ${C1}`) }])
     expect(posted()).toBe('')
     // A failed post needs no repair pass now: nothing was touched, and the
     // pull can only ever be handed ids we chose.
     const calls = shimCalls()
-    expect(calls.indexOf('bd github sync --push-only --issues km-m')).toBe(-1)
+    expect(calls.indexOf('bd github sync --push-only --issues km-mmmm')).toBe(-1)
     expect(calls.match(/--pull-only/g)).toHaveLength(1)
   })
 
   it('holds a bead at a comment naming an unminted bead, publishing nothing after it', () => {
-    const unminted = syncRow({ id: 'km-u', external_ref: null, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 })
+    const unminted = syncRow({ id: 'km-uuuu', external_ref: null, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 })
     const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [[...commentedRows(), unminted]],
-      comments: { 'km-m': [beadComment(C1, 'waits on km-u', '2026-09-03T20:16:36Z'), twoComments[0]] },
+      reads: [[...commentedRows(), unminted]],
+      comments: { 'km-mmmm': [beadComment(C1, 'waits on km-uuuu', '2026-09-03T20:16:36Z'), twoComments[0]] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-m: it names bead(s) with no issue yet (km-u) — 2 left for the next run`)
+    expect(r.stdout).toContain(`SKIPPED comment ${C1} of km-mmmm: it names bead(s) not referenceable this run (km-uuuu) — 2 left for the next run`)
     expect(posted()).toBe('')
     // Nothing publishable, so no touch either: a touch with no post would
     // just push the bead out next run for nothing.
-    expect(shimCalls()).not.toContain('bd update km-m')
+    expect(shimCalls()).not.toContain('bd update km-mmmm')
   })
 
   it('reads every comment page, so a marker beyond the first still counts', () => {
-    const { run, shimCalls, posted } = makeSyncRepo({
+    const { run, shimCalls, commentReads, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: [
         { data: { repository: { i7: issueComments(['a human comment'], 'cursor-1') } } },
         { data: { repository: { issue: issueComments([`<!-- bd-comment ${C1} -->\nfirst`, `<!-- bd-comment ${C2} -->\nsecond`]) } } },
@@ -2034,7 +2830,7 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
     const r = run()
     expect(r.status).toBe(0)
     const calls = shimCalls()
-    expect(calls.match(/gh api graphql/g)).toHaveLength(2)
+    expect(commentReads()).toBe(2)
     expect(calls).toContain('after: "cursor-1"')
     expect(posted()).toBe('')
   })
@@ -2044,20 +2840,20 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // #N, which the repo treats as worse than an opaque bead id.
   it('does not rewrite a reference whose bead points at no issue of this repo, and says so', () => {
     const rows = [
-      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
-      syncRow({ id: 'km-o', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+      syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-oooo', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
     ]
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [rows],
-      comments: { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] },
+      reads: [rows],
+      comments: { 'km-mmmm': [beadComment(C1, 'see km-oooo', '2026-09-03T20:16:36Z')] },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
+    expect(r.stdout).toContain(`posted comment ${C1} of km-mmmm to #7 with bead id(s) it could not resolve (km-oooo)`)
     const [post] = postsOf(posted())
-    expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see km-o')).toBe(true)
+    expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see km-oooo')).toBe(true)
   })
 
   // PRs share the number sequence, so a ref beyond the listing's last issue
@@ -2065,62 +2861,85 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   // is trusted unseen.
   it('does not trust a ref beyond the listing unless this run minted it', () => {
     const rows = (oRef: string | null) => [
-      syncRow({ id: 'km-m', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
-      syncRow({ id: 'km-o', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
+      syncRow({ id: 'km-mmmm', external_ref: ref(7), updated_at: '2026-08-19T00:00:00Z', comment_count: 1 }),
+      syncRow({ id: 'km-oooo', external_ref: oRef, updated_at: '2026-08-19T00:00:00Z', comment_count: 0 }),
     ]
-    const comments = { 'km-m': [beadComment(C1, 'see km-o', '2026-09-03T20:16:36Z')] }
+    const comments = { 'km-mmmm': [beadComment(C1, 'see km-oooo', '2026-09-03T20:16:36Z')] }
     const graphql = { data: { repository: { i7: issueComments([]) } } }
 
-    const preExisting = makeSyncRepo({ issues: twoIssues(), lists: [rows(ref(9))], comments, graphql })
-    expect(preExisting.run().stdout).toContain(`posted comment ${C1} of km-m to #7 with bead id(s) it could not resolve (km-o)`)
+    const preExisting = makeSyncRepo({ issues: twoIssues(), reads: [rows(ref(9))], comments, graphql })
+    expect(preExisting.run().stdout).toContain(`posted comment ${C1} of km-mmmm to #7 with bead id(s) it could not resolve (km-oooo)`)
 
-    const minted = makeSyncRepo({ issues: twoIssues(), lists: [rows(null), rows(ref(9))], comments, graphql })
+    const minted = makeSyncRepo({ issues: twoIssues(), reads: [rows(null), rows(ref(9))], comments, graphql })
     const r = minted.run()
-    expect(r.stdout).toContain('minted: km-o → #9')
+    expect(r.stdout).toContain('minted: km-oooo → #9')
     const [post] = postsOf(minted.posted())
     expect(JSON.parse(post.slice(post.indexOf('\n') + 1)).body.endsWith('see #9')).toBe(true)
   })
 
-  // A bead the restore left half-repaired is kept out of the push-back; the
-  // mirror's touch would push it just the same.
-  it('does not touch or post a bead whose restore failed this run', () => {
-    const closedLocal = syncRow({ id: 'km-t4', status: 'closed', external_ref: ref(4), updated_at: '2026-08-20T02:00:00Z', comment_count: 2 })
-    const revertedRow = { ...closedLocal, status: 'open', priority: 2 }
-    const { run, posted } = makeSyncRepo({
-      issues: [ghIssue(4, '2026-08-20T01:00:00Z')],
-      lists: [[closedLocal], [closedLocal], [revertedRow]],
-      shows: [[{ ...closedLocal, close_reason: 'done' }], [revertedRow]],
-      failCloseId: 'km-t4',
-      comments: { 'km-t4': twoComments },
-      graphql: { data: { repository: { i4: issueComments([]) } } },
-    })
+  it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {
+    const rows = [syncRow({ id: 'km-mmmm', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
+    const { run, commentReads, posted } = makeSyncRepo({ issues: twoIssues(), reads: [rows], comments: { 'km-mmmm': twoComments } })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('FAILED to restore')
-    expect(r.stdout).toContain('SKIPPED comments of km-t4: its restore failed this run')
+    expect(r.stdout).toContain('SKIPPED comments of km-mmmm: its external_ref does not point at an issue of this repo')
+    expect(commentReads()).toBe(0)
     expect(posted()).toBe('')
   })
 
-  it('skips a commented bead whose own ref points at no issue of this repo, before any GitHub read', () => {
-    const rows = [syncRow({ id: 'km-m', external_ref: ref(5), updated_at: '2026-08-19T00:00:00Z', comment_count: 2 })]
-    const { run, shimCalls, posted } = makeSyncRepo({ issues: twoIssues(), lists: [rows], comments: { 'km-m': twoComments } })
+  // The read is split into chunks that run at once; each chunk must pick its
+  // own issues out of its own response, whatever order they come back in.
+  it('reads the comments of many issues in concurrent chunks and posts only what is missing', () => {
+    const numbers = [11, 12, 13, 14, 15, 16, 17, 18, 19]
+    const commentId = (n: number) => `0000c0de-0000-7000-8000-0000000000${n}`
+    const rows = numbers.map(n => syncRow({ id: `km-c${n}`, external_ref: ref(n), updated_at: '2026-08-19T00:00:00Z' }))
+    const comments = Object.fromEntries(numbers.map(n => [`km-c${n}`, [beadComment(commentId(n), `on #${n}`, '2026-09-03T20:16:36Z')]]))
+    const onGitHub = Object.fromEntries(numbers.map(n => [`i${n}`, issueComments(n === 15 ? [] : [`<!-- bd-comment ${commentId(n)} -->\nmirrored`])]))
+    const { run, commentReads, posted } = makeSyncRepo({
+      issues: numbers.map(n => ghIssue(n, '2026-08-20T00:00:00Z')),
+      reads: [rows],
+      comments,
+      graphql: { data: { repository: onGitHub } },
+    })
     const r = run()
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('SKIPPED comments of km-m: its external_ref does not point at an issue of this repo')
-    expect(shimCalls()).not.toContain('gh api graphql')
-    expect(posted()).toBe('')
+    expect(commentReads()).toBe(5)
+    const posts = postsOf(posted())
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toContain(`repos/${REPO}/issues/15/comments`)
+  })
+
+  // Past 400 commented issues the chunks are full and outnumber the width, so
+  // the read has to queue them rather than start them all.
+  it('keeps at most eight comment reads in flight, however many chunks there are', () => {
+    const numbers = Array.from({ length: 401 }, (_, i) => 1000 + i)
+    const commentId = (n: number) => `0000c0de-0000-7000-8000-00000000${n}`
+    const rows = numbers.map(n => syncRow({ id: `km-c${n}`, external_ref: ref(n), updated_at: '2026-08-19T00:00:00Z' }))
+    const comments = Object.fromEntries(numbers.map(n => [`km-c${n}`, [beadComment(commentId(n), 'c', '2026-09-03T20:16:36Z')]]))
+    const onGitHub = Object.fromEntries(numbers.map(n => [`i${n}`, issueComments([`<!-- bd-comment ${commentId(n)} -->\nmirrored`])]))
+    const { run, commentReads, graphqlPeak } = makeSyncRepo({
+      issues: numbers.map(n => ghIssue(n, '2026-08-20T00:00:00Z')),
+      reads: [rows],
+      comments,
+      graphql: { data: { repository: onGitHub } },
+      graphqlDelay: 0.3,
+    })
+    const r = run()
+    expect(r.status).toBe(0)
+    expect(commentReads()).toBe(9)
+    expect(graphqlPeak()).toBe(8)
   })
 
   it('reports what it would mirror under --dry-run and posts nothing', () => {
     const { run, posted, shimCalls } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { data: { repository: { i7: issueComments([]) } } },
     })
     const r = run('--dry-run')
     expect(r.status).toBe(0)
-    expect(r.stdout).toContain('[dry-run] would mirror 2 comment(s) of km-m to #7')
+    expect(r.stdout).toContain('[dry-run] would mirror 2 comment(s) of km-mmmm to #7')
     expect(posted()).toBe('')
     expect(shimCalls()).not.toContain('bd update')
     expect(shimCalls().match(/--pull-only/g)).toHaveLength(1)
@@ -2129,679 +2948,13 @@ describe('runSync process behavior', { timeout: 20_000 }, () => {
   it('skips the mirror, without failing the run, when the GitHub comment read is unusable', () => {
     const { run, posted } = makeSyncRepo({
       issues: twoIssues(),
-      lists: [commentedRows()],
-      comments: { 'km-m': twoComments },
+      reads: [commentedRows()],
+      comments: { 'km-mmmm': twoComments },
       graphql: { message: 'Bad credentials' },
     })
     const r = run()
     expect(r.status).toBe(0)
     expect(r.stdout).toContain('FAILED to read GitHub comments')
     expect(posted()).toBe('')
-  })
-})
-
-// Process-level pins for hookPrePr's composition — the ordering and gating
-// that unit tests on the pure functions cannot see. Runs the real entry point
-// in a scratch git repo with NO .beads/embeddeddolt and a PATH-fronted `bd`
-// shim that logs every invocation: the fresh-clone invariant is exactly "no
-// bd process is ever spawned there" (the first bd command would create an
-// empty DB that then refuses to pull).
-// Measured ~150ms per spawn solo; budgeted for the 6x load stretch.
-describe('hookPrePr process behavior', { timeout: 20_000 }, () => {
-  const script = fileURLToPath(new URL('./bd-github-sync.mjs', import.meta.url))
-
-  const makeRepo = (opts: {
-    dbReady: boolean
-    ghIssues?: Record<number, object>
-    shows?: object[][]
-  }) => {
-    const repo = mkdtempSync(join(tmpdir(), 'bd-sync-hook-'))
-    spawnSync('git', ['init', '-q'], { cwd: repo })
-    mkdirSync(join(repo, '.beads'))
-    if (opts.dbReady) mkdirSync(join(repo, '.beads', 'embeddeddolt'))
-    const shimDir = join(repo, 'shim')
-    mkdirSync(shimDir)
-    const shimLog = join(repo, 'bd-shim.log')
-    writeFileSync(shimLog, '')
-    const shows = opts.shows ?? [[]]
-    shows.forEach((rows, i) => writeFileSync(join(repo, `show-${i + 1}.json`), JSON.stringify(rows)))
-    writeFileSync(join(repo, 'show-last.json'), JSON.stringify(shows[shows.length - 1]))
-    // The shim answers --version with real text: initializedDbRoot treats
-    // empty stdout as "bd missing", which would silently turn dbReady repos
-    // DB-less and make the zero-calls assertions vacuous.
-    writeFileSync(
-      join(shimDir, 'bd'),
-      [
-        '#!/bin/sh',
-        `echo "bd $@" >> "${shimLog}"`,
-        'case "$1" in',
-        '  --version) echo "bd-shim 0.0.0";;',
-        '  show)',
-        `    m=$(cat "${repo}/show-count" 2>/dev/null || echo 0)`,
-        `    m=$((m+1)); echo $m > "${repo}/show-count"`,
-        `    if [ -f "${repo}/show-$m.json" ]; then cat "${repo}/show-$m.json"; else cat "${repo}/show-last.json"; fi;;`,
-        '  github) echo "Pushed 1 issues";;',
-        '  *) echo ok;;',
-        'esac',
-        'exit 0',
-      ].join('\n') + '\n',
-    )
-    chmodSync(join(shimDir, 'bd'), 0o755)
-    for (const [n, body] of Object.entries(opts.ghIssues ?? {}))
-      writeFileSync(join(repo, `gh-issue-${n}.json`), JSON.stringify(body))
-    writeFileSync(
-      join(shimDir, 'gh'),
-      [
-        '#!/bin/sh',
-        `echo "gh $@" >> "${shimLog}"`,
-        'if [ "$1" = "auth" ]; then echo shim-token; exit 0; fi',
-        'if [ "$1" = "api" ]; then',
-        '  n=$(basename "$2")',
-        `  if [ -f "${repo}/gh-issue-$n.json" ]; then cat "${repo}/gh-issue-$n.json"; exit 0; fi`,
-        '  echo \'{"message":"Not Found"}\'; exit 1',
-        'fi',
-        'exit 0',
-      ].join('\n') + '\n',
-    )
-    chmodSync(join(shimDir, 'gh'), 0o755)
-    // GH_TOKEN/GH_HOST: if a shim ever breaks, PATH search must not fall
-    // through to the real gh with live credentials.
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      PATH: `${shimDir}:${process.env.PATH}`,
-      GH_TOKEN: '',
-      GH_HOST: '127.0.0.1',
-      BD_GITHUB_SYNC_DRY: '1',
-    }
-    const hook = (command: string) => {
-      const payload = JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command } })
-      return spawnSync('node', [script, '--hook-pre-pr'], { cwd: repo, env, input: payload, encoding: 'utf8' })
-    }
-    return { hook, repo, shimCalls: () => readFileSync(shimLog, 'utf8') }
-  }
-
-  it('blocks a bead-id publish in a DB-less clone WITHOUT ever spawning bd', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: false })
-    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-zzzz')
-    expect(r.stderr).toContain('No GitHub issue found')
-    expect(shimCalls()).toBe('')
-  })
-
-  it('honors the escape hatch BEFORE any lookup or mint (DB-ready repo, zero bd calls)', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true })
-    const r = hook('KM_ALLOW_BEAD_IDS=1 gh pr create --body "km-zzzz deliberately"')
-    expect(r.status).toBe(0)
-    expect(shimCalls()).toBe('')
-  })
-
-  it('lets a quoted mention of a publishing command pass end-to-end', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: false })
-    const r = hook('git commit -m "fix parser; gh pr comment is the follow-up\nrefs km-zzzz"')
-    expect(r.status).toBe(0)
-    expect(shimCalls()).toBe('')
-  })
-
-  // The #N echo-gate survives pre-publish for the verifier-BLIND class —
-  // merge, review, close/reopen, graphql, response-hiding or captured
-  // output — each pinned below. Publishes the verifier can read hand their
-  // refs to bd-publish-verify.mjs.
-  it('echoes issue references on gh pr merge with their real titles and blocks once', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('gh pr merge 12 --squash --body "relates to #653 and #999"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-    expect(r.stderr).toContain('#999 → NO SUCH ISSUE OR PR')
-    // the nonexistent number suppresses the bypass offer for the whole round
-    expect(r.stderr).not.toContain('KM_ISSUE_REFS_OK=1')
-    const resolved = hook('gh pr merge 12 --squash --body "relates to #653"')
-    expect(resolved.stderr).toContain('KM_ISSUE_REFS_OK=1')
-  })
-
-  it('honors KM_ISSUE_REFS_OK before any lookup (zero gh calls)', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "relates to #653"')
-    expect(r.status).toBe(0)
-    expect(shimCalls()).not.toContain('gh api')
-  })
-
-  it('warns when a merge close keyword targets a pull request', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    const r = hook('gh pr merge 12 --body "Fixes #700"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('close keyword targets a PR')
-  })
-
-  // The mixed case: the bead deny licenses a KM_ISSUE_REFS_OK=1 re-run, so
-  // any #N already in merge text must be echoed in the SAME round —
-  // otherwise that licence would publish unverified numbers.
-  it('echoes pre-existing issue refs inside the bead-id deny round on merge', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('gh pr merge 12 --body "tracks km-zzzz, relates to #653"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-zzzz')
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-  })
-
-  // The legs are INDEPENDENT: a publish verb in the same invocation must not
-  // swallow the commit check.
-  it('gates commit close keywords even when the invocation also publishes', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    const r = hook('git commit -m "land it\n\nFixes #700" && gh pr comment 12 --body "posted"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('close keyword targets a PR')
-  })
-
-  // #683 B: blind-publish text that lives OUTSIDE the command (files,
-  // payloads, expansion) is not read — it blocks outright, and BOTH escapes
-  // attest. One rule, no per-channel detection; the merge COMMIT itself is
-  // additionally read back post-merge by bd-publish-verify.
-  it('blocks blind publishes whose text lives outside the command, both escapes to pass', () => {
-    const { hook, repo } = makeRepo({ dbReady: true })
-    writeFileSync(join(repo, 'merge-msg.txt'), 'ship it\n\nFixes #700\n')
-    const fromFile = hook(`gh pr merge 12 --squash -F ${join(repo, 'merge-msg.txt')}`)
-    expect(fromFile.status).toBe(2)
-    expect(fromFile.stderr).toContain('post-publication read-back covers')
-    expect(hook('cat msg.txt | gh pr merge 12 -F -').status).toBe(2)
-    // the CLI accepts the attached value form too
-    expect(hook('gh pr merge 12 --squash -Fmsgfile').status).toBe(2)
-    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments --input payload.json').status).toBe(2)
-    expect(hook(`gh api graphql -f query='mutation { x }' -F vars=@vars.json`).status).toBe(2)
-    // the mutation keyword may live entirely in the external payload — the
-    // graphql endpoint itself is blind-class, so the outside-text signal
-    // still blocks these
-    expect(hook('gh api graphql -F query=@q.graphql').status).toBe(2)
-    expect(hook('gh api graphql -f query="$QUERY"').status).toBe(2)
-    expect(hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 -F ${join(repo, 'merge-msg.txt')}`).status).toBe(2)
-    expect(hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 -F ${join(repo, 'merge-msg.txt')}`).status).toBe(0)
-  })
-
-  // Expansion-built unrepairable text has no readable form anywhere — the
-  // command shows $(…), the merge commit is beyond repair. Non-merge
-  // publishes with expansions stay allowed (the freeze pin below): the
-  // verifier reads THEIR published result.
-  it('fails closed on expansion-built merge/review/close text, both escapes required', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    const r = hook('gh pr merge 12 --squash --body "$(cat msg)"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('shell expansion')
-    expect(hook('gh pr review 5 -b "$REVIEW_TEXT"').status).toBe(2)
-    expect(hook('KM_ISSUE_REFS_OK=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(2)
-    expect(hook('KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --body "$(cat msg)"').status).toBe(0)
-  })
-
-  // Quoted membership words reach gh unquoted but are blanked from the
-  // skeleton — the raw text answers for them too.
-  it('classifies quoted graphql/output-hiding words from the raw command', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('gh api "--silent" repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-    const g = hook(`gh api "graphql" -f query='mutation { addComment(input: {body: "tracks km-zzzz"}) { x } }'`)
-    expect(g.status).toBe(2)
-    expect(g.stderr).toContain('km-zzzz')
-  })
-
-  // The whitelist: a shell operator of ANY kind leaves the covered shape, so
-  // the publish keeps its pre-publish checks. One character class decides it
-  // — no per-operator spelling, which is what previous rounds kept patching.
-  // Even `2>` attests, though it leaves stdout intact: carving it out is
-  // exactly the special-casing this shape exists to avoid.
-  it('pre-echoes refs of any publish carrying a shell operator', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    const r = hook('gh pr edit 12 --body="Fixes #700" >/dev/null')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('close keyword targets a PR')
-    for (const cmd of [
-      'gh pr edit 12 --body="Fixes #700" 2>/dev/null',
-      'captured=$(gh pr edit 12 --body="Fixes #700")',
-      'gh pr edit 12 --body="Fixes #700" | tail -n 0',
-      'cat x | gh pr edit 12 --body="Fixes #700"',
-      'gh pr edit 12 --body="Fixes #700" && echo done',
-      // a foreign -R publish is uncovered by gh vocabulary, not by syntax:
-      // the read-back is pinned to this repo
-      'gh -R owner/other pr edit 12 --body="Fixes #700"',
-      'gh --repo=owner/other pr edit 12 --body="Fixes #700"',
-      // gh takes the attached form too — nothing would check this publish
-      'gh -Rowner/other pr edit 12 --body="Fixes #700"',
-    ])
-      expect(hook(cmd).status, cmd).toBe(2)
-    // the covered shape itself passes: one command, no operator, this repo
-    expect(hook('gh pr edit 12 --body "relates to #653"').status).toBe(0)
-  })
-
-  it('treats every body-bearing file flag as outside-command text on blind publishes', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    expect(hook('gh release edit v1 --notes-file msg.md >/dev/null').status).toBe(2)
-    expect(hook('gh pr create --template msg.md >/dev/null').status).toBe(2)
-    expect(hook('gh pr create -Tmsg.md >/dev/null').status).toBe(2)
-  })
-
-  // When the invocation also publishes, the commit leg scans raw text only:
-  // a publish flag must not be misread as a commit-message file (an api
-  // field value is not a path, and a publish body-file is the verifier's).
-  it('does not misread publish file flags as commit-message files in compounds', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    // the compound attests under the coarse rule, but on the PUBLISH's
-    // flags — the commit leg must never report an unreadable message file
-    const api = hook('git commit -m ok && gh api repos/Stvad/knowledge-medium/issues/1/comments -F body=hello')
-    expect(api.status).toBe(2)
-    expect(api.stderr).toContain('post-publication read-back covers')
-    expect(api.stderr).not.toContain('Run from the directory')
-    // the body-file belongs to the publish, so the compound attests under the
-    // coarse rule — it must never fail closed on an unreadable COMMIT message
-    const r = hook('git commit -m ok && gh pr create --title t --body-file missing.md')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('post-publication read-back covers')
-    expect(r.stderr).not.toContain('Run from the directory')
-  })
-
-  // gh pr review output names no URL, so the verifier cannot find the
-  // review — its refs stay pre-gated.
-  it('echoes issue references on gh pr review and passes clean reviews', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('gh pr review 5 --comment -b "relates to #653"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-    expect(hook('gh pr review 5 --approve').status).toBe(0)
-  })
-
-  // GraphQL mutations publish through a response envelope the verifier
-  // cannot safely resolve; their inline query text sits in the raw command.
-  it('gates refs and bead ids in graphql mutations, ignoring graphql reads', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook(`gh api graphql -f query='mutation { addComment(input: {body: "see #653"}) { x } }'`)
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('Real GC failure')
-    const beads = hook(`gh api graphql -f query='mutation { addComment(input: {body: "tracks km-zzzz"}) { x } }'`)
-    expect(beads.status).toBe(2)
-    expect(beads.stderr).toContain('km-zzzz')
-    expect(hook(`gh api graphql -f query='query { repository(name: "x") { id } }'`).status).toBe(0)
-  })
-
-  // An api mutation with a response-hiding output flag is invisible to the
-  // verifier — its READABLE inline text gets the tables here; a blanket
-  // block would offer the escape without ever showing the refs.
-  it('echoes readable text of response-hiding api mutations, passes clean ones', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('gh api --silent -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="relates to #653"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-    const jq = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-zzzz" --jq .id')
-    expect(jq.status).toBe(2)
-    expect(jq.stderr).toContain('km-zzzz')
-    // clean readable text has nothing to confirm — no blanket block
-    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body=done').status).toBe(0)
-    // -F attests even inline. On gh api it is a typed FIELD, not a file, but
-    // an INLINE api publish is covered and never reaches this branch — so
-    // telling the two apart would only ever matter for a command already
-    // attesting, and the split is what made a mixed compound read the wrong
-    // signal. Over-blocking here costs one attested re-run.
-    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=done').status).toBe(2)
-    expect(hook('gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -F body=@notes.md').status).toBe(2)
-    expect(hook('gh api --silent --method GET repos/Stvad/knowledge-medium/issues -f state=open').status).toBe(0)
-  })
-
-  // Round-6 pin: a sibling GET segment must not suppress the opaque leg —
-  // there is no GET exemption left to suppress.
-  it('echoes refs of a silent mutation even when a sibling segment is an explicit GET', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook(
-      'gh api -X GET repos/Stvad/knowledge-medium/issues/1 && gh api --silent repos/Stvad/knowledge-medium/issues/1/comments -f body="see #653"',
-    )
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-  })
-
-  // Close/reopen comments publish text whose success output names repo#N,
-  // never a URL — the verifier cannot find them, so their refs stay here.
-  it('echoes issue references in close/reopen comments and passes comment-less closes', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const r = hook('gh issue close 12 -c "superseded, see #653"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('#653 → "Real GC failure" (issue, open)')
-    expect(hook('gh issue close 12').status).toBe(0)
-    expect(hook('gh pr close 12').status).toBe(0)
-  })
-
-  // The escapes are INDEPENDENT: approving the #N refs must not wave a
-  // file-fed body through — under the coarse rule the file is never read,
-  // so a single escape cannot attest for both checks.
-  it('keeps blocking a refs-approved file-fed merge until both escapes attest', () => {
-    const { hook, repo } = makeRepo({ dbReady: true })
-    writeFileSync(join(repo, 'merge-body.txt'), 'ship it\n\ntracks km-zzzz\n')
-    const r = hook(`KM_ISSUE_REFS_OK=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('post-publication read-back covers')
-    const both = hook(`KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh pr merge 12 --squash -F ${join(repo, 'merge-body.txt')}`)
-    expect(both.status).toBe(0)
-  })
-
-  // Same independence for --silent api mutations: the refs approval unlocks
-  // the silent block, never the bead-id scan of the raw command.
-  it('still scans refs-approved silent api mutations for bead ids', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    const r = hook('KM_ISSUE_REFS_OK=1 gh api --silent repos/Stvad/knowledge-medium/issues/12/comments -f body=km-zzzz')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-zzzz')
-    const both = hook(
-      'KM_ISSUE_REFS_OK=1 KM_ALLOW_BEAD_IDS=1 gh api --silent repos/Stvad/knowledge-medium/issues/12/comments -f body=km-zzzz',
-    )
-    expect(both.status).toBe(0)
-  })
-
-  // Position pin: the escape must be honored BEFORE the commit leg's
-  // fail-closed blocks — both block messages advertise the KM_ISSUE_REFS_OK
-  // re-run, which would otherwise block again forever.
-  it('honors KM_ISSUE_REFS_OK ahead of the stdin and missing-file blocks', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    expect(hook('KM_ISSUE_REFS_OK=1 cat msg | git commit -F -').status).toBe(0)
-    expect(hook('KM_ISSUE_REFS_OK=1 cd subdir && git commit -F msg.txt').status).toBe(0)
-  })
-
-  // The commit leg reads its OWN message file, and no longer stands down when
-  // the invocation is also read as publishing. Nothing observable changes for
-  // the compound below — a commit file flag always trips the coarse rule, so
-  // it was blocked before this too — but the leg no longer depends on a
-  // detector that deliberately over-matches, and the file is read for the
-  // reason it should be rather than by luck of a second guard.
-  it('reads the commit message file, and blocks a compound either way', () => {
-    const { hook, repo } = makeRepo({
-      dbReady: true,
-      ghIssues: { 700: A_PR },
-    })
-    writeFileSync(join(repo, 'msg.txt'), 'land it\n\nFixes #700\n')
-    // alone: the file is read and its close keyword checked against reality
-    const alone = hook(`git commit -F ${join(repo, 'msg.txt')}`)
-    expect(alone.status).toBe(2)
-    expect(alone.stderr).toContain('close keyword targets a PR')
-    // beside a verb in argv: still blocked, nothing slips through
-    const verb = ['gh', 'pr', 'create'].join(' ')
-    expect(hook(`git commit -F ${join(repo, 'msg.txt')}; printf '%s' ${verb}`).status).toBe(2)
-  })
-
-  // The gate LOOKS UP but never MINTS. The detectors deliberately over-match,
-  // and a verb sitting in ordinary unquoted argv reads as a publish — so a
-  // mint here would create a public issue for a command that is about to be
-  // blocked and never runs. An extra check costs a round; an extra issue does
-  // not come back.
-  it('never mints an issue, even for a real unmapped bead in a real publish', () => {
-    const { hook, shimCalls } = makeRepo({
-      dbReady: true,
-      shows: [[{ id: 'km-zzzz', external_ref: null }]],
-    })
-    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
-    expect(r.status).toBe(2)
-    expect(shimCalls()).toContain('bd show km-zzzz')
-    expect(shimCalls()).not.toContain('bd github sync')
-    expect(r.stderr).toContain('pnpm bd:sync')
-  })
-
-  // The same, through the shape that made this urgent: a verb in argv, where
-  // blanking quoted spans protects nothing.
-  it('does not spawn a sync for a bead id in a non-publishing command', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, shows: [[{ id: 'km-new', external_ref: null }]] })
-    const verb = ['gh', 'pr', 'create'].join(' ')
-    const r = hook(`printf '%s' ${verb} km-new`)
-    expect(shimCalls()).not.toContain('bd github sync')
-    // the id is still surfaced rather than silently allowed
-    if (r.status === 2) expect(r.stderr).toContain('km-new')
-  })
-
-  // A COVERED publish gets no body inspection at all: one gh command, no
-  // shell operator, this repo, a verb whose output names a URL. The gate
-  // reads no files and spawns nothing — bd-publish-verify reads the
-  // published object back instead. These pins keep the deleted parsing
-  // surface from growing back (#672: the pre-gate's surface is frozen;
-  // decline coverage findings here).
-  it('lets covered publishes through without body inspection (post-publication owns them)', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    expect(hook('gh pr create --title t --body "relates to #653"').status).toBe(0)
-    expect(hook('gh pr create --body-file missing-body.md --title t').status).toBe(0)
-    expect(hook('gh pr create --recover abc123 --title t').status).toBe(0)
-    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body=hi').status).toBe(0)
-    expect(shimCalls()).toBe('')
-  })
-
-  // The same bodies through an OPERATOR are uncovered, and the ones whose
-  // text the gate cannot read then attest. This is the deliberate cost of
-  // the whitelist — the fix is a single --body-file command, above.
-  it('attests operator-borne bodies the gate cannot read', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    for (const cmd of [
-      'gh pr comment 1 --body "$(cat body.md)"',
-      'cat body.md | gh pr comment 12 -F -',
-      'cd subdir && gh pr create --body-file missing-body.md --title t',
-    ])
-      expect(hook(cmd).status, cmd).toBe(2)
-  })
-
-  // A mode that prints or hands off creates nothing for the read-back to
-  // find, so it is UNCOVERED — never exempt from publishing checks. Exempting
-  // fails open, and the token is command-wide: a dry-run beside a real
-  // publish, or --dry-run=false, would exempt a genuine publish. Uncovered
-  // fails closed in all three, at the cost of one confirmation round.
-  it('makes --dry-run and --web uncovered, never exempt from the checks', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    for (const cmd of [
-      'gh pr create --title t --body "Fixes #700" --dry-run',
-      'gh pr create --title t --body "Fixes #700" --web',
-      // the disabled form still checks, rather than exempting itself
-      'gh pr create --title t --body "Fixes #700" --dry-run=false',
-      // a dry-run beside a REAL publish must not exempt the real one
-      'gh pr create --title t --dry-run; gh issue comment 1 --body "Fixes #700"',
-      // nor must a body that merely mentions the flag exempt anything
-      'gh pr merge 12 --squash --body "run it with --dry-run first, Fixes #700"',
-    ]) {
-      const r = hook(cmd)
-      expect(r.status, cmd).toBe(2)
-      expect(r.stderr, cmd).toContain('close keyword targets a PR')
-    }
-  })
-
-  // A `$` or backtick inside SINGLE quotes never expands, so it is published
-  // text rather than a hidden argument — an inline markdown code span or a
-  // price must not cost the maximum-friction round. Double-quoted, the shell
-  // WOULD expand it, so that stays uncovered.
-  it('treats single-quoted dollars and backticks as text, not expansion', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    expect(hook("gh pr comment 652 --body 'the `isPostVerifiable` gate'").status).toBe(0)
-    expect(hook("gh pr comment 652 --body 'costs $5 per run'").status).toBe(0)
-    // double quotes DO expand, so the gate still refuses to call it covered
-    expect(hook('gh pr comment 652 --body "see $(cat notes.md)"').status).toBe(2)
-  })
-
-  // The gate must never fail on its OWN bug: PreToolUse treats an unasked-for
-  // non-zero exit as a hook error and runs the command anyway, so a throw
-  // would disable every check while looking like a problem with the command.
-  it('never exits non-zero for its own errors', () => {
-    const { hook, repo } = makeRepo({ dbReady: true })
-    mkdirSync(join(repo, 'a-directory.txt'))
-    // a directory where a message file is expected takes the fail-closed
-    // branch (exit 2 with the block message), not a stack trace
-    const dir = hook(`git commit -F ${join(repo, 'a-directory.txt')} -m x`)
-    expect(dir.status).toBe(2)
-    expect(dir.stderr).toContain('Cannot read message file')
-    expect(dir.stderr).not.toContain('at readFileSync')
-    // and a payload the hook cannot make sense of at all allows explicitly,
-    // rather than throwing its way to the same outcome with a stack trace
-    const malformed = spawnSync('node', [script, '--hook-pre-pr'], {
-      input: JSON.stringify({ tool_name: 'Bash', cwd: repo, tool_input: { command: 42 } }),
-      encoding: 'utf8',
-    })
-    expect(malformed.status).toBe(0)
-    expect(malformed.stderr).toBe('')
-  })
-
-  // The gh-vocabulary layer: flags and selectors that leave the read-back
-  // nothing to fetch. A gap here is bounded by one tool's manual — and no
-  // longer silent, since bd-publish-verify reports a coverage claim it
-  // could not honour.
-  it('treats response-hiding flags and foreign selectors as uncovered', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    for (const cmd of [
-      // -t is --template's short form; on gh api it formats the response away
-      'gh api -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="Fixes #700" -t \'{{.id}}\'',
-      'gh api -X PATCH repos/Stvad/knowledge-medium/pulls/12 -f body="Fixes #700" --template \'{{.id}}\'',
-      // GH_REPO selects the repository the way -R does, and the read-back's
-      // URL pattern is pinned to this one
-      'GH_REPO=owner/other gh pr edit 12 --body="Fixes #700"',
-    ])
-      expect(hook(cmd).status, cmd).toBe(2)
-    // -t on a CLI verb is --title, not a template: still covered
-    expect(hook('gh pr create -t "a title" --body "relates to #700"').status).toBe(0)
-  })
-
-  // The two signals must be read off the SAME string. Testing expansion on
-  // the raw command while testing operators on the skeleton — which blanks a
-  // QUOTED expansion — let a command be a publish and post-verified at once.
-  it('treats a quoted flag expansion as uncovered, not just an unquoted one', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    // the quoted form is the subject here: the skeleton blanks it, so only
-    // the raw-text read catches it. The unquoted form is pinned separately.
-    const r = hook('gh api "${FLAGS:---input=payload.json}" repos/Stvad/knowledge-medium/issues/1/comments')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('post-publication read-back covers')
-  })
-
-  // With its flags expanded, an api mutation shows no literal mutation flag
-  // — neither this gate nor the read-back would otherwise look at it.
-  it('treats an expansion-flagged api call as a publish', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    const r = hook('gh api $FLAGS repos/Stvad/knowledge-medium/issues/1/comments')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('post-publication read-back covers')
-    // a literal read stays out of the publish path entirely
-    expect(hook('gh api repos/Stvad/knowledge-medium/issues/1').status).toBe(0)
-  })
-
-  // Repair used to catch a bead id that reached a published api body; with
-  // the verifier read-only, the gate takes the case it can see for free —
-  // an id in the raw command blocks whether or not the publish is covered.
-  it('blocks bead ids in a covered api publish', () => {
-    const { hook } = makeRepo({ dbReady: true, shows: [[{ id: 'km-abc', external_ref: 'https://github.com/Stvad/knowledge-medium/issues/12' }]] })
-    const r = hook('gh api repos/Stvad/knowledge-medium/issues/1/comments -f body="tracks km-abc"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-abc')
-  })
-
-  // The commit leg: close keywords act when the commit reaches the default
-  // branch, so they get the echo round; plain mentions and ordinary commits
-  // pass with zero subprocesses.
-  it('gates close-keyword refs in git commit messages', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    const r = hook('git commit -m "land the fix\n\nFixes #700"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('close keyword targets a PR')
-  })
-
-  it('gates a close keyword behind git global options (git -C … commit)', () => {
-    const { hook, repo } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    const r = hook(`git -C ${repo} commit -m "Fixes #700"`)
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('close keyword targets a PR')
-  })
-
-  // A referenced commit-message file the hook cannot read fails CLOSED:
-  // commit text never becomes a GitHub object, so no post-publication pass
-  // can verify the close keywords it may hold.
-  it('blocks a commit whose message file cannot be resolved', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true })
-    const r = hook('cd subdir && git commit -F msg.txt')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('Cannot read message file')
-    expect(shimCalls()).toBe('')
-  })
-
-  // No foreign-repo shortcut: three rounds of target-parse bypasses retired
-  // it. Every publish runs the gate, -R or not — including the multi-segment
-  // payload where a foreign first segment used to bypass a same-repo second.
-  it('gates every publish regardless of -R, including multi-segment payloads', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    expect(hook('gh --repo other/repo pr comment 12 -b "tracks km-zzzz"').status).toBe(2)
-    const multi = hook('gh -R owner/other issue comment 1 -b ok; gh pr create -b "tracks km-zzzz"')
-    expect(multi.status).toBe(2)
-    expect(multi.stderr).toContain('km-zzzz')
-  })
-
-  // A quoted -R value is blanked by the skeleton; if that read as a foreign
-  // target the gate would switch itself off (round-10 regression shape).
-  it('still gates a publish whose same-repo -R value is quoted', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    const r = hook('gh -R "Stvad/knowledge-medium" pr comment 12 -b "tracks km-zzzz"')
-    expect(r.status).toBe(2)
-    expect(r.stderr).toContain('km-zzzz')
-  })
-
-  // The commit leg keeps the stdin fail-closed rule: a pipe-fed message is
-  // text this gate cannot see and no post-publication pass ever will.
-  it('fails closed on a pipe-fed commit message but lets heredoc stdin through', () => {
-    const { hook } = makeRepo({ dbReady: true, ghIssues: { 700: A_PR } })
-    const piped = hook('cat msg.txt | git commit -F -')
-    expect(piped.status).toBe(2)
-    expect(piped.stderr).toContain('stdin')
-    // quoting the sentinel blanked it in the skeleton and bypassed the rule
-    const quoted = hook('cat msg.txt | git commit -F "-"')
-    expect(quoted.status).toBe(2)
-    expect(quoted.stderr).toContain('stdin')
-    // /dev/stdin is stdin in disguise: reading it in the hook scans the
-    // hook's own drained stream while git reads the piped file
-    const device = hook('cat msg.txt | git commit -F /dev/stdin')
-    expect(device.status).toBe(2)
-    expect(device.stderr).toContain('stdin')
-    const heredoc = hook('git commit -F - <<EOF\nFixes #700\nEOF')
-    expect(heredoc.status).toBe(2)
-    expect(heredoc.stderr).toContain('close keyword targets a PR')
-  })
-
-  // The command's addressee is not published text: a positional target URL
-  // on a merge must not cost a confirmation round, while the same URL inside
-  // the quoted merge body is merge-commit text and still verifies.
-  it('ignores positional target URLs on merge but verifies URLs inside merge bodies', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    const target = hook(`gh pr merge https://github.com/Stvad/knowledge-medium/pull/653 --body "looks good"`)
-    expect(target.status).toBe(0)
-    expect(shimCalls()).not.toContain('gh api')
-    const inBody = hook(`gh pr merge 12 --body "see https://github.com/Stvad/knowledge-medium/issues/653"`)
-    expect(inBody.status).toBe(2)
-    expect(inBody.stderr).toContain('Real GC failure')
-    // quoted prose that merely RESEMBLES a positional target keeps its refs:
-    // the strip applies only when the skeleton confirms an unquoted target.
-    // The prose must spell the FULL `gh pr comment <url>` shape — anything
-    // less never matches the strip regex at all and pins nothing (found by
-    // mutation: with a gh-less prose body, deleting the skeleton-confirm
-    // guard failed no test while stripping refs out of real merge bodies).
-    const prose = hook(`gh pr merge 12 --body "as gh pr comment https://github.com/Stvad/knowledge-medium/issues/653 said"`)
-    expect(prose.status).toBe(2)
-    expect(prose.stderr).toContain('Real GC failure')
-  })
-
-  // Argv tokens alone must not make the hook open a file: `printf … git commit -F
-  // <path>` runs printf. Before the position check this blocked, reporting
-  // the path as an unreadable message file — i.e. it had tried to read it.
-  it('does not read a message file for a command that only mentions git commit', () => {
-    const { hook } = makeRepo({ dbReady: true })
-    const r = hook(`printf '%s' git commit -F /nonexistent/secret.env`)
-    expect(r.status).toBe(0)
-    expect(r.stderr).not.toContain('secret.env')
-  })
-
-  it('lets plain-mention and escaped commits pass with zero lookups', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true, ghIssues: { 653: AN_ISSUE } })
-    expect(hook('git commit -m "see #653 for context"').status).toBe(0)
-    expect(hook('KM_ISSUE_REFS_OK=1 git commit -m "Fixes #653"').status).toBe(0)
-    expect(shimCalls()).not.toContain('gh api')
-  })
-
-  // Positive control: the zero-calls assertions above are negative tests, so
-  // prove the shim plumbing actually intercepts when bd SHOULD run —
-  // otherwise a broken PATH front would pass all of them vacuously.
-  it('routes lookup through bd in a DB-ready repo (shim interception works)', () => {
-    const { hook, shimCalls } = makeRepo({ dbReady: true })
-    const r = hook('gh pr create --title t --body "tracks km-zzzz"')
-    expect(r.status).toBe(2)
-    expect(shimCalls()).toContain('bd --version')
-    expect(shimCalls()).toContain('bd show km-zzzz --json')
   })
 })

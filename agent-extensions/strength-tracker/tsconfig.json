@@ -1,15 +1,13 @@
 {
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "baseUrl": "../..",
-    "ignoreDeprecations": "6.0",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
     "paths": {
-      "@/*": ["agent-extensions/kernel-types/src/*"]
+      "@/*": ["../kernel-types/src/*"]
     },
     "skipLibCheck": true,
     "strict": true,

@@ -27,7 +27,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { attachmentObjectPath } from './storagePaths.js'
+import { attachmentObjectPath, storageObjectUrl } from './storagePaths.js'
 
 export const ATTACHMENTS_BUCKET = 'attachments'
 
@@ -68,7 +68,7 @@ export interface BlobStore {
    *  The bytes come from `encodeBytes` (§5), which is ArrayBuffer-backed. */
   put(workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<'written' | 'exists'>
   /** Direct RLS-gated GET of the stored object bytes (ArrayBuffer-backed, so it
-   *  feeds `decodeBytes` directly). Throws if absent/denied. */
+   *  feeds `verifyObjectBytes` directly). Throws if absent/denied. */
   get(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer>>
   /** The §9 recovery actor's presence probe of the content path: the stored object's
    *  bytes when the path is occupied (so the caller can decode + hash-verify — the
@@ -83,12 +83,18 @@ export interface BlobStore {
    *  GET as {@link get}; the split is purely about turning the 404 into a value instead of
    *  a throw, which recovery branches on.) */
   probe(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
-  /** Direct RLS-gated delete (writer). Idempotent: supabase-js `remove` returns
-   *  200 with an EMPTY list (no error) when the object is absent or RLS-denied,
-   *  so this resolves on a no-op. Fine for §16 GC; the §10.1 poison-correction
-   *  must NOT infer "the path is now free" from this resolving — it GET-verifies
-   *  the path is gone before re-uploading (the §9 re-attempt sweep does this). */
-  delete(workspaceId: string, contentKey: string): Promise<void>
+  /** Direct RLS-gated delete (writer) of one object. Resolves only when Storage
+   *  confirms the delete; throws otherwise, an absent object included, so a
+   *  denied delete never reads as done. `signal` aborts the request. */
+  delete(workspaceId: string, contentKey: string, signal: AbortSignal | undefined): Promise<void>
+}
+
+/** The storage-js bucket API's own request plumbing: `url` is the Storage base,
+ *  `fetch` adds the session's token. Not in its public types. */
+interface StorageFileApiInternals {
+  readonly url: string
+  readonly headers: Record<string, string>
+  readonly fetch: typeof fetch
 }
 
 export interface SupabaseBlobStoreDeps {
@@ -242,11 +248,24 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       return new Uint8Array(await data.arrayBuffer())
     },
 
-    async delete(workspaceId, contentKey) {
-      const { error } = await client.storage
-        .from(ATTACHMENTS_BUCKET)
-        .remove([objectPath(workspaceId, contentKey)])
-      if (error) throw error
+    async delete(workspaceId, contentKey, signal) {
+      // The single-object route, not `remove()`: the bulk route deletes the rows,
+      // then sends one backend DeleteObjects whose per-key errors it never reads,
+      // so a failed key keeps its bytes with no row any listing could find. This
+      // route deletes the backend object inside the row's transaction. storage-js
+      // has no call for it, so it rides the bucket API's own url and authed fetch.
+      const files = client.storage.from(ATTACHMENTS_BUCKET) as unknown as StorageFileApiInternals
+      const path = objectPath(workspaceId, contentKey)
+      const res = await files.fetch(storageObjectUrl(files.url, ATTACHMENTS_BUCKET, path), {
+        method: 'DELETE',
+        headers: files.headers,
+        signal,
+      })
+      if (!res.ok) {
+        // Storage answers a denial and an absence alike with a 400; only the body's code tells them apart.
+        const code = await res.json().then((body: {code?: unknown} | null) => body?.code, () => undefined)
+        throw new Error(`blob delete failed (${res.status}${typeof code === 'string' ? ` ${code}` : ''}) for ${path}`)
+      }
     },
   }
 }

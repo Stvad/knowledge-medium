@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // The REAL dialogs module, driven through its real queue. Mocking it would mean

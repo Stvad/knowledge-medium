@@ -12,6 +12,7 @@ import type { PluggableList } from 'unified'
 const markdownConfig = gfmMarkdownExtension({
   block: {} as Block,
   blockContext: {},
+  input: {},
   data: {content: '', references: [], workspaceId: ''},
 })
 
@@ -114,6 +115,14 @@ describe('gfm markdown extension', () => {
     expect(container.querySelector('ol')?.className).toBe('markdown-list')
     expect(container.querySelector('ul')?.className)
       .toBe('contains-task-list markdown-list')
+  })
+
+  it('puts a markdown table in its own scroller', () => {
+    renderMarkdown('| a |\n|---|\n| 1 |')
+
+    const table = screen.getByRole('table')
+    expect(table).toHaveClass('markdown-table')
+    expect(table.parentElement).toHaveClass('markdown-table-scroll')
   })
 
   it('drops every newline separator inside a tight list', () => {

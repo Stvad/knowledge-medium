@@ -20,16 +20,20 @@
  *
  *  - A Repo built in `beforeAll` (file- or suite-lifetime, by construction) is
  *    registered before any scope is open, so it is NOT released here. That is
- *    deliberate — releasing it would break the file that shares it — and it is
- *    why `createTestDb`'s own teardown is still the right place to cover a
- *    Repo the db outlives.
+ *    deliberate — releasing it would break the file that shares it. Such a
+ *    file must release its own Repo in `afterAll`, before the db closes
+ *    (`releaseTestRepos` below); `createTestDb`'s cleanup releases no Repo, it
+ *    only closes the db and removes its directory.
  *  - A file's own `afterEach` runs BEFORE this release, so a file that already
  *    disposes its Repo keeps working; the second release is a no-op.
  *
- * WHAT IT DOES NOT REACH: work whose deferral timer has not fired yet. A drain
- * awaits what is pending, and neither job framework keeps the timer handle a
- * cancel would need, so an armed `delayMs` processor outlives this (#892). The
- * unpin above blunts it: a pass gated on the active workspace refuses when it
+ * ARMED TIMERS. A drain awaits only work whose deferral timer has fired. An
+ * armed `delayMs` processor is cancelled instead: left armed, it fires during a
+ * later file against a db that file's `afterAll` closed, and logs from inside
+ * whatever test runs then — or, landing in vitest's end-of-file RPC window, fails
+ * the run with an `EnvironmentTeardownError`. An armed idle callback still
+ * outlives this, since `PendingIdleJobs` keeps no handle to cancel (#892); the
+ * unpin blunts it, as a pass gated on the active workspace refuses when it
  * eventually fires.
  *
  * WEAK REFS, and the sweep. A fuzz property builds one Repo per iteration
@@ -79,7 +83,19 @@ export const beginTestRepoScope = (): void => {
   scope = {refs: new Set(), sweepAt: SWEEP_FLOOR}
 }
 
-/** Release every Repo built during the test and drain its deferred work.
+/** Release every Repo built during the test — see `releaseTestRepos`. */
+export const endTestRepoScope = async (): Promise<void> => {
+  const closing = scope
+  scope = null
+  if (!closing) return
+  await releaseTestRepos([...closing.refs]
+    .map(ref => ref.deref())
+    .filter((repo): repo is Repo => repo !== undefined))
+}
+
+/** Release `live` and drain its deferred work — what `endTestRepoScope` does
+ *  at test end, exported for a test that outlives its Repos (a fuzz property
+ *  building one per fast-check case, all on one shared db).
  *
  *  Stopping the observer before unpinning is precautionary, not load-bearing:
  *  unpinning drives projector work, and a Repo on its way out has no business
@@ -91,13 +107,7 @@ export const beginTestRepoScope = (): void => {
  *  a partial release on a run that is already red, and costs a worse failure:
  *  a caught unpin leaves the Repo RE-PINNED (the setter rolls back), so the
  *  drain below never settles. */
-export const endTestRepoScope = async (): Promise<void> => {
-  const closing = scope
-  scope = null
-  if (!closing) return
-  const live = [...closing.refs]
-    .map(ref => ref.deref())
-    .filter((repo): repo is Repo => repo !== undefined)
+export const releaseTestRepos = async (live: readonly Repo[]): Promise<void> => {
   // Settle the observer BEFORE detaching it. `dispose()` is synchronous and the
   // drain only re-checks `disposed` at the top of its loop, so a window already
   // inside `applyWindow` commits regardless — after this hook returns, and after
@@ -112,4 +122,6 @@ export const endTestRepoScope = async (): Promise<void> => {
     repo.setActiveWorkspaceId(null)
   }
   await Promise.all(live.map(repo => repo.awaitDeferredWork()))
+  // After the drain, whose own txs can arm more delayed jobs.
+  for (const repo of live) repo.cancelDelayedProcessors()
 }

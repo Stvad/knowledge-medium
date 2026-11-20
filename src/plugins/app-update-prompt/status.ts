@@ -43,9 +43,6 @@ const CHECK_TOAST_ID = 'app-update-check'
 // Manually poke the SW update check. Useful now that navigation is cache-first
 // (src/sw/worker.ts): a new deploy no longer appears on the next navigation, so
 // this — alongside the 30-min poll — is how a user pulls a new build on demand.
-// A found update still surfaces the persistent reload prompt via the existing
-// updatefound → appUpdate.markAvailable() path; this toast is just the immediate
-// "what happened" feedback.
 const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: APP_CHECK_FOR_UPDATES_ACTION_ID,
   description: 'Check for updates',
@@ -64,7 +61,13 @@ const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
           : result === 'no-worker'
             ? "Update checks aren't active in this session."
             : "Couldn't check for updates — check your connection."
-    showInfo(message, {id: CHECK_TOAST_ID, duration: 4000})
+    showInfo(message, {
+      id: CHECK_TOAST_ID,
+      duration: 4000,
+      action: result === 'update-found'
+        ? {label: 'Reload', onClick: () => appUpdate.reload()}
+        : undefined,
+    })
   },
 }
 

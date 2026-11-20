@@ -2,21 +2,42 @@
  * km MCP server — live Knowledge Medium graph tools over the kmagent
  * bridge, for any MCP client.
  *
- * Deliberately narrower than the bridge: read tools + block-level
+ * Deliberately narrower than the bridge: read tools (most generated from
+ * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
+ * `add_media` takes the file's bytes from the model; reading a local path
+ * instead reaches past the graph, and an entry point has to ask for that
+ * (`localMediaFiles`).
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { z } from 'zod'
-import { createBridgeClient, type BridgeClient } from './client.js'
-import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
+import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
+import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
-import { moveBlockPositionSchema } from './protocol.js'
+import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './mediaFile.js'
+import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
+import {
+  addCommentCommandSchema,
+  BRIDGE_COMMAND_TIMEOUT_MS,
+  createContributorCommandSchema,
+  listContributorsCommandSchema,
+  addMediaCommandSchema,
+  MEDIA_BRIDGE_MAX_BYTES,
+  moveBlockPositionSchema,
+  neutralizeDisplayText,
+  readMediaCommandSchema,
+  readMediaResultSchema,
+  TODO_WRITE_HELP,
+  toDisplayJson,
+  WRITE_TARGET_HELP,
+} from './protocol.js'
+import { GRAPH_READ_TOOLS, renderToolResult, toolCommand } from './readTools.js'
 
 interface PackageJson {
   version?: unknown
@@ -31,14 +52,45 @@ const agentCliPackageVersion = (() => {
   return pkg.version
 })()
 
+/** What every km-mcp client is told about the graph; a caller's own
+ *  `serverOptions.instructions` is appended after it. */
+export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything is a block (markdown content plus typed properties) nested under a parent. A page is a top-level block whose content is its title; [[Page name]] in content links to a page; a block's backlinks are the blocks that reference it. Daily notes are pages, one per date.
+
+Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as its id, a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take an id, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
+
+The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
+
+Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them (if that name shows no Assets type, it is another page: select from block_types where type = 'media'), and backlinks shows where one is used.
+
+Writing: append_markdown writes an outline in one call; edit_block changes one passage of a block; pass update_block the block's exact content as expectedContent so a concurrent edit of it is refused rather than overwritten. A block link in content is ((id)) or [label](((id))), with the id as printed after the ^; content that links an id no live block of the workspace has is refused.
+
+Contributor setup: use list_contributors and create_contributor to discover or create page-backed identities from a new MCP connection. These tools do not change this server's attribution choice; configure contributorId on GraphMcpServerOptions or AGENT_RUNTIME_CONTRIBUTOR_ID for writes.`
+
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
+/** The image formats model APIs take inline; any other image goes out as a file. */
+const MODEL_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+/** `media:mime` is synced and member-writable. */
+const MIME_SHAPE = /^[\w.+-]+\/[\w.+-]+$/
+
+/** What a write tool is about to do, as the write guard sees it. Block-id
+ *  fields (`id`, move_block's `parentId` and `position.siblingId`) carry the
+ *  FULL id the write will act on — a `^id` / `((id))` the caller typed is
+ *  resolved first — so a guard looking rows up by id checks the same
+ *  block. Targets (`parentId` of create_block, `target`) stay as typed. */
 export type GraphMcpWriteOperation =
   | {type: 'create_block', parentId: string, content: string, properties?: Record<string, unknown>}
-  | {type: 'update_block', id: string, content?: string, properties?: Record<string, unknown>}
+  | {type: 'update_block', id: string, content?: string, properties?: Record<string, unknown>, expectedContent?: string}
   | {type: 'move_block', id: string, parentId: string | null, position: MoveBlockPositionInput}
   | {type: 'delete_block', id: string}
   | {type: 'restore_block', id: string}
+  | {type: 'append_markdown', target: string, markdown: string, position?: MoveBlockPositionInput, shape?: 'outline' | 'block'}
+  | {type: 'edit_block', id: string, old: string, new: string}
+  | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
+  | {type: 'create_page', name?: string, date?: string}
+  /** `path` is set only when the bytes come from a local file (`localMediaFiles`). */
+  | {type: 'add_media', path?: string, filename: string, mime?: string, workspaceId?: string}
+  | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
   beforeWrite: (operation: GraphMcpWriteOperation) => void | Promise<void>
@@ -52,16 +104,26 @@ export interface GraphMcpWriteGuardContext {
 export interface GraphMcpServerOptions {
   client?: BridgeClient
   profile?: string
+  /** Attribution for every MCP write; undefined leaves attribution unconfigured. */
+  contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
+  /** Let `add_media` read a local path the model names. Off unless the
+   *  entry point asks: a server whose model is driven by synced notes (agent-dispatch)
+   *  must not turn a note into a read of this machine's files. */
+  localMediaFiles?: boolean
   serverOptions?: ConstructorParameters<typeof McpServer>[1]
 }
 
 export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpServer => {
-  const client = options.client ?? createBridgeClient({
+  const configuredContributorId = options.contributorId !== undefined
+    ? options.contributorId
+    : parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
+  const baseClient = options.client ?? createBridgeClient({
     profile: options.profile ?? process.env.AGENT_RUNTIME_PROFILE,
-    timeoutMs: options.timeoutMs ?? 60_000,
+    timeoutMs: options.timeoutMs ?? BRIDGE_COMMAND_TIMEOUT_MS,
   })
+  const client = withContributorId(baseClient, configuredContributorId)
   const graph = createBridgeGraph(client)
   const writeGuard = typeof options.writeGuard === 'function'
     ? options.writeGuard({client, graph})
@@ -71,8 +133,18 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     await writeGuard?.beforeWrite(operation)
   }
 
+  // With a guard, an id field is resolved once, here, and sent with `exactIds`
+  // so the runtime does not read it as a ref a second time: the guard and the
+  // write act on one block. Without one, the write resolves it the same way.
+  const exactIds = writeGuard !== undefined
+  const blockId = (ref: string): Promise<string> => exactIds ? graph.resolveBlockId(ref) : Promise.resolve(ref)
+  const resolvedPosition = async (position: MoveBlockPositionInput): Promise<MoveBlockPositionInput> =>
+    position.kind === 'before' || position.kind === 'after'
+      ? {kind: position.kind, siblingId: await blockId(position.siblingId)}
+      : position
+
   const json = (value: unknown) => ({
-    content: [{type: 'text' as const, text: JSON.stringify(value, null, 2)}],
+    content: [{type: 'text' as const, text: toDisplayJson(value)}],
   })
   const text = (value: string) => ({
     content: [{type: 'text' as const, text: value}],
@@ -80,53 +152,131 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   const server = new McpServer(
     {name: MCP_SERVER_NAME, version: agentCliPackageVersion},
-    options.serverOptions,
+    {
+      ...options.serverOptions,
+      instructions: options.serverOptions?.instructions
+        ? `${KM_MCP_INSTRUCTIONS}\n\n${options.serverOptions.instructions}`
+        : KM_MCP_INSTRUCTIONS,
+    },
   )
 
-  server.registerTool('get_block' satisfies KmMcpToolName, {
-    description: 'Fetch a single block (content, properties, parentId) by id. For its children, use the subtree tool.',
-    inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.getBlock(id)))
+  for (const tool of GRAPH_READ_TOOLS) {
+    server.registerTool(tool.name, {
+      description: tool.description,
+      inputSchema: tool.shape,
+    }, async input => text(renderToolResult(await client.runCommand(toolCommand(tool, input)))))
+  }
 
-  server.registerTool('subtree' satisfies KmMcpToolName, {
-    description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content> <propsJSON>`). '
-    + "Each block's properties (e.g. status, type) are appended as compact JSON by default; pass includeProperties:false for the lean id+content form.",
-    inputSchema: {rootId: z.string(), includeProperties: z.boolean().optional().default(true)},
-  }, async ({rootId, includeProperties}) =>
-    text(renderSubtreeOutline(await graph.getSubtree(rootId) as SubtreeOutlineRow[], {includeProperties})))
-
-  server.registerTool('backlinks' satisfies KmMcpToolName, {
-    description: 'List blocks that reference the given block/page (hydrated: id, content, deepLink).',
-    inputSchema: {id: z.string()},
-  }, async ({id}) => json(await graph.backlinkSources(id)))
-
-  server.registerTool('page' satisfies KmMcpToolName, {
-    description: 'Resolve a page by alias/title. Returns the exact match (if any) plus substring candidates.',
-    inputSchema: {name: z.string()},
-  }, async ({name}) => json(await client.runCommand({type: 'page', name})))
-
-  server.registerTool('daily_note' satisfies KmMcpToolName, {
-    description: 'Resolve a date expression (today | yesterday | ISO date | natural language) to its daily-note block.',
-    inputSchema: {date: z.string()},
-  }, async ({date}) => json(await client.runCommand({type: 'daily-note', date})))
-
-  server.registerTool('search' satisfies KmMcpToolName, {
-    description: 'Full-text search over block content.',
-    inputSchema: {query: z.string(), limit: z.number().int().positive().optional()},
-  }, async ({query, limit}) => json(await client.runCommand({type: 'search', query, limit})))
-
-  server.registerTool('sql_query' satisfies KmMcpToolName, {
-    description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',
-    inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
-  }, async ({sql, params}) => {
-    if (!isReadOnlySql(sql)) {
-      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block / delete_block / restore_block for writes.')
+  server.registerTool('read_media' satisfies KmMcpToolName, {
+    description: 'The bytes of a media block (type media, shown in notes as ((id))), hash-verified. An image comes '
+    + 'back inline for you to look at; any other file as a binary resource, which your client may save for you to open. '
+    + `Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    inputSchema: {
+      ref: readMediaCommandSchema.shape.ref,
+      workspaceId: readMediaCommandSchema.shape.workspaceId,
+    },
+  }, async ({ref, workspaceId}) => {
+    const media = readMediaResultSchema.parse(await client.runCommand({
+      type: 'read-media',
+      ref,
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+    const summary = neutralizeDisplayText(
+      `Media ^${media.id}: ${media.filename ?? '(no filename)'}, ${media.mime}, ${media.size} bytes, ${media.hash}`,
+    )
+    return {
+      content: [
+        {type: 'text' as const, text: summary},
+        media.imageMime !== null && MODEL_IMAGE_MIMES.has(media.imageMime)
+          ? {type: 'image' as const, data: media.base64, mimeType: media.imageMime}
+          : {
+              type: 'resource' as const,
+              resource: {
+                uri: `km://media/${encodeURIComponent(media.id)}`,
+                mimeType: MIME_SHAPE.test(media.mime) ? media.mime : 'application/octet-stream',
+                blob: media.base64,
+              },
+            },
+      ],
     }
-    return json(await graph.sqlAll(sql, params ?? []))
+  })
+
+  const localMediaFiles = options.localMediaFiles === true
+  server.registerTool('add_media' satisfies KmMcpToolName, {
+    description: 'Store a file as a media block under the workspace\'s Assets page; the same bytes added '
+    + 'twice are one block. Pass the file itself as `content` (text such as SVG as is, binary as base64 with encoding "base64")'
+    + (localMediaFiles ? ', or a local file\'s absolute `path`' : '')
+    + '. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
+    + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    inputSchema: {
+      ...(localMediaFiles ? {path: z.string().optional().describe('Absolute path of a local file; instead of content')} : {}),
+      content: z.string().optional().describe('The file itself: text as is, or base64 with encoding "base64"'),
+      encoding: z.enum(['utf8', 'base64']).optional().describe('How content is written. Default: utf8'),
+      filename: addMediaCommandSchema.shape.filename.describe(
+        'The block\'s content. Required with content; a path defaults to the file\'s own name',
+      ),
+      mime: addMediaCommandSchema.shape.mime.describe(
+        'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: image/svg+xml '
+        + 'for a .svg filename, else application/octet-stream, which shows as a download',
+      ),
+      workspaceId: addMediaCommandSchema.shape.workspaceId,
+    },
+    // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
+    annotations: {destructiveHint: true, openWorldHint: localMediaFiles},
+  }, async ({path: filePath, content, encoding, filename, mime, workspaceId}: {
+    path?: string, content?: string, encoding?: 'utf8' | 'base64', filename?: string, mime?: string, workspaceId?: string
+  }) => {
+    if ((filePath === undefined) === (content === undefined)) {
+      throw new Error(localMediaFiles ? 'add_media takes exactly one of path and content.' : 'add_media needs content.')
+    }
+    if (content !== undefined && !filename) throw new Error('add_media needs a filename with content.')
+    if (filePath !== undefined && !path.isAbsolute(filePath)) {
+      throw new Error(`add_media needs an absolute path; got ${filePath}.`)
+    }
+    const name = filename || path.basename(filePath!)
+    const type = mime ?? mimeFromFilename(name)
+    await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
+    return json(await client.runCommand({
+      type: 'add-media',
+      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!),
+      filename: name,
+      ...(type !== undefined ? {mime: type} : {}),
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+  })
+
+  server.registerTool('list_contributors' satisfies KmMcpToolName, {
+    description: 'List page-backed contributors in a workspace. Use this to find an id for contributorId configuration.',
+    inputSchema: {
+      workspaceId: listContributorsCommandSchema.shape.workspaceId,
+    },
+  }, async ({workspaceId}) => json(await client.runCommand({
+    type: 'list-contributors',
+    ...(workspaceId !== undefined ? {workspaceId} : {}),
+  })))
+
+  server.registerTool('create_contributor' satisfies KmMcpToolName, {
+    description: 'Create a page-backed contributor. Configure the returned id as contributorId on this MCP server to attribute its future writes.',
+    inputSchema: {
+      name: createContributorCommandSchema.shape.name,
+      kind: createContributorCommandSchema.shape.kind,
+      role: createContributorCommandSchema.shape.role,
+      workspaceId: createContributorCommandSchema.shape.workspaceId,
+    },
+  }, async ({name, kind, role, workspaceId}) => {
+    await beforeWrite({type: 'create_contributor', name, kind, role, workspaceId})
+    return json(await client.runCommand({
+      type: 'create-contributor',
+      name,
+      ...(kind !== undefined ? {kind} : {}),
+      ...(role !== undefined ? {role} : {}),
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
   })
 
   server.registerTool('create_block' satisfies KmMcpToolName, {
-    description: 'Create a new block under a parent. Content is markdown; [[Page]] wikilinks create references.',
+    description: 'Create ONE block (content kept whole) under parentId, a target as described for append_markdown — '
+    + `the way to write a typed record; for several blocks, use append_markdown. ${TODO_WRITE_HELP}`,
     inputSchema: {
       parentId: z.string(),
       content: z.string(),
@@ -138,15 +288,19 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   server.registerTool('update_block' satisfies KmMcpToolName, {
-    description: 'Update a block\'s content and/or merge properties.',
+    description: 'Replace a block\'s content and/or merge properties (omitted keys stay). To change one passage, use '
+    + 'edit_block. With expectedContent the update is refused, showing the current content, unless the block\'s '
+    + 'content is exactly that — read it whole with get_block, not from an outline line.',
     inputSchema: {
       id: z.string(),
       content: z.string().optional(),
       properties: z.record(z.string(), z.unknown()).optional(),
+      expectedContent: z.string().optional(),
     },
-  }, async ({id, content, properties}) => {
-    await beforeWrite({type: 'update_block', id, content, properties})
-    return json(await graph.updateBlock(id, {content, properties}))
+  }, async ({id: ref, content, properties, expectedContent}) => {
+    const id = await blockId(ref)
+    await beforeWrite({type: 'update_block', id, content, properties, expectedContent})
+    return json(await graph.updateBlock(id, {content, properties, expectedContent, exactIds}))
   })
 
   server.registerTool('move_block' satisfies KmMcpToolName, {
@@ -156,9 +310,14 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       parentId: z.string().nullable(),
       position: moveBlockPositionSchema,
     },
-  }, async ({id, parentId, position}) => {
+  }, async input => {
+    const [id, parentId, position] = await Promise.all([
+      blockId(input.id),
+      input.parentId === null ? null : blockId(input.parentId),
+      resolvedPosition(input.position),
+    ])
     await beforeWrite({type: 'move_block', id, parentId, position})
-    return json(await graph.moveBlock({id, parentId, position}))
+    return json(await graph.moveBlock({id, parentId, position, exactIds}))
   })
 
   server.registerTool('delete_block' satisfies KmMcpToolName, {
@@ -166,9 +325,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {
       id: z.string(),
     },
-  }, async ({id}) => {
+  }, async ({id: ref}) => {
+    const id = await blockId(ref)
     await beforeWrite({type: 'delete_block', id})
-    return json(await graph.deleteBlock(id))
+    return json(await graph.deleteBlock(id, {exactIds}))
   })
 
   server.registerTool('restore_block' satisfies KmMcpToolName, {
@@ -176,10 +336,93 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {
       id: z.string(),
     },
-  }, async ({id}) => {
+  }, async ({id: ref}) => {
+    const id = await blockId(ref)
     await beforeWrite({type: 'restore_block', id})
-    return json(await graph.restoreBlock(id))
+    return json(await graph.restoreBlock(id, {exactIds}))
   })
+
+  server.registerTool('append_markdown' satisfies KmMcpToolName, {
+    description: 'Insert markdown under a target in ONE transaction, split into blocks as the app\'s paste does '
+    + '(bullets and headings nest; a code block or table stays one block; shape "block" keeps it all one block). '
+    + 'Returns the new blocks as an outline with their ids. Default position: after the target\'s last child; a '
+    + `before/after siblingId must be a child of the target, which is then never created. ${WRITE_TARGET_HELP}`,
+    inputSchema: {
+      target: z.string(),
+      markdown: z.string(),
+      position: moveBlockPositionSchema.optional(),
+      shape: z.enum(['outline', 'block']).optional(),
+    },
+  }, async ({target, markdown, position: requested, shape}) => {
+    const position = requested && await resolvedPosition(requested)
+    await beforeWrite({type: 'append_markdown', target, markdown, position, shape})
+    return text(renderToolResult(await graph.appendMarkdown({target, markdown, position, shape, exactIds})))
+  })
+
+  server.registerTool('edit_block' satisfies KmMcpToolName, {
+    description: 'Replace the one occurrence of `old` in a block\'s content with `new` (literal text), against the '
+    + 'content current at write time; returns the change in context. Refused when `old` is empty or found more than '
+    + 'once (add surrounding text), and when it is not found, showing the current content.',
+    inputSchema: {
+      id: z.string(),
+      old: z.string(),
+      new: z.string(),
+    },
+  }, async input => {
+    const edit = {...input, id: await blockId(input.id)}
+    await beforeWrite({type: 'edit_block', ...edit})
+    return json(await graph.editBlock({...edit, exactIds}))
+  })
+
+  server.registerTool('add_comment' satisfies KmMcpToolName, {
+    description: 'Start a comment thread on a block, on quoted text of it or on the whole block, and return its root id '
+    + '(write ((id)) to quote that range elsewhere). The quote is found in the block\'s current content, verbatim as '
+    + 'get_block returns it; one that appears more than once needs occurrence, and the result\'s quoteStart and excerpt '
+    + 'show which appearance was anchored. No content makes a highlight. A replacement makes an edit suggestion; to '
+    + 'change text yourself, use edit_block. Reply to a comment with append_markdown under '
+    + 'that comment; resolve a thread with update_block on its root, properties {"annotation:status": "resolved"}. '
+    + 'comments reads threads.',
+    inputSchema: {
+      target: addCommentCommandSchema.shape.target,
+      quote: addCommentCommandSchema.shape.quote,
+      occurrence: addCommentCommandSchema.shape.occurrence,
+      content: addCommentCommandSchema.shape.content,
+      replacement: addCommentCommandSchema.shape.replacement,
+    },
+  }, async input => {
+    const comment = {...input, target: await blockId(input.target)}
+    await beforeWrite({type: 'add_comment', ...comment})
+    return json(await graph.addComment({...comment, exactIds}))
+  })
+
+  server.registerTool('create_page' satisfies KmMcpToolName, {
+    description: 'Get-or-create a page by name, as typing [[name]] would (a date-literal name is that daily note), '
+    + 'or a daily note by date (today, next monday). Pass one of name or date. To also write content, '
+    + 'append_markdown to [[name]] instead.',
+    inputSchema: {
+      name: z.string().optional(),
+      date: z.string().optional(),
+    },
+  }, async ({name, date}) => {
+    await beforeWrite({type: 'create_page', name, date})
+    return json(await graph.createPage({name, date}))
+  })
+
+  // Defaults to this session's own window: what it changed since it started.
+  const sessionStartedAt = Date.now()
+
+  server.registerTool('recent_changes' satisfies KmMcpToolName, {
+    description: 'Recent local transactions in this workspace, newest first, with the blocks each changed (content '
+    + 'before/after, clipped; parent; property names). Defaults to agent writes (any agent on this device) since this '
+    + 'session started — use it to report what you changed. since: epoch ms or ISO (0 = all); includeUser adds '
+    + 'the user\'s own edits.',
+    inputSchema: {
+      since: z.union([z.number(), z.string()]).optional(),
+      limit: z.number().int().positive().optional(),
+      includeUser: z.boolean().optional(),
+    },
+  }, async ({since, limit, includeUser}) =>
+    json(await graph.recentChanges({since: since ?? sessionStartedAt, limit, includeUser})))
 
   return server
 }

@@ -26,6 +26,7 @@ import {
   getBlockTypes,
   propertyDefaultProp,
   propertyHiddenProp,
+  propertyHideInOutlineProp,
   propertyNameProp,
   seedKeyProp,
   seedRevisionProp,
@@ -39,6 +40,7 @@ import {typeSeedsFacet} from '@/data/facets'
 import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import {waitFor} from '@/test/waitFor'
 import type {Repo} from '@/data/repo'
 import type {PendingIdleJobs} from '@/data/internals/idleMarkerJobs'
 
@@ -333,7 +335,7 @@ describe('materializePropertySeeds', () => {
       parentId: null,
       orderKey: 'a0',
       content: 'foreign live row',
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     await expect(materializePropertySeeds(repo, WS, [seed])).rejects.toThrow(
       `seed id ${id} belongs to workspace ${OTHER_WS}`,
@@ -354,7 +356,7 @@ describe('materializePropertySeeds', () => {
         content: 'foreign tombstone',
       })
       await tx.delete(id)
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     await expect(materializePropertySeeds(repo, WS, [seed])).rejects.toThrow(
       `seed id ${id} belongs to workspace ${OTHER_WS}`,
@@ -482,6 +484,7 @@ describe('materializePropertySeeds', () => {
     // AbortController, so a later test's `Repo` cannot reach into and cancel an
     // earlier one's). See the PR description for the reproduction of both.
     const freshWs = 'ws-no-pages-property'
+    repo.setActiveWorkspaceId(freshWs)
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [propertiesPageBlockId(freshWs)])).toBeNull()
 
@@ -586,7 +589,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
    *  this poll expiring — carrying the last assertion error — rather than as
    *  an opaque test timeout. */
   const waitForMaterialization = (check: () => Promise<void>): Promise<void> =>
-    vi.waitFor(check, {timeout: 15_000, interval: 50})
+    waitFor(check, {timeout: 15_000})
 
   type WithRun = {runWorkspaceSeedMaterialization: (...a: unknown[]) => Promise<void>}
 
@@ -719,7 +722,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       })
 
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
     await repo.awaitSeedMaterialization()
     // Exactly one dirty re-run (2 total): the mid-flight change is honored and the
     // loop terminates once no further change is pending — no unbounded re-running.
@@ -731,7 +734,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     await repo.whenPropertyDefinitionsReady(WS)
     // A dynamic type seed (a `seedType` contribution that appears post-bootstrap).
     repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.has(typeSeed.seedKey)).toBe(true)
     })
 
@@ -766,10 +769,10 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
       parentId: null,
       orderKey: 'a0',
       content: 'foreign occupant',
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.has(typeSeed.seedKey)).toBe(true)
     })
 
@@ -795,7 +798,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // Gate on the test seeds' own keys, not a total count: post-C4a the registry
     // also carries the kernel type seeds (`system:kernel-data/type/*`), so an
     // absolute `seedsByKey.size` would double-count them.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/a')).toBe(seedA)
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/b')).toBe(seedBContested)
     })
@@ -844,7 +847,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // The two same-key contributions collapse to one (keep-first); assert that
     // survivor directly rather than a total `seedsByKey.size`, which post-C4a also
     // counts the kernel type seeds (`system:kernel-data/type/*`).
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.seedsByKey.get(DUP_KEY)).toBe(first)
       expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(true)
     })
@@ -861,7 +864,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // reschedule — no explicit schedule here, this rides the applyTypesAndSchemas
     // auto-reschedule under test.
     repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first])
-    await vi.waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
+    await waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
     await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{deleted: number}>(
@@ -885,7 +888,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     const seedB = seedType({seedKey: K1, revision: 1, id: 'y', label: 'B'})
     const seedC = seedType({seedKey: K2, revision: 1, id: 'x', label: 'C'})
     repo.setRuntimeContributions(typeSeedsFacet, 'triple', [seedA, seedB, seedC])
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.typeDefinitions?.contestedSeedKeys.has(K1)).toBe(true)
       // id 'x' resolves to A's key (k1), the winner — but that key is contested.
       expect(repo.typeDefinitions?.seedKeyById.get('x')).toBe(K1)
@@ -924,7 +927,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
 
     // The embedded property was harvested into the property registry (so its schema
     // resolves for anything typed with it)...
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.propertyDefinitions?.seedsByKey.has('system:demo/property/color')).toBe(true)
     })
     // ...and it materializes a backing block by the same path as any property seed, so
@@ -986,6 +989,42 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
 })
 
 describe('seed definition write guard (tx layer)', () => {
+  it('allows outline preference edits, undo, and returning to the code default', async () => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const canonical = canonicalPropertySeedProperties(seed)
+    await repo.tx(tx => tx.setProperty(id, propertyHideInOutlineProp, true), {scope: ChangeScope.BlockDefault})
+    expect((await repo.load(id))!.properties).toEqual({...canonical, [propertyHideInOutlineProp.name]: true})
+    await repo.undo()
+    expect((await repo.load(id))!.properties).toEqual(canonical)
+    await repo.redo()
+    expect((await repo.load(id))!.properties).toEqual({...canonical, [propertyHideInOutlineProp.name]: true})
+    await repo.tx(tx => tx.setProperty(id, propertyHideInOutlineProp, false), {scope: ChangeScope.BlockDefault})
+    await materializePropertySeeds(repo, WS, [seed])
+    expect((await repo.load(id))!.properties).toEqual({...canonical, [propertyHideInOutlineProp.name]: false})
+    await repo.tx(tx => tx.update(id, {properties: canonical}), {scope: ChangeScope.BlockDefault})
+    expect((await repo.load(id))!.properties).toEqual(canonical)
+  })
+
+  it.each([
+    {label: 'another property alongside the preference', extra: {[propertyNameProp.name]: 'hacked', [propertyHideInOutlineProp.name]: true}},
+    {label: 'an invalid outline preference', extra: {[propertyHideInOutlineProp.name]: 'invalid'}},
+  ])('rejects $label without changing the seed', async ({extra}) => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const canonical = canonicalPropertySeedProperties(seed)
+    await expect(repo.tx(tx => tx.update(id, {properties: {...canonical, ...extra}}),
+      {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+    expect((await repo.load(id))!.properties).toEqual(canonical)
+  })
+
+  it('does not allow the property outline preference on a code-driven type', async () => {
+    await materializeTypeSeeds(repo, WS, [typeSeed])
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    await expect(repo.tx(tx => tx.setProperty(id, propertyHideInOutlineProp, true),
+      {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+  })
+
   it('rejects user-scope bag edits and deletes of a materialized seed block', async () => {
     await materializePropertySeeds(repo, WS, [seed])
     const id = propertyDefinitionBlockId(WS, seed.seedKey)
@@ -1346,7 +1385,7 @@ describe('type definition materialization', () => {
       parentId: null,
       orderKey: 'a0',
       content: 'foreign live row',
-    }), {scope: ChangeScope.BlockDefault})
+    }), {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
 
     await expect(materializeTypeSeeds(repo, WS, [typeSeed])).rejects.toThrow(
       `seed id ${id} belongs to workspace ${OTHER_WS}`,
@@ -1379,6 +1418,7 @@ describe('type definition materialization', () => {
     // ParentNotFound and leave the seed unmaterialized until the next open/change.
     // This workspace never had `ensureSystemPages` run (beforeEach only ensures WS).
     const freshWs = 'ws-no-pages'
+    repo.setActiveWorkspaceId(freshWs)
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [typesPageBlockId(freshWs)])).toBeNull()
 
@@ -1402,6 +1442,7 @@ describe('type definition materialization', () => {
     // the recheck at the top of the write tx must commit nothing, even though the
     // page itself gets created (ensureParent ignores the signal).
     const freshWs = 'ws-abort-in-ensure'
+    repo.setActiveWorkspaceId(freshWs)
     const controller = new AbortController()
     const realLoad = repo.load.bind(repo)
     vi.spyOn(repo, 'load').mockImplementation((async (
@@ -1552,7 +1593,7 @@ describe('type definition materialization', () => {
     // The declared-seed contribution publishes into `repo.types` immediately
     // (independent of the block), so wait on the block-bound side of the
     // registry to prove the materialized row was actually projected.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(repo.userTypes.getTypeBlockId(typeSeed.id)).toBeDefined()
     }, {timeout: 3000})
 

@@ -16,7 +16,7 @@ interface Props extends BlockRendererProps {
 }
 
 /**
- * Footer section that drives the variant pick:
+ * Backlinks section that drives the variant pick:
  * - reads registered variants from `backlinksViewFacet`
  * - reads the current block's optional saved choice from `backlinksViewProp`
  * - otherwise derives the default view from the block (daily notes use grouped)

@@ -27,9 +27,10 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp, blockTypeLabelProp } from '@/data/properties'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
   applyRefRewrites,
@@ -594,7 +595,7 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
 
       expect((await env.read('s'))!.content).toBe('see [[A]] please')
       expect(await blockReferences('s', 't')).toEqual([])
-      expect(await blockReferences('s', computeAliasSeatId('A', WS, 0)))
+      expect(await blockReferences('s', computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'A', WS, 0)))
         .toEqual([{alias: 'A'}])
       expect(warn.mock.calls.flat().join(' ')).toContain('cannot pin a span')
     } finally {
@@ -660,7 +661,7 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('s'))!.content).toBe('see [[New]]')
     expect(await blockReferences('s', 't')).toEqual([{alias: 'New'}])
     // The span must NOT have been rebound to a freshly minted seat.
-    expect(await blockReferences('s', computeAliasSeatId('Old', WS, 0))).toEqual([])
+    expect(await blockReferences('s', computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Old', WS, 0))).toEqual([])
   })
 
   it('re-keys an undrained MARKED row too — it has a stamp but still no edge', async () => {
@@ -733,23 +734,23 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('s'))!.content).toBe(`see [${alias}](((${PIN_TARGET}))) please`)
   })
 
-  it("never rewrites an installed extension's source code", async () => {
+  it.each(['extension', 'html-document'])('never rewrites the source code in a %s block', async type => {
     // `references.parseReferences` deliberately does not run the wikilink
-    // grammar over extension source (code hands it `[[`
+    // grammar over source code (code hands it `[[`
     // openers for free — one real extension minted three phantom pages before
-    // that gate). So extension blocks have NO edge, which is exactly why the
+    // that gate). So these blocks have NO edge, which is exactly why the
     // edge-keyed leg never reached them and the content leg would. Rewriting a
-    // span inside stored source corrupts an extension so it no longer loads.
+    // span inside stored source corrupts it.
     await seedTarget('t', 'Old', ['Old'])
     const code = 'const re = /[[Old]]/g // matches [[Old]]'
     await env.repo.tx(async tx => {
       await tx.create({
         id: 'ext', workspaceId: WS, parentId: null, orderKey: 'e0',
-        content: code, properties: {types: ['extension']},
+        content: code, properties: {types: [type]},
       })
     }, {scope: ChangeScope.BlockDefault})
     await flush()
-    // Precondition, asserted not assumed: the extension really has no edge,
+    // Precondition, asserted not assumed: the block really has no edge,
     // so this test is about the content leg and nothing else.
     expect(await blockReferences('ext', 't')).toEqual([])
 
@@ -760,6 +761,26 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     await flush()
 
     expect((await env.read('ext'))!.content).toBe(code)
+  })
+
+  // Tagging only clears a block's edges at the next parse. Until then the
+  // edge-keyed leg still reaches it, and the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never rewrites a block newly typed %s through its old edge', async type => {
+    await seedTarget('t', 'Old', ['Old'])
+    const code = 'const label = "[[Old]]"'
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'e0', content: code})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await blockReferences('src', 't')).not.toEqual([])
+
+    await env.repo.tx(async tx => {
+      await tx.update('src', {properties: {types: [type]}})
+      await tx.setProperty('t', aliasesProp, ['New'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('src'))!.content).toBe(code)
   })
 
   it('skips the content leg when TWO targets release the same alias in one commit', async () => {
@@ -1064,7 +1085,7 @@ describe('rename — post-tx claimant (§11 group 2)', () => {
     await seedTarget(PIN_TARGET, 'T', ['Win'])
     await seedSource('s', 'see [[Win]] please')
 
-    const seatId = computeAliasSeatId('Win', WS, 0)
+    const seatId = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Win', WS, 0)
     await env.repo.tx(async tx => {
       await tx.setProperty(PIN_TARGET, aliasesProp, [])
       await ensureAliasTarget(tx, env.repo, 'Win', WS)
@@ -1200,7 +1221,7 @@ describe('rename — surviving spans converge after the re-parse (#444 round 7)'
     // No phantom edge onto the renamed block, and the embed now binds to
     // whatever `[[A]]` means — a fresh seat.
     expect(await blockReferences('s', PIN_TARGET)).toEqual([])
-    expect(await refsOf('s')).toEqual([{id: computeAliasSeatId('A', WS, 0), alias: 'A'}])
+    expect(await refsOf('s')).toEqual([{id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'A', WS, 0), alias: 'A'}])
   })
 
   it('drops the shared entry when a pinned rewrite leaves an embed standing beside it', async () => {
@@ -1223,7 +1244,7 @@ describe('rename — surviving spans converge after the re-parse (#444 round 7)'
     // to the seat. Two distinct entries, both rebuilt by the re-parse.
     expect(await refsOf('s')).toEqual(expect.arrayContaining([
       {id: PIN_TARGET, alias: PIN_TARGET},
-      {id: computeAliasSeatId('A', WS, 0), alias: 'A'},
+      {id: computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'A', WS, 0), alias: 'A'},
     ]))
     expect(await refsOf('s')).toHaveLength(2)
   })
@@ -1344,7 +1365,7 @@ describe('rename — claimants of the released alias (§11 group 2)', () => {
     // here. A raw insert outside `repo.tx` leaves `tx_context.source`
     // NULL: the same shape a synced row has.
     await seedSource('s', 'see [[Win]] please')
-    const seatId = computeAliasSeatId('Win', WS, 0)
+    const seatId = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Win', WS, 0)
     expect((await env.read(seatId))!.deleted).toBe(0)
     expect(await refsOf('s')).toEqual([{id: seatId, alias: 'Win'}])
 

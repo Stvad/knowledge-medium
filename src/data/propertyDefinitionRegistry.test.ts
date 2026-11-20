@@ -4,7 +4,10 @@ import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {
   buildPropertyDefinitionRegistry,
+  combineProjectedPropertyDefinitions,
   resolveEditorOverride,
+  sameFieldRecognition,
+  type ProjectedPropertyDefinition,
 } from '@/data/propertyDefinitionRegistry'
 import {createPropertySchemaResolver} from '@/data/internals/propertySchemaResolution'
 import {seedProperty} from '@/data/propertySeeds'
@@ -27,6 +30,15 @@ const competingTitleSeed = seedProperty({
   name: titleSeed.name,
   preset: 'number',
   defaultValue: 5,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const otherSeed = seedProperty({
+  seedKey: 'system:kernel-data/property/other',
+  revision: 1,
+  name: 'other-seed',
+  preset: 'string',
+  defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -172,7 +184,7 @@ describe('property definition registry snapshot', () => {
     expect(snapshot.schemas.has('status')).toBe(false)
     expect(createPropertySchemaResolver(snapshot).resolve('status')).toEqual({
       status: 'identity-unavailable',
-      reason: 'definition-unavailable',
+      reason: 'behavior-unavailable',
     })
   })
 
@@ -192,7 +204,7 @@ describe('property definition registry snapshot', () => {
     expect(snapshot.definitionsByFieldId.get('plugin-field')).toBe(definition)
     expect(createPropertySchemaResolver(snapshot).resolve('plugin:config')).toEqual({
       status: 'identity-unavailable',
-      reason: 'definition-unavailable',
+      reason: 'behavior-unavailable',
     })
   })
 
@@ -205,6 +217,59 @@ describe('property definition registry snapshot', () => {
     expect(snapshot.definitionsByFieldId.has('foreign')).toBe(false)
     expect(snapshot.schemasByFieldId.has('foreign')).toBe(false)
     expect(snapshot.schemas.has('foreign')).toBe(false)
+  })
+
+  it('reports this workspace\'s unparseable definition blocks, apart from its definitions', () => {
+    const snapshot = build({
+      projectedDefinitions: new Map([
+        ['broken', {unparseable: {fieldId: 'broken', workspaceId: WS}}],
+        ['broken-elsewhere', {unparseable: {fieldId: 'broken-elsewhere', workspaceId: 'ws-other'}}],
+      ]),
+    })
+    expect([...snapshot.unparseableDefinitionIds]).toEqual(['broken'])
+    expect(snapshot.definitionsByFieldId.has('broken')).toBe(false)
+    expect(createPropertySchemaResolver(snapshot).resolveField('broken')).toEqual({
+      status: 'identity-unavailable',
+      reason: 'definition-unavailable',
+    })
+  })
+
+  it('lets a parsed definition outrank an unparseable marker for its id, in either order', () => {
+    const parsed = {metadata: metadata('dual', 'dual', 1)}
+    const marker = {unparseable: {fieldId: 'dual', workspaceId: WS}}
+    for (const values of [[parsed, marker], [marker, parsed]]) {
+      const snapshot = build({projectedDefinitions: combineProjectedPropertyDefinitions(values)})
+      expect(snapshot.definitionsByFieldId.get('dual')).toBe(parsed.metadata)
+      expect(snapshot.unparseableDefinitionIds.has('dual')).toBe(false)
+    }
+  })
+
+  it('compares snapshots on what recognition reads, not on names', () => {
+    const base = {
+      projectedDefinitions: new Map([['def', {metadata: metadata('def', 'status', 1)}]]),
+      seeds: [titleSeed],
+    }
+    const snapshot = build(base)
+    expect(sameFieldRecognition(snapshot, build({
+      ...base,
+      projectedDefinitions: new Map([['def', {metadata: metadata('def', 'renamed', 1)}]]),
+    })), 'a rename').toBe(true)
+    for (const [change, other] of [
+      ['a definition added', build({...base, projectedDefinitions: new Map([
+        ...base.projectedDefinitions, ['def-2', {metadata: metadata('def-2', 'other', 2)}],
+      ])})],
+      ['a block stops parsing', build({...base, projectedDefinitions: new Map<string, ProjectedPropertyDefinition>([
+        ...base.projectedDefinitions, ['broken', {unparseable: {fieldId: 'broken', workspaceId: WS}}],
+      ])})],
+      ['a seed declared', build({...base, seeds: [titleSeed, otherSeed]})],
+      ['no registry', null],
+    ] as const) {
+      expect(sameFieldRecognition(snapshot, other), change).toBe(false)
+    }
+    // Same seed keys, so only the workspace differs — and with it every seed's
+    // deterministic id.
+    expect(sameFieldRecognition(build(), build({workspaceId: 'ws-other'})), 'another workspace')
+      .toBe(false)
   })
 
   it('rejects a structural handle that borrows another declaration seed key', () => {

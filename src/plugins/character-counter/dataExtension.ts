@@ -1,14 +1,16 @@
 /** Data-layer contributions for the character-counter plugin — the
- *  `char-counter` block type and `char:*` property schemas.
+ *  `char-counter` and `word-counter` block types, the word counter's initial
+ *  values, and the `char:*` property schemas.
  *  Composed into the user-facing `characterCounterPlugin` in `./index.ts`. */
 
-import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
+import { definitionSeedsFacet, sameTxProcessorsFacet, typeSeedsFacet } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet'
-import { CHAR_COUNTER_TYPE_CONTRIBUTIONS } from './blockType'
+import { CHAR_COUNTER_TYPE_CONTRIBUTIONS, wordCounterInitialValues } from './blockType'
 import { charLimitProp, charProfileProp, charScopeProp } from './properties'
 
 export const characterCounterDataExtension: AppExtension = [
   CHAR_COUNTER_TYPE_CONTRIBUTIONS.map(t => typeSeedsFacet.of(t, {source: 'character-counter'})),
+  sameTxProcessorsFacet.of(wordCounterInitialValues, {source: 'character-counter'}),
   [
     charLimitProp,
     charScopeProp,

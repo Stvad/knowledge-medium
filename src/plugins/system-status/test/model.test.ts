@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSyncIndicatorView } from '../model.ts'
+import { getChipAppearance, getSyncIndicatorView } from '../model.ts'
 
 const baseInput = {
   localOnly: false,
@@ -169,8 +169,8 @@ describe('getSyncIndicatorView', () => {
       })
 
       expect(view.state).toBe('synced')
-      expect(view.tone).toBe('success')
-      expect(view.icon).toBe('check')
+      expect(view.tone).toBe('neutral')
+      expect(view.icon).toBe('cloud')
     })
 
     it("singularizes the rejected count in the title", () => {
@@ -181,6 +181,21 @@ describe('getSyncIndicatorView', () => {
 
       expect(view.title).toContain('1 change')
       expect(view.title).not.toContain('1 changes')
+    })
+
+    it('says another tab is syncing, not offline, while another client holds the sync stream', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        connected: false,
+        hasSynced: true,
+        syncingInOtherTab: true,
+        rejectedChanges: 2,
+      })
+
+      expect(view.state).toBe('other-tab')
+      expect(view.icon).not.toBe('offline')
+      expect(view.title).toMatch(/another open tab/i)
+      expect(view.title).toContain('2 changes')
     })
 
     it("mentions rejections in the title for the offline state", () => {
@@ -197,17 +212,19 @@ describe('getSyncIndicatorView', () => {
       expect(view.title).toContain('5 changes')
     })
 
-    it("doesn't downgrade pending / error / active states (already calling attention)", () => {
-      // Pending already uses a warning tone; uploading is active; error
-      // is louder than warning. Letting rejections override those would
-      // hide the more urgent signal.
+    it("doesn't downgrade stuck-pending or error states (already calling attention)", () => {
+      // Stuck pending is already a warning; error is louder than warning.
+      // Letting rejections override those would hide the more urgent signal.
       const pending = getSyncIndicatorView({
         ...baseInput,
         pendingChanges: 3,
+        pendingStuck: true,
         rejectedChanges: 5,
       })
       expect(pending.state).toBe('pending')
-      expect(pending.icon).toBe('upload')
+      expect(pending.tone).toBe('warning')
+      expect(pending.title).toMatch(/waiting to upload/i)
+      expect(pending.title).toContain('5 changes')
 
       const errored = getSyncIndicatorView({
         ...baseInput,
@@ -251,13 +268,112 @@ describe('getSyncIndicatorView', () => {
       })
       expect(view.state).toBe('downloading')
       expect(view.spinning).toBe(true)
-      expect(view.tone).toBe('active')
+      expect(view.tone).toBe('neutral')
     })
 
     it('leaves a healthy chip untouched when there is no alert', () => {
       const view = getSyncIndicatorView({...baseInput, diagnosticAlert: null})
       expect(view.state).toBe('synced')
-      expect(view.tone).toBe('success')
+      expect(view.tone).toBe('neutral')
     })
+  })
+
+  describe('calm while healthy', () => {
+    // Routine work (an edit queued, an upload, a short download) must not
+    // restyle the chip; only states that need the user's attention do.
+    it.each([
+      ['synced', {}],
+      ['pending, uploading soon', {pendingChanges: 2}],
+      ['uploading', {uploading: true, pendingChanges: 2}],
+      ['downloading', {downloading: true}],
+      ['processing', {materializingChanges: 4}],
+      ['connecting', {connected: false, connecting: true}],
+    ])('renders %s in the neutral tone', (_case, input) => {
+      expect(getSyncIndicatorView({...baseInput, ...input}).tone).toBe('neutral')
+    })
+
+    it('draws a queued edit like the synced chip while it is not stuck', () => {
+      const pending = getSyncIndicatorView({...baseInput, pendingChanges: 2})
+      const synced = getSyncIndicatorView(baseInput)
+      expect(pending.state).toBe('pending')
+      expect([pending.icon, pending.tone]).toEqual([synced.icon, synced.tone])
+    })
+
+    it('keeps queued edits with rejected writes a warning', () => {
+      const view = getSyncIndicatorView({...baseInput, pendingChanges: 2, rejectedChanges: 1})
+      expect(view.state).toBe('pending')
+      expect([view.tone, view.icon]).toEqual(['warning', 'alert'])
+      expect(view.title).toContain("1 change couldn't sync")
+    })
+
+    it('draws queued edits as the calm cloud while another tab syncs', () => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        connected: false,
+        syncingInOtherTab: true,
+        pendingChanges: 2,
+      })
+      expect(view.icon).toBe('cloud')
+    })
+
+    it('keeps the offline icon for queued edits while disconnected', () => {
+      const view = getSyncIndicatorView({...baseInput, connected: false, pendingChanges: 2})
+      expect(view.state).toBe('pending')
+      expect(view.icon).toBe('offline')
+      expect(view.tone).toBe('neutral')
+    })
+
+    it.each([
+      ['connected', true, 'upload', /waiting to upload/i],
+      ['offline', false, 'offline', /waiting for a sync connection/i],
+    ])('escalates stuck pending changes to a warning while %s', (_case, connected, icon, title) => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        connected,
+        pendingChanges: 2,
+        pendingStuck: true,
+      })
+      expect(view.state).toBe('pending')
+      expect(view.tone).toBe('warning')
+      expect(view.icon).toBe(icon)
+      expect(view.title).toMatch(title)
+    })
+  })
+})
+
+describe('getChipAppearance', () => {
+  const alert = {label: 'Data integrity', summary: '2 issues found'}
+
+  it('draws a brief upload as the state it settles to, keeping rejected writes visible', () => {
+    const settled = getChipAppearance({...baseInput, rejectedChanges: 2}, false)
+    const uploading = getChipAppearance({...baseInput, rejectedChanges: 2, uploading: true}, false)
+    expect(settled).toEqual({tone: 'warning', icon: 'alert', spinning: false})
+    expect(uploading).toEqual(settled)
+  })
+
+  it('keeps a diagnostic alert through a brief upload', () => {
+    expect(getChipAppearance({...baseInput, diagnosticAlert: alert, uploading: true}, false))
+      .toEqual({tone: 'error', icon: 'alert', spinning: false})
+  })
+
+  it('keeps the offline icon through a brief reconnect attempt', () => {
+    expect(getChipAppearance({...baseInput, connected: false, connecting: true}, false))
+      .toEqual({tone: 'neutral', icon: 'offline', spinning: false})
+  })
+
+  it('draws a brief first sync as the calm cloud', () => {
+    expect(getChipAppearance({...baseInput, hasSynced: false}, false))
+      .toEqual({tone: 'neutral', icon: 'cloud', spinning: false})
+  })
+
+  it('spins once activity is shown, and through the linger after it ends', () => {
+    const spinner = {tone: 'neutral', icon: 'sync', spinning: true}
+    expect(getChipAppearance({...baseInput, downloading: true}, true)).toEqual(spinner)
+    expect(getChipAppearance(baseInput, true)).toEqual(spinner)
+  })
+
+  it('never spins over a state that needs attention', () => {
+    expect(getChipAppearance({...baseInput, errorMessage: 'JWT expired'}, true))
+      .toEqual({tone: 'error', icon: 'alert', spinning: false})
   })
 })

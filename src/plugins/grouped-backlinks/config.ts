@@ -6,6 +6,7 @@ import {
   type BlockData,
   type Codec,
 } from '@/data/api'
+import { decodeRowProperty } from '@/data/rowProperty'
 import { uniqueStrings } from '@/utils/array'
 
 export interface GroupedBacklinksConfig {
@@ -123,10 +124,7 @@ export const mergeGroupedBacklinksConfig = (
 export const selectGroupedBacklinksOverrides = (
   data: Pick<BlockData, 'properties'> | null | undefined,
 ): GroupedBacklinksOverrides => {
-  const stored = data?.properties[groupedBacklinksOverridesProp.name]
-  return stored === undefined
-    ? groupedBacklinksOverridesProp.defaultValue
-    : groupedBacklinksOverridesProp.codec.decode(stored)
+  return data ? decodeRowProperty(data, groupedBacklinksOverridesProp) : groupedBacklinksOverridesProp.defaultValue
 }
 
 export const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {

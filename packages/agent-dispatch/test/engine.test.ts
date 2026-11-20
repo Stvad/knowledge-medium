@@ -1,39 +1,53 @@
 import {describe, expect, it, vi} from 'vitest'
-import {createEngine, type EngineDeps} from '../src/engine'
+import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine'
 import {parseConfig, PROPS} from '../src/config'
-import type {BlockData, Graph} from '../src/graph'
-import type {AgentRunResult} from '../src/runner'
+import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
+import type {BlockData, Graph, ReplyWriter} from '../src/graph'
+import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
+import {createCodexJsonlParser} from '../src/codexRunner'
+import {activityStateFor, chipStateFor} from '../../../src/plugins/agent-dispatch-companion/chipState'
 import type {StateStore} from '../src/state'
-import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
+import type {MemoryEntry} from '../src/memory'
+import {MAX_ATTEMPTS, MAX_CURSOR_IDS, STALE_RUNNING_MS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
 
 interface FakeGraphSeed {
+  beingEdited?: string[]
   pageId?: string
-  backlinks?: Array<{id: string, deepLink?: string}>
+  backlinks?: Array<{id: string, deepLink?: string, sourceFields?: string[]}>
   blocks?: Record<string, Partial<BlockData>>
+  /** What `comments({thread})` answers, by root id. */
+  threads?: Record<string, CommentThreadView>
+  /** The memory block's entries; a run edits this array to write memory. */
+  memory?: MemoryEntry[]
 }
 
-/** Minimal in-memory graph double tracking writes. */
+/** Minimal in-memory graph double tracking writes. One object stands in for
+ *  both handles (pass it as `graph` and `replies`); which handle carries which
+ *  write is pinned against the real ones in dispatchAttribution.test.ts. */
 const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const blocks = new Map<string, BlockData>(
     // editedAtMs defaults to NOW: most tests exercise the post-baseline
     // lifecycle, where a candidate block was just edited.
     Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
-  const replies: Array<{parentId: string, content: string}> = []
   const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
-  const activityWrites: Array<{id: string, label: string}> = []
+  const activityWrites: Array<{id: string, label: string, nowMs: number}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
-  const contentUpdates: Array<{id: string, content: string}> = []
   const cancelClears: string[] = []
 
-  const graph: Graph = {
+  const memory = seed.memory ?? []
+  const graph: Graph & ReplyWriter = {
+    ensureMemoryBlock: vi.fn(async () => 'mem-1'),
+    propertyValueBlocks: async () => new Set(),
+    memoryOutline: vi.fn(async () => ['Memory  ^mem-1', ...memory.map(entry => `- ${entry.content}  ^${entry.id}`)].join('\n')),
+    memoryEntries: vi.fn(async () => memory.map(entry => ({...entry}))),
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
     backlinkSources: vi.fn(async () =>
-      (seed.backlinks ?? []).map(({id, deepLink}) => ({
-        id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
+      (seed.backlinks ?? []).map(({id, deepLink, sourceFields}) => ({
+        id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: sourceFields ?? [''],
       }))),
     getBlock: async id => blocks.get(id) ?? null,
     ancestors: async id => {
@@ -68,20 +82,14 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       propWrites.push({id, status: args.status, activity: args.activity})
     },
-    createReply: async (parentId, content) => {
-      replies.push({parentId, content})
-      const reply: BlockData = {id: `reply-${replies.length}`, parentId, content, properties: {[PROPS.reply]: true}}
-      blocks.set(reply.id, reply)
-      return reply
-    },
     reconcileReplyTree: async (parentId, markdown, {replyKey, shape, final}) => {
       reconciles.push({parentId, markdown, replyKey, shape, final: final ?? false})
     },
-    setActivity: async (id, label) => {
+    setActivity: async (id, label, nowMs) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.properties = {...target.properties, [PROPS.activity]: label}
       blocks.set(id, target)
-      activityWrites.push({id, label})
+      activityWrites.push({id, label, nowMs})
     },
     setSession: async (id, session, resumeOptions) => {
       const target = blocks.get(id) ?? {id, properties: {}}
@@ -100,13 +108,12 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       cancelClears.push(id)
     },
-    updateBlockContent: async (id, content) => {
-      const target = blocks.get(id) ?? {id, properties: {}}
-      target.content = content
-      blocks.set(id, target)
-      contentUpdates.push({id, content})
-    },
     sqlAll: vi.fn(async () => []),
+    comments: vi.fn(async ({thread}: {thread?: string}) => {
+      const view = thread ? seed.threads?.[thread] : undefined
+      return {total: view ? 1 : 0, offset: 0, nextOffset: null, threads: view ? [view] : []}
+    }),
+    beingEditedBlocks: vi.fn(async () => new Map((seed.beingEdited ?? []).map(id => [id, NOW] as const))),
     blockViews: async ids => new Map(
       ids.flatMap(id => {
         const target = blocks.get(id)
@@ -115,7 +122,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
+  return {graph, blocks, reconciles, propWrites, activityWrites, sessionWrites, cancelClears, memory}
 }
 
 const memoryState = (
@@ -142,17 +149,19 @@ const memoryState = (
 }
 
 const okRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => ({
-  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {},
+  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {}, usage: null,
   ...overrides,
 })
 
 const mentionConfig = (overrides: object = {}) => parseConfig({
-  watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
+    workspaceId: 'ws-test',
+  watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0}],
   ...overrides,
 })
 
-const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
+const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
   createEngine({
+    replies: deps.graph,
     config: mentionConfig(),
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
@@ -164,9 +173,284 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
     ...deps,
   })
 
+describe('watcher memory', () => {
+  const seed = (memory: MemoryEntry[] = [{id: 'n-1', content: 'replies short'}]): FakeGraphSeed => ({
+    pageId: 'page-claude', backlinks: [{id: 'b1'}], blocks: {b1: {content: '[[claude]] hi'}}, memory,
+  })
+  const promptOf = (runTask: ReturnType<typeof vi.fn>) => (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  const finalReply = (reconciles: ReturnType<typeof fakeGraph>['reconciles']) => reconciles.filter(write => write.final).at(-1)!.markdown
+
+  it('shows the run the memory under its target page', async () => {
+    const fake = fakeGraph(seed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph: fake.graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.graph.ensureMemoryBlock).toHaveBeenCalledWith('page-claude')
+    expect(promptOf(runTask)).toContain('- replies short  ^n-1')
+    expect(promptOf(runTask)).toContain('append_markdown with target mem-1')
+    // Nothing written: the reply says nothing about memory.
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+  })
+
+  it('says in the reply what the run changed in its memory', async () => {
+    const fake = fakeGraph(seed())
+    const engine = engineWith({graph: fake.graph, runTask: vi.fn(async () => {
+      fake.memory.push({id: 'n-2', content: 'prefers suggestions'})
+      return okRun()
+    })})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toBe('Reply text\n\nMemory changed during this run: saved [prefers suggestions](((n-2)))')
+  })
+
+  it('says it on a failed run too, which may have written memory before it ended', async () => {
+    const fake = fakeGraph(seed())
+    const engine = engineWith({graph: fake.graph, runTask: vi.fn(async () => {
+      fake.memory.splice(0, 1)
+      return okRun({ok: false, exitCode: 1, stderr: 'boom'})
+    })})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toMatch(/run failed — exit 1: boom\n\nMemory changed during this run: removed "replies short" \(`n-1`\)$/)
+  })
+
+  it('keeps a streamed answer when the memory cannot be read after the run', async () => {
+    const fake = fakeGraph(seed())
+    const entries = fake.graph.memoryEntries
+    fake.graph.memoryEntries = vi.fn(async (id: string) => {
+      if (vi.mocked(fake.graph.memoryEntries).mock.calls.length > 1) throw new Error('bridge blipped')
+      return entries(id)
+    })
+    const engine = engineWith({
+      graph: fake.graph,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
+      runTask: vi.fn(async options => {
+        options.onEvent?.({kind: 'text', text: 'Reply'})
+        return okRun()
+      }),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+    expect(fake.blocks.get('b1')?.properties?.[PROPS.status]).toBe('done')
+  })
+
+  it('says when the memory is too large to compare', async () => {
+    const fake = fakeGraph(seed())
+    fake.graph.memoryEntries = vi.fn(async () => null)
+    const engine = engineWith({graph: fake.graph})
+    await engine.tick()
+    await engine.drain()
+
+    expect(finalReply(fake.reconciles)).toMatch(/Reply text\n\nMemory has more than \d+ blocks/)
+  })
+
+  it('reads and shows no memory for a watcher that turns it off', async () => {
+    const fake = fakeGraph(seed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph: fake.graph, runTask,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, memory: false}]}),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.graph.ensureMemoryBlock).not.toHaveBeenCalled()
+    expect(promptOf(runTask)).not.toMatch(/memory/i)
+  })
+
+  it('runs without memory when it cannot be read, and never asks the run to keep it', async () => {
+    const fake = fakeGraph(seed())
+    fake.graph.memoryOutline = vi.fn(async () => { throw new Error('bridge blipped') })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph: fake.graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(fake.blocks.get('b1')?.properties?.[PROPS.status]).toBe('done')
+    expect(promptOf(runTask)).not.toMatch(/memory/i)
+    expect(finalReply(fake.reconciles)).toBe('Reply text')
+  })
+
+  it('delivers the memory to a channel session', async () => {
+    const fake = fakeGraph(seed())
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph: fake.graph, deliverToChannel,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}]}),
+    })
+    await engine.tick()
+    await engine.drain()
+
+    expect((deliverToChannel.mock.calls[0] as unknown as [{content: string}])[0].content).toContain('- replies short  ^n-1')
+  })
+})
+
+describe('mention inside a comment thread', () => {
+  const author = (name: string, kind: 'human' | 'agent') => ({id: `p-${name}`, name, kind})
+  const comment = (id: string, by: ReturnType<typeof author>, content: string, replies: CommentThreadView['comments'] = []) => ({
+    id, content, cut: 0, author: by, createdAt: 1, replies,
+  })
+  const alex = author('Alex', 'human')
+  const claude = author('Claude', 'agent')
+  const threadSeed = (): FakeGraphSeed => ({
+    backlinks: [{id: 'c3'}],
+    blocks: {
+      'target': {parentId: 'section', content: 'We moved the launch to Thursday because the vendor slipped.'},
+      'section': {parentId: 'page-root', content: 'Launch details'},
+      'page-root': {parentId: null, content: 'Project plan'},
+      'container': {parentId: null, content: 'Comments (km)'},
+      'root': {parentId: 'container', content: 'Thursday', properties: {types: ['annotation:thread']}},
+      'c1': {parentId: 'root', content: 'Is Thursday confirmed?'},
+      'c2': {parentId: 'c1', content: 'Yes, 9am.'},
+      'c3': {parentId: 'c2', content: '[[claude]] can you check the venue too?'},
+    },
+    threads: {
+      root: {
+        id: 'root', status: 'open', anchor: 'exact', quote: 'Thursday',
+        target: {id: 'target', deleted: false, path: ['Launch plan'], excerpt: '…'},
+        comments: [
+          comment('c1', alex, 'Is Thursday confirmed?', [
+            comment('c2', claude, 'Yes, 9am.', [comment('c3', alex, '[[claude]] can you check the venue too?')]),
+          ]),
+          comment('sibling', author('Sam', 'human'), 'An unrelated sibling comment'),
+        ],
+        omittedComments: 0,
+      },
+    },
+  })
+  const promptOf = (runTask: ReturnType<typeof vi.fn>) => {
+    expect(runTask).toHaveBeenCalled()
+    return (runTask.mock.calls[0][0] as {prompt: string}).prompt
+  }
+
+  it('adds the annotated block, the quote, its path and the chain down to the mention, not the whole thread', async () => {
+    const {graph} = fakeGraph(threadSeed())
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    const prompt = promptOf(runTask)
+    expect(graph.comments).toHaveBeenCalledWith({thread: 'root'})
+    expect(prompt).toContain('The annotated block (id target; page path: Launch plan):\nContaining page id: page-root\nWe moved the launch to Thursday because the vendor slipped.')
+    expect(prompt).toContain('The thread quotes: "Thursday"')
+    expect(prompt).toContain([
+      '- [c1] Alex (human): Is Thursday confirmed?',
+      '  - [c2] Claude (agent): Yes, 9am.',
+      '    - [c3] Alex (human): [[claude]] can you check the venue too?',
+    ].join('\n'))
+    expect(prompt).not.toContain('unrelated sibling')
+    // The seed's view has no replacement, as an app older than suggestions sends.
+    expect(prompt).not.toContain('edit suggestion')
+  })
+
+  it('uses the annotated block itself as the containing page when it is top level', async () => {
+    const seed = threadSeed()
+    seed.blocks!.target = {parentId: null, content: 'A root-level plan.'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('Containing page id: target')
+  })
+
+  it('reports the containing page unavailable when the ancestor chain is cut', async () => {
+    const seed = threadSeed()
+    seed.blocks!.target = {parentId: 'section', content: 'A plan with a missing parent.'}
+    seed.blocks!.section = {parentId: 'missing-parent', content: 'An intermediate section.'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('Containing page id: unavailable')
+    expect(promptOf(runTask)).not.toContain('Containing page id: section')
+  })
+
+  it('says what an edit suggestion proposes', async () => {
+    const seed = threadSeed()
+    seed.threads!.root = {...seed.threads!.root, replacement: 'Friday'}
+    const {graph} = fakeGraph(seed)
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).toContain('The thread quotes: "Thursday"\nIt is an edit suggestion to replace that text with: "Friday"')
+  })
+
+  it('answers the mention without the thread when the thread cannot be read', async () => {
+    const {graph} = fakeGraph(threadSeed())
+    graph.comments = vi.fn(async () => { throw new Error('Unknown command type: comments') })
+    const runTask = vi.fn(async () => okRun())
+    const log = vi.fn()
+    const engine = engineWith({graph, runTask, log})
+    await engine.tick()
+    await engine.drain()
+
+    expect(promptOf(runTask)).not.toContain('comment in a thread')
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('no thread context for c3'))
+  })
+
+  it('reads no thread for a mention outside one', async () => {
+    const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] summarize inbox'}}})
+    const runTask = vi.fn(async () => okRun())
+    const log = vi.fn()
+    const engine = engineWith({graph, runTask, log})
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalled()
+    expect(graph.comments).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining('no thread context'))
+  })
+})
+
+describe('channel delivery', () => {
+  it('parks a task stopped before delivery as cancelled, and delivers nothing', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] x'}}})
+    let reading!: () => void
+    const reads = new Promise<void>(resolve => { reading = resolve })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const getSubtree = graph.getSubtree
+    graph.getSubtree = async id => {
+      reading()
+      await held
+      return getSubtree(id)
+    }
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({
+      graph, deliverToChannel,
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}]}),
+    })
+
+    await engine.tick()
+    await reads
+    // The Stop chip's write, then the next tick's sweep.
+    blocks.get('b-1')!.properties = {...blocks.get('b-1')!.properties, [PROPS.cancel]: 'requested'}
+    await engine.tick()
+    release()
+    await engine.drain()
+
+    expect(deliverToChannel).not.toHaveBeenCalled()
+    expect(blocks.get('b-1')?.properties).toMatchObject({[PROPS.status]: 'error', [PROPS.error]: 'cancelled', [PROPS.cancel]: ''})
+    expect(reconciles.at(-1)?.markdown).toContain('cancelled')
+  })
+})
+
 describe('mention lifecycle', () => {
   it('claims, runs, replies, and marks done with the session id', async () => {
-    const {graph, blocks, replies, reconciles, propWrites} = fakeGraph({
+    const {graph, blocks, reconciles, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
     })
@@ -182,7 +466,6 @@ describe('mention lifecycle', () => {
     expect(reconciles).toEqual([
       {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1', shape: 'outline', final: true},
     ])
-    expect(replies).toEqual([])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
     expect(blocks.get('b-1')?.properties?.[PROPS.executor]).toBe('claude')
     expect(blocks.get('b-1')?.properties?.[PROPS.attempts]).toBe(1)
@@ -208,6 +491,21 @@ describe('mention lifecycle', () => {
     const claimLog = logs.find(line => line.includes('claiming b-1'))
     // Whitespace-collapsed onto one line, and the text is present.
     expect(claimLog).toContain('"[[browser emacs]] investigate the flaky test"')
+  })
+
+  it('logs a finished run\'s token usage beside its done line', async () => {
+    const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[browser emacs]] hi'}}})
+    const logs: string[] = []
+    const runTask = vi.fn(async () => okRun({
+      usage: {inputTokens: 4, cacheReadTokens: 14_244, cacheWriteTokens: 14_625, outputTokens: 34},
+    }))
+    const engine = engineWith({graph, runTask, log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(logs.find(line => line.includes('done b-1')))
+      .toContain('tokens: in 4 · cache read 14.2k · cache write 14.6k · out 34')
   })
 
   it('strips control bytes from the claim-log preview so synced block text cannot spoof the terminal', async () => {
@@ -291,12 +589,63 @@ describe('mention lifecycle', () => {
     await engine.tick()
     for (let i = 0; i < 50; i += 1) await Promise.resolve()
 
-    expect(blocks.get('child')?.properties?.[PROPS.status]).toBeUndefined()
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('queued')
     expect(runTask).toHaveBeenCalledTimes(1) // only the parent
 
     releaseParent()
     await parentTick
     await engine.drain()
+  })
+
+  it('marks a follow-up waiting on its thread as queued, logs it once, and runs it when the thread frees', async () => {
+    const backlinks: Array<{id: string}> = [{id: 'parent'}]
+    const {graph, blocks} = fakeGraph({
+      backlinks,
+      blocks: {parent: {content: '[[claude]] long parent task'}},
+    })
+    let releaseParent = () => {}
+    const parentGate = new Promise<void>(resolve => { releaseParent = resolve })
+    const runTask = vi.fn(async (opts: {prompt: string, onEvent?: (e: {kind: 'session', sessionId: string}) => void}) => {
+      if (!opts.prompt.includes('quick follow-up')) {
+        opts.onEvent?.({kind: 'session', sessionId: 'sess-parent'})
+        await parentGate
+        return okRun({sessionId: 'sess-parent'})
+      }
+      childActivityAtRun = blocks.get('child')?.properties?.[PROPS.activity]
+      return okRun({resultText: 'child reply', sessionId: 'sess-parent'})
+    })
+    let childActivityAtRun: unknown = 'not run'
+    const logs: string[] = []
+    const engine = engineWith({graph, runTask, log: line => logs.push(line), config: mentionConfig({maxConcurrent: 5})})
+
+    const parentTick = engine.tick()
+    await vi.waitFor(() => expect(blocks.get('parent')?.properties?.[PROPS.session]).toBe('sess-parent'))
+    blocks.set('child', {id: 'child', parentId: 'parent', content: '[[claude]] quick follow-up', properties: {}, editedAtMs: NOW})
+    backlinks.push({id: 'child'})
+
+    await engine.tick()
+    await vi.waitFor(() => expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('queued'))
+    const queuedProps = blocks.get('child')?.properties ?? {}
+    expect(queuedProps[PROPS.executor]).toBe('claude')
+    expect(queuedProps[PROPS.activity]).toBe(THREAD_BUSY_ACTIVITY)
+
+    // A second sweep while still blocked neither re-logs nor re-writes.
+    const queuedStamp = queuedProps[PROPS.updatedAt]
+    await engine.tick()
+    for (let i = 0; i < 50; i += 1) await Promise.resolve()
+    expect(logs.filter(line => line.includes('child') && line.includes('waiting'))).toHaveLength(1)
+    expect(blocks.get('child')?.properties?.[PROPS.updatedAt]).toBe(queuedStamp)
+
+    releaseParent()
+    await parentTick
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(2)
+    // The claim drops the waiting label; the run's own activity replaces it.
+    expect(childActivityAtRun).toBe('')
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBe('done')
   })
 
   it('cancels a running task: aborts the run, parks it error:cancelled, and clears the flag', async () => {
@@ -462,21 +811,132 @@ describe('mention lifecycle', () => {
     expect(reconciles).toHaveLength(1)
   })
 
-  it('waits for the quiet period before claiming a just-edited mention', async () => {
+  it('does not treat a block that only credits the target page as its author as a mention', async () => {
+    // The target page doubling as the run's contributor: everything the run
+    // writes outside its reply then references the target through attribution.
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [
+        {id: 'authored', sourceFields: ['attribution:creators', 'attribution:editors']},
+        {id: 'linked', sourceFields: ['', 'attribution:editors']},
+      ],
+      blocks: {'authored': {content: 'a block the run wrote'}, 'linked': {content: '[[claude]] and this'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(propWrites.map(write => write.id)).not.toContain('authored')
+    expect(propWrites.map(write => write.id)).toContain('linked')
+  })
+
+  it('waits out the settle window before claiming a just-edited mention', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] half-typed…', editedAtMs: NOW - 2_000}},
+      blocks: {'b-1': {content: '[[claude]] half-typed…', editedAtMs: NOW - 500}},
     })
     const runTask = vi.fn(async () => okRun())
     const engine = engineWith({
       graph,
       runTask,
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 15_000}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 1_000}]}),
     })
 
     await engine.tick()
     await engine.drain()
     expect(runTask).not.toHaveBeenCalled()
+  })
+
+  it('holds a mention open in an editor, and claims it once it leaves', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] still thinking', editedAtMs: NOW - 30_000}},
+      beingEdited: ['b-1'],
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+    // Held at the scan, so it never spends a launch slot on the re-check.
+    expect(graph.beingEditedBlocks).toHaveBeenCalledTimes(1)
+
+    ;(graph.beingEditedBlocks as ReturnType<typeof vi.fn>).mockResolvedValue(new Map())
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-checks the editor right before claiming, against a re-entry since the scan', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] back to it', editedAtMs: NOW - 30_000}},
+    })
+    ;(graph.beingEditedBlocks as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Map())
+      .mockResolvedValue(new Map([['b-1', NOW]]))
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+  })
+
+  it('reads edit state before the text, so a leave between the reads cannot pass stale text', async () => {
+    const {graph, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] stale text', editedAtMs: NOW - 30_000}},
+    })
+    // Not being edited at the scan, then back in the editor, then out again
+    // the moment the text has been read.
+    let editing = false
+    ;(graph.beingEditedBlocks as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      const result = new Map(editing ? [['b-1', NOW] as const] : [])
+      editing = true
+      return result
+    })
+    const readBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const block = await readBlock(id)
+      editing = false
+      return block
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(propWrites).toEqual([])
+  })
+
+  it('a read that fails before the claim gives its launch slot back', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] do it', editedAtMs: NOW - 30_000}},
+    })
+    const readBlock = graph.getBlock
+    let failures = 1
+    graph.getBlock = async id => {
+      if (failures-- > 0) throw new Error('bridge timed out')
+      return readBlock(id)
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: mentionConfig({runsPerHour: 1})})
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
   })
 
   it('replies with a failure note and marks error on a failed run', async () => {
@@ -535,13 +995,13 @@ describe('mention lifecycle', () => {
   })
 
   it('parks a task after MAX_ATTEMPTS with a terminal error write', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
         properties: {
           [PROPS.status]: 'running',
-          [PROPS.updatedAt]: NOW - 60 * 60_000,
+          [PROPS.updatedAt]: NOW - STALE_RUNNING_MS,
           [PROPS.attempts]: MAX_ATTEMPTS,
         },
       }},
@@ -554,25 +1014,27 @@ describe('mention lifecycle', () => {
 
     expect(runTask).not.toHaveBeenCalled()
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-    expect(replies[0].content).toContain('gave up after')
+    expect(reconciles).toEqual([{
+      parentId: 'b-1', markdown: expect.stringContaining('gave up after'), replyKey: 'park:b-1', shape: 'block', final: true,
+    }])
 
     // Terminal: later ticks skip it entirely.
     await engine.tick()
     await engine.drain()
-    expect(replies).toHaveLength(1)
+    expect(reconciles).toHaveLength(1)
   })
 
   it('parks props-FIRST so a failed reply write cannot spam ⚠️ blocks', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
-        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS, [PROPS.attempts]: MAX_ATTEMPTS},
       }},
     })
     // Reply write is broken; the terminal status must still land so the
     // block isn't re-parked (and re-replied) every tick.
-    graph.createReply = vi.fn(async () => { throw new Error('reply write failed') })
+    graph.reconcileReplyTree = vi.fn(async () => { throw new Error('reply write failed') })
     const engine = engineWith({graph})
 
     await engine.tick()
@@ -581,16 +1043,15 @@ describe('mention lifecycle', () => {
 
     await engine.tick()
     await engine.drain()
-    expect((graph.createReply as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
-    expect(replies).toHaveLength(0)
+    expect((graph.reconcileReplyTree as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
   })
 
   it('does not re-park a task the channel session already closed (fresh re-read)', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {
         content: '[[claude]] cursed',
-        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS, [PROPS.attempts]: MAX_ATTEMPTS},
       }},
     })
     // Between the tick snapshot and the park, the ambient session marks it done.
@@ -604,7 +1065,7 @@ describe('mention lifecycle', () => {
 
     await engine.tick()
     await engine.drain()
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('does not count a resumed-thread placeholder against maxConcurrent', async () => {
@@ -647,10 +1108,7 @@ describe('mention lifecycle', () => {
 
     let clock = NOW
     const runTask = vi.fn(async () => okRun())
-    const engine = createEngine({
-      config: mentionConfig(), graph, state: memoryState(), runTask,
-      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
-    })
+    const engine = engineWith({graph, runTask, now: () => clock})
 
     await engine.tick()          // resolves page-v1, no backlinks
     await engine.drain()
@@ -665,7 +1123,7 @@ describe('mention lifecycle', () => {
   })
 
   it('backs off when another daemon wins the claim race', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] contested'}},
     })
@@ -685,7 +1143,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).not.toHaveBeenCalled()
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('resumes the nearest ancestor session for follow-up mentions', async () => {
@@ -710,7 +1168,8 @@ describe('mention lifecycle', () => {
     // up under a codex watcher: `codex exec resume <claude-id>` would
     // fail the run outright, so it must start FRESH instead.
     const codexConfig = () => parseConfig({
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'codex'}}],
+    workspaceId: 'ws-test',
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, runner: {executor: 'codex'}}],
     })
     {
       const {graph, blocks} = fakeGraph({
@@ -779,7 +1238,7 @@ describe('mention lifecycle', () => {
       const engine = engineWith({
         graph,
         runTask,
-        config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor}}]}),
+        config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, runner: {executor}}]}),
       })
       await engine.tick()
       await engine.drain()
@@ -957,11 +1416,12 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{
           kind: 'backlinks',
           name: 'mentions',
           target: 'claude',
-          quietMs: 0,
+          settleMs: 0,
           runner: {executor: 'claude', allowedTools: ['Bash(git:*)']},
         }],
       }),
@@ -977,6 +1437,27 @@ describe('mention lifecycle', () => {
     expect(tools).toContain('Bash(git:*)')
   })
 
+  it("passes a claude watcher's effort to its run", async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] think it through'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, runner: {executor: 'claude', effort: 'high'}}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask.mock.calls[0][0]).toMatchObject({effort: 'high'})
+  })
+
   it('defaultAllowedTools: [] keeps runs graph-only (web-tools opt-out)', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -987,8 +1468,9 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         defaultAllowedTools: [],
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0}],
       }),
     })
 
@@ -997,6 +1479,8 @@ describe('mention lifecycle', () => {
 
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
+    // Dispatch's km server has no path argument on add_media, so uploading is a graph write like the rest.
+    expect(tools).toContain('mcp__km__add_media')
     expect(tools).not.toContain('WebSearch')
     expect(tools).not.toContain('WebFetch')
   })
@@ -1011,11 +1495,12 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{
           kind: 'backlinks',
           name: 'mentions',
           target: 'claude',
-          quietMs: 0,
+          settleMs: 0,
           runner: {
             executor: 'codex',
             sandbox: 'workspace-write',
@@ -1052,11 +1537,12 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
+    workspaceId: 'ws-test',
         watchers: [{
           kind: 'backlinks',
           name: 'mentions',
           target: 'claude',
-          quietMs: 0,
+          settleMs: 0,
           runner: {
             executor: 'codex',
             cwd: '/Users/vlad/project',
@@ -1084,29 +1570,194 @@ describe('mention lifecycle', () => {
 })
 
 describe('live progress streaming', () => {
-  it('activity events write setActivity on label CHANGE only, and the terminal write clears it', async () => {
-    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] research this'}},
+  it.each(['claude', 'codex'] as const)('%s keeps the oldest outstanding tool visible with its original age', async executor => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
     })
-    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
-      options.onEvent?.({kind: 'activity', label: 'km: search'})
-      options.onEvent?.({kind: 'activity', label: 'km: search'}) // duplicate — must not re-write
-      options.onEvent?.({kind: 'activity', label: 'Searching the web'})
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      const parser = executor === 'claude' ? createStreamJsonParser(options.onEvent) : createCodexJsonlParser(options.onEvent)
+      const start = (id: string) => parser.feed(`${JSON.stringify(executor === 'claude'
+        ? {type: 'assistant', message: {content: [{type: 'tool_use', id, name: 'mcp__km__comments'}]}}
+        : {type: 'item.started', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
+      const end = (id: string) => parser.feed(`${JSON.stringify(executor === 'claude'
+        ? {type: 'user', message: {content: [{type: 'tool_result', tool_use_id: id, content: 'result'}]}}
+        : {type: 'item.completed', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}})}\n`)
+      start('slow-tool')
+      clock += 5_000
+      start('slow-tool')
+      clock += 5_000
+      start('quick-tool')
+      clock += 2_000
+      end('quick-tool')
+      end('quick-tool')
+      clock += 70_000
+      end('slow-tool')
+      end('slow-tool')
       return okRun()
-    })
-    const engine = engineWith({graph, runTask})
-
+    }})
     await engine.tick()
     await engine.drain()
+    expect(activityWrites).toEqual([{id: 'b-1', label: 'km: comments', nowMs: NOW}])
+    const oldest = activityWrites[0]
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': oldest.label, 'agent:activity-at': oldest.nowMs})!
+    expect(activityStateFor(chip, NOW + 70_000)).toMatchObject({stalled: true})
+  })
 
+  it('advances to the next oldest tool at its original start when the oldest completes', async () => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
     expect(activityWrites).toEqual([
-      {id: 'b-1', label: 'km: search'},
-      {id: 'b-1', label: 'Searching the web'},
+      {id: 'b-1', label: 'km: comments', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 10_000},
     ])
-    // Terminal write clears the transient label so it never outlives the run.
+  })
+
+  it('debounces Thinking and skips its write when a new step starts in the window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, now: Date.now, runTask: async options => {
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+        await vi.advanceTimersByTimeAsync(2_999)
+        expect(activityWrites).toHaveLength(1)
+        options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+        await vi.advanceTimersByTimeAsync(1)
+        expect(activityWrites).toHaveLength(2)
+        options.onEvent?.({kind: 'activity-end', stepId: 'unknown'})
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(activityWrites).toHaveLength(2)
+        options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+        await vi.advanceTimersByTimeAsync(3_000)
+        expect(activityWrites.map(w => w.label)).toEqual(['km: comments', 'km: search', 'Thinking'])
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(activityWrites).toHaveLength(3)
+      expect(activityWrites.at(-1)?.nowMs).toBe(NOW + 6_000)
+      expect(propWrites.at(-1)?.status).toBe('done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([false, true])('cancels the pending Thinking write when a run terminates (throws: %s)', async throws => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        options.onEvent?.({kind: 'activity', label: 'km: comments', stepId: 'first'})
+        options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+        if (throws) throw new Error('runner failed')
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      const writeCount = activityWrites.length
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(activityWrites).toHaveLength(writeCount)
+      expect(propWrites.at(-1)?.status).toBe(throws ? 'error' : 'done')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('timestamps consecutive same-label starts before queued writes and clears activity at termination', async () => {
+    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'first'})
+      clock += 30_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'first'})
+      options.onEvent?.({kind: 'activity', label: 'km: search', stepId: 'second'})
+      clock += 10_000
+      options.onEvent?.({kind: 'activity-end', stepId: 'second'})
+      options.onEvent?.({kind: 'activity', label: 'Searching the web', stepId: 'third'})
+      clock += 90_000
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: search', nowMs: NOW},
+      {id: 'b-1', label: 'km: search', nowMs: NOW + 30_000},
+      {id: 'b-1', label: 'Searching the web', nowMs: NOW + 40_000},
+    ])
     expect(propWrites.at(-1)).toMatchObject({status: 'done', activity: null})
     expect(blocks.get('b-1')?.properties?.[PROPS.activity]).toBe('')
+  })
+
+  it('starts the step clock only after streamed arguments finalize', async () => {
+    const {graph, activityWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    let clock = NOW
+    const engine = engineWith({graph, now: () => clock, runTask: async options => {
+      const parser = createStreamJsonParser(options.onEvent)
+      const feed = (line: unknown) => parser.feed(`${JSON.stringify(line)}\n`)
+      feed({type: 'stream_event', event: {type: 'content_block_start', content_block: {type: 'tool_use', id: 'call', name: 'mcp__km__append_markdown'}}})
+      clock += 50_000
+      feed({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'input_json_delta', partial_json: 'long argument'}}})
+      feed({type: 'assistant', message: {content: [{type: 'tool_use', id: 'call', name: 'mcp__km__append_markdown'}]}})
+      clock += 15_000
+      feed({type: 'user', message: {content: [{type: 'tool_result', tool_use_id: 'call'}]}})
+      return okRun()
+    }})
+    await engine.tick()
+    await engine.drain()
+    expect(activityWrites).toEqual([{id: 'b-1', label: 'km: append_markdown', nowMs: NOW + 50_000}])
+    const chip = chipStateFor({'agent:status': 'running', 'agent:activity': activityWrites[0].label, 'agent:activity-at': activityWrites[0].nowMs})!
+    expect(activityStateFor(chip, clock)).toMatchObject({ageLabel: '15s', stalled: false})
+  })
+
+  it('writes each of twenty consecutive same-label starts without intermediate Thinking writes', async () => {
+    vi.useFakeTimers()
+    try {
+      const {graph, activityWrites, propWrites} = fakeGraph({
+        backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] research this'}},
+      })
+      const engine = engineWith({graph, runTask: async options => {
+        for (let n = 0; n < 20; n++) {
+          options.onEvent?.({kind: 'activity', label: 'km: search', stepId: `step-${n}`})
+          await vi.advanceTimersByTimeAsync(500)
+          options.onEvent?.({kind: 'activity-end', stepId: `step-${n}`})
+          await vi.advanceTimersByTimeAsync(500)
+        }
+        return okRun()
+      }})
+      await engine.tick()
+      await engine.drain()
+      expect(propWrites.at(-1)?.status).toBe('done')
+      expect(activityWrites).toHaveLength(20)
+      expect(activityWrites.every(write => write.label === 'km: search')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('streamReply: placeholder, throttled text reconciles, then the terminal reconcile — all one keyed subtree', async () => {
@@ -1123,17 +1774,10 @@ describe('live progress streaming', () => {
       options.onEvent?.({kind: 'text', text: 'Once upon a time'}) // t+1600: past 1.5s, writes
       return okRun({resultText: 'Once upon a time, the end.'})
     })
-    const engine = createEngine({
-      config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true, splitReply: false}]}),
       graph,
-      runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => clock,
+      runTask, now: () => clock,
     })
 
     await engine.tick()
@@ -1163,7 +1807,7 @@ describe('live progress streaming', () => {
     })
     const engine = engineWith({
       graph, runTask,
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1183,7 +1827,8 @@ describe('live progress streaming', () => {
       graph,
       runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
       config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+    workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}],
       }),
     })
 
@@ -1210,7 +1855,7 @@ describe('live progress streaming', () => {
     })
     const engine = engineWith({
       graph, runTask,
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
     })
 
     await engine.tick()
@@ -1239,7 +1884,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1269,7 +1914,7 @@ describe('live progress streaming', () => {
       graph,
       delay: async () => {},
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+      config: parseConfig({workspaceId: 'ws-test', watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1315,17 +1960,10 @@ describe('splitReply (reply as a block hierarchy)', () => {
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
-    const engine = createEngine({
-      config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, splitReply: false}]}),
       graph,
       runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => NOW,
     })
 
     await engine.tick()
@@ -1344,17 +1982,10 @@ describe('splitReply (reply as a block hierarchy)', () => {
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
     const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
-    const engine = createEngine({
-      config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
-      }),
-      state: memoryState(),
+    const engine = engineWith({
+      config: mentionConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}]}),
       graph,
       runTask,
-      deliverToChannel: vi.fn(async () => {}),
-      mcpConfigPath: '/tmp/mcp.json',
-      log: () => {},
-      now: () => NOW,
     })
 
     await engine.tick()
@@ -1439,10 +2070,7 @@ describe('backlink watcher baseline (stamp timing)', () => {
     })
     const state = memoryState([], {armBaselines: false})
     const runTask = vi.fn(async () => okRun())
-    const engine = createEngine({
-      config: mentionConfig(), graph, state, runTask,
-      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
-    })
+    const engine = engineWith({graph, state, runTask, now: () => clock})
 
     await engine.tick()
     await engine.drain()
@@ -1457,11 +2085,12 @@ describe('backlink watcher baseline (stamp timing)', () => {
 
 describe('channel delivery (experimental)', () => {
   const channelConfig = () => parseConfig({
-    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}],
+    workspaceId: 'ws-test',
+    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, delivery: 'channel'}],
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] ambient task'}},
     })
@@ -1479,7 +2108,7 @@ describe('channel delivery (experimental)', () => {
     expect(event.content).toContain('close the task out yourself')
     // Daemon only claims; the ambient session finishes the lifecycle.
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
-    expect(replies).toHaveLength(0)
+    expect(reconciles).toHaveLength(0)
   })
 
   it('marks the task error when the channel listener is unreachable', async () => {
@@ -1502,6 +2131,7 @@ describe('channel delivery (experimental)', () => {
 
 describe('query watcher lifecycle', () => {
   const queryConfig = (overrides: object = {}) => parseConfig({
+    workspaceId: 'ws-test',
     watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', ...overrides}],
   })
 

@@ -17,9 +17,9 @@ import {
   adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild, type DerivedIdentity,
 } from '@/data/typedRecords.js'
 
-import {FIELD} from './fields'
 import {asAltChoice} from './records'
-import {SETTINGS_TYPE, STRENGTH_LOG_TYPE} from './schema'
+import {SETTINGS_TYPE, settingsType, STRENGTH_LOG_TYPE} from './schema'
+import {contentChildren} from './children'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
@@ -59,8 +59,7 @@ export const findSettingsBlock = async (
 /** Any of the settings values, which is what makes a block the settings block
  *  when its type tag is not there to say so. */
 const carriesKnobs = (block: BlockData): boolean =>
-  [FIELD.planRoot, FIELD.rolloverHour, FIELD.cadenceDays, FIELD.roundTo]
-    .some(name => block.properties[name] !== undefined)
+  (settingsType.properties ?? []).some(prop => block.properties[prop.name] !== undefined)
 
 /** …or any recorded `or`-group choice among its children.
  *
@@ -71,7 +70,7 @@ const carriesKnobs = (block: BlockData): boolean =>
  *  the knobs only would abandon exactly the workspace that had answered a
  *  question and changed nothing else. */
 const carriesChoices = async (repo: Repo, block: BlockData): Promise<boolean> =>
-  ((await repo.block(block.id).children.load()) ?? [])
+  (await contentChildren(repo, block.id))
     .some(child => asAltChoice(child) !== null)
 
 /** The one ordered rule for "where are this page's settings", used by the
@@ -111,7 +110,7 @@ const locateSettings = async (
   // this is the handful of loose blocks under the page, and the child load per
   // candidate below is bounded by that. It only runs at all when there is no
   // tagged settings block AND no seat, which is the rescue case.
-  const loose = ((await repo.block(pageId).children.load()) ?? [])
+  const loose = (await contentChildren(repo, pageId))
     .filter(block => !block.deleted && !hasBlockType(block, SETTINGS_TYPE))
   const byKnobs = loose.find(carriesKnobs)
   if (byKnobs) return byKnobs
@@ -202,7 +201,7 @@ export const getOrCreateSettingsBlock = async (
     // and a blind mint in this branch breaks no test through the public path.
     // It covers the window where that query has not yet seen a mint of its
     // own, which is real but not reproducible from outside.
-    const minted = (await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
+    const minted = (await tx.childrenOf(pageId, undefined, {propertyChildren: 'none'}))
       .find(block => !block.deleted && block.id !== seat.id && hasBlockType(block, SETTINGS_TYPE))
     return minted !== undefined
       ? (await adoptTypedBlock(repo, tx, minted, [SETTINGS_TYPE], typeSnapshot)).id

@@ -66,7 +66,7 @@ const PROPERTY_FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
-const isVisibleElement = (element: HTMLElement): boolean => {
+export const isVisibleElement = (element: HTMLElement): boolean => {
   if (typeof window === 'undefined' || !window.getComputedStyle) return true
   // Prefer checkVisibility: it walks ANCESTORS, so a property row inside a
   // warm-but-hidden layout session (display:none on some ancestor wrapper,

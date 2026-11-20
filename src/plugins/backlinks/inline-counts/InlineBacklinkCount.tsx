@@ -4,12 +4,12 @@
  *  Two cooperating facet contributions, sharing one ephemeral expansion
  *  store (`expansionStore.ts`):
  *
- *    - a `blockContentDecorators` contribution overlays a small count pill
- *      on the block's content line. The pill shows only when the block has
+ *    - a `blockGutterItems` contribution puts a small count pill in the
+ *      block's top-right gutter. The pill shows only when the block has
  *      ≥1 backlink; clicking it toggles the expansion.
- *    - a `blockChildrenFooter` contribution renders the same backlinks-view
+ *    - a `blockBelowContent` contribution renders the same backlinks-view
  *      section the focal block uses (`BacklinksViewSection`, so the block's
- *      Flat/Grouped choice is honoured) *after the block's children* when
+ *      Flat/Grouped choice is honoured) *ahead of the block's children* when
  *      this block is expanded.
  *
  *  The count reuses the `backlinks.forBlock` handle (ids only, no
@@ -17,66 +17,43 @@
 import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
 import { useWorkspaceId } from '@/hooks/block.js'
-import {
-  cachedContentDecorator,
-  type BlockContentDecoratorContribution,
-  type BlockChildrenFooterContribution,
-  type BlockResolveContext,
+import type {
+  BlockBelowContentContribution,
+  BlockGutterItem,
+  BlockGutterItemContribution,
+  BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
+import { GutterPill } from '@/components/GutterPill.js'
 import { BacklinksViewSection } from '@/plugins/backlinks-view/BacklinksViewSection.js'
 import { inlineBacklinksApplies } from './applies.ts'
 import { useBacklinkCount } from './useBacklinkCount.ts'
 import { toggleBacklinkExpansion, useBacklinkExpansion } from './expansionStore.ts'
 
-// ──── Count pill (content decorator) ────
+// ──── Count pill (gutter item) ────
 
-const InlineBacklinkCountBadge = ({
-  block,
-  Inner,
-}: {
-  block: Block
-  Inner: BlockRenderer
-}) => {
+const InlineBacklinkCountPill: BlockRenderer = ({block}) => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
   const count = useBacklinkCount(block, workspaceId)
   const expanded = useBacklinkExpansion(block.id)
-
-  // Reserve a right gutter (flex column) rather than absolutely overlaying
-  // the count, so it never covers text at the end of a long line. With no
-  // badge the content is the sole flex child and stays full width.
+  if (count === 0) return null
   return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <Inner block={block} />
-      </div>
-      {count > 0 && (
-        <button
-          type="button"
-          onClick={() => toggleBacklinkExpansion(block.id)}
-          aria-expanded={expanded}
-          aria-label={`${count} linked reference${count === 1 ? '' : 's'}`}
-          title={`${count} linked reference${count === 1 ? '' : 's'}`}
-          className={`mt-0.5 inline-flex h-4 min-w-4 shrink-0 select-none items-center justify-center rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
-            expanded
-              ? 'bg-accent text-accent-foreground'
-              : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-          }`}
-        >
-          {count}
-        </button>
-      )}
-    </div>
+    <GutterPill
+      count={count}
+      expanded={expanded}
+      onClick={() => toggleBacklinkExpansion(block.id)}
+      label={`${count} linked reference${count === 1 ? '' : 's'}`}
+    />
   )
 }
 
-const decorate = cachedContentDecorator(InlineBacklinkCountBadge, 'WithInlineBacklinkCount')
+const countPillItem: BlockGutterItem = {corner: 'top-right', component: InlineBacklinkCountPill}
 
-export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorContribution = (ctx) =>
-  inlineBacklinksApplies(ctx) ? decorate : null
+export const inlineBacklinkCountItemContribution: BlockGutterItemContribution = (ctx) =>
+  inlineBacklinksApplies(ctx) ? countPillItem : null
 
-// ──── Expanded references (children footer) ────
+// ──── Expanded references ────
 
 // Mounts (and subscribes to the shared count handle) only once expanded, so
 // non-expanded blocks pay nothing here beyond the cheap expansion-store read.
@@ -101,7 +78,7 @@ const ExpandedBacklinks = ({
 }
 ExpandedBacklinks.displayName = 'ExpandedBacklinks'
 
-export const inlineBacklinkExpansionFooterContribution: BlockChildrenFooterContribution = (ctx) => {
+export const inlineBacklinkExpansionContribution: BlockBelowContentContribution = (ctx) => {
   if (!inlineBacklinksApplies(ctx)) return null
   const Section: BlockRenderer = ({ block }) => {
     const expanded = useBacklinkExpansion(block.id)

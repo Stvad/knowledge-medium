@@ -19,8 +19,10 @@ import {
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,
+  caseInsensitiveVariants,
   replaceLiteralMatches,
 } from './search.ts'
+import { deriveReferenceColumns, sameTxReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor'
 import type {
   ApplyContentReplaceArgs,
   ApplyContentReplaceResult,
@@ -83,16 +85,51 @@ interface ContentCandidateRow {
   content: string
 }
 
-const SELECT_CONTENT_CANDIDATES_SQL = `
+interface CandidateFilter {
+  sql: string
+  arg: string
+}
+
+/** The only non-ASCII code points the case-insensitive search folds onto an
+ *  ASCII letter (U+017F onto `s`, U+212A onto `k`); SQLite's `LOWER` folds
+ *  ASCII alone, so they are mapped before it. */
+const ASCII_FOLDED_CONTENT_SQL =
+  `LOWER(replace(replace(content, char(383), 's'), char(8490), 'k'))`
+
+const GLOB_SPECIAL_CHARS = new Set(['*', '?', '[', ']'])
+
+/** Holds for every content where a case-insensitive `findLiteralMatches`
+ *  finds `needle`: each needle code point becomes the class of its variants.
+ *  A class of several variants holds only letters, never a bracket-syntax
+ *  character. */
+const caseInsensitiveGlob = (needle: string): string => {
+  let pattern = '*'
+  for (const char of needle) {
+    const variants = caseInsensitiveVariants(char)
+    pattern += variants.length === 1 && !GLOB_SPECIAL_CHARS.has(char)
+      ? char
+      : `[${variants.join('')}]`
+  }
+  return `${pattern}*`
+}
+
+const isAscii = (text: string): boolean => /^\p{ASCII}*$/u.test(text)
+
+/** The SQL prefilter never excludes a block `buildContentSearchMatch` would
+ *  match; it may admit some it does not. */
+const candidateFilter = (needle: string, matchCase: boolean): CandidateFilter => {
+  if (matchCase) return {sql: 'instr(content, ?) > 0', arg: needle}
+  if (isAscii(needle)) return {sql: `instr(${ASCII_FOLDED_CONTENT_SQL}, LOWER(?)) > 0`, arg: needle}
+  return {sql: 'content GLOB ?', arg: caseInsensitiveGlob(needle)}
+}
+
+const selectContentCandidatesSql = (filterSql: string): string => `
   SELECT id, content
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-    AND (
-      (? != 0 AND instr(content, ?) > 0)
-      OR (? = 0 AND instr(LOWER(content), LOWER(?)) > 0)
-    )
+    AND ${filterSql}
   ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
@@ -123,10 +160,10 @@ export const searchContentQuery = defineQuery<
       key: kernelContentKey(workspaceId),
     })
 
-    const matchCase = normalizedOptions.matchCase ? 1 : 0
+    const filter = candidateFilter(trimmed, normalizedOptions.matchCase)
     const rows = await ctx.db.getAll<ContentCandidateRow>(
-      SELECT_CONTENT_CANDIDATES_SQL,
-      [workspaceId, matchCase, trimmed, matchCase, trimmed, candidateLimit + 1],
+      selectContentCandidatesSql(filter.sql),
+      [workspaceId, filter.arg, candidateLimit + 1],
     )
     const candidateRows = rows.slice(0, candidateLimit)
     const matches = candidateRows
@@ -230,17 +267,9 @@ export const applyContentReplaceMutator = defineMutator<
       // value exactly as it would after.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
-        // The check is on the PROPOSED content, and asking it takes nothing
-        // but that string: `valueChildContentToEncoded` decodes a ref
-        // value by parsing the id out of its id-carrying span, so there is no
-        // derived column to project first (#443 group 3). It used to resolve
-        // `deriveReferenceColumns` here — an async alias lookup per candidate
-        // row — precisely because the decode trusted the column, and that
-        // made the guard agree with a decode that was itself wrong: a replace
-        // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
-        // passed the guard, and PROJECT then wrote the WRONG id into the
-        // owner's cell. Now it reads as unparseable and is reported as a skip.
-        //
+        // Resolve the proposed text: the stored target belongs to the old text.
+        const derived = await deriveReferenceColumns(
+          replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx))
         // Decoding is NOT the whole question, and asking only it let #688
         // through here: `codecs.string` / `codecs.url` accept any string, so a
         // replace that turned a value into `::((id))` decoded fine, was
@@ -250,7 +279,7 @@ export const applyContentReplaceMutator = defineMutator<
         // refuses instead and offers "replace anyway" like every other skip.
         const unsafeToWrite = (() => {
           try {
-            valueChildContentToEncoded(schema, replaced.content)
+            valueChildContentToEncoded(schema, {content: replaced.content, referenceTargetId: derived.targetId})
           } catch {
             return true
           }

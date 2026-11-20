@@ -147,8 +147,15 @@ export const readIsChildBackedWorkspace = async (
   db: WorkspaceColumnReader,
   workspaceId: string,
 ): Promise<boolean> =>
-  isChildBackedPropertiesWorkspace(parsePropertiesMigration(
-    await readWorkspaceColumn(db, workspaceId, 'properties_migration')))
+  isChildBackedPropertiesWorkspace(await readWorkspacePropertiesMigration(db, workspaceId))
+
+/** The workspace's `properties_migration`, parsed — `'cell'` when this device
+ *  has no local row for it (see {@link parsePropertiesMigration}). */
+export const readWorkspacePropertiesMigration = async (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+): Promise<PropertiesMigrationState> =>
+  parsePropertiesMigration(await readWorkspaceColumn(db, workspaceId, 'properties_migration'))
 
 /** The minimal read surface the tx engine (`TxDb`) and `Repo` (`PowerSyncDb`)
  *  both already satisfy. */
@@ -172,9 +179,10 @@ const readWorkspaceColumn = async (
 }
 
 /** The workspace's `encryption_mode`, or null when this device has no local
- *  `workspaces` row for it yet. Callers that gate on e2ee must treat the null
- *  as "unknown, assume the stricter answer" rather than as "not encrypted" —
- *  a device can be asked to act on a workspace whose row has not synced. */
+ *  `workspaces` row for it yet. The null is "unknown", not "not encrypted": a
+ *  device can be asked to act on a workspace whose row has not synced, and each
+ *  caller decides what unknown means for it (the §6 resolver, for one, reads it
+ *  as not-e2ee because the row rides the same checkpoint as the blocks). */
 export const readWorkspaceEncryptionMode = (
   db: WorkspaceColumnReader,
   workspaceId: string,

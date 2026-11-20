@@ -14,7 +14,6 @@ import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry
 import {
   addProperty,
   deleteProperty,
-  renameProperty,
   writeProperty,
 } from './actions'
 
@@ -40,14 +39,6 @@ describe('property panel action visibility guards', () => {
     }
 
     await writeProperty(block, seedKeyProp, 'tampered/property/key')
-    await renameProperty({
-      block,
-      properties,
-      schemas: block.repo.propertySchemas,
-      uis: new Map(),
-      oldName: seedKeyProp.name,
-      newName: 'renamed-seed-key',
-    })
     await deleteProperty({
       block,
       properties,
@@ -99,48 +90,7 @@ describe('property panel action visibility guards', () => {
     expect(tx).not.toHaveBeenCalled()
   })
 
-  it('refuses renames from or to a hidden declaration-only definition', async () => {
-    const hidden: PropertyDefinitionMetadata = {
-      fieldId: 'field-secret',
-      workspaceId: 'ws',
-      createdAt: 1,
-      name: 'secret',
-      changeScope: ChangeScope.BlockDefault,
-      hidden: true,
-      origin: 'user',
-    }
-    const propertyDefinitions = buildPropertyDefinitionRegistry({
-      workspaceId: 'ws',
-      projectedDefinitions: new Map([[hidden.fieldId, {metadata: hidden}]]),
-      seeds: [],
-    })
-    const tx = vi.fn()
-    const block = {
-      repo: {propertyDefinitions, tx},
-    } as unknown as Block
-    const properties = {secret: 'private', visible: 'public'}
-
-    await renameProperty({
-      block,
-      properties,
-      schemas: propertyDefinitions.schemas,
-      uis: new Map(),
-      oldName: 'secret',
-      newName: 'renamed',
-    })
-    await renameProperty({
-      block,
-      properties,
-      schemas: propertyDefinitions.schemas,
-      uis: new Map(),
-      oldName: 'visible',
-      newName: 'secret',
-    })
-
-    expect(tx).not.toHaveBeenCalled()
-  })
-
-  it('refuses rename and delete for a visible declaration-only definition', async () => {
+  it('refuses add and delete for a visible declaration-only definition', async () => {
     const metadataOnly: PropertyDefinitionMetadata = {
       fieldId: 'field-srs-config',
       workspaceId: 'ws',
@@ -181,14 +131,6 @@ describe('property panel action visibility guards', () => {
       presetId: staleSchema.codec.type,
     })).resolves.toBeUndefined()
 
-    await renameProperty({
-      block,
-      properties,
-      schemas: staleSchemas,
-      uis: new Map(),
-      oldName: metadataOnly.name,
-      newName: 'renamed-config',
-    })
     await deleteProperty({
       block,
       properties,
@@ -252,52 +194,6 @@ describe('property panel action visibility guards', () => {
     })
     expect(update).toHaveBeenCalledWith('block-1', {properties: {keep: 'me'}})
     expect(unsetProperty).not.toHaveBeenCalled()
-  })
-
-  // The raw whole-bag write must be built from the CURRENT bag read inside the
-  // tx, not the panel's captured `args.properties` — otherwise a property some
-  // other write changed between the panel opening and this commit is clobbered
-  // back to its snapshot value.
-  it('renameProperty writes the FRESH in-tx bag, not the stale panel snapshot', async () => {
-    const {update, block} = deleteBlock({a: 1, b: 99}) // `b` concurrently changed
-    await renameProperty({
-      block,
-      properties: {a: 1, b: 2}, // stale snapshot
-      schemas: new Map(),
-      uis: new Map(),
-      oldName: 'a',
-      newName: 'c',
-    })
-    expect(update).toHaveBeenCalledWith('block-1', {properties: {b: 99, c: 1}})
-  })
-
-  // A padded key is what synthesis mints for an orphaned cell key, verbatim.
-  // Reachable as an edit that lands back on the stored key — PropertyRow no
-  // longer commits at all unless an input event fired.
-  it('leaves a padded key alone when the edit lands back on it', async () => {
-    const {update, block} = deleteBlock({' padded ': 1, keep: 'me'})
-    await renameProperty({
-      block,
-      properties: {' padded ': 1, keep: 'me'},
-      schemas: new Map(),
-      uis: new Map(),
-      oldName: ' padded ',
-      newName: ' padded ',
-    })
-    expect(update).not.toHaveBeenCalled()
-  })
-
-  it('still trims a padded key the user actually edited', async () => {
-    const {update, block} = deleteBlock({' padded ': 1, keep: 'me'})
-    await renameProperty({
-      block,
-      properties: {' padded ': 1, keep: 'me'},
-      schemas: new Map(),
-      uis: new Map(),
-      oldName: ' padded ',
-      newName: ' padded x',
-    })
-    expect(update).toHaveBeenCalledWith('block-1', {properties: {keep: 'me', 'padded x': 1}})
   })
 
   it('deleteProperty (schema-less) writes the FRESH in-tx bag, not the stale snapshot', async () => {

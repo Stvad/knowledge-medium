@@ -6,6 +6,7 @@ import {
   type Codec,
 } from '@/data/api'
 import { uniqueStrings } from '@/utils/array'
+import { endsInUnmatchedBracket } from '@/data/referenceBlock'
 import { canRenderAsWikilink } from '@/plugins/references/referenceParser'
 
 /** Tag names are interpolated into a wikilink (`[[name]]`). The
@@ -26,29 +27,26 @@ import { canRenderAsWikilink } from '@/plugins/references/referenceParser'
  *  dialog's input and the config editor's draft field), so nothing
  *  upstream bounds this. Refusing beats silently writing dead markup.
  *
- *  The length check is on the RENDERED span, not on `trimmed`, and that
- *  distinction is load-bearing: `renderWikilink` appends a space after a
- *  trailing `]` to keep the closing delimiter balanced, so a name of
- *  exactly `MAX_ALIAS_LENGTH` ending in `]` emits an alias one character
- *  OVER the cap. Comparing `trimmed.length` would wave it through.
- *  Parsing what the renderer actually emits is the only form of this
- *  check that cannot drift from the renderer. */
+ *  A name ending in an unmatched `]` is rejected too: `renderWikilink`
+ *  pads it with a space to keep the closing delimiter balanced, so the link
+ *  it writes names `foo] `, not `foo]`, and the already-tagged check never
+ *  recognizes it.
+ *
+ *  The length check is on the RENDERED span, so it cannot drift from the
+ *  renderer. */
 export const isValidTagName = (name: string): boolean =>
   tagNameIssue(name) === null
 
-/** WHY a tag name was rejected, so the entry points can say something
- *  true. They used to hard-code "can't contain `[[` or `]]`", which was
- *  the only rule; the length rule made that message a lie for an input
- *  containing neither delimiter — the control went disabled with an
- *  error naming characters that weren't there and no hint that
- *  shortening would fix it. A reason code rather than
- *  a string so each surface keeps its own markup for the delimiters. */
-export type TagNameIssue = 'empty' | 'delimiters' | 'too-long'
+/** WHY a tag name was rejected, so the entry points' hint names the rule
+ *  the input actually broke. A reason code rather than a string so the
+ *  hint (`TagNameIssueHint`) can mark up the delimiters. */
+export type TagNameIssue = 'empty' | 'delimiters' | 'unmatched-bracket' | 'too-long'
 
 export const tagNameIssue = (name: string): TagNameIssue | null => {
   const trimmed = name.trim()
   if (!trimmed) return 'empty'
   if (trimmed.includes('[[') || trimmed.includes(']]')) return 'delimiters'
+  if (endsInUnmatchedBracket(trimmed)) return 'unmatched-bracket'
   if (!canRenderAsWikilink(trimmed)) return 'too-long'
   return null
 }

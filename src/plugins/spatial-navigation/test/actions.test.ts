@@ -2,6 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -22,7 +23,10 @@ import {
 } from '@/shortcuts/types.js'
 import { extendSelectionDown } from '@/shortcuts/blockActions.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
-import { getSpatialNavigationDispatchDecorators } from '@/plugins/spatial-navigation/actions.js'
+import {
+  getSpatialNavigationActions,
+  getSpatialNavigationDispatchDecorators,
+} from '@/plugins/spatial-navigation/actions.js'
 import {
   resolveSpatialNavExclusions,
   spatialNavExclusionsFacet,
@@ -30,6 +34,8 @@ import {
 import { DEFAULT_NON_NAVIGABLE_SURFACES } from '@/plugins/spatial-navigation/walker.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { waitFor } from '@/test/waitFor'
+import { PANEL_LANE_ATTRIBUTE } from '@/utils/panelLanes.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -257,7 +263,7 @@ const pressExtendSelectionDown = async (
     context: ActionContextTypes.NORMAL_MODE,
     handler: async baseDeps => {
       structuralExtend()
-      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, baseDeps.scopeRootId)
+      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, outlineSurfaceOf(baseDeps))
     },
   })
   await action.handler(deps, {} as ActionTrigger)
@@ -276,7 +282,7 @@ const pressMultiSelectExtendDown = async (
     context: ActionContextTypes.MULTI_SELECT_MODE,
     handler: async baseDeps => {
       structuralExtend()
-      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, baseDeps.scopeRootId)
+      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, outlineSurfaceOf(baseDeps))
     },
   })
   await action.handler(deps, {} as ActionTrigger)
@@ -339,6 +345,29 @@ describe('spatial navigation selection actions', () => {
       blockId: 'X',
       renderScopeId: 'panel:backlink',
     })
+  })
+
+  it('extends past a nested surface to the next row of the same scope', async () => {
+    buildPanelDom([
+      {
+        blockId: 'P',
+        renderScopeId: 'panel:outline',
+        nested: [{blockId: 'X', renderScopeId: 'panel:backlink:X'}],
+      },
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'P', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['P'], anchorBlockId: 'P'})
+
+    await pressExtendSelectionDown({
+      block: env.repo.block('P'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['P', 'B'])
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B', renderScopeId: 'panel:outline'})
   })
 
   it('Roam-style first press selects only the focused block, not its neighbour', async () => {
@@ -443,6 +472,162 @@ describe('spatial navigation shift-click selection', () => {
     expect(panel.peekProperty(selectionStateProp)).toEqual({
       selectedBlockIds: ['A', 'X'],
       anchorBlockId: 'A',
+    })
+  })
+
+  // A scrollbar drag mounts the rows it lands on and none it passed over, so the
+  // rows between the two ends can still be placeholders when the click lands.
+  it('includes rows still deferred between the anchor and the clicked block', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline'},
+        {deferredBlockId: 'B', deferredScopeId: 'panel:outline'},
+        {blockId: 'C', renderScopeId: 'panel:outline'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'B', 'C'],
+      anchorBlockId: 'A',
+    })
+  })
+
+  // An expanded section renders other blocks between a row and its own children.
+  // They are not part of a range the user drew within the outline, and a selected
+  // range is what `d` deletes.
+  it('leaves nested surfaces out of a range within one scope', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {
+          blockId: 'P',
+          renderScopeId: 'panel:outline',
+          nested: [
+            {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+            {deferredBlockId: 'Y'},
+            {blockId: 'C', renderScopeId: 'panel:outline'},
+          ],
+        },
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'P', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    const selected = panel.peekProperty(selectionStateProp)?.selectedBlockIds
+    expect(selected).toContain('P')
+    expect(selected).not.toContain('X')
+    expect(selected).not.toContain('Y')
+  })
+
+  // A backlink entry reserves its slot without naming the scope it will mint,
+  // which keeps navigation off it; a range needs only the block.
+  it('includes a deferred row whose slot names no scope', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {deferredBlockId: 'X'},
+      {blockId: 'B', renderScopeId: 'panel:backlink:B'},
+    ] as NavInstance[])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('B'),
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A', 'X', 'B'])
+  })
+
+  it('leaves out deferred rows inside an excluded surface, as it does mounted ones', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline'},
+        {
+          blockId: 'X',
+          renderScopeId: 'panel:crumbs',
+          surface: 'breadcrumb',
+          nested: [{deferredBlockId: 'B1', deferredScopeId: 'panel:crumbs:B1'}],
+        },
+        {blockId: 'C', renderScopeId: 'panel:outline'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+    })
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A', 'C'])
+  })
+
+  it('extends from the range origin the gesture carries rather than the focused row', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+      {blockId: 'C', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+
+    const {structuralSelect} = await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+      rangeOrigin: {blockId: 'A', renderScopeId: 'panel:outline'},
+    })
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'B', 'C'],
+      anchorBlockId: 'A',
+    })
+  })
+
+  it('lets an active selection anchor win over the range origin', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'B', renderScopeId: 'panel:outline'},
+      {blockId: 'C', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['B'], anchorBlockId: 'B'})
+
+    await shiftClick({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('C'),
+      rangeOrigin: {blockId: 'A', renderScopeId: 'panel:outline'},
+    })
+
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['B', 'C'],
+      anchorBlockId: 'B',
     })
   })
 
@@ -757,7 +942,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:A:X',
@@ -796,7 +981,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:A:X',
@@ -874,7 +1059,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:B:X',
@@ -1114,7 +1299,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B1',
         renderScopeId: 'panel:outline',
@@ -1153,7 +1338,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B1',
         renderScopeId: 'panel:outline',
@@ -1259,7 +1444,7 @@ describe('spatial navigation vertical actions', () => {
 
     expect(modelWalk).not.toHaveBeenCalled()
     // The mounted row after the embed, not the collapsed child inside it.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'C',
         renderScopeId: 'panel:outline',
@@ -1301,7 +1486,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'C',
         renderScopeId: 'panel:outline',
@@ -1424,7 +1609,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'backlink:B',
@@ -1455,7 +1640,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'embed:A:X',
@@ -1507,7 +1692,7 @@ describe('spatial navigation vertical actions', () => {
     expect(modelWalk).not.toHaveBeenCalled()
     // NOT the backlink: it was the neighbour before 'B' mounted, and taking it
     // would jump the row that had just appeared in between.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
         renderScopeId: 'panel:outline',
@@ -1570,7 +1755,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
         renderScopeId: 'panel:outline',
@@ -1624,7 +1809,7 @@ describe('spatial navigation vertical actions', () => {
     })
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'panel:backlink',
@@ -1652,12 +1837,131 @@ describe('spatial navigation vertical actions', () => {
     // sibling test can actually be false.)
 
     expect(modelWalk).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
         renderScopeId: 'below:outline',
       })
     })
+  })
+})
+
+describe('spatial navigation across a lane beside the panel content', () => {
+  const placeAt = (el: HTMLElement, top: number, left: number, right: number): void => {
+    el.getBoundingClientRect = () =>
+      ({top, bottom: top + 30, left, right, width: right - left, height: 30, x: left, y: top, toJSON: () => ({})}) as DOMRect
+  }
+  const OUTLINE = 'panel:outline'
+  const CARD = 'panel:margin:thread'
+
+  /** The panel's outline (A, C) and a lane right of it, after it in document
+   *  order as a panel mount is, holding `laneRows` level with C; then a panel in
+   *  the next layout column. */
+  const buildLaneLayout = (laneRows: readonly NavChild[]): void => {
+    const columns = [document.createElement('div'), document.createElement('div')]
+    columns.forEach((column, i) => { column.dataset.layoutColumnId = `col-${i}` })
+    const panelEl = document.createElement('div')
+    panelEl.dataset.panelId = 'panel'
+    appendInstances(panelEl, [
+      {blockId: 'A', renderScopeId: OUTLINE, surface: 'outline'},
+      {blockId: 'C', renderScopeId: OUTLINE, surface: 'outline'},
+    ])
+    const lane = document.createElement('div')
+    lane.setAttribute(PANEL_LANE_ATTRIBUTE, 'margin')
+    appendInstances(lane, laneRows)
+    panelEl.appendChild(lane)
+    columns[0].appendChild(panelEl)
+    const right = document.createElement('div')
+    right.dataset.panelId = 'panel-below'
+    appendInstances(right, [{blockId: 'X', renderScopeId: 'below:outline', surface: 'outline'}])
+    columns[1].appendChild(right)
+    document.body.append(...columns)
+    const rows = panelEl.querySelectorAll<HTMLElement>('[data-block-nav-item]')
+    rows.forEach((row, i) => placeAt(row, i < 2 ? 100 * i : 100 + 40 * (i - 2), i < 2 ? 0 : 640, i < 2 ? 600 : 900))
+    lane.getBoundingClientRect = () =>
+      ({top: 0, bottom: 700, left: 640, right: 900, width: 260, height: 700, x: 640, y: 0, toJSON: () => ({})}) as DOMRect
+  }
+
+  const pressHorizontal = async (id: 'move_left' | 'move_right', deps: BlockShortcutDependencies) => {
+    const action = getSpatialNavigationActions().find(candidate => candidate.id === id)!
+    await action.handler(deps, {} as ActionTrigger)
+  }
+
+  beforeEach(async () => { await seedPanelBelow(env.repo) })
+
+  it('moves right onto the lane row level with it, and left back', async () => {
+    buildLaneLayout([{blockId: 'B1', renderScopeId: CARD, surface: 'nested'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'C', {renderScopeId: OUTLINE})
+
+    await pressHorizontal('move_right', {block: env.repo.block('C'), uiStateBlock: panel, renderScopeId: OUTLINE})
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B1', renderScopeId: CARD})
+
+    await pressHorizontal('move_left', {block: env.repo.block('B1'), uiStateBlock: panel, renderScopeId: CARD})
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'C', renderScopeId: OUTLINE})
+  })
+
+  it('leaves for the next column from the lane, where nothing lies further right', async () => {
+    buildLaneLayout([{blockId: 'B1', renderScopeId: CARD, surface: 'nested'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B1', {renderScopeId: CARD})
+
+    await pressHorizontal('move_right', {block: env.repo.block('B1'), uiStateBlock: panel, renderScopeId: CARD})
+
+    await waitFor(() => {
+      expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'below:outline',
+      })
+    })
+  })
+
+  it('jumps to the last row of the lane focus is in', async () => {
+    buildLaneLayout([
+      {blockId: 'B', renderScopeId: CARD, surface: 'nested'},
+      {blockId: 'B1', renderScopeId: CARD, surface: 'nested'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: OUTLINE})
+
+    await pressNavigationKey('jump_to_last_visible_block', {
+      block: env.repo.block('A'), uiStateBlock: panel, renderScopeId: OUTLINE, scopeRootId: 'top',
+    })
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'C', renderScopeId: OUTLINE})
+
+    await focusBlock(panel, 'B', {renderScopeId: CARD})
+    await pressNavigationKey('jump_to_last_visible_block', {
+      block: env.repo.block('B'), uiStateBlock: panel, renderScopeId: CARD, scopeRootId: 'B',
+    })
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'B1', renderScopeId: CARD})
+  })
+
+  it('starts a new selection at a row shift-clicked in the other lane', async () => {
+    buildLaneLayout([{blockId: 'B1', renderScopeId: CARD, surface: 'nested'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: OUTLINE})
+    const target = document.querySelector<HTMLElement>(`[data-block-id="B1"]`)!
+
+    const {structuralSelect} = await shiftClick({block: env.repo.block('B1'), uiStateBlock: panel, targetElement: target})
+
+    expect(structuralSelect).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({selectedBlockIds: ['B1'], anchorBlockId: 'B1'})
+  })
+
+  it('stops at the end of the outline rather than stepping onto a row reserved in the lane', async () => {
+    // 'C' is the last child of 'top', so the scope edge asks the rendered order.
+    buildLaneLayout([{deferredBlockId: 'B1', deferredScopeId: CARD}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'C', {renderScopeId: OUTLINE})
+    const focusWrites = vi.spyOn(panel.repo, 'tx')
+
+    const {modelWalk} = await pressNavigationKey('move_down', {
+      block: env.repo.block('C'), uiStateBlock: panel, renderScopeId: OUTLINE, scopeRootId: 'top',
+    })
+
+    // A step onto the reserved row is a focus write the handler doesn't await.
+    expect(focusWrites).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
   })
 })
 
@@ -1701,7 +2005,7 @@ describe('spatial navigation exclusion facet — real consumer path', () => {
     // not just a direct walker call. The same-panel step writes via a
     // fire-and-forget `void focusBlock(...)` (actions.ts), so poll rather
     // than assert immediately after `action.handler` resolves.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
         renderScopeId: 'panel:outline',

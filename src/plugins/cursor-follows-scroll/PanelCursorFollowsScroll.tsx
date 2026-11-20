@@ -13,6 +13,7 @@ import { instanceIn, panelById } from '@/plugins/spatial-navigation/walker.js'
 import { resolveSpatialNavExclusions } from '@/plugins/spatial-navigation/exclusionsFacet.js'
 import { isCursorRowSettled, isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
 import { createSettleScheduler } from './settleScheduler.ts'
+import { forgetFollow, keepFollowOnlyAt, rememberFollow } from './followOrigin.ts'
 
 /** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
  *  a fling would otherwise write a focus location per frame, and the row we
@@ -28,6 +29,11 @@ const SCROLL_SETTLE_MS = 150
  *  instead, bounded so a genuinely empty viewport doesn't spin. */
 const SETTLE_RETRY_MS = 250
 const SETTLE_RETRIES = 4
+
+/** A wide table or a code block panning in place moves no row up or down, so
+ *  it says nothing about where the viewport is. */
+const pansOnlySideways = (scroller: Element): boolean =>
+  scroller.scrollWidth > scroller.clientWidth && scroller.scrollHeight <= scroller.clientHeight
 
 
 /**
@@ -85,10 +91,14 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
   // mid-scroll, which reads as "the cursor was never on screen" and silently
   // switches the behaviour off until the next focus change.
   useEffect(() => {
-    if (!focusedBlockId || !renderScopeId) return
+    const cursor = focusedBlockId && renderScopeId
+      ? {blockId: focusedBlockId, renderScopeId}
+      : undefined
+    keepFollowOnlyAt(block.id, cursor)
+    if (!cursor) return
     const panelEl = panelById(block.id)
     if (!panelEl) return
-    const location = {blockId: focusedBlockId, renderScopeId}
+    const location = cursor
 
     let retriesLeft = 0
     let seenOnScreen = false
@@ -127,6 +137,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
         excludedSurfaces: excluded(),
       })
       if (next) {
+        rememberFollow(block.id, location, next)
         void focusBlock(block, next.blockId, {renderScopeId: next.renderScopeId})
         return
       }
@@ -155,6 +166,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       // viewport that never moved.
       const target = event.target
       if (target instanceof Node && !target.contains(panelEl) && !panelEl.contains(target)) return
+      if (target instanceof Element && pansOnlySideways(target)) return
       sample()
       if (!seenOnScreen) return
       if (block.peekProperty(isEditingProp)) suppressedWhileEditing = true
@@ -232,6 +244,8 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     }
   }, [block, focusedBlockId, renderScopeId])
 
+  useEffect(() => () => forgetFollow(block.id), [block])
+
   // Leaving the editor re-runs the decision once, which is what makes the
   // edit-mode refusal a DEFERRAL rather than a silent drop: a scroll while the
   // editor is open is declined, and without this nothing would reconsider until
@@ -257,6 +271,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       : undefined
     editedLocation.current = isEditing ? (current ?? null) : null
     if (!wasEditing || isEditing) return
+    // Defence in depth, not pinned: no test reaches this through the component.
     if (!sameFocusedBlockLocation(wasEditing, current)) return
     settleRef.current?.()
   }, [isEditing, focusedBlockId, renderScopeId])

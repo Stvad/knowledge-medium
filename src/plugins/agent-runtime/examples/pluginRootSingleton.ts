@@ -1,9 +1,10 @@
 import { ChangeScope, seedProperty, seedType } from '@/data/api/index.js'
-import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, systemPagesFacet, typeSeedsFacet } from '@/data/facets.js'
 import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { getOrCreateKernelPage } from '@/data/kernelPage.js'
 import { getOrCreateTypedChild } from '@/data/typedRecords.js'
 import type { Repo } from '@/data/repo.js'
+import type { KernelPageSpec } from '@/data/kernelPage.js'
 
 // Generate ONE namespace UUID per block kind and never change it —
 // changing it re-points the kind at fresh ids and orphans every row
@@ -45,7 +46,14 @@ const bookType = seedType({
   properties: [bookIdProp, progressProp],
 })
 
+export const readwiseRootSpec: KernelPageSpec = {
+  namespace: READWISE_ROOT_NS,
+  alias: 'Readwise Library',
+  markerType: libraryType.id,
+}
+
 export default [
+  systemPagesFacet.of({spec: readwiseRootSpec, eager: false}, {source: 'readwise'}),
   definitionSeedsFacet.of(bookIdProp, {source: 'readwise'}),
   definitionSeedsFacet.of(progressProp, {source: 'readwise'}),
   typeSeedsFacet.of(libraryType, {source: 'readwise'}),
@@ -66,11 +74,7 @@ export const syncBooks = async (
   // id = uuidv5(workspaceId, NS): the workspace is the WHOLE key, so one per
   // workspace. Repairs a row that lost its alias or type, restores a deleted
   // one. These two examples are one fictional plugin, hence the shared NS.
-  const root = await getOrCreateKernelPage(repo, workspaceId, {
-    namespace: READWISE_ROOT_NS,
-    alias: 'Readwise Library',
-    markerType: libraryType.id,   // what you subscribeBlocks({types}) for
-  })
+  const root = await getOrCreateKernelPage(repo, workspaceId, readwiseRootSpec, {skipUndo: true})
 
   // One block per book, under it. The key is whatever makes it THIS book —
   // include the workspace, since ids are global.

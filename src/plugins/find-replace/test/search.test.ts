@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildContentSearchMatch,
+  caseFoldingCodePoints,
+  caseInsensitiveVariants,
   findLiteralMatches,
   previewForMatch,
   replaceLiteralMatches,
@@ -33,6 +35,36 @@ describe('find/replace literal matching', () => {
       {index: 0, length: 4},
       {index: 29, length: 4},
     ])
+  })
+
+  it('splices a case-insensitive replacement at offsets into the original text', () => {
+    // `İ` lowercases to two code units, so offsets read off a lowercased copy
+    // land one character late for everything after it.
+    expect(replaceLiteralMatches('İstanbul foo bar', 'foo', 'X', insensitive)).toEqual({
+      content: 'İstanbul X bar',
+      replacementCount: 1,
+    })
+    // ...and the `i` inside that expansion is not a character of the original.
+    expect(replaceLiteralMatches('xİy', 'i', 'Z', insensitive)).toEqual({
+      content: 'xİy',
+      replacementCount: 0,
+    })
+  })
+
+  it('still considers a whole-word candidate that overlaps a rejected one', () => {
+    expect(findLiteralMatches('xa.a.a', 'a.a', {matchCase: false, wholeWord: true}))
+      .toEqual([{index: 3, length: 3}])
+  })
+
+  // The matcher folds the Kelvin sign onto `k` and `ſ` onto `s`; a word
+  // boundary that saw them as punctuation would let a replace cut into a word.
+  it('keeps whole-word boundaries for letters in any script, case-folded ones included', () => {
+    const wholeWord = {matchCase: false, wholeWord: true}
+    expect(findLiteralMatches('foo\u212Abar', 'k', wholeWord)).toEqual([])
+    expect(findLiteralMatches('foo\u017Fbar', 's', wholeWord)).toEqual([])
+    expect(findLiteralMatches('café', 'caf', wholeWord)).toEqual([])
+    expect(findLiteralMatches('a \u212A b', 'k', wholeWord)).toEqual([{index: 2, length: 1}])
+    expect(findLiteralMatches('\u{1D400}x x', 'x', wholeWord)).toEqual([{index: 4, length: 1}])
   })
 
   it('replaces each literal match without treating the find text as regex', () => {
@@ -82,5 +114,32 @@ describe('buildContentSearchMatch', () => {
 
   it('short-circuits an empty query to null (no match, no preview)', () => {
     expect(buildContentSearchMatch('b1', 'any content', '', insensitive)).toBeNull()
+  })
+})
+
+describe('caseInsensitiveVariants', () => {
+  const escapeClassMember = (char: string) => char.replace(/[-\\\]^[]/g, '\\$&')
+  // Measured ~0.5s alone: two passes over every code point.
+  it('leaves out no code point with a case-insensitive partner', () => {
+    const candidates = new Set(caseFoldingCodePoints())
+    const anyCandidate = new RegExp(`[${[...candidates].map(escapeClassMember).join('')}]`, 'iu')
+    const partnered: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint++) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue
+      const char = String.fromCodePoint(codePoint)
+      if (!candidates.has(char) && anyCandidate.test(char)) partnered.push(char)
+    }
+    expect(partnered).toEqual([])
+  }, 20_000)
+
+  it('folds exactly U+017F and U+212A onto ASCII letters from outside ASCII', () => {
+    const letters = 'abcdefghijklmnopqrstuvwxyz'
+    const nonAscii = [...letters].flatMap(caseInsensitiveVariants).filter(char => char > '\x7f')
+    expect(nonAscii.sort()).toEqual(['\u017F', '\u212A'])
+  })
+
+  it('returns the whole class of a code point, itself included', () => {
+    expect(caseInsensitiveVariants('в').sort()).toEqual(['В', 'в', '\u1C80'].sort())
+    expect(caseInsensitiveVariants('日')).toEqual(['日'])
   })
 })

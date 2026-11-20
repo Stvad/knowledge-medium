@@ -24,6 +24,7 @@ import {
 import {dbMirrorRuntimeHealth} from '../runtimeHealth.js'
 import {createDbMirrorStore, type DbMirrorStore} from '../store.js'
 import type {DbMirrorOutcome} from '../mirror.js'
+import {waitFor} from '@/test/waitFor'
 
 const USER = 'alice'
 const BOB = 'bob'
@@ -274,7 +275,7 @@ describe('the mirror schedule', () => {
 
     const {job} = build()
 
-    await vi.waitFor(() => expect(job.rearms.length).toBeGreaterThan(0))
+    await waitFor(() => expect(job.rearms.length).toBeGreaterThan(0))
     expect(job.rearms.at(-1)?.delayMs).toBeLessThanOrEqual(INTERVAL_MS)
   })
 
@@ -793,7 +794,7 @@ describe('the mirror schedule', () => {
     stop?.()
     const other = {...repo, user: {id: BOB}} as unknown as Repo
     const bobFirst = schedule.runNow(other)
-    await vi.waitFor(() => expect(mirror).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(mirror).toHaveBeenCalledTimes(2))
 
     // Alice's run settles while bob's is still in flight.
     held[0]!()
@@ -821,7 +822,7 @@ describe('the mirror schedule', () => {
     const {job} = build()
 
     const inFlight = job.body!()
-    await vi.waitFor(() => expect(mirror).toHaveBeenCalled())
+    await waitFor(() => expect(mirror).toHaveBeenCalled())
     await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
     release()
     await inFlight
@@ -855,7 +856,7 @@ describe('the mirror schedule', () => {
     const reads = vi.spyOn((repo as unknown as {db: {getAll: (sql: string) => Promise<unknown>}}).db, 'getAll')
     const {job} = build()
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(reads.mock.calls.some(([sql]) => String(sql).includes('ORDER BY id LIMIT 1'))).toBe(true),
     )
     // No re-arm at all: the job's own short first delay stands.
@@ -875,7 +876,7 @@ describe('the mirror schedule', () => {
     const {job} = build()
 
     const inFlight = job.body!()
-    await vi.waitFor(() => expect(mirror).toHaveBeenCalled())
+    await waitFor(() => expect(mirror).toHaveBeenCalled())
     await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
     release()
     await inFlight
@@ -897,12 +898,12 @@ describe('the mirror schedule', () => {
     const {job} = build()
 
     const stale = job.body!()
-    await vi.waitFor(() => expect(mirror).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mirror).toHaveBeenCalledTimes(1))
     await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
 
     // A tick after the folder change starts its own run rather than joining.
     const fresh = job.body!()
-    await vi.waitFor(() => expect(mirror).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(mirror).toHaveBeenCalledTimes(2))
 
     release()
     await Promise.all([stale, fresh])
@@ -920,7 +921,7 @@ describe('the mirror schedule', () => {
     const {job, stop} = build()
 
     const stale = job.body!()
-    await vi.waitFor(() => expect(mirror).toHaveBeenCalled())
+    await waitFor(() => expect(mirror).toHaveBeenCalled())
     stop?.()
     build()
     release()
@@ -949,25 +950,25 @@ describe('the mirror schedule', () => {
     // the change — a week on the longest cadence, with the new folder empty.
     await enable()
     const {job} = build()
-    await vi.waitFor(() => expect(store.getSnapshot()?.settings.enabled).toBe(true))
+    await waitFor(() => expect(store.getSnapshot()?.settings.enabled).toBe(true))
     job.rearms.length = 0
 
     await store.setDirectory(USER, {kind: 'directory', name: 'Elsewhere'} as never)
 
     // Due NOW, not one cadence from now.
-    await vi.waitFor(() => expect(job.rearms.at(-1)?.delayMs).toBe(0))
+    await waitFor(() => expect(job.rearms.at(-1)?.delayMs).toBe(0))
   })
 
   it('re-arms this tab when another one turns mirroring on', async () => {
     await store.load(USER)
     await store.setDirectory(USER, {kind: 'directory', name: 'Backups'} as never)
     const {job} = build()
-    await vi.waitFor(() => expect(store.getSnapshot()).not.toBeNull())
+    await waitFor(() => expect(store.getSnapshot()).not.toBeNull())
     job.rearms.length = 0
 
     await store.updateSettings(USER, {enabled: true})
 
-    await vi.waitFor(() => expect(job.rearms.at(-1)?.delayMs).toBe(0))
+    await waitFor(() => expect(job.rearms.at(-1)?.delayMs).toBe(0))
   })
 
   it('does not clear a stale record against a folder the user has since replaced', async () => {
@@ -1245,11 +1246,11 @@ describe('the mirror schedule', () => {
       // from weekly to half-hourly leaves other tabs dormant for a week.
       await enable()
       const {job} = build()
-      await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
+      await waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
 
       await store.updateSettings(USER, {intervalMinutes: 30})
 
-      await vi.waitFor(() =>
+      await waitFor(() =>
         expect(job.rearms).toContainEqual({loop: 1, delayMs: 30 * 60_000}),
       )
     })
@@ -1265,7 +1266,7 @@ describe('the mirror schedule', () => {
       store = createDbMirrorStore()
       const {job} = build()
 
-      await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
+      await waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
 
       expect(job.rearms).toEqual([])
     })
@@ -1273,7 +1274,7 @@ describe('the mirror schedule', () => {
     it('does not re-arm for a status write, which would restart the cadence forever', async () => {
       await enable()
       const {job} = build()
-      await vi.waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
+      await waitFor(() => expect(store.getSnapshot()?.settings.intervalMinutes).toBe(120))
 
       await store.recordStatus(USER, {incarnation: INCARNATION, lastCheckedAt: 1}, {ifDirectoryEpoch: undefined})
 
@@ -1293,7 +1294,7 @@ describe('the mirror schedule', () => {
       const {job} = build()
 
       // 120-minute cadence, 30 minutes elapsed: 90 left, not a fresh start.
-      await vi.waitFor(() =>
+      await waitFor(() =>
         expect(job.rearms).toContainEqual({loop: 1, delayMs: 90 * 60_000}),
       )
     })
@@ -1304,7 +1305,7 @@ describe('the mirror schedule', () => {
       store = createDbMirrorStore()
       const {job} = build()
 
-      await vi.waitFor(() => expect(job.rearms.length).toBeGreaterThan(0))
+      await waitFor(() => expect(job.rearms.length).toBeGreaterThan(0))
       expect(job.rearms[0].delayMs).toBe(LAZY_DEEP_IDLE.minDelayMs)
     })
 
@@ -1313,7 +1314,7 @@ describe('the mirror schedule', () => {
       store = createDbMirrorStore()
       const {job} = build()
 
-      await vi.waitFor(() => expect(store.getSnapshot()).not.toBeNull())
+      await waitFor(() => expect(store.getSnapshot()).not.toBeNull())
       expect(job.rearms).toEqual([])
     })
   })
@@ -1326,6 +1327,6 @@ describe('the mirror schedule', () => {
     store = createDbMirrorStore()
     build()
 
-    await vi.waitFor(() => expect(store.getSnapshot()?.status.permissionLost).toBe(true))
+    await waitFor(() => expect(store.getSnapshot()?.status.permissionLost).toBe(true))
   })
 })

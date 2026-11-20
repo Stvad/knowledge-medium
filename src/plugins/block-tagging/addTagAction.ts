@@ -23,7 +23,7 @@ const runAddTagFlow = async (blocks: readonly Block[]): Promise<void> => {
       showSuccess(
         `Tagged ${result.updated} block${result.updated === 1 ? '' : 's'} with [[${choice.tagName}]]`,
       )
-    } else if (result.alreadyTagged > 0) {
+    } else if (result.alreadyTagged === result.total) {
       showError(`Every selected block already carries [[${choice.tagName}]]`)
     } else {
       showError('No blocks were tagged')

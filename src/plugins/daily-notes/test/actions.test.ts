@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
@@ -11,7 +11,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
@@ -96,7 +96,7 @@ describe('dailyNotesActions', () => {
       {preventDefault: vi.fn()} as unknown as KeyboardEvent,
     )
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren[0]).toBe('existing-daily-child')
     expect(dailyChildren).toHaveLength(2)
     const newBlockId = dailyChildren[1]

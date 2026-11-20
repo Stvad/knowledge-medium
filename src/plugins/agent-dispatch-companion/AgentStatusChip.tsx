@@ -4,81 +4,87 @@
  *  channel: props sync reactively to every device, so this needs no
  *  daemon connection — it just makes the lifecycle visible.
  *
- *  Same gutter pattern as the inline backlink count badge: with no
- *  chip, content renders untouched (no wrapper). */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+ *  A top-right gutter item: `BlockGutterHost` places it, and with no chip
+ *  the item renders null. */
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ClipboardCopy, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
-import {
-  cachedContentDecorator,
-  type BlockContentDecoratorContribution,
+import type {
+  BlockGutterItem,
+  BlockGutterItemContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
+import { GUTTER_PILL_CLASS } from '@/components/GutterPill.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { chipStateFor, chipTitle, type ChipState } from './chipState.ts'
+import { activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, type ActivityState, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
 import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
 
-/** Ticks once a second while mounted — only running chips mount it. */
-const useElapsedLabel = (sinceMs: number | null): string | null => {
+/** One clock serves the elapsed run time and activity age. */
+const useRunningClock = (running: boolean): number => {
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
+    if (!running) return
     const timer = setInterval(() => setNowMs(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [])
-  if (sinceMs === null) return null
-  const seconds = Math.max(0, Math.round((nowMs - sinceMs) / 1_000))
-  if (seconds < 100) return `${seconds}s`
-  return `${Math.round(seconds / 60)}m`
+  }, [running])
+  return nowMs
 }
 
-const RunningChip = ({ chip }: { chip: ChipState }) => {
-  const elapsed = useElapsedLabel(chip.updatedAtMs)
+/** Keep every lifecycle state the same width so age and warning changes never rewrap the gutter. */
+const CHIP_CLASS = `group ${GUTTER_PILL_CLASS} w-24 gap-0.5 bg-muted px-1 text-muted-foreground`
+
+const ChipLabel = ({children}: {children: ReactNode}) => (
+  <span className="min-w-0 flex-1 truncate text-left leading-4">{children}</span>
+)
+
+const RunningChip = ({ chip, activity }: { chip: ChipState; activity: ActivityState | null }) => {
   return (
     <>
-      <span className="animate-pulse text-amber-600">●</span>
+      <span className={activity?.stalled ? 'text-amber-600' : 'animate-pulse text-amber-600'}>{activity?.stalled ? '⚠' : '●'}</span>
       {chip.cancelling ? (
-        <span>{chip.executorLabel} · cancelling…</span>
+        <ChipLabel>cancelling…</ChipLabel>
       ) : (
         <>
-          <span>{chip.executorLabel}{elapsed ? ` · ${elapsed}` : ''}</span>
-          {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
+          <ChipLabel>{compactActivityLabel(chip.activity)}</ChipLabel>
+          {activity?.ageLabel && <span className="shrink-0 tabular-nums">{activity.ageLabel}</span>}
         </>
       )}
     </>
   )
 }
 
-const chipBody = (chip: ChipState) => {
+const chipBody = (chip: ChipState, activity: ActivityState | null) => {
   switch (chip.kind) {
     case 'queued':
       return (
         <>
           <span className="text-muted-foreground">●</span>
-          <span>{chip.executorLabel}…</span>
+          <ChipLabel>{chip.executorLabel}…</ChipLabel>
         </>
       )
     case 'running':
-      return <RunningChip chip={chip} />
+      return <RunningChip chip={chip} activity={activity} />
     case 'done':
       return (
         <>
           <span className="text-emerald-600">✓</span>
-          <span>{chip.executorLabel}</span>
+          <ChipLabel>{chip.executorLabel}</ChipLabel>
         </>
       )
     case 'error':
       return (
         <>
           <span className="text-red-600">⚠</span>
-          <span>{chip.executorLabel}</span>
+          <ChipLabel>{chip.executorLabel}</ChipLabel>
         </>
       )
   }
@@ -95,15 +101,19 @@ const AgentStatusChipMenu = ({
   chip: ChipViewState
   block: Block
 }) => {
+  const nowMs = useRunningClock(chip.kind === 'running' && !chip.cancelling)
+  const activity = activityStateFor(chip, nowMs)
+  const title = chipTitle(chip, activity, nowMs)
+  const className = `${CHIP_CLASS}${activity?.stalled ? ' text-amber-700 dark:text-amber-400 ring-1 ring-amber-500' : ''}`
   const canStop = chip.kind === 'running' && !chip.cancelling
   if (!chip.resumeCommand && !canStop) {
     return (
       <span
-        title={chipTitle(chip)}
+        title={title}
         data-agent-dispatch-chip={chip.kind}
-        className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
+        className={className}
       >
-        {chipBody(chip)}
+        {chipBody(chip, activity)}
       </span>
     )
   }
@@ -113,16 +123,21 @@ const AgentStatusChipMenu = ({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          title={chipTitle(chip)}
-          aria-label={`${chip.executorLabel} task actions`}
+          title={title}
+          aria-label={`${title}; task actions`}
           data-agent-dispatch-chip={chip.kind}
           onClick={event => event.stopPropagation()}
-          className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={`${className} hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
-          {chipBody(chip)}
+          {chipBody(chip, activity)}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        {canStop && (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            {chip.executorLabel} · {chipActivityDetails(chip, activity, nowMs)}
+          </DropdownMenuLabel>
+        )}
         {chip.resumeCommand && (
           <DropdownMenuItem onSelect={() => { void copyAgentResumeCommand(block) }}>
             <ClipboardCopy className="h-4 w-4" />
@@ -142,15 +157,9 @@ const AgentStatusChipMenu = ({
 
 /** Optimistic "queued" shown between the Ask Agent action and the
  *  daemon's claim writing real props. */
-const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
+const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', activityAtMs: null, cancelling: false}
 
-const AgentStatusChipRow = ({
-  block,
-  Inner,
-}: {
-  block: Block
-  Inner: BlockRenderer
-}) => {
+const AgentStatusChipItem: BlockRenderer = ({block}) => {
   const propsChip = useHandle(block, {
     selector: doc => {
       const properties = doc?.properties as Record<string, unknown> | undefined
@@ -166,27 +175,16 @@ const AgentStatusChipRow = ({
   }, [propsChip, block.id])
 
   const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
-  if (!chip) return <Inner block={block} />
+  if (!chip) return null
 
-  return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <Inner block={block} />
-      </div>
-      <AgentStatusChipMenu chip={chip} block={block} />
-    </div>
-  )
+  return <AgentStatusChipMenu key={`${chip.kind}:${chip.cancelling}`} chip={chip} block={block} />
 }
 
-const decorate = cachedContentDecorator(AgentStatusChipRow, 'WithAgentStatusChip')
+const statusChipItem: BlockGutterItem = {corner: 'top-right', component: AgentStatusChipItem}
 
-/** The chip is a block-level pill in the right gutter, so it attaches on
- *  every surface that renders the block as a full row — the outline,
- *  backlink entries, and embeds — where run status is genuinely useful
- *  (a page's backlink list is exactly where you review what the daemon
- *  just picked up, and a bare mention there otherwise shows no status).
- *  It's suppressed only where the block renders as inline text or a
- *  compact path preview — an inline `((reference))` or a breadcrumb
- *  segment — because a full-width gutter row can't lay out there. */
-export const agentStatusChipContribution: BlockContentDecoratorContribution = (ctx) =>
-  ctx.blockContext?.isReference || ctx.blockContext?.isBreadcrumb ? null : decorate
+/** On every surface that renders the block as a full row — the outline,
+ *  backlink entries, and embeds — where run status is genuinely useful (a
+ *  page's backlink list is exactly where you review what the daemon just
+ *  picked up, and a bare mention there otherwise shows no status). Inline
+ *  references and breadcrumbs get no gutter at all (`BlockGutterHost`). */
+export const agentStatusChipContribution: BlockGutterItemContribution = () => statusChipItem

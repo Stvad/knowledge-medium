@@ -58,9 +58,7 @@ export interface PropertyPanelModelRow {
    *  the matching `ValuePreset.Glyph`. Undefined falls back to the
    *  codec-type-keyed icon table inside `PropertyShapeGlyph`. */
   readonly Glyph?: ComponentType<{className?: string}>
-  readonly canRename: boolean
   readonly canDelete: boolean
-  readonly canChangeShape: boolean
   readonly isHidden: boolean
   /** Row-level lock independent of repository read-only mode. */
   readonly readOnly: boolean
@@ -184,11 +182,10 @@ const resolveModelRow = (
     schemaUnknown: !display.isKnown && declarationOnly === undefined,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    Editor: rowReadOnly ? undefined : display.Editor,
+    // Inferred shapes describe orphan values; only definitions authorize editing.
+    Editor: rowReadOnly || !display.isKnown ? undefined : display.Editor,
     Glyph: display.Glyph,
-    canRename: !args.hidden && !display.isKnown && !rowReadOnly,
     canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && !rowReadOnly,
-    canChangeShape: !args.hidden && !display.isKnown && !rowReadOnly,
     isHidden: args.hidden,
     readOnly: rowReadOnly,
     ...(declarationOnly
@@ -224,6 +221,44 @@ const resolveSection = (
   }
 }
 
+const isSeededDefinitionBlock = (
+  blockId: string,
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null,
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null,
+): boolean =>
+  propertyDefinitions?.definitionsByFieldId.get(blockId)?.seedKey !== undefined ||
+  typeDefinitions?.definitionsByBlockId.get(blockId)?.seedKey !== undefined
+
+/** ONE property of a block, resolved exactly as the panel resolves its row —
+ *  editor, decoded value, read-only lock — for a surface that shows a single
+ *  property in place (the outline's property rows). Sharing it is what keeps
+ *  an edit there and an edit in the panel the same write of the same value.
+ *  `null` when the panel would show no row for `name`. */
+export const resolvePropertyModelRow = (args: {
+  blockId: string
+  properties: Record<string, unknown>
+  name: string
+  schemas: ReadonlyMap<string, AnyPropertySchema>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>
+}): PropertyPanelModelRow | null => {
+  const isSet = Object.hasOwn(args.properties, args.name)
+  return resolveModelRow(
+    {name: args.name, encodedValue: isSet ? args.properties[args.name] : undefined, isSet},
+    {
+      schemas: args.schemas,
+      uis: args.uis,
+      presets: args.presets,
+      definitions: args.propertyDefinitions,
+      hidden: isPropertyPanelHiddenProperty(args.name, args.schemas, args.uis, args.propertyDefinitions),
+      blockIsSeededDefinition: isSeededDefinitionBlock(
+        args.blockId, args.propertyDefinitions, args.typeDefinitions),
+    },
+  )
+}
+
 export const buildPropertyPanelModel = (args: {
   blockId: string
   /** The panel block's own workspace — where `updatedByBlockId` was
@@ -250,9 +285,8 @@ export const buildPropertyPanelModel = (args: {
   // registries: property-seed backing blocks are keyed in the property registry
   // by field id; type-seed (`block-type`) backing blocks are keyed in the type
   // registry by block id.
-  const blockIsSeededDefinition =
-    args.propertyDefinitions?.definitionsByFieldId.get(args.blockId)?.seedKey !== undefined ||
-    args.typeDefinitions?.definitionsByBlockId.get(args.blockId)?.seedKey !== undefined
+  const blockIsSeededDefinition = isSeededDefinitionBlock(
+    args.blockId, args.propertyDefinitions, args.typeDefinitions)
   const {visibleProperties, hiddenProperties} = partitionProperties(
     args.properties,
     args.schemas,

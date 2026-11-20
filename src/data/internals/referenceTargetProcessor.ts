@@ -49,6 +49,8 @@ export interface ReferenceTargetLookups {
   /** Generic alias lookup (`block_aliases` index): target block id, or null
    *  when nothing claims the alias. */
   aliasTargetId(alias: string, workspaceId: string): Promise<string | null>
+  /** Optional batch read over the same transaction and winner policy. */
+  aliasTargetIds?(aliases: readonly string[], workspaceId: string): Promise<ReadonlyMap<string, string | null>>
 }
 
 /** Both LOCAL derived columns for `content`, computed in one textual pass

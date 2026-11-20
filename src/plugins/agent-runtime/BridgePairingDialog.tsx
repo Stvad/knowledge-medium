@@ -39,11 +39,11 @@ export function BridgePairingDialog({
         <DialogHeader>
           <DialogTitle>Connect to local agent bridge?</DialogTitle>
           <DialogDescription>
-            A link is asking to connect this workspace to a local agent
-            runtime bridge. Once connected, a process on this machine can
-            read and modify this workspace as you — including running
-            code. Only continue if you just started this from your own
-            terminal (e.g. <code>pnpm agent connect</code>).
+            A link is asking to connect this app to a local agent runtime
+            bridge. Once connected, a process on this machine can read and
+            modify any of your workspaces as you — including running code.
+            Only continue if you just started this from your own terminal
+            (e.g. <code>pnpm agent connect</code>).
           </DialogDescription>
         </DialogHeader>
 

@@ -1,7 +1,10 @@
 import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
+import {tryReferenceBlockContentForId} from '@/data/referenceBlock'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
+  isActiveSearchFilter,
+  matchesTypeFilter,
   searchSourceHealthFacet,
   searchSourcesFacet,
   type SearchSourceArgs,
@@ -129,7 +132,7 @@ export interface LinkTargetValueCandidate {
 }
 
 export const labelForBlockData = (
-  data: BlockData | null | undefined,
+  data: Pick<BlockData, 'properties' | 'content'> | null | undefined,
   fallback: string,
 ): string => {
   const aliases = data?.properties[aliasesProp.name]
@@ -400,11 +403,13 @@ const runFuzzyAliasSearch = async (
     query,
     recentBlockIds,
     limit,
+    targetTypes,
   }: {
     workspaceId: string
     query: string
     recentBlockIds?: ReadonlyArray<string>
     limit: number
+    targetTypes?: readonly string[]
   },
 ): Promise<FuzzyAliasRow[]> => {
   const prefixes = buildFilterPrefixes(query)
@@ -414,6 +419,7 @@ const runFuzzyAliasSearch = async (
     prefixes,
     query,
     limit: fetchLimit,
+    ...(targetTypes?.length ? {targetTypes: [...targetTypes]} : {}),
   }).load()
 
   const ranked = rankCandidates({
@@ -529,7 +535,8 @@ const blockSearchTextScore = (content: string, query: string): number => {
  *  defaults are wired. */
 export const coreContentSearchSource: SearchSourceContribution = {
   id: 'core.content',
-  search: async (repo, {workspaceId, query, limit, recentBlockIds}) => {
+  supportsFilter: true,
+  search: async (repo, {workspaceId, query, limit, recentBlockIds, filter}) => {
     // Over-fetch so the score below (which promotes exact/prefix/recent
     // hits over the SQL engine's own rank) has room to reorder before the
     // merge point's final slice to `limit`. Same multiplier/ceiling as the
@@ -539,7 +546,12 @@ export const coreContentSearchSource: SearchSourceContribution = {
     // the ceiling (the ceiling is a headroom cap for the common case, not
     // a hard maximum on the result size).
     const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
-    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
+    const rows = await repo.query.searchByContent({
+      workspaceId,
+      query,
+      limit: fetchLimit,
+      ...(isActiveSearchFilter(filter) ? {filter} : {}),
+    }).load()
     return rows.map((block): SearchSourceCandidate => ({
       block,
       score: blockSearchTextScore(block.content, query) +
@@ -697,9 +709,18 @@ export const searchBlocksAcrossSources = async (
   const generation = ++searchHealthGeneration
 
   const sources = repo.facetRuntime?.read(searchSourcesFacet)
-  const contributions = sources && sources.size > 0
+  const registered = sources && sources.size > 0
     ? [...sources.values()]
     : [coreContentSearchSource]
+  const filter = isActiveSearchFilter(args.filter) ? args.filter : undefined
+  const contributions = filter?.underId !== undefined
+    ? registered.filter(source => source.supportsFilter === true)
+    : registered
+  if (contributions.length === 0) return []
+  const keep = (source: SearchSourceContribution, candidates: readonly SearchSourceCandidate[]) =>
+    filter && source.supportsFilter !== true
+      ? candidates.filter(candidate => matchesTypeFilter(readTypeIds(candidate.block), filter))
+      : candidates
 
   const failures: {index: number; error: unknown}[] = []
   // Written by INDEX, not pushed: a push orders outcomes by settle order, so
@@ -714,7 +735,7 @@ export const searchBlocksAcrossSources = async (
         outcomes[index] = detail === null
           ? {sourceId: source.id, kind: 'ok'}
           : {sourceId: source.id, kind: 'malformed-candidate', detail}
-        return candidates
+        return keep(source, candidates)
       } catch (error) {
         console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
         outcomes[index] = {sourceId: source.id, kind: 'threw', error}
@@ -727,7 +748,9 @@ export const searchBlocksAcrossSources = async (
   // After the barrier, so the report names exactly the set of sources this
   // search ran — a source that has left the runtime is absent from it, which
   // is how a consumer retires state it could never be told to clear.
-  reportSearchSourceHealth(repo, generation, outcomes)
+  // A report names the whole set of sources (an absent one reads as having
+  // left the runtime), so a filtered search that skipped some reports nothing.
+  if (contributions.length === registered.length) reportSearchSourceHealth(repo, generation, outcomes)
 
   // Every source failed (including the single-source case) — there is
   // nothing to rank, and silently returning [] would hide the failure
@@ -936,6 +959,61 @@ const ownersBeforeTheirPropertyRows = (
 
   candidates.forEach(candidate => emit(candidate))
   return ordered
+}
+
+export interface TypedReferenceCandidate {
+  id: string
+  label: string
+  detail: string
+  typeIds: readonly string[]
+}
+
+/** Search typed aliases using the same target that a wikilink resolves. */
+export const searchTypedAliasCandidates = async (
+  repo: Repo,
+  args: {workspaceId: string; query: string; targetTypes: readonly string[]; limit: number},
+): Promise<TypedReferenceCandidate[]> => {
+  if (!args.workspaceId || args.targetTypes.length === 0 || args.limit <= 0) return []
+  const rows = await runFuzzyAliasSearch(repo, args)
+  const types = await loadTypeIdsByBlock(repo, args.workspaceId, rows.map(row => row.blockId))
+  const seen = new Set<string>()
+  return rows.flatMap(row => {
+    if (seen.has(row.alias)) return []
+    seen.add(row.alias)
+    return [{id: row.blockId, label: row.alias, detail: row.content, typeIds: types.get(row.blockId) ?? []}]
+  })
+}
+
+/** Search typed candidates with filtering before each source's display limit. */
+export const rankedTypedReferenceCandidates = async (
+  repo: Repo,
+  args: {workspaceId: string; query: string; targetTypes: readonly string[]; limit: number},
+): Promise<TypedReferenceCandidate[]> => {
+  if (!args.workspaceId || args.targetTypes.length === 0 || args.limit <= 0) return []
+  const query = args.query.trim()
+  const fetchLimit = Math.max(args.limit, Math.min(args.limit * 4, 200))
+  const [aliases, blocks] = await Promise.all([
+    query ? searchTypedAliasCandidates(repo, {...args, limit: fetchLimit}) : [],
+    query
+      ? searchBlocksAcrossSources(repo, {workspaceId: args.workspaceId, query, limit: fetchLimit, filter: {types: [...args.targetTypes]}})
+      : repo.query.typedBlocks({workspaceId: args.workspaceId, types: [...args.targetTypes], order: 'created-desc', limit: fetchLimit}).load(),
+  ])
+  const candidates = [...aliases, ...blocks.map(block => ({
+    id: block.id, label: labelForBlockData(block, block.id), detail: block.content, typeIds: readTypeIds(block),
+  }))]
+  const seen = new Set<string>()
+  return candidates.filter(candidate => {
+    if (seen.has(candidate.id)) return false
+    seen.add(candidate.id)
+    return true
+  })
+}
+
+export const searchTypedReferenceCandidates = async (
+  repo: Repo, args: Parameters<typeof rankedTypedReferenceCandidates>[1],
+): Promise<TypedReferenceCandidate[]> => {
+  const candidates = await rankedTypedReferenceCandidates(repo, args)
+  return candidates.filter(hit => tryReferenceBlockContentForId(hit.id) !== null).slice(0, args.limit)
 }
 
 export const searchLinkTargetIdCandidates = async (

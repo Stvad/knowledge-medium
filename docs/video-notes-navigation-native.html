@@ -137,7 +137,7 @@
 </nav>
 
 <h2 id="problem"><span class="num">1</span> Problem</h2>
-<p>The video player's notes view (video left, editable child notes right — entered via the hover button or <code>$mod+Shift+n</code>) is a <strong>modal takeover, not a place you navigate to</strong>:</p>
+<p>The video player's notes view (video left, editable child notes right — entered via the hover button or <code>Alt+Shift+n</code>) is a <strong>modal takeover, not a place you navigate to</strong>:</p>
 <ul>
   <li>It renders as a viewport-fixed overlay (<code>fixed inset-0 z-50</code>, <code>VideoPlayerRenderer.tsx:283</code>) painted over the header, sidebar, and every other pane — regardless of which pane the video block actually lives in.</li>
   <li>It is driven by <code>video:playerView</code>, a <code>ChangeScope.UiState</code> property <strong>on the video block itself</strong> (<code>view.ts:10-14</code>). That has three consequences:

@@ -17,19 +17,6 @@
  * and NEVER served; the caller renders the broken-asset placeholder. This is the
  * hard Phase-3 acceptance gate (§17), not an optimization.
  *
- * A LOCAL HIT IS VERIFIED TOO, on the same rule. "Verified when stored" is a
- * premise about the write path, and the write path is not atomic on every
- * engine: `getFileHandle(create)` mints an empty file before any byte lands, so
- * a store whose write then fails (WebKit before Safari 26 had no `createWritable`
- * — every asset on an iPad was an empty local hit after its first open) or a
- * killed writer leaves an entry that was never verified. So a local read is
- * accepted only if its sha256 matches the block's `hash` — THE hash is the
- * authority (`media:size` is cosmetic and user-editable, so it decides nothing);
- * anything else is treated as a miss and, unless the entry is young enough to be
- * a write still in flight (`ENTRY_SETTLE_MS`), deleted. The hash is over bytes
- * already in memory — cheap next to the read itself, and it makes the store a
- * cache that cannot lie rather than an authority the renderer has to trust.
- *
  * Three-valued, never two-valued (§5.1 / §7.3 / e2ee §6 rule 2): the decode
  * decision is driven by `getMaterializability` — decrypt (e2ee + WK) / copy
  * (plaintext-pinned) / defer (e2ee without WK, unpinned, or signed out). `defer`
@@ -42,8 +29,7 @@
  * bytes makes the security-critical core fully unit-testable without the DOM.
  */
 
-import { decodeBytes } from '@/sync/byteTransform.js'
-import { deriveContentKey } from '@/sync/crypto/contentKey.js'
+import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import { verifyContentHash } from '@/sync/crypto/contentHash.js'
 import {
   materializabilityToMode,
@@ -52,7 +38,8 @@ import {
   type SyncMode,
 } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
-import { ENTRY_SETTLE_MS, type ByteStore } from './byteStore.js'
+import type { ByteStore } from './byteStore.js'
+import { deriveObjectKey } from './storagePaths.js'
 
 /** What the renderer asks the resolver to materialize. */
 export interface AssetResolveRequest {
@@ -128,8 +115,8 @@ export interface AssetResolverDeps {
   readonly getMaterializability: GetMaterializability
   /** The workspace key for AEAD-open (e2ee only). */
   readonly getCek: GetCek
-  /** The workspace's content-key HMAC subkey K_id (§10); null on a legacy
-   *  device → e2ee fails closed (`no-content-key`). */
+  /** The workspace's content-key HMAC subkey K_id (§10). Without one, e2ee
+   *  fails closed (`no-content-key`, via `deriveObjectKey`). */
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
 }
 
@@ -160,7 +147,15 @@ const fail = (reason: AssetFailReason): { readonly ok: false; readonly reason: A
  *  remote object. Returning the derivation (not just running it twice) lets the
  *  backlog lane probe `has()` with the same key the demand lane fetches under. */
 type PreparedResolve =
-  | { readonly ok: true; readonly userId: string; readonly mode: SyncMode; readonly contentKey: string }
+  | {
+      readonly ok: true
+      readonly userId: string
+      readonly mode: SyncMode
+      /** The remote object's key, which a fresh download is also stored under. */
+      readonly contentKey: string
+      /** Every local name the plaintext may already sit under ({@link deriveObjectKey}). */
+      readonly localKeys: readonly string[]
+    }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
 /** Where the verified bytes came from this resolve — the backlog-only provenance the
@@ -178,15 +173,6 @@ type ResolveSource = 'local' | 'downloaded' | 'unstored'
 type ResolveOutcome =
   | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer>; readonly source: ResolveSource }
   | { readonly ok: false; readonly reason: AssetFailReason }
-
-/** Why a local copy is NOT the block's bytes — see the module header. `null` = it is.
- *  `empty` is just the cheap name for the mismatch every poisoned entry has. */
-type LocalDefect = 'empty' | 'hash-mismatch'
-
-const localDefect = async (local: Uint8Array<ArrayBuffer>, contentHash: string): Promise<LocalDefect | null> => {
-  if (local.byteLength === 0) return 'empty'
-  return (await verifyContentHash(local, contentHash)) ? null : 'hash-mismatch'
-}
 
 export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
   const { getUserId, byteStore, blobStore, getMaterializability, getCek, getContentKeyHmac } = deps
@@ -216,16 +202,36 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     }
 
     // (2) The content-key (§10) addresses both the local store and the remote object.
-    // E2EE needs K_id; its absence (legacy device) fails closed — and since K_id
-    // co-lives with the WK, an unlocked e2ee workspace that stored bytes always has
-    // it, so this never strands already-stored bytes.
-    const contentKeyHmac = mode === 'e2ee' ? await getContentKeyHmac(workspaceId) : null
-    if (mode === 'e2ee' && !contentKeyHmac) return { ok: false, reason: 'no-content-key' }
-    try {
-      return { ok: true, userId, mode, contentKey: await deriveContentKey({ contentHash, mode, contentKeyHmac }) }
-    } catch {
-      return { ok: false, reason: 'invalid-hash' }
+    // E2EE needs K_id, and fails closed without it. K_id co-lives with the WK, so
+    // an unlocked e2ee workspace that stored bytes always has it: this never
+    // strands already-stored bytes.
+    const key = await deriveObjectKey(contentHash, mode, () => getContentKeyHmac(workspaceId))
+    if (!key.ok) return key
+    return { ok: true, userId, mode, contentKey: key.objectKey, localKeys: key.localKeys }
+  }
+
+  /** The first local name holding the block's bytes, or null. An entry is not
+   *  proof of its content (byteStore.ts), so a copy is a hit only if it hashes
+   *  to `contentHash`; one that doesn't is a MISS, as is a transient read error
+   *  (the bytes are re-fetchable, §8). It is left in place: the fetch that
+   *  follows overwrites it, and deleting here could race a put still writing it. */
+  const readLocal = async (
+    userId: string,
+    workspaceId: string,
+    localKeys: readonly string[],
+    contentHash: string,
+  ): Promise<Uint8Array<ArrayBuffer> | null> => {
+    for (const key of localKeys) {
+      try {
+        const local = await byteStore.get(userId, workspaceId, key)
+        if (!local) continue
+        if (await verifyContentHash(local, contentHash)) return local
+        console.warn(`[assetResolver] local copy in ${workspaceId} (${local.byteLength} bytes) is not its content; re-fetching`)
+      } catch (err) {
+        console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
+      }
     }
+    return null
   }
 
   const resolveImpl = async ({ workspaceId, contentHash }: AssetResolveRequest): Promise<ResolveOutcome> => {
@@ -237,40 +243,12 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     try {
       const prep = await prepare({ workspaceId, contentHash })
       if (!prep.ok) return fail(prep.reason)
-      const { userId, mode, contentKey } = prep
+      const { userId, mode, contentKey, localKeys } = prep
 
-      // (3) Local hit — serve directly once it passes the same verification a download
-      // gets (module header: the store's write is not atomic on every engine, so a
-      // stored entry is not proof of verified bytes). A defective copy is deleted and
-      // treated as a MISS, exactly like a transient store-read error (the bytes are
-      // re-fetchable, §8): fall through to the network. An EMPTY or short copy is never
-      // served — that was the every-asset-broken-on-second-open failure.
-      let local: Uint8Array<ArrayBuffer> | null = null
-      try {
-        local = await byteStore.get(userId, workspaceId, contentKey)
-      } catch (err) {
-        console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
-      }
-      if (local) {
-        const defect = await localDefect(local, contentHash)
-        if (!defect) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
-        // A defective read is a miss either way. It is grounds to DELETE only once the
-        // entry is old enough not to be a write in flight: a peer (another tab, this
-        // page's other resolver) may hold the file open and we read it truncated —
-        // deleting then would destroy its completed write a moment later.
-        const stat = await byteStore.stat(userId, workspaceId, contentKey).catch(() => null)
-        const inFlight = stat !== null && stat.lastModified > 0 && Date.now() - stat.lastModified < ENTRY_SETTLE_MS
-        console.warn(
-          `[assetResolver] local copy of ${contentHash} in ${workspaceId} is ${defect} (${local.byteLength} bytes); ${
-            inFlight ? 'possibly a write in flight, leaving it and' : 'discarding it and'
-          } re-fetching`,
-        )
-        if (!inFlight) {
-          await byteStore.delete(userId, workspaceId, contentKey).catch((err: unknown) => {
-            console.warn(`[assetResolver] could not delete the ${defect} local copy for ${workspaceId}`, err)
-          })
-        }
-      }
+      // (3) Local hit — verified like a download (`readLocal`), then served
+      // directly; a miss on every local name falls through to the network.
+      const local = await readLocal(userId, workspaceId, localKeys, contentHash)
+      if (local) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
 
       // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).
       let blob: Uint8Array<ArrayBuffer>
@@ -280,18 +258,11 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         return fail('fetch-failed') // absent / denied / offline — transient or §9 backstop
       }
 
-      // (5) Decode: identity for plaintext, AEAD-open for e2ee (throws on a wrong
-      // key / tampered envelope / mismatched AAD).
-      let plaintext: Uint8Array<ArrayBuffer>
-      try {
-        plaintext = await decodeBytes(blob, mode, getCek, { contentHash, workspaceId })
-      } catch {
-        return fail('decode-failed')
-      }
-
-      // (6) THE load-bearing check (§5.1). A mismatch is discarded — never stored,
-      // never served — even though step 5's AEAD tag passed.
-      if (!(await verifyContentHash(plaintext, contentHash))) return fail('hash-mismatch')
+      // (5)+(6) Decode, then THE load-bearing hash check (§5.1). A failure is
+      // discarded — never stored, never served — even when the AEAD tag passed.
+      const verified = await verifyObjectBytes(blob, mode, getCek, { contentHash, workspaceId })
+      if (!verified.ok) return fail(verified.reason)
+      const plaintext = verified.plaintext
 
       // (7) Cache the verified bytes, then serve. A cache-write failure (quota) must
       // NOT deny the render — serve these verified bytes; the next render re-fetches.
@@ -370,10 +341,15 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       // get() local hit, so the hint can only ever cost a redundant get(), never a leak.)
       let isPresent = false
       if (present) {
-        isPresent = present.has(prep.contentKey)
+        isPresent = prep.localKeys.some(key => present.has(key))
       } else {
         try {
-          isPresent = await byteStore.has(prep.userId, request.workspaceId, prep.contentKey)
+          for (const key of prep.localKeys) {
+            if (await byteStore.has(prep.userId, request.workspaceId, key)) {
+              isPresent = true
+              break
+            }
+          }
         } catch (err) {
           console.warn(`[assetResolver] has() probe failed for ${request.workspaceId}; fetching`, err)
         }

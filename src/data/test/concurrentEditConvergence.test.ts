@@ -35,7 +35,8 @@ import {
   __compactBlockCrudEntriesForTest,
   __runUploadLoopForTest,
 } from '@/services/powersync'
-import { CrudEntry, UpdateType } from '@powersync/common'
+import { UpdateType } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
 import { applySyncInvalidation } from '@/data/internals/syncObserver/invalidate.js'
 import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness.js'
 import { ChangeScope } from '@/data/api'
@@ -399,9 +400,9 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     // Device A's burst: edit 1 pre-upgrade (no base), edit 2 post-upgrade
     // (base = A's own local stamp from edit 1, V+1).
     const [operation] = __compactBlockCrudEntriesForTest([
-      new CrudEntry(1, UpdateType.PATCH, 'blocks', 'x',
+      crudEntry(1, UpdateType.PATCH, 'blocks', 'x',
         1, {workspace_id: WS, properties_json: '{"color":"red"}', updated_at: V + 1}),
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'x',
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'x',
         2, {workspace_id: WS, properties_json: '{"color":"blue"}', updated_at: V + 2,
           base_updated_at: V + 1}),
     ])

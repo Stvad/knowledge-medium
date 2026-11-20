@@ -35,6 +35,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PowerSyncDatabase, Schema } from '@powersync/node'
+import Database from 'better-sqlite3'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
@@ -45,6 +46,7 @@ import {
   CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
   dropStaleAnyFieldFormIndex,
   CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
+  CREATE_BLOCKS_BEING_EDITED_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -76,6 +78,10 @@ import {
 } from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
+// Keep the native addon loaded in the parent while PowerSync workers exit.
+// better-sqlite3 12 can unload it before V8's final worker GC (#1477 upstream).
+new Database(':memory:').close()
+
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
   db: PowerSyncDatabase
@@ -104,7 +110,8 @@ const openTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   const schema = createTestSchema()
   const db = new PowerSyncDatabase({
     schema,
-    database: {dbFilename: 'test.db', dbLocation: dbDir},
+    // One reader preserves WAL isolation; Vitest parallelizes test files.
+    database: {dbFilename: 'test.db', dbLocation: dbDir, readWorkerCount: 1},
   })
   await db.waitForReady()
   return db
@@ -125,6 +132,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // No-op on a fresh table (CREATE carries the local columns) — mirrors the
   // production upgrade ordering so the harness exercises the same path.
   await ensureBlockLocalColumns(db)
+  await db.execute(CREATE_BLOCKS_BEING_EDITED_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
@@ -194,6 +202,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_BEING_EDITED_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')
@@ -288,15 +298,21 @@ const copyTemplateDb = (templateDir: string, dbDir: string): void => {
 }
 
 /** Open an in-tmpdir PowerSyncDatabase with the production blocks
- *  raw-table + the v2 client schema applied. */
-export const createTestDb = async (): Promise<TestDb> => {
-  const templateDir = await ensureTemplateDbDir()
+ *  raw-table + the v2 client schema applied, or a copy of `from`: the closed
+ *  `dir` of an earlier one. */
+export const createTestDb = async ({from}: {from?: string} = {}): Promise<TestDb & {
+  /** Holds the database files; once `db` is closed, a template another
+   *  `createTestDb` can copy. */
+  dir: string
+}> => {
+  const templateDir = from ?? await ensureTemplateDbDir()
   const dbDir = mkdtempSync(join(tmpdir(), 'ps-test-'))
   copyTemplateDb(templateDir, dbDir)
   const db = await openTestDb(dbDir)
 
   return {
     db,
+    dir: dbDir,
     cleanup: async () => {
       await db.close()
       rmSync(dbDir, {recursive: true, force: true})

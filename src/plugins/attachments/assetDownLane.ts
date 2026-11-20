@@ -24,10 +24,10 @@
 import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import { getAssetResolverForUser } from './assetResolver.js'
-import { ENTRY_SETTLE_MS, getByteStore, type ByteStore } from './byteStore.js'
+import { getByteStore } from './byteStore.js'
 import { reconcileDownLane } from './downLane.js'
 import { runSingleOwner } from './laneLock.js'
-import { MEDIA_TYPE, mediaHashProp } from './mediaBlock.js'
+import { MEDIA_TYPE, mediaHashOf } from './mediaBlock.js'
 import type { AssetResolveRequest } from './resolver.js'
 
 /** Slow periodic re-walk (§9): catches a block whose origin uploaded its bytes LATE
@@ -57,55 +57,15 @@ export const collectReplicationRequests = async (
   const seen = new Set<string>()
   const out: AssetResolveRequest[] = []
   for (const row of rows) {
-    const encoded = row.properties[mediaHashProp.name]
-    if (encoded === undefined) continue
-    // Decode TOTAL: the cache boundary validates JSON syntax, not shape, so a legacy /
-    // imported / hand-edited row could carry a non-string `media:hash` (the string codec
-    // THROWS on it). Skip that one block rather than let it abort the whole workspace's
-    // walk — same throw-free stance as the renderer's canRender (MediaBlockRenderer). The
-    // block just won't background-replicate; it's still demand-fetchable (fail-closed) on view.
-    let contentHash: string
-    try {
-      contentHash = mediaHashProp.codec.decode(encoded)
-    } catch {
-      continue
-    }
+    // A row whose hash doesn't decode won't background-replicate; it's still
+    // demand-fetchable (fail-closed) on view.
+    const contentHash = mediaHashOf(row.properties)
     if (!contentHash || seen.has(contentHash)) continue
     seen.add(contentHash)
     out.push({ workspaceId, contentHash })
   }
   return out
 }
-
-/** Once per (user, workspace) per page: reap the EMPTY entries an older build left in
- *  the byte store (a `put` that minted the file and then failed to write it). Memoized
- *  as the in-flight promise, so a second pass arriving mid-sweep awaits the same sweep
- *  rather than starting another; a failed sweep forgets itself so the next pass
- *  retries. Cheap (one listing + a size read per entry, one workspace), idempotent, and
- *  older-than-`ENTRY_SETTLE_MS` only — a younger empty entry may be a put in flight. */
-const sweptScopes = new Map<string, Promise<void>>()
-const sweepEmptyEntriesOnce = (byteStore: ByteStore, userId: string, workspaceId: string): Promise<void> => {
-  const key = `${userId}\n${workspaceId}`
-  const existing = sweptScopes.get(key)
-  if (existing) return existing
-  const run = byteStore
-    .sweepEmpty(userId, workspaceId, { minAgeMs: ENTRY_SETTLE_MS })
-    .then(({ scanned, removed }) => {
-      if (removed > 0) {
-        console.warn(`[media] removed ${removed} empty local asset file(s) left by failed writes (${scanned} scanned)`)
-      }
-    })
-    .catch((err: unknown) => {
-      // A missed repair, not a broken lane: the resolver still refuses the empty entries.
-      sweptScopes.delete(key)
-      console.warn(`[media] byte-store repair sweep failed for ${workspaceId}`, err)
-    })
-  sweptScopes.set(key, run)
-  return run
-}
-
-/** Test seam: forget which (user, workspace) scopes this page already swept. */
-export const resetSweptScopesForTests = (): void => sweptScopes.clear()
 
 /** Run ONE down-lane pass for `workspaceId`, single-owner per (user, workspace) across
  *  tabs. A no-op when: remote sync is off (local-only — nothing to fetch from), signed
@@ -122,10 +82,6 @@ export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Pro
   await runSingleOwner(downLaneLockName(userId, workspaceId), async () => {
     const requests = await collectReplicationRequests(repo, workspaceId)
     if (requests.length === 0) return
-    // The one-time repair of a store an older build poisoned (empty entries a failed
-    // write left behind) goes right before the presence scan, under the same lock: the
-    // scan already omits empties, but until they are gone every pass re-reads them.
-    await sweepEmptyEntriesOnce(getByteStore(), userId, workspaceId)
     // ONE enumeration of what's already on disk, so the steady-state pass costs a single
     // directory scan instead of a has() probe per block (§8). On a read error, leave it
     // undefined → replicate falls back to a per-block has() (correct, just slower).

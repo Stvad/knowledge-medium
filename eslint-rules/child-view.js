@@ -1,16 +1,15 @@
-// Guardrail for the properties-as-blocks child-visibility model:
-// `tx.childrenOf` / `repo.query.{children,subtree,childIds}` default to the
-// STRUCTURAL everything-view (every child, including hidden property field-row
-// machinery). The VISIBLE / outline view (machinery excluded, §9) is opt-in via
-// `hidePropertyChildren: true` (or the `visibleChildrenOf` helper).
+// Guardrail for the properties-as-blocks child views: a child listing is
+// always a VIEW (`propertyChildren`: `'all'` every child, `'non-hidden'`,
+// `'none'` no recognized property field row), and
+// `tx.childrenOf` / `repo.query.{children,subtree,childIds}` answer `'all'`
+// when the caller says nothing.
 //
-// In pure outline/display modules the visible view is nearly always what's
-// wanted, and a forgotten opt-in silently leaks machinery into a user-facing
-// traversal — mis-picked as an indent target, rendered as a panel, serialized
-// into the clipboard. This rule forces the choice to be explicit there. It is
-// deliberately NOT applied to the mixed data-layer files (mutators, paste,
-// panelLayoutProjection) that legitimately interleave both views — those use
-// the named `visibleChildrenOf` helper so the two spellings sit side by side.
+// In outline/display modules a forgotten view silently puts property rows
+// into a user-facing traversal — mis-picked as an indent target, rendered as a
+// panel, serialized into the clipboard. This rule makes the caller name the
+// view there. The list a SURFACE draws is not a fixed view: gesture code reads
+// it through `visibleChildIds(block, scope)` / `visibleChildrenOf(tx, …,
+// scope)` (`src/data/visibleChildren.ts`), which this rule does not police.
 
 const normalizePath = (value) => value.replaceAll('\\', '/')
 
@@ -39,7 +38,7 @@ const requireExplicitChildView = {
     type: 'problem',
     docs: {
       description:
-        'Outline/display code must choose the child view explicitly (visible vs. structural).',
+        'Outline/display code must name the child view it reads (`propertyChildren`).',
     },
     // `check` picks how much of the surface to guard:
     //   'all'   — query handles AND `tx.childrenOf`. For pure display dirs,
@@ -47,7 +46,7 @@ const requireExplicitChildView = {
     //   'query' — query handles only. The default everywhere else: a
     //             `repo.query.{children,subtree,childIds}({id})` is a READ-OUT
     //             (render, serialize, hand to an agent) and every such call
-    //             site in `src/` wants the visible view, while `tx.childrenOf`
+    //             site in `src/` wants a view it can name, while `tx.childrenOf`
     //             is the low-level primitive that mixed data-layer files
     //             (mutators, paste, panelLayoutProjection, agent-runtime)
     //             legitimately call structurally for order-key/sibling math.
@@ -58,10 +57,11 @@ const requireExplicitChildView = {
     }],
     messages: {
       explicitChildView:
-        'Choose the child view explicitly: use `visibleChildrenOf(tx, …)` or pass '
-        + '`hidePropertyChildren` (true = visible outline view, false = structural '
-        + 'everything-view). The bare call returns ALL children, including hidden '
-        + 'property field-row machinery (PR #288/#386).',
+        'Name the child view: pass `propertyChildren` (`\'none\'` = no property rows, '
+        + '`\'non-hidden\'` = property rows whose definition is not hidden, `\'all\'` = every '
+        + 'child). For the list a surface DRAWS, which a gesture should walk, use '
+        + '`visibleChildIds(block, scope)` / `visibleChildrenOf(tx, …, scope)` instead. '
+        + 'The bare call returns every child, property field rows included.',
     },
   },
   create(context) {
@@ -78,7 +78,7 @@ const requireExplicitChildView = {
           if (check !== 'all') return
           // Options is the trailing arg; scan every arg for the flag object so
           // the 2-arg and 3-arg spellings are both covered.
-          if (!node.arguments.some(arg => objHasKey(arg, 'hidePropertyChildren'))) {
+          if (!node.arguments.some(arg => objHasKey(arg, 'propertyChildren'))) {
             context.report({node, messageId: 'explicitChildView'})
           }
           return
@@ -89,7 +89,7 @@ const requireExplicitChildView = {
           // Match only the query-handle shape `…query.<m>({id: …})`; array
           // `.children`, `slot.subtree`, etc. never take an `{id}` options arg.
           if (!objHasKey(first, 'id')) return
-          if (!objHasKey(first, 'hidePropertyChildren')) {
+          if (!objHasKey(first, 'propertyChildren')) {
             context.report({node, messageId: 'explicitChildView'})
           }
         }

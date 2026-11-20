@@ -27,7 +27,7 @@ export const canConvertEmptyChildBlockToProperty = async (
   // either way, so do not use BlockData.content as the emptiness gate here.
   //
   // Load the STRUCTURAL child list (property field/value rows INCLUDED), not
-  // the visible `block.childIds` facade (§9 excludes field rows). A block that
+  // the mode-`none` view (§9 excludes field rows). A block that
   // owns property data isn't empty — converting it `delete()`s the block and
   // strands/soft-deletes that data, incl. value-row comments. A child-backed
   // workspace can leave a block with hidden field/value rows but an EMPTY
@@ -35,7 +35,7 @@ export const canConvertEmptyChildBlockToProperty = async (
   // content stops decoding makes PROJECT drop the cell key while the rows stay
   // live, so the visible facade AND the `properties` cell can BOTH look empty
   // while real data hangs off the block. The structural list is what sees it.
-  const childIds = await repo.query.childIds({id: block.id, hidePropertyChildren: false}).load()
+  const childIds = await repo.query.childIds({id: block.id, propertyChildren: 'all'}).load()
   if (childIds.length > 0) return null
 
   // The cell is the other shape property data takes — and the only one in a

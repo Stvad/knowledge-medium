@@ -8,9 +8,10 @@
 //
 // All checks are READ-ONLY over the client SQLite (it runs on the decrypted
 // client, so unlike the server probe it covers the e2ee workspace). The lean
-// checks are pure counts plus a BOUNDED e2ee decrypt spot-check (so the cadence
-// cost stays fixed regardless of graph size). `full` mode adds the heavier
-// inspections — precise property-ref projection, schema-aware at-rest,
+// checks use SQL counts plus a BOUNDED e2ee decrypt spot-check, and on a
+// workspace at property children, two keyset-paged scans of the property cells
+// (coverage and cell-vs-children divergence: see propertyChildrenChecks.ts). `full` mode
+// adds the heavier inspections — precise property-ref projection, schema-aware at-rest,
 // content-link recompute, dangling refs, and an EXHAUSTIVE keyset-paginated
 // decrypt-compare — which need the app's own projection/parser + the active
 // workspace schemas (passed in via `opts.full`). Each check is isolated: a
@@ -30,8 +31,23 @@ import {
 // `full`-mode checks reuse the app's own projection + reference parser so they
 // see exactly what the references processor sees.
 import { isRefCodec, isRefListCodec, type AnyPropertySchema } from '@/data/api'
+import { measureDivergence } from './divergenceScan.js'
 import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
 import { parseReferences, parseBlockRefs } from '@/plugins/references/referenceParser.js'
+import { hasSourceContent } from '@/data/blockTypes'
+import type { Repo } from '@/data/repo'
+import { readWorkspacePropertiesMigration } from '@/data/workspaceSchema'
+import {
+  runPropertyCellCoverageCheck,
+  runPropertyCellDivergenceCheck,
+  runPropertyFieldRowDuplicatesCheck,
+} from './propertyChildrenChecks.js'
+import { parsePropertiesJson } from './rowJson.js'
+import { runReferencesMirrorCheck } from './referencesMirror.js'
+
+/** {@link hasSourceContent} for a raw row. */
+const rowHasSourceContent = (propertiesJson: string | null): boolean =>
+  hasSourceContent({properties: parsePropertiesJson(propertiesJson)})
 
 /** Minimal DB surface the audit needs (a subset of the Repo's PowerSyncDb). */
 export interface AuditDb {
@@ -45,7 +61,6 @@ export interface AuditDb {
 // SQL predicates for "is / isn't encrypted at rest". The prefix is a constant
 // with no LIKE wildcards, so embedding it as a literal is safe.
 const isEnc = (col: string): string => `${col} LIKE '${ENVELOPE_PREFIX}%'`
-const notEnc = (col: string): string => `${col} NOT LIKE '${ENVELOPE_PREFIX}%'`
 
 export interface ConsistencyCheckResult {
   /** `anomaly` is the only status that counts toward `anomalies`. `error` = the
@@ -104,15 +119,6 @@ const addSamples = (acc: string[], more: string[]): void => {
   }
 }
 
-// json_each throws on invalid JSON; feed it a guarded value so one bad row can't
-// abort the mirror check (the bad row is counted separately as malformedJson).
-const REFS_JSON = `CASE WHEN json_valid(b.references_json) THEN b.references_json ELSE '[]' END`
-const EXPANDED_REF_FILTER = `
-      typeof(json_extract(je.value,'$.id'))='text'
-  AND typeof(json_extract(je.value,'$.alias'))='text'
-  AND (json_type(je.value,'$.sourceField') IS NULL
-       OR typeof(json_extract(je.value,'$.sourceField'))='text')`
-
 /** §6 mode/key resolver surface the decrypt spot-check needs — structurally the
  *  observer's `MaterializeDeps`, so the Repo passes its `syncObserverDeps`
  *  straight through. Omit to run cleartext-only (the default). */
@@ -145,12 +151,16 @@ export interface DecryptSpotCheckResult {
 export interface AuditOptions {
   /** When set (with `sleep`), the divergence check that finds anomalies on its
    *  first pass re-measures after this delay and reports the SETTLED counts —
-   *  debouncing transient mid-sync divergence (an own write uploaded but its
-   *  server echo not yet streamed back; a mid-resync window). The point-in-time
-   *  snapshot can't otherwise tell a transient from a persistent divergence
-   *  (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
+   *  debouncing transient mid-sync divergence (a mid-resync window). The
+   *  point-in-time snapshot can't otherwise tell a transient from a persistent
+   *  divergence (SLO §5). Omit to disable (the default — pure, instant, used in tests). */
   divergenceRecheckMs?: number
   sleep?: (ms: number) => Promise<void>
+  /** Epoch ms of the last checkpoint the sync client APPLIED (PowerSync's
+   *  `lastSyncedAt`), or undefined before the first. When set, the divergence
+   *  check judges stranded / local-richer rows only if stamped before it. Omit
+   *  to judge every row (tests). */
+  syncedThroughMs?: () => number | undefined
   /** When set, the divergence check decrypts a bounded sample of equal-stamp
    *  e2ee staging rows and compares plaintext-to-plaintext — recovering the
    *  content-divergence detection the cleartext-only SQL diff gives up on an
@@ -164,6 +174,13 @@ export interface AuditOptions {
    *  and an EXHAUSTIVE e2ee content divergence) — the rich superset the bridge
    *  eval used to reimplement. Omit for the lean always-on cadence run. */
   full?: AuditFullDeps
+  /** The repo whose loaded property registry resolves the audited workspace's
+   *  keys — the coverage and divergence checks read through it. Omit and they
+   *  report `skipped`; the SQL-only duplicate check runs either way. */
+  repo?: Repo
+  /** The scheduled audit awaits this before each statement through `db`.
+   *  The two property scans wait once before each page. */
+  yieldWhenBusy?: () => Promise<void>
 }
 
 /** Runtime context the deep `full`-mode checks need beyond the DB: the active
@@ -366,7 +383,7 @@ const runDanglingRefsCheck = async (
 }
 
 type StoredRef = { id?: string; alias?: string; sourceField?: string }
-const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''} ${r.id ?? ''}`
+const refKey = (r: { sourceField?: string; id?: string }): string => `${r.sourceField ?? ''}\u0000${r.id ?? ''}`
 
 /** R4(1) — precise property-ref projection diff (active workspace, loaded ref
  *  schemas): recompute expected refs via the app's projection and diff stored.
@@ -426,12 +443,12 @@ const runPropertyRefProjectionCheck = async (
     if (missing.length) {
       blocksMissing += 1
       refsMissing += missing.length
-      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split(' ')) })
+      if (missingSample.length < sampleLimit) missingSample.push({ id: row.id, missing: missing.map((k) => k.split('\u0000')) })
     }
     if (extra.length) {
       blocksExtra += 1
       refsExtra += extra.length
-      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split(' ')) })
+      if (extraSample.length < sampleLimit) extraSample.push({ id: row.id, extra: extra.map((k) => k.split('\u0000')) })
     }
   }
   const anomalous = blocksMissing + blocksExtra > 0
@@ -509,8 +526,8 @@ const runContentLinkRecomputeCheck = async (
   const strippedSample: Array<{ id: string; marks: number; content_preview: string }> = []
   const staleSample: Array<{ id: string; stale: string[]; content_preview: string }> = []
   for (;;) {
-    const batch = await db.getAll<{ id: string; content: string; references_json: string }>(
-      `SELECT id, content, references_json FROM blocks
+    const batch = await db.getAll<{ id: string; content: string; references_json: string; properties_json: string }>(
+      `SELECT id, content, references_json, properties_json FROM blocks
        WHERE deleted=0 AND workspace_id=?
          AND (content LIKE '%[[%' OR content LIKE '%((%')
          AND id > ?
@@ -519,6 +536,7 @@ const runContentLinkRecomputeCheck = async (
     )
     if (batch.length === 0) break
     for (const row of batch) {
+      if (rowHasSourceContent(row.properties_json)) continue
       const parsedAliases = new Set<string>([
         ...parseReferences(row.content).map((m) => m.alias),
         ...parseBlockRefs(row.content).map((m) => m.blockId),
@@ -643,11 +661,20 @@ const runExhaustiveE2eeDivergenceCheck = async (
  *  optional divergence-recheck sleep): caller supplies `now` (epoch ms). Never
  *  throws — per-check failures are captured as `error`. */
 export const runConsistencyAudit = async (
-  db: AuditDb,
+  rawDb: AuditDb,
   workspaceId: string,
   now: number,
   opts: AuditOptions = {},
 ): Promise<ConsistencyAuditResult> => {
+  const { yieldWhenBusy } = opts
+  const db: AuditDb = yieldWhenBusy
+    ? {
+        getAll: async <T = Record<string, unknown>>(sql: string, params?: unknown[]) => {
+          await yieldWhenBusy()
+          return rawDb.getAll<T>(sql, params)
+        },
+      }
+    : rawDb
   const checks: Record<string, ConsistencyCheckResult> = {}
   let anomalies = 0
   const run = async (name: string, fn: () => Promise<ConsistencyCheckResult>): Promise<void> => {
@@ -661,146 +688,7 @@ export const runConsistencyAudit = async (
   }
 
   // R2 — references_json <-> block_references mirror (both directions + dupes + malformed).
-  await run('references_index_mirror', async () => {
-    const malformedJson = await count(
-      db,
-      `SELECT count(*) AS n FROM blocks b
-       WHERE b.deleted=0 AND b.workspace_id=?
-         AND (NOT json_valid(b.references_json) OR NOT json_valid(b.properties_json))`,
-      [workspaceId],
-    )
-    // `json_valid` is satisfied by ANY well-formed JSON, so `null`, `{}` and
-    // `"x"` all pass the count above while being unusable as reference
-    // storage — `json_each` yields nothing for them, so every mirror
-    // direction reads as consistent and the row looks healthy. A separate
-    // counter rather than widening `malformedJson`, whose meaning
-    // ("unparseable") is what the samples and the dialog already say.
-    const malformedRefsShape = await count(
-      db,
-      `SELECT count(*) AS n FROM blocks b
-       WHERE b.deleted=0 AND b.workspace_id=?
-         AND json_valid(b.references_json)
-         AND json_type(b.references_json) != 'array'`,
-      [workspaceId],
-    )
-    const missingIndexRows = await count(
-      db,
-      `SELECT count(*) AS n FROM (
-         SELECT b.id AS source_id,
-                json_extract(je.value,'$.id') AS target_id,
-                json_extract(je.value,'$.alias') AS alias,
-                COALESCE(json_extract(je.value,'$.sourceField'),'') AS source_field
-         FROM blocks b, json_each(${REFS_JSON}) je
-         WHERE b.deleted=0 AND b.workspace_id=? AND ${EXPANDED_REF_FILTER}
-       ) exp
-       LEFT JOIN block_references br
-         ON br.source_id=exp.source_id AND br.target_id=exp.target_id
-        AND br.alias=exp.alias AND br.source_field=exp.source_field
-       WHERE br.source_id IS NULL`,
-      [workspaceId],
-    )
-    const extraIndexRows = await count(
-      db,
-      `SELECT count(*) AS n FROM block_references br
-       JOIN blocks b ON b.id=br.source_id AND b.deleted=0
-       WHERE br.workspace_id=?
-         AND NOT EXISTS (
-           SELECT 1 FROM json_each(${REFS_JSON}) je
-           WHERE json_extract(je.value,'$.id')=br.target_id
-             AND json_extract(je.value,'$.alias')=br.alias
-             AND COALESCE(json_extract(je.value,'$.sourceField'),'')=br.source_field)`,
-      [workspaceId],
-    )
-    const orphanSourceRows = await count(
-      db,
-      `SELECT count(*) AS n FROM block_references br
-       LEFT JOIN blocks b ON b.id=br.source_id
-       WHERE br.workspace_id=? AND (b.id IS NULL OR b.deleted=1)`,
-      [workspaceId],
-    )
-    const duplicateTuples = await count(
-      db,
-      `SELECT count(*) AS n FROM (
-         SELECT b.id,
-                json_extract(je.value,'$.id') AS tid,
-                json_extract(je.value,'$.alias') AS al,
-                COALESCE(json_extract(je.value,'$.sourceField'),'') AS sf
-         FROM blocks b, json_each(${REFS_JSON}) je
-         WHERE b.deleted=0 AND b.workspace_id=? AND ${EXPANDED_REF_FILTER}
-         GROUP BY b.id, tid, al, sf
-         HAVING count(*) > 1
-       )`,
-      [workspaceId],
-    )
-    const total = missingIndexRows + extraIndexRows + orphanSourceRows + duplicateTuples
-      + malformedJson + malformedRefsShape
-    const samples: string[] = []
-    if (malformedRefsShape > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT b.id AS id FROM blocks b
-         WHERE b.deleted=0 AND b.workspace_id=?
-           AND json_valid(b.references_json)
-           AND json_type(b.references_json) != 'array' LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
-    }
-    if (missingIndexRows > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT exp.source_id AS id FROM (
-           SELECT b.id AS source_id,
-                  json_extract(je.value,'$.id') AS target_id,
-                  json_extract(je.value,'$.alias') AS alias,
-                  COALESCE(json_extract(je.value,'$.sourceField'),'') AS source_field
-           FROM blocks b, json_each(${REFS_JSON}) je
-           WHERE b.deleted=0 AND b.workspace_id=? AND ${EXPANDED_REF_FILTER}
-         ) exp
-         LEFT JOIN block_references br
-           ON br.source_id=exp.source_id AND br.target_id=exp.target_id
-          AND br.alias=exp.alias AND br.source_field=exp.source_field
-         WHERE br.source_id IS NULL LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
-    }
-    if (extraIndexRows > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT br.source_id AS id FROM block_references br
-         JOIN blocks b ON b.id=br.source_id AND b.deleted=0
-         WHERE br.workspace_id=?
-           AND NOT EXISTS (
-             SELECT 1 FROM json_each(${REFS_JSON}) je
-             WHERE json_extract(je.value,'$.id')=br.target_id
-               AND json_extract(je.value,'$.alias')=br.alias
-               AND COALESCE(json_extract(je.value,'$.sourceField'),'')=br.source_field)
-         LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
-    }
-    if (orphanSourceRows > 0) {
-      addSamples(samples, await sampleIds(
-        db,
-        `SELECT br.source_id AS id FROM block_references br
-         LEFT JOIN blocks b ON b.id=br.source_id
-         WHERE br.workspace_id=? AND (b.id IS NULL OR b.deleted=1) LIMIT ${SAMPLE_LIMIT}`,
-        [workspaceId],
-      ))
-    }
-    return {
-      status: total > 0 ? 'anomaly' : 'ok',
-      missingIndexRows,
-      extraIndexRows,
-      orphanSourceRows,
-      duplicateTuples,
-      malformedJson,
-      /** Live blocks whose `references_json` parses but is not an array —
-       *  unusable as reference storage, and invisible to every other count
-       *  here because `json_each` simply yields nothing for them. */
-      malformedRefsShape,
-      samples,
-    }
-  })
+  await run('references_index_mirror', () => runReferencesMirrorCheck(db, workspaceId, SAMPLE_LIMIT))
 
   // R4 — property-ref at-rest. Full (on-demand): the schema-aware superset that
   // also catches toggled-off ref props (and flags on any finding). Lean (cadence):
@@ -844,24 +732,6 @@ export const runConsistencyAudit = async (
   // frequently a TRANSIENT mid-sync state, so a dirty first pass is re-measured
   // after a delay (opts.divergenceRecheckMs) and the SETTLED counts are reported.
   await run('local_server_divergence', async () => {
-    const pendingClause = `NOT EXISTS (
-      SELECT 1 FROM ps_crud p
-      WHERE json_extract(p.data,'$.type')='blocks' AND json_extract(p.data,'$.id')=b.id)`
-    const strandedWhere = `b.workspace_id=? AND b.deleted=0
-      AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
-      AND ${pendingClause}`
-    // Cross-view content diff. An e2ee staging row holds `enc:v1:` ciphertext
-    // while `blocks` holds decrypted plaintext, so they're never byte-equal —
-    // comparing them flags every e2ee row. The prefix ALONE can't tell real
-    // ciphertext from a plaintext value that merely starts with `enc:v1:` (which
-    // exists on BOTH a plaintext workspace AND as a decrypted e2ee note about the
-    // format) — only the workspace's materializability can. So: when the
-    // workspace is confirmed PLAINTEXT (`copy`), byte-compare all columns
-    // unconditionally (a real divergence on a prefix-shaped plaintext value is
-    // still caught). Otherwise (e2ee, or unknown/no-deps) skip the sealed-column
-    // byte-compare for any `enc:v1:` staging row — the decrypt spot-check + the
-    // full-mode exhaustive decrypt-compare recover content detection for those.
-    // `deleted`/`updated_at` are cleartext and always compared.
     let plaintextWorkspace = false
     if (opts.decrypt) {
       try {
@@ -870,25 +740,11 @@ export const runConsistencyAudit = async (
         plaintextWorkspace = false // can't confirm → treat as encrypted (safe default)
       }
     }
-    const sealedDiffers = plaintextWorkspace
-      ? `(b.content!=bs.content OR b.properties_json!=bs.properties_json
-          OR b.references_json!=bs.references_json)`
-      : `(${notEnc('bs.content')}
-          AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-               OR b.references_json!=bs.references_json))`
-    const contentDiffers = `(b.deleted!=bs.deleted OR ${sealedDiffers})`
-    const standoffWhere = `b.workspace_id=? AND b.updated_at=bs.updated_at AND b.updated_at!=0
-      AND ${contentDiffers}`
-    const localRicherWhere = `b.workspace_id=? AND b.updated_at>bs.updated_at AND ${pendingClause}`
-    const serverAheadWhere = `b.workspace_id=? AND bs.updated_at>b.updated_at AND ${pendingClause}
-      AND ${contentDiffers}`
-
-    const measure = async () => ({
-      strandedLocalOnly: await count(db, `SELECT count(*) AS n FROM blocks b WHERE ${strandedWhere}`, [workspaceId]),
-      equalStampStandoff: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere}`, [workspaceId]),
-      localRicherNoPending: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere}`, [workspaceId]),
-      serverAheadUndrained: await count(db, `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${serverAheadWhere}`, [workspaceId]),
-    })
+    // A checkpoint can advance during the recheck delay. Before the first
+    // applied checkpoint no local write's echo is due.
+    const measure = () => measureDivergence(db, workspaceId,
+      opts.syncedThroughMs ? (opts.syncedThroughMs() ?? 0) : Number.MAX_SAFE_INTEGER,
+      plaintextWorkspace, SAMPLE_LIMIT)
     // stranded + standoff + local-richer are real anomalies; server-ahead is info.
     const anomalyTotal = (m: Awaited<ReturnType<typeof measure>>) =>
       m.strandedLocalOnly + m.equalStampStandoff + m.localRicherNoPending
@@ -899,17 +755,6 @@ export const runConsistencyAudit = async (
       await opts.sleep(opts.divergenceRecheckMs)
       m = await measure() // settled counts — a transient will have cleared
       rechecked = true
-    }
-
-    const samples: string[] = []
-    if (m.strandedLocalOnly > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b WHERE ${strandedWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
-    }
-    if (m.equalStampStandoff > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${standoffWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
-    }
-    if (m.localRicherNoPending > 0) {
-      addSamples(samples, await sampleIds(db, `SELECT b.id AS id FROM blocks b JOIN blocks_synced bs ON bs.id=b.id WHERE ${localRicherWhere} LIMIT ${SAMPLE_LIMIT}`, [workspaceId]))
     }
 
     // e2ee content divergence: the cleartext-only diff above can't see through
@@ -934,13 +779,9 @@ export const runConsistencyAudit = async (
 
     return {
       status: anomalyTotal(m) > 0 || decryptSpotCheck?.status === 'anomaly' ? 'anomaly' : 'ok',
-      strandedLocalOnly: m.strandedLocalOnly,
-      equalStampStandoff: m.equalStampStandoff,
-      localRicherNoPending: m.localRicherNoPending,
-      serverAheadUndrained: m.serverAheadUndrained,
+      ...m,
       rechecked,
       decryptSpotCheck,
-      samples,
     }
   })
 
@@ -959,6 +800,36 @@ export const runConsistencyAudit = async (
       opts.full ? (opts.full.candidateCap ?? 60000) : (opts.decryptSampleSize ?? DECRYPT_SAMPLE_LIMIT),
     ),
   )
+
+  // Property children (#1011, read-only). Only a workspace at 'children' has
+  // both representations to compare: before it there are no field rows to
+  // trust, and past it the cell is no longer the read surface. All three run
+  // on the cadence. Coverage and divergence page through owners, and the
+  // duplicate check groups consecutive entries in the live field index.
+  let propertiesMigration: ReturnType<typeof readWorkspacePropertiesMigration> | undefined
+  const whenSwitched = async (
+    check: () => Promise<ConsistencyCheckResult>,
+  ): Promise<ConsistencyCheckResult> => {
+    propertiesMigration ??= readWorkspacePropertiesMigration(
+      { getOptional: async <T>(sql: string, params?: unknown[]) => (await db.getAll<T>(sql, params))[0] ?? null },
+      workspaceId,
+    )
+    const mode = await propertiesMigration
+    return mode === 'children'
+      ? check()
+      : { status: 'skipped', reason: `properties_migration is '${mode}', not 'children'` }
+  }
+  const noRepo: ConsistencyCheckResult = {
+    status: 'skipped', reason: 'no repo passed to resolve property keys against',
+  }
+  await run('property_field_row_duplicates', () => whenSwitched(() =>
+    runPropertyFieldRowDuplicatesCheck(db, workspaceId, SAMPLE_LIMIT)))
+  await run('property_cell_coverage', () => whenSwitched(async () =>
+    opts.repo ? runPropertyCellCoverageCheck(opts.repo, workspaceId, SAMPLE_LIMIT, yieldWhenBusy) : noRepo))
+  await run('property_cell_divergence', () => whenSwitched(async () =>
+    opts.repo
+      ? runPropertyCellDivergenceCheck(rawDb, opts.repo, workspaceId, SAMPLE_LIMIT, yieldWhenBusy)
+      : noRepo))
 
   // Deep ON-DEMAND checks (full mode only) — the rich superset the bridge eval
   // used to reimplement, now run by the engine so the eval just invokes it.

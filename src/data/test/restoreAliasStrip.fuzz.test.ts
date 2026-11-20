@@ -84,7 +84,6 @@ const caseArb: fc.Arbitrary<Case> = fc.record({
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await guard.barrier()
   await sharedDb.cleanup()
 })
 

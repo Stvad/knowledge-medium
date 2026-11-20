@@ -43,6 +43,7 @@
  *   obscure case it fixes.
  */
 
+import { takesTextEdit } from '@/data/blockTypes'
 import {
   defineSameTxProcessor,
   type AnySameTxProcessor,
@@ -98,8 +99,9 @@ const dedupe = (values: readonly string[]): string[] => {
  *  final uniqueness invariant; content-rename plans also carry intent
  *  metadata so a rejected merge can drop only the replaced alias. */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
-  if (row.before === null || row.after === null) return null
-  if (row.after.deleted) return null
+  // A source block's content is a document, not a title: mirroring one into the
+  // other would rename the page to its source, and renaming the page would overwrite it.
+  if (row.before === null || !takesTextEdit(row.after)) return null
 
   const before = row.before
   const after = row.after

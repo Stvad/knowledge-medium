@@ -1,11 +1,10 @@
 /**
  * "The user is done editing this block" — fired when a block's editor
- * unmounts (focus moved elsewhere, edit mode exited) or when an action
- * finishes a programmatic edit on the user's behalf.
+ * unmounts (focus moved elsewhere, edit mode exited).
  *
- * Deliberately generic and editor-owned: consumers (e.g. the agent
- * runtime's watch-events facility, which uses it to short-circuit its
- * settle window) subscribe here without the editor knowing about them.
+ * Deliberately generic and editor-owned: consumers subscribe here without
+ * the editor knowing about them. It reaches this tab only; to know whether
+ * a block is being edited on any device, read the synced `isEditing` flag.
  */
 import { CallbackSet } from '@/utils/callbackSet.js'
 
@@ -13,13 +12,3 @@ export const blockEditSettled = new CallbackSet<[blockId: string]>('block-edit-s
 
 export const notifyBlockEditSettled = (blockId: string): void =>
   blockEditSettled.notify(blockId)
-
-/** The user is editing this block AGAIN — fired when its editor mounts.
- *  Consumers must revoke anything they inferred from the last settled
- *  signal (e.g. watch-events drops the block's blur exemption: quiet
- *  "confirmed by leaving" stops being true the moment the user is
- *  back). */
-export const blockEditResumed = new CallbackSet<[blockId: string]>('block-edit-resumed')
-
-export const notifyBlockEditResumed = (blockId: string): void =>
-  blockEditResumed.notify(blockId)

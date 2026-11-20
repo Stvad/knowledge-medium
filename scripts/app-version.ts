@@ -31,8 +31,10 @@ const git = (args: string[]) => {
   }
 }
 
+export const shortCommitSha = (sha: string) => sha.slice(0, 8)
+
 export const resolveAppVersion = () => {
-  const sha = (process.env.GITHUB_SHA || git(['rev-parse', 'HEAD'])).slice(0, 8) || 'dev'
+  const sha = shortCommitSha(process.env.GITHUB_SHA || git(['rev-parse', 'HEAD'])) || 'dev'
 
   // Strict-ISO committer date, already rendered in the committer's timezone,
   // e.g. "2026-06-13T12:16:16+02:00". Slice the wall-clock parts directly so

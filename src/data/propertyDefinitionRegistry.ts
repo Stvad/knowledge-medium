@@ -9,15 +9,70 @@ import {isPropertySeedDeclaration, type AnyPropertySeedDeclaration} from '@/data
 /** A block-built behavioral entry kept beside its durable field identity.
  * The public ambient registry is name-keyed; this internal form prevents that
  * lossy projection from becoming the resolver's source of identity. */
-export interface ProjectedPropertyDefinition {
+export interface ParsedPropertyDefinition {
   readonly metadata: PropertyDefinitionMetadata
   readonly schema?: AnyPropertySchema
+}
+
+/** A live `property-schema` block whose metadata does not parse (an empty
+ * name, a change scope that is not one, a flag that does not decode). It is
+ * no definition to the registry, so a field row targeting it is an honest
+ * unknown-field row (§9) — and the outline SQL, which recognizes definitions
+ * from `block_types` tags, has to be told so. */
+export interface UnparseablePropertyDefinition {
+  readonly unparseable: {readonly fieldId: string; readonly workspaceId: string}
+}
+
+/** What the user-schemas projector publishes per `property-schema` block. */
+export type ProjectedPropertyDefinition =
+  | ParsedPropertyDefinition
+  | UnparseablePropertyDefinition
+
+export const isParsedPropertyDefinition = (
+  projected: ProjectedPropertyDefinition,
+): projected is ParsedPropertyDefinition => 'metadata' in projected
+
+export const projectedPropertyDefinitionFieldId = (
+  projected: ProjectedPropertyDefinition,
+): string => isParsedPropertyDefinition(projected)
+  ? projected.metadata.fieldId
+  : projected.unparseable.fieldId
+
+/** Fold every source's projected definitions into one entry per field id.
+ *  Last-wins, as for every keyed registry facet, except that a parsed
+ *  definition outranks an unparseable marker for the same id in either order:
+ *  a source that CAN define the id answers for it over one that could not read
+ *  the block. That keeps `definitionsByFieldId` and `unparseableDefinitionIds`
+ *  disjoint whatever the contribution order. */
+export const combineProjectedPropertyDefinitions = (
+  values: readonly ProjectedPropertyDefinition[],
+): ReadonlyMap<string, ProjectedPropertyDefinition> => {
+  const out = new Map<string, ProjectedPropertyDefinition>()
+  for (const value of values) {
+    const key = projectedPropertyDefinitionFieldId(value)
+    const existing = out.get(key)
+    if (existing !== undefined) {
+      const parsedNow = isParsedPropertyDefinition(value)
+      if (isParsedPropertyDefinition(existing) && !parsedNow) continue
+      if (isParsedPropertyDefinition(existing) === parsedNow) {
+        console.warn(
+          `[data.projected-property-definitions] duplicate registration for "${key}"; ` +
+          'last-wins per facet convention',
+        )
+      }
+    }
+    out.set(key, value)
+  }
+  return out
 }
 
 export interface PropertyDefinitionRegistrySnapshot {
   readonly workspaceId: string
   readonly schemas: ReadonlyMap<string, AnyPropertySchema>
   readonly definitionsByFieldId: ReadonlyMap<string, PropertyDefinitionMetadata>
+  /** Blocks tagged `property-schema` here that are NOT in
+   *  `definitionsByFieldId` — see {@link UnparseablePropertyDefinition}. */
+  readonly unparseableDefinitionIds: ReadonlySet<string>
   readonly definitionsByName: ReadonlyMap<string, readonly PropertyDefinitionMetadata[]>
   readonly schemasByFieldId: ReadonlyMap<string, AnyPropertySchema>
   readonly seedsByKey: ReadonlyMap<string, AnyPropertySeedDeclaration>
@@ -146,6 +201,75 @@ export const effectivePropertyDefinitionName = (
   return declared?.name ?? row.name
 }
 
+const sameKeys = (
+  a: ReadonlyMap<string, unknown> | ReadonlySet<string>,
+  b: ReadonlyMap<string, unknown> | ReadonlySet<string>,
+): boolean => {
+  if (a.size !== b.size) return false
+  for (const key of a.keys()) if (!b.has(key)) return false
+  return true
+}
+
+/** A definition's hide-in-outline answer: what its row STORES, else what its
+ *  current seed declares. The fallback is what lets a built-in be marked in
+ *  code with no write to any workspace — nothing stores the field until
+ *  someone sets it — and a stored value, false included, still wins. */
+export const effectiveHideInOutline = (
+  definition: Pick<PropertyDefinitionMetadata, 'hideInOutline' | 'seedKey'>,
+  seedsByKey: ReadonlyMap<string, Pick<AnyPropertySeedDeclaration, 'hideInOutline'>>,
+): boolean =>
+  definition.hideInOutline
+  ?? (definition.seedKey !== undefined && seedsByKey.get(definition.seedKey)?.hideInOutline === true)
+
+/** The field ids the outline's default property display (`'non-hidden'`)
+ *  skips: definitions that are `hidden`, or hide-in-outline
+ *  ({@link effectiveHideInOutline}). A seed whose row has not materialized yet
+ *  answers with its declaration. Not memoized here: the hot readers memoize
+ *  per snapshot or per transaction (`kernelQueries`, `commitPipeline`). */
+export const outlineSkippedFieldIds = (
+  snapshot: PropertyDefinitionRegistrySnapshot,
+): ReadonlySet<string> => {
+  const skipped = new Set<string>()
+  for (const [fieldId, definition] of snapshot.definitionsByFieldId) {
+    if (definition.hidden || effectiveHideInOutline(definition, snapshot.seedsByKey)) skipped.add(fieldId)
+  }
+  for (const seed of snapshot.seedsByKey.values()) {
+    const fieldId = propertyDefinitionBlockId(snapshot.workspaceId, seed.seedKey)
+    if (snapshot.definitionsByFieldId.has(fieldId)) continue
+    if (seed.hidden || seed.hideInOutline === true) skipped.add(fieldId)
+  }
+  return skipped
+}
+
+/** Do two snapshots skip the same field ids in the outline's default view?
+ *  The input to that child view, which {@link sameFieldRecognition} does not
+ *  cover: flipping a definition's hidden or hide-in-outline bit changes no
+ *  recognition. */
+export const sameOutlineSkips = (
+  a: PropertyDefinitionRegistrySnapshot | null,
+  b: PropertyDefinitionRegistrySnapshot | null,
+): boolean => {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  return a.workspaceId === b.workspaceId && sameKeys(outlineSkippedFieldIds(a), outlineSkippedFieldIds(b))
+}
+
+/** Do two snapshots recognize the same field ids as definitions (§9
+ *  condition 3)? The inputs to both views' answer: the parsed definitions, the
+ *  unparseable blocks, the seed slots, and the workspace they belong to. A
+ *  rename or a re-type changes none of them. */
+export const sameFieldRecognition = (
+  a: PropertyDefinitionRegistrySnapshot | null,
+  b: PropertyDefinitionRegistrySnapshot | null,
+): boolean => {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  return a.workspaceId === b.workspaceId
+    && sameKeys(a.definitionsByFieldId, b.definitionsByFieldId)
+    && sameKeys(a.unparseableDefinitionIds, b.unparseableDefinitionIds)
+    && sameKeys(a.seedsByKey, b.seedsByKey)
+}
+
 /** Build one immutable-by-replacement workspace snapshot. Source precedence is
  * explicit during the cutover: block-built behavior replaces transitional
  * direct registrations, then a unique local declaration replaces its block
@@ -155,9 +279,16 @@ export const buildPropertyDefinitionRegistry = (
 ): PropertyDefinitionRegistrySnapshot => {
   const {byKey: seedsByKey, byName: seedsByDeclarationName} = indexSeeds(args.seeds)
   const definitionsByFieldId = new Map<string, PropertyDefinitionMetadata>()
+  const unparseableDefinitionIds = new Set<string>()
   const definitionsByNameMutable = new Map<string, PropertyDefinitionMetadata[]>()
   const schemasByFieldId = new Map<string, AnyPropertySchema>()
   for (const projected of args.projectedDefinitions.values()) {
+    if (!isParsedPropertyDefinition(projected)) {
+      if (projected.unparseable.workspaceId === args.workspaceId) {
+        unparseableDefinitionIds.add(projected.unparseable.fieldId)
+      }
+      continue
+    }
     const raw = projected.metadata
     if (raw.workspaceId !== args.workspaceId) continue
     // Seeds are code-owned and non-renamable (user renames are deferred to
@@ -237,6 +368,7 @@ export const buildPropertyDefinitionRegistry = (
     workspaceId: args.workspaceId,
     schemas,
     definitionsByFieldId,
+    unparseableDefinitionIds,
     definitionsByName: definitionsByNameMutable,
     schemasByFieldId,
     seedsByKey,

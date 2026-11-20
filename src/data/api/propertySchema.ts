@@ -43,9 +43,15 @@ export interface ResolvedPropertySchema<T> extends PropertySchemaEntry<T> {
   readonly [resolvedPropertySchemaBrand]: true
 }
 
+/** `behavior-unavailable`: the winning definition exists and is readable, but
+ *  this device cannot build its codec (its preset is not loaded here, or its
+ *  stored config does not decode). Distinct from `definition-unavailable` —
+ *  no definition at all — because §9 recognition classifies the first and not
+ *  the second. */
 export type PropertySchemaIdentityUnavailableReason =
   | 'registry-not-workspace-keyed'
   | 'definition-unavailable'
+  | 'behavior-unavailable'
   | 'shadowed'
   | 'ambiguous'
 
@@ -108,6 +114,8 @@ export interface PropertyEditorOverride<T = unknown> {
    *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
+  /** Opt-in control for the scalar value block itself in the outline. */
+  readonly InlineEditor?: PropertyEditor<T>
   /** Optional glyph override. Defaults to the matching `ValuePreset.Glyph`
    *  when absent. Use sparingly — most properties pick up the codec-type-keyed
    *  glyph from the preset and don't need a per-definition shape.
@@ -122,7 +130,8 @@ export interface PropertyEditorProps<T> {
    *  renderers; optional so older UI contributions that only need
    *  value/onChange/block keep their existing shape. */
   schema?: PropertySchema<T>
-  /** The block being edited. Type kept loose here so the data-layer api
+  /** The owner in a property panel, or the value row for an InlineEditor.
+   *  Type kept loose here so the data-layer api
    *  module doesn't need to import the `Block` facade (defined in
    *  `src/data/block.ts`). UI consumers narrow at the call site. */
   block: unknown

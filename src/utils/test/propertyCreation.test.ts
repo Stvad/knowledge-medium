@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { showPropertiesProp } from '@/data/properties'
 import { consumePendingPropertyCreateRequest } from '@/utils/propertyNavigation'
@@ -26,6 +26,7 @@ describe('convertEmptyChildBlockToProperty', () => {
       newId: () => crypto.randomUUID(),
       startSyncObserver: false,
     }).repo
+    repo.setActiveWorkspaceId('ws-1')
 
     await repo.tx(async tx => {
       await tx.create({
@@ -130,7 +131,7 @@ describe('convertEmptyChildBlockToProperty', () => {
 
     // The field row is hidden from the visible facade and the cell is empty:
     // exactly the both-look-empty state the fix must still refuse.
-    expect(await repo.block('child').childIds.load()).toEqual([])
+    expect(await childIdsOf(repo, 'child')).toEqual([])
     expect(repo.block('child').peek()?.properties).toEqual({})
 
     const converted = await convertEmptyChildBlockToProperty(repo.block('child'), repo)

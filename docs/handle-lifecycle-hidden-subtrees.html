@@ -342,7 +342,7 @@ unconditional, so it applies in dev too), and the compiler hoists the factory ca
 cache. From the served <code>LayoutRenderer</code>:</p>
 
 <pre><code>if ($[1] !== block.id || $[2] !== block.repo.query) {
-  t1 = block.repo.query.subtree({id: block.id, hidePropertyChildren: true});
+  t1 = block.repo.query.subtree({id: block.id, propertyChildren: 'none'});
 } else {
   t1 = $[3];        // cache hit — the disposed handle, forever
 }</code></pre>

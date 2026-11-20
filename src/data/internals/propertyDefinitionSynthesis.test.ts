@@ -448,7 +448,7 @@ describe('planPropertyDefinitionSynthesis', () => {
 
     const plan = await planFor()
 
-    expect(plan.scanSyncGap).toMatch(/have not reached/)
+    expect(plan.scanSyncGap).toMatch(/have not been verified locally/)
     expect(flipBlockedBySynthesis(plan)).toMatch(/still catching up/)
   })
 
@@ -476,7 +476,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     })
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/have not reached/)
+      .rejects.toThrow(/have not been verified locally/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 
@@ -580,7 +580,7 @@ describe('planPropertyDefinitionSynthesis', () => {
     expect(await repo.syncViewGap()).toBeNull()
 
     await expect(applyPropertyDefinitionSynthesis(repo, plan))
-      .rejects.toThrow(/have not reached/)
+      .rejects.toThrow(/have not been verified locally/)
     expect(repo.block(await definitionIdFor('demo:orphan')).peek()).toBeUndefined()
   })
 
@@ -650,7 +650,7 @@ describe('applyPropertyDefinitionSynthesis', () => {
     try {
       const reachedMintPath = vi.spyOn(repo, 'propertySchemaResolverFor')
       await expect(applyPropertyDefinitionSynthesis(repo, plan))
-        .rejects.toThrow(/have not reached/)
+        .rejects.toThrow(/have not been verified locally/)
       expect(probes).toBe(2)
       // On the CAUSE, not on the absence of a block: `repo.tx` rolls back, so
       // "no definition exists" holds wherever in the transaction the guard
@@ -1334,7 +1334,7 @@ describe('applyPropertyDefinitionSynthesis: the id is occupied, or the key stopp
     await repo.tx(async tx => {
       await tx.create({id, workspaceId: 'some-other-ws', parentId: null,
                        orderKey: 'a0', content: 'squatter'})
-    }, {scope: ChangeScope.BlockDefault, description: 'squat'})
+    }, {scope: ChangeScope.BlockDefault, description: 'squat', allowUnloadedWorkspace: true})
 
     const result = await applyPropertyDefinitionSynthesis(repo, await planFor())
     expect(result.skipped[0]!.reason).toMatch(/another workspace/)

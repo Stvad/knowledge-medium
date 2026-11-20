@@ -29,6 +29,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../../data/repo'
 import { serializeBlock, serializeSelectedBlocks } from '@/utils/copy'
+import { parseMarkdownToBlocks } from '@/utils/markdownParser'
 
 const WS = 'ws-1'
 
@@ -134,13 +135,23 @@ describe('serializeBlock', () => {
 })
 
 describe('serializeSelectedBlocks', () => {
-  it('combines multiple subtrees in selection order', async () => {
+  it('combines multiple subtrees in selection order, bulleting a childless root', async () => {
     await seed({id: 'a', content: 'a', children: [{id: 'a1', content: 'a1'}]})
     await seed({id: 'b', content: 'b'})
 
     const result = await serializeSelectedBlocks(['a', 'b'], env.repo)
-    expect(result.markdown).toBe('- a\n  - a1\nb')
+    expect(result.markdown).toBe('- a\n  - a1\n- b')
     expect(result.blocks.map(x => x.id)).toEqual(['a', 'a1', 'b'])
+  })
+
+  it('keeps a childless multi-line root bare, so a fence next to another root pastes back whole', async () => {
+    await seed({id: 'f', content: '```js\nconsole.log(1)\n```'})
+    await seed({id: 'b', content: 'after'})
+
+    const result = await serializeSelectedBlocks(['f', 'b'], env.repo)
+    expect(result.markdown).toBe('```js\nconsole.log(1)\n```\n- after')
+    expect(parseMarkdownToBlocks(result.markdown).map(block => [block.content, block.parentId ?? null]))
+      .toEqual([['```js\nconsole.log(1)\n```', null], ['after', null]])
   })
 
   it('skips ids that fail to serialize and returns the rest', async () => {

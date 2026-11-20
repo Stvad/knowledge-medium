@@ -2,6 +2,9 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
+import { armedCutAppMountExtension } from '@/extensions/armedCutAppMount.js'
+import { blockDeletionGuardsFacet } from '@/extensions/core.js'
+import { kernelPageDeletionGuard } from '@/extensions/kernelPageDeletionGuard.js'
 import { appUpdatePromptExtension } from '@/plugins/app-update-prompt'
 import { extensionPromptsExtension } from '@/plugins/extension-prompts'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
@@ -33,9 +36,12 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { attachmentsPlugin } from '@/plugins/attachments'
+import { richPastePlugin } from '@/plugins/rich-paste'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { moveBlocksPlugin } from '@/plugins/move-blocks'
+import { blockDragPlugin } from '@/plugins/block-drag'
+import { touchSelectionPlugin } from '@/plugins/touch-selection'
 import { referencesPlugin } from '@/plugins/references'
 import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
@@ -45,6 +51,8 @@ import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { blockInfoPlugin } from '@/plugins/block-info'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
+import { contributorsPlugin } from '@/plugins/contributors'
+import { annotationsPlugin } from '@/plugins/annotations'
 import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
@@ -58,7 +66,9 @@ import { dataIntegrityPlugin } from '@/plugins/data-integrity'
 import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { dbMirrorPlugin } from '@/plugins/db-mirror'
 import { propertiesMigrationPlugin } from '@/plugins/properties-migration'
+import { propertyRowsPlugin } from '@/plugins/property-rows'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
+import { syncMetricsPlugin } from '@/plugins/sync-metrics'
 import { interactionMetricsPlugin } from '@/plugins/interaction-metrics'
 import { observeWorkspaceEffectContribution } from '@/plugins/interaction-metrics/sessionContext'
 import { perfMonitorPlugin } from '@/plugins/perf-monitor'
@@ -67,6 +77,7 @@ import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
+import { htmlDocumentPlugin } from '@/plugins/html-document'
 import { supertagsPlugin } from '@/plugins/supertags'
 import type { AppExtension } from '@/facets/facet.js'
 
@@ -82,10 +93,15 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
   kernelDataExtension,
+  blockDeletionGuardsFacet.of(kernelPageDeletionGuard, {source: 'kernel'}),
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
+  // The pending cut's page surface: dims its blocks, and a native copy or cut
+  // disarms it (`@/paste/armedCut.js`). Not cosmetic: without it a copied
+  // editor selection identical to the cut's text would move the cut.
+  armedCutAppMountExtension,
   appUpdatePromptExtension,
   // Surfaces extension trust prompts (needs-approval / update-available)
   // globally — a per-extension toast + a status-chip indicator — instead of
@@ -133,13 +149,17 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   attachmentsPlugin,
+  richPastePlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
+  htmlDocumentPlugin,
   supertagsPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
   moveBlocksPlugin,
+  blockDragPlugin,
+  touchSelectionPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
@@ -160,7 +180,9 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   dbMaintenancePlugin({repo}),
   dbMirrorPlugin,
   propertiesMigrationPlugin({repo}),
+  propertyRowsPlugin,
   startupMetricsPlugin,
+  syncMetricsPlugin,
   interactionMetricsPlugin,
   perfMonitorPlugin({repo}),
   // Deliberately OUTSIDE both metrics toggles: the rule that page-global
@@ -172,6 +194,8 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   blockInfoPlugin,
   agentRuntimePlugin,
   agentDispatchCompanionPlugin,
+  contributorsPlugin,
+  annotationsPlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

@@ -287,7 +287,7 @@ export const flipRejectionProvesNoWrite = (err: unknown): boolean =>
  *
  * A direct UPDATE, like `renameWorkspace`: RLS admits writers and the
  * properties_migration trigger is what narrows this to the OWNER, to the
- * 'cell' -> 'children' step, and away from e2ee workspaces.
+ * 'cell' -> 'children' step.
  *
  * `.select().single()` is not decoration. An UPDATE that RLS filters to zero
  * rows SUCCEEDS, so without reading the row back a refusal we are not a writer
@@ -557,7 +557,6 @@ export const awaitLocalMemberRole = async (
   return new Promise<WorkspaceRole>((resolve, reject) => {
     let settled = false
     let unsubscribe: (() => void) | null = null
-    let disposeRequested = false
     // Rechecks in flight. The park says "waiting on the outside world", so it is
     // held exactly when no bounded local read is running: `check` lifts it on the
     // way in and the LAST one out re-enters it. Counting rather than re-entering
@@ -589,10 +588,6 @@ export const awaitLocalMemberRole = async (
         } catch (error) {
           return error
         }
-      } else {
-        // onError/abort may fire synchronously while onChange is still
-        // constructing its disposer. Honor cleanup as soon as it returns.
-        disposeRequested = true
       }
       return null
     }
@@ -634,15 +629,9 @@ export const awaitLocalMemberRole = async (
 
     try {
       unsubscribe = repo.db.onChange(
-        {onChange: check, onError: fail},
+        {onChange: check},
         {tables: ['workspace_members']},
       )
-      if (disposeRequested) {
-        const current = unsubscribe
-        unsubscribe = null
-        current()
-        return
-      }
       signal?.addEventListener('abort', onAbort, {once: true})
       if (signal?.aborted) {
         onAbort()
@@ -691,6 +680,30 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
       workspace.wkCanary,
       workspace.propertiesMigration,
     ],
+  )
+}
+
+/**
+ * Mark this device's `workspaces` row e2ee with the server's canary, as the
+ * flip just made the server row. The resolver reads the synced row, and until a
+ * checkpoint delivers the flip it would still say plaintext and let this
+ * device upload its own writes in plaintext — which the server now refuses, and
+ * the device then quarantines. Marked, those writes are held instead.
+ *
+ * Local only: the `workspaces` table has no upload trigger, and the synced row
+ * that later replaces it carries the same values. A checkpoint from before the
+ * flip, still being applied, can put plaintext back; that is accepted, since
+ * every run past the flip marks the row again and writes refused meanwhile are
+ * quarantined, not lost.
+ */
+export const markLocalWorkspaceConverted = async (
+  db: {execute(sql: string, params?: unknown[]): Promise<unknown>},
+  workspaceId: string,
+  wkCanary: string,
+): Promise<void> => {
+  await db.execute(
+    `UPDATE workspaces SET encryption_mode = 'e2ee', wk_canary = ? WHERE id = ?`,
+    [wkCanary, workspaceId],
   )
 }
 
@@ -774,7 +787,7 @@ export const ensureLocalPersonalWorkspace = async (
     // Local-only personal workspace is always plaintext.
     encryptionMode: 'none',
     wkCanary: null,
-    propertiesMigration: 'cell',
+    propertiesMigration: 'children',
   }
   const member: WorkspaceMembership = {
     id: memberId,

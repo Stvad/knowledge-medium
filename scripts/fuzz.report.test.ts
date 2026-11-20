@@ -104,6 +104,19 @@ describe('fuzz --report', () => {
     expect(body).not.toContain('FUZZ_SEED=111')
   })
 
+  it('lists the file vitest attributes an unhandled error to, when every file passed', () => {
+    const unhandledLog = [
+      '⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯',
+      'WorkspaceRegistryUnavailableError: workspace registry for ws-1 is not loaded for this transaction',
+      'This error originated in "src/shortcuts/test/defaultActions.fuzz.test.ts" test file. It doesn\'t mean the error was thrown inside the file itself, but while it was running.',
+      ' Test Files  65 passed (65)',
+      '      Errors  1 error',
+    ].join('\n')
+    const body = runReport('Deep fuzz — all suites', unhandledLog)
+
+    expect(body).toContain('- `src/shortcuts/test/defaultActions.fuzz.test.ts`')
+  })
+
   it('omits the regenerate command when no seed is reported (non-fast-check crash)', () => {
     const crashLog = [
       ' FAIL  src/data/test/setup.fuzz.test.ts',

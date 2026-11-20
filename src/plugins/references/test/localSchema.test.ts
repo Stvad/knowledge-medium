@@ -9,6 +9,7 @@ import {
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
 import { CLIENT_SCHEMA_STATEMENTS } from '@/data/internals/clientSchema'
+import { POWERSYNC_STUB_TABLES_SQL } from '@/data/test/powerSyncStubTables'
 import {
   BACKFILL_BLOCK_REFERENCES_SQL,
   BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
@@ -71,13 +72,7 @@ const blockValues = (row: BlockInsert): Array<string | number | null> =>
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
 
-  db.exec(`
-    CREATE TABLE ps_crud (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL,
-      tx_id INTEGER
-    )
-  `)
+  for (const stmt of POWERSYNC_STUB_TABLES_SQL) db.exec(stmt)
 
   db.exec(CREATE_BLOCKS_TABLE_SQL)
   // Layout B staging table — the blocks_synced change-capture triggers in

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { decodeBytes } from '@/sync/byteTransform.js'
+import { verifyObjectBytes } from '@/sync/byteTransform.js'
 import { computeContentHash } from '@/sync/crypto/contentHash.js'
+import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
+import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import type { GetCek, GetMaterializability, Materializability } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
@@ -9,12 +11,13 @@ import { InMemoryByteUploadStore, type StageInput } from './uploadStore.js'
 
 const USER = 'u1'
 const WS = 'ws1'
-// The canonical staged plaintext + its REAL hash: the drain verifies the local bytes
-// against the record's hash before sealing, so a placeholder hash would quarantine.
+// The default staged plaintext and its real hash: the drain hashes the local bytes
+// before uploading them. The hash's raw name is the record's capture-time key, as
+// for anything captured in a plaintext workspace.
 const PLAIN = new Uint8Array(Array.from({ length: 32 }, (_, i) => i & 0xff)) as Uint8Array<ArrayBuffer>
 const HASH = await computeContentHash(PLAIN)
-const KEY = 'ck-deadbeef'
-const BLOCK = 'media:ck-deadbeef'
+const KEY = HASH.slice('sha256:'.length)
+const BLOCK = 'media:ab'
 
 const bytes = (n: number) => new Uint8Array(Array.from({ length: n }, (_, i) => i & 0xff)) as Uint8Array<ArrayBuffer>
 
@@ -41,7 +44,9 @@ class FakeBlobStore implements BlobStore {
     this.puts.push({ workspaceId, contentKey, bytes: b })
     return this.existing ? 'exists' : 'written'
   }
-  async get(): Promise<Uint8Array<ArrayBuffer>> {
+  gets: string[] = []
+  async get(_workspaceId: string, objectKey: string): Promise<Uint8Array<ArrayBuffer>> {
+    this.gets.push(objectKey)
     if (this.getFails) throw new Error('transient verify GET failure')
     if (this.existing) return this.existing
     throw new Error('not used in drain tests')
@@ -51,6 +56,14 @@ class FakeBlobStore implements BlobStore {
   }
   async delete(): Promise<void> {}
 }
+
+const live = (encryptionMode: string) => async (): Promise<WorkspaceConversionRead> => ({
+  kind: 'read',
+  state: { encryptionMode, conversionPhase: null, wkCanary: null, ownerUserId: 'owner' },
+})
+const unavailable = async (): Promise<WorkspaceConversionRead> => ({ kind: 'unavailable', error: new Error('offline') })
+
+const kid = await deriveContentKeyHmac(new Uint8Array(32).fill(5) as Uint8Array<ArrayBuffer>)
 
 const aesKey = () =>
   crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
@@ -80,6 +93,8 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     blobStore,
     getMaterializability: matCopy,
     getCek: noCek,
+    getContentKeyHmac: async () => null,
+    readLiveWorkspace: live('none'),
     now: () => clock,
     ...over,
   })
@@ -114,7 +129,6 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   })
 
   it('409 whose existing object hash-MISMATCHES (poisoned path) → keeps the record failed, never clears', async () => {
-    // HASH never matches arbitrary bytes, so the existing object is "poisoned".
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
     await byteStore.put(USER, WS, KEY, PLAIN)
@@ -140,6 +154,16 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect((await store.get(USER, BLOCK))).toMatchObject({ status: 'pending', attempts: 1 })
   })
 
+  it('never uploads local bytes that do not hash to the record (a write cut short): quarantines', async () => {
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, PLAIN.slice(0, 20))
+
+    expect(await drainUploads(USER, deps())).toMatchObject({ failed: 1, uploaded: 0 })
+    expect(blobStore.puts).toHaveLength(0)
+    expect((await store.get(USER, BLOCK))?.status).toBe('failed')
+  })
+
   it('does NOT drain a staged (not-yet-promoted) record', async () => {
     await store.stage(stageInput()) // staged, never promoted
     await byteStore.put(USER, WS, KEY, PLAIN)
@@ -155,17 +179,18 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     const key = await aesKey()
     const matDecrypt = mat('decrypt')
     const getCek: GetCek = async () => key
-    await store.stage(stageInput())
+    const plain = bytes(40)
+    const contentHash = await computeContentHash(plain)
+    await store.stage(stageInput({ contentHash }))
     await store.promote(USER, BLOCK)
-    const plain = PLAIN // the staged record's hash is PLAIN's — the drain verifies before sealing
     await byteStore.put(USER, WS, KEY, plain)
 
-    await drainUploads(USER, deps({ getMaterializability: matDecrypt, getCek }))
+    await drainUploads(USER, deps({ getMaterializability: matDecrypt, getCek, getContentKeyHmac: async () => kid }))
 
     const uploaded = blobStore.puts[0].bytes
     expect([...uploaded]).not.toEqual([...plain]) // sealed, not raw
-    const opened = await decodeBytes(uploaded, 'e2ee', getCek, { contentHash: HASH, workspaceId: WS })
-    expect([...opened]).toEqual([...plain]) // and it opens back to the plaintext
+    const opened = await verifyObjectBytes(uploaded, 'e2ee', getCek, { contentHash, workspaceId: WS })
+    expect(opened.ok && [...opened.plaintext]).toEqual([...plain]) // and it opens back to the plaintext
     expect(await store.get(USER, BLOCK)).toBeNull()
   })
 
@@ -294,28 +319,6 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect((await store.get(USER, BLOCK))?.status).toBe('failed')
   })
 
-  it('refuses to upload local bytes that do not hash to the record (a partial / foreign entry): deletes them, quarantines', async () => {
-    await store.stage(stageInput())
-    await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, PLAIN.slice(0, 20)) // a write cut short
-
-    const summary = await drainUploads(USER, deps())
-
-    expect(summary).toMatchObject({ failed: 1, uploaded: 0 })
-    expect(blobStore.puts).toHaveLength(0) // never sealed, never sent
-    expect(await byteStore.has(USER, WS, KEY)).toBe(false) // the bad entry is gone
-    expect((await store.get(USER, BLOCK))?.status).toBe('failed')
-  })
-
-  it('refuses an EMPTY local entry the same way', async () => {
-    await store.stage(stageInput())
-    await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, new Uint8Array(0))
-
-    expect(await drainUploads(USER, deps())).toMatchObject({ failed: 1, uploaded: 0 })
-    expect(blobStore.puts).toHaveLength(0)
-  })
-
   it('drains only the active user’s pending records', async () => {
     await store.stage(stageInput({ userId: 'u1', assetBlockId: 'media:a', contentKey: 'a' }))
     await store.promote('u1', 'media:a')
@@ -326,8 +329,130 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
 
     await drainUploads('u1', deps())
 
-    expect(blobStore.puts.map(p => p.contentKey)).toEqual(['a'])
+    expect(blobStore.puts).toHaveLength(1)
     expect(await store.get('u1', 'media:a')).toBeNull() // uploaded
     expect((await store.get('u2', 'media:b'))?.status).toBe('pending') // untouched
+  })
+
+  // Addresses are derived when used (docs/workspace-e2ee-conversion.md §6.2): the
+  // record's contentKey names its local bytes, never where they go.
+  describe('the address, derived when used', () => {
+    it('uploads to the address the hash and the live mode give, reading bytes under the record key', async () => {
+      await store.stage(stageInput({ contentKey: 'local-name' }))
+      await store.promote(USER, BLOCK)
+      await byteStore.put(USER, WS, 'local-name', PLAIN)
+
+      await drainUploads(USER, deps())
+
+      expect(blobStore.puts.map(p => p.contentKey)).toEqual([KEY])
+    })
+
+    it('a record captured plaintext uploads sealed to the KEYED address once the workspace is e2ee', async () => {
+      const key = await aesKey()
+      const plain = bytes(12)
+      const contentHash = await computeContentHash(plain)
+      const raw = contentHash.slice('sha256:'.length)
+      await store.stage(stageInput({ contentHash, contentKey: raw }))
+      await store.promote(USER, BLOCK)
+      await byteStore.put(USER, WS, raw, plain)
+
+      await drainUploads(USER, deps({
+        getMaterializability: mat('decrypt'),
+        getCek: async () => key,
+        getContentKeyHmac: async () => kid,
+      }))
+
+      const keyed = await deriveContentKey({ contentHash, mode: 'e2ee', contentKeyHmac: kid })
+      expect(blobStore.puts.map(p => p.contentKey)).toEqual([keyed])
+      const opened = await verifyObjectBytes(blobStore.puts[0].bytes, 'e2ee', async () => key, { contentHash, workspaceId: WS })
+      expect(opened.ok && [...opened.plaintext]).toEqual([...plain])
+    })
+
+    it('verifies a 409 at the derived address', async () => {
+      const plain = bytes(24)
+      const contentHash = await computeContentHash(plain)
+      await store.stage(stageInput({ contentHash, contentKey: 'local-name' }))
+      await store.promote(USER, BLOCK)
+      await byteStore.put(USER, WS, 'local-name', plain)
+      blobStore.existing = plain
+
+      expect(await drainUploads(USER, deps())).toMatchObject({ uploaded: 1 })
+      expect(blobStore.gets).toEqual([contentHash.slice('sha256:'.length)])
+    })
+
+    it('an e2ee workspace whose key record has no K_id waits (no attempt burn)', async () => {
+      await store.stage(stageInput())
+      await store.promote(USER, BLOCK)
+      await byteStore.put(USER, WS, KEY, PLAIN)
+
+      const summary = await drainUploads(USER, deps({ getMaterializability: mat('decrypt'), getCek: async () => aesKey() }))
+
+      expect(summary).toMatchObject({ deferred: 1 })
+      expect(blobStore.puts).toHaveLength(0)
+      expect(await store.get(USER, BLOCK)).toMatchObject({ status: 'pending', attempts: 0 })
+    })
+
+    it('a malformed hash can never upload: failed at once', async () => {
+      await store.stage(stageInput({ contentHash: 'sha256:nothex' }))
+      await store.promote(USER, BLOCK)
+      await byteStore.put(USER, WS, KEY, PLAIN)
+
+      expect(await drainUploads(USER, deps())).toMatchObject({ failed: 1 })
+      expect(blobStore.puts).toHaveLength(0)
+    })
+  })
+
+  // The synced mode lags the server whenever this device's ps_crud is non-empty,
+  // so a plaintext upload confirms the server's mode first.
+  describe('the live-mode check before a plaintext upload', () => {
+    const pending = async () => {
+      await store.stage(stageInput())
+      await store.promote(USER, BLOCK)
+      await byteStore.put(USER, WS, KEY, PLAIN)
+    }
+
+    it('a server that now says e2ee defers the upload, with no attempt burn', async () => {
+      await pending()
+      const summary = await drainUploads(USER, deps({ readLiveWorkspace: live('e2ee') }))
+      expect(summary).toMatchObject({ deferred: 1, uploaded: 0 })
+      expect(blobStore.puts).toHaveLength(0)
+      expect(await store.get(USER, BLOCK)).toMatchObject({ status: 'pending', attempts: 0 })
+    })
+
+    it('an unreadable server mode defers too', async () => {
+      await pending()
+      expect(await drainUploads(USER, deps({ readLiveWorkspace: unavailable })))
+        .toMatchObject({ deferred: 1 })
+      expect(blobStore.puts).toHaveLength(0)
+    })
+
+    it('a workspace this session can no longer see goes to the PUT, which fails it at once as before', async () => {
+      // The same membership gates the row and the PUT, so the upload is refused
+      // (403, permanent) rather than stored — not deferred out of sight for days.
+      await pending()
+      blobStore.fail = () => { throw new BlobPutError('forbidden', true) }
+      expect(await drainUploads(USER, deps({ readLiveWorkspace: async () => ({ kind: 'not-visible' as const }) })))
+        .toMatchObject({ failed: 1 })
+    })
+
+    it('an unreadable mode still ages out like any transient failure', async () => {
+      await pending()
+      clock += 8 * 24 * 60 * 60 * 1000
+      expect(await drainUploads(USER, deps({ readLiveWorkspace: unavailable })))
+        .toMatchObject({ failed: 1 })
+    })
+
+    it('a sealed upload does not ask: it is safe whatever the server says', async () => {
+      await pending()
+      let asked = 0
+      await drainUploads(USER, deps({
+        getMaterializability: mat('decrypt'),
+        getCek: async () => aesKey(),
+        getContentKeyHmac: async () => kid,
+        readLiveWorkspace: async () => { asked += 1; return live('none')() },
+      }))
+      expect(asked).toBe(0)
+      expect(blobStore.puts).toHaveLength(1)
+    })
   })
 })

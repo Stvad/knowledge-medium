@@ -19,7 +19,7 @@
  *    `sealBytes`/`openBytes` (byteAead.ts:26-39, :44-53), for arbitrary AAD
  *    tuples built from `contentAad`/`assetBytesAad` (aad.ts:39-43, :60-64).
  *    Text plaintext is restricted to well-formed-Unicode generators
- *    (`fc.string()` / `fc.string({unit:'binary'})`), not arbitrary UTF-16:
+ *    (`fc.string()` / `fc.string({unit: codePointUnitArb})`), not arbitrary UTF-16:
  *    `seal` encodes via `TextEncoder`, which *silently* replaces an
  *    unpaired surrogate with U+FFFD, so a lone-surrogate plaintext would
  *    fail this oracle for a reason that has nothing to do with the AEAD
@@ -65,6 +65,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
+import { codePointUnitArb } from '@/test/arbitraries/utf16'
 import { open, seal } from './aead.js'
 import { openBytes, sealBytes } from './byteAead.js'
 import { mintCanary, validateCanary } from './canary.js'
@@ -98,11 +99,11 @@ const distinctFillPairArb = fc
 // round-trips. Capped length keeps the smoke tier's crypto-op count cheap.
 const textArb = fc.oneof(
   fc.string({ maxLength: 40 }),
-  fc.string({ unit: 'binary', maxLength: 40 }),
+  fc.string({ unit: codePointUnitArb, maxLength: 40 }),
 )
 const fieldArb = fc.oneof(
   fc.string({ maxLength: 24 }),
-  fc.string({ unit: 'binary', maxLength: 24 }),
+  fc.string({ unit: codePointUnitArb, maxLength: 24 }),
 )
 const bytesArb = fc.uint8Array({ maxLength: 64 })
 

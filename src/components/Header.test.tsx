@@ -31,7 +31,7 @@ describe('Header', () => {
     )
 
     const shell = container.firstElementChild as HTMLElement
-    expect(shell).toHaveClass('flex-nowrap', 'px-2', 'py-1')
+    expect(shell).toHaveClass('flex-nowrap', 'px-2.5', 'py-1')
 
     const [startRegion, endRegion] = Array.from(shell.children) as HTMLElement[]
     expect(startRegion).toHaveClass('shrink-0')

@@ -11,15 +11,15 @@
  *  pre-accept content, the user's edit silently reverts or a stale value
  *  is baked in.
  *
- *  So at accept time the completion calls `flushEditorContent(view)`,
- *  which fires the debounced write NOW — the flush lands on the FIFO
- *  write lock ahead of the apply's own tx, so downstream reads see a
- *  stored row consistent with the view. `BlockEditor` publishes its
+ *  So a completion accepts through `acceptCompletionInsert`, whose
+ *  `flushEditorContent(view)` fires the debounced write NOW — the flush
+ *  lands on the FIFO write lock ahead of the apply's own tx, so downstream
+ *  reads see a stored row consistent with the view. `BlockEditor` publishes its
  *  flush through `editorContentFlushFacet`; views with no React-side
  *  persistence (bare test harnesses) publish nothing and the helper is a
  *  no-op. */
 
-import { Facet } from '@codemirror/state'
+import { EditorSelection, Facet } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 
 /** Single flush callback per view (BlockEditor's `flushDebouncers`).
@@ -35,4 +35,18 @@ export const editorContentFlushFacet = Facet.define<() => void, (() => void) | n
  *  content. No-op when the view publishes no flush. */
 export const flushEditorContent = (view: EditorView): void => {
   view.state.facet(editorContentFlushFacet)?.()
+}
+
+/** Accept a completion: replace `from`..`to` with `insert`, put the cursor
+ *  at `cursor` (default: just after the insert), and flush. Completion
+ *  accept is a sync point: the insert is flushed at once rather than
+ *  waiting for the debounce, so the reference it writes is durable for the
+ *  processors that key off stored content. */
+export const acceptCompletionInsert = (
+  view: EditorView,
+  change: {from: number; to: number; insert: string},
+  cursor: number = change.from + change.insert.length,
+): void => {
+  view.dispatch({changes: change, selection: EditorSelection.cursor(cursor)})
+  flushEditorContent(view)
 }

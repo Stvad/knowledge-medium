@@ -56,7 +56,7 @@ import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {
   buildPropertyDefinitionRegistry,
-  type ProjectedPropertyDefinition,
+  type ParsedPropertyDefinition,
   type PropertyDefinitionRegistrySnapshot,
 } from '@/data/propertyDefinitionRegistry'
 import {
@@ -192,7 +192,7 @@ const rowSpecArb = fc.array(
 
 interface Universe {
   readonly seeds: readonly AnyPropertySeedDeclaration[]
-  readonly rows: ReadonlyArray<readonly [string, ProjectedPropertyDefinition]>
+  readonly rows: ReadonlyArray<readonly [string, ParsedPropertyDefinition]>
 }
 
 /** Materialize specs into build inputs. Seed specs are deduped by seedKey
@@ -208,7 +208,7 @@ const buildUniverse = (seedSpecs: readonly SeedSpec[], rowSpecs: readonly RowSpe
     seenKeys.add(spec.key)
     seeds.push(seedFor(spec.key, spec.name, spec.preset))
   }
-  const rows = new Map<string, ProjectedPropertyDefinition>()
+  const rows = new Map<string, ParsedPropertyDefinition>()
   for (const spec of rowSpecs) {
     const workspaceId = spec.foreign ? OTHER_WS : WS
     const fieldId = spec.kind === 'seed-row'
@@ -357,8 +357,8 @@ describe('property definition registry + resolver (fuzz)', () => {
               resolvedSchemas.push(result.schema)
             } else {
               // The winner itself can lack buildable behavior (metadata-only
-              // row, propertySchemaResolution.ts:302-306).
-              expect(result.reason).toBe('definition-unavailable')
+              // row).
+              expect(result.reason).toBe('behavior-unavailable')
             }
           }
         }

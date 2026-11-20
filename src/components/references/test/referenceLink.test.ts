@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
 import type { MouseEvent } from 'react'
-import { classifyReferenceClick } from '../ReferenceLink'
+import { classifyLinkInteraction } from '../linkInteraction'
 
 // A reference renders its raw content INSIDE its own `<a href>`. Classify a click
 // as: 'anchor' (a nested link — navigates natively, the reference does nothing),
@@ -21,19 +21,19 @@ const append = <T extends Element>(parent: Element, child: T): T => {
 const clickOn = (target: Node, currentTarget: Element): MouseEvent =>
   ({ target, currentTarget } as unknown as MouseEvent)
 
-describe('classifyReferenceClick', () => {
+describe('classifyLinkInteraction', () => {
   it('plain text / the link element itself → null (the reference navigates)', () => {
     const a = link()
     const span = append(a, document.createElement('span'))
     span.textContent = 'hello'
-    expect(classifyReferenceClick(clickOn(span, a))).toBeNull()
-    expect(classifyReferenceClick(clickOn(a, a))).toBeNull()
+    expect(classifyLinkInteraction(clickOn(span, a))).toBeNull()
+    expect(classifyLinkInteraction(clickOn(a, a))).toBeNull()
   })
 
   it('a non-Element target (a raw text node) → null', () => {
     const a = link()
     const text = append(a, document.createElement('span')).appendChild(document.createTextNode('x'))
-    expect(classifyReferenceClick(clickOn(text, a))).toBeNull()
+    expect(classifyLinkInteraction(clickOn(text, a))).toBeNull()
   })
 
   it("a nested link (markdown link / nested reference) → 'anchor' (it navigates natively)", () => {
@@ -41,14 +41,14 @@ describe('classifyReferenceClick', () => {
     const inner = append(a, document.createElement('a'))
     inner.href = 'https://example.com'
     const innerText = append(inner, document.createElement('span'))
-    expect(classifyReferenceClick(clickOn(inner, a))).toBe('anchor')
-    expect(classifyReferenceClick(clickOn(innerText, a))).toBe('anchor')
+    expect(classifyLinkInteraction(clickOn(inner, a))).toBe('anchor')
+    expect(classifyLinkInteraction(clickOn(innerText, a))).toBe('anchor')
   })
 
   it("a media image → 'rich' (lightbox, not navigate)", () => {
     const a = link()
     const img = append(a, document.createElement('img'))
-    expect(classifyReferenceClick(clickOn(img, a))).toBe('rich')
+    expect(classifyLinkInteraction(clickOn(img, a))).toBe('rich')
   })
 
   it("a LINKED image (markdown link wraps the image) → 'anchor' (follow the link, not the lightbox)", () => {
@@ -58,7 +58,7 @@ describe('classifyReferenceClick', () => {
     const img = append(inner, document.createElement('img'))
     // The <img> (rich) sits closer to the target than the wrapping <a>, but an
     // explicit link is meant to be followed — anchor wins.
-    expect(classifyReferenceClick(clickOn(img, a))).toBe('anchor')
+    expect(classifyLinkInteraction(clickOn(img, a))).toBe('anchor')
   })
 
   it("the video player + audio/canvas/button/[role=button] → 'rich'", () => {
@@ -70,10 +70,10 @@ describe('classifyReferenceClick', () => {
     const button = append(a, document.createElement('button'))
     const roleButton = append(a, document.createElement('div'))
     roleButton.setAttribute('role', 'button')
-    expect(classifyReferenceClick(clickOn(video, a))).toBe('rich')
-    expect(classifyReferenceClick(clickOn(iframe, a))).toBe('rich')
-    expect(classifyReferenceClick(clickOn(audio, a))).toBe('rich')
-    expect(classifyReferenceClick(clickOn(button, a))).toBe('rich')
-    expect(classifyReferenceClick(clickOn(roleButton, a))).toBe('rich')
+    expect(classifyLinkInteraction(clickOn(video, a))).toBe('rich')
+    expect(classifyLinkInteraction(clickOn(iframe, a))).toBe('rich')
+    expect(classifyLinkInteraction(clickOn(audio, a))).toBe('rich')
+    expect(classifyLinkInteraction(clickOn(button, a))).toBe('rich')
+    expect(classifyLinkInteraction(clickOn(roleButton, a))).toBe('rich')
   })
 })

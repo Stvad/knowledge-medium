@@ -2,8 +2,17 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
+import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { ChangeScope, type User } from '@/data/api'
+import {
+  ChangeScope,
+  CORE_BLOCK_MERGED_EVENT,
+  CORE_BLOCK_SPLIT_EVENT,
+  defineSameTxProcessor,
+  ProcessorRejection,
+  type User,
+} from '@/data/api'
+import { sameTxProcessorsFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -18,7 +27,9 @@ import {
   peekFocusedBlockLocation,
   selectionStateProp,
   topLevelBlockIdProp,
+  aliasesProp,
 } from '@/data/properties'
+import { aliasSameTxProcessors } from '@/plugins/alias/syncProcessor'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
 import {
   CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
@@ -27,10 +38,13 @@ import {
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
+import { createMinimalMarkdownConfig, createTypeScriptConfig } from '@/utils/codemirror'
 import {
   insertPanelRow,
   panelBlockId,
   allPanelRowsInLayoutOrder,
+  layoutSlotsFromRows,
+  insertSidebarStackedPanel,
 } from '@/utils/panelLayoutProjection'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
@@ -47,6 +61,7 @@ import { BULK_DELETE_CONFIRM_THRESHOLD } from '@/utils/deleteBlockThroughUi'
 import { __resetDialogsForTests, getDialogQueue } from '@/utils/dialogs'
 import * as viewTransition from '@/utils/viewTransition'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { disarmCut, getArmedCut } from '@/paste/armedCut'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const WS = 'ws-1'
@@ -210,6 +225,44 @@ beforeEach(async () => {
 })
 
 describe('default CodeMirror shortcuts', () => {
+  it.each([
+    {name: 'uses the selection as the label and puts the caret in the URL', anchor: 11, head: 6, expected: 'hello [world]()!', caret: 14},
+    {name: 'puts the caret in the label when there is no selection', anchor: 6, head: 6, expected: 'hello []()world!', caret: 7},
+  ])('Create link $name', async ({anchor, head, expected, caret}) => {
+    const view = new EditorView({state: EditorState.create({
+      doc: 'hello world!',
+      selection: {anchor, head},
+      extensions: createMinimalMarkdownConfig(),
+    })})
+    try {
+      const {block, uiStateBlock} = await seedPanelAndContent()
+      await findEditModeAction(env.repo, 'edit.cm.create_link')
+        .handler({block, uiStateBlock, editorView: view}, new CustomEvent('test'))
+
+      expect(view.state.doc.toString()).toBe(expected)
+      expect(view.state.selection.main).toMatchObject({anchor: caret, head: caret})
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('declines to insert Markdown into the TypeScript editor', async () => {
+    const view = new EditorView({state: EditorState.create({
+      doc: 'const answer = 42',
+      extensions: createTypeScriptConfig(),
+    })})
+    try {
+      const {block, uiStateBlock} = await seedPanelAndContent()
+      const result = await findEditModeAction(env.repo, 'edit.cm.create_link')
+        .handler({block, uiStateBlock, editorView: view}, new CustomEvent('test'))
+
+      expect(view.state.doc.toString()).toBe('const answer = 42')
+      expect(result).toBe(false)
+    } finally {
+      view.destroy()
+    }
+  })
+
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
     const moveBlockUpAction = findEditModeAction(env.repo, 'move_block_up_cm')
     const moveBlockDownAction = findEditModeAction(env.repo, 'move_block_down_cm')
@@ -389,6 +442,68 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
+  })
+
+  it.each([
+    {context: 'normal mode', actionId: 'open_focused_in_panel'},
+    {context: 'CodeMirror edit mode', actionId: 'edit.cm.open_focused_in_panel'},
+  ])('opens the focused block in the existing sidebar stack from $context', async ({actionId, context}) => {
+    await env.repo.tx(async tx => {
+      for (const [id, orderKey] of [
+        ['source', 'a0'],
+        ['focused', 'b0'],
+        ['right', 'c0'],
+        ['last', 'd0'],
+      ] as const) {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey, content: id})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
+    const sourcePanelId = await insertPanelRow(env.repo, layoutSession, 'source')
+    const rightPanelId = await insertSidebarStackedPanel(env.repo, layoutSession, 'right', {sourcePanelId})
+    await insertPanelRow(env.repo, layoutSession, 'last')
+    const rightPanel = await env.repo.block(rightPanelId).load()
+    const existingStackId = rightPanel?.parentId
+    if (!existingStackId) throw new Error('Expected the right panel to belong to a sidebar stack')
+    const topLevelRowIds = await childIds(layoutSession.id)
+    expect(topLevelRowIds).toHaveLength(3)
+    const action = context === 'normal mode'
+      ? findNormalModeAction(env.repo, actionId)
+      : findEditModeAction(env.repo, actionId)
+    const dependencies = context === 'normal mode'
+      ? {block: env.repo.block('focused'), uiStateBlock: env.repo.block(sourcePanelId)}
+      : {
+          block: env.repo.block('focused'),
+          editorView: emptyEditorView(),
+          uiStateBlock: env.repo.block(sourcePanelId),
+        }
+
+    await action.handler(
+      dependencies as BlockShortcutDependencies & CodeMirrorEditModeDependencies,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    await waitFor(async () => {
+      const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
+      expect(await childIds(layoutSession.id)).toEqual(topLevelRowIds)
+      expect((await env.repo.block(existingStackId).load())?.parentId).toBe(layoutSession.id)
+      expect(layoutSlotsFromRows(layoutSession.id, rows)).toEqual([
+        {kind: 'leaf', blockId: 'source'},
+        {
+          kind: 'stack',
+          children: [
+            {kind: 'leaf', blockId: 'focused', active: true},
+            {kind: 'leaf', blockId: 'right'},
+          ],
+        },
+        {kind: 'leaf', blockId: 'last'},
+      ])
+      const panelRows = allPanelRowsInLayoutOrder(layoutSession.id, rows)
+      expect(panelRows.map(panelBlockId)).toEqual(['source', 'focused', 'right', 'last'])
+      expect((await env.repo.block(rightPanelId).load())?.parentId).toBe(existingStackId)
+    })
   })
 
   it('closes the current panel from CodeMirror edit mode', async () => {
@@ -855,10 +970,9 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
   })
 
-  it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
-    // `cut_selected_blocks` is bound to `d` in multi-select. It called
-    // `block.delete()` directly, so `Delete` on a daily note was refused while
-    // `d` on the identical selection destroyed it.
+  it('cut deletes nothing: it writes the clipboard and arms the blocks to move, guarded ones too', async () => {
+    // `cut_selected_blocks` (`$mod+x`, `d`) deletes nothing, so the deletion
+    // guards and the bulk-delete confirmation don't apply to it.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -884,6 +998,7 @@ describe('default CodeMirror shortcuts', () => {
     const write = vi.fn(async () => {})
     vi.stubGlobal('ClipboardItem', class { })
     vi.stubGlobal('navigator', {clipboard: {write}})
+    disarmCut()
 
     const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
     await action.handler({
@@ -892,62 +1007,117 @@ describe('default CodeMirror shortcuts', () => {
       anchorBlock: null,
     } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    // All-or-nothing: the unguarded sibling survives too, rather than the
-    // selection being half-cut.
-    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
-    // And the guard runs BEFORE the copy: a refused cut must not leave the
-    // user believing the content is on their clipboard. Asserting only that
-    // nothing was deleted can't see this — `deleteBlocksThroughUi` re-checks
-    // the guards itself, so the deletion assertions pass even with the
-    // pre-copy check removed.
-    expect(write).not.toHaveBeenCalled()
-    // The selection survives too, so the user can narrow it and retry.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
-      .toEqual(['ordinary', 'protected'])
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(getArmedCut()?.rootIds).toEqual(['ordinary', 'protected'])
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
+    disarmCut()
     vi.unstubAllGlobals()
   })
 
-  it('cut asks for confirmation BEFORE writing the clipboard', async () => {
-    // Same ordering rule as the guards, for the same reason plus one: a cut the
-    // user calls off must not have replaced whatever their clipboard held.
+  it('cut moves focus past the cut blocks, so a paste there is not inside the cut', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
     }, {scope: ChangeScope.BlockDefault})
-    const ids: string[] = []
-    for (let i = 0; i < BULK_DELETE_CONFIRM_THRESHOLD; i++) {
-      const id = `bulk-${i}`
-      await env.repo.mutate.createChild({parentId: 'root', id, content: id})
-      ids.push(id)
-    }
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut me'})
+    await env.repo.mutate.createChild({parentId: 'cut-me', id: 'cut-child', content: 'child'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    const uiStateBlock = env.repo.block('ui')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+    disarmCut()
 
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-me')],
+      anchorBlock: null,
+      scopeRootId: 'root',
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() =>
+      expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('next'))
+    disarmCut()
+    vi.unstubAllGlobals()
+  })
+
+  it('cutting the last siblings focuses an earlier one, not another cut block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    for (const id of ['keep', 'cut-1', 'cut-2']) {
+      await env.repo.mutate.createChild({parentId: 'root', id, content: id})
+    }
+    const uiStateBlock = env.repo.block('ui')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+    disarmCut()
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('cut-1'), env.repo.block('cut-2')],
+      anchorBlock: null,
+      scopeRootId: 'root',
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    await vi.waitFor(() =>
+      expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('keep'))
+    disarmCut()
+    vi.unstubAllGlobals()
+  })
+
+  it('a cut whose clipboard write is refused arms nothing and keeps the selection', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
     const uiStateBlock = env.repo.block('ui')
     await uiStateBlock.set(selectionStateProp, {
       ...selectionStateProp.defaultValue,
-      selectedBlockIds: ids,
+      selectedBlockIds: ['ordinary'],
     })
-    const write = vi.fn(async () => {})
     vi.stubGlobal('ClipboardItem', class { })
-    vi.stubGlobal('navigator', {clipboard: {write}})
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => { throw new Error('NotAllowedError') })}})
+    disarmCut()
 
     const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
-    const cutting = action.handler({
+    await action.handler({
       uiStateBlock,
-      selectedBlocks: ids.map(id => env.repo.block(id)),
+      selectedBlocks: [env.repo.block('ordinary')],
       anchorBlock: null,
     } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    await vi.waitFor(() => expect(getDialogQueue()).toHaveLength(1))
-    expect(write).not.toHaveBeenCalled()
-    // Cancel. `null` is the dialog queue's cancel value.
-    getDialogQueue()[0].finalize(null)
-    await cutting
+    expect(getArmedCut()).toBeNull()
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['ordinary'])
+    vi.unstubAllGlobals()
+  })
 
-    expect(write).not.toHaveBeenCalled()
-    for (const id of ids) expect(await isBlockDeleted(env.repo, id)).toBe(false)
-    // And the selection survives, so the user can narrow it and retry.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(ids)
+  it('normal-mode cut that the clipboard refuses leaves the focused block and data intact', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'cut-me', content: 'cut me'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'cut-me')
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => { throw new Error('NotAllowedError') })}})
+    disarmCut()
+
+    const action = findNormalModeAction(env.repo, 'cut_block')
+    await action.handler({uiStateBlock, block: env.repo.block('cut-me'), scopeRootId: 'root'} satisfies BlockShortcutDependencies,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(getArmedCut()).toBeNull()
+    expect(await isBlockDeleted(env.repo, 'cut-me')).toBe(false)
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)?.blockId).toBe('cut-me')
     vi.unstubAllGlobals()
   })
 
@@ -1058,6 +1228,38 @@ describe('default CodeMirror shortcuts', () => {
     expect(editorView.state.doc.toString()).toBe('current')
   })
 
+  it('puts the editor text back when a Delete merge is refused', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-merge', [defineSameTxProcessor({
+      name: 'test.refuseMerge',
+      watches: {kind: 'event', events: [CORE_BLOCK_MERGED_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(await isBlockDeleted(env.repo, 'next')).toBe(false)
+    // Left merged, the editor's next flush would copy `next` into this block.
+    expect(editorView.state.doc.toString()).toBe('current')
+    expect(editorView.state.selection.main.head).toBe('current'.length)
+  })
+
   it('a guarded block is not merged away by Backspace at offset 0', async () => {
     // The Backspace twin of the above: this branch merges the CURRENT block
     // into the previous one, which destroys the current block.
@@ -1156,6 +1358,74 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.content).toBe('current')
     expect(env.repo.block('empty').peek()).toBeNull()
     expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
+  })
+
+  describe.each(['extension', 'html-document'])('next to a %s block', type => {
+    const seed = async (firstType?: string, secondType?: string) => {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+      await env.repo.mutate.createChild({parentId: 'root', id: 'second', content: 'second'})
+      await env.repo.tx(async tx => {
+        if (firstType) await tx.update('first', {properties: {types: [firstType]}})
+        if (secondType) await tx.update('second', {properties: {types: [secondType]}})
+      }, {scope: ChangeScope.BlockDefault})
+      const uiStateBlock = env.repo.block('ui')
+      await uiStateBlock.set(topLevelBlockIdProp, 'root')
+      return uiStateBlock
+    }
+
+    const expectBothIntact = () => {
+      expect(env.repo.block('first').peek()?.content).toBe('first')
+      expect(env.repo.block('second').peek()?.content).toBe('second')
+    }
+
+    it('Enter mid-source does not split it', async () => {
+      const uiStateBlock = await seed(type, undefined)
+      await focusBlock(uiStateBlock, 'first')
+      await findEditModeAction(env.repo, 'split_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView: codeMirrorEditorView('first', 2),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(await childIds('root')).toEqual(['first', 'second'])
+    })
+
+    it.each([
+      ['prose, with source above', type, undefined],
+      ['source, with prose above', undefined, type],
+    ] as const)('Backspace at the start of %s does not join them', async (_name, firstType, secondType) => {
+      const uiStateBlock = await seed(firstType, secondType)
+      await focusBlock(uiStateBlock, 'second')
+      await findEditModeAction(env.repo, 'delete_empty_block_cm').handler({
+        block: env.repo.block('second'),
+        editorView: codeMirrorEditorView('second', 0),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+    })
+
+    it.each([
+      ['prose, with source below', undefined, type],
+      ['source, with prose below', type, undefined],
+    ] as const)('Delete at the end of %s does not join them', async (_name, firstType, secondType) => {
+      const uiStateBlock = await seed(firstType, secondType)
+      await focusBlock(uiStateBlock, 'first')
+      const editorView = codeMirrorEditorView('first', 'first'.length)
+      await findEditModeAction(env.repo, 'merge_next_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView,
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(editorView.state.doc.toString()).toBe('first')
+    })
   })
 
   it("merges an only child into its parent when pressing delete at the parent's end", async () => {
@@ -1546,6 +1816,123 @@ describe('default CodeMirror shortcuts', () => {
     expect(editorView.state.doc.toString()).toBe('left ')
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(suffixId)
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({blockId: suffixId, start: 0})
+  })
+
+  // Each split re-arms the editor with the half its block keeps before the
+  // split's transaction runs, so a refused split must put the rest back, or
+  // the editor's next flush would save only that half.
+  it.each([
+    ['a mid-text split', 'root'],
+    ['a scope-root split', 'current'],
+  ])('puts the whole text back in the editor when %s is refused', async (_shape, scopeRootId) => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'left right'})
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-refuse-split', [defineSameTxProcessor({
+      name: 'test.refuseSplit',
+      watches: {kind: 'event', events: [CORE_BLOCK_SPLIT_EVENT]},
+      apply: async () => { throw new ProcessorRejection('refused', 'test.refused') },
+    })])
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'current')
+    const editorView = codeMirrorEditorView('left right', 'left '.length)
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await expect(action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId,
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger))
+      .rejects.toBeInstanceOf(ProcessorRejection)
+
+    expect(editorView.state.doc.toString()).toBe('left right')
+    expect(editorView.state.selection.main.head).toBe('left '.length)
+    expect(env.repo.block('current').peek()?.content).toBe('left right')
+    expect(await childIds('root')).toEqual(['current'])
+  })
+
+  // The editor stays editable while a split's or merge's write runs, so a
+  // write that an alias collision refuses must keep what was typed meanwhile:
+  // the editor's next flush saves whatever it is left showing. Each gesture
+  // renames an aliased block to the name `taken` holds.
+  it.each([
+    {
+      shape: 'a scope-root split, typed into', actionId: 'split_block_cm', blockId: 'page', taken: 'Alpha',
+      text: 'Alpha Beta', caret: 'Alpha'.length, rearmed: 'Alpha', typedAt: 'Alpha'.length, typed: '!',
+      restored: 'Alpha! Beta', restoredCaret: 'Alpha!'.length,
+    },
+    {
+      shape: 'a mid-text split, typed into', actionId: 'split_block_cm', blockId: 'current', taken: 'Beta',
+      text: 'Alpha Beta', caret: 'Alpha '.length, rearmed: 'Beta', typedAt: 0, typed: '!',
+      restored: 'Alpha !Beta', restoredCaret: 'Alpha !'.length,
+    },
+    {
+      shape: 'a Delete merge, typed into at the join', actionId: 'merge_next_block_cm', blockId: 'current', taken: 'Alpha Beta',
+      text: 'Alpha', caret: 'Alpha'.length, rearmed: 'Alpha Beta', typedAt: 'Alpha'.length, typed: '!',
+      restored: 'Alpha!', restoredCaret: 'Alpha!'.length,
+    },
+    // Text typed into what the merge pulled in stays whole, in both blocks.
+    {
+      shape: 'a Delete merge, typed into past the join', actionId: 'merge_next_block_cm', blockId: 'current', taken: 'Alpha Beta',
+      text: 'Alpha', caret: 'Alpha'.length, rearmed: 'Alpha Beta', typedAt: 'Alpha B'.length, typed: '!',
+      restored: 'Alpha B!eta', restoredCaret: 'Alpha B!'.length,
+    },
+    {
+      shape: 'a Delete merge, caret moved past the join', actionId: 'merge_next_block_cm', blockId: 'current', taken: 'Alpha Beta',
+      text: 'Alpha', caret: 'Alpha'.length, rearmed: 'Alpha Beta', typedAt: 'Alpha B'.length, typed: '',
+      restored: 'Alpha', restoredCaret: 'Alpha'.length,
+    },
+  ])('keeps what the user did while $shape runs, when an alias collision refuses it', async ({
+    actionId, blockId, taken, text, caret, rearmed, typedAt, typed, restored, restoredCaret,
+  }) => {
+    env.repo.setRuntimeContributions(sameTxProcessorsFacet, 'test-alias-sync', [...aliasSameTxProcessors])
+    const aliased = async (id: string, title: string, parentId: string | null, orderKey: string) => {
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId, orderKey, content: title})
+        await tx.setProperty(id, aliasesProp, [title])
+      }, {scope: ChangeScope.BlockDefault})
+    }
+    await aliased('taken', taken, null, 'z1')
+    await aliased('page', blockId === 'page' ? text : 'Page', null, 'a0')
+    if (blockId === 'current') await aliased('current', text, 'page', 'a0')
+    await env.repo.mutate.createChild({parentId: 'page', id: 'next', content: ' Beta'})
+    await env.repo.tx(tx => tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'}), {scope: ChangeScope.BlockDefault})
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, blockId)
+
+    // Hold the gesture's write until the user has typed into the editor it
+    // re-armed.
+    let releaseWrite!: () => void
+    const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve })
+    const runTx = env.repo.tx.bind(env.repo)
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementationOnce(async (...args: Parameters<Repo['tx']>) => {
+      await writeReleased
+      return runTx(...args)
+    })
+
+    const editorView = new EditorView({doc: text, selection: {anchor: caret}})
+    const gesture = findEditModeAction(env.repo, actionId).handler({
+      block: env.repo.block(blockId),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'page',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    const refused = expect(gesture).rejects.toMatchObject({code: 'alias.collision'})
+    await vi.waitFor(() => expect(txSpy).toHaveBeenCalled())
+    expect(editorView.state.doc.toString()).toBe(rearmed)
+    editorView.dispatch({changes: {from: typedAt, insert: typed}, selection: {anchor: typedAt + typed.length}})
+    releaseWrite()
+    await refused
+
+    expect(editorView.state.doc.toString()).toBe(restored)
+    expect(editorView.state.selection.main.head).toBe(restoredCaret)
+    expect(env.repo.block(blockId).peek()?.content).toBe(text)
+    expect(await isBlockDeleted(env.repo, 'next')).toBe(false)
+    editorView.destroy()
   })
 
   it('makes Tab a no-op on a scope-root block', async () => {

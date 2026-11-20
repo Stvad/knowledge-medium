@@ -13,7 +13,7 @@ import {
   undoBottomNavItem,
 } from './defaultItems.ts'
 
-export { MobileBottomNav } from './MobileBottomNav.tsx'
+export { ActionRefBarButton, MobileBottomNav } from './MobileBottomNav.tsx'
 export { MobileBottomNavButton, type MobileBottomNavIcon } from './Button.tsx'
 export {
   mobileBottomNavItemsFacet,

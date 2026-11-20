@@ -23,14 +23,47 @@ vi.mock('@/shortcuts/ActiveContexts.tsx', () => ({
 
 let activeContextsMock: ReadonlyMap<string, BaseShortcutDependencies>
 
-const renderHookWithRuntime = (runtime: FacetRuntime) =>
-  renderHook(() => useCommandPaletteActions(), {
+const renderHookWithRuntime = (runtime: FacetRuntime, open = true) =>
+  renderHook(({open}) => useCommandPaletteActions(open, null), {
+    initialProps: {open},
     wrapper: ({children}) => (
       <AppRuntimeContextProvider value={runtime}>{children}</AppRuntimeContextProvider>
     ),
   })
 
 describe('useCommandPaletteActions isVisible filter', () => {
+  it('skips visibility reads and list updates while closed, then refreshes on reopening', () => {
+    const isVisible = vi.fn(() => true)
+    const action: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+      id: 'visible', description: 'Visible', context: ActionContextTypes.NORMAL_MODE,
+      isVisible, handler: vi.fn(),
+    }
+    const runtime = resolveFacetRuntimeSync([
+      defaultActionContextConfigs.map(c => actionContextsFacet.of(c)),
+      actionsFacet.of(action, {source: 'test'}),
+    ])
+    activeContextsMock = new Map([[ActionContextTypes.NORMAL_MODE, {
+      block: {id: 'b'}, uiStateBlock: {id: 'b'},
+    } as never]])
+    const {result, rerender} = renderHookWithRuntime(runtime)
+    expect(result.current.actions).toContain(action)
+    expect(isVisible).toHaveBeenCalled()
+    isVisible.mockClear()
+
+    rerender({open: false})
+    const closedActions = result.current.actions
+    activeContextsMock = new Map(activeContextsMock)
+    rerender({open: false})
+
+    expect(isVisible).not.toHaveBeenCalled()
+    expect(result.current.actions).toBe(closedActions)
+
+    isVisible.mockReturnValue(false)
+    rerender({open: true})
+    expect(isVisible).toHaveBeenCalledOnce()
+    expect(result.current.actions).not.toContain(action)
+  })
+
   it('hides actions whose isVisible returns false against the active context deps', () => {
     const always: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
       id: 'always',

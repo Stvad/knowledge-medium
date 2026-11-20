@@ -138,7 +138,7 @@ export const ensureBlockLocalColumns = async (db: {
  * LOCAL-only staging column: has the drain decided that `blocks` correctly
  * reflects this delivery?
  *
- * The durable record of "this device downloaded a row it has not applied",
+ * The durable record of "this downloaded row still needs local verification",
  * written by the materializer in the SAME transaction as the decision itself.
  * Every other way of answering that question is a poll of concurrently-moving
  * state from somewhere the decision is not made, and each one is its own
@@ -148,7 +148,9 @@ export const ensureBlockLocalColumns = async (db: {
  * PowerSync's put is an `INSERT OR REPLACE` over the STORAGE columns only, so
  * every delivery — first or re-delivery — resets this to its default and a
  * newer version is unapplied until the drain says otherwise; a staging delete
- * takes it with the row. No path can leave it stale.
+ * takes it with the row. The upgrade seed can leave already-correct legacy rows
+ * flagged when stored-column comparisons cannot prove equality; only the drain
+ * can verify encrypted stamp-zero rows against local plaintext.
  *
  * `blocks_synced` carries INSERT and DELETE triggers but no UPDATE trigger, so
  * clearing it enqueues nothing and cannot feed the drain its own tail.
@@ -262,6 +264,15 @@ export const CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_recent
   ON blocks (workspace_id, coalesce(user_updated_at, updated_at) DESC, id ASC)
   WHERE deleted = 0 AND content != ''
+`
+
+/** Blocks open in an editor on any client (the readers carry this predicate
+ *  literally; see `BEING_EDITED_BLOCKS_SQL`). Holds a handful of ui-state
+ *  rows, so a read re-run on every table change stays cheap on a large graph. */
+export const CREATE_BLOCKS_BEING_EDITED_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_being_edited
+  ON blocks (id)
+  WHERE deleted = 0 AND json_extract(properties_json, '$.isEditing') = 1
 `
 
 /** Partial index over the local derived column: field-row recognition and
@@ -442,11 +453,12 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
 ] as const satisfies readonly BlockSnapshotJsonField[]
 
+/** The JSON snapshot of a `blocks` row that `row_events` stores. */
 export const buildBlockSnapshotJsonSql = (rowRef: string) => `
   json_object(
 ${formatSqlList(BLOCK_SNAPSHOT_JSON_FIELDS.map(field => `'${field.key}', ${field.sqlExpression(rowRef)}`), 4)}
   )
-`
+`.trim()
 
 const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
   if (!value) return fallback
@@ -458,9 +470,6 @@ const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
     return fallback
   }
 }
-
-export const parseBlockSnapshotJson = (value: string | null | undefined) =>
-  value ? safeJsonParse<BlockData | null>(value, null) ?? undefined : undefined
 
 export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,

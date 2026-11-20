@@ -1,5 +1,5 @@
 import type { Repo } from '@/data/repo'
-import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { readPluginPref } from '@/data/stateBlocks.js'
 import {
   EMPTY_GROUPED_BACKLINKS_CONFIG,
   groupedBacklinksDefaultsProp,
@@ -26,9 +26,8 @@ export type GroupedBacklinksGroupingSpec =
   | Partial<GroupedBacklinksConfig>
 
 /** Resolve the grouping config for `blockId` the way the grouped-backlinks
- *  view does, but outside React. The `'user'` branch bootstraps the
- *  grouped-backlinks user-prefs sub-block on first access (same as
- *  opening the panel in-app does). */
+ *  view does, but outside React. The `'user'` branch reads the user's
+ *  grouped-backlinks defaults without creating their prefs block. */
 export const resolveGroupedBacklinksConfig = async (
   repo: Repo,
   workspaceId: string,
@@ -40,14 +39,7 @@ export const resolveGroupedBacklinksConfig = async (
   }
   if (spec === 'none') return EMPTY_GROUPED_BACKLINKS_CONFIG
 
-  const prefsBlock = await getPluginPrefsBlock(
-    repo,
-    workspaceId,
-    repo.user,
-    groupedBacklinksPrefsType,
-  )
-  const defaults = prefsBlock.peekProperty(groupedBacklinksDefaultsProp)
-    ?? groupedBacklinksDefaultsProp.defaultValue
+  const defaults = await readPluginPref(repo, workspaceId, repo.user, groupedBacklinksPrefsType, groupedBacklinksDefaultsProp)
   const blockData = await repo.load(blockId)
   const overrides = selectGroupedBacklinksOverrides(blockData)
   return mergeGroupedBacklinksConfig(defaults, overrides)

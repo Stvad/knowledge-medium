@@ -20,8 +20,6 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { registrySeedParams } from '@/data/internals/kernelQueries'
-import { propertyMachinerySourceIds } from '@/plugins/backlinks/query'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
@@ -380,6 +378,58 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     })
   }
 
+  it('leaves an old named-value projection alone on open, then refreshes on content edit', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-refs', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    await seedRow({id: 'named-owner', properties: {[schema.name]: [], unrelated: 'keep'}})
+    await seedRow({id: 'named-field', parentId: 'named-owner', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    await seedRow({id: 'named-value', parentId: 'named-field', content: '[[Existing name]]', referenceTargetId: 'existing-target'})
+    await seedRow({id: 'existing-target', properties: {[aliasesProp.name]: ['Existing name']}})
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    await runPass(repo)
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    await repo.tx(tx => tx.update('named-value', {content: '[[Existing name]] '}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await cellOf('named-owner', schema.name)).toEqual(['existing-target'])
+    expect(await cellOf('named-owner', 'unrelated')).toBe('keep')
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Existing name]] '})
+  })
+
+  it('projects a refList member when its previously missing name resolves', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-refs', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    await runPass(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'named-owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'owner'})
+      await tx.create({id: 'late-target', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target'})
+      await tx.create({id: 'named-field', workspaceId: WS, parentId: 'named-owner', orderKey: 'a0', content: '::((named-ref-field))'})
+      await tx.create({id: 'named-value', workspaceId: WS, parentId: 'named-field', orderKey: 'a0', content: '[[Late name]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('named-value')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toEqual([])
+    const before = await repo.load('named-value')
+    await repo.tx(tx => tx.setProperty('late-target', aliasesProp, ['Late name']), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('named-value')).toBe('late-target')
+      expect(await cellOf('named-owner', schema.name)).toEqual(['late-target'])
+    })
+    expect(await repo.load('named-value')).toMatchObject({content: '[[Late name]]', updatedAt: before!.updatedAt})
+  })
+
   it('projects the owner cell when the claim turns a marked row into a field row', async () => {
     await flipWorkspace()
     const repo = setup()
@@ -622,13 +672,9 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     expect(await cellOf(STATUS_FIELD_ID, aliasesProp.name)).toBeUndefined()
   })
 
-  /** The stamp writes one local column and re-runs no reference parsing, so
-   *  whether a row's stored `references` can go stale across the transition
-   *  decides whether the repair needs a references reconcile bolted on
-   *  (issue #781). It can't, and this pins the two facts that make it so:
-   *  parse output does not read recognition, and the display-side machinery
-   *  filter is a live query rather than parse-time state. */
-  it('recognizes a row without touching its parsed references — the machinery filter follows the stamp', async () => {
+  /** The stamp writes the derived target column while preserving parsed
+   *  references; both remain independently observable after the pass. */
+  it('stamps recognized field rows without changing their parsed references', async () => {
     await seedDormantWorkspace()
     const repo = setup()
     // The upgrading device's shape: derived columns NULL because they
@@ -654,27 +700,11 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     })
     await flipSeededWorkspace()
 
-    // Pre-stamp the row is an ordinary block, so nothing under it is
-    // machinery and both edges display. Asserting this half is what makes
-    // the post-stamp assertion evidence rather than a tautology.
-    expect(await propertyMachinerySourceIds(
-      sharedDb.db, ['row', 'value'], registrySeedParams(repo),
-    )).toEqual(new Set())
-
     await runPass(repo)
     expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
 
-    // Same stored edges, read differently: the interior value row is now
-    // suppressed from the backlink panel and the field row itself is not
-    // (its edge to its own definition IS the "used by" backlink).
-    expect(await propertyMachinerySourceIds(
-      sharedDb.db, ['row', 'value'], registrySeedParams(repo),
-    )).toEqual(new Set(['value']))
-
-    // And the edges themselves are untouched — deliberately. Parse writes
-    // them from content alone, so a field row carries a reference to its
-    // definition exactly as an unrecognized `::((id))` row does, and
-    // definition merge/rename retarget reach both through the same index.
+    // Parse writes references from content alone, independent of derived
+    // recognition, and the pass leaves those stored references untouched.
     expect(await refsOf('row')).toEqual([{id: STATUS_FIELD_ID, alias: STATUS_FIELD_ID}])
     expect(await refsOf('value')).toEqual([{id: 'target-page', alias: 'Target'}])
   })

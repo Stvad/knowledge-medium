@@ -63,6 +63,7 @@ export type {
 } from '@/extensions/core.js'
 
 export type {
+  BlockBelowContentContribution,
   BlockBulletClassContext,
   BlockBulletClassContribution,
   BlockBulletHoverContribution,
@@ -75,6 +76,9 @@ export type {
   BlockContentRendererSlot,
   BlockContentSurfaceContribution,
   BlockContentSurfaceProps,
+  BlockGutterCorner,
+  BlockGutterItem,
+  BlockGutterItemContribution,
   BlockTextClassContext,
   BlockTextClassContribution,
   BlockInteractionContext,
@@ -88,6 +92,11 @@ export type {
 } from '@/extensions/blockInteraction.js'
 
 export type {
+  MarkdownSource,
+} from '@/markdown/context.js'
+
+export type {
+  OutlineNode,
   PasteDecision,
   PasteRequest,
   PasteSurface,
@@ -107,6 +116,11 @@ export type {
   BlockOpenerOptions,
   OpenBlockContext,
 } from '@/utils/navigation.js'
+
+export type {
+  SurfaceZoom,
+  ZoomCrumb,
+} from '@/components/ZoomableSurface.js'
 
 export type {
   ActionConfig,
@@ -140,6 +154,8 @@ export type {
   TypeContribution,
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
+
+export type { SystemPage } from '@/data/facets.js'
 
 export type {
   DerivedChildOutcome,

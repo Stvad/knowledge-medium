@@ -1,20 +1,15 @@
 /**
- * Request coalescing for the ancestor walk.
+ * Request coalescing for the ancestor walk (`readBatch.ts`).
  *
  * One handle per id (see `core.ancestors`) would otherwise cost one SQL
- * statement per id, on a connection with no read/read concurrency
- * (`OPFSCoopSyncVFS` runs one connection behind a single-slot mutex). So
- * every walk that starts in the same microtask is answered by ONE
- * `manyAncestorsSql` statement.
- *
- * Purely a transport: it holds no resolved chains between flushes, so
- * nothing here can serve a stale one. Caching is the handle store's job.
+ * statement per id. So every walk that starts in the same microtask is
+ * answered by ONE `manyAncestorsSql` statement.
  */
 
 import type { QueryReadDb } from '@/data/api'
 import type { BlockRow } from '@/data/blockSchema'
+import { ReadBatcher, readBatcherPerDb } from './readBatch'
 import { MAX_IDS_PER_IN_CLAUSE } from './sqlBinds'
-import { contentionFor } from './timingMetrics'
 import { manyAncestorsSql } from './treeQueries'
 
 export type AncestorChainRow = BlockRow & {chain_start_id: string; depth: number}
@@ -51,114 +46,24 @@ const walkFromRows = (rows: readonly AncestorChainRow[]): AncestorWalk => ({
   chain: rows.slice(1),
 })
 
-/** One id's pending read. Every caller for that id in a tick awaits the
- *  same promise, so settling it settles all of them. */
-interface Pending {
-  promise: Promise<AncestorWalk>
-  resolve: (walk: AncestorWalk) => void
-  reject: (error: unknown) => void
-  /** How many callers await this id. Counted so the flush can report ONE
-   *  shared read once, rather than once per caller that joined. */
-  callers: number
-}
-
-const pending = (): Pending => {
-  let resolve!: (walk: AncestorWalk) => void
-  let reject!: (error: unknown) => void
-  const promise = new Promise<AncestorWalk>((res, rej) => { resolve = res; reject = rej })
-  return {promise, resolve, reject, callers: 1}
-}
-
-class AncestorBatcher {
-  /** Ids awaiting the next flush. Same id twice in a tick is one read. */
-  private waiting = new Map<string, Pending>()
-  private scheduled = false
-  /** Undefined when the db was never wrapped for metrics (fixtures, tests).
-   *  Assigned in the constructor BODY: a field initializer reading `this.db`
-   *  runs before the parameter property exists under `useDefineForClassFields`. */
-  private readonly pool: ReturnType<typeof contentionFor>
-
-  constructor(private readonly db: QueryReadDb) {
-    this.pool = contentionFor(db)
-  }
-
-  /** Tell the metrics layer this statement is answering more than one caller.
-   *  Without it every one of them looks like an independent measurement of an
-   *  idle database: the pool genuinely was idle for each, and the wall-clock
-   *  they all record is still ONE observation. The batcher is the only place
-   *  that knows the difference.
-   *
-   *  Once per STATEMENT, from the flush, because that is what the counter
-   *  counts — not once per caller that joined, which would count joins. */
-  private noteShared(): void {
-    this.pool?.noteSharedWork()
-  }
-
-  walkFor(id: string): Promise<AncestorWalk> {
-    const existing = this.waiting.get(id)
-    if (existing) {
-      existing.callers++
-      return existing.promise
+const batcherFor = readBatcherPerDb(db => new ReadBatcher<void, AncestorWalk>(db, {
+  maxIdsPerStatement: MAX_IDS_PER_STATEMENT,
+  read: async (_key, ids) => {
+    const rows = await db.getAll<AncestorChainRow>(manyAncestorsSql(ids.length), [...ids])
+    const byStart = new Map<string, AncestorChainRow[]>()
+    for (const row of rows) {
+      const walk = byStart.get(row.chain_start_id)
+      if (walk) walk.push(row)
+      else byStart.set(row.chain_start_id, [row])
     }
-
-    const entry = pending()
-    this.waiting.set(id, entry)
-    // Work avoided, not a correctness guard: a second flush in the
-    // same tick finds the queue already drained and issues nothing.
-    if (!this.scheduled) {
-      this.scheduled = true
-      queueMicrotask(() => { void this.flush() })
+    // An id with no rows at all is a block that does not exist or is
+    // soft-deleted — the ONE place that reading is made.
+    return id => {
+      const rowsForId = byStart.get(id)
+      return rowsForId ? walkFromRows(rowsForId) : NO_WALK
     }
-    return entry.promise
-  }
-
-  private async flush(): Promise<void> {
-    // Taken before the first await, so ids arriving while a statement is
-    // in flight open the NEXT batch rather than joining one that has
-    // already been read.
-    const batch = this.waiting
-    this.waiting = new Map()
-    this.scheduled = false
-
-    const ids = [...batch.keys()]
-    for (let start = 0; start < ids.length; start += MAX_IDS_PER_STATEMENT) {
-      const chunk = ids.slice(start, start + MAX_IDS_PER_STATEMENT)
-      // Callers, not ids: three resolves awaiting one id share this statement
-      // exactly as three ids from three resolves do, and both are one read.
-      let callers = 0
-      for (const id of chunk) callers += batch.get(id)!.callers
-      if (callers > 1) this.noteShared()
-      try {
-        const rows = await this.db.getAll<AncestorChainRow>(
-          manyAncestorsSql(chunk.length), chunk,
-        )
-        const byStart = new Map<string, AncestorChainRow[]>()
-        for (const row of rows) {
-          const walk = byStart.get(row.chain_start_id)
-          if (walk) walk.push(row)
-          else byStart.set(row.chain_start_id, [row])
-        }
-        // An id with no rows at all is a block that does not exist or is
-        // soft-deleted — the ONE place that reading is made, so a caller
-        // never sees `undefined` for an id it asked about.
-        for (const id of chunk) {
-          const rowsForId = byStart.get(id)
-          batch.get(id)!.resolve(rowsForId ? walkFromRows(rowsForId) : NO_WALK)
-        }
-      } catch (error) {
-        // Scoped to the chunk: an id in a later chunk is a separate
-        // statement and still gets its chain.
-        for (const id of chunk) batch.get(id)!.reject(error)
-      }
-    }
-  }
-}
-
-/** One batcher per read surface, which is one per `Repo` — `Repo` wraps
- *  its database in a per-instance metrics proxy, so two Repos over one
- *  connection do NOT share a queue. `WeakMap` rather than a `Repo` field
- *  so the walk stays reachable from a resolver holding only `ctx.db`. */
-const batchers = new WeakMap<QueryReadDb, AncestorBatcher>()
+  },
+}))
 
 /** The walk for `id`: its leaf-to-root chain with deleted rows filtered
  *  out, and the parent it stopped at if it did. Calls for the same id in
@@ -168,11 +73,4 @@ const batchers = new WeakMap<QueryReadDb, AncestorBatcher>()
 export const ancestorWalk = (
   db: QueryReadDb,
   id: string,
-): Promise<AncestorWalk> => {
-  let batcher = batchers.get(db)
-  if (!batcher) {
-    batcher = new AncestorBatcher(db)
-    batchers.set(db, batcher)
-  }
-  return batcher.walkFor(id)
-}
+): Promise<AncestorWalk> => batcherFor(db).request(id)

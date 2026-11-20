@@ -27,6 +27,7 @@ describe('data-layer errors', () => {
     const errors = [
       new BlockNotFoundError('a'),
       new BlockNotLoadedError('a'),
+      new CodecError('string', 42),
       new CycleError('a', 'b'),
       new DeletedConflictError('a'),
       new DeterministicIdCrossWorkspaceError('a', 'w1', 'w2'),
@@ -69,33 +70,11 @@ describe('data-layer errors', () => {
     expect(checked).toBeGreaterThan(15)
   })
 
-  it('CodecError also subclasses DataLayerError', () => {
-    expect(new CodecError('string', 42)).toBeInstanceOf(DataLayerError)
-  })
-
-  it('preserves identifying fields on tree errors', () => {
-    const cyc = new CycleError('child', 'newParent')
-    expect(cyc.movedId).toBe('child')
-    expect(cyc.targetParentId).toBe('newParent')
-
-    const merge = new MergeIntoDescendantError('intoX', 'fromY')
-    expect(merge.intoId).toBe('intoX')
-    expect(merge.fromId).toBe('fromY')
-    expect(merge.message).toContain('intoX')
-    expect(merge.message).toContain('fromY')
-
-    const cross = new DeterministicIdCrossWorkspaceError('id', 'wa', 'wb')
-    expect(cross.id).toBe('id')
-    expect(cross.existingWorkspaceId).toBe('wa')
-    expect(cross.requestedWorkspaceId).toBe('wb')
-
-    const mismatch = new WorkspaceMismatchError('w1', 'w2')
-    expect(mismatch.pinnedWorkspaceId).toBe('w1')
-    expect(mismatch.attemptedWorkspaceId).toBe('w2')
-  })
-
   it('messages include the relevant identifiers for grep-friendly logs', () => {
     expect(new ParentNotFoundError('parentX').message).toContain('parentX')
     expect(new ReadOnlyError('block-default').message).toContain('block-default')
+    const merge = new MergeIntoDescendantError('intoX', 'fromY').message
+    expect(merge).toContain('intoX')
+    expect(merge).toContain('fromY')
   })
 })

@@ -7,6 +7,7 @@
  * interesting cases are all timing ones that are painful to stage through the
  * UI but trivial to state directly.
  */
+import { decodeRowProperty } from '@/data/rowProperty'
 import type { BlockData } from '@/data/api'
 import { getBlockTypes } from '@/data/properties.js'
 import {
@@ -38,10 +39,8 @@ export const carriesSrsType = (data: BlockData): boolean => {
 export const isLiveSrsCard = (data: BlockData): boolean => {
   try {
     if (!carriesSrsType(data)) return false
-    const archivedRaw = data.properties[srsArchivedProp.name]
-    if (archivedRaw !== undefined && srsArchivedProp.codec.decode(archivedRaw)) return false
-    const dateRaw = data.properties[srsNextReviewDateProp.name]
-    return dateRaw !== undefined && srsNextReviewDateProp.codec.decode(dateRaw).length > 0
+    if (decodeRowProperty(data, srsArchivedProp)) return false
+    return decodeRowProperty(data, srsNextReviewDateProp).length > 0
   } catch {
     return false
   }

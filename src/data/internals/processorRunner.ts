@@ -58,6 +58,8 @@ export interface CommittedTxOutcome {
   /** Merged property-schema registry snapshot taken at the same
    *  boundary as `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Repo host bound to the originating transaction runtime. */
+  repo: Repo
 }
 
 /** Internal helper — convert a snapshots map entry into a ChangedRow. */
@@ -100,16 +102,17 @@ const collectFieldMatches = (
 }
 
 export class ProcessorRunner {
-  private readonly repo: Repo
   private readonly db: PowerSyncDb
   /** In-flight processor promises. Tracked so tests (and any caller
    *  who needs deterministic ordering) can `awaitIdle()` before
    *  assertions. Each promise removes itself from the set on
    *  settlement (success or failure). */
   private readonly pending: Set<Promise<void>> = new Set()
+  /** Delayed jobs whose timer has not fired yet: not in `pending`, and
+   *  stoppable only through these handles. */
+  private readonly armed: Set<ReturnType<typeof setTimeout>> = new Set()
 
-  constructor(repo: Repo, db: PowerSyncDb) {
-    this.repo = repo
+  constructor(db: PowerSyncDb) {
     this.db = db
   }
 
@@ -132,6 +135,14 @@ export class ProcessorRunner {
       // when this batch settles, and the loop catches them.
       await Promise.allSettled([...this.pending])
     }
+  }
+
+  /** Drop every delayed job whose timer has not fired: it never runs. For an
+   *  owner discarding the db these jobs would run against; a job that has
+   *  already started is `pending`, which `awaitIdle` drains instead. */
+  cancelArmed(): void {
+    for (const timer of this.armed) clearTimeout(timer)
+    this.armed.clear()
   }
 
   /** Dispatch all matching processors for one committed tx. Called by
@@ -160,7 +171,7 @@ export class ProcessorRunner {
         user: outcome.user,
         workspaceId: outcome.workspaceId,
       }
-      this.track(this.runOne(processor, event, name, outcome.propertySchemas))
+      this.track(this.runOne(processor, event, name, outcome.propertySchemas, outcome.repo))
     }
 
     // Explicit processors: one job per `tx.afterCommit` call. The tx's
@@ -198,11 +209,13 @@ export class ProcessorRunner {
         // too. Until the timer fires there's nothing pending, which
         // matches the spec: §16.4 calls out that delayMs is real
         // wall-clock time and not part of the synchronous commit step.
-        setTimeout(() => {
-          this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas))
+        const timer = setTimeout(() => {
+          this.armed.delete(timer)
+          this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas, outcome.repo))
         }, job.delayMs)
+        this.armed.add(timer)
       } else {
-        this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas))
+        this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas, outcome.repo))
       }
     }
   }
@@ -222,11 +235,12 @@ export class ProcessorRunner {
     event: CommittedEvent<unknown>,
     name: string,
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    repo: Repo,
   ): Promise<void> {
     try {
       const ctx: ProcessorCtx = {
         db: this.db,
-        repo: this.repo,
+        repo,
         propertySchemas,
       }
       await processor.apply(event, ctx)

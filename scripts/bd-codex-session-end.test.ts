@@ -53,9 +53,22 @@ describe('launchSessionEndSync', () => {
     const releaseDir = mkdtempSync(join(tmpdir(), 'bd-codex-release-'))
     created.add(releaseDir)
     const release = join(releaseDir, 'release')
+    // Poll for the release file rather than fs.watch it: on macOS fs.watch returns
+    // before its FSEvents stream is live, so a file created right after "ready" is
+    // never reported and the fixture waits forever. The deadline (above the test's
+    // own budget) keeps a never-released fixture from outliving the test.
     const fixture = writeSyncFixture(
       'success',
-      `import { existsSync, watch } from 'node:fs'\nconst release = ${JSON.stringify(release)}\nlet watcher\nlet done = false\nconst finish = () => { if (done) return; done = true; watcher?.close(); process.stdout.write('fake sync success\\n') }\nwatcher = watch(${JSON.stringify(releaseDir)}, (_, name) => { if (String(name) === 'release' && existsSync(release)) finish() })\nif (existsSync(release)) finish()\nprocess.stdout.write('fake sync ready\\n')\n`,
+      `import { existsSync } from 'node:fs'
+const release = ${JSON.stringify(release)}
+const poll = setInterval(() => {
+  if (!existsSync(release)) return
+  clearInterval(poll)
+  process.stdout.write('fake sync success\\n')
+}, 10)
+setTimeout(() => process.exit(1), 60_000).unref()
+process.stdout.write('fake sync ready\\n')
+`,
     )
     const launcher = writeSyncFixture(
       'parent',

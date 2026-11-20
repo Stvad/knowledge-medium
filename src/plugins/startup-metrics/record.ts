@@ -32,6 +32,7 @@ import {
   markStartup,
   markStartupAt,
   onLongTask,
+  type DbFileBytes,
   type StartupTimeline,
 } from '@/utils/startupTimeline.js'
 
@@ -53,6 +54,14 @@ export interface StartupRecordData {
   deviceLabel: string
   /** Boot start as epoch ms (`performance.timeOrigin`). */
   timeOriginMs: number
+  /** Repo init split by step, all inside `repoReadyMs` — see `StartupPhase`. */
+  dbRequestedMs?: number
+  dbPreparedMs?: number
+  dbOpenedMs?: number
+  clientSchemaAppliedMs?: number
+  localSchemaAppliedMs?: number
+  /** Database file sizes before the open, keyed `main` / sidecar suffix. */
+  dbFileBytes?: DbFileBytes
   repoReadyMs?: number
   workspaceResolvedMs?: number
   bootstrapDoneMs?: number
@@ -129,6 +138,12 @@ export const buildStartupRecord = (
     clientId: meta.clientId,
     deviceLabel: meta.deviceLabel,
     timeOriginMs: timeline.timeOriginMs,
+    dbRequestedMs: marks.dbRequested,
+    dbPreparedMs: marks.dbPrepared,
+    dbOpenedMs: marks.dbOpened,
+    clientSchemaAppliedMs: marks.clientSchemaApplied,
+    localSchemaAppliedMs: marks.localSchemaApplied,
+    dbFileBytes: timeline.dbFileBytes,
     repoReadyMs: marks.repoReady,
     workspaceResolvedMs: marks.workspaceResolved,
     bootstrapDoneMs: marks.bootstrapDone,

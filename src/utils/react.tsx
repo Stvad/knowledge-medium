@@ -1,5 +1,5 @@
 import { useMedia } from 'react-use'
-import { MOBILE_BREAKPOINT_QUERY } from './viewport.js'
+import { MOBILE_BREAKPOINT_QUERY, POINTER_COARSE_QUERY } from './viewport.js'
 
 export const useIsMobile = () => {
   return useMedia(MOBILE_BREAKPOINT_QUERY, false);
@@ -11,5 +11,5 @@ export const useIsMobile = () => {
  *  pointer is a mouse/trackpad (`fine`) even if a touchscreen is also present.
  *  Reactive: attaching a mouse can flip the primary pointer to fine. */
 export const usePointerCoarse = () => {
-  return useMedia('(pointer: coarse)', false);
+  return useMedia(POINTER_COARSE_QUERY, false);
 }

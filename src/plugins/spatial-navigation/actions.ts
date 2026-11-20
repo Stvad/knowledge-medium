@@ -28,6 +28,8 @@ import {
   type FocusedBlockLocation,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
+import { hasBlockSelection } from '@/data/stateBlocks.js'
 import type { Block } from '@/data/block'
 import {
   blockIdsInOrderedSelectionRange,
@@ -38,11 +40,18 @@ import {
 } from '@/utils/selection.js'
 import {
   aheadOf,
+  firstInstanceIn,
   horizontalNeighborPanel,
+  laneEdgeInstance,
+  laneOf,
+  lateralNeighbor,
   locationOf,
+  OWN_CONTENT_LANE,
   panelById,
   panelOf,
-  panelInstances,
+  nextRowInScope,
+  panelRowsInOrder,
+  type PanelRow,
   reservedRowBetween,
   resolveCurrentAnchor,
   rowSlotIn,
@@ -81,16 +90,23 @@ const currentInstance = (
   return resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excludedSurfacesFor(uiStateBlock))
 }
 
-const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] | null => {
-  const locations = instances.map(locationOf)
-  return locations.every((location): location is FocusedBlockLocation => Boolean(location))
-    ? locations
-    : null
+/** A range within one scope spans that scope's rows only. A nested surface
+ *  between them (an embed, an expanded comment or reference) shows other blocks,
+ *  which a range drawn over the outline must not put in the way of `d`. Across
+ *  scopes, position is all that relates the two ends. */
+const blockIdsInRange = (rows: readonly PanelRow[], anchor: PanelRow, target: PanelRow): string[] => {
+  const spanned = anchor.renderScopeId === target.renderScopeId
+    ? rows.filter(row => row.renderScopeId === anchor.renderScopeId)
+    : rows
+  return blockIdsInOrderedSelectionRange(spanned, spanned.indexOf(anchor), spanned.indexOf(target))
 }
 
+/** `rangeOrigin` stands in for the focused row as the cursor the range starts
+ *  from — see `BlockPointerDependencies.rangeOrigin`. */
 export const extendSelectionToSpatialTarget = async (
   deps: BaseShortcutDependencies,
   target: HTMLElement,
+  rangeOrigin?: FocusedBlockLocation,
 ): Promise<boolean> => {
   const {uiStateBlock} = deps
   if (!uiStateBlock) return false
@@ -101,27 +117,32 @@ export const extendSelectionToSpatialTarget = async (
   if (!panel || panel.dataset.panelId !== uiStateBlock.id) return true
 
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
-  const currentLocation = peekFocusedBlockLocation(uiStateBlock)
-  const anchorBlockId = currentState?.anchorBlockId ?? currentLocation?.blockId
+  const cursorLocation = rangeOrigin ?? peekFocusedBlockLocation(uiStateBlock)
+  const anchorBlockId = currentState?.anchorBlockId ?? cursorLocation?.blockId
   if (!anchorBlockId) return false
 
-  const instances = panelInstances(panel, excludedSurfacesFor(uiStateBlock))
-  const orderedLocations = locationsOf(instances)
-  if (!orderedLocations) return false
-  const targetIndex = instances.indexOf(target)
-  const anchorIndex = findBestSelectionAnchorIndex(orderedLocations, {
+  const allRows = panelRowsInOrder(panel, excludedSurfacesFor(uiStateBlock))
+  // A range stays in one lane of the panel (`laneOf`): an anchor in another
+  // starts a new one at the target.
+  const lane = laneOf(target)
+  const rows = allRows.filter(row => laneOf(row.element) === lane)
+  const targetIndex = rows.findIndex(row => row.element === target)
+  const anchorElsewhere = !rows.some(row => row.blockId === anchorBlockId) &&
+    allRows.some(row => row.blockId === anchorBlockId)
+  const rangeAnchorId = anchorElsewhere ? targetLocation.blockId : anchorBlockId
+  const anchorIndex = anchorElsewhere ? targetIndex : findBestSelectionAnchorIndex(rows, {
     anchorBlockId,
     targetIndex,
     selectedBlockIds: currentState?.selectedBlockIds,
-    currentLocation,
+    currentLocation: cursorLocation,
   })
   if (anchorIndex < 0) return false
 
   return commitSelectionRange({
     uiStateBlock,
-    anchorBlockId,
+    anchorBlockId: rangeAnchorId,
     targetLocation,
-    selectedBlockIds: blockIdsInOrderedSelectionRange(orderedLocations, anchorIndex, targetIndex),
+    selectedBlockIds: blockIdsInRange(rows, rows[anchorIndex], rows[targetIndex]),
     clearEditing: true,
     description: 'spatial-navigation extend selection',
   })
@@ -151,13 +172,13 @@ const extendSelectionVertical = async (
   // Roam-style: the first press (no active selection yet) selects just the
   // focused block; only once a selection exists do further presses extend to
   // the neighbour. Mirrors the structural extendSelectionDown/Up path.
-  const hasSelection = (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
-  if (!hasSelection) {
+  if (!hasBlockSelection(uiStateBlock)) {
     await extendSelectionToSpatialTarget(deps, current)
     return true
   }
 
-  const next = verticalNeighbor(current, direction, excludedSurfaces)
+  const next = nextRowInScope(current, direction, excludedSurfaces)
+    ?? verticalNeighbor(current, direction, excludedSurfaces)
   // NOT the same call as `moveVertical`'s boundary, though it looks like it.
   // Declining here doesn't extend the selection by one row: the structural
   // base re-derives the WHOLE range from the model, which sweeps in every
@@ -272,10 +293,11 @@ const moveVertical = async (
   //
   // Costs one O(depth) walk per keystroke over handle-cached rows — the same
   // walk the model handler does on its own when spatial nav is off.
-  const modelNext = deps.scopeRootId
+  const surface = outlineSurfaceOf(deps)
+  const modelNext = surface
     ? (direction === 'down'
-        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
-        : await previousVisibleBlock(block, deps.scopeRootId))
+        ? await nextVisibleBlock(block, surface)
+        : await previousVisibleBlock(block, surface))
     : null
 
   // A second keystroke or a click can land while that walk waits on an
@@ -404,6 +426,13 @@ const moveHorizontal = async (
   if (!block || !uiStateBlock) return false
   const current = currentInstance(deps)
   if (!current) return false
+  const excludedSurfaces = excludedSurfacesFor(uiStateBlock)
+  const beside = lateralNeighbor(current, direction, excludedSurfaces)
+  const besideLocation = beside ? locationOf(beside) : null
+  if (besideLocation) {
+    await focusBlock(uiStateBlock, besideLocation.blockId, {renderScopeId: besideLocation.renderScopeId})
+    return true
+  }
   // Scope the column walk to the ACTIVE layout session: with the
   // session host mounted, N warm sessions each carry their own
   // `[data-layout-column-id]` columns, so an unscoped document-wide query
@@ -421,7 +450,7 @@ const moveHorizontal = async (
   // top-level (the panel's `topLevelBlockIdProp` aligned to its
   // outline root).
   const destLocation = peekFocusedBlockLocation(destPanelBlock)
-    ?? findFirstInstanceLocation(destPanel, excludedSurfacesFor(uiStateBlock))
+    ?? findFirstInstanceLocation(destPanel, excludedSurfaces)
   if (!destLocation) return false
   await crossPanelFocus(uiStateBlock, destPanelId, destLocation)
   return true
@@ -431,11 +460,8 @@ const findFirstInstanceLocation = (
   panel: HTMLElement,
   excludedSurfaces: ReadonlySet<string>,
 ): FocusedBlockLocation | undefined => {
-  for (const instance of panelInstances(panel, excludedSurfaces)) {
-    const location = locationOf(instance)
-    if (location) return location
-  }
-  return undefined
+  const first = firstInstanceIn(panel, excludedSurfaces)
+  return (first && locationOf(first)) ?? undefined
 }
 
 const crossPanelFocus = async (
@@ -468,7 +494,8 @@ const crossPanelFocus = async (
 }
 
 /**
- * Jump focus to the first / last navigable instance in the panel, in
+ * Jump focus to the first / last navigable instance in the focused row's lane
+ * of the panel (its own content, unless focus is in a lane beside it), in
  * visible DOM order. This is the `gg` / `Shift+G` counterpart to
  * `moveVertical`: since spatial nav steps `j`/`k` through the rendered
  * DOM (outline bullets *and* trailing surfaces like backlinks/embeds),
@@ -494,9 +521,10 @@ const jumpToPanelEdge = async (
   if (typeof document === 'undefined') return false
   const panel = panelById(uiStateBlock.id)
   if (!panel) return false
-  const instances = panelInstances(panel, excludedSurfacesFor(uiStateBlock))
-  if (instances.length === 0) return false
-  const target = edge === 'first' ? instances[0] : instances[instances.length - 1]
+  const current = currentInstance(deps)
+  const lane = current ? laneOf(current) : OWN_CONTENT_LANE
+  const target = laneEdgeInstance(panel, lane, edge, excludedSurfacesFor(uiStateBlock))
+  if (!target) return false
   const location = locationOf(target)
   if (!location) return false
   await focusBlock(uiStateBlock, location.blockId, {renderScopeId: location.renderScopeId})
@@ -510,7 +538,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
   return [
     bindNormal({
       id: 'move_left',
-      description: 'Move focus to the panel on the left',
+      description: 'Move focus left (beside it in the panel, else the panel on the left)',
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'left')
       },
@@ -518,7 +546,7 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
     }),
     bindNormal({
       id: 'move_right',
-      description: 'Move focus to the panel on the right',
+      description: 'Move focus right (beside it in the panel, else the panel on the right)',
       handler: async (deps: BlockShortcutDependencies) => {
         await moveHorizontal(deps, 'right')
       },
@@ -600,13 +628,13 @@ export const spatialSelectionClickDecorator: ActionDispatchDecorator = {
   actionId: EXTEND_BLOCK_SELECTION_ACTION_ID,
   context: ActionContextTypes.BLOCK_POINTER,
   wrap: async (deps, trigger, next, dispatch) => {
-    const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
+    const {uiStateBlock, targetElement, rangeOrigin} = deps as BlockPointerDependencies
     // Only the clicked block's own panel can resolve a spatial range; for a
     // mismatched panel defer to the structural base rather than swallow it.
     // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
     // the keyboard contract, so gate on the panel match here.
     if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
-      if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
+      if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement, rangeOrigin)) return
     }
     await next(deps, trigger, dispatch)
   },
