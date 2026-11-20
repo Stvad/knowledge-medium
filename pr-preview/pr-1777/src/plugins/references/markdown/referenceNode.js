@@ -1,1 +1,1 @@
-export{jb as EmbedComponent,Mb as referenceTargetOf}from"../../../../chunks/app-CWRBaDSC.js";
+export{jb as EmbedComponent,Mb as referenceTargetOf}from"../../../../chunks/app-BXX_wY85.js";

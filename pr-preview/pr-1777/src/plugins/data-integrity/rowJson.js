@@ -1,1 +1,1 @@
-export{bc as parsePropertiesJson}from"../../../chunks/app-CWRBaDSC.js";
+export{bc as parsePropertiesJson}from"../../../chunks/app-BXX_wY85.js";

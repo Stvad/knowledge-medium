@@ -1,1 +1,1 @@
-export{yH as typePropertyGroups}from"../../chunks/app-CWRBaDSC.js";
+export{yH as typePropertyGroups}from"../../chunks/app-BXX_wY85.js";
