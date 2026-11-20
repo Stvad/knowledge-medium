@@ -1,1 +1,1 @@
-export{YC as default}from"../../../chunks/app-D0Qz4jcW.js";
+export{YC as default}from"../../../chunks/app-BIUkVETT.js";

@@ -1,1 +1,1 @@
-export{rot as getOrCreateKernelPage,iot as kernelPageBlockId}from"../../chunks/app-D0Qz4jcW.js";
+export{iot as getOrCreateKernelPage,aot as kernelPageBlockId}from"../../chunks/app-BIUkVETT.js";

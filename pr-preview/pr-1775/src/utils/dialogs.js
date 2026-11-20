@@ -1,1 +1,1 @@
-export{RR as __resetDialogsForTests,zR as getDialogQueue,BR as isDialogOpenForWorkspace,VR as openDialog,HR as subscribeDialogs}from"../../chunks/app-D0Qz4jcW.js";
+export{RR as __resetDialogsForTests,zR as getDialogQueue,BR as isDialogOpenForWorkspace,VR as openDialog,HR as subscribeDialogs}from"../../chunks/app-BIUkVETT.js";

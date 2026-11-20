@@ -1,1 +1,1 @@
-export{Vo as MigrationGate}from"../../../chunks/app-D0Qz4jcW.js";
+export{Vo as MigrationGate}from"../../../chunks/app-BIUkVETT.js";

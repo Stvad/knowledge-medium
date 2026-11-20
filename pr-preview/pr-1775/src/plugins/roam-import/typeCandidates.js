@@ -1,1 +1,1 @@
-export{Sd as collectTypeCandidates,Cd as formatTypeCandidateReport}from"../../../chunks/app-D0Qz4jcW.js";
+export{Sd as collectTypeCandidates,Cd as formatTypeCandidateReport}from"../../../chunks/app-BIUkVETT.js";

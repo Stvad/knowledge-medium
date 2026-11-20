@@ -1,1 +1,1 @@
-export{PI as LazyBlockComponent}from"../../chunks/app-D0Qz4jcW.js";
+export{PI as LazyBlockComponent}from"../../chunks/app-BIUkVETT.js";

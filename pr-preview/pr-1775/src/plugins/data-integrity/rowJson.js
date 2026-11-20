@@ -1,1 +1,1 @@
-export{pc as parsePropertiesJson}from"../../../chunks/app-D0Qz4jcW.js";
+export{pc as parsePropertiesJson}from"../../../chunks/app-BIUkVETT.js";
