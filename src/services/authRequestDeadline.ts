@@ -3,8 +3,8 @@
  *  `getSession()` awaits the one in-flight token refresh. So a refresh that
  *  never gets a response blocks every caller that needs a token, the upload
  *  pass and PowerSync's `fetchCredentials` included, until the page reloads.
- *  Aborted, the refresh fails as retryable and the next auto-refresh tick
- *  tries again. */
+ *  Aborted, the refresh fails as retryable: auth-js keeps the session and
+ *  refreshes again once its failure cooldown ends. */
 export const AUTH_REQUEST_TIMEOUT_MS = 15_000
 
 const AUTH_PATH = '/auth/v1/'
