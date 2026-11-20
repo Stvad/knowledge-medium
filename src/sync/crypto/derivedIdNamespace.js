@@ -1,1 +1,1 @@
-export{Vst as deriveWorkspaceIdNamespace}from"../../../chunks/app-Bg8Raxgd.js";
+export{Jst as deriveWorkspaceIdNamespace}from"../../../chunks/app-D_pKA27D.js";

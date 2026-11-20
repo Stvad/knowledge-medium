@@ -1,1 +1,1 @@
-export{Af as annotationsPlugin}from"../../../chunks/app-Bg8Raxgd.js";
+export{If as annotationsPlugin}from"../../../chunks/app-D_pKA27D.js";

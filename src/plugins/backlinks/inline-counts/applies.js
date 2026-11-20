@@ -1,1 +1,1 @@
-export{Ey as inlineBacklinksApplies}from"../../../../chunks/app-Bg8Raxgd.js";
+export{My as inlineBacklinksApplies}from"../../../../chunks/app-D_pKA27D.js";
