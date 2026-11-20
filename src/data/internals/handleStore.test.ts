@@ -2298,7 +2298,7 @@ describe('mergeChangeNotifications()', () => {
 
   it('is the union of every field, across sets, arrays and absent sides', () => {
     const merged = mergeChangeNotifications(
-      { rowIds: new Set(['a']), parentIds: ['p1'], plugin: new Map([['ch', new Set(['k1'])], ['only-a', ['x']]]) },
+      { rowIds: new Set(['a']), parentIds: ['p1'], plugin: new Map<string, ReadonlySet<string> | readonly string[]>([['ch', new Set(['k1'])], ['only-a', ['x']]]) },
       { rowIds: ['a', 'b'], workspaceIds: new Set(['w']), tables: ['t'], plugin: new Map([['ch', ['k2']]]) },
     )
     expect(sorted(merged.rowIds)).toEqual(['a', 'b'])
