@@ -1,1 +1,1 @@
-export{VD as forgetRememberedWorkspace,HD as recallRememberedWorkspace,UD as rememberWorkspace}from"../../chunks/app-Bg93jrwD.js";
+export{VD as forgetRememberedWorkspace,HD as recallRememberedWorkspace,UD as rememberWorkspace}from"../../chunks/app-By7M7RmE.js";
