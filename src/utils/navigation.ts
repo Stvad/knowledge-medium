@@ -199,9 +199,7 @@ export const resolveActivePanelRow = async (
 }
 
 /** Can this viewport show a second pane? Below the mobile breakpoint the
- *  layout renders ONE pane (`soloPanelRow`), so a destination that adds a row
- *  there adds a pane the user never sees and never closes. Read synchronously
- *  per navigation, like `currentViewport`. */
+ *  layout renders ONE pane (`soloPanelRow`). */
 const canRenderSplit = (): boolean => !isMobileViewport()
 
 /** Where a resolved navigation should go: an existing panel to swap, or a fresh

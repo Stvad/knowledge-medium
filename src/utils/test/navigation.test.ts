@@ -198,21 +198,22 @@ describe('navigate', () => {
     expect(rightPanel?.parentId).not.toBe(layoutSession.id)
   })
 
-  // Below the split breakpoint the layout renders one pane, so a row these
-  // targets would add is one the user never sees and never closes. Every
-  // programmatic open (share target, capture, "open in panel") takes this path.
+  // The active pane is neither the last row nor the source here, so landing
+  // on either of those instead fails.
   it("'new-panel' and 'sidebar-stack' land in the active pane when the viewport cannot render a split", async () => {
     stubViewport(true)
     const layoutSession = await layoutSessionBlock()
-    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const sourcePanel = await insertPanelRow(env.repo, layoutSession, 'b-main')
     const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+    await insertPanelRow(env.repo, layoutSession, 'b-last')
+    await layoutSession.set(activePanelIdProp, activePanel)
 
-    const stacked = await navigate(env.repo, {blockId: 'b-stacked', target: 'sidebar-stack', sourcePanelId: activePanel})
-    const split = await navigate(env.repo, {blockId: 'b-split', target: 'new-panel', sourcePanelId: activePanel})
+    const stacked = await navigate(env.repo, {blockId: 'b-stacked', target: 'sidebar-stack', sourcePanelId: sourcePanel})
+    const split = await navigate(env.repo, {blockId: 'b-split', target: 'new-panel', sourcePanelId: sourcePanel})
 
     expect(stacked?.panelId).toBe(activePanel)
     expect(split?.panelId).toBe(activePanel)
-    expect(await currentLayoutBlockIds()).toEqual(['b-main', 'b-split'])
+    expect(await currentLayoutBlockIds()).toEqual(['b-main', 'b-split', 'b-last'])
     expect(await currentActivePanelId()).toBe(activePanel)
     expect(panelHistory.getSnapshot(activePanel).back.map(entry => entry.blockId)).toEqual(['b-side', 'b-stacked'])
   })
