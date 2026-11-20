@@ -2,7 +2,7 @@ a[data-vim-link-hint]::before {
   content: attr(data-vim-link-hint) / "";
   position: absolute;
   z-index: 1;
-  transform: translate(-0.12em, -55%);
+  transform: translate(calc(var(--vim-link-hint-depth, 0) * (100% + 1px) - 0.12em), -55%);
   border-radius: var(--radius-sm);
   padding: 0.08em 0.3em;
   background: var(--color-muted);
