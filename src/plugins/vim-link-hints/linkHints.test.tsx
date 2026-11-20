@@ -236,3 +236,28 @@ it('offsets nested link badges and releases their styling when hints close', asy
   press(shell, 'f')
   expect(inner.style.getPropertyValue('--vim-link-hint-depth')).toBe('')
 })
+
+it('labels three links with single letters while preserving the modified shortcut on the third letter', async () => {
+  const shortcut = vi.fn()
+  const {shell} = setup({always: true, actions: [
+    {id: 'busy', context: normal, description: 'Busy letters', defaultBinding: {keys: '([^blmq])'}, handler: () => {}},
+    {id: 'suffix', context: normal, description: 'Sequence suffix', defaultBinding: {keys: 'g Alt+l'}, handler: () => {}},
+    {id: 'modified-m', context: global, description: 'Modified m', defaultBinding: {keys: 'Control+Shift+m'}, handler: shortcut},
+  ]})
+  const third = document.createElement('a')
+  third.href = '#third'
+  third.textContent = 'Third'
+  const follow = vi.fn((event: MouseEvent) => event.preventDefault())
+  third.addEventListener('click', follow)
+  shell.querySelector('.block-content')!.append(third)
+  await waitFor(() => expect(hint('Third')).toBe('m'))
+  expect([hint('First'), hint('Second')]).toEqual(['b', 'q'])
+
+  press(shell, 'M', {ctrlKey: true, shiftKey: true})
+  expect(shortcut).toHaveBeenCalledOnce()
+  expect(follow).not.toHaveBeenCalled()
+  press(shell, 'm')
+  press(shell, 'M', {shiftKey: true})
+  expect(follow).toHaveBeenCalledTimes(2)
+  expect(follow).toHaveBeenLastCalledWith(expect.objectContaining({shiftKey: true}))
+})
