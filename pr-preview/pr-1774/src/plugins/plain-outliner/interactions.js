@@ -1,1 +1,1 @@
-export{AE as blockEditingContentRenderer}from"../../../chunks/app-BFJ7VYpx.js";
+export{AE as blockEditingContentRenderer}from"../../../chunks/app-g3Rf1KA1.js";

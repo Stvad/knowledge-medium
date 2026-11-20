@@ -1,1 +1,1 @@
-export{ip as acceptSuggestion,ap as appliedContent,op as rejectSuggestion}from"../../../chunks/app-BFJ7VYpx.js";
+export{ip as acceptSuggestion,ap as appliedContent,op as rejectSuggestion}from"../../../chunks/app-g3Rf1KA1.js";

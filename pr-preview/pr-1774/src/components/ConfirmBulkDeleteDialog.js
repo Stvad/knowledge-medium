@@ -1,1 +1,1 @@
-export{WL as ConfirmBulkDeleteDialog}from"../../chunks/app-BFJ7VYpx.js";
+export{WL as ConfirmBulkDeleteDialog}from"../../chunks/app-g3Rf1KA1.js";

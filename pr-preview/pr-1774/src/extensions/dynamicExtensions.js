@@ -1,1 +1,1 @@
-export{KF as dynamicExtensionsExtension}from"../../chunks/app-BFJ7VYpx.js";
+export{KF as dynamicExtensionsExtension}from"../../chunks/app-g3Rf1KA1.js";

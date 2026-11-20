@@ -1,1 +1,1 @@
-export{wb as EmbedComponent,Tb as referenceTargetOf}from"../../../../chunks/app-BFJ7VYpx.js";
+export{wb as EmbedComponent,Tb as referenceTargetOf}from"../../../../chunks/app-g3Rf1KA1.js";
