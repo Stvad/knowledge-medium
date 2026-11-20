@@ -1,0 +1,1 @@
+export{AM as CommandPaletteHeaderItem}from"../../../chunks/app-PRAdNSCa.js";

@@ -1,0 +1,1 @@
+export{fR as useIsMobile,pR as usePointerCoarse}from"../../chunks/app-PRAdNSCa.js";

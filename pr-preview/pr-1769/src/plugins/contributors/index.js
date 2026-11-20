@@ -1,0 +1,1 @@
+export{Ym as contributorsPlugin}from"../../../chunks/app-PRAdNSCa.js";

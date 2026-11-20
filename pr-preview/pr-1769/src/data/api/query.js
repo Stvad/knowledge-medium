@@ -1,0 +1,1 @@
+export{gdt as defineQuery}from"../../../chunks/app-PRAdNSCa.js";

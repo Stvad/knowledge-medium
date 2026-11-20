@@ -1,0 +1,1 @@
+export{zot as aliasSeatNamespacesInTx,Bot as resolveAliasSeatNamespaces}from"../../chunks/app-PRAdNSCa.js";

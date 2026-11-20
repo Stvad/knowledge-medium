@@ -1,0 +1,1 @@
+export{$P as checkForAppUpdate,eF as registerServiceWorker}from"../chunks/app-PRAdNSCa.js";

@@ -1,0 +1,1 @@
+export{TF as ClientLocalSettings,EF as clientLocalSettings}from"../../chunks/app-PRAdNSCa.js";

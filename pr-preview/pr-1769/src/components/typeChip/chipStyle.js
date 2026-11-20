@@ -1,0 +1,1 @@
+export{NN as chipStyle}from"../../../chunks/app-PRAdNSCa.js";

@@ -1,0 +1,1 @@
+export{To as propertiesMigrationPlugin}from"../../../chunks/app-PRAdNSCa.js";

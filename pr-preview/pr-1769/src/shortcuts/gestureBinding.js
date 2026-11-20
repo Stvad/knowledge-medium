@@ -1,0 +1,1 @@
+export{fF as gestureBindingDescriptor,pF as matchesGestureEvent}from"../../chunks/app-PRAdNSCa.js";

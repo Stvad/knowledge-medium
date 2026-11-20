@@ -1,0 +1,1 @@
+export{Lw as spatialNavigationShellDecorator}from"../../../chunks/app-PRAdNSCa.js";

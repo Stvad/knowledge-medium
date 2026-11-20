@@ -1,0 +1,1 @@
+export{G4 as UndoManager}from"../../../chunks/app-PRAdNSCa.js";

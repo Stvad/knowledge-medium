@@ -1,0 +1,1 @@
+export{gk as useAncestorCrumbs}from"../../chunks/app-PRAdNSCa.js";

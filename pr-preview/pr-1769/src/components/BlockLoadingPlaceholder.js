@@ -1,0 +1,1 @@
+export{gI as BlockLoadingPlaceholder}from"../../chunks/app-PRAdNSCa.js";

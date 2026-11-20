@@ -1,0 +1,1 @@
+export{Vv as BlockMetaCard}from"../../../chunks/app-PRAdNSCa.js";

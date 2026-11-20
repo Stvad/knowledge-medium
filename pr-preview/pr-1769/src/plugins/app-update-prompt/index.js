@@ -1,0 +1,1 @@
+export{WP as appUpdatePromptExtension}from"../../../chunks/app-PRAdNSCa.js";

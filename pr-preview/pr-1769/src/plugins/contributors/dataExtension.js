@@ -1,0 +1,1 @@
+export{EQ as contributorsDataExtension}from"../../../chunks/app-PRAdNSCa.js";

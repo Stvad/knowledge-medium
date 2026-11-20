@@ -1,0 +1,1 @@
+export{kF as dynamicExtensionsExtension}from"../../chunks/app-PRAdNSCa.js";

@@ -1,0 +1,1 @@
+export{rE as usePromotableBreadcrumb}from"../../../chunks/app-PRAdNSCa.js";

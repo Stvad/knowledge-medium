@@ -1,0 +1,1 @@
+export{yx as richPastePlugin}from"../../../chunks/app-PRAdNSCa.js";

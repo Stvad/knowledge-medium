@@ -1,0 +1,1 @@
+export{xC as videoPlayerPlugin}from"../../../chunks/app-PRAdNSCa.js";

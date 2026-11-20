@@ -1,0 +1,1 @@
+export{Kc as appVersion}from"../chunks/app-PRAdNSCa.js";

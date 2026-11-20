@@ -1,0 +1,1 @@
+export{Wf as moveCommentToOwnThread}from"../../../chunks/app-PRAdNSCa.js";

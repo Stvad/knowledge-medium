@@ -1,0 +1,1 @@
+export{iB as ExtensionRenderBoundary}from"../../chunks/app-PRAdNSCa.js";

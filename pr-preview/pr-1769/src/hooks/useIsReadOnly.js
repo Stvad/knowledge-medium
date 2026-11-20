@@ -1,0 +1,1 @@
+export{Wb as useIsReadOnly}from"../../chunks/app-PRAdNSCa.js";

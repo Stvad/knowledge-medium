@@ -1,0 +1,1 @@
+export{Cx as attachmentsPlugin}from"../../../chunks/app-PRAdNSCa.js";

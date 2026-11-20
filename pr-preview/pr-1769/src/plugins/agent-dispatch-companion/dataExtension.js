@@ -1,0 +1,1 @@
+export{l0 as agentDispatchCompanionDataExtension}from"../../../chunks/app-PRAdNSCa.js";

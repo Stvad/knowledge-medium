@@ -1,0 +1,1 @@
+export{MN as TypeChip}from"../../../chunks/app-PRAdNSCa.js";

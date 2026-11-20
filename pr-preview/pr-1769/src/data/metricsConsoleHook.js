@@ -1,0 +1,1 @@
+export{XN as ensureMetricsConsoleHook}from"../../chunks/app-PRAdNSCa.js";
