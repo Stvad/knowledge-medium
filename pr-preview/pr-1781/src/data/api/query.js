@@ -1,1 +1,1 @@
-export{nft as defineQuery}from"../../../chunks/app-5Fg_ptL1.js";
+export{rft as defineQuery}from"../../../chunks/app-DyfIB3Yy.js";

@@ -1,1 +1,1 @@
-export{RI as BlockChildren,zI as BlockComponent}from"../../chunks/app-5Fg_ptL1.js";
+export{RI as BlockChildren,zI as BlockComponent}from"../../chunks/app-DyfIB3Yy.js";
