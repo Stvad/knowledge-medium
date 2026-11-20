@@ -95,6 +95,7 @@ import {
   type RematerializeProgressListener,
   type RematerializeReport,
   type RematerializeScope,
+  type SyncDrainStats,
 } from '@/data/internals/syncObserver/observer'
 import {
   readSyncDivergence,
@@ -742,6 +743,7 @@ export class Repo {
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
   private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
   private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
+  private readonly syncDrainStatsListeners = new CallbackSet<[SyncDrainStats]>('Repo.syncDrainStats')
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -1336,6 +1338,7 @@ export class Repo {
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
       onError: options?.onError,
+      onDrainStats: stats => this.syncDrainStatsListeners.notify(stats),
     })
     return this.syncObserver
   }
@@ -1355,6 +1358,13 @@ export class Repo {
       this.syncObserver.dispose()
       this.syncObserver = null
     }
+  }
+
+  /** Hear what each sync drain did and where its time went. Fires for every
+   *  drain that ran a window — per arrival in steady state — so a listener
+   *  that persists anything picks which ones are worth it. */
+  onSyncDrainStats(cb: (stats: SyncDrainStats) => void): () => void {
+    return this.syncDrainStatsListeners.add(cb)
   }
 
   /** Manually flush the sync observer — drains any pending `blocks_synced`

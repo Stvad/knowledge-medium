@@ -160,7 +160,23 @@ export interface SyncSnapshot {
 /** What the pass did. `snapshots` carries the before/after for every applied
  *  (after set) and deleted (after null) row — the observer's invalidation
  *  layer consumes it; the id lists are for tests and bookkeeping. */
+/** Where one pass's wall time went. The three stages are consecutive and cover
+ *  the pass up to the end of its write transaction; `writeMs` includes the wait
+ *  for the write lock, so a drain queued behind other writers shows up there. */
+export interface MaterializeTimings {
+  /** Staging rows, their local counterparts and the upload queue, read outside
+   *  the write lock. */
+  readonly readMs: number
+  /** Gate decisions and decryption of the rows that passed them. */
+  readonly decodeMs: number
+  /** The write transaction: lock wait, re-gate reads, upserts with their
+   *  triggers, reference derivation, flag writes, commit. 0 when the pass had
+   *  nothing to write. */
+  readonly writeMs: number
+}
+
 export interface MaterializeOutcome {
+  readonly timings: MaterializeTimings
   readonly snapshots: ReadonlyMap<string, SyncSnapshot>
   /** Ids materialized into `blocks` (decrypted or copied). */
   readonly applied: readonly string[]
@@ -343,6 +359,7 @@ export const materializeStagingRows = async (
    *  ever re-examines it short of a fresh delivery. */
   const decisions: FlagDecision[] = []
 
+  const startedAt = performance.now()
   const stagingRows = await readStagingRows(db, change.upserted, readChunkSize)
 
   // Bulk-read the gate's local state for the whole batch up front, rather than
@@ -355,6 +372,7 @@ export const materializeStagingRows = async (
     db, stagingRows.map(row => row.id), readChunkSize,
   )
   const pendingUploadIds = await readPendingUploadIds(db)
+  const readDoneAt = performance.now()
 
   const materializabilityByWs = new Map<string, Promise<Materializability>>()
   const resolveMaterializability = async (workspaceId: string): Promise<Materializability> => {
@@ -440,6 +458,9 @@ export const materializeStagingRows = async (
     }
   }
 
+  const decodeDoneAt = performance.now()
+  const stagesBeforeWrite = {readMs: readDoneAt - startedAt, decodeMs: decodeDoneAt - readDoneAt}
+
   const snapshots = new Map<string, SyncSnapshot>()
   const applied: string[] = []
   const deleted: string[] = []
@@ -450,7 +471,10 @@ export const materializeStagingRows = async (
   // `blocks` row and still has flags to clear, and leaving them set would make
   // an echo-only drain look like a permanent gap.
   if (candidates.length === 0 && change.removed.length === 0 && decisions.length === 0) {
-    return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
+    return {
+      timings: {...stagesBeforeWrite, writeMs: 0},
+      snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged,
+    }
   }
 
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
@@ -597,6 +621,7 @@ export const materializeStagingRows = async (
       }
     }
   })
+  const timings: MaterializeTimings = {...stagesBeforeWrite, writeMs: performance.now() - decodeDoneAt}
 
   // §9 arrival-order repair, alias half: a
   // `[[alias]]` row that arrived BEFORE its target derived to NULL, and
@@ -633,5 +658,5 @@ export const materializeStagingRows = async (
     }
   }
 
-  return { snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
+  return { timings, snapshots, applied, deferred, skippedStale, quarantined, deleted, resolved, reflagged }
 }

@@ -24,6 +24,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
+  type BlocksSyncedObserverArgs,
 } from '../observer.js'
 import {
   materializeStagingRows,
@@ -107,6 +108,7 @@ export interface StartObserverOpts {
   onCycleDetected?: (e: CycleDetectedEvent) => void
   drainChunkSize?: number
   onError?: (err: unknown) => void
+  onDrainStats?: BlocksSyncedObserverArgs['onDrainStats']
   getInvalidationRules?: () => readonly InvalidationRule[]
   throttleMs?: number
   /** Derive-at-arrival lookups. Omitted by default so
@@ -160,6 +162,7 @@ export const setupObserverTestDb = () => {
       throttleMs: opts.throttleMs ?? 5,
       drainChunkSize: opts.drainChunkSize,
       onError: opts.onError,
+      onDrainStats: opts.onDrainStats,
       getInvalidationRules: opts.getInvalidationRules,
     })
     observers.push(observer)
