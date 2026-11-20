@@ -4,7 +4,9 @@
  *  A writer of focus or the edit flag calls `flushPendingEditorContent()`
  *  synchronously, immediately before its own `repo.tx`. The content write then
  *  takes the FIFO write lock first, and the upload queue keeps that order, so
- *  whoever reads "not being edited" also finds the text.
+ *  whoever reads "not being edited" also finds the text. A structural edit
+ *  that writes the live text in its own tx (split, merge) calls it too: the
+ *  text then lands as its own undo step, so undoing the edit keeps it.
  *
  *  The order rests on `Block.setContent` and `repo.tx` reaching the lock in call
  *  order: an `await` ahead of the lock on only one of those paths breaks it.
