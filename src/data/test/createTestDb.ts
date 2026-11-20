@@ -59,11 +59,13 @@ import {
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
+  WORKSPACE_FIRST_SYNC_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
   ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
+  grandfatherWorkspaceFirstSync,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
@@ -170,6 +172,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
+  await grandfatherWorkspaceFirstSync(backfillDb)
   await applyLocalSchemaContributions(
     backfillDb,
     localSchemaContributions,
@@ -384,6 +387,9 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id
