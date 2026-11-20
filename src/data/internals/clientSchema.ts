@@ -461,7 +461,10 @@ export const SYNC_BULK_LOAD_SCOPE = 'sync-bulk'
 /** A row a bulk load creates gets no 'create' event: it records that the row
  *  arrived on this device, for every row of the workspace, and nothing a user
  *  did. Its later changes are logged as any other row's, each with its before
- *  state. */
+ *  state.
+ *
+ *  The `source IS NULL` half is DEFENCE IN DEPTH: a local write must be logged
+ *  whatever scope string it was given. */
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks

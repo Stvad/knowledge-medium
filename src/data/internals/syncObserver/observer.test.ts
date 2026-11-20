@@ -989,6 +989,21 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     ])
   })
 
+  it('still logs a create for a local write that carries the bulk scope', async () => {
+    // DEFENCE IN DEPTH: no ChangeScope is the bulk scope, but a scope is a
+    // string an extension passes, and an unlogged local create has no undo.
+    await env.db.writeTransaction(async (tx) => {
+      await tx.execute(`UPDATE tx_context SET source = 'user', scope = 'sync-bulk', tx_seq = 1 WHERE id = 1`)
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+           created_at, updated_at, created_by, updated_by, deleted)
+         VALUES ('local', 'ws', NULL, 'a0', '', '{}', '[]', 1, 1, 'u', 'u', 0)`,
+      )
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = NULL, tx_seq = NULL WHERE id = 1')
+    })
+    expect(await events()).toEqual([{ block_id: 'local', kind: 'create' }])
+  })
+
   it('leaves no exemption behind for another source-NULL write', async () => {
     const { observer } = start({ getMaterializability: constMat('copy') })
     const release = observer.holdBulkLoad()
