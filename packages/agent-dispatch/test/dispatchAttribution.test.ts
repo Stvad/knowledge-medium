@@ -252,6 +252,24 @@ describe('watcher memory against the app', () => {
   const memoryBlocks = () => db.db.getAll<{id: string, content: string}>(
     'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0', [CLAUDE])
 
+  const replyText = async () => (await db.db.getAll<{content: string}>(
+    `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
+    [MENTION],
+  )).map(row => row.content).join('\n')
+
+  /** One tick of a fresh engine whose run does `run`; the prompts it was given. */
+  const runOnce = async (run: (prompt: string) => Promise<void> = async () => {}) => {
+    const prompts: string[] = []
+    const engine = engineFor(async options => {
+      prompts.push(options.prompt)
+      await run(options.prompt)
+      return result({resultText: 'Done.'})
+    })
+    await engine.tick()
+    await engine.drain()
+    return prompts
+  }
+
   it('creates the memory block under the watched page once, off the undo stack and unattributed, and shows the run its entries', async () => {
     repo.undoManager.clear()
     const prompts: string[] = []
@@ -282,13 +300,7 @@ describe('watcher memory against the app', () => {
 
   it('uses a Memory block the person made under the watched page', async () => {
     const mine = await repo.mutate.createChild({parentId: CLAUDE, content: 'memory'})
-    const prompts: string[] = []
-    const engine = engineFor(async options => {
-      prompts.push(options.prompt)
-      return result({resultText: 'Done.'})
-    })
-    await engine.tick()
-    await engine.drain()
+    const prompts = await runOnce()
 
     expect((await memoryBlocks()).map(row => row.id)).toEqual([mine])
     expect(prompts[0]).toContain(`append_markdown with target ${mine}`)
@@ -338,19 +350,12 @@ describe('watcher memory against the app', () => {
   })
 
   it('says in the reply what a run saved to its memory', async () => {
-    const engine = engineFor(async options => {
-      const memoryId = /append_markdown with target (\S+)\./.exec(options.prompt)![1]
+    await runOnce(async prompt => {
+      const memoryId = /append_markdown with target (\S+)\./.exec(prompt)![1]
       await withContributorId(inProcessClient(), agentId).runCommand({type: 'append-markdown', target: memoryId, markdown: 'Prefers suggestions.'})
-      return result({resultText: 'Done.'})
     })
-    await engine.tick()
-    await engine.drain()
 
-    const reply = await db.db.getAll<{content: string}>(
-      `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
-      [MENTION],
-    )
-    expect(reply.map(row => row.content).join('\n')).toMatch(/Memory changed during this run: saved \[Prefers suggestions\.\]\(\(\([0-9a-f-]+\)\)\)/)
+    expect(await replyText()).toMatch(/Memory changed during this run: saved \[Prefers suggestions\.\]\(\(\([0-9a-f-]+\)\)\)/)
   })
 
   describe('shared notes it embeds', () => {
@@ -375,23 +380,6 @@ describe('watcher memory against the app', () => {
       for (const note of notes) await repo.mutate.createChild({parentId: memoryId, content: note})
       await repo.awaitProcessors()
       return memoryId
-    }
-
-    const replyText = async () => (await db.db.getAll<{content: string}>(
-      `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
-      [MENTION],
-    )).map(row => row.content).join('\n')
-
-    const runOnce = async (run: (prompt: string) => Promise<void>) => {
-      const prompts: string[] = []
-      const engine = engineFor(async options => {
-        prompts.push(options.prompt)
-        await run(options.prompt)
-        return result({resultText: 'Done.'})
-      })
-      await engine.tick()
-      await engine.drain()
-      return prompts
     }
 
     const edit = (id: string, content: string) => inProcessClient().runCommand({type: 'update-block', id, content})
@@ -441,7 +429,7 @@ describe('watcher memory against the app', () => {
     ])('leaves out its own reply when the mention is %s', async (_, parentOf) => {
       const memoryId = await seedMemory('![[Shared]]')
       await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [parentOf(memoryId), MENTION])
-      await runOnce(async () => {})
+      await runOnce()
 
       const text = await replyText()
       expect(text).toContain('Done.')
