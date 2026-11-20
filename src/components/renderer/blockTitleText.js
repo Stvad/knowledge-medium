@@ -1,1 +1,1 @@
-export{EB as BLOCK_TITLE_TEXT_CLASS,DB as useBlockTitleTextClass}from"../../../chunks/app-DDwB1awm.js";
+export{EB as BLOCK_TITLE_TEXT_CLASS,DB as useBlockTitleTextClass}from"../../../chunks/app-Bg93jrwD.js";

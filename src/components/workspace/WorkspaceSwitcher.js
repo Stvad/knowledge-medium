@@ -1,1 +1,1 @@
-export{IE as WorkspaceSwitcher}from"../../../chunks/app-DDwB1awm.js";
+export{IE as WorkspaceSwitcher}from"../../../chunks/app-Bg93jrwD.js";
