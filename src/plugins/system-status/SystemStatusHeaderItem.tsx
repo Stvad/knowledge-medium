@@ -21,6 +21,7 @@ import {
   getChipAppearance,
   getSyncIndicatorView,
   type SyncIndicatorIcon,
+  type SyncIndicatorInput,
   type SyncIndicatorTone,
 } from './model.ts'
 import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog.js'
@@ -305,7 +306,12 @@ function SyncStatusHeaderContent({
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
-  const pendingIdle = pendingChanges > 0 && !status.uploading
+  // A failing attempt still counts as idle: retries toggle `uploading`, but
+  // nothing leaves the device. Another tab's uploads are invisible from here,
+  // so there is nothing to time while it holds the sync stream.
+  const pendingIdle = pendingChanges > 0
+    && (!status.uploading || status.uploadError != null)
+    && !syncingInOtherTab
   const pendingStuck = useHysteresis(pendingIdle, pendingStuckMs, 0)
   // Health contributed via the diagnostics seam (the consistency audit is the
   // first source). Only non-ok sources are worth surfacing; an 'ok' source stays
@@ -323,7 +329,7 @@ function SyncStatusHeaderContent({
   // already reddens the whole chip (diagnosticAlert), so it doesn't also dot.
   const nudge = diagnosticItems.find((it) => it.snapshot.nudge)
   const showStatusDot = Boolean(nudge) && !errorDiagnostic
-  const view = getSyncIndicatorView({
+  const indicatorInput: SyncIndicatorInput = {
     localOnly,
     connected: status.connected,
     connecting: status.connecting,
@@ -340,10 +346,11 @@ function SyncStatusHeaderContent({
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
     diagnosticAlert,
-  })
+  }
+  const view = getSyncIndicatorView(indicatorInput)
   const Icon = iconByName[view.icon]
   const activityShown = useHysteresis(view.spinning, activityEnterMs, activityExitMs)
-  const chip = getChipAppearance(view, activityShown)
+  const chip = getChipAppearance(indicatorInput, activityShown)
   const ChipIcon = iconByName[chip.icon]
   // Surface the nudge's one-liner (e.g. "A new version is available") on the
   // chip itself so the dot has an accessible meaning; settled-state errors are
@@ -360,7 +367,7 @@ function SyncStatusHeaderContent({
             type="button"
             className={cn(
               'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
-              toneClass[view.tone],
+              toneClass[chip.tone],
             )}
             aria-label={chipTitle}
             title={chipTitle}

@@ -523,6 +523,36 @@ describe('SystemStatusHeaderItem', () => {
       expect(screen.getByRole('button').className).toMatch(/destructive/)
     })
 
+    it('calls changes stuck while every upload attempt fails', () => {
+      // A different message per attempt keeps the error grace window from
+      // ever elapsing, so only the stuck rule can raise the warning.
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      const {rerender} = render(<SystemStatusHeaderItem/>)
+      for (let i = 0; i < 10; i++) {
+        mocks.status = {...defaultStatus(), uploading: true, uploadError: {message: `attempt ${i}`}}
+        rerender(<SystemStatusHeaderItem/>)
+        act(() => vi.advanceTimersByTime(500))
+        mocks.status = {...defaultStatus(), uploadError: {message: `attempt ${i} failed`}}
+        rerender(<SystemStatusHeaderItem/>)
+        act(() => vi.advanceTimersByTime(3_000))
+      }
+      expect(screen.getByRole('button').getAttribute('aria-label')).not.toMatch(/needs attention/i)
+      expect(screen.getByRole('button').className).toMatch(/destructive/)
+    })
+
+    it('does not call changes stuck while another tab holds the sync stream', async () => {
+      mocks.status = {...defaultStatus(), connected: false}
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      setHeldLocks([thisDatabaseSyncLock()])
+      render(<SystemStatusHeaderItem/>)
+      // The lock was read: queued edits draw the cloud, not the offline icon.
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(chipIcon().getAttribute('class')).toMatch(/lucide-cloud(?!-)/)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(31_000) })
+      expect(screen.getByRole('button').className).not.toMatch(/destructive/)
+    })
+
     it('does not call an edit stream stuck while uploads keep starting', () => {
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
       const {rerender} = render(<SystemStatusHeaderItem/>)

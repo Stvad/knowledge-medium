@@ -11,9 +11,9 @@ export type SyncIndicatorState =
   | 'synced'
   | 'starting'
 
-// Only states that need the user get a tone of their own; routine work
-// (queued edits, uploads, downloads) stays `neutral` so typing never restyles
-// the chip.
+// Routine sync work (queued edits, uploads, downloads) stays `neutral` so
+// typing never restyles the chip; only states that need the user, and
+// local-only mode, get a tone of their own.
 export type SyncIndicatorTone = 'error' | 'warning' | 'local' | 'neutral'
 
 export type SyncIndicatorIcon = 'alert' | 'hard-drive' | 'upload' | 'sync' | 'offline' | 'cloud'
@@ -233,16 +233,23 @@ const baseSyncIndicatorView = ({
   }
 
   if (pendingChanges > 0) {
+    const reachable = connected || syncingInOtherTab
+    const appearance: Pick<SyncIndicatorView, 'tone' | 'icon'> =
+      rejectedChanges > 0 ? {tone: 'warning', icon: 'alert'}
+        : pendingStuck ? {tone: 'warning', icon: reachable ? 'upload' : 'offline'}
+          : {tone: 'neutral', icon: reachable ? 'cloud' : 'offline'}
     return {
       state: 'pending',
-      tone: pendingStuck ? 'warning' : 'neutral',
-      icon: pendingStuck ? 'upload' : connected ? 'cloud' : 'offline',
+      ...appearance,
       label: 'Pending',
-      title: appendPendingTitle(
-        connected ? 'Waiting to upload.' : 'Waiting for a sync connection.',
-        pendingChanges,
-        false,
-        pendingChangesApproximate,
+      title: appendRejectedTitle(
+        appendPendingTitle(
+          connected ? 'Waiting to upload.' : 'Waiting for a sync connection.',
+          pendingChanges,
+          false,
+          pendingChangesApproximate,
+        ),
+        rejectedChanges,
       ),
       pendingLabel,
       progressPercent: null,
@@ -361,19 +368,32 @@ export const getSyncIndicatorView = (input: SyncIndicatorInput): SyncIndicatorVi
 }
 
 export interface ChipAppearance {
+  tone: SyncIndicatorTone
   icon: SyncIndicatorIcon
   spinning: boolean
 }
 
+const withoutActivity = (input: SyncIndicatorInput): SyncIndicatorInput => ({
+  ...input,
+  uploading: false,
+  downloading: false,
+  connecting: false,
+  materializingChanges: 0,
+})
+
 /** What the header chip draws, given whether activity has lasted long enough
  *  to show (`activityShown`, debounced by the caller). Activity too brief to
- *  show is drawn as the calm cloud, and a shown spinner lingers after the view
- *  settles; the dropdown and tooltip read the live view instead. */
+ *  show is drawn as the state it settles to, so an edit's upload leaves the
+ *  chip as it was; a shown spinner never covers a state that needs attention.
+ *  The dropdown and tooltip read the live view instead. */
 export const getChipAppearance = (
-  view: SyncIndicatorView,
+  input: SyncIndicatorInput,
   activityShown: boolean,
 ): ChipAppearance => {
-  if (activityShown) return {icon: 'sync', spinning: true}
-  if (view.spinning) return {icon: 'cloud', spinning: false}
-  return {icon: view.icon, spinning: false}
+  const live = getSyncIndicatorView(input)
+  const needsAttention = live.tone === 'error' || live.tone === 'warning'
+  if (activityShown && !needsAttention) return {tone: live.tone, icon: 'sync', spinning: true}
+  const settled = live.spinning ? getSyncIndicatorView(withoutActivity(input)) : live
+  // Still spinning with activity cleared: the first sync hasn't finished.
+  return {tone: settled.tone, icon: settled.spinning ? 'cloud' : settled.icon, spinning: false}
 }
