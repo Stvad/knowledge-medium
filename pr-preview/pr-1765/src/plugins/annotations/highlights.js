@@ -1,1 +1,0 @@
-export{zm as HIGHLIGHT_CLASS,Bm as MOVED_HIGHLIGHT_CLASS,Vm as SUGGESTION_HIGHLIGHT_CLASS,Hm as coveringStyle,Um as highlightClasses,Wm as highlightField,Gm as highlightRange,Km as highlightRanges,qm as threadHighlights,Jm as threadHighlightsContribution}from"../../../chunks/app-BBxFVD_I.js";

@@ -1,1 +1,0 @@
-export{iB as ExtensionRenderBoundary}from"../../chunks/app-BBxFVD_I.js";

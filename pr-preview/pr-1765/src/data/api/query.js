@@ -1,1 +1,0 @@
-export{gdt as defineQuery}from"../../../chunks/app-BBxFVD_I.js";

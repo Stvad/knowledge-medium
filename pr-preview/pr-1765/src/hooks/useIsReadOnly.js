@@ -1,1 +1,0 @@
-export{Wb as useIsReadOnly}from"../../chunks/app-BBxFVD_I.js";

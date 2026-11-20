@@ -1,1 +1,0 @@
-export{FF as extensionDisplayName,IF as extensionName,LF as userExtensionShellToggle,RF as userExtensionToggle}from"../../chunks/app-BBxFVD_I.js";

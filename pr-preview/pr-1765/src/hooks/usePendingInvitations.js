@@ -1,1 +1,0 @@
-export{GD as usePendingInvitations}from"../../chunks/app-BBxFVD_I.js";

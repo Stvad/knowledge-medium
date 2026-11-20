@@ -1,1 +1,0 @@
-export{Uv as UpdateIndicator}from"../../../chunks/app-BBxFVD_I.js";

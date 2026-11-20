@@ -1,1 +1,0 @@
-export{qk as Label}from"../../../chunks/app-BBxFVD_I.js";

@@ -1,1 +1,0 @@
-export{TC as default}from"../../../chunks/app-BBxFVD_I.js";

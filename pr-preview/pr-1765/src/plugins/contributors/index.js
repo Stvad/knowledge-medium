@@ -1,1 +1,0 @@
-export{Ym as contributorsPlugin}from"../../../chunks/app-BBxFVD_I.js";

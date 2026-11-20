@@ -1,1 +1,0 @@
-export{aK as propertyShapeLabel}from"../../../chunks/app-BBxFVD_I.js";

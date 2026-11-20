@@ -1,1 +1,0 @@
-export{LI as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,RI as openExtensionsSettings}from"../../chunks/app-BBxFVD_I.js";

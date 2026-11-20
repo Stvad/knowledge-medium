@@ -1,1 +1,0 @@
-export{wV as BlockProperties}from"../../chunks/app-BBxFVD_I.js";

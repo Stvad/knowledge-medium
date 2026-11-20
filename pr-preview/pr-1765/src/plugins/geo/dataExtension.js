@@ -1,1 +1,0 @@
-export{YJ as geoDataExtension}from"../../../chunks/app-BBxFVD_I.js";

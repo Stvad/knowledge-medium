@@ -1,1 +1,0 @@
-export{bx as richPasteDecisionContribution}from"../../../chunks/app-BBxFVD_I.js";

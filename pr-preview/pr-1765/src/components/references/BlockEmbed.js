@@ -1,1 +1,0 @@
-export{CN as BlockEmbed}from"../../../chunks/app-BBxFVD_I.js";

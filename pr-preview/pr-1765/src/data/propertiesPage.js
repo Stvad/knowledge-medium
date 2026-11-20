@@ -1,1 +1,0 @@
-export{Iot as getOrCreatePropertiesPage,Lot as propertiesPageBlockId,Rot as propertiesPageSpec}from"../../chunks/app-BBxFVD_I.js";

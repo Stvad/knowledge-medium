@@ -1,1 +1,0 @@
-export{Lg as authorIdOf}from"../../../chunks/app-BBxFVD_I.js";

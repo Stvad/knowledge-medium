@@ -1,1 +1,0 @@
-export{xJ as htmlDocumentTypeSeed}from"../../../chunks/app-BBxFVD_I.js";

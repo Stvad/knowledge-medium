@@ -1,1 +1,0 @@
-export{rb as wikilinkMarkdownExtension}from"../../../../../chunks/app-BBxFVD_I.js";

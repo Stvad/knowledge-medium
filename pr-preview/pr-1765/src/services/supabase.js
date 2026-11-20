@@ -1,1 +1,0 @@
-export{Dot as hasSupabaseAuthConfig,Oot as isAuthCallbackUrl,kot as readPersistedSession,Aot as sessionUserToAppUser,jot as supabase}from"../../chunks/app-BBxFVD_I.js";
