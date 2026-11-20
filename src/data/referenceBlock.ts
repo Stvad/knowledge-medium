@@ -230,6 +230,15 @@ export const referenceBlockContentForId = (id: string): string => {
   return content
 }
 
+/** The spelling an ID-based picker can offer, if the reference round-trips. */
+export const tryReferenceBlockContentForId = (id: string): string | null => {
+  try {
+    return referenceBlockContentForId(id)
+  } catch {
+    return null
+  }
+}
+
 /** Every `]` in `s` closes an earlier `[`, and every `[` is closed — single
  *  brackets, so a nested `[[b]]` counts as balanced. The inline reader
  *  (`@/plugins/references/referenceParser`) decides how many of a `]]]…` run

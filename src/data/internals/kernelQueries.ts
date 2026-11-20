@@ -484,6 +484,15 @@ export const selectAliasTargetIdsSql = (count: number): string => `
   FROM requested
 `
 
+/** Aliases that would resolve back to each offered block when inserted as a wikilink. */
+export const SELECT_RESOLVING_ALIASES_FOR_BLOCKS_SQL = `
+  SELECT a.block_id AS id, a.alias
+    FROM block_aliases a
+   WHERE a.workspace_id = ? AND a.block_id IN (SELECT value FROM json_each(?))
+     AND a.block_id = (SELECT blocks.id ${liveAliasLookupSql('a.alias', 'a.workspace_id')})
+   ORDER BY a.block_id, a.alias
+`
+
 /** ALL live claimants of an exact alias in a workspace — no `LIMIT 1`.
  *  The single-row lookups above tie-break on `created_at`, which is a
  *  defense-in-depth convenience for callers that just want "the block

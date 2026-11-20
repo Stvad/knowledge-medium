@@ -11,7 +11,7 @@ import {valueAutocomplete, valueCompletionSource} from '../valueAutocomplete'
 
 const enumSchema = defineProperty('status', {codec: codecs.enum([{value: ' open ', label: 'Open'}, {value: 'done', label: 'Done'}]), defaultValue: 'done', changeScope: ChangeScope.BlockDefault})
 const refSchema = defineProperty('owner', {codec: codecs.ref({targetTypes: ['person']}), defaultValue: '', changeScope: ChangeScope.BlockDefault})
-const search = vi.fn(async () => [{id: 'target', label: 'Alice'}])
+const search = vi.fn(async () => [{insert: '((target))', label: 'Alice'}])
 const complete = async (schema: typeof enumSchema | typeof refSchema, doc: string) => {
   const state = EditorState.create({doc, selection: {anchor: doc.length}})
   return valueCompletionSource(schema, search)(new CompletionContext(state, doc.length, false))
@@ -71,7 +71,7 @@ it('opens on focus of an empty enum value and updates as the user types', async 
 
 
 it('searches the edited block workspace rather than the active workspace', async () => {
-  const spy = vi.spyOn(linkSearch, 'searchTypedReferenceCandidates').mockResolvedValue([])
+  const spy = vi.spyOn(linkSearch, 'rankedTypedReferenceCandidates').mockResolvedValue([])
   const repo = {activeWorkspaceId: 'other-workspace'} as Repo
   const block = {peek: () => ({workspaceId: 'edited-workspace'})} as Block
   try {
