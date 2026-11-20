@@ -1,0 +1,1 @@
+export{TN as BlockEmbed}from"../../../chunks/app-DK9epZrZ.js";

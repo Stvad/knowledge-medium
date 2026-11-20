@@ -1,0 +1,1 @@
+export{UK as BootFallback}from"../../../chunks/app-DK9epZrZ.js";

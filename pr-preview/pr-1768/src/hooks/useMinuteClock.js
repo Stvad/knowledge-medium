@@ -1,0 +1,1 @@
+export{WO as useMinuteClock}from"../../chunks/app-DK9epZrZ.js";

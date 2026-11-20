@@ -1,0 +1,1 @@
+export{sb as remarkWikilinks}from"../../../../../chunks/app-DK9epZrZ.js";

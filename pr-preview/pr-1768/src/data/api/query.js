@@ -1,0 +1,1 @@
+export{vdt as defineQuery}from"../../../chunks/app-DK9epZrZ.js";

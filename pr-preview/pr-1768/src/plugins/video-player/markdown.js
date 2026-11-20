@@ -1,0 +1,1 @@
+export{wC as videoPlayerMarkdownExtension}from"../../../chunks/app-DK9epZrZ.js";

@@ -1,0 +1,1 @@
+export{kP as editorAutocompleteExtension}from"../../chunks/app-DK9epZrZ.js";

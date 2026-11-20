@@ -1,0 +1,1 @@
+export{CJ as htmlDocumentTypeSeed}from"../../../chunks/app-DK9epZrZ.js";

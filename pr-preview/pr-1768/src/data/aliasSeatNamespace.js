@@ -1,0 +1,1 @@
+export{Vot as aliasSeatNamespacesInTx,Hot as resolveAliasSeatNamespaces}from"../../chunks/app-DK9epZrZ.js";
