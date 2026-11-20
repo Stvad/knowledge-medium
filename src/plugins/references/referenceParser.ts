@@ -252,15 +252,15 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
   return references.sort((a, b) => a.startIndex - b.startIndex)
 }
 
+/** Whether a parsed `[[alias]]` is the `![[alias]]` page-embed form. */
+export const isPageEmbed = (content: string, ref: Pick<ParsedReference, 'startIndex'>): boolean =>
+  ref.startIndex > 0 && content[ref.startIndex - 1] === '!'
+
 /**
  * Parse every balanced `[[alias]]` pattern from text content. Nested
  * wikilinks emit both the outer and inner references, matching Roam's
  * backlink behavior.
  */
-/** Whether a parsed `[[alias]]` is the `![[alias]]` page-embed form. */
-export const isPageEmbed = (content: string, ref: Pick<ParsedReference, 'startIndex'>): boolean =>
-  ref.startIndex > 0 && content[ref.startIndex - 1] === '!'
-
 export function parseReferences(content: string): ParsedReference[] {
   return parseWikilinkReferences(content)
 }
