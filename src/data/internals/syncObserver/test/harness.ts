@@ -123,6 +123,8 @@ export interface StartedObserver {
   observer: BlocksSyncedObserver
   cache: BlockCache
   notifications: ChangeNotification[]
+  /** One per window: what was marked stale ahead of its delivery. */
+  staleMarks: ChangeNotification[]
 }
 
 /**
@@ -149,10 +151,11 @@ export const setupObserverTestDb = () => {
   const start = (opts: StartObserverOpts): StartedObserver => {
     const cache = new BlockCache()
     const notifications: ChangeNotification[] = []
+    const staleMarks: ChangeNotification[] = []
     const observer = startBlocksSyncedObserver({
       db: env.db,
       cache,
-      handleStore: { invalidate: n => notifications.push(n) },
+      handleStore: { invalidate: n => notifications.push(n), markStale: n => staleMarks.push(n) },
       deps: {
         getMaterializability: opts.getMaterializability,
         getCek: opts.getCek ?? noKey,
@@ -168,7 +171,7 @@ export const setupObserverTestDb = () => {
       getInvalidationRules: opts.getInvalidationRules,
     })
     observers.push(observer)
-    return { observer, cache, notifications }
+    return { observer, cache, notifications, staleMarks }
   }
 
   return {

@@ -69,16 +69,16 @@ const DEFAULT_THROTTLE_MS = 100
  *  resumes from the last committed window instead of restarting from zero. */
 const DEFAULT_DRAIN_CHUNK = 1000
 
-/** How often a drain with more than one window delivers its handle
- *  invalidations. Every delivery re-runs the live queries it matches, and during
- *  a backlog the workspace-wide ones match every window: re-run per window they
- *  occupy the read connection the drain's own reads need, so a long drain goes
- *  as fast as the UI's queries let it. The first window of a drain and its end
- *  always deliver, so a drain of one window, which is every drain in steady
- *  state, is invalidated exactly as promptly as before.
+/** During a multi-window drain every window marks the handles it affects
+ *  stale at once, and the re-runs of their loaders are merged and delivered
+ *  after the drain's first window, then at most this often, then at the drain's
+ *  end. Each delivery re-runs the live queries it matches, on the read
+ *  connection the drain itself reads from; a single-window drain delivers
+ *  immediately.
  *
- *  Only the QUERY re-runs wait. The block cache is updated in each window: a
- *  cached row that lags `blocks` is what a local edit would be built on. */
+ *  Only what subscribers SEE waits. A handle awaited through `load()` and the
+ *  block cache are both current with every committed window, because writes
+ *  are decided from them. */
 const DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS = 10_000
 
 /** The device's materialization backlog: staged changes the drain hasn't
@@ -122,10 +122,16 @@ export interface SyncDrainStats {
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
+/** The handle store as the observer drives it: `markStale` for every window,
+ *  `invalidate` when the held changes are delivered. */
+export type SyncHandleStore = SyncInvalidationTarget & {
+  markStale(change: ChangeNotification): void
+}
+
 export interface BlocksSyncedObserverArgs {
   readonly db: PowerSyncDb
   readonly cache: SyncCache
-  readonly handleStore: SyncInvalidationTarget
+  readonly handleStore: SyncHandleStore
   readonly deps: MaterializeDeps
   /** Plugin invalidation rules, read fresh each drain (plugins can register
    *  after the observer starts). */
@@ -319,6 +325,7 @@ export const startBlocksSyncedObserver = (
   let invalidationsDeliveredAt = -Infinity
   const heldInvalidations: SyncInvalidationTarget = {
     invalidate: (change) => {
+      handleStore.markStale(change)
       heldInvalidation = heldInvalidation ? mergeChangeNotifications(heldInvalidation, change) : change
     },
   }

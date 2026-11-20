@@ -21,6 +21,7 @@ import {
   HandleStore,
   LoaderHandle,
   handleKey,
+  mergeChangeNotifications,
   stableArgsKey,
   type Dependency,
 } from './handleStore'
@@ -2260,5 +2261,51 @@ describe('Dep dedup at registration', () => {
     block()
     await waitFor(() => expect(h.status()).toBe('ready'))
     expect(h.__depsForTest()).toEqual([{ kind: 'row', id: 'r1' }])
+  })
+})
+
+describe('markStale()', () => {
+  it('makes a subscribed handle load fresh without re-running it for its subscribers', async () => {
+    const store = makeStore()
+    let v = 1
+    let runs = 0
+    const h = store.getOrCreate('stale-q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-q',
+        loader: async (ctx) => { ctx.depend({ kind: 'row', id: 'r1' }); runs++; return v },
+      }),
+    )
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await waitFor(() => expect(fired).toEqual([1]))
+
+    v = 2
+    store.markStale({ rowIds: ['other'] })
+    expect(await h.load()).toBe(1)
+
+    store.markStale({ rowIds: ['r1'] })
+    // A subscriber alone triggers nothing: the loader has still run once.
+    await Promise.resolve()
+    expect(runs).toBe(1)
+    // An awaited read is what must not see the old value.
+    expect(await h.load()).toBe(2)
+  })
+})
+
+describe('mergeChangeNotifications()', () => {
+  const sorted = (x: ReadonlySet<string> | readonly string[] | undefined) => (x ? [...x].sort() : x)
+
+  it('is the union of every field, across sets, arrays and absent sides', () => {
+    const merged = mergeChangeNotifications(
+      { rowIds: new Set(['a']), parentIds: ['p1'], plugin: new Map([['ch', new Set(['k1'])], ['only-a', ['x']]]) },
+      { rowIds: ['a', 'b'], workspaceIds: new Set(['w']), tables: ['t'], plugin: new Map([['ch', ['k2']]]) },
+    )
+    expect(sorted(merged.rowIds)).toEqual(['a', 'b'])
+    expect(sorted(merged.parentIds)).toEqual(['p1'])
+    expect(sorted(merged.workspaceIds)).toEqual(['w'])
+    expect(sorted(merged.tables)).toEqual(['t'])
+    expect(sorted(merged.plugin?.get('ch'))).toEqual(['k1', 'k2'])
+    expect(sorted(merged.plugin?.get('only-a'))).toEqual(['x'])
   })
 })

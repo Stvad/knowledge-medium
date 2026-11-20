@@ -118,6 +118,10 @@ interface RegisteredHandle {
    *  flush when all batch members are done, or with `null` to release
    *  its slot without contributing a notify). */
   invalidate: (batch?: NotifyBatch) => void
+  /** Record that the handle's value is out of date WITHOUT re-running its
+   *  loader: the next `load()` / `loadFresh()` re-resolves, subscribers are
+   *  not notified. See `HandleStore.markStale`. */
+  markStale: () => void
   /** Called when GC fires — handle clears its state, the store removes
    *  the entry from the registry. */
   dispose: () => void
@@ -387,6 +391,19 @@ export class HandleStore {
       h.invalidate(batch)
     }
     batch.close()
+  }
+
+  /** Everything `invalidate(change)` would invalidate is marked out of date,
+   *  and nothing is re-run: a caller that then awaits `load()` or `loadFresh()`
+   *  gets a fresh result, while subscribers keep their current value until an
+   *  `invalidate` covering the same change follows. For a producer that
+   *  commits faster than its subscribers' loaders are worth re-running — the
+   *  producer owes that later `invalidate`. */
+  markStale(change: ChangeNotification): void {
+    for (const h of Array.from(this.handles.values())) {
+      h.observeDuringLoad(change)
+      if (h.matches(change)) h.markStale()
+    }
   }
 
   /** Test/debug: how many handles are currently registered. */
@@ -956,6 +973,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // Capacity isn't bounded by design — invalidations are infrequent
     // relative to load duration, and the queue clears on every settle.
     if (this.inflight) this.changesDuringLoad.push(change)
+  }
+
+  markStale(): void {
+    if (this.disposed) return
+    // A load in flight may have read before the change committed: same
+    // treatment as `invalidate` gives it, a rerun once it settles.
+    if (this.inflight) this.pendingReinvalidate = true
+    else this.stale = true
   }
 
   invalidate(batch?: NotifyBatch): void {

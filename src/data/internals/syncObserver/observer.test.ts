@@ -865,13 +865,14 @@ describe('blocksSyncedObserver — handle invalidation during a backlog', () => 
 
   it('delivers the first window at once and the rest of the drain together', async () => {
     await stageFive()
-    const { observer, notifications, cache } = start({
+    const { observer, notifications, staleMarks, cache } = start({
       getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
     })
     await observer.flush()
 
     expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3', 'b4']])
-    // The cache is not part of what waits.
+    // Staleness is not part of what waits, and neither is the cache.
+    expect(staleMarks.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3'], ['b4']])
     expect(cache.getSnapshot('b4')).toMatchObject({ content: 'c4' })
   })
 
