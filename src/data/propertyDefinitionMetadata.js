@@ -1,1 +1,1 @@
-export{Ott as parsePropertyDefinitionMetadata,ktt as propertySchemaOriginForSeedKey}from"../../chunks/app-H6Ke0J5V.js";
+export{Ott as parsePropertyDefinitionMetadata,ktt as propertySchemaOriginForSeedKey}from"../../chunks/app-DDwB1awm.js";

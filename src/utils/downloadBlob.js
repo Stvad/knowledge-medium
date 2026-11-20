@@ -1,1 +1,1 @@
-export{CB as downloadBlob}from"../../chunks/app-H6Ke0J5V.js";
+export{CB as downloadBlob}from"../../chunks/app-DDwB1awm.js";

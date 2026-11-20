@@ -1,1 +1,1 @@
-export{v8 as Block,y8 as requireLoadedBlock}from"../../chunks/app-H6Ke0J5V.js";
+export{v8 as Block,y8 as requireLoadedBlock}from"../../chunks/app-DDwB1awm.js";

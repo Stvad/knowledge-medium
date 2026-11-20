@@ -1,1 +1,1 @@
-export{zot as aliasSeatNamespacesInTx,Bot as resolveAliasSeatNamespaces}from"../../chunks/app-H6Ke0J5V.js";
+export{zot as aliasSeatNamespacesInTx,Bot as resolveAliasSeatNamespaces}from"../../chunks/app-DDwB1awm.js";

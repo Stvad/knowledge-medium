@@ -1,1 +1,1 @@
-export{GM as blockSelector,KM as findSwipeActionAnchorElement,qM as findSwipeActionBlockElement,JM as getSwipeActionAnchorRect}from"../../../chunks/app-H6Ke0J5V.js";
+export{GM as blockSelector,KM as findSwipeActionAnchorElement,qM as findSwipeActionBlockElement,JM as getSwipeActionAnchorRect}from"../../../chunks/app-DDwB1awm.js";
