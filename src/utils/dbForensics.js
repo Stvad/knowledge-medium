@@ -1,1 +1,1 @@
-export{_2 as DbForensics,v2 as dbForensics}from"../../chunks/app-DtzPb22-.js";
+export{_2 as DbForensics,v2 as dbForensics}from"../../chunks/app-BXyVVwHy.js";

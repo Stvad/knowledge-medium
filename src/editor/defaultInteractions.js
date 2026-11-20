@@ -1,1 +1,1 @@
-export{VP as BlockSelectionShellDecorator,HP as blockContentPointerGestures,UP as blockSelectionShellDecorator,WP as codeMirrorEditModeActivation,GP as createBlockSelectionShellState,KP as defaultEditorInteractionExtension}from"../../chunks/app-DtzPb22-.js";
+export{VP as BlockSelectionShellDecorator,HP as blockContentPointerGestures,UP as blockSelectionShellDecorator,WP as codeMirrorEditModeActivation,GP as createBlockSelectionShellState,KP as defaultEditorInteractionExtension}from"../../chunks/app-BXyVVwHy.js";

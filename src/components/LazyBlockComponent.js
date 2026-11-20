@@ -1,1 +1,1 @@
-export{BI as LazyBlockComponent}from"../../chunks/app-DtzPb22-.js";
+export{BI as LazyBlockComponent}from"../../chunks/app-BXyVVwHy.js";

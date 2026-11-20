@@ -1,1 +1,1 @@
-export{$t as toastExtensionLoadError}from"../../chunks/app-DtzPb22-.js";
+export{$t as toastExtensionLoadError}from"../../chunks/app-BXyVVwHy.js";

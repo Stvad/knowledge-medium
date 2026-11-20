@@ -1,1 +1,1 @@
-export{hb as useBacklinks}from"../../../chunks/app-DtzPb22-.js";
+export{hb as useBacklinks}from"../../../chunks/app-BXyVVwHy.js";

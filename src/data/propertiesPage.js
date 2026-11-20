@@ -1,1 +1,1 @@
-export{yst as getOrCreatePropertiesPage,bst as propertiesPageBlockId,xst as propertiesPageSpec}from"../../chunks/app-DtzPb22-.js";
+export{bst as getOrCreatePropertiesPage,xst as propertiesPageBlockId,Sst as propertiesPageSpec}from"../../chunks/app-BXyVVwHy.js";
