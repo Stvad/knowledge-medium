@@ -1,0 +1,1 @@
+export{lot as MIGRATIONS_PAGE_ALIAS,uot as getOrCreateMigrationsPage,dot as migrationsPageBlockId,fot as migrationsPageSpec}from"../../chunks/app-5Fg_ptL1.js";

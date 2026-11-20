@@ -1,0 +1,1 @@
+export{Qn as builtinCountProfiles,$n as characterCountProfilesFacet,er as profileFrom,tr as profileLabel,nr as rawCharacterCountProfile,rr as textCountProfile,ir as wordsCountProfile}from"../../../chunks/app-5Fg_ptL1.js";

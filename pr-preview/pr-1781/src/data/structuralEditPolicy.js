@@ -1,0 +1,1 @@
+export{LP as resolveStructuralEditPolicy,RP as structuralEditPolicyForBlock}from"../../chunks/app-5Fg_ptL1.js";

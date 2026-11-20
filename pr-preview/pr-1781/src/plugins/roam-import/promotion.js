@@ -1,0 +1,1 @@
+export{Bd as computePromotedFromChildren,Vd as detectInlineAttribute}from"../../../chunks/app-5Fg_ptL1.js";

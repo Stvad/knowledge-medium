@@ -1,0 +1,1 @@
+export{HF as gestureBindingDescriptor,UF as matchesGestureEvent}from"../../chunks/app-5Fg_ptL1.js";

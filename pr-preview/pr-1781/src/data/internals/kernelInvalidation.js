@@ -1,0 +1,1 @@
+export{L5 as emitKernelInvalidations,R5 as kernelInvalidationRule}from"../../../chunks/app-5Fg_ptL1.js";

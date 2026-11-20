@@ -1,0 +1,1 @@
+export{Ib as blockrefMarkdownExtension}from"../../../../../chunks/app-5Fg_ptL1.js";

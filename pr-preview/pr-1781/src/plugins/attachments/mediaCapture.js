@@ -1,0 +1,1 @@
+export{iC as DEFAULT_MAX_CAPTURE_BYTES,aC as captureMedia,oC as mediaBlockId}from"../../../chunks/app-5Fg_ptL1.js";

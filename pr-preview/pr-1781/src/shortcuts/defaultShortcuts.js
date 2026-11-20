@@ -1,0 +1,1 @@
+export{pP as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,mP as OPEN_PREFERENCES_ACTION_ID,hP as RELOAD_IN_SAFE_MODE_ACTION_ID,gP as defaultActionContextsExtension,_P as defaultActionsExtension,vP as getDefaultActionGroups,yP as getDefaultActions}from"../../chunks/app-5Fg_ptL1.js";

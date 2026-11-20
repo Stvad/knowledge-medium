@@ -1,0 +1,1 @@
+export{_k as useMinuteClock}from"../../chunks/app-5Fg_ptL1.js";
