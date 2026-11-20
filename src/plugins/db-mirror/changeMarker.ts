@@ -4,9 +4,12 @@
  * TWO parts, because two different things can make the copy on disk stale.
  *
  * `row_events.id` is an AUTOINCREMENT the client schema's triggers advance on
- * every change to `blocks` — local `repo.tx` writes and sync-applied ones alike
- * — so its maximum moves exactly when the DATA worth copying moves, and reading
- * it is a rowid lookup rather than a scan. That matters because the
+ * every local `repo.tx` write to `blocks` and every sync-applied change to a
+ * row this device already had. Its maximum therefore moves whenever data only
+ * this device holds moves, and reading it is a rowid lookup rather than a scan.
+ * It does NOT move for the rows a bulk load brings in (`syncBulkLoadScope`):
+ * a workspace's first download is not copied until something else changes,
+ * and a copy that lacks it gets it back from the server on restore. That matters because the
  * alternative is copying multiple gigabytes to discover nothing changed. An
  * update that moves only a row's version is not a change: the copy on disk
  * holds the same data, and sync re-delivers the bump to a restored copy, whose
@@ -76,7 +79,7 @@ const readQueueFingerprint = async (
  * first thing this database ever recorded, and its timestamp never moves. A
  * database that the browser wiped and PowerSync re-created gets a new one: its
  * log starts again, at the first write after the re-download (the download's
- * own creates are not logged — `SYNC_BULK_LOAD_SCOPE`).
+ * own creates are not logged — `syncBulkLoadScope`).
  *
  * It does NOT identify a DEVICE — restoring a mirror copies the log along with
  * everything else, so two installs can hold the same incarnation. The install

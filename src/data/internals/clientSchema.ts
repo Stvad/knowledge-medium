@@ -18,6 +18,7 @@ import {
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
 import {
+  BLOCK_LOCAL_COLUMN_NAMES,
   BLOCKS_TABLE_COLUMN_NAMES,
   STAGING_LOCAL_COLUMNS,
   buildBlockSnapshotJsonSql,
@@ -422,7 +423,7 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // history substrate (local change-history / time-travel; the only durable
 // record of incoming sync changes), read by the agent-runtime history views and
 // db-mirror's change marker. The one exception is a bulk load's creates
-// (`SYNC_BULK_LOAD_SCOPE`).
+// (`syncBulkLoadScope`).
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
@@ -453,25 +454,34 @@ const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1),
 const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
 /** What the sync observer writes to `tx_context.scope`, beside a NULL
- *  `source`, for a window of a bulk load: rows a device is receiving for the
- *  first time while a gate stands where the app would be. No local transaction
- *  can carry it, since every `ChangeScope` comes with a non-NULL source. */
-export const SYNC_BULK_LOAD_SCOPE = 'sync-bulk'
+ *  `source`, for a window of a bulk load: the workspaces this device is
+ *  receiving for the first time while a gate stands where the app would be.
+ *  `sync-bulk:<workspace id>:<workspace id>:` — every id is followed by a
+ *  colon, so a trigger finds its row's workspace as `:<id>:`. No local
+ *  transaction can carry it, since every `ChangeScope` comes with a non-NULL
+ *  source. */
+const SYNC_BULK_LOAD_SCOPE_PREFIX = 'sync-bulk:'
+export const syncBulkLoadScope = (workspaceIds: readonly string[]): string | null =>
+  workspaceIds.length === 0 ? null : `${SYNC_BULK_LOAD_SCOPE_PREFIX}${workspaceIds.map(id => `${id}:`).join('')}`
+
+/** True for a row of a workspace the current transaction is bulk-loading.
+ *
+ *  The `source IS NULL` half is DEFENCE IN DEPTH: a local write must be logged
+ *  whatever scope string it was given. */
+const inBulkLoadSql = (rowRef: 'NEW'): string => `(
+    (SELECT source FROM tx_context WHERE id = 1) IS NULL
+    AND instr(COALESCE((SELECT scope FROM tx_context WHERE id = 1), ''), '${SYNC_BULK_LOAD_SCOPE_PREFIX}') = 1
+    AND instr((SELECT scope FROM tx_context WHERE id = 1), ':' || ${rowRef}.workspace_id || ':') > 0
+  )`
 
 /** A row a bulk load creates gets no 'create' event: it records that the row
  *  arrived on this device, for every row of the workspace, and nothing a user
  *  did. Its later changes are logged as any other row's, each with its before
- *  state.
- *
- *  The `source IS NULL` half is DEFENCE IN DEPTH: a local write must be logged
- *  whatever scope string it was given. */
+ *  state. */
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
-  WHEN NOT (
-    (SELECT source FROM tx_context WHERE id = 1) IS NULL
-    AND (SELECT scope FROM tx_context WHERE id = 1) IS '${SYNC_BULK_LOAD_SCOPE}'
-  )
+  WHEN NOT ${inBulkLoadSql('NEW')}
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -494,15 +504,26 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
  *  snapshot: the snapshot normalizes some stored changes away (`json()`, the
  *  boolean CASEs, `userUpdatedAt`'s fallback to `updated_at`), and a column it
  *  lacks would otherwise go unlogged. */
-const blockRowChangedBesidesVersionSql = BLOCKS_TABLE_COLUMN_NAMES
-  .filter(name => name !== 'updated_at')
-  .map(name => `OLD.${name} IS NOT NEW.${name}`)
-  .join('\n    OR ')
+const columnsChangedSql = (names: readonly string[]): string =>
+  names.map(name => `OLD.${name} IS NOT NEW.${name}`).join('\n    OR ')
+
+const blockRowChangedBesidesVersionSql = columnsChangedSql(
+  BLOCKS_TABLE_COLUMN_NAMES.filter(name => name !== 'updated_at'),
+)
+
+/** The columns a device derives for itself. A bulk load stamps them on the
+ *  rows it has just inserted, in the same transaction, and that is no more an
+ *  event than the insert was — and would cost two snapshots where the insert
+ *  cost one. */
+const blockLocalColumnsOnlyChangedSql = `NOT (${columnsChangedSql(
+  BLOCKS_TABLE_COLUMN_NAMES.filter(name => name !== 'updated_at' && !BLOCK_LOCAL_COLUMN_NAMES.includes(name)),
+)})`
 
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
-  WHEN ${blockRowChangedBesidesVersionSql}
+  WHEN (${blockRowChangedBesidesVersionSql})
+    AND NOT (${inBulkLoadSql('NEW')} AND ${blockLocalColumnsOnlyChangedSql})
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id

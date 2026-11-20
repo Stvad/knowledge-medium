@@ -68,7 +68,8 @@ const remainingIn = (elapsed: number | undefined, window: number): number | unde
   elapsed !== undefined && elapsed >= 0 && elapsed < window ? window - elapsed : undefined
 
 /** A database whose log is still empty. Transient by nature — it is the window
- *  between a wipe or an import and sync writing the first event — so it gets a
+ *  between a wipe or an import and the first logged change, which a first
+ *  download's own rows are not (`syncBulkLoadScope`) — so it gets a
  *  short retry like the busy path rather than the full cadence, which on a
  *  weekly setting left the warning up and no copy taken for a week after sync
  *  had already finished. Nothing else re-arms the job when sync completes. */
@@ -288,8 +289,8 @@ export const createDbMirrorSchedule = ({
     // one's, and a record that is only true if you remember to check a
     // neighbouring field is a record that will be read wrong. Before the
     // empty-log return below, because that is the post-wipe window itself — a
-    // rebuilt database has an empty log until sync repopulates it, which is
-    // exactly when the stale record is on screen.
+    // rebuilt database has an empty log until its first logged change, which
+    // is exactly when the stale record is on screen.
     if (knownStale && state.status.lastOutcome !== undefined) {
       await recordStatus(userId, {
         incarnation,

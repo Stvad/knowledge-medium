@@ -93,6 +93,7 @@ describe('WorkspaceSyncGate', () => {
     const hold = vi.spyOn(repo, 'holdBulkSyncLoad').mockReturnValue(release)
     const {unmount} = renderGate({onReady: vi.fn()})
     await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1))
+    expect(hold).toHaveBeenCalledWith(WS)
     expect(release).not.toHaveBeenCalled()
     unmount()
     expect(release).toHaveBeenCalledTimes(1)

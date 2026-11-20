@@ -939,8 +939,8 @@ describe('blocksSyncedObserver — bulk windows', () => {
       }
     })
 
-    const release = observer.holdBulkLoad()
-    const nested = observer.holdBulkLoad()
+    const release = observer.holdBulkLoad('ws')
+    const nested = observer.holdBulkLoad('ws')
     nested()
     nested() // a second call releases nothing further
     await stage(0)
@@ -953,7 +953,7 @@ describe('blocksSyncedObserver — bulk windows', () => {
     expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 3 })
 
     // The workspace pass sizes its windows the same way.
-    const again = observer.holdBulkLoad()
+    const again = observer.holdBulkLoad('ws')
     await observer.drainWorkspace('ws', 'all')
     expect(seen.at(-1)).toMatchObject({ source: 'workspace', rows: 12, windows: 3 })
     again()
@@ -969,7 +969,7 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     const { observer } = start({ getMaterializability: constMat('copy') })
     await observer.flush()
 
-    const release = observer.holdBulkLoad()
+    const release = observer.holdBulkLoad('ws')
     await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
     await observer.flush()
     expect(await blocks()).toEqual([{ id: 'bulk', content: 'v1' }])
@@ -980,11 +980,20 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     await observer.flush()
     expect(await events()).toEqual([{ block_id: 'bulk', kind: 'update' }])
 
+    // The hold names a workspace: another one's arrivals are logged throughout.
+    await put(data({ id: 'other', workspaceId: 'ws-other', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'other', kind: 'create' },
+    ])
+
     release()
     await put(data({ id: 'live', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
     await observer.flush()
     expect(await events()).toEqual([
       { block_id: 'bulk', kind: 'update' },
+      { block_id: 'other', kind: 'create' },
       { block_id: 'live', kind: 'create' },
     ])
   })
@@ -993,7 +1002,7 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     // DEFENCE IN DEPTH: no ChangeScope is the bulk scope, but a scope is a
     // string an extension passes, and an unlogged local create has no undo.
     await env.db.writeTransaction(async (tx) => {
-      await tx.execute(`UPDATE tx_context SET source = 'user', scope = 'sync-bulk', tx_seq = 1 WHERE id = 1`)
+      await tx.execute(`UPDATE tx_context SET source = 'user', scope = 'sync-bulk:ws:', tx_seq = 1 WHERE id = 1`)
       await tx.execute(
         `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
            created_at, updated_at, created_by, updated_by, deleted)
@@ -1004,9 +1013,43 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     expect(await events()).toEqual([{ block_id: 'local', kind: 'create' }])
   })
 
+  it('logs no update for the derived columns a bulk load stamps on its own rows', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws' }))
+    await observer.flush()
+    release()
+
+    const stamp = (scope: string | null, set: string) => env.db.writeTransaction(async (tx) => {
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [scope])
+      await tx.execute(`UPDATE blocks SET ${set} WHERE id = 'bulk'`)
+      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+    })
+    await stamp('sync-bulk:ws:', `reference_target_id = 't1'`)
+    expect(await events()).toEqual([])
+    // Outside a bulk load the same stamp is an event, as it always was.
+    await stamp(null, `reference_target_id = 't2'`)
+    // And inside one, a change to a synced column still is.
+    await stamp('sync-bulk:ws:', `content = 'changed', reference_target_id = 't3'`)
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'bulk', kind: 'update' },
+    ])
+  })
+
+  it('logs a create on a live pass whatever scope was left behind', async () => {
+    // DEFENCE IN DEPTH: nothing leaves a bulk scope committed, so this state is
+    // written by hand.
+    await env.db.execute(`UPDATE tx_context SET scope = 'sync-bulk:ws:' WHERE id = 1`)
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await put(data({ id: 'live', workspaceId: 'ws' }))
+    await observer.flush()
+    expect(await events()).toEqual([{ block_id: 'live', kind: 'create' }])
+  })
+
   it('leaves no exemption behind for another source-NULL write', async () => {
     const { observer } = start({ getMaterializability: constMat('copy') })
-    const release = observer.holdBulkLoad()
+    const release = observer.holdBulkLoad('ws')
     await put(data({ id: 'bulk', workspaceId: 'ws' }))
     await observer.flush()
     release()

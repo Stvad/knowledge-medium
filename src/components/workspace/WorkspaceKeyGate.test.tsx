@@ -546,16 +546,16 @@ describe('workspaceGateDeps', () => {
   it('holds bulk drain windows around the gate drain, and gives them back when it fails', async () => {
     const order: string[] = []
     const repo = {
-      holdBulkSyncLoad: () => { order.push('hold'); return () => { order.push('release') } },
+      holdBulkSyncLoad: (workspaceId: string) => { order.push(`hold ${workspaceId}`); return () => { order.push('release') } },
       drainSyncWorkspace: vi.fn(async () => { order.push('drain'); return {deferred: 0} }),
     }
     const deps = workspaceGateDeps(repo as never, 'ws')
     await deps.drainWorkspace()
-    expect(order).toEqual(['hold', 'drain', 'release'])
+    expect(order).toEqual(['hold ws', 'drain', 'release'])
 
     order.length = 0
     repo.drainSyncWorkspace.mockRejectedValueOnce(new Error('drain failed'))
     await expect(deps.drainWorkspace()).rejects.toThrow('drain failed')
-    expect(order).toEqual(['hold', 'release'])
+    expect(order).toEqual(['hold ws', 'release'])
   })
 })

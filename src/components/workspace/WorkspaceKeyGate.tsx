@@ -34,10 +34,11 @@ export interface WorkspaceGateDeps {
 }
 
 export const workspaceGateDeps = (repo: Repo, workspaceId: string): WorkspaceGateDeps => ({
-  // Bulk windows: the gate stands where the app would be, so nothing is waiting
-  // to write. A drain the user walked away from keeps them until it finishes.
+  // A bulk load: the gate stands where the app would be, so nothing is waiting
+  // to write, and the rows this drain inserts are reaching `blocks` for the
+  // first time. A drain the user walked away from stays one until it finishes.
   drainWorkspace: async (onProgress) => {
-    const release = repo.holdBulkSyncLoad()
+    const release = repo.holdBulkSyncLoad(workspaceId)
     try {
       return await repo.drainSyncWorkspace(workspaceId, onProgress)
     } finally {

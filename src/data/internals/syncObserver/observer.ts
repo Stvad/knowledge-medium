@@ -249,13 +249,14 @@ export interface BlocksSyncedObserver {
    *  navigated away from would otherwise refuse every pass on the one they are
    *  in now, for as long as it runs. */
   isRematerializingWorkspace(workspaceId: string): boolean
-  /** Treat what drains as a bulk load until the returned release is called:
-   *  bulk-sized windows, and no 'create' event for the rows they insert
-   *  (`SYNC_BULK_LOAD_SCOPE`). For a caller that knows this device is
-   *  receiving the rows for the first time and that nothing is waiting on the
-   *  write lock: a gate shown INSTEAD of the app, with no editor or plugin
-   *  mounted. Holds nest. */
-  holdBulkLoad(): () => void
+  /** Treat `workspaceId`'s deliveries as a bulk load until the returned release
+   *  is called: no 'create' event for the rows inserted into it
+   *  (`syncBulkLoadScope`), and bulk-sized windows for the whole drain, since
+   *  windows are not per workspace. For a caller that knows this device is
+   *  receiving that workspace for the first time and that nothing is waiting
+   *  on the write lock: a gate shown INSTEAD of the app, with no editor or
+   *  plugin mounted. Holds nest. */
+  holdBulkLoad(workspaceId: string): () => void
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -319,10 +320,11 @@ export const startBlocksSyncedObserver = (
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
   const liveChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
   const bulkChunk = Math.max(1, args.bulkDrainChunkSize ?? DEFAULT_BULK_DRAIN_CHUNK)
-  let bulkHolds = 0
+  /** Holds out per workspace — see {@link BlocksSyncedObserver.holdBulkLoad}. */
+  const bulkHolds = new Map<string, number>()
   /** Read per window, so a hold taken or released mid-drain applies from the
    *  next one. */
-  const windowSize = (): number => (bulkHolds > 0 ? bulkChunk : liveChunk)
+  const windowSize = (): number => (bulkHolds.size > 0 ? bulkChunk : liveChunk)
   const rules = (): readonly InvalidationRule[] => getInvalidationRules?.() ?? []
   const invalidationIntervalMs =
     args.backlogInvalidationIntervalMs ?? DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS
@@ -396,7 +398,7 @@ export const startBlocksSyncedObserver = (
     upserted: readonly string[],
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoad: bulkHolds > 0 })
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds: [...bulkHolds.keys()] })
     // Counted as soon as the window has committed: a failure in the steps
     // below does not undo it.
     meter.windows++
@@ -606,13 +608,15 @@ export const startBlocksSyncedObserver = (
     drainWorkspace,
     isRematerializingWorkspace: (workspaceId: string) =>
       (workspaceRescans.get(workspaceId) ?? 0) > 0,
-    holdBulkLoad() {
-      bulkHolds++
+    holdBulkLoad(workspaceId) {
+      bulkHolds.set(workspaceId, (bulkHolds.get(workspaceId) ?? 0) + 1)
       let held = true
       return () => {
         if (!held) return
         held = false
-        bulkHolds--
+        const left = (bulkHolds.get(workspaceId) ?? 1) - 1
+        if (left > 0) bulkHolds.set(workspaceId, left)
+        else bulkHolds.delete(workspaceId)
       }
     },
     dispose() {
