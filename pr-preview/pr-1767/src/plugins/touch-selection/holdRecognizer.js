@@ -1,1 +1,1 @@
-export{jb as BLOCK_HOLD_GESTURE,Mb as BLOCK_HOLD_RECOGNIZER_ID,Nb as blockHoldRecognizer}from"../../../chunks/app-D74yNxP1.js";
+export{jb as BLOCK_HOLD_GESTURE,Mb as BLOCK_HOLD_RECOGNIZER_ID,Nb as blockHoldRecognizer}from"../../../chunks/app-jNpI-EPZ.js";

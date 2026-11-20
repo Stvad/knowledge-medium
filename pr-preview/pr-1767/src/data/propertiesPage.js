@@ -1,1 +1,1 @@
-export{Rot as getOrCreatePropertiesPage,zot as propertiesPageBlockId,Bot as propertiesPageSpec}from"../../chunks/app-D74yNxP1.js";
+export{Rot as getOrCreatePropertiesPage,zot as propertiesPageBlockId,Bot as propertiesPageSpec}from"../../chunks/app-jNpI-EPZ.js";
