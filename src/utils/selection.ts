@@ -10,8 +10,9 @@ import {
   uiStateRenderScopeId,
 } from '@/data/properties'
 import { ChangeScope, type BlockData } from '@/data/api'
+import { precedesInTree } from '@/data/treeOrder.js'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
-import { siblingPrecedes, unlistedIndexAmong } from '@/data/orderKey'
+import { unlistedIndexAmong } from '@/data/orderKey'
 import type { OutlineSurface } from '@/data/outlineSurface'
 import { visibleChildIds } from '@/data/visibleChildren'
 
@@ -250,23 +251,10 @@ const pathFromRoot = (repo: Repo, id: string): BlockData[] | null => {
   return null
 }
 
-/** Whether `a` renders before `b` in their tree: an ancestor before its
- *  descendants, siblings as every children query sorts them (order key,
- *  then id). Blocks in different trees have no order. */
-const precedesInTree = (a: readonly BlockData[], b: readonly BlockData[]): boolean => {
-  if (a[0].id !== b[0].id) return false
-  for (let depth = 1; depth < Math.min(a.length, b.length); depth++) {
-    const [x, y] = [a[depth], b[depth]]
-    if (x.id === y.id) continue
-    return siblingPrecedes(x, y)
-  }
-  return a.length < b.length
-}
-
 /** `ids` with `id` inserted before the first of them it renders before,
- *  else appended — so a selection kept in document order stays in it. The
- *  multi-select actions apply in selection order and rely on that. Loads
- *  the ancestors the comparison reads. */
+ *  else appended — so a selection kept in document order stays in it. Copy
+ *  and cut read the selection in stored order and rely on that. Loads the
+ *  ancestors the comparison reads. */
 export async function insertInDocumentOrder(
   ids: readonly string[],
   id: string,

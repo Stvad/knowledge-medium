@@ -1,5 +1,6 @@
 import type { BlockData, Tx } from '@/data/api'
 import type { Block } from '@/data/block'
+import { unlistedIndexAmong } from '@/data/orderKey'
 import { childrenViewIn, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 
 /**
@@ -36,4 +37,20 @@ export const visibleChildIds = async (
 ): Promise<string[]> => {
   const data = scope.childBacked ? await parent.load() : null
   return parent.repo.query.childIds({id: parent.id, propertyChildren: childrenViewIn(scope, data)}).load()
+}
+
+/** `self`'s siblings as a surface with `scope` draws them, and `self`'s index
+ *  on that list. A `self` the drawn list leaves out (the focused row the
+ *  outline keeps showing, `BlockChildren`) goes where the outline draws it:
+ *  `unlistedIndexAmong`, the rule `BlockChildren` and the selection walkers use. */
+export const visibleSiblingsOf = async (
+  tx: Tx,
+  self: BlockData,
+  scope: PropertyDisplayScopeLevels,
+): Promise<{siblings: BlockData[]; index: number}> => {
+  const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId, scope)
+  const listed = siblings.findIndex(sibling => sibling.id === self.id)
+  if (listed >= 0) return {siblings, index: listed}
+  const index = unlistedIndexAmong(siblings, self)
+  return {siblings: [...siblings.slice(0, index), self, ...siblings.slice(index)], index}
 }

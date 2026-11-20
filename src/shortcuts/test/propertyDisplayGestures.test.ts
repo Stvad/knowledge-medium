@@ -1,4 +1,4 @@
-// @vitest-environment node
+// @vitest-environment happy-dom
 /**
  * The block actions hand the surface's property display scope to the gesture
  * mutators: a property row the surface draws is a neighbour or an anchor like
@@ -22,6 +22,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { bindBlockActionContext, createSharedBlockActions, type BlockAction } from '@/shortcuts/blockActions'
 import { ActionContextTypes, type BlockShortcutDependencies, type MultiSelectModeDependencies } from '@/shortcuts/types'
 import { applyToAllBlocksInSelection } from '@/shortcuts/utils'
+import { getDefaultActionGroups } from '@/shortcuts/defaultShortcuts'
 
 const USER: User = {id: 'user-1', name: 'Alice'}
 const WS = 'ws-property-display-gestures'
@@ -36,8 +37,17 @@ let sharedDb: TestDb
 let repo: Repo
 let statusRow: string
 let draftRow: string
-beforeAll(async () => { sharedDb = await createTestDb() })
-afterAll(async () => { await sharedDb.cleanup() })
+beforeAll(async () => {
+  sharedDb = await createTestDb()
+  // Reduced motion: no rows render here, so a move's row slide would wait out
+  // its settle timeout.
+  vi.spyOn(window, 'matchMedia').mockImplementation(query =>
+    ({matches: query === '(prefers-reduced-motion: reduce)'}) as MediaQueryList)
+})
+afterAll(async () => {
+  vi.restoreAllMocks()
+  await sharedDb.cleanup()
+})
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
@@ -111,5 +121,40 @@ describe('the block actions pass their surface\'s display scope', () => {
     }
     await indent.handler(deps, {kind: 'test'} as never)
     expect(await parentOf('b')).toBe(statusRow)
+  })
+})
+
+describe('the multi-select gestures move the selection on the drawn list', () => {
+  type Gesture = 'indent_block' | 'outdent_block' | 'move_block_up' | 'move_block_down'
+  /** `status` and `draft` stand for the property row and its value. */
+  const named = (id: string): string => id === statusRow ? 'status' : id === draftRow ? 'draft' : id
+  const resolve = (name: string): string => name === 'status' ? statusRow : name === 'draft' ? draftRow : name
+  const outline = async (id: string): Promise<string> => {
+    const parts = await Promise.all((await childIds(id)).map(async child => {
+      const inner = await outline(child)
+      return inner ? `${named(child)}(${inner})` : named(child)
+    }))
+    return parts.join(' ')
+  }
+
+  it.each<[Gesture, string[], PropertyDisplayScopeLevels | undefined, string]>([
+    ['indent_block', ['b'], NON_HIDDEN, 'a status(draft b)'],
+    ['outdent_block', ['draft'], NON_HIDDEN, 'a status draft b'],
+    ['move_block_up', ['b'], NON_HIDDEN, 'a b status(draft)'],
+    ['move_block_down', ['a'], NON_HIDDEN, 'status(draft) a b'],
+    // Without the property row drawn, a and b are a run that holds at the edge;
+    // drawn, it stands between them, and b indents on its own.
+    ['indent_block', ['a', 'b'], undefined, 'a status(draft) b'],
+    ['indent_block', ['a', 'b'], NON_HIDDEN, 'a status(draft b)'],
+  ])('%s over %j in scope %o', async (gesture, selection, propertyDisplay, expected) => {
+    const action = getDefaultActionGroups({repo}).multiSelectModeActions
+      .find(each => each.id === `multi_select.${gesture}`)
+    if (!action) throw new Error(`no multi_select.${gesture}`)
+    const deps: MultiSelectModeDependencies = {
+      selectedBlocks: selection.map(name => repo.block(resolve(name))), anchorBlock: null,
+      uiStateBlock: repo.block('page'), scopeRootId: 'page', propertyDisplay,
+    }
+    await action.handler(deps, {kind: 'test'} as never)
+    expect(await outline('owner')).toBe(expected)
   })
 })
