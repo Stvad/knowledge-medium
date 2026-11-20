@@ -1,1 +1,1 @@
-export{tst as getOrCreateTypesPage,nst as typesPageBlockId,rst as typesPageSpec}from"../../chunks/app-Cyz2gWIL.js";
+export{tst as getOrCreateTypesPage,nst as typesPageBlockId,rst as typesPageSpec}from"../../chunks/app-BFJ7VYpx.js";

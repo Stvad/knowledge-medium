@@ -1,1 +1,1 @@
-export{xa as collectSyncMetricsEffect,Sa as startSyncMetricsCollector}from"../../../chunks/app-Cyz2gWIL.js";
+export{xa as collectSyncMetricsEffect,Sa as startSyncMetricsCollector}from"../../../chunks/app-BFJ7VYpx.js";

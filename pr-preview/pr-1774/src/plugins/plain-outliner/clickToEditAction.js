@@ -1,1 +1,1 @@
-export{DE as ENTER_BLOCK_EDIT_MODE_ACTION_ID,OE as enterBlockEditModeOnClickAction}from"../../../chunks/app-Cyz2gWIL.js";
+export{DE as ENTER_BLOCK_EDIT_MODE_ACTION_ID,OE as enterBlockEditModeOnClickAction}from"../../../chunks/app-BFJ7VYpx.js";
