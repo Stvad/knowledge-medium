@@ -1,0 +1,1 @@
+export{uk as BlockLink}from"../../../chunks/app-D0Qz4jcW.js";

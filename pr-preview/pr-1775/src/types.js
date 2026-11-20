@@ -1,0 +1,1 @@
+export{xct as isChildBackedPropertiesWorkspace}from"../chunks/app-D0Qz4jcW.js";

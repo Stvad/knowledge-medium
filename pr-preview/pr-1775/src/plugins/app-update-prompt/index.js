@@ -1,0 +1,1 @@
+export{mF as appUpdatePromptExtension}from"../../../chunks/app-D0Qz4jcW.js";
