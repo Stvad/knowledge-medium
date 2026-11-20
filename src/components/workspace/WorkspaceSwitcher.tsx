@@ -21,9 +21,9 @@ import { cn } from '@/lib/utils'
 import type { Workspace } from '@/types'
 
 /** The switcher on a screen standing in for a workspace that isn't open (the
- *  key gate). It names that workspace rather than the active one, offers its
- *  settings beside the trigger — rename, members and delete need no key — and
- *  leaves it through `onLeave`. */
+ *  key gate, the sync gate). It names that workspace rather than the active
+ *  one, offers its settings beside the trigger — rename, members and delete
+ *  need no key — and leaves it through `onLeave`. */
 export interface SwitcherGate {
   readonly workspaceId: string
   /** Re-resolve the app away from the workspace. A hash change can't: a gate

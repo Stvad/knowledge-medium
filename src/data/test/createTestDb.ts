@@ -77,6 +77,7 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { WORKSPACE_FIRST_SYNC_MARKER_PREFIX } from '@/data/workspaceFirstSync'
 
 // Keep the native addon loaded in the parent while PowerSync workers exit.
 // better-sqlite3 12 can unload it before V8's final worker GC (#1477 upstream).
@@ -384,6 +385,9 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id

@@ -8,6 +8,8 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext'
+import { PowerSyncContext } from '@powersync/react'
+import type { AbstractPowerSyncDatabase } from '@powersync/common'
 
 // App's ready path fans out through workspace resolution, the §6 access
 // gate, and the bootstrap-write phase — each its own module with its own
@@ -238,5 +240,32 @@ describe('App / LayoutRootContext provision', () => {
 
     expect(await screen.findByTestId('app-block-component')).toBeInTheDocument()
     expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBeUndefined()
+  })
+
+  it('opens a workspace the sync gate held by its id, though the URL names none', async () => {
+    // An empty-hash resolve goes through the ensure-personal RPC, which throws offline.
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
+    await act(async () => {
+      render(
+        <PowerSyncContext value={sharedDb.db as unknown as AbstractPowerSyncDatabase}>
+          <Suspense fallback={<div>loading</div>}>
+            <App/>
+          </Suspense>
+        </PowerSyncContext>,
+      )
+    })
+    expect(await screen.findByRole('heading', {name: /opening/i})).toBeInTheDocument()
+    expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBeUndefined()
+
+    vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
+    await act(async () => {
+      await sharedDb.db.execute(
+        `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time, encryption_mode)
+         VALUES ('ws-1', 'Vault', 'user-1', 1, 1, 'none')`,
+      )
+    })
+
+    expect(await screen.findByTestId('app-block-component')).toBeInTheDocument()
+    expect(vi.mocked(resolveWorkspace).mock.lastCall?.[1]).toBe('ws-1')
   })
 })

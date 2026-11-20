@@ -1028,6 +1028,21 @@ export const recordMarkerSql = (key: string): string => `
   VALUES ('${key}', strftime('%s', 'now') * 1000)
 `
 
+/** A KEYED marker — the key is bound (`?`), so these three serve every family
+ *  whose keys are built at runtime (a prefix plus a workspace id or a name). */
+export const RECORD_KEYED_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+export const SELECT_KEYED_MARKER_SQL = `
+  SELECT key FROM client_schema_state WHERE key = ?
+`
+
+export const DELETE_KEYED_MARKER_SQL = `
+  DELETE FROM client_schema_state WHERE key = ?
+`
+
 /** Takes the SQL rather than the key so call sites keep naming their own
  *  `SELECT_*_DONE_SQL` const, which is also what tests reach for. */
 export const isMarkerSet = async (
@@ -1222,30 +1237,12 @@ export const SELECT_REPROJECT_REF_MARKERS_SQL = `
   SELECT key FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'
 `
 
-export const RECORD_REPROJECT_REF_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
-export const CLEAR_REPROJECT_REF_MARKER_SQL = `
-  DELETE FROM client_schema_state WHERE key = ?
-`
-
 /** Completion markers for workspace-scoped repo.tx data backfills
  *  (`workspaceBackfillsFacet`). Keyed `workspace_backfill:<workspaceId>:<id>`;
  *  a row lands once a backfill has run for a workspace, so subsequent opens
  *  skip it. Local (never synced) — like the reproject markers, each device
  *  records its own completion. */
 export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
-
-export const SELECT_WORKSPACE_BACKFILL_MARKERS_SQL = `
-  SELECT key FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'
-`
-
-export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
 
 /** One-time post-upgrade marker: this client has re-scanned a workspace's
  *  staged `blocks_synced` rows under the relaxed reconcile gate, to heal
@@ -1254,15 +1251,6 @@ export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
  *  them). Keyed `reconcile_rescan_v1:<workspaceId>` — once per workspace per
  *  client. */
 export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
-
-export const SELECT_RECONCILE_RESCAN_MARKER_SQL = `
-  SELECT key FROM client_schema_state WHERE key = ?
-`
-
-export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
 
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
@@ -1765,13 +1753,6 @@ const analyzeUnbounded = async (
  *  still going. The writer's own refresh covers the rest unless it dies too. */
 export const ANALYZE_OWED_MARKER_PREFIX = 'analyze_owed:'
 
-const RECORD_ANALYZE_OWED_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
-const CLEAR_ANALYZE_OWED_SQL = `DELETE FROM client_schema_state WHERE key = ?`
-
 /** One row, so it reads through `getOptional`: the bootstrap shims' `execute`
  *  hands back no rows. */
 const SELECT_ANALYZE_OWED_SQL = String.raw`
@@ -1786,7 +1767,7 @@ export const recordAnalyzeOwed = async (
   db: ClientSchemaBootstrapDb,
   tables: readonly string[],
 ): Promise<void> => {
-  for (const table of tables) await db.execute(RECORD_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+  for (const table of tables) await db.execute(RECORD_KEYED_MARKER_SQL, [analyzeOwedKey(table)])
 }
 
 export const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
@@ -1803,7 +1784,7 @@ const analyzeTablesUnbounded = async (
   await analyzeUnbounded(
     db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
   )
-  for (const table of tables) await db.execute(CLEAR_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+  for (const table of tables) await db.execute(DELETE_KEYED_MARKER_SQL, [analyzeOwedKey(table)])
 }
 
 /** Unconditional ANALYZE of the named tables, for a bulk writer that KNOWS it

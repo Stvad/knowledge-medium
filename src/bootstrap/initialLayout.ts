@@ -1,8 +1,7 @@
 /**
  * Boot layout resolution: which workspace this run lands on, the §6 access
- * gate, then the bootstrap writes — in that fixed order, because the gate must
- * decide BEFORE any write (those writes would otherwise land plaintext into an
- * encrypted-but-locked workspace).
+ * gate, the first-sync gate, then the bootstrap writes — in that fixed order,
+ * because both gates must decide BEFORE any write.
  *
  * The boot path prepares the result before the React tree renders
  * (`prepareInitialLayout`) so App's first `use()` is a cache hit and mounts no
@@ -17,6 +16,7 @@ import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 import { memoizeAsync } from '@/utils/memoize.js'
+import { readWorkspaceFirstSync, recordWorkspaceFirstSync } from '@/data/workspaceFirstSync.js'
 
 export const getCurrentHash = (): string =>
   typeof window === 'undefined' ? '' : window.location.hash
@@ -30,7 +30,14 @@ export type InitialLayout =
       reason: EntryLockReason
       canary: string | null
     }
-  | {kind: 'waiting'; workspaceId: string}
+  | {
+      /** Not caught up on this device (`workspaceFirstSync`), or — with
+       *  `awaitingRow` — its row has not arrived, so access is not decided yet. */
+      kind: 'syncing'
+      workspaceId: string
+      workspaceName: string | null
+      awaitingRow: boolean
+    }
 
 export const resolveInitialLayout = async (
   repo: Repo,
@@ -47,37 +54,18 @@ export const resolveInitialLayout = async (
     useRemoteSync,
   )
   repo.setActiveWorkspaceId(workspaceId)
+  // Every gated layout is read-only; only `ready` takes the role, below.
+  repo.setReadOnly(true)
 
-  // Derive read-only from the local membership row. workspace_members rides
-  // the same sync stream as workspaces, so for any workspace we just
-  // resolved as accessible, the role row is normally already local. Null
-  // (membership not yet synced) defaults to read-only=false; if the role
-  // is actually 'viewer', the very next sync tick flips us — and any
-  // edits attempted in the meantime would be RLS-rejected server-side
-  // anyway.
-  const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
-  repo.setReadOnly(role === 'viewer')
-
-  // Phase 2 — §6 rule 3 access gate. Resolve whether this workspace can be
-  // materialized for us right now BEFORE any bootstrap write below — those
-  // writes (daily note, properties/types/recents pages, ui-state) would
-  // otherwise write plaintext into an encrypted-but-locked workspace. If it
-  // can't, return a `locked`/`waiting` layout and App renders the gate/loader.
-  // The read-inputs + decide halves live together in resolveWorkspaceEntry; the
-  // local workspace row read is injected to keep that module within sync/keys.
+  // Phase 2 — §6 rule 3 access gate, BEFORE any bootstrap write: those writes
+  // (daily note, properties/types/recents pages, ui-state) would otherwise land
+  // plaintext in an encrypted-but-locked workspace. The local workspace row
+  // read is injected to keep resolveWorkspaceEntry within sync/keys.
   const entry = await resolveWorkspaceEntry(repo.user.id, workspaceId, id =>
     getLocalWorkspace(repo, id),
   )
   markStartup('workspaceResolved')
-  if (entry.kind === 'waiting') {
-    // The workspaces row hasn't replicated yet and the pin can't settle access
-    // without it. Don't bootstrap (would write plaintext into a possibly-e2ee
-    // workspace) and don't gate with a null canary — wait for the row.
-    repo.setReadOnly(true)
-    return {kind: 'waiting', workspaceId}
-  }
   if (entry.kind === 'locked') {
-    repo.setReadOnly(true)
     return {
       kind: 'locked',
       workspaceId,
@@ -86,10 +74,32 @@ export const resolveInitialLayout = async (
       canary: entry.canary,
     }
   }
+  const syncing = async (awaitingRow: boolean): Promise<InitialLayout> => ({
+    kind: 'syncing',
+    workspaceId,
+    workspaceName: (await getLocalWorkspace(repo, workspaceId))?.name ?? null,
+    awaitingRow,
+  })
+  if (entry.kind === 'waiting') return syncing(true)
 
-  // Phase 3 — bootstrap writes (remember-as-default, backfills, tutorial, the
-  // Properties/Types/Recents pages, ui-state) + URL→layout application. Runs
-  // only past the gate; see bootstrap/workspaceBootstrap.
+  // Phase 3 — the first-sync gate: bootstrap's get-or-creates must find the
+  // server's rows, not race them. Past the access gate, so recording is safe.
+  if (freshlyCreated) {
+    await recordWorkspaceFirstSync(repo.db, workspaceId)
+  } else if (useRemoteSync) {
+    const firstSync = await readWorkspaceFirstSync(repo, workspaceId)
+    if (firstSync.kind === 'pending') return syncing(false)
+    if (firstSync.kind === 'caught-up') await recordWorkspaceFirstSync(repo.db, workspaceId)
+  }
+
+  // A null role (membership not synced yet) opens writable: a viewer's next
+  // sync tick flips it, and the server rejects its writes meanwhile.
+  const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
+  repo.setReadOnly(role === 'viewer')
+
+  // Phase 4 — bootstrap writes (remember-as-default, backfills, tutorial, the
+  // Properties/Types/Recents pages, ui-state) + URL→layout application; see
+  // bootstrap/workspaceBootstrap.
   const layoutSessionBlock = await bootstrapWorkspace({
     repo,
     workspaceId,
