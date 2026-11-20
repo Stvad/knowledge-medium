@@ -435,6 +435,19 @@ describe('watcher memory against the app', () => {
         `^Memory changed during this run: edited \\[Cite sources, always\\.\\]\\(\\(\\(${SHARED}\\)\\)\\)$`, 'm'))
     })
 
+    it.each([
+      ['inside a shared note', () => SHARED],
+      ['in the memory itself', (memoryId: string) => memoryId],
+    ])('leaves out its own reply when the mention is %s', async (_, parentOf) => {
+      const memoryId = await seedMemory('![[Shared]]')
+      await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [parentOf(memoryId), MENTION])
+      await runOnce(async () => {})
+
+      const text = await replyText()
+      expect(text).toContain('Done.')
+      expect(text).not.toContain('Memory changed')
+    })
+
     it('reports a note once when the memory embeds one of its own', async () => {
       const memoryId = await seedMemory('Topic', `!((${OWN_DEEP}))`)
       const [topic] = await repo.query['core.childIds']({id: memoryId}).load()

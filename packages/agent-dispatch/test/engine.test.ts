@@ -2,7 +2,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine'
 import {parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
-import type {BlockData, Graph, ReplyWriter} from '../src/graph'
+import type {BlockData, Graph, MemoryScope, ReplyWriter} from '../src/graph'
 import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
 import {createCodexJsonlParser} from '../src/codexRunner'
 import {activityStateFor, chipStateFor} from '../../../src/plugins/agent-dispatch-companion/chipState'
@@ -224,9 +224,9 @@ describe('watcher memory', () => {
   it('keeps a streamed answer when the memory cannot be read after the run', async () => {
     const fake = fakeGraph(seed())
     const entries = fake.graph.memoryEntries
-    fake.graph.memoryEntries = vi.fn(async (id: string) => {
+    fake.graph.memoryEntries = vi.fn(async (scope: MemoryScope) => {
       if (vi.mocked(fake.graph.memoryEntries).mock.calls.length > 1) throw new Error('bridge blipped')
-      return entries(id)
+      return entries(scope)
     })
     const engine = engineWith({
       graph: fake.graph,

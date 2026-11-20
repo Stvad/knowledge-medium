@@ -19,6 +19,16 @@ export interface MemoryOutline {
   sharedRoots: string[]
 }
 
+/** The blocks a run's account of memory changes compares, fixed when it starts. */
+export interface MemoryScope {
+  memoryId: string
+  /** The shared notes the run's outline shows: {@link MemoryOutline.sharedRoots}. */
+  sharedRoots: readonly string[]
+  /** The mention: under it go the daemon's reply and its progress note,
+   *  which can sit inside a shared note or the memory and are not memory. */
+  mentionId: string
+}
+
 interface TaskPropsWrite {
   status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
   resumeOptions?: AgentResumeOptions | null,
@@ -31,7 +41,8 @@ const MEMORY_OUTLINE_LIMIT = 50
 const MEMORY_OUTLINE_DEPTH = 3
 /** Blocks of memory, shared notes included, the reply's account of changes
  *  compares; past it the comparison is skipped, since a cut window would
- *  report false changes. */
+ *  report false changes. One limit for both: a large embedded page skips the
+ *  account of own notes too, which the reply then says. */
 export const MEMORY_DIFF_LIMIT = 1000
 /** The reconcile key the daemon creates the memory block under, which also
  *  finds it again after the person retitles it. */
@@ -145,23 +156,23 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     return {text, sharedRoots}
   }
 
-  /** Every block below the memory block and every block of the shared notes
-   *  (`sharedRoots` and below), field rows aside and in the memory block's
-   *  workspace only, for the reply's account of what a run changed; null past
-   *  {@link MEMORY_DIFF_LIMIT}. */
-  const memoryEntries = async (memoryId: string, sharedRoots: readonly string[]): Promise<MemoryEntry[] | null> => {
+  /** Every block below the memory block and every block of the shared notes,
+   *  field rows aside, in the memory block's workspace only and without the
+   *  mention's subtree, for the reply's account of what a run changed; null
+   *  past {@link MEMORY_DIFF_LIMIT}. */
+  const memoryEntries = async ({memoryId, sharedRoots, mentionId}: MemoryScope): Promise<MemoryEntry[] | null> => {
     const rows = await bridgeGraph.sqlAll(
       `WITH RECURSIVE ws(workspace_id) AS (SELECT workspace_id FROM blocks WHERE id = ?),
        tree(id) AS (
          SELECT id FROM blocks
           WHERE (parent_id = ? OR id IN (SELECT value FROM json_each(?)))
-            AND deleted = 0 AND is_field_form IS NOT 1 AND workspace_id = (SELECT workspace_id FROM ws)
+            AND deleted = 0 AND is_field_form IS NOT 1 AND workspace_id = (SELECT workspace_id FROM ws) AND id != ?
          UNION
          SELECT b.id FROM blocks b JOIN tree ON b.parent_id = tree.id
-          WHERE b.deleted = 0 AND b.is_field_form IS NOT 1 AND b.workspace_id = (SELECT workspace_id FROM ws)
+          WHERE b.deleted = 0 AND b.is_field_form IS NOT 1 AND b.workspace_id = (SELECT workspace_id FROM ws) AND b.id != ?
        )
        SELECT blocks.id, blocks.content FROM tree JOIN blocks ON blocks.id = tree.id LIMIT ?`,
-      [memoryId, memoryId, JSON.stringify(sharedRoots), MEMORY_DIFF_LIMIT + 1],
+      [memoryId, memoryId, JSON.stringify(sharedRoots), mentionId, mentionId, MEMORY_DIFF_LIMIT + 1],
     )
     if (rows.length > MEMORY_DIFF_LIMIT) return null
     return rows.flatMap(row => {

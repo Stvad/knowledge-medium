@@ -151,6 +151,7 @@ describe('renderMentionPrompt with a memory', () => {
     const shared = renderMentionPrompt(undefined, {...context, memory: {...memory, shared: true}})
     expect(shared).toContain('is a shared note')
     expect(shared).toContain('append_markdown with target m-1, never under a shared note.')
+    expect(shared).toContain('A shared note, and the note that embeds it, stay as they are unless the user asks.')
   })
 
   it('appends the memory to a custom template that does not place it', () => {
