@@ -2612,6 +2612,9 @@ export class Repo {
   ): Unsubscribe {
     const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
     if (options?.freshInitial) {
+      // A projector's registries are what a local transaction encodes with,
+      // so its rows may not wait out a sync backlog's held invalidations.
+      handle.rerunOnStaleMark()
       let initialPending = true
       const unsubscribe = handle.subscribe(rows => {
         if (!initialPending) listener(rows)

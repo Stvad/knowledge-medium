@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@/test/waitFor'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -24,6 +24,7 @@ import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
 import type { AnyPropertySchema, ResolvedTypedBlockQuery } from '@/data/api'
 import { trackTestRepo } from '@/data/test/testRepoScope'
+import { LoaderHandle } from './handleStore'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -789,6 +790,17 @@ describe('repo.queryBlocks', () => {
 })
 
 describe('repo.subscribeBlocks', () => {
+  it('asks only a projector-mode subscription\'s handle to rerun on a stale mark', () => {
+    const asked = vi.spyOn(LoaderHandle.prototype, 'rerunOnStaleMark')
+
+    env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, () => {})()
+    expect(asked).not.toHaveBeenCalled()
+
+    env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, () => {}, {freshInitial: true})()
+    expect(asked).toHaveBeenCalledTimes(1)
+    asked.mockRestore()
+  })
+
   it('updates when local writes change type membership', async () => {
     const fired: string[][] = []
     const off = env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, rows => {
