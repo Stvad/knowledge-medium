@@ -6,14 +6,18 @@ import { createPropertyRenderer, type PropertyLine } from './properties.ts'
 import { boundDisplayId, idMark } from './displayIds.ts'
 import { crumbLine, joinDisplayLines, loadRoot, plural } from './shared.ts'
 import { charBoundary, formatCount } from './text.ts'
+import { NO_REFS, refLines, REFS_LEGEND, resolveRowRefs, type ExpandRefsParam, type RowRefs } from './refs.ts'
 
-export interface BlockViewParams {
+export interface BlockViewParams extends ExpandRefsParam {
   ref: string
   maxChars?: number
   contentOffset?: number
 }
 
-export interface BlockView {
+/** The notes the view lists: the whole block's, not one content page's. */
+const BLOCK_REFS = 20
+
+export interface BlockView extends RowRefs {
   id: string
   workspaceId: string
   parentId: string | null
@@ -57,8 +61,9 @@ export const buildBlockView = async (
   const boundary = charBoundary(block.content, Math.min(block.content.length, contentOffset + maxChars))
   const end = boundary > contentOffset ? boundary : Math.min(block.content.length, contentOffset + 2)
 
-  const [renderer, crumbs, childCounts, backlinkCount] = await Promise.all([
+  const [renderer, refs, crumbs, childCounts, backlinkCount] = await Promise.all([
     createPropertyRenderer(repo, [block], 'full'),
+    resolveRowRefs(repo, workspaceId, [block], params, BLOCK_REFS),
     loadCrumbs(repo, [block.id], block.workspaceId),
     visibleChildCounts(repo, [block.id], workspaceId),
     // The count of the backlinks view's own set, which owns that equality;
@@ -84,6 +89,7 @@ export const buildBlockView = async (
     childCount: childCounts.get(block.id) ?? 0,
     backlinkCount,
     editedAt: validIso(editedAt),
+    ...refs.get(block.id) ?? NO_REFS,
   }
 }
 
@@ -103,6 +109,10 @@ export const renderBlockView = (view: BlockView): string => {
   if (view.nextContentOffset !== null) {
     const rest = view.contentLength - view.nextContentOffset
     lines.push(`…[+${formatCount(rest)} chars — continue with contentOffset=${view.nextContentOffset}]`)
+  }
+  if (view.refs.length > 0) {
+    // Headed, since content can itself hold a blank line or a line starting with ↳.
+    lines.push('', 'references (not part of the content):', ...refLines(view), REFS_LEGEND)
   }
   if (view.properties.length > 0) {
     lines.push('')
