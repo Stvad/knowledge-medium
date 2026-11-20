@@ -83,6 +83,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
+  grandfatherWorkspaceFirstSync,
   ensureBlockUserUpdatedAtColumn,
   ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
@@ -647,6 +648,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
+  await grandfatherWorkspaceFirstSync(backfillDb)
   const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
   await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
   markStartup('localSchemaApplied')

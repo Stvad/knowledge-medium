@@ -59,6 +59,7 @@
     "@floating-ui/dom": "^1.8.0",
     "@knowledge-medium/agent-cli": "workspace:*",
     "@lezer/common": "^1.5.5",
+    "@lezer/highlight": "^1.2.5",
     "@noble/hashes": "^2.4.0",
     "@powersync/common": "^2.5.0",
     "@powersync/react": "^2.2.0",

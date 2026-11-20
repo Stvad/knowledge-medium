@@ -39,10 +39,9 @@ function PendingInvitationsInner() {
     try {
       await acceptInvitation(id)
       await refresh()
-      // Hand off to App.tsx by changing the hash. App subscribes through
-      // the panel layout projection and will re-resolve through
-      // getInitialLayout, which will poll local sqlite for the workspace's
-      // blocks to arrive over PowerSync once the new membership row replicates.
+      // Hand off to App.tsx by changing the hash: it re-resolves the layout,
+      // which holds the workspace behind the sync gate until its first sync
+      // has downloaded and materialized here.
       setHash(buildAppHash(workspaceId))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to accept invitation')
