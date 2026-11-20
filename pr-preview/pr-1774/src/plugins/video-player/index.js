@@ -1,0 +1,1 @@
+export{RC as videoPlayerPlugin}from"../../../chunks/app-Cyz2gWIL.js";

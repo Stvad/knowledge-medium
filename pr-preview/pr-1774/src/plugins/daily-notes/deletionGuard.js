@@ -1,0 +1,1 @@
+export{ij as dailyNotesDeletionGuard}from"../../../chunks/app-Cyz2gWIL.js";

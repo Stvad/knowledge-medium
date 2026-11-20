@@ -1,0 +1,1 @@
+export{vK as usePropertySchemas}from"../../chunks/app-Cyz2gWIL.js";

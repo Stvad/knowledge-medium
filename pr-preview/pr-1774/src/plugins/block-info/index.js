@@ -1,0 +1,1 @@
+export{ry as blockInfoPlugin}from"../../../chunks/app-Cyz2gWIL.js";

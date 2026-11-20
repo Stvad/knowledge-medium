@@ -1,0 +1,1 @@
+export{Oz as useShortcutSurfaceActivations}from"../../chunks/app-Cyz2gWIL.js";

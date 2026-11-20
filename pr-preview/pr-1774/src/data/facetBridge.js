@@ -1,0 +1,1 @@
+export{G4 as FacetBridge}from"../../chunks/app-Cyz2gWIL.js";

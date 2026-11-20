@@ -1,0 +1,1 @@
+export{WP as editorAutocompleteExtension}from"../../chunks/app-Cyz2gWIL.js";

@@ -1,0 +1,1 @@
+export{UQ as contributorsDataExtension}from"../../../chunks/app-Cyz2gWIL.js";

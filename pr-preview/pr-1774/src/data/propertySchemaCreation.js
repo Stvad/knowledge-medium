@@ -1,0 +1,1 @@
+export{CK as adoptOrCreatePropertySchema}from"../../chunks/app-Cyz2gWIL.js";

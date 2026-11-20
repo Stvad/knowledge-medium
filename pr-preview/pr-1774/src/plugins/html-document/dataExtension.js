@@ -1,0 +1,1 @@
+export{LJ as htmlDocumentDataExtension}from"../../../chunks/app-Cyz2gWIL.js";

@@ -1,0 +1,1 @@
+export{xB as ExtensionRenderBoundary}from"../../chunks/app-Cyz2gWIL.js";

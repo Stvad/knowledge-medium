@@ -1,0 +1,1 @@
+export{KF as dynamicExtensionsExtension}from"../../chunks/app-Cyz2gWIL.js";

@@ -1,0 +1,1 @@
+export{Bo as propertiesMigrationPlugin}from"../../../chunks/app-Cyz2gWIL.js";

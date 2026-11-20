@@ -1,0 +1,1 @@
+export{eL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,tL as openExtensionsSettings}from"../../chunks/app-Cyz2gWIL.js";

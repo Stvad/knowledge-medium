@@ -1,0 +1,1 @@
+export{QF as extensionDisplayName,$F as extensionName,eI as userExtensionShellToggle,tI as userExtensionToggle}from"../../chunks/app-Cyz2gWIL.js";

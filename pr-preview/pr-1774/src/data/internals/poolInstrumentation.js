@@ -1,0 +1,1 @@
+export{U2 as instrumentAdapter}from"../../../chunks/app-Cyz2gWIL.js";
