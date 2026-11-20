@@ -11,13 +11,13 @@ A headless client is a Node process that signs in, syncs, decrypts and materiali
 
 ## 2. Scope (the decision that sizes everything else)
 
-**This design is for a host that keeps its disk: one long-lived process, one database directory, on a machine that stays up** (a home server, a small VPS, a Mac that does not sleep).
+**This design is for a host that keeps its disk: one long-lived process, one database directory, on a machine that stays up** (a home server, a small VPS, a Mac that does not sleep). Owner decision, 2026-11-19: persistent hosts first; transient containers are wanted eventually, so this design must not foreclose them ([§11](#11-later-hosts-that-lose-their-disk)).
 
 It protects against: a plaintext upload to an encrypted workspace; a headless write that skips mutators or processors; a data migration run from the host; two processes on one database; an agent reading the key through the agent surface.
 
-It does not cover hosts that lose their disk (a cloud container that is reclaimed). That case needs a database snapshot that can be exported, published, restored and re-identified, and it is the origin of most of the hard invariants in the scoping notes this design started from (not in the repo). [§11](#11-deferred-hosts-that-lose-their-disk) says what was verified about it and why it is not in this design.
+It does not cover hosts that lose their disk (a cloud container that is reclaimed). That case needs a database snapshot that can be exported, published, restored and re-identified, and it is the origin of most of the hard invariants in the scoping notes this design started from (not in the repo). [§11](#11-later-hosts-that-lose-their-disk) says what was verified about it, why it is not built first, and what this design keeps open for it.
 
-Where the *agent* runs stays open and is small: an agent anywhere can use a persistent host through the bridge protocol ([§12](#12-deferred-agents-that-run-somewhere-else)).
+Where the *agent* runs stays open and is small: an agent anywhere can use a persistent host through the bridge protocol ([§12](#12-later-agents-that-run-somewhere-else)).
 
 ## 3. What already exists
 
@@ -68,7 +68,7 @@ The entry point is a composition root **outside `src/`** (`headless/`, beside `s
 
 ## 7. Identity and secrets
 
-**Account. Recommended: a dedicated member account with the editor role, not the owner's session.** The credential on an unattended machine is then bounded by row-level security to one workspace, cannot delete or convert the workspace, and is revoked by removing a member. It also means the host has no second workspace to write to, which removes a class of question from the plaintext-upload invariant. Sync volume is not a reason either way: the other workspaces are about 1% of the blocks. **[measured]** Cost: rows the host writes carry the automation user's id beside the contributor attribution, and whatever per-user rows a member account mints on first open (not yet sized; slice 1 lists them). *Open, the owner's call.*
+**Account: a dedicated member account with the editor role, not the owner's session** (owner decision, 2026-11-19). The credential on an unattended machine is then bounded by row-level security to one workspace, cannot delete or convert the workspace, and is revoked by removing a member. It also means the host has no second workspace to write to, which removes a class of question from the plaintext-upload invariant. Sync volume is not a reason either way: the other workspaces are about 1% of the blocks. **[measured]** Cost: rows the host writes carry the automation user's id beside the contributor attribution, and whatever per-user rows a member account mints on first open (not yet sized; slice 1 lists them).
 
 **Sign-in.** The app signs in by emailed code only (`signInWithOtp` / `verifyOtp` in `Login.tsx`). **[read]** So `headless login` is interactive once: email, typed code, session persisted to device storage. supabase-js refreshes in-process, and the rotated refresh token lands in the same file. **[reasoned]** A password or service credential would be a new auth surface for one host; not proposed.
 
@@ -81,7 +81,7 @@ The entry point is a composition root **outside `src/`** (`headless/`, beside `s
 Each has the mechanism that holds it and the test that fails when the mechanism is deleted.
 
 1. **Writes go through the data layer.** The host exposes only `executeCommand`, which writes through `repo.tx`. The verb allowlist excludes `eval`, and admits `sql` only when the protocol's own `isReadOnlyAgentCommand` says it is a read. *Test:* each refused verb, sent over the in-process bridge client, is refused; deleting its allowlist check makes a named test fail.
-2. **Queued writes are durable and visible.** On a host that keeps its disk the upload queue survives a kill, so "a run is not done until uploaded" reduces to: shutdown drains, and `health` reports queue depth. This is deliberately weaker than "completion means acknowledged"; that stronger form belongs to hosts that lose their disk ([§11](#11-deferred-hosts-that-lose-their-disk)). *Test:* SIGTERM with a queued write exits only after the fake sink received it; SIGKILL then restart uploads it once.
+2. **Queued writes are durable and visible.** On a host that keeps its disk the upload queue survives a kill, so "a run is not done until uploaded" reduces to: shutdown drains, and `health` reports queue depth. This is deliberately weaker than "completion means acknowledged"; that stronger form belongs to hosts that lose their disk ([§11](#11-later-hosts-that-lose-their-disk)). *Test:* SIGTERM with a queued write exits only after the fake sink received it; SIGKILL then restart uploads it once.
 3. **One identity per database.** A lock file in the state directory; the second process exits. The state directory is never copied to another machine: a new host does a cold sync. *Test:* a second boot on a held directory fails before opening the database.
 4. **Snapshot export and stamping** (two invariants from the scoping notes) do not apply: there is no snapshot. Across code upgrades the database is migrated at open by the same idempotent `ensure*` steps a browser's is, because the initialisation is shared.
 5. **No data migration from the host.** Structural: the Repo has no `backfillCompletionClaim`, so backfills refuse, and `run-backfill` is off the allowlist. Per-device derivation passes run as on any device. *Test:* a backfill requested on a Repo built the way the host builds it refuses; `workspaceBackfillRunner.test.ts` is where the absent-claim branch is exercised today, to be confirmed in slice 1.
@@ -122,13 +122,25 @@ Each has the mechanism that holds it and the test that fails when the mechanism 
 | Host off for weeks, then started with queued writes | They upload, as from a laptop that was closed | None; the queue holds only what agents wrote just before the stop |
 | Membership removed | Sync and uploads fail; queued writes go through the existing rejection path **[reasoned]** | Re-add, or discard the directory |
 
-## 11. Deferred: hosts that lose their disk
+## 11. Later: hosts that lose their disk
 
-Not designed, and recommended against until a persistent host is shown not to be enough. What a snapshot would have to carry is a 6 GB file **[measured]** holding plaintext, whole-file encrypted, stored somewhere never public, refreshed by something, downloaded at each fresh start. On top of that: export only with an empty queue and no open transaction; a stamp of schema and app version; a restore that mints a new PowerSync client id (the id is in the file **[read]**; that resetting it is sufficient is **[reasoned]**); the app-level client id and device storage reset with it; and a way to deliver the key into the container. Each is permanent machinery for one hosting choice.
+Wanted eventually, not built first. Two different things get called a transient container, and only one needs this section:
 
-If it is ever needed, the host in this document is the thing that would produce and consume the snapshot, so nothing here is wasted.
+- **A transient agent with a persistent client.** The container runs the agent and reaches a persistent host over the bridge ([§12](#12-later-agents-that-run-somewhere-else)). No database, no key and no snapshot enter the container. This is the cheap path and should be tried first.
+- **A transient client.** The container itself syncs and decrypts, so it must start from a saved database or pay a cold sync. That is the snapshot path below.
 
-## 12. Deferred: agents that run somewhere else
+What a snapshot has to carry is a 6 GB file **[measured]** holding plaintext, whole-file encrypted, stored somewhere never public, refreshed by something, downloaded at each fresh start. On top of that: export only with an empty queue and no open transaction; a stamp of schema and app version; a restore that mints a new PowerSync client id (the id is in the file **[read]**; that resetting it is sufficient is **[reasoned]**); the app-level client id and device storage reset with it; a completion rule of "uploaded and acknowledged", because a reclaimed container loses its queue; and a way to deliver the key into the container.
+
+**What this design keeps open for it, at no cost now:**
+
+- The state directory is the whole device: the database and the device-storage file, nothing elsewhere. A snapshot is that directory.
+- Boot is "open whatever is in the state directory, then sync incrementally". A restore is the same boot over a directory that arrived by download.
+- The host is the only writer of its directory, so it is also the only thing that could export it consistently.
+- Settled-ness is already a number the host computes (first sync done, materialize backlog zero, upload queue depth). The stronger completion rule is a wait on that number.
+
+Slice 2's measurements (cold sync time and file size under Node) decide how much of the snapshot path is worth building: a cold sync of a few minutes on native SQLite would make a transient client viable for long jobs with no snapshot at all.
+
+## 12. Later: agents that run somewhere else
 
 An agent in a cloud session needs the bridge, not the database. The relay speaks HTTP with `Authorization: Bearer`, and already has a guarded switch for listening beyond loopback (`AGENT_RUNTIME_ALLOW_NETWORK`). **[read]** Behind a TLS tunnel, the agent's credential is a revocable bearer token for one host name, which is exactly the shape a header-injecting secret proxy supports, and neither the workspace key nor the database ever enters the remote machine. This needs its own short design (exposure, token scope, rate limits) and is the natural second step after slice 4.
 
@@ -139,7 +151,8 @@ An agent in a cloud session needs the bridge, not the database. The relay speaks
 3. **Writes on a scratch e2ee workspace.** The clamp, the write verbs, contributor attribution, shutdown drain, the missing-seed write check, and a parity test: one command sequence against a tab-shaped and a host-shaped runtime yields identical rows.
 4. **The real graph, with `agent-dispatch` pointed at the host's profile.** Dispatch runs only there, so the claim race it documents does not widen.
 
-## 14. Open questions
+## 14. Decided, and still open
 
-- **Host** ([§2](#2-scope-the-decision-that-sizes-everything-else)): is a machine that stays up acceptable as the first host?
-- **Account** ([§7](#7-identity-and-secrets)): dedicated member, or the owner's session?
+Decided by the owner, 2026-11-19: persistent hosts first, transient containers later ([§2](#2-scope-the-decision-that-sizes-everything-else)); a dedicated member account ([§7](#7-identity-and-secrets)).
+
+Still open, each assigned to a slice: cold sync time, memory and file size under Node (slice 2); what a member account writes on first open (slice 1); how a write to a property whose seed the host lacks behaves (slice 3).
