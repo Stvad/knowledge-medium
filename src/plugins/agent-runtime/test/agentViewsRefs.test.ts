@@ -93,7 +93,8 @@ const sharedMemory = async () => {
 describe('contentMarks', () => {
   it('reads plain refs, embeds and page embeds, but not labelled refs or page links', () => {
     const id = uuid('c0000001', 1)
-    expect(contentMarks(`a ((${id})) b !((${id})) [label](((${id}))) [[Page]] ![[Shared]] ((${id}))`)).toEqual([
+    const labelled = uuid('c0000001', 3)
+    expect(contentMarks(`a ((${id})) b !((${id})) [label](((${labelled}))) [[Page]] ![[Shared]] ((${id}))`)).toEqual([
       {kind: 'ref', id},
       {kind: 'embed', id},
       {kind: 'page-embed', alias: 'Shared'},

@@ -179,7 +179,9 @@ const keepWithinBudget = (nodes: Map<string, Node>, budget: number, lineChars: (
   let kept = 0
   for (const node of nodes.values()) {
     const ownHidden = hiddenChildCount(node, 0)
-    // An embedded row is not its host's child: keeping it leaves the host's note as it was.
+    // An embedded row is not its host's child: keeping it leaves the host's
+    // note as it was. Budget accounting only (a few characters either way);
+    // the printed note counts `node.children`, so no output test pins it.
     const parent = node.embedded ? undefined : nodes.get(node.viewParentId)
     const parentHidden = parent ? hidden.get(parent.block.id)! : 0
     const cost = lineChars(node) + noteChars(node, ownHidden)
