@@ -261,11 +261,10 @@ export const BLOCK_EDITOR_BASIC_SETUP = {
 
 /** Markdown syntax in the block editor is marked with STATIC classes and
  *  painted from the palette tokens in index.css (`.km-md-*`), so every theme
- *  reaches it — and so can an extension's stylesheet. Without a main
- *  highlighter, @uiw's basicSetup falls back to CodeMirror's
- *  `defaultHighlightStyle`: light-only hex colors (a URL in #219 navy) that
- *  vanish on a dark ground. */
-export const markdownHighlightStyle = HighlightStyle.define([
+ *  reaches it — and so can an extension's stylesheet. @uiw's basicSetup
+ *  supplies `defaultHighlightStyle` only as a FALLBACK, so removing this
+ *  main highlighter leaves light-only hardcoded colors, not no highlighting. */
+const markdownHighlightStyle = HighlightStyle.define([
   {tag: tags.url, class: 'km-md-url'},
   {tag: tags.link, class: 'km-md-link'},
   {tag: tags.heading, class: 'km-md-heading'},

@@ -3,7 +3,7 @@ import { EditorSelection, EditorState, type Extension, type StateCommand, type T
 import { EditorView } from '@codemirror/view'
 import { autocompletion, completionKeymap, completionStatus, startCompletion } from '@codemirror/autocomplete'
 import { describe, expect, it, vi } from 'vitest'
-import { basicSetup } from '@uiw/react-codemirror'
+import { basicSetup } from '@uiw/codemirror-extensions-basic-setup'
 import {
   BLOCK_EDITOR_BASIC_SETUP,
   acceptCompletionOnEnterCapture,
@@ -177,12 +177,9 @@ describe('minimal markdown CodeMirror config', () => {
     expect(textsWithClass(view, 'km-md-url')).toEqual(['https://example.com/x'])
     expect(textsWithClass(view, 'km-md-strong').join('')).toBe('**bold**')
     expect(textsWithClass(view, 'km-md-mark')).toEqual(['**', '**'])
-    // Without the config's main highlighter, basicSetup's fallback
-    // `defaultHighlightStyle` paints these same spans through generated `ͼ…`
-    // classes with light-only colors.
-    const generated = [...view.contentDOM.querySelectorAll('.cm-line *')]
-      .filter(el => [...el.classList].some(c => c.startsWith('ͼ')))
-    expect(generated).toEqual([])
+    // basicSetup's fallback `defaultHighlightStyle` would paint these through
+    // generated `ͼ…` classes instead.
+    expect(view.contentDOM.querySelector('[class*="ͼ"]')).toBeNull()
     view.destroy()
   })
 })

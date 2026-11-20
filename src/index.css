@@ -424,7 +424,7 @@
   }
 
   .cm-content .km-md-code {
-    font-family: var(--default-mono-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace);
+    @apply font-mono;
   }
 
   /* Marks and apparatus are subordinate to the text they shape, like the
