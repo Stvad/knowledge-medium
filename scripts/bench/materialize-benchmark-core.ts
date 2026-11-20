@@ -183,6 +183,7 @@ export const runMaterializePass = async (
 
 export const validateMaterializeDb = async (
   db: PowerSyncDb, fixture: MaterializeFixture,
+  options: {skipDerivedReferenceChecks?: boolean} = {},
 ): Promise<MaterializeValidation> => {
   const rows = await db.getAll<BlockRow>(`SELECT id, workspace_id, parent_id, order_key, content, properties_json, references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form FROM blocks`)
   const staged = await db.getAll<{needs_apply: number}>(`SELECT needs_apply FROM blocks_synced`)
@@ -196,6 +197,7 @@ export const validateMaterializeDb = async (
       || row.references_json !== JSON.stringify(expected.references)) {
       throw new Error(`materialized values mismatch for ${row.id}`)
     }
+    if (options.skipDerivedReferenceChecks) continue
     const expectedTarget = expected.references[0]?.id ?? null
     if (row.reference_target_id !== expectedTarget || (row.is_field_form === 1) !== fixture.fieldIds.has(row.id)) {
       throw new Error(`derived reference columns mismatch for ${row.id}`)
@@ -203,10 +205,10 @@ export const validateMaterializeDb = async (
   }
   const derivedReferenceTargets = rows.filter(row => row.reference_target_id !== null).length
   const derivedFieldForms = rows.filter(row => row.is_field_form === 1).length
-  if (derivedReferenceTargets !== fixture.referenceCount) {
+  if (!options.skipDerivedReferenceChecks && derivedReferenceTargets !== fixture.referenceCount) {
     throw new Error(`expected ${fixture.referenceCount} derived references, got ${derivedReferenceTargets}`)
   }
-  if (derivedFieldForms !== fixture.fieldCount) {
+  if (!options.skipDerivedReferenceChecks && derivedFieldForms !== fixture.fieldCount) {
     throw new Error(`expected ${fixture.fieldCount} field forms, got ${derivedFieldForms}`)
   }
   return {

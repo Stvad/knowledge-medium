@@ -14,8 +14,16 @@ export const MATERIALIZE_USER_ID = 'bench-materialize-user'
 export const materializeFixtureId = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`
 export const materializeFixtureAlias = (n: number) => `bench-alias-${n}`
 
+/** Same uniqueness (trailing n) but the leading hex is a multiplicative scramble of n, so
+ *  ids are deterministic yet scattered across the key space like real random UUIDs. */
+export const materializeScrambledFixtureId = (n: number) =>
+  `${(Math.imul(n, 0x9e3779b1) >>> 0).toString(16).padStart(8, '0')}-0000-4000-8000-${n.toString().padStart(12, '0')}`
+
 /** Deterministic, browser-safe synthetic records shared by Node and WebKit benches. */
-export const makeMaterializeFixture = (count: number): MaterializeFixture => {
+export const makeMaterializeFixture = (
+  count: number, options: {randomIds?: boolean} = {},
+): MaterializeFixture => {
+  const idOf = options.randomIds ? materializeScrambledFixtureId : materializeFixtureId
   const blocks: BlockData[] = []
   const expectedPlaintext = new Map<string, BlockData>()
   let aliasCount = 0
@@ -24,8 +32,8 @@ export const makeMaterializeFixture = (count: number): MaterializeFixture => {
   const fieldIds = new Set<string>()
   const baseTime = 1_800_000_000_000
   for (let i = 0; i < count; i++) {
-    const id = materializeFixtureId(i + 1)
-    const parentId = i > 0 && i % 11 !== 0 ? materializeFixtureId(Math.floor(i / 11) * 11 + 1) : null
+    const id = idOf(i + 1)
+    const parentId = i > 0 && i % 11 !== 0 ? idOf(Math.floor(i / 11) * 11 + 1) : null
     let content = `A realistic workspace paragraph ${i}: planning, notes, and a few ordinary words.`
     let properties: Record<string, unknown> = {tags: ['benchmark', `group-${i % 13}`], rank: i % 7}
     let references: BlockData['references'] = []
@@ -35,23 +43,23 @@ export const makeMaterializeFixture = (count: number): MaterializeFixture => {
     } else if (i % 13 === 1) {
       const target = i - 1
       content = `[[${materializeFixtureAlias(target)}]]`
-      references = [{id: materializeFixtureId(target + 1), alias: materializeFixtureAlias(target)}]
+      references = [{id: idOf(target + 1), alias: materializeFixtureAlias(target)}]
       referenceCount++
     } else if (i % 13 === 2) {
       const target = Math.max(0, i - 1)
-      content = `((${materializeFixtureId(target + 1)}))`
-      references = [{id: materializeFixtureId(target + 1), alias: materializeFixtureId(target + 1)}]
+      content = `((${idOf(target + 1)}))`
+      references = [{id: idOf(target + 1), alias: idOf(target + 1)}]
       referenceCount++
     } else if (i % 13 === 3) {
       const target = Math.max(0, i - 1)
-      content = `[related](((${materializeFixtureId(target + 1)})))`
-      references = [{id: materializeFixtureId(target + 1), alias: 'related'}]
+      content = `[related](((${idOf(target + 1)})))`
+      references = [{id: idOf(target + 1), alias: 'related'}]
       referenceCount++
     } else if (i % 13 === 4) {
       const target = Math.max(0, i - 1)
-      content = `::[related](((${materializeFixtureId(target + 1)})))`
-      properties = {field: 'related', value: [{id: materializeFixtureId(target + 1), alias: materializeFixtureAlias(target)}]}
-      references = [{id: materializeFixtureId(target + 1), alias: materializeFixtureAlias(target)}]
+      content = `::[related](((${idOf(target + 1)})))`
+      properties = {field: 'related', value: [{id: idOf(target + 1), alias: materializeFixtureAlias(target)}]}
+      references = [{id: idOf(target + 1), alias: materializeFixtureAlias(target)}]
       fieldCount++
       fieldIds.add(id)
       referenceCount++

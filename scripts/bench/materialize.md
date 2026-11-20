@@ -167,3 +167,68 @@ benchmark runner could not inspect other processes, so unrelated load cannot be 
 out for the adjacent captures either. The tight sample ranges and exact SQL
 counts support the work reduction; use timings as local comparisons, not device
 throughput predictions.
+
+## Variant matrix: where the initial write transaction goes
+
+`bench-materialize.ts` takes variant flags; with none of them its output is
+unchanged.
+
+- `--modes none,e2ee`, `--scenarios initial,echo-repass`: run a subset.
+- `--window N`: drain window size (production: 1,000).
+- `--random-ids`: scatter the fixture's ids across the key space, as real
+  UUIDs are. The default fixture's ids are sequential, so every index insert
+  appends; that is the best case and not what a device sees.
+- `--drop-triggers a,b`: drop the named triggers before the run.
+- `--rebuild-derived`: after the pass, time one set-based rebuild of each
+  derived table (for use with the insert triggers dropped).
+
+Measured 2026-11-19, Node test DB, 100,000 encrypted rows, `initial` scenario,
+two samples each after one warmup, run sequentially. The machine was under
+heavy unrelated load throughout (load average 6–10 on 12 cores), so absolute
+times are inflated and two samples of one variant differ by up to 6 s. Read
+the large differences; the ones of a few seconds are not resolved.
+
+| Variant | Wall ms (two samples) | Write tx ms | Rows/s |
+| --- | ---: | ---: | ---: |
+| A: sequential ids (the earlier baseline) | 13,057 / 14,242 | 8,671 / 9,686 | 7,659 / 7,022 |
+| B: `--random-ids` | 25,763 / 32,507 | 21,644 / 26,770 | 3,882 / 3,076 |
+| C: B + drop `blocks_row_event_insert` | 26,238 / 24,360 | 20,507 / 19,570 | 3,811 / 4,105 |
+| D: B + drop `blocks_fts_insert` | 23,064 / 24,390 | 18,257 / 19,563 | 4,336 / 4,100 |
+| E: B + drop `blocks_alias_insert`, `blocks_type_insert` | 26,395 / 27,363 | 21,677 / 22,530 | 3,789 / 3,655 |
+| F: B + drop all four, then rebuild | 17,327 / 17,632 | 12,375 / 12,797 | 5,771 / 5,672 |
+| G: B + `--window 5000` | 20,343 / 20,133 | 15,854 / 15,418 | 4,916 / 4,967 |
+| H: B + `--window 20000` | 18,131 / 18,243 | 13,531 / 13,388 | 5,515 / 5,482 |
+
+Phase one (reads, gates, decrypt) stayed at 4.1–5.7 s in every variant.
+
+F's set-based rebuild, run with the production backfill statements, took
+1.1–1.3 s in total: `blocks_fts` 869 / 1,065 ms, `blocks_fts_rowids`
+145 / 140 ms, `block_aliases` 50 / 49 ms, `block_types` 31 / 31 ms. Rebuilt
+row counts matched a triggers-on run. The fixture has no
+`$.types`, so the `block_types` rebuild ran over nothing.
+
+What the matrix shows:
+
+- Scattered ids roughly double the wall time and take the write transaction
+  to 2–3x. Every earlier figure in this file used sequential ids; that they
+  understate a real device by a similar factor is reasoned from this one
+  comparison, not measured on a device.
+- A larger window helps without touching the upsert: the multi-row upsert's
+  summed time was the same in B, G and H (8.2–9.9 s), while the write
+  transaction fell from 21.6–26.8 s to 13.4 s at 20,000. The difference is
+  outside the timed statements. Per-transaction cost (commit) is the likely
+  place; that was not broken down.
+- No single trigger is the cost. Dropping the row-event trigger or the alias
+  and type triggers is within noise. Dropping the FTS trigger took the
+  multi-row upsert's summed time from 8.2–9.9 s to 5.7–6.0 s (per-statement
+  timings from the run output, not in the table; the write-transaction
+  column alone does not separate D from B).
+- Dropping all four and rebuilding (F) is about a third faster than B, but it
+  is not a like-for-like pass: reference derivation resolves through
+  `block_aliases`, so with `blocks_alias_insert` gone it resolved 693 of 924
+  targets in a 3,000-row check, and the rebuild does not repair them. E and F
+  run with that validation skipped (`skippedDerivedReferenceValidation` in
+  the output) and did less lookup work than a real pass would.
+
+Not measured here: the WebKit/OPFS runner with these flags, windows and
+dropped triggers combined, and any device.
