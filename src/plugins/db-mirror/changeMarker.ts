@@ -7,10 +7,11 @@
  * every local `repo.tx` write to `blocks` and every sync-applied change to a
  * row this device already had. Its maximum therefore moves whenever data only
  * this device holds moves, and reading it is a rowid lookup rather than a scan.
- * It does NOT move for the rows a bulk load brings in (`syncBulkLoadScope`):
- * a workspace's first download is not copied until something else changes,
- * and a copy that lacks it gets it back from the server on restore. That matters because the
- * alternative is copying multiple gigabytes to discover nothing changed. An
+ * That matters because the alternative is copying multiple gigabytes to
+ * discover nothing changed. It does NOT move for the rows a bulk load brings in
+ * (`syncBulkLoadScope`): a workspace's first download is not copied until
+ * something else changes, and a copy that lacks it gets it back from the
+ * server on restore. An
  * update that moves only a row's version is not a change: the copy on disk
  * holds the same data, and sync re-delivers the bump to a restored copy, whose
  * checkpoint predates it.
