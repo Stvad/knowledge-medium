@@ -931,6 +931,28 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     expect(classifyUploadError(thrown)).toBe('ambiguous')
   })
 
+  it('throws a named Error, so the upload status shows its message rather than "Non-Error rejection"', async () => {
+    // postgrest-js (non-throwing mode) hands every failure back as a PLAIN
+    // object with no `name`. PowerSync's worker serializes a thrown value without
+    // a string `name` as the generic "Non-Error rejection", discarding the
+    // message. This is the shape a request aborted by the upload deadline takes.
+    const aborted = {
+      message: 'TimeoutError: signal timed out',
+      details: '',
+      hint: 'Request was aborted (timeout or manual cancellation)',
+      code: '',
+    }
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: aborted, status: 0})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).toMatchObject({...aborted, name: 'PostgrestError', status: 0})
+    expect(classifyUploadError(thrown)).toBe('transient')
+  })
+
   it('retries an ambiguous codeless 4xx across the budget, then quarantines it (#190)', async () => {
     // A codeless non-retryable 4xx is `ambiguous`: we can't confirm it's
     // permanent from a code, so the orchestrator retries it across a few upload

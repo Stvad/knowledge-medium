@@ -227,9 +227,13 @@ const assertSupabase = () => {
  *  PowerSync would retry the same batch forever — the original queue jam. With
  *  the status attached, the classifier routes a non-retryable 4xx to
  *  `ambiguous` (bounded retry, then quarantine) and keeps the retryable subset
- *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190. */
-const throwWithHttpStatus = (error: object, status: number): never => {
-  throw Object.assign(error, {status})
+ *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190.
+ *
+ *  It is thrown as a named `Error` because postgrest-js returns its errors as
+ *  plain objects, and PowerSync's worker reports a thrown value without a
+ *  string `name` as "Non-Error rejection", dropping the message. */
+const throwWithHttpStatus = (error: {message: string}, status: number): never => {
+  throw Object.assign(new Error(error.message), {...error, name: 'PostgrestError', status})
 }
 
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
