@@ -74,17 +74,18 @@ const readQueueFingerprint = async (
  * Derived rather than stored, from the FIRST row the local audit log holds:
  * `row_events` is never trimmed and its id is an autoincrement, so row 1 is the
  * first thing this database ever recorded, and its timestamp never moves. A
- * database that the browser wiped and PowerSync re-created gets a new one,
- * because the re-download writes fresh events.
+ * database that the browser wiped and PowerSync re-created gets a new one: its
+ * log starts again, at the first write after the re-download (the download's
+ * own creates are not logged — `SYNC_BULK_LOAD_SCOPE`).
  *
  * It does NOT identify a DEVICE — restoring a mirror copies the log along with
  * everything else, so two installs can hold the same incarnation. The install
  * id it is paired with in the filename is what separates those.
  *
  * The two ways of having no answer are kept APART because they call for
- * opposite things. An EMPTY log is a positive fact: every `blocks` insert is
- * logged, local and sync-applied alike, so an empty log means no local
- * writes — and therefore nothing in the upload queue either, which is the whole
+ * opposite things. An EMPTY log is a positive fact: every local write to
+ * `blocks` is logged, so an empty log means there have been none — and
+ * therefore nothing in the upload queue either, which is the whole
  * of what this feature protects. There is nothing to copy, so no copy is taken.
  * An UNREADABLE log says nothing about the database; in particular it says
  * nothing about whether the FILE copies, since the export streams raw bytes and

@@ -69,7 +69,7 @@ const DEFAULT_THROTTLE_MS = 100
  *  resumes from the last committed window instead of restarting from zero. */
 const DEFAULT_DRAIN_CHUNK = 1000
 
-/** Window size while a bulk hold is out ({@link BlocksSyncedObserver.holdBulkWindows}).
+/** Window size while a bulk hold is out ({@link BlocksSyncedObserver.holdBulkLoad}).
  *  A window is one write transaction, so a larger one commits less often and
  *  touches each index page once for many rows — and holds the write lock for
  *  that much longer, which is why it needs a holder vouching that nothing is
@@ -249,10 +249,13 @@ export interface BlocksSyncedObserver {
    *  navigated away from would otherwise refuse every pass on the one they are
    *  in now, for as long as it runs. */
   isRematerializingWorkspace(workspaceId: string): boolean
-  /** Drain in bulk-sized windows until the returned release is called. For a
-   *  caller that knows nothing is waiting on the write lock: a gate shown
-   *  INSTEAD of the app, with no editor or plugin mounted. Holds nest. */
-  holdBulkWindows(): () => void
+  /** Treat what drains as a bulk load until the returned release is called:
+   *  bulk-sized windows, and no 'create' event for the rows they insert
+   *  (`SYNC_BULK_LOAD_SCOPE`). For a caller that knows this device is
+   *  receiving the rows for the first time and that nothing is waiting on the
+   *  write lock: a gate shown INSTEAD of the app, with no editor or plugin
+   *  mounted. Holds nest. */
+  holdBulkLoad(): () => void
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -393,7 +396,7 @@ export const startBlocksSyncedObserver = (
     upserted: readonly string[],
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoad: bulkHolds > 0 })
     // Counted as soon as the window has committed: a failure in the steps
     // below does not undo it.
     meter.windows++
@@ -603,7 +606,7 @@ export const startBlocksSyncedObserver = (
     drainWorkspace,
     isRematerializingWorkspace: (workspaceId: string) =>
       (workspaceRescans.get(workspaceId) ?? 0) > 0,
-    holdBulkWindows() {
+    holdBulkLoad() {
       bulkHolds++
       let held = true
       return () => {

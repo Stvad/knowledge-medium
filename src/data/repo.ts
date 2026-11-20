@@ -1391,10 +1391,11 @@ export class Repo {
     }
   }
 
-  /** Drain sync deliveries in bulk-sized windows until the returned release
-   *  is called — see `BlocksSyncedObserver.holdBulkWindows` for who may. */
-  holdBulkSyncDrain(): () => void {
-    return this.syncObserver?.holdBulkWindows() ?? (() => {})
+  /** Treat sync deliveries as a bulk load until the returned release is
+   *  called — see `BlocksSyncedObserver.holdBulkLoad` for what that changes
+   *  and who may. */
+  holdBulkSyncLoad(): () => void {
+    return this.syncObserver?.holdBulkLoad() ?? (() => {})
   }
 
   /** Manually flush the sync observer — drains any pending `blocks_synced`

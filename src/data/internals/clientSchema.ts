@@ -421,7 +421,8 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // row_events for invalidation — the Layout B observer owns that — so this is a
 // history substrate (local change-history / time-travel; the only durable
 // record of incoming sync changes), read by the agent-runtime history views and
-// db-mirror's change marker.
+// db-mirror's change marker. The one exception is a bulk load's creates
+// (`SYNC_BULK_LOAD_SCOPE`).
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
@@ -451,9 +452,23 @@ const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1),
 /** Undo-group token (issue #306) — same source-gated projection as tx_id. */
 const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
+/** What the sync observer writes to `tx_context.scope`, beside a NULL
+ *  `source`, for a window of a bulk load: rows a device is receiving for the
+ *  first time while a gate stands where the app would be. No local transaction
+ *  can carry it, since every `ChangeScope` comes with a non-NULL source. */
+export const SYNC_BULK_LOAD_SCOPE = 'sync-bulk'
+
+/** A row a bulk load creates gets no 'create' event: it records that the row
+ *  arrived on this device, for every row of the workspace, and nothing a user
+ *  did. Its later changes are logged as any other row's, each with its before
+ *  state. */
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
+  WHEN NOT (
+    (SELECT source FROM tx_context WHERE id = 1) IS NULL
+    AND (SELECT scope FROM tx_context WHERE id = 1) IS '${SYNC_BULK_LOAD_SCOPE}'
+  )
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id

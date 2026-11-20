@@ -939,8 +939,8 @@ describe('blocksSyncedObserver — bulk windows', () => {
       }
     })
 
-    const release = observer.holdBulkWindows()
-    const nested = observer.holdBulkWindows()
+    const release = observer.holdBulkLoad()
+    const nested = observer.holdBulkLoad()
     nested()
     nested() // a second call releases nothing further
     await stage(0)
@@ -953,9 +953,50 @@ describe('blocksSyncedObserver — bulk windows', () => {
     expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 3 })
 
     // The workspace pass sizes its windows the same way.
-    const again = observer.holdBulkWindows()
+    const again = observer.holdBulkLoad()
     await observer.drainWorkspace('ws', 'all')
     expect(seen.at(-1)).toMatchObject({ source: 'workspace', rows: 12, windows: 3 })
     again()
+  })
+})
+
+describe('blocksSyncedObserver — a bulk load\'s change log', () => {
+  const events = () => env.db.getAll<{ block_id: string; kind: string }>(
+    'SELECT block_id, kind FROM row_events ORDER BY id',
+  )
+
+  it('logs no create for a row a bulk load inserts, and logs its later changes', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+
+    const release = observer.holdBulkLoad()
+    await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'bulk', content: 'v1' }])
+    expect(await events()).toEqual([])
+
+    // Still under the hold: an UPDATE is a change to a row this device has.
+    await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v2', updatedAt: 2 }))
+    await observer.flush()
+    expect(await events()).toEqual([{ block_id: 'bulk', kind: 'update' }])
+
+    release()
+    await put(data({ id: 'live', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'live', kind: 'create' },
+    ])
+  })
+
+  it('leaves no exemption behind for another source-NULL write', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const release = observer.holdBulkLoad()
+    await put(data({ id: 'bulk', workspaceId: 'ws' }))
+    await observer.flush()
+    release()
+
+    expect(await env.db.get<{ scope: string | null }>('SELECT scope FROM tx_context WHERE id = 1'))
+      .toEqual({ scope: null })
   })
 })

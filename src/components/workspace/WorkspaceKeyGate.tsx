@@ -37,7 +37,7 @@ export const workspaceGateDeps = (repo: Repo, workspaceId: string): WorkspaceGat
   // Bulk windows: the gate stands where the app would be, so nothing is waiting
   // to write. A drain the user walked away from keeps them until it finishes.
   drainWorkspace: async (onProgress) => {
-    const release = repo.holdBulkSyncDrain()
+    const release = repo.holdBulkSyncLoad()
     try {
       return await repo.drainSyncWorkspace(workspaceId, onProgress)
     } finally {

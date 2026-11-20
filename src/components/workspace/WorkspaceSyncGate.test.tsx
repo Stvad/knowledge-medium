@@ -90,7 +90,7 @@ const askedTimes = (asks: {mock: {calls: unknown[]}}, count: number) =>
 describe('WorkspaceSyncGate', () => {
   it('holds bulk drain windows for as long as it is up', async () => {
     const release = vi.fn()
-    const hold = vi.spyOn(repo, 'holdBulkSyncDrain').mockReturnValue(release)
+    const hold = vi.spyOn(repo, 'holdBulkSyncLoad').mockReturnValue(release)
     const {unmount} = renderGate({onReady: vi.fn()})
     await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1))
     expect(release).not.toHaveBeenCalled()

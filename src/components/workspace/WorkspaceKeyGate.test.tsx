@@ -546,7 +546,7 @@ describe('workspaceGateDeps', () => {
   it('holds bulk drain windows around the gate drain, and gives them back when it fails', async () => {
     const order: string[] = []
     const repo = {
-      holdBulkSyncDrain: () => { order.push('hold'); return () => { order.push('release') } },
+      holdBulkSyncLoad: () => { order.push('hold'); return () => { order.push('release') } },
       drainSyncWorkspace: vi.fn(async () => { order.push('drain'); return {deferred: 0} }),
     }
     const deps = workspaceGateDeps(repo as never, 'ws')

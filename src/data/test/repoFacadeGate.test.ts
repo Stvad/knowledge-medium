@@ -120,7 +120,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   workspaceUnappliedCount: 'read — one query; assigns no Repo fields',
   workspaceUnappliedExactCount: 'read — one query; assigns no Repo fields',
   flushSyncObserver: 'reads this.syncObserver through the chain; never assigns it',
-  holdBulkSyncDrain: 'reads this.syncObserver through the chain; never assigns it',
+  holdBulkSyncLoad: 'reads this.syncObserver through the chain; never assigns it',
   onUserError: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onReadOnlyChange: 'adds the caller listener to a shared CallbackSet; no this-capture',
   onMetricsReset: 'adds the caller listener to a shared CallbackSet; no this-capture',
