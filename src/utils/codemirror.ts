@@ -273,11 +273,12 @@ export const markdownHighlightStyle = HighlightStyle.define([
   {tag: tags.strong, class: 'km-md-strong'},
   {tag: tags.strikethrough, class: 'km-md-strikethrough'},
   {tag: tags.monospace, class: 'km-md-code'},
-  // The marks themselves: `#`, `**`, `-`, `>`, link brackets.
-  {tag: tags.processingInstruction, class: 'km-md-mark'},
+  // The marks themselves: `#`, `**`, `-`, `>`, link brackets, `[ ]`.
+  {tag: [tags.processingInstruction, tags.atom], class: 'km-md-mark'},
   // Apparatus that is neither prose nor a mark: `---`, a reference-style
-  // link label, a link title, a comment, a fence's language word.
-  {tag: [tags.contentSeparator, tags.labelName, tags.string, tags.comment, tags.meta], class: 'km-md-meta'},
+  // link label or a fence's language word, a comment. Not `tags.string`:
+  // in markdown it also covers entities and emoji shortcodes, which are text.
+  {tag: [tags.contentSeparator, tags.labelName, tags.comment], class: 'km-md-meta'},
 ])
 
 export const createMinimalMarkdownConfig = (
