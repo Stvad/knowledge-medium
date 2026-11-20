@@ -2326,6 +2326,32 @@ describe('markStale() during a load', () => {
   })
 })
 
+describe('markStale() before the load declares the dep', () => {
+  it('judges the mark against the deps the load ends up with', async () => {
+    const store = makeStore()
+    let runs = 0
+    let release!: () => void
+    const h = store.getOrCreate('stale-late-dep', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'stale-late-dep',
+        loader: async (ctx) => {
+          runs++
+          if (runs === 1) await new Promise<void>((resolve) => { release = resolve })
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return runs
+        },
+      }),
+    )
+    const first = h.load()
+    await waitFor(() => expect(runs).toBe(1))
+    store.markStale({ rowIds: ['r1'] })
+    release()
+    expect(await first).toBe(1)
+    expect(await h.load()).toBe(2)
+  })
+})
+
 describe('mergeChangeNotifications()', () => {
   const sorted = (x: ReadonlySet<string> | readonly string[] | undefined) => (x ? [...x].sort() : x)
 
