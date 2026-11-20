@@ -157,9 +157,6 @@ export interface SyncSnapshot {
   readonly after: BlockData | null
 }
 
-/** What the pass did. `snapshots` carries the before/after for every applied
- *  (after set) and deleted (after null) row — the observer's invalidation
- *  layer consumes it; the id lists are for tests and bookkeeping. */
 /** Where one pass's wall time went. The three stages are consecutive and cover
  *  the pass up to the end of its write transaction; `writeMs` includes the wait
  *  for the write lock, so a drain queued behind other writers shows up there. */
@@ -175,6 +172,9 @@ export interface MaterializeTimings {
   readonly writeMs: number
 }
 
+/** What the pass did. `snapshots` carries the before/after for every applied
+ *  (after set) and deleted (after null) row — the observer's invalidation
+ *  layer consumes it; the id lists are for tests and bookkeeping. */
 export interface MaterializeOutcome {
   readonly timings: MaterializeTimings
   readonly snapshots: ReadonlyMap<string, SyncSnapshot>
