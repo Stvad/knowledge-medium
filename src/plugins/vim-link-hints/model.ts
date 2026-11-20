@@ -16,16 +16,22 @@ export function boundPresses(
 }
 
 export function hintLetters(presses: readonly KeybindingPress[]): string {
-  // One label works with every click modifier, so reserve the letter even
-  // when the shortcut only uses it with modifiers or inside a sequence.
-  const reserved = presses.map(([, , key]) => typeof key === 'string'
-    ? key.toLowerCase()
-    : new RegExp(key.source, 'i'))
-  return Array.from(LETTERS).filter(letter => !reserved.some(key =>
-    typeof key === 'string'
+  const bindings = presses.map(([required, , key]) => ({
+    requiresModifier: required.length > 0,
+    key: typeof key === 'string' ? key.toLowerCase() : new RegExp(key.source, 'i'),
+  }))
+  const unused: string[] = []
+  const modifiedOnly: string[] = []
+  for (const letter of LETTERS) {
+    const matches = bindings.filter(({key}) => typeof key === 'string'
       ? key === letter || key === `key${letter}`
-      : key.test(letter) || key.test(`Key${letter.toUpperCase()}`),
-  )).join('')
+      : key.test(letter) || key.test(`Key${letter.toUpperCase()}`))
+    if (!matches.length) unused.push(letter)
+    else if (matches.every(binding => binding.requiresModifier)) modifiedOnly.push(letter)
+  }
+  // Prefer labels that work with every click modifier. Additional labels
+  // share a letter with a shortcut only when its plain press is free.
+  return [...unused, ...modifiedOnly].join('')
 }
 
 export function hintLabels(letters: string, count: number): string[] {

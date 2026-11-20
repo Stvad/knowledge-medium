@@ -150,8 +150,7 @@ export function LinkHints() {
       const next = prefix + key
       const hasCandidate = key.length === 1 && letters.includes(key)
         && Array.from(links.keys()).some(label => label.startsWith(next))
-      // A physical-code binding can map to a different letter on this layout.
-      // Check the actual event before claiming any candidate.
+      // Modified shortcuts and physical-key bindings on this layout take priority.
       const matchesBinding = hasCandidate && presses.some(press => {
         const pattern = press[2]
         if (pattern instanceof RegExp) pattern.lastIndex = 0
