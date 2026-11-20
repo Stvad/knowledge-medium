@@ -1,1 +1,0 @@
-import{dj as e,fj as t,lj as n,uj as r}from"../../chunks/app-CIf3Ornw.js";export{n as extensionDisplayName,r as extensionName,e as userExtensionShellToggle,t as userExtensionToggle};

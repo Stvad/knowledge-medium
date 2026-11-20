@@ -1,1 +1,0 @@
-import{CQ as e,SQ as t,wQ as n}from"../../chunks/app-CIf3Ornw.js";export{t as NAMES_IN_A_SENTENCE,e as describeNames,n as firstFew};

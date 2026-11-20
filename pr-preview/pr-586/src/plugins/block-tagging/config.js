@@ -1,1 +1,0 @@
-import{dl as e,fl as t,gl as n,hl as r,ll as i,ml as a,pl as o,ul as s}from"../../../chunks/app-CIf3Ornw.js";export{i as blockTaggingPrefsType,s as blockTagsConfigCodec,e as blockTagsConfigPresetCore,t as blockTagsConfigProp,o as isValidTagName,a as normalizeBlockTagsConfig,r as selectableTagNames,n as tagNameIssue};

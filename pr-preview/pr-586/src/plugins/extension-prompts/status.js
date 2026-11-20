@@ -1,1 +1,0 @@
-import{ck as e,lk as t}from"../../../chunks/app-CIf3Ornw.js";export{e as extensionPromptDiagnosticContribution,t as extensionPromptDiagnosticSource};

@@ -1,1 +1,0 @@
-import{Dx as e,Ox as t}from"../../../chunks/app-CIf3Ornw.js";export{e as isLeftSidebarSectionContribution,t as leftSidebarSectionsFacet};

@@ -1,1 +1,0 @@
-import{bd as e,xd as t}from"../../chunks/app-CIf3Ornw.js";export{e as extensionApiCatalog,t as extensionApiRuntimeExports};

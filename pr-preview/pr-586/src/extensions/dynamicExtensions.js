@@ -1,1 +1,0 @@
-import{rj as e}from"../../chunks/app-CIf3Ornw.js";export{e as dynamicExtensionsExtension};

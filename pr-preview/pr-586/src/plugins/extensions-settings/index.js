@@ -1,1 +1,0 @@
-import{Cd as e,Jn as t,wd as n}from"../../../chunks/app-CIf3Ornw.js";export{e as extensionsOverridesProp,n as extensionsPrefsType,t as extensionsSettingsPlugin};

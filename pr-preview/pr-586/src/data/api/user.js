@@ -1,1 +1,0 @@
-import{bet as e,vet as t,yet as n}from"../../../chunks/app-CIf3Ornw.js";export{t as SYSTEM_AUTHOR_PREFIX,n as isSystemAuthor,e as systemAuthor};

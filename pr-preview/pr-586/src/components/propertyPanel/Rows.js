@@ -1,1 +1,0 @@
-import{RP as e,zP as t}from"../../../chunks/app-CIf3Ornw.js";export{e as MetadataRow,t as PropertySectionLabel};

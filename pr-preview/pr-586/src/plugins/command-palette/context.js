@@ -1,1 +1,0 @@
-import{BE as e,HE as t,VE as n,zE as r}from"../../../chunks/app-CIf3Ornw.js";export{r as COMMAND_PALETTE_ACTION_ID,e as COMMAND_PALETTE_CONTEXT,n as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,t as commandPaletteActionContext};
