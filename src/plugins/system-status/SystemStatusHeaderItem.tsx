@@ -1,7 +1,7 @@
 import { useQuery, useStatus } from '@powersync/react'
 import {
   CircleAlert,
-  CloudCheck,
+  Cloud,
   CloudOff,
   CloudUpload,
   HardDrive,
@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu.js'
 import { cn } from '@/lib/utils.js'
 import {
+  getChipAppearance,
   getSyncIndicatorView,
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
@@ -32,6 +33,7 @@ import {
   uploadQueuePreviewCountSql,
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
+import { useHysteresis } from './useHysteresis.ts'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
 import { runActionByIdSafely } from '@/shortcuts/runAction.js'
 
@@ -48,6 +50,16 @@ const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 // has persisted continuously for this long; clear it immediately when it
 // resolves. (Offline is handled separately — see `SyncStatusHeaderContent`.)
 const networkErrorGraceMs = 5_000
+
+// The chip spins only for activity that outlasts `activityEnterMs` (an upload
+// after a keystroke finishes well inside it), and keeps spinning for
+// `activityExitMs` after it ends so back-to-back batches read as one.
+const activityEnterMs = 2_000
+const activityExitMs = 1_000
+
+// Queued changes turn the chip into a warning once no upload has started for
+// this long — the point where "it'll upload in a moment" stops being true.
+const pendingStuckMs = 30_000
 
 // Debounce the *appearance* of an error: surface `message` only after it has
 // stayed non-null for `delayMs`, and drop it the instant it clears. Keeps the
@@ -121,19 +133,11 @@ function useSyncingInOtherTab(dbFilename: string, active: boolean): boolean {
 
 type SyncStatus = ReturnType<typeof useStatus>
 
-// Theme-aware tones. `success` reads `--success` (per-theme green
-// hue) rather than `--primary` so warm-primary palettes like
-// sunset-warm don't paint the "synced OK" chip in alarming reds.
-// `active` keeps the primary tint — a spinning icon plus primary
-// hue communicates "in progress" without colliding with the
-// "good/bad" semantic of success/error. `warning` is a softer
-// destructive shade so a glance still differentiates "needs
-// attention" from a hard error.
+// `warning` is a softer destructive shade so a glance still differentiates
+// "needs attention" from a hard error.
 const toneClass: Record<SyncIndicatorTone, string> = {
   error: 'border-destructive/30 bg-destructive/10 text-destructive',
   warning: 'border-destructive/20 bg-destructive/5 text-destructive',
-  active: 'border-primary/30 bg-primary/10 text-primary',
-  success: 'border-success/30 bg-success/10 text-success',
   local: 'border-border bg-muted/50 text-muted-foreground',
   neutral: 'border-border bg-background text-muted-foreground',
 }
@@ -144,7 +148,7 @@ const iconByName = {
   upload: CloudUpload,
   sync: RefreshCw,
   offline: CloudOff,
-  check: CloudCheck,
+  cloud: Cloud,
 } satisfies Record<SyncIndicatorIcon, typeof CircleAlert>
 
 const formatLastSyncedAt = (date: Date | undefined): string => {
@@ -301,6 +305,8 @@ function SyncStatusHeaderContent({
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
+  const pendingIdle = pendingChanges > 0 && !status.uploading
+  const pendingStuck = useHysteresis(pendingIdle, pendingStuckMs, 0)
   // Health contributed via the diagnostics seam (the consistency audit is the
   // first source). Only non-ok sources are worth surfacing; an 'ok' source stays
   // silent (a clean audit shows nothing, matching the pre-seam behavior).
@@ -326,6 +332,7 @@ function SyncStatusHeaderContent({
     downloading: status.downloading,
     pendingChanges,
     pendingChangesApproximate,
+    pendingStuck,
     rejectedChanges: rejectedCount,
     materializingChanges,
     syncingInOtherTab,
@@ -335,6 +342,9 @@ function SyncStatusHeaderContent({
     diagnosticAlert,
   })
   const Icon = iconByName[view.icon]
+  const activityShown = useHysteresis(view.spinning, activityEnterMs, activityExitMs)
+  const chip = getChipAppearance(view, activityShown)
+  const ChipIcon = iconByName[chip.icon]
   // Surface the nudge's one-liner (e.g. "A new version is available") on the
   // chip itself so the dot has an accessible meaning; settled-state errors are
   // already folded into view.title by getSyncIndicatorView.
@@ -355,7 +365,7 @@ function SyncStatusHeaderContent({
             aria-label={chipTitle}
             title={chipTitle}
           >
-            <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
+            <ChipIcon className={cn('h-4 w-4', chip.spinning && 'animate-spin')}/>
             {showStatusDot && (
               <span
                 aria-hidden

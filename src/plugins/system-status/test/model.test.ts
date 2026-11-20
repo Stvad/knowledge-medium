@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSyncIndicatorView } from '../model.ts'
+import { getChipAppearance, getSyncIndicatorView } from '../model.ts'
 
 const baseInput = {
   localOnly: false,
@@ -169,8 +169,8 @@ describe('getSyncIndicatorView', () => {
       })
 
       expect(view.state).toBe('synced')
-      expect(view.tone).toBe('success')
-      expect(view.icon).toBe('check')
+      expect(view.tone).toBe('neutral')
+      expect(view.icon).toBe('cloud')
     })
 
     it("singularizes the rejected count in the title", () => {
@@ -213,12 +213,12 @@ describe('getSyncIndicatorView', () => {
     })
 
     it("doesn't downgrade pending / error / active states (already calling attention)", () => {
-      // Pending already uses a warning tone; uploading is active; error
-      // is louder than warning. Letting rejections override those would
-      // hide the more urgent signal.
+      // Stuck pending is already a warning; error is louder than warning.
+      // Letting rejections override those would hide the more urgent signal.
       const pending = getSyncIndicatorView({
         ...baseInput,
         pendingChanges: 3,
+        pendingStuck: true,
         rejectedChanges: 5,
       })
       expect(pending.state).toBe('pending')
@@ -266,13 +266,79 @@ describe('getSyncIndicatorView', () => {
       })
       expect(view.state).toBe('downloading')
       expect(view.spinning).toBe(true)
-      expect(view.tone).toBe('active')
+      expect(view.tone).toBe('neutral')
     })
 
     it('leaves a healthy chip untouched when there is no alert', () => {
       const view = getSyncIndicatorView({...baseInput, diagnosticAlert: null})
       expect(view.state).toBe('synced')
-      expect(view.tone).toBe('success')
+      expect(view.tone).toBe('neutral')
     })
+  })
+
+  describe('calm while healthy', () => {
+    // Routine work (an edit queued, an upload, a short download) must not
+    // restyle the chip; only states that need the user's attention do.
+    it.each([
+      ['synced', {}],
+      ['pending, uploading soon', {pendingChanges: 2}],
+      ['uploading', {uploading: true, pendingChanges: 2}],
+      ['downloading', {downloading: true}],
+      ['processing', {materializingChanges: 4}],
+      ['connecting', {connected: false, connecting: true}],
+    ])('renders %s in the neutral tone', (_case, input) => {
+      expect(getSyncIndicatorView({...baseInput, ...input}).tone).toBe('neutral')
+    })
+
+    it('draws a queued edit like the synced chip while it is not stuck', () => {
+      const pending = getSyncIndicatorView({...baseInput, pendingChanges: 2})
+      const synced = getSyncIndicatorView(baseInput)
+      expect(pending.state).toBe('pending')
+      expect([pending.icon, pending.tone]).toEqual([synced.icon, synced.tone])
+    })
+
+    it('keeps the offline icon for queued edits while disconnected', () => {
+      const view = getSyncIndicatorView({...baseInput, connected: false, pendingChanges: 2})
+      expect(view.state).toBe('pending')
+      expect(view.icon).toBe('offline')
+      expect(view.tone).toBe('neutral')
+    })
+
+    it.each([
+      ['connected', true, /waiting to upload/i],
+      ['offline', false, /waiting for a sync connection/i],
+    ])('escalates stuck pending changes to a warning while %s', (_case, connected, title) => {
+      const view = getSyncIndicatorView({
+        ...baseInput,
+        connected,
+        pendingChanges: 2,
+        pendingStuck: true,
+      })
+      expect(view.state).toBe('pending')
+      expect(view.tone).toBe('warning')
+      expect(view.icon).toBe('upload')
+      expect(view.title).toMatch(title)
+    })
+  })
+})
+
+describe('getChipAppearance', () => {
+  const uploading = getSyncIndicatorView({...baseInput, uploading: true})
+  const synced = getSyncIndicatorView(baseInput)
+
+  it('shows a calm icon for activity that has not lasted long enough', () => {
+    expect(getChipAppearance(uploading, false)).toEqual({icon: 'cloud', spinning: false})
+  })
+
+  it('spins once the activity is shown', () => {
+    expect(getChipAppearance(uploading, true)).toEqual({icon: 'sync', spinning: true})
+  })
+
+  it('keeps spinning through the linger after activity ends', () => {
+    expect(getChipAppearance(synced, true)).toEqual({icon: 'sync', spinning: true})
+  })
+
+  it('shows a settled view as it is', () => {
+    expect(getChipAppearance(synced, false)).toEqual({icon: synced.icon, spinning: false})
   })
 })

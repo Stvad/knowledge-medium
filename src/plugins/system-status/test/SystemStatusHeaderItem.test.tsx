@@ -480,6 +480,64 @@ describe('SystemStatusHeaderItem', () => {
     expect(screen.queryByText(/Data integrity/)).not.toBeInTheDocument()
   })
 
+  describe('calm chip while typing', () => {
+    // The chip's icon and its spin; the tooltip stays live regardless.
+    const chipIcon = () => screen.getByRole('button').querySelector('svg')!
+    const isSpinning = () => chipIcon().classList.contains('animate-spin')
+
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('does not spin for an upload shorter than the activity delay', () => {
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+      const {rerender} = render(<SystemStatusHeaderItem/>)
+      const idleIcon = chipIcon().getAttribute('class')
+
+      mocks.status = {...defaultStatus(), uploading: true}
+      rerender(<SystemStatusHeaderItem/>)
+      act(() => vi.advanceTimersByTime(1_500))
+      expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/uploading/i)
+      expect(chipIcon().getAttribute('class')).toBe(idleIcon)
+
+      mocks.status = defaultStatus()
+      rerender(<SystemStatusHeaderItem/>)
+      act(() => vi.advanceTimersByTime(5_000))
+      expect(isSpinning()).toBe(false)
+    })
+
+    it('spins once activity outlasts the delay', () => {
+      mocks.status = {...defaultStatus(), downloading: true}
+      render(<SystemStatusHeaderItem/>)
+      expect(isSpinning()).toBe(false)
+
+      act(() => vi.advanceTimersByTime(2_000))
+      expect(isSpinning()).toBe(true)
+    })
+
+    it('warns only once queued changes sit without an upload for the stuck delay', () => {
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      render(<SystemStatusHeaderItem/>)
+      expect(screen.getByRole('button').className).not.toMatch(/destructive/)
+
+      act(() => vi.advanceTimersByTime(30_000))
+      expect(screen.getByRole('button').className).toMatch(/destructive/)
+    })
+
+    it('does not call an edit stream stuck while uploads keep starting', () => {
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      const {rerender} = render(<SystemStatusHeaderItem/>)
+      for (let i = 0; i < 4; i++) {
+        act(() => vi.advanceTimersByTime(20_000))
+        mocks.status = {...defaultStatus(), uploading: true}
+        rerender(<SystemStatusHeaderItem/>)
+        act(() => vi.advanceTimersByTime(500))
+        mocks.status = defaultStatus()
+        rerender(<SystemStatusHeaderItem/>)
+      }
+      expect(screen.getByRole('button').className).not.toMatch(/destructive/)
+    })
+  })
+
   it('surfaces an app-update nudge with a Reload action when a new build is ready', async () => {
     mocks.updateAvailable = true
 
