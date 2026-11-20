@@ -213,8 +213,8 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
   /** The first local name holding the block's bytes, or null. An entry is not
    *  proof of its content (byteStore.ts), so a copy is a hit only if it hashes
    *  to `contentHash`; one that doesn't is a MISS, as is a transient read error
-   *  (the bytes are re-fetchable, §8). It is left in place: the fetch that
-   *  follows overwrites it, and deleting here could race a put still writing it. */
+   *  (the bytes are re-fetchable, §8). It is left in place: nothing serves it,
+   *  and deleting here could race a put still writing it. */
   const readLocal = async (
     userId: string,
     workspaceId: string,

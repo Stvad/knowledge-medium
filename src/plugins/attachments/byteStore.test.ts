@@ -116,7 +116,7 @@ class FakeDirHandle {
 const asRoot = (root: FakeDirHandle) => root as unknown as FileSystemDirectoryHandle
 
 /** The writer worker, in-thread: the real handler over the fake tree. `hang` never
- *  answers (after `beforeHang` has had its way with the tree); `crash` fires onerror. */
+ *  answers; `crash` fires onerror. */
 class FakeWriterWorker implements WriterWorkerLike {
   static spawned = 0
   onmessage: ((event: MessageEvent<WriteReply>) => void) | null = null
@@ -125,14 +125,15 @@ class FakeWriterWorker implements WriterWorkerLike {
   constructor(
     private readonly root: FakeDirHandle,
     private readonly mode: 'ok' | 'hang' | 'crash',
-    private readonly beforeHang?: (root: FakeDirHandle) => Promise<void>,
   ) {
     FakeWriterWorker.spawned++
   }
-  postMessage(message: WriteRequest): void {
-    if (this.mode === 'hang') return void this.beforeHang?.(this.root)
+  postMessage(message: WriteRequest, transfer: Transferable[]): void {
+    // Detaches the sender's buffer, as a real transfer does.
+    const received = structuredClone(message, { transfer })
+    if (this.mode === 'hang') return
     if (this.mode === 'crash') return void Promise.resolve().then(() => this.onerror?.({ message: 'boom' } as ErrorEvent))
-    void handleWriteRequest(async () => asRoot(this.root), message).then((reply) => {
+    void handleWriteRequest(async () => asRoot(this.root), received).then((reply) => {
       if (!this.terminated) this.onmessage?.({ data: reply } as MessageEvent<WriteReply>)
     })
   }
@@ -143,19 +144,18 @@ class FakeWriterWorker implements WriterWorkerLike {
 
 const opfsWithRoot = () => {
   const root = new FakeDirHandle()
-  const store = new OpfsByteStore({ getRoot: async () => asRoot(root), hasWritableStream: () => true })
+  const store = new OpfsByteStore({ getRoot: async () => asRoot(root), hasWritableStream: true })
   return { store, root }
 }
 
 /** A store on an engine without `createWritable`: every put goes through the worker. */
-const workerOpfs = (over: { modes?: Array<'ok' | 'hang' | 'crash'>; beforeHang?: (root: FakeDirHandle) => Promise<void>; writeTimeoutMs?: number } = {}) => {
+const workerOpfs = (...modes: Array<'ok' | 'hang' | 'crash'>) => {
   const root = new FakeDirHandle()
-  const modes = [...(over.modes ?? [])]
   const store = new OpfsByteStore({
     getRoot: async () => asRoot(root),
-    hasWritableStream: () => false,
-    spawnWriterWorker: () => new FakeWriterWorker(root, modes.shift() ?? 'ok', over.beforeHang),
-    writeTimeoutMs: over.writeTimeoutMs,
+    hasWritableStream: false,
+    spawnWriterWorker: () => new FakeWriterWorker(root, modes.shift() ?? 'ok'),
+    writeTimeoutMs: 20,
   })
   return { store, root }
 }
@@ -385,11 +385,11 @@ describe('OpfsByteStore — writing where the engine has no createWritable (WebK
     expect(FakeFileHandle.openSyncHandles).toBe(0)
   })
 
-  it('a write that fails part-way rejects and leaves no partial entry', async () => {
+  it('a write that fails part-way rejects with the engine’s error and leaves no entry it created', async () => {
     const { store, root } = workerOpfs()
     FakeFileHandle.failSyncWriteAfter = 2
     try {
-      await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toThrow(/full/)
+      await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toMatchObject({ name: 'QuotaExceededError' })
     } finally {
       FakeFileHandle.failSyncWriteAfter = null
     }
@@ -397,42 +397,28 @@ describe('OpfsByteStore — writing where the engine has no createWritable (WebK
     expect(FakeFileHandle.openSyncHandles).toBe(0)
   })
 
-  it('a write the worker never answers times out, its partial file is removed, and the next put uses a fresh worker', async () => {
-    const { store, root } = workerOpfs({
-      modes: ['hang'],
-      writeTimeoutMs: 20,
-      // What a worker killed mid-write leaves: the entry, with some of the bytes.
-      beforeHang: async (tree) => {
-        let dir = tree
-        for (const name of [ASSETS_ROOT, U, WS]) dir = await dir.getDirectoryHandle(name, { create: true })
-        ;(await dir.getFileHandle(KEY, { create: true })).data = bytes(1, 2)
-      },
-    })
+  it('a re-put that fails part-way leaves the complete copy already there', async () => {
+    // It may be the only copy of a capture not yet uploaded.
+    const { store } = workerOpfs()
+    await store.put(U, WS, KEY, bytes(1, 2, 3, 4))
+    FakeFileHandle.failSyncWriteAfter = 2
+    try {
+      await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toMatchObject({ name: 'QuotaExceededError' })
+    } finally {
+      FakeFileHandle.failSyncWriteAfter = null
+    }
+    expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2, 3, 4))
+  })
 
+  it('a write the worker never answers times out, and the next put uses a fresh worker', async () => {
+    const { store } = workerOpfs('hang')
     await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toThrow(/timed out/)
-    expect(fileAt(root)).toBeUndefined()
-
     await store.put(U, WS, KEY, bytes(1, 2, 3, 4))
     expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2, 3, 4))
   })
 
-  it('an abandoned write keeps an entry that is already the complete copy', async () => {
-    // It may be the only copy of a capture not yet uploaded.
-    const { store, root } = workerOpfs()
-    await store.put(U, WS, KEY, bytes(1, 2, 3))
-    const hung = new OpfsByteStore({
-      getRoot: async () => asRoot(root),
-      hasWritableStream: () => false,
-      spawnWriterWorker: () => new FakeWriterWorker(root, 'hang'),
-      writeTimeoutMs: 20,
-    })
-
-    await expect(hung.put(U, WS, KEY, bytes(1, 2, 3))).rejects.toThrow(/timed out/)
-    expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2, 3))
-  })
-
   it('a worker that dies rejects the pending put, and the next put spawns another', async () => {
-    const { store } = workerOpfs({ modes: ['crash'] })
+    const { store } = workerOpfs('crash')
     await expect(store.put(U, WS, KEY, bytes(1))).rejects.toThrow(/worker failed/)
     await store.put(U, WS, KEY, bytes(1))
     expect(await store.get(U, WS, KEY)).toEqual(bytes(1))

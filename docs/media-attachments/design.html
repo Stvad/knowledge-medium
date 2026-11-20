@@ -663,17 +663,17 @@ amount of wiping addresses.
     never served or stored.</li>
   <li><strong>A local hit is verified too — the store is a cache, not an authority.</strong> An entry
     existing is not proof its bytes are the content: <code>getFileHandle(name, {create: true})</code> mints an
-    <em>empty</em> entry before any byte lands, and a writer can die between the two (WebKit before Safari 26
-    had no <code>createWritable</code>, so every asset on an iPad was an empty local hit after its first
-    open). So a local read is a hit only if its <code>sha256</code> matches the block's <code>hash</code> —
-    the same rule a download passes, over bytes already in memory. Anything else is a <em>miss</em>: the
-    resolve proceeds through the remote fetch → decode → verify → store path, whose <code>put</code>
-    overwrites the bad entry, and if the remote also fails it fails closed (<code>fetch-failed</code>,
-    placeholder) — empty or short bytes are never served. The resolver does not delete the bad entry itself:
-    nothing serves it, and a delete could race a <code>put</code> that is still writing it. The down-lane's
-    presence probes agree on the cheap case: an empty entry is <em>not</em> present (neither
-    <code>has()</code> nor the one-shot <code>listWorkspaceKeys()</code> enumeration reports it), so the
-    backlog lane re-fetches the entries a pre-fix build left behind.</li>
+    <em>empty</em> entry before any byte lands, and a writer can die between the two. So a local read is a hit
+    only if its <code>sha256</code> matches the block's <code>hash</code> — the same rule a download passes,
+    over bytes already in memory. Anything else is a <em>miss</em>: the resolve proceeds through the remote
+    fetch → decode → verify → store path, and if the remote also fails it fails closed
+    (<code>fetch-failed</code>, placeholder) — empty or short bytes are never served. The resolver does not
+    delete the bad entry: nothing serves it, a delete could race a <code>put</code> still writing it, and the
+    <code>put</code> that follows a successful fetch overwrites it (under the object's current name; a bad
+    copy under a pre-conversion name just stays a miss). The down-lane's presence probes catch only the cheap
+    case: an <em>empty</em> entry is not present (neither <code>has()</code> nor the one-shot
+    <code>listWorkspaceKeys()</code> enumeration reports it), so the backlog lane re-fetches it; a non-empty
+    bad entry waits for a demand read.</li>
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
     PowerSync drops the workspace's block rows from the local DB, and the out-of-band OPFS bytes need their
@@ -725,9 +725,7 @@ investigation).
   store</strong> (a download decrypts + hash-verifies before writing, §9; a paste already holds plaintext),
   not on every render — so the render path is a local read → <em>verify</em> (<code>sha256</code> = the
   block's <code>hash</code>; §7.3) → object URL, with no decrypt step, and plaintext and E2EE workspaces are <strong>identical locally</strong>,
-  differing only in the at-rest format on the <em>server</em>. The read-side verify is not optional
-  belt-and-braces: the store's write is not atomic on every engine (below), so a stored entry is not by
-  itself proof of verified bytes.</p>
+  differing only in the at-rest format on the <em>server</em>.</p>
 
 <div class="decision">
 <strong>Why decrypted-at-rest, not a ciphertext replica.</strong> An earlier draft kept two tiers — a
@@ -755,21 +753,21 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
   <li><strong>Writing the store.</strong> A <code>put</code> holds the object's Web Lock (one writer per
     object across tabs) and must work on every engine with OPFS. Where
     <code>FileSystemFileHandle.prototype.createWritable</code> exists (Chromium, Firefox, Safari 26+) it writes
-    through the stream on the main thread; a failed write leaves the previous content, and removes the entry
-    only if this <code>put</code> created it. Where it does not exist (Safari 16.4–18 — every iOS 18 browser is
+    through the stream on the main thread. Where it does not (Safari 16.4–18 — every iOS 18 browser is
     WKWebView) only <code>createSyncAccessHandle</code> can write, and only inside a Worker, so the store
     posts the file's <em>path</em> plus a transferred copy of the bytes to a small module worker
-    (<code>byteStoreWriter.worker.ts</code>) that re-walks the path, truncates, writes, flushes, and answers
-    — a handle cannot be structured-cloned to a worker on that engine. A sync handle truncates in place, so a
-    write that fails, or a worker that is dropped for not answering, leaves a partial file: it is removed
-    unless its size already equals the bytes being written (a complete copy — possibly the only one of a
-    capture not yet uploaded). There is no temp-file-then-rename: WebKit's
-    <code>FileSystemFileHandle.move()</code> takes different arguments from Chromium's, so the guarantee is
-    the read-side verify, not an atomic write. Either path resolves only once the bytes are durable, so the
-    paste hot-path's "bytes before the block tx" ordering (§9/§11) is unchanged. The up-lane applies the read
-    rule on its way out: the §9 drain hash-verifies the local bytes against the record before sealing and
-    uploading them (a partial must never be uploaded under the content hash — that would poison the path,
-    §17); a mismatch quarantines the record.</li>
+    (<code>byteStoreWriter.worker.ts</code>) — a handle cannot be structured-cloned to a worker on that
+    engine. One rule covers both paths: <em>a failed write removes only an entry it created, and never
+    damages a complete copy already there</em> (which may be the only copy of a capture not yet uploaded).
+    The stream gives that for free (the old content stays until <code>close</code>); the sync handle writes
+    in place, so it writes from offset 0 and cuts the file to length <em>last</em> — the path is
+    content-addressed, so over a good copy every byte written is the byte already there. There is no
+    temp-file-then-rename (WebKit's <code>FileSystemFileHandle.move()</code> takes different arguments from
+    Chromium's), and a worker dropped for not answering can leave a partial file where it created the entry:
+    the guarantee is the read-side verify (§7.3), not an atomic write. Either path resolves only once the
+    bytes are durable, so the paste hot-path's "bytes before the block tx" ordering (§9/§11) is unchanged.
+    The §9 drain applies the read rule on the way out: local bytes that do not hash to the record are never
+    sealed or uploaded (that would poison the content path, §17); the record is quarantined.</li>
   <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the
     <em>same</em> fetch primitive (fetch ciphertext → decrypt → verify hash → store decrypted bytes) over
     <em>one in-flight map</em>, so a demand fetch and a queued backlog item for the same asset

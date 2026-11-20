@@ -11,18 +11,13 @@
  *     (`purgeWorkspace`, the §8 one-shot claw-back primitive).
  *   - `<content-key>` is the §10 object path segment the resolver derives.
  *
- * Bytes are written already verified (the resolver hash-checks before
- * `put`, §5.1/§7.3), so the store is a dumb content-addressed blob cache — it
- * holds no keys and makes no trust decisions. The backing store is OPFS
+ * The store holds no keys and makes no trust decisions, and an entry existing
+ * is NOT proof its bytes are the content: OPFS mints a file before any byte
+ * lands, and a writer can die between the two. So every reader that acts on the
+ * bytes hashes them first (the resolver's local hit, the up-lane drain), and the
+ * presence probes (`has`, `listWorkspaceKeys`) report only entries with bytes,
+ * so the down-lane re-fetches an empty one. The backing store is OPFS
  * (`OpfsByteStore`); `InMemoryByteStore` is the test double + no-OPFS fallback.
- *
- * An entry existing is NOT proof its bytes are the content: OPFS mints a file
- * before any byte lands, and a writer can die between the two. So every reader
- * that acts on the bytes hashes them first (the resolver's local hit, the
- * up-lane drain), and the presence probes (`has`, `listWorkspaceKeys`) report
- * only entries with bytes, so the down-lane re-fetches an empty one. A `put`
- * holds the object's Web Lock and writes through `createWritable` where the
- * engine has it, else through a worker's sync access handle (byteStoreWriter.ts).
  *
  * Destruction is the coarse platform clear (§7.2) — this store has no per-store
  * wipe role; `purgeWorkspace` is an AUTHORIZATION claw-back (revoke/leave), not
@@ -30,12 +25,7 @@
  */
 
 import { withLock } from '@/utils/webLock.js'
-import {
-  createWorkerFileWriter,
-  removeUnlessComplete,
-  type WorkerFileWriter,
-  type WriterWorkerLike,
-} from './byteStoreWriter.js'
+import { createWorkerFileWriter, type WorkerFileWriter, type WriterWorkerLike } from './byteStoreWriter.js'
 
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'
@@ -70,7 +60,7 @@ const decodeSegment = (s: string): string => {
 export interface ByteStore {
   /** The stored plaintext bytes, or `null` on a miss. */
   get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
-  /** Write already-verified plaintext bytes (the resolver hash-checks first). */
+  /** Write plaintext bytes the caller has verified or just captured. */
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
   /** Is the object present locally? (the §6 down-lane's "already replicated?" probe). */
   has(userId: string, workspaceId: string, contentKey: string): Promise<boolean>
@@ -164,17 +154,17 @@ export class InMemoryByteStore implements ByteStore {
 export interface OpfsByteStoreDeps {
   /** The OPFS root; injectable for tests. Defaults to the real origin root. */
   getRoot?: () => Promise<FileSystemDirectoryHandle>
-  /** Does this engine's `FileSystemFileHandle` have `createWritable`? Injectable to
-   *  force the worker path in tests. */
-  hasWritableStream?: () => boolean
+  /** Overrides {@link engineHasWritableStream}; `false` forces the worker path in tests. */
+  hasWritableStream?: boolean
   /** Spawns the writer worker (byteStoreWriter.worker.ts); injectable for tests. */
   spawnWriterWorker?: () => WriterWorkerLike
   /** How long a worker write may take before it is abandoned; injectable for tests. */
   writeTimeoutMs?: number
 }
 
-/** Chromium, Firefox and Safari 26+ have the stream write API; WebKit before that
- *  (every iOS 18 browser) can write only through a worker's sync access handle. */
+/** Chromium, Firefox and Safari 26+ have the stream write API. WebKit before that
+ *  (every iOS 18 browser) can write OPFS only through a sync access handle, which
+ *  exists only inside a Worker. */
 const engineHasWritableStream = (): boolean =>
   typeof FileSystemFileHandle !== 'undefined' &&
   typeof (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable === 'function'
@@ -190,9 +180,7 @@ const spawnRealWriterWorker = (): WriterWorkerLike =>
 export class OpfsByteStore implements ByteStore {
   private readonly getRoot: () => Promise<FileSystemDirectoryHandle>
   private readonly hasWritableStream: boolean
-  /** The worker write path, built on first use (never on an engine with the stream API). */
-  private workerWriter?: WorkerFileWriter
-  private readonly makeWorkerWriter: () => WorkerFileWriter
+  private readonly workerWriter: WorkerFileWriter
   /** Cached OPFS root + per-(user,ws) dir handles, so repeated ops (the down-lane's
    *  probes, capture/demand reads+writes) skip re-walking the 3-level chain from the
    *  root each call. Only SUCCESSFUL resolutions are cached. Invalidated on
@@ -203,13 +191,8 @@ export class OpfsByteStore implements ByteStore {
 
   constructor(deps: OpfsByteStoreDeps = {}) {
     this.getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory())
-    this.hasWritableStream = (deps.hasWritableStream ?? engineHasWritableStream)()
-    this.makeWorkerWriter = () =>
-      createWorkerFileWriter(deps.spawnWriterWorker ?? spawnRealWriterWorker, {
-        timeoutMs: deps.writeTimeoutMs,
-        // Still under the object's lock (`put` is awaiting), so nothing else is writing it.
-        onAbandoned: async (path, byteLength) => removeUnlessComplete(await this.root(), path, byteLength),
-      })
+    this.hasWritableStream = deps.hasWritableStream ?? engineHasWritableStream()
+    this.workerWriter = createWorkerFileWriter(deps.spawnWriterWorker ?? spawnRealWriterWorker, deps.writeTimeoutMs)
   }
 
   private root(): Promise<FileSystemDirectoryHandle> {
@@ -264,8 +247,6 @@ export class OpfsByteStore implements ByteStore {
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
     return withLock(writeLockName(userId, workspaceId, contentKey), async () => {
       if (!this.hasWritableStream) {
-        // The worker walks the path from the root itself: a handle can't be posted to it.
-        this.workerWriter ??= this.makeWorkerWriter()
         return this.workerWriter.write(assetPathSegments(userId, workspaceId, contentKey), bytes)
       }
       try {
@@ -324,7 +305,7 @@ export class OpfsByteStore implements ByteStore {
       const keys = new Set<string>()
       for await (const [name, entry] of dir.entries()) {
         if (entry.kind !== 'file') continue
-        // An entry a writer holds open refuses `getFile`: in flight, so not present yet.
+        // An entry that can't be read is not present either.
         const size = await (entry as FileSystemFileHandle).getFile().then((f) => f.size, () => 0)
         if (size > 0) keys.add(decodeSegment(name))
       }

@@ -190,18 +190,13 @@ const drainOne = async (
   } catch {
     return retryOrFail(userId, rec, ctx)
   }
-  if (!plaintext) {
-    // A clean OPFS miss is terminal — BUT a concurrent re-paste writes fresh bytes to
-    // OPFS *before* it re-arms (bumps stagedAt), so the stamp guard turns this into a
-    // no-op when superseded, and the next drain finds the re-pasted bytes.
-    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
-    return 'failed'
-  }
-  // (2b) The bytes must BE the record's content before they are sealed and uploaded
-  //     under its hash: an entry is not proof of its content (byteStore.ts), and
-  //     uploading a cut-short write would poison the content path (§17). Quarantine;
-  //     a re-paste overwrites the entry and re-arms the record.
-  if (!(await verifyContentHash(plaintext, rec.contentHash))) {
+  // The bytes must BE the record's content before they are sealed and uploaded
+  // under its hash: an entry is not proof of its content (byteStore.ts), and a
+  // cut-short write uploaded would poison the content path (§17). Absent or
+  // wrong is terminal — BUT a concurrent re-paste writes fresh bytes to OPFS
+  // *before* it re-arms (bumps stagedAt), so the stamp guard turns this into a
+  // no-op when superseded, and the next drain finds the re-pasted bytes.
+  if (!plaintext || !(await verifyContentHash(plaintext, rec.contentHash))) {
     await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
     return 'failed'
   }
