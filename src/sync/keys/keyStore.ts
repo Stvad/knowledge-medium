@@ -15,13 +15,10 @@
  * no-IndexedDB fallback use {@link InMemoryWorkspaceKeyStore}.
  *
  * NOTE on testing: a `CryptoKey` is structured-cloneable in browsers but
- * NOT under Node's `structuredClone`, so the `CryptoKey`-storing path below
- * can only be exercised in a real browser. Its keying logic is factored into
- * the pure {@link keyStoreRecordId} (unit-tested), and the IndexedDB plumbing
- * now lives in the shared {@link IdbKeyedStore} (Node-tested via fake-indexeddb).
- * What remains browser-only is this store's wiring of that plumbing to a
- * `CryptoKey` value — browser-validated via the §8 flows (unlock → reload →
- * still unlocked).
+ * NOT under Node's `structuredClone`, so a `CryptoKey` round trip through the
+ * store can only be exercised in a real browser — browser-validated via the
+ * §8 flows (unlock → reload → still unlocked). Everything else about the
+ * IndexedDB store is Node-tested over fake-indexeddb with plain-object records.
  */
 
 import type {WorkspaceObjectKeys} from '../crypto/contentKey.js'
@@ -85,8 +82,10 @@ export const getUsableKeyRecord = async (
 }
 
 /** {@link getUsableKeyRecord}, reading an unreadable store (IndexedDB
- *  unavailable / corrupt / quota) as "no key" — for callers that fail closed on
- *  absence and must not throw. */
+ *  unavailable / corrupt / quota, a record the device cannot read) as "no key"
+ *  — for callers that fail closed on absence and must not throw. The entry
+ *  gate is one: it asks for the key rather than open a workspace it cannot
+ *  decrypt. */
 export const readUsableKeyRecord = async (
   keyStore: WorkspaceKeyStore,
   userId: string,
@@ -100,9 +99,8 @@ export const readUsableKeyRecord = async (
   }
 }
 
-/** The record is stored but cannot be read right now. iOS seals a stored
- *  `CryptoKey` under a secret the device withholds while it is locked, and a
- *  read then succeeds with `null` in place of the record. */
+/** The record is stored but cannot be read right now: a locked iOS device
+ *  reads a stored record as `null`, without an error. */
 export class KeyRecordUnreadableError extends Error {
   constructor(workspaceId: string) {
     super(`the stored workspace key for ${workspaceId} cannot be read right now`)
@@ -164,9 +162,8 @@ export class InMemoryWorkspaceKeyStore implements WorkspaceKeyStore {
 const DB_NAME = 'km-e2ee-keys'
 const STORE_NAME = 'workspace_keys'
 
-/** IndexedDB-backed store. Stores a `CryptoKey`-bearing record, so the
- *  round-trip can only run in a real browser (see the file header on testing);
- *  the cached connection + commit-durable `tx` come from {@link IdbKeyedStore}. */
+/** IndexedDB-backed store; the cached connection + commit-durable `tx` come
+ *  from {@link IdbKeyedStore}. See the file header on testing. */
 export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
   private readonly idb = new IdbKeyedStore(DB_NAME, STORE_NAME)
   /** The last record each id read or wrote, served while the store cannot be

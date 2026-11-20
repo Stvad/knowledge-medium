@@ -50,8 +50,7 @@ describe('requireWorkspaceKeys', () => {
     const reported = watch()
     const store = new InMemoryWorkspaceKeyStore()
     await store.put(USER, WS, {wk: WK, contentKeyHmac: KID})
-    const lost = new Error('IndexedDB connection lost')
-    vi.spyOn(store, 'get').mockRejectedValueOnce(lost)
+    vi.spyOn(store, 'get').mockRejectedValueOnce(new Error('IndexedDB connection lost'))
 
     expect(await requireWorkspaceKeys(store, USER, WS)).toEqual({cek: WK, contentKeyHmac: KID})
     expect(reported).not.toHaveBeenCalled()
@@ -71,7 +70,6 @@ describe('requireWorkspaceKeys', () => {
     const error = await requireWorkspaceKeys(store, USER, WS).catch((err: unknown) => err)
 
     expect(error).toBeInstanceOf(WorkspaceKeyUnavailableError)
-    expect((error as WorkspaceKeyUnavailableError).storeUnreadable).toBe(true)
     expect((error as Error).cause).toBe(failure)
     expect(reported).not.toHaveBeenCalled()
   })

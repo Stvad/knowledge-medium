@@ -22,20 +22,18 @@ import { objectKeysOf, type WorkspaceKeyRecord, type WorkspaceKeyStore } from '.
 
 /** No usable key could be read for the workspace. Either this device holds
  *  none — no record, or one with no `K_id` (the legacy shape, which the entry
- *  gate also treats as locked) — or the store could not be read at all
- *  (`storeUnreadable`, with the failure as `cause`), which says nothing about
- *  whether the key is still there. */
+ *  gate also treats as locked) — or the store could not be read at all (the
+ *  failure is `cause`), which says nothing about whether the key is still
+ *  there. Only the first has locked the workspace. */
 export class WorkspaceKeyUnavailableError extends Error {
-  readonly storeUnreadable: boolean
-  constructor(readonly workspaceId: string, options?: {cause?: unknown; storeUnreadable?: boolean}) {
+  constructor(readonly workspaceId: string, options?: {cause?: unknown}) {
     super(
-      options?.storeUnreadable
-        ? `the workspace key store could not be read for ${workspaceId}`
-        : `no usable workspace key on this device for ${workspaceId}; unlock the workspace with its key`,
+      options?.cause === undefined
+        ? `no usable workspace key on this device for ${workspaceId}; unlock the workspace with its key`
+        : `the workspace key store could not be read for ${workspaceId}`,
       options,
     )
     this.name = 'WorkspaceKeyUnavailableError'
-    this.storeUnreadable = options?.storeUnreadable ?? false
   }
 }
 
@@ -49,9 +47,10 @@ export const onWorkspaceKeyUnavailable = (
 ): (() => void) => unavailable.add(listener)
 
 /** `workspaceId`'s keys, or a throw. A read that FINDS no usable key signals
- *  {@link onWorkspaceKeyUnavailable} first. A store that cannot be read, tried
- *  once more first, only throws: the caller's work fails and is retried, and
- *  locking the workspace over it would ask for a key the device still holds. */
+ *  {@link onWorkspaceKeyUnavailable} first. A failed read is tried once more,
+ *  since the store reopens a connection the browser closed, and then only
+ *  throws: the caller's work fails and is retried, and locking the workspace
+ *  over it would ask for a key the device still holds. */
 export const requireWorkspaceKeys = async (
   keyStore: WorkspaceKeyStore,
   userId: string,
@@ -63,7 +62,7 @@ export const requireWorkspaceKeys = async (
     record = await read().catch(read)
   } catch (cause) {
     console.warn(`[workspaceKeys] key read failed for ${workspaceId}`, cause)
-    throw new WorkspaceKeyUnavailableError(workspaceId, {cause, storeUnreadable: true})
+    throw new WorkspaceKeyUnavailableError(workspaceId, {cause})
   }
   const keys = record && objectKeysOf(record)
   if (keys) return keys
@@ -71,8 +70,9 @@ export const requireWorkspaceKeys = async (
   throw new WorkspaceKeyUnavailableError(workspaceId)
 }
 
-/** `read`'s keys, or null when it found none (and so has already signalled),
- *  for a caller whose own result already says "no key". */
+/** `read`'s keys, or null when no usable key could be read (see
+ *  {@link WorkspaceKeyUnavailableError}), for a caller whose own result
+ *  already says "no key". */
 export const orNullWhenKeyUnavailable = async <T>(read: Promise<T>): Promise<T | null> => {
   try {
     return await read

@@ -13,10 +13,12 @@ import {
 const record = (): WorkspaceKeyRecord =>
   ({wk: {name: 'wk'}, contentKeyHmac: {name: 'k_id'}}) as unknown as WorkspaceKeyRecord
 
+/** The stored rows, reached around the key store. */
+const raw = new IdbKeyedStore('km-e2ee-keys', 'workspace_keys')
+
 /** The stored value as a locked iOS device reads it: `null`, record still there. */
 const sealRecord = (userId: string, workspaceId: string) =>
-  new IdbKeyedStore('km-e2ee-keys', 'workspace_keys')
-    .tx('readwrite', store => store.put(null, keyStoreRecordId(userId, workspaceId)))
+  raw.tx('readwrite', store => store.put(null, keyStoreRecordId(userId, workspaceId)))
 
 describe('IndexedDbWorkspaceKeyStore', () => {
   // Stubbed and restored, not `fake-indexeddb/auto`: this file shares a worker,
@@ -62,8 +64,7 @@ describe('IndexedDbWorkspaceKeyStore', () => {
     const store = new IndexedDbWorkspaceKeyStore()
     await store.put('u', 'evicted', record())
     await store.get('u', 'evicted')
-    await new IdbKeyedStore('km-e2ee-keys', 'workspace_keys')
-      .tx('readwrite', s => s.delete(keyStoreRecordId('u', 'evicted')))
+    await raw.tx('readwrite', s => s.delete(keyStoreRecordId('u', 'evicted')))
 
     expect(await store.get('u', 'evicted')).toBeNull()
     await sealRecord('u', 'evicted')
