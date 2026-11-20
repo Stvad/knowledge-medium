@@ -1,0 +1,1 @@
+export{$P as checkForAppUpdate,eF as registerServiceWorker}from"../chunks/app-aK9-91Gy.js";

@@ -1,0 +1,1 @@
+export{wV as BlockProperties}from"../../chunks/app-aK9-91Gy.js";

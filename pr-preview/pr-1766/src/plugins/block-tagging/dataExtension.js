@@ -1,0 +1,1 @@
+export{Hu as blockTaggingDataExtension}from"../../../chunks/app-aK9-91Gy.js";

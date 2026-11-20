@@ -1,0 +1,1 @@
+export{bg as lintExtensionSource}from"../../../chunks/app-aK9-91Gy.js";

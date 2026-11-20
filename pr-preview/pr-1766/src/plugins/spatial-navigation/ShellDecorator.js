@@ -1,0 +1,1 @@
+export{Rw as SpatialNavigationShellDecorator}from"../../../chunks/app-aK9-91Gy.js";

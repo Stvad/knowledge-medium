@@ -1,0 +1,1 @@
+export{Cx as attachmentsPlugin}from"../../../chunks/app-aK9-91Gy.js";

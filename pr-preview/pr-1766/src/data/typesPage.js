@@ -1,0 +1,1 @@
+export{Not as getOrCreateTypesPage,Pot as typesPageBlockId,Fot as typesPageSpec}from"../../chunks/app-aK9-91Gy.js";

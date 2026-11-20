@@ -1,0 +1,1 @@
+export{WO as openRecentsPage}from"../../../chunks/app-aK9-91Gy.js";

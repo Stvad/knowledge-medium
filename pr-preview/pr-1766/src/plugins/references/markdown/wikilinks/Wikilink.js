@@ -1,0 +1,1 @@
+export{ib as Wikilink}from"../../../../../chunks/app-aK9-91Gy.js";

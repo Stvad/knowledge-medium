@@ -1,0 +1,1 @@
+export{kF as dynamicExtensionsExtension}from"../../chunks/app-aK9-91Gy.js";
