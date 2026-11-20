@@ -88,6 +88,16 @@ const askedTimes = (asks: {mock: {calls: unknown[]}}, count: number) =>
   vi.waitFor(() => expect(asks.mock.calls.length).toBeGreaterThanOrEqual(count))
 
 describe('WorkspaceSyncGate', () => {
+  it('holds bulk drain windows for as long as it is up', async () => {
+    const release = vi.fn()
+    const hold = vi.spyOn(repo, 'holdBulkSyncDrain').mockReturnValue(release)
+    const {unmount} = renderGate({onReady: vi.fn()})
+    await vi.waitFor(() => expect(hold).toHaveBeenCalledTimes(1))
+    expect(release).not.toHaveBeenCalled()
+    unmount()
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
   it('does not open on status changes while the workspace is not caught up', async () => {
     await deliver([serverWorkspace(workspaceRow), stagedBlock('b1')])
     const asks = vi.spyOn(repo, 'workspaceViewGap')

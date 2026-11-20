@@ -69,6 +69,13 @@ const DEFAULT_THROTTLE_MS = 100
  *  resumes from the last committed window instead of restarting from zero. */
 const DEFAULT_DRAIN_CHUNK = 1000
 
+/** Window size while a bulk hold is out ({@link BlocksSyncedObserver.holdBulkWindows}).
+ *  A window is one write transaction, so a larger one commits less often and
+ *  touches each index page once for many rows — and holds the write lock for
+ *  that much longer, which is why it needs a holder vouching that nothing is
+ *  waiting to write. */
+const DEFAULT_BULK_DRAIN_CHUNK = 20_000
+
 /** During a multi-window drain every window marks the handles it affects
  *  stale at once, and the re-runs of their loaders are merged and delivered
  *  after the drain's first window, then at most this often, then at the drain's
@@ -144,6 +151,8 @@ export interface BlocksSyncedObserverArgs {
   /** Max changes materialized per drain window (default {@link DEFAULT_DRAIN_CHUNK}).
    *  Tests shrink it to exercise multi-window backlogs. */
   readonly drainChunkSize?: number
+  /** Window size under a bulk hold (default {@link DEFAULT_BULK_DRAIN_CHUNK}). */
+  readonly bulkDrainChunkSize?: number
   /** See {@link DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS}. Tests set it. */
   readonly backlogInvalidationIntervalMs?: number
   readonly onError?: (err: unknown) => void
@@ -240,6 +249,10 @@ export interface BlocksSyncedObserver {
    *  navigated away from would otherwise refuse every pass on the one they are
    *  in now, for as long as it runs. */
   isRematerializingWorkspace(workspaceId: string): boolean
+  /** Drain in bulk-sized windows until the returned release is called. For a
+   *  caller that knows nothing is waiting on the write lock: a gate shown
+   *  INSTEAD of the app, with no editor or plugin mounted. Holds nest. */
+  holdBulkWindows(): () => void
   /** Stop the subscription. Idempotent. */
   dispose(): void
 }
@@ -301,7 +314,12 @@ export const startBlocksSyncedObserver = (
 ): BlocksSyncedObserver => {
   const { db, cache, handleStore, deps, getInvalidationRules, onCycleDetected } = args
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
-  const drainChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
+  const liveChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
+  const bulkChunk = Math.max(1, args.bulkDrainChunkSize ?? DEFAULT_BULK_DRAIN_CHUNK)
+  let bulkHolds = 0
+  /** Read per window, so a hold taken or released mid-drain applies from the
+   *  next one. */
+  const windowSize = (): number => (bulkHolds > 0 ? bulkChunk : liveChunk)
   const rules = (): readonly InvalidationRule[] => getInvalidationRules?.() ?? []
   const invalidationIntervalMs =
     args.backlogInvalidationIntervalMs ?? DEFAULT_BACKLOG_INVALIDATION_INTERVAL_MS
@@ -434,10 +452,11 @@ export const startBlocksSyncedObserver = (
   const drainQueueOnce = (): Promise<void> => metered('queue', async meter => {
     for (;;) {
       if (disposed) throw disposedMidDrain()
+      const chunk = windowSize()
       const readAt = performance.now()
       const rows = await db.getAll<QueueRow>(
         'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?',
-        [drainChunk],
+        [chunk],
       )
       meter.bookkeepingMs += performance.now() - readAt
       if (rows.length === 0) return
@@ -464,7 +483,7 @@ export const startBlocksSyncedObserver = (
 
       // A short final window means the queue is drained; stop without an extra
       // empty read. (Rows arriving after this still re-trigger via onChange.)
-      if (rows.length < drainChunk) return
+      if (rows.length < chunk) return
     }
   })
 
@@ -492,11 +511,12 @@ export const startBlocksSyncedObserver = (
     onProgress?.({ done: 0, total: ids.length })
     // Same bounded windows as the queue drain; a re-invocation resumes because
     // already-materialized rows LWW-skip.
-    for (let i = 0; i < ids.length; i += drainChunk) {
+    for (let done = 0; done < ids.length;) {
       if (disposed) throw disposedMidDrain()
-      const batch = ids.slice(i, i + drainChunk)
+      const batch = ids.slice(done, done + windowSize())
       const outcome = await applyWindow(meter, batch, [])
-      onProgress?.({ done: i + batch.length, total: ids.length })
+      done += batch.length
+      onProgress?.({ done, total: ids.length })
       totals.applied += outcome.applied.length
       totals.deferred += outcome.deferred.length
       totals.skippedStale += outcome.skippedStale.length
@@ -583,6 +603,15 @@ export const startBlocksSyncedObserver = (
     drainWorkspace,
     isRematerializingWorkspace: (workspaceId: string) =>
       (workspaceRescans.get(workspaceId) ?? 0) > 0,
+    holdBulkWindows() {
+      bulkHolds++
+      let held = true
+      return () => {
+        if (!held) return
+        held = false
+        bulkHolds--
+      }
+    },
     dispose() {
       if (disposed) return
       disposed = true

@@ -921,3 +921,41 @@ describe('blocksSyncedObserver — handle invalidation during a backlog', () => 
     expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3']])
   })
 })
+
+describe('blocksSyncedObserver — bulk windows', () => {
+  it('drains in bulk-sized windows while a hold is out, and in live ones after its release', async () => {
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, bulkDrainChunkSize: 4,
+      onDrainStats: stats => seen.push(stats),
+    })
+    await observer.flush()
+    const stage = (from: number) => env.db.writeTransaction(async (tx) => {
+      for (let i = from; i < from + 6; i++) {
+        await tx.execute(
+          BLOCKS_SYNCED_RAW_TABLE.put.sql,
+          blockToSyncedRowParams(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` })),
+        )
+      }
+    })
+
+    const release = observer.holdBulkWindows()
+    const nested = observer.holdBulkWindows()
+    nested()
+    nested() // a second call releases nothing further
+    await stage(0)
+    await observer.flush()
+    expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 2 })
+
+    release()
+    await stage(6)
+    await observer.flush()
+    expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 3 })
+
+    // The workspace pass sizes its windows the same way.
+    const again = observer.holdBulkWindows()
+    await observer.drainWorkspace('ws', 'all')
+    expect(seen.at(-1)).toMatchObject({ source: 'workspace', rows: 12, windows: 3 })
+    again()
+  })
+})

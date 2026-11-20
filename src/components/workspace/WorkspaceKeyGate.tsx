@@ -34,7 +34,16 @@ export interface WorkspaceGateDeps {
 }
 
 export const workspaceGateDeps = (repo: Repo, workspaceId: string): WorkspaceGateDeps => ({
-  drainWorkspace: onProgress => repo.drainSyncWorkspace(workspaceId, onProgress),
+  // Bulk windows: the gate stands where the app would be, so nothing is waiting
+  // to write. A drain the user walked away from keeps them until it finishes.
+  drainWorkspace: async (onProgress) => {
+    const release = repo.holdBulkSyncDrain()
+    try {
+      return await repo.drainSyncWorkspace(workspaceId, onProgress)
+    } finally {
+      release()
+    }
+  },
   fetchConversionState: () => fetchWorkspaceConversionState(workspaceId),
   hasCopiedCiphertext: () => hasCopiedCiphertext(repo.db, workspaceId),
 })
