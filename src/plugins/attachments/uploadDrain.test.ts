@@ -11,10 +11,12 @@ import { InMemoryByteUploadStore, type StageInput } from './uploadStore.js'
 
 const USER = 'u1'
 const WS = 'ws1'
-// A well-formed hash no test byte string matches; its raw name is the record's
-// capture-time key, as for anything captured in a plaintext workspace.
-const KEY = 'ab'.repeat(32)
-const HASH = `sha256:${KEY}`
+// The default staged plaintext and its real hash: the drain hashes the local bytes
+// before uploading them. The hash's raw name is the record's capture-time key, as
+// for anything captured in a plaintext workspace.
+const PLAIN = new Uint8Array(Array.from({ length: 32 }, (_, i) => i & 0xff)) as Uint8Array<ArrayBuffer>
+const HASH = await computeContentHash(PLAIN)
+const KEY = HASH.slice('sha256:'.length)
 const BLOCK = 'media:ab'
 
 const bytes = (n: number) => new Uint8Array(Array.from({ length: n }, (_, i) => i & 0xff)) as Uint8Array<ArrayBuffer>
@@ -100,7 +102,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('uploads a pending plaintext asset and deletes the record on success', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(32))
+    await byteStore.put(USER, WS, KEY, PLAIN)
 
     const summary = await drainUploads(USER, deps())
 
@@ -108,7 +110,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect(blobStore.puts).toHaveLength(1)
     expect(blobStore.puts[0]).toMatchObject({ workspaceId: WS, contentKey: KEY })
     // plaintext mode is identity — the uploaded bytes equal the stored plaintext
-    expect([...blobStore.puts[0].bytes]).toEqual([...bytes(32)])
+    expect([...blobStore.puts[0].bytes]).toEqual([...PLAIN])
     expect(await store.get(USER, BLOCK)).toBeNull()
   })
 
@@ -127,10 +129,9 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   })
 
   it('409 whose existing object hash-MISMATCHES (poisoned path) → keeps the record failed, never clears', async () => {
-    // HASH never matches arbitrary bytes, so the existing object is "poisoned".
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(16))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     blobStore.existing = bytes(99) // a different body already occupies the content path
 
     const summary = await drainUploads(USER, deps())
@@ -143,7 +144,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('409 whose verify-GET fails transiently → retries (does not clear, does not quarantine)', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(16))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     blobStore.existing = bytes(16) // put → 'exists'
     blobStore.getFails = true // …but the verify read fails transiently
 
@@ -153,9 +154,19 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect((await store.get(USER, BLOCK))).toMatchObject({ status: 'pending', attempts: 1 })
   })
 
+  it('never uploads local bytes that do not hash to the record (a write cut short): quarantines', async () => {
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, PLAIN.slice(0, 20))
+
+    expect(await drainUploads(USER, deps())).toMatchObject({ failed: 1, uploaded: 0 })
+    expect(blobStore.puts).toHaveLength(0)
+    expect((await store.get(USER, BLOCK))?.status).toBe('failed')
+  })
+
   it('does NOT drain a staged (not-yet-promoted) record', async () => {
     await store.stage(stageInput()) // staged, never promoted
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
 
     const summary = await drainUploads(USER, deps())
 
@@ -189,7 +200,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     // quarantine it. It must defer (stay pending) and re-drain when its user returns.
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
 
     const summary = await drainUploads(USER, deps({ isActiveUser: () => false }))
 
@@ -202,7 +213,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     const matDefer = mat('defer')
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
 
     const summary = await drainUploads(USER, deps({ getMaterializability: matDefer }))
 
@@ -214,7 +225,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('quarantines (→failed) on a PERMANENT upload rejection', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     blobStore.fail = () => {
       throw new BlobPutError('forbidden', true, 403, 'AccessDenied')
     }
@@ -228,7 +239,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('a TRANSIENT rejection DEFERS (no attempt burn) and stays pending', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     blobStore.fail = () => {
       throw new BlobPutError('offline', false, 0, 'network')
     }
@@ -243,7 +254,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('a transient failure CANNOT exhaust the attempt budget — only AGE quarantines (Codex P2)', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     blobStore.fail = () => {
       throw new BlobPutError('offline', false, 0, 'network')
     }
@@ -261,7 +272,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('a transient failure past the age bound is quarantined regardless of attempts', async () => {
     await store.stage(stageInput()) // stagedAt = 1000
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     blobStore.fail = () => {
       throw new BlobPutError('5xx', false, 503, 'network')
     }
@@ -281,7 +292,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     // which nothing re-drains).
     await store.stage(stageInput()) // stagedAt 1000
     await store.promote(USER, BLOCK)
-    await byteStore.put(USER, WS, KEY, bytes(8))
+    await byteStore.put(USER, WS, KEY, PLAIN)
     clock = 2000
     blobStore.fail = () => {
       void store.stage(stageInput()) // re-arm: staged, attempts 0, stagedAt 2000
@@ -311,10 +322,10 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
   it('drains only the active user’s pending records', async () => {
     await store.stage(stageInput({ userId: 'u1', assetBlockId: 'media:a', contentKey: 'a' }))
     await store.promote('u1', 'media:a')
-    await byteStore.put('u1', WS, 'a', bytes(4))
+    await byteStore.put('u1', WS, 'a', PLAIN)
     await store.stage(stageInput({ userId: 'u2', assetBlockId: 'media:b', contentKey: 'b' }))
     await store.promote('u2', 'media:b')
-    await byteStore.put('u2', WS, 'b', bytes(4))
+    await byteStore.put('u2', WS, 'b', PLAIN)
 
     await drainUploads('u1', deps())
 
@@ -329,7 +340,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     it('uploads to the address the hash and the live mode give, reading bytes under the record key', async () => {
       await store.stage(stageInput({ contentKey: 'local-name' }))
       await store.promote(USER, BLOCK)
-      await byteStore.put(USER, WS, 'local-name', bytes(8))
+      await byteStore.put(USER, WS, 'local-name', PLAIN)
 
       await drainUploads(USER, deps())
 
@@ -372,7 +383,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     it('an e2ee workspace whose key record has no K_id waits (no attempt burn)', async () => {
       await store.stage(stageInput())
       await store.promote(USER, BLOCK)
-      await byteStore.put(USER, WS, KEY, bytes(8))
+      await byteStore.put(USER, WS, KEY, PLAIN)
 
       const summary = await drainUploads(USER, deps({ getMaterializability: mat('decrypt'), getCek: async () => aesKey() }))
 
@@ -384,7 +395,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     it('a malformed hash can never upload: failed at once', async () => {
       await store.stage(stageInput({ contentHash: 'sha256:nothex' }))
       await store.promote(USER, BLOCK)
-      await byteStore.put(USER, WS, KEY, bytes(8))
+      await byteStore.put(USER, WS, KEY, PLAIN)
 
       expect(await drainUploads(USER, deps())).toMatchObject({ failed: 1 })
       expect(blobStore.puts).toHaveLength(0)
@@ -397,7 +408,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     const pending = async () => {
       await store.stage(stageInput())
       await store.promote(USER, BLOCK)
-      await byteStore.put(USER, WS, KEY, bytes(8))
+      await byteStore.put(USER, WS, KEY, PLAIN)
     }
 
     it('a server that now says e2ee defers the upload, with no attempt burn', async () => {

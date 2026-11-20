@@ -59,6 +59,7 @@
  */
 
 import { encodeBytes, verifyObjectBytes } from '@/sync/byteTransform.js'
+import { verifyContentHash } from '@/sync/crypto/contentHash.js'
 import type { WorkspaceConversionRead } from '@/sync/keys/conversionState.js'
 import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
@@ -189,10 +190,13 @@ const drainOne = async (
   } catch {
     return retryOrFail(userId, rec, ctx)
   }
-  if (!plaintext) {
-    // A clean OPFS miss is terminal — BUT a concurrent re-paste writes fresh bytes to
-    // OPFS *before* it re-arms (bumps stagedAt), so the stamp guard turns this into a
-    // no-op when superseded, and the next drain finds the re-pasted bytes.
+  // The bytes must BE the record's content before they are sealed and uploaded
+  // under its hash: an entry is not proof of its content (byteStore.ts), and a
+  // cut-short write uploaded would poison the content path (§17). Absent or
+  // wrong is terminal — BUT a concurrent re-paste writes fresh bytes to OPFS
+  // *before* it re-arms (bumps stagedAt), so the stamp guard turns this into a
+  // no-op when superseded, and the next drain finds the re-pasted bytes.
+  if (!plaintext || !(await verifyContentHash(plaintext, rec.contentHash))) {
     await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
     return 'failed'
   }
