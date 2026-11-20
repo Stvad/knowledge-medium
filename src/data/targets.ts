@@ -16,6 +16,7 @@ import {
   type Tx,
   type TypeRegistrySnapshot,
 } from '@/data/api'
+import { aliasClaimConflicts, restorePropertiesYieldingTakenAliases } from '@/data/aliasClaim'
 import { derivedBlockId } from '@/data/derivedIds'
 import { aliasSeatNamespacesInTx, type AliasSeatNamespaces } from '@/data/aliasSeatNamespace'
 import type { Repo } from '@/data/repo'
@@ -48,7 +49,8 @@ export interface CreateOrRestoreArgs {
   /** Strip the tombstone's `aliases` in the same restore UPDATE. Set it
    *  iff your `onInsertedOrRestored` re-writes the alias list (alias/daily
    *  seats); leave it unset so a user-set alias survives (shortcuts,
-   *  media). See {@link restorePropertiesStrippingAliases}. */
+   *  media) — all but a name another live block took meanwhile, which is
+   *  yielded. See {@link restorePropertiesStrippingAliases}. */
   stripAliasesOnRestore?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
@@ -64,7 +66,9 @@ export interface CreateOrRestoreArgs {
  *  wrong: a tombstone can carry a claim some live block took while it was
  *  dead, and re-inserting it trips the alias-uniqueness trigger, rolling
  *  back the CALLER's whole tx. The caller owns the alias write — pass this
- *  as `tx.restore`'s patch, then re-claim the domain's set in the same tx. */
+ *  as `tx.restore`'s patch, then re-claim the domain's set in the same tx.
+ *  To bring back every name nobody took instead, see
+ *  `restorePropertiesYieldingTakenAliases`. */
 export const restorePropertiesStrippingAliases = async (
   tx: Tx,
   id: string,
@@ -75,22 +79,18 @@ export const restorePropertiesStrippingAliases = async (
   return restoredProperties
 }
 
-/** Return aliases with no other live claimant, including sync co-claims that
- * a single oldest-row lookup would hide. Call inside the writing transaction:
- * rewriting an alias bag reinserts every claim, and one competing claim would
- * abort the caller's whole transaction. Yielding it keeps the page reachable. */
+/** Return the aliases `id` can claim without aborting: those it already holds,
+ * co-claimed or not, and those no other live block holds. Call inside the
+ * writing transaction, where the answer matches the trigger's. Yielding the
+ * rest keeps the page reachable. */
 export const partitionClaimableAliases = async (
   tx: Tx,
   id: string,
   aliases: readonly string[],
   workspaceId: string,
 ): Promise<string[]> => {
-  const claimable: string[] = []
-  for (const alias of aliases) {
-    const owners = await tx.aliasClaimants(alias, workspaceId)
-    if (owners.every(owner => owner.id === id)) claimable.push(alias)
-  }
-  return claimable
+  const taken = new Set((await aliasClaimConflicts(tx, id, workspaceId, aliases)).map(conflict => conflict.alias))
+  return aliases.filter(alias => !taken.has(alias))
 }
 
 /** Shared primitive — see file header. Returns `{id, inserted}`;
@@ -117,7 +117,8 @@ export const createOrRestoreTargetBlock = async (
         const restoredProperties = await restorePropertiesStrippingAliases(tx, args.id)
         await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
       } else {
-        await tx.restore(args.id, {content: args.freshContent})
+        const properties = await restorePropertiesYieldingTakenAliases(tx, args.id)
+        await tx.restore(args.id, {content: args.freshContent, ...(properties === undefined ? {} : {properties})})
       }
       if (args.onInsertedOrRestored) {
         await args.onInsertedOrRestored(tx, args.id)

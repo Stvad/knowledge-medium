@@ -180,6 +180,28 @@ describe('createOrRestoreTargetBlock — tombstone path', () => {
     expect(row.deleted).toBe(0)
     expect(row.content).toBe('restored content')
   })
+
+  it('keeps a user-set alias but yields one another block took while it was dead', async () => {
+    const id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'shortcut', WS)
+    await env.repo.tx(tx => tx.create({
+      id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Shortcut',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Mine', 'Taken'])},
+    }), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete(id), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.create({
+      id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Other',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Taken'])},
+    }), {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(tx => createOrRestoreTargetBlock(tx, {
+      id, workspaceId: WS, parentId: null, orderKey: 'a0', freshContent: 'Shortcut',
+    }), {scope: ChangeScope.BlockDefault})
+
+    const row = await env.h.db.get<{deleted: 0 | 1; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id])
+    expect(row.deleted).toBe(0)
+    expect(JSON.parse(row.properties_json)[aliasesProp.name]).toEqual(['Mine'])
+  })
 })
 
 describe('createOrRestoreTargetBlock — workspace mismatch', () => {

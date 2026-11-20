@@ -1803,10 +1803,7 @@ const ROOT_ALIAS = 'Readwise Library'
  *
  *  Its own transaction, and its failure is swallowed, because `ensureRoot` runs
  *  before `runSync`'s per-book isolation — anything that aborts here costs the
- *  whole export. `setProperty` rewrites the WHOLE bag, so an entry the root
- *  co-holds with a sync-applied row (sync apply skips the uniqueness trigger,
- *  so two live rows can hold one name) is re-inserted under that trigger and
- *  refused. A nameless root still works; a dead sync does not. */
+ *  whole export. A nameless root still works; a dead sync does not. */
 const reclaimRootAlias = async (repo: any, rootId: string, workspaceId: string): Promise<void> => {
   try {
     await repo.tx(async (tx: any) => {
