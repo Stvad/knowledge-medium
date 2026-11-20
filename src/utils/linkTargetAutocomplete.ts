@@ -1,6 +1,6 @@
 import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import {referenceBlockContentForId} from '@/data/referenceBlock'
+import {tryReferenceBlockContentForId} from '@/data/referenceBlock'
 import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
   isActiveSearchFilter,
@@ -985,7 +985,7 @@ export const searchTypedAliasCandidates = async (
 }
 
 /** Search typed candidates with filtering before each source's display limit. */
-export const searchTypedReferenceCandidates = async (
+export const rankedTypedReferenceCandidates = async (
   repo: Repo,
   args: {workspaceId: string; query: string; targetTypes: readonly string[]; limit: number},
 ): Promise<TypedReferenceCandidate[]> => {
@@ -1004,10 +1004,16 @@ export const searchTypedReferenceCandidates = async (
   const seen = new Set<string>()
   return candidates.filter(candidate => {
     if (seen.has(candidate.id)) return false
-    try { referenceBlockContentForId(candidate.id) } catch { return false }
     seen.add(candidate.id)
     return true
-  }).slice(0, args.limit)
+  })
+}
+
+export const searchTypedReferenceCandidates = async (
+  repo: Repo, args: Parameters<typeof rankedTypedReferenceCandidates>[1],
+): Promise<TypedReferenceCandidate[]> => {
+  const candidates = await rankedTypedReferenceCandidates(repo, args)
+  return candidates.filter(hit => tryReferenceBlockContentForId(hit.id) !== null).slice(0, args.limit)
 }
 
 export const searchLinkTargetIdCandidates = async (
