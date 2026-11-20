@@ -1,0 +1,1 @@
+export{QO as OPEN_RECENTS_ACTION_ID,$O as openRecentsAction,ek as recentsHeaderItem,tk as recentsPlugin}from"../../../chunks/app-CWRBaDSC.js";

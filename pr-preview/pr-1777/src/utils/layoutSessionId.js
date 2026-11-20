@@ -1,0 +1,1 @@
+export{Pat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Fat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Iat as __resetLayoutSessionIdForTesting,Lat as getLayoutSessionId,Rat as isInstalledAppDisplayMode,zat as readOrCreateLayoutSessionId}from"../../chunks/app-CWRBaDSC.js";

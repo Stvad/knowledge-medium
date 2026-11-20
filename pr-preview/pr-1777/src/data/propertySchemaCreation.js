@@ -1,0 +1,1 @@
+export{AK as adoptOrCreatePropertySchema}from"../../chunks/app-CWRBaDSC.js";

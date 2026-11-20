@@ -1,0 +1,1 @@
+export{uk as BlockLink}from"../../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{pw as DEFAULT_VIDEO_NOTES_PANE_RATIO,mw as VIDEO_NOTES_VIEW_MODE,hw as videoNotesPaneRatioProp}from"../../../chunks/app-CWRBaDSC.js";

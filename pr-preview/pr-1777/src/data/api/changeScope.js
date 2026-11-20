@@ -1,0 +1,1 @@
+export{Ift as CHANGE_SCOPE_POLICIES,Lft as ChangeScope,Rft as isChangeScope,zft as policyForScope,Bft as scopeAllowedInReadOnly,Vft as scopeIsUndoable,Hft as scopePoliciesEquivalent,Uft as scopeUploadsToServer,Wft as sourceForScope}from"../../../chunks/app-CWRBaDSC.js";

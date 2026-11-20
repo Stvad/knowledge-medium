@@ -1,0 +1,1 @@
+export{vct as isChildBackedPropertiesWorkspace}from"../chunks/app-CWRBaDSC.js";

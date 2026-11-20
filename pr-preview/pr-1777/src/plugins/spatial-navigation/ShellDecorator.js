@@ -1,0 +1,1 @@
+export{cT as SpatialNavigationShellDecorator}from"../../../chunks/app-CWRBaDSC.js";

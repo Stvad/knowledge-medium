@@ -1,0 +1,1 @@
+export{fq as SuspenseFallback}from"../../../chunks/app-CWRBaDSC.js";

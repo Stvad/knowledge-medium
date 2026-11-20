@@ -1,0 +1,1 @@
+export{Udt as defineQuery}from"../../../chunks/app-CWRBaDSC.js";

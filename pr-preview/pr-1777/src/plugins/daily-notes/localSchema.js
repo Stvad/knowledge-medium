@@ -1,0 +1,1 @@
+export{kX as dailyNotesLocalSchema}from"../../../chunks/app-CWRBaDSC.js";

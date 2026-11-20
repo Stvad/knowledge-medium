@@ -1,0 +1,1 @@
+export{S$ as RAW_CHARACTER_COUNT_PROFILE_ID,C$ as WORDS_COUNT_PROFILE_ID,w$ as charLimitProp,T$ as charProfileProp,E$ as charScopeProp}from"../../../chunks/app-CWRBaDSC.js";

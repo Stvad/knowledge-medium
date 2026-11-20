@@ -1,0 +1,1 @@
+export{qx as attachmentsPlugin}from"../../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{kM as useCommandPaletteActions}from"../../../chunks/app-CWRBaDSC.js";

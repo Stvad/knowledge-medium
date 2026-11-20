@@ -1,0 +1,1 @@
+export{CK as floatingAnchorFromRect,wK as useAnchoredFloating}from"../../../chunks/app-CWRBaDSC.js";

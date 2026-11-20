@@ -1,0 +1,1 @@
+export{fk as useMinuteClock}from"../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{cst as getOrCreatePropertiesPage,lst as propertiesPageBlockId,ust as propertiesPageSpec}from"../../chunks/app-CWRBaDSC.js";

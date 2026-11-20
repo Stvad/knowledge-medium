@@ -1,0 +1,1 @@
+export{ej as dailyDateWikilinkDecorator}from"../../../chunks/app-CWRBaDSC.js";

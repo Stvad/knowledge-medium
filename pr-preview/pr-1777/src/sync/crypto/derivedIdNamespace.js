@@ -1,0 +1,1 @@
+export{Gst as deriveWorkspaceIdNamespace}from"../../../chunks/app-CWRBaDSC.js";

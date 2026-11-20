@@ -1,0 +1,1 @@
+export{V5 as KERNEL_PROCESSORS}from"../../../chunks/app-CWRBaDSC.js";

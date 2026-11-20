@@ -1,0 +1,1 @@
+export{VC as attachmentObjectPath,HC as authenticatedObjectUrl,UC as deriveObjectKey,WC as storageObjectUrl}from"../../../chunks/app-CWRBaDSC.js";

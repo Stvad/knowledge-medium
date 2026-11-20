@@ -1,0 +1,1 @@
+export{Ob as Wikilink}from"../../../../../chunks/app-CWRBaDSC.js";

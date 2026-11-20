@@ -1,0 +1,1 @@
+export{rP as chipStyle}from"../../../chunks/app-CWRBaDSC.js";

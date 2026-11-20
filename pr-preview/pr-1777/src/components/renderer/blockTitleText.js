@@ -1,0 +1,1 @@
+export{XB as BLOCK_TITLE_TEXT_CLASS,ZB as useBlockTitleTextClass}from"../../../chunks/app-CWRBaDSC.js";

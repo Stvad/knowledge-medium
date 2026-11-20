@@ -1,0 +1,1 @@
+export{y7 as NAMES_IN_A_SENTENCE,b7 as describeNames,x7 as firstFew}from"../../chunks/app-CWRBaDSC.js";

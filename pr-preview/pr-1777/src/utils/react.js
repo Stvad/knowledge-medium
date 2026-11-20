@@ -1,0 +1,1 @@
+export{IR as useIsMobile,LR as usePointerCoarse}from"../../chunks/app-CWRBaDSC.js";

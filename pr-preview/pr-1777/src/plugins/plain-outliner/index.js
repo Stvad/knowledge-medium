@@ -1,0 +1,1 @@
+export{NE as plainOutlinerPlugin}from"../../../chunks/app-CWRBaDSC.js";

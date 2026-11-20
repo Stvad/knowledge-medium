@@ -1,0 +1,1 @@
+export{qN as BlockEmbed}from"../../../chunks/app-CWRBaDSC.js";

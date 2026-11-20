@@ -1,0 +1,1 @@
+export{i2 as omnilinerNamespace}from"../../chunks/app-CWRBaDSC.js";

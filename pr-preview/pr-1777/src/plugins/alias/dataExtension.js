@@ -1,0 +1,1 @@
+export{X1 as aliasDataExtension}from"../../../chunks/app-CWRBaDSC.js";

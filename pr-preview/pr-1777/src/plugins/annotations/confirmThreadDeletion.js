@@ -1,0 +1,1 @@
+export{gm as confirmThreadDeletion}from"../../../chunks/app-CWRBaDSC.js";

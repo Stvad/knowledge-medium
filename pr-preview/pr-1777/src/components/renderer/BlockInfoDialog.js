@@ -1,0 +1,1 @@
+export{UR as BlockInfoDialog}from"../../../chunks/app-CWRBaDSC.js";

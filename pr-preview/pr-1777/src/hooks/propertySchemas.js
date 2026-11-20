@@ -1,0 +1,1 @@
+export{TK as usePropertySchemas}from"../../chunks/app-CWRBaDSC.js";

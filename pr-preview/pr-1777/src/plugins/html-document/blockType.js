@@ -1,0 +1,1 @@
+export{GJ as htmlDocumentTypeSeed}from"../../../chunks/app-CWRBaDSC.js";

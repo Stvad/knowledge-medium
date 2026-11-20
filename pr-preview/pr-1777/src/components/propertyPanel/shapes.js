@@ -1,0 +1,1 @@
+export{kK as propertyShapeLabel}from"../../../chunks/app-CWRBaDSC.js";

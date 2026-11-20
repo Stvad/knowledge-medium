@@ -1,0 +1,1 @@
+export{KC as videoPlayerMarkdownExtension}from"../../../chunks/app-CWRBaDSC.js";

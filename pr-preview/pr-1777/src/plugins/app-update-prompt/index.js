@@ -1,0 +1,1 @@
+export{mF as appUpdatePromptExtension}from"../../../chunks/app-CWRBaDSC.js";

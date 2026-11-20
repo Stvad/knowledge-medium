@@ -1,0 +1,1 @@
+export{XQ as contributorsDataExtension}from"../../../chunks/app-CWRBaDSC.js";

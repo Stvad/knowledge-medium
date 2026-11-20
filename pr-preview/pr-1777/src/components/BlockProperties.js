@@ -1,0 +1,1 @@
+export{JV as BlockProperties}from"../../chunks/app-CWRBaDSC.js";

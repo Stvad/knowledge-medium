@@ -1,0 +1,1 @@
+export{Db as wikilinkMarkdownExtension}from"../../../../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{mx as useIsReadOnly}from"../../chunks/app-CWRBaDSC.js";

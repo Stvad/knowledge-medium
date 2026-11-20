@@ -1,0 +1,1 @@
+export{ud as BlockTagsConfigEditor}from"../../../chunks/app-CWRBaDSC.js";

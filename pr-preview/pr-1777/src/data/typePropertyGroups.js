@@ -1,0 +1,1 @@
+export{yH as typePropertyGroups}from"../../chunks/app-CWRBaDSC.js";

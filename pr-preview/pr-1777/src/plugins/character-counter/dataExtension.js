@@ -1,0 +1,1 @@
+export{g$ as characterCounterDataExtension}from"../../../chunks/app-CWRBaDSC.js";

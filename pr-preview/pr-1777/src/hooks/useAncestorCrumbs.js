@@ -1,0 +1,1 @@
+export{Bk as useAncestorCrumbs}from"../../chunks/app-CWRBaDSC.js";

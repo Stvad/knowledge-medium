@@ -1,0 +1,1 @@
+export{w5 as emitKernelInvalidations,T5 as kernelInvalidationRule}from"../../../chunks/app-CWRBaDSC.js";

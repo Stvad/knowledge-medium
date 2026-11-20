@@ -1,0 +1,1 @@
+export{PI as LazyBlockComponent}from"../../chunks/app-CWRBaDSC.js";

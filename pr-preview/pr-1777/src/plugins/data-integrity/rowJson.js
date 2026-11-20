@@ -1,0 +1,1 @@
+export{bc as parsePropertiesJson}from"../../../chunks/app-CWRBaDSC.js";

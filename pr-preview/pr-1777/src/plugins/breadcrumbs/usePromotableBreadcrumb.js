@@ -1,0 +1,1 @@
+export{DE as usePromotableBreadcrumb}from"../../../chunks/app-CWRBaDSC.js";

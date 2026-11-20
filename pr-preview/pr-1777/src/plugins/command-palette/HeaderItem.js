@@ -1,0 +1,1 @@
+export{eN as CommandPaletteHeaderItem}from"../../../chunks/app-CWRBaDSC.js";

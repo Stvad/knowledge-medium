@@ -1,0 +1,1 @@
+export{So as propertyRowsPlugin}from"../../../chunks/app-CWRBaDSC.js";

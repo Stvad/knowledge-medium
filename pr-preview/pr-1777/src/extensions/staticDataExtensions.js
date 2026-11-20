@@ -1,0 +1,1 @@
+export{Pq as staticDataExtensions}from"../../chunks/app-CWRBaDSC.js";

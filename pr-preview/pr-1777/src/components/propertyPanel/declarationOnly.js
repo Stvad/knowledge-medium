@@ -1,0 +1,1 @@
+export{CH as declarationOnlyDefinitionForName,wH as declarationOnlyStatusText}from"../../../chunks/app-CWRBaDSC.js";

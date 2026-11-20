@@ -1,0 +1,1 @@
+export{uy as blockInfoPlugin}from"../../../chunks/app-CWRBaDSC.js";

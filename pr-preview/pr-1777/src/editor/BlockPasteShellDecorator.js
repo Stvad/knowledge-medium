@@ -1,0 +1,1 @@
+export{VP as BlockPasteShellDecorator,HP as blockPasteShellDecorator}from"../../chunks/app-CWRBaDSC.js";

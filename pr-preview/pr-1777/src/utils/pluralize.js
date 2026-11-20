@@ -1,0 +1,1 @@
+export{_7 as agree,v7 as pluralize}from"../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{N8 as applySyncInvalidation}from"../../../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{GC as videoPlayerPlugin}from"../../../chunks/app-CWRBaDSC.js";

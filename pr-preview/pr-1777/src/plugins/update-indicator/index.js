@@ -1,0 +1,1 @@
+export{fy as updateIndicatorPlugin}from"../../../chunks/app-CWRBaDSC.js";

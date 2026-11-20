@@ -1,0 +1,1 @@
+export{kb as remarkWikilinks}from"../../../../../chunks/app-CWRBaDSC.js";

@@ -1,0 +1,1 @@
+export{N0 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CWRBaDSC.js";

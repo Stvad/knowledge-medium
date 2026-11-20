@@ -1,0 +1,1 @@
+export{X2 as instrumentAdapter}from"../../../chunks/app-CWRBaDSC.js";

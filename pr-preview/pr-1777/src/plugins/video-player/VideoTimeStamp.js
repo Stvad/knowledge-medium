@@ -1,0 +1,1 @@
+export{YC as default}from"../../../chunks/app-CWRBaDSC.js";

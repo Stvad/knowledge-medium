@@ -1,0 +1,1 @@
+export{JX as annotationsDataExtension}from"../../../chunks/app-CWRBaDSC.js";

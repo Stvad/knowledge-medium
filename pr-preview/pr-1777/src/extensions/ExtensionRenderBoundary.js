@@ -1,0 +1,1 @@
+export{OB as ExtensionRenderBoundary}from"../../chunks/app-CWRBaDSC.js";

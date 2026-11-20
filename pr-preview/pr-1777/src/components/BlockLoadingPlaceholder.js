@@ -1,0 +1,1 @@
+export{BI as BlockLoadingPlaceholder}from"../../chunks/app-CWRBaDSC.js";

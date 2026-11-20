@@ -1,0 +1,1 @@
+export{bP as ensureMetricsConsoleHook}from"../../chunks/app-CWRBaDSC.js";

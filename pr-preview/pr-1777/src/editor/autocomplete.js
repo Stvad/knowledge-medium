@@ -1,0 +1,1 @@
+export{ZP as editorAutocompleteExtension}from"../../chunks/app-CWRBaDSC.js";

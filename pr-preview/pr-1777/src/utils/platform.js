@@ -1,0 +1,1 @@
+export{TG as isIOS,EG as isMacPlatform}from"../../chunks/app-CWRBaDSC.js";
