@@ -47,6 +47,7 @@ import {
   NO_REGISTRY_RECOGNITION_PARAMS,
   NON_HIDDEN_CHILDREN_IDS_SQL,
   NON_HIDDEN_CHILDREN_SQL,
+  recognizedFieldRowSql,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
@@ -297,6 +298,27 @@ const blockTypeInSql = `
      AND bt.type IN (SELECT value FROM json_each(?))
 `
 
+/** Which property rows a content search returns. `'all'` (the default)
+ *  searches them like any other block: a property's value is a block and its
+ *  text is content. `'none'` leaves out recognized field rows and the value
+ *  rows directly under them, for a surface that lists note text and reads
+ *  property values off their owner instead. */
+export type SearchPropertyChildrenView = 'all' | 'none'
+
+/** The `'none'` view's clause. In the statement, ahead of the LIMIT: a short
+ *  property value outranks a sentence that merely contains the query, so a
+ *  caller filtering a fetched window gets back a page of values and none of
+ *  the prose they crowded out. Binds {@link RecognitionParams} twice. */
+const NOT_PROPERTY_ROW_SQL = `
+    AND NOT (${recognizedFieldRowSql('b')})
+    AND NOT EXISTS (
+      SELECT 1 FROM blocks field_row
+       WHERE field_row.id = b.parent_id
+         AND field_row.workspace_id = b.workspace_id
+         AND (${recognizedFieldRowSql('field_row')})
+    )
+`
+
 /** Content search — case-insensitive trigram FTS substring match, optionally
  *  narrowed by a {@link BlockSearchFilter}. Every clause sits in the WHERE,
  *  ahead of the LIMIT. The descendant walk has no depth cap: UNION (not
@@ -307,8 +329,12 @@ const blockTypeInSql = `
  *  ancestry check must run on every match ahead of the LIMIT, and a common
  *  word matches most of the graph. Binds, in order: `[underId]` when filtering by
  *  ancestry, workspaceId (twice when filtering by ancestry), the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
- *  then the two rank parameters and the limit. */
-export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string => `
+ *  the recognition params twice under `propertyChildren: 'none'`, then the
+ *  two rank parameters and the limit. */
+export const selectBlocksByContentSql = (
+  filter: BlockSearchFilter = {},
+  propertyChildren: SearchPropertyChildrenView = 'all',
+): string => `
   ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id, workspace_id) AS (SELECT ?, ?),
   under_tree(id) AS (
     SELECT c.id FROM blocks c, under_root
@@ -331,6 +357,7 @@ export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string
     ${filter.types?.length ? `AND EXISTS (${blockTypeInSql})` : ''}
     ${filter.excludeTypes?.length ? `AND NOT EXISTS (${blockTypeInSql})` : ''}
     ${filter.underId !== undefined ? 'AND b.id IN (SELECT id FROM under_tree)' : ''}
+    ${propertyChildren === 'none' ? NOT_PROPERTY_ROW_SQL : ''}
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
@@ -1475,7 +1502,13 @@ export const typedBlockCountQuery = defineQuery<ResolvedTypedBlockQuery, number>
 
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
-  {workspaceId: string; query: string; limit?: number; filter?: BlockSearchFilter},
+  {
+    workspaceId: string
+    query: string
+    limit?: number
+    filter?: BlockSearchFilter
+    propertyChildren?: SearchPropertyChildrenView
+  },
   BlockData[]
 >({
   name: 'core.searchByContent',
@@ -1488,9 +1521,10 @@ export const searchByContentQuery = defineQuery<
       excludeTypes: z.array(z.string()).optional(),
       underId: z.string().optional(),
     }).optional(),
+    propertyChildren: z.enum(['all', 'none']).optional(),
   }),
   resultSchema: blockDataArraySchema,
-  resolve: async ({workspaceId, query, limit = 50, filter}, ctx) => {
+  resolve: async ({workspaceId, query, limit = 50, filter, propertyChildren = 'all'}, ctx) => {
     const compiledQuery = compileBlocksContentSearchQuery(query)
     if (compiledQuery === null) return []
     // Narrow `kernel.content` channel — fires only when content
@@ -1510,14 +1544,18 @@ export const searchByContentQuery = defineQuery<
     // announce — so a filtered handle depends on the whole workspace.
     const active = isActiveSearchFilter(filter) ? filter : undefined
     if (active) ctx.depend({kind: 'workspace', workspaceId})
+    const recognition = propertyChildren === 'none' ? dependOnRecognitionParams(ctx) : null
     const rows = await ctx.db.getAll<BlockRow>(
-      active ? selectBlocksByContentSql(active) : SELECT_BLOCKS_BY_CONTENT_SQL,
+      active || propertyChildren === 'none'
+        ? selectBlocksByContentSql(active, propertyChildren)
+        : SELECT_BLOCKS_BY_CONTENT_SQL,
       [
         ...(active?.underId !== undefined ? [active.underId, workspaceId] : []),
         workspaceId,
         compiledQuery.matchQuery,
         ...(active?.types?.length ? [JSON.stringify(active.types)] : []),
         ...(active?.excludeTypes?.length ? [JSON.stringify(active.excludeTypes)] : []),
+        ...(propertyChildren === 'none' ? [...recognition!, ...recognition!] : []),
         compiledQuery.rankQuery,
         escapeLikePattern(compiledQuery.rankQuery),
         limit,
