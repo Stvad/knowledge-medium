@@ -807,9 +807,11 @@ describe('blocksSyncedObserver — drain stats', () => {
     expect(seen[0]).toMatchObject({
       source: 'queue', completed: true, windows: 3, rows: 5, applied: 5, deferred: 0, deleted: 0,
     })
-    const { wallMs, readMs, decodeMs, writeMs, invalidateMs, queueMs } = seen[0]!
-    expect(writeMs).toBeGreaterThan(0)
-    expect(readMs + decodeMs + writeMs + invalidateMs + queueMs).toBeLessThanOrEqual(wallMs)
+    const { wallMs, readMs, decodeMs, writeMs, invalidateMs, bookkeepingMs } = seen[0]!
+    for (const stage of [readMs, decodeMs, writeMs, invalidateMs, bookkeepingMs]) {
+      expect(stage).toBeGreaterThan(0)
+    }
+    expect(readMs + decodeMs + writeMs + invalidateMs + bookkeepingMs).toBeLessThanOrEqual(wallMs)
 
     // A flush with nothing queued ran no window, so it has nothing to report.
     await observer.flush()
@@ -836,4 +838,18 @@ describe('blocksSyncedObserver — drain stats', () => {
     // exactly the first window was applied before the failure.
     expect(seen[0]).toMatchObject({ source: 'queue', completed: false, windows: 1, rows: 2, applied: 2 })
   })
+
+  it('keeps a drain intact when its stats listener throws', async () => {
+    await put(data({ id: 'b0', workspaceId: 'ws', content: 'c0' }))
+    const errors: unknown[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onError: e => errors.push(e),
+      onDrainStats: () => { throw new Error('listener') },
+    })
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'b0', content: 'c0' }])
+    expect(errors).toEqual([new Error('listener')])
+  })
+
 })

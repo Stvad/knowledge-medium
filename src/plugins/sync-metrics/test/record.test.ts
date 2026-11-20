@@ -8,7 +8,7 @@ const header = { recordedAt: 1700, appVersion: '2026.11.19', appSha: 'abc123', c
 const stats: SyncDrainStats = {
   source: 'queue', completed: true, wallMs: 1234.6, windows: 3, rows: 2500,
   applied: 2400, deferred: 50, skippedStale: 30, quarantined: 10, deleted: 10,
-  readMs: 100.4, decodeMs: 200.5, writeMs: 700.49, invalidateMs: 50.2, queueMs: 9.9,
+  readMs: 100.4, decodeMs: 200.5, writeMs: 700.49, invalidateMs: 50.2, bookkeepingMs: 9.9,
 }
 
 describe('buildDrainRecord', () => {
@@ -22,7 +22,7 @@ describe('buildDrainRecord', () => {
       hasSynced: false,
       source: 'queue', completed: true, windows: 3, rows: 2500,
       applied: 2400, deferred: 50, skippedStale: 30, quarantined: 10, deleted: 10,
-      wallMs: 1235, readMs: 100, decodeMs: 201, writeMs: 700, invalidateMs: 50, queueMs: 10,
+      wallMs: 1235, readMs: 100, decodeMs: 201, writeMs: 700, invalidateMs: 50, bookkeepingMs: 10,
     })
   })
 })

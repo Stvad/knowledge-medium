@@ -108,7 +108,7 @@ export const buildDrainRecord = (
   decodeMs: Math.round(stats.decodeMs),
   writeMs: Math.round(stats.writeMs),
   invalidateMs: Math.round(stats.invalidateMs),
-  queueMs: Math.round(stats.queueMs),
+  bookkeepingMs: Math.round(stats.bookkeepingMs),
 })
 
 /** Pure: tracker output -> storable record. Unobserved phases stay absent. */

@@ -77,8 +77,8 @@ export const MATERIALIZE_QUEUE_COUNT_SQL = 'SELECT COUNT(*) AS count FROM blocks
  *  counterpart of `scripts/bench/bench-materialize.ts`. One per drain that ran
  *  at least one window, whether it finished or not.
  *
- *  The stage fields sum to less than `wallMs`: the remainder is the loop's own
- *  bookkeeping and time yielded to the event loop between awaits. */
+ *  The stage fields sum to less than `wallMs`: the remainder is synchronous
+ *  work between the stages and time yielded to the event loop. */
 export interface SyncDrainStats {
   /** `queue`: deliveries drained from `blocks_synced_changes`. `workspace`: a
    *  {@link BlocksSyncedObserver.drainWorkspace} pass over staged rows. */
@@ -100,9 +100,9 @@ export interface SyncDrainStats {
   readonly writeMs: number
   /** Cache + handle invalidation and the cycle scan. */
   readonly invalidateMs: number
-  /** Reading and consuming `blocks_synced_changes`, or the id read of a
-   *  workspace pass. */
-  readonly queueMs: number
+  /** Around the windows: reading and consuming `blocks_synced_changes` (or a
+   *  workspace pass's id read), and the ANALYZE-owed check after each one. */
+  readonly bookkeepingMs: number
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
@@ -124,7 +124,8 @@ export interface BlocksSyncedObserverArgs {
    *  Tests shrink it to exercise multi-window backlogs. */
   readonly drainChunkSize?: number
   readonly onError?: (err: unknown) => void
-  /** Hears every drain that ran at least one window. Must not throw. */
+  /** Hears every drain that ran at least one window. A throw is reported
+   *  through `onError` and changes nothing about the drain. */
   readonly onDrainStats?: (stats: SyncDrainStats) => void
 }
 
@@ -331,9 +332,8 @@ export const startBlocksSyncedObserver = (
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
     const outcome = await materializeStagingRows(db, { upserted, removed }, deps)
-    const materializedAt = performance.now()
-    await applyOutcome(outcome)
-    meter.invalidateMs += performance.now() - materializedAt
+    // Counted as soon as the window has committed: a failure in the steps
+    // below does not undo it.
     meter.windows++
     meter.rows += upserted.length + removed.length
     for (const stage of ['readMs', 'decodeMs', 'writeMs'] as const satisfies readonly (keyof MaterializeTimings)[]) {
@@ -342,8 +342,16 @@ export const startBlocksSyncedObserver = (
     for (const count of ['applied', 'deferred', 'skippedStale', 'quarantined', 'deleted'] as const) {
       meter[count] += outcome[count].length
     }
+    const materializedAt = performance.now()
+    try {
+      await applyOutcome(outcome)
+    } finally {
+      meter.invalidateMs += performance.now() - materializedAt
+    }
+    const invalidatedAt = performance.now()
     // Bookkeeping, not materialization: a failure here must not re-queue a window.
     await oweAnalyzeOnGrowth(outcome).catch(onError)
+    meter.bookkeepingMs += performance.now() - invalidatedAt
     return outcome
   }
 
@@ -356,7 +364,7 @@ export const startBlocksSyncedObserver = (
     const meter: Mutable<SyncDrainStats> = {
       source, completed: false, wallMs: 0, windows: 0, rows: 0,
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
-      readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, queueMs: 0,
+      readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
     }
     const startedAt = performance.now()
     try {
@@ -366,7 +374,9 @@ export const startBlocksSyncedObserver = (
     } finally {
       if (meter.windows > 0) {
         meter.wallMs = performance.now() - startedAt
-        args.onDrainStats?.({...meter})
+        // Guarded here rather than trusted: a throw from a `finally` would
+        // replace the drain's own result or error.
+        try { args.onDrainStats?.({...meter}) } catch (err) { onError(err) }
       }
     }
   }
@@ -379,7 +389,7 @@ export const startBlocksSyncedObserver = (
         'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq LIMIT ?',
         [drainChunk],
       )
-      meter.queueMs += performance.now() - readAt
+      meter.bookkeepingMs += performance.now() - readAt
       if (rows.length === 0) return
       const maxSeq = rows[rows.length - 1]!.seq
 
@@ -400,7 +410,7 @@ export const startBlocksSyncedObserver = (
       // queued (prior committed windows are not rolled back).
       const consumeAt = performance.now()
       await db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
-      meter.queueMs += performance.now() - consumeAt
+      meter.bookkeepingMs += performance.now() - consumeAt
 
       // A short final window means the queue is drained; stop without an extra
       // empty read. (Rows arriving after this still re-trigger via onChange.)
@@ -425,7 +435,7 @@ export const startBlocksSyncedObserver = (
         : 'SELECT id FROM blocks_synced WHERE workspace_id = ? ORDER BY id',
       [workspaceId],
     )).map(row => row.id)
-    meter.queueMs += performance.now() - readAt
+    meter.bookkeepingMs += performance.now() - readAt
     const totals = {
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, resolved: 0, reflagged: 0,
     }
