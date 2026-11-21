@@ -1,4 +1,5 @@
 import { createClient, Session, User as SupabaseAuthUser } from '@supabase/supabase-js'
+import { authStorage } from './authStorage.js'
 import { User } from '@/types.js'
 import { withAuthRequestDeadline } from '@/services/authRequestDeadline.js'
 
@@ -10,6 +11,7 @@ export const hasSupabaseAuthConfig = Boolean(supabaseUrl && supabaseAnonKey)
 export const supabase = hasSupabaseAuthConfig
   ? createClient(supabaseUrl!, supabaseAnonKey!, {
       auth: {
+        ...(authStorage && {storage: authStorage}),
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: true,

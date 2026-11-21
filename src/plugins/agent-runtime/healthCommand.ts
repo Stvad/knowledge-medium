@@ -1,3 +1,4 @@
+import type { AgentRuntimeContext } from './protocol'
 import type { Repo } from '@/data/repo'
 import type { WorkspaceSyncDivergence } from '@/data/internals/syncObserver/reconcile'
 import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
@@ -16,6 +17,8 @@ import {
  * balloons into a meaningless number).
  */
 export interface SyncHealthResult {
+  host?: Readonly<Record<string, unknown>>
+  rejectedUploads: number
   activeWorkspaceId: string | null
   /** App-visible, non-deleted blocks. */
   blocks: number
@@ -47,20 +50,23 @@ export interface SyncHealthResult {
 const countOf = async (repo: Repo, sql: string): Promise<number> =>
   (await repo.db.get<{ count: number }>(sql)).count
 
-export const runHealthCommand = async (repo: Repo): Promise<SyncHealthResult> => {
+export const runHealthCommand = async (repo: Repo, hostHealth?: AgentRuntimeContext['hostHealth']): Promise<SyncHealthResult> => {
   // The reads are independent — run them concurrently so the command's latency
   // is the slowest single query, not their sum (the divergence probe scans
   // every staged row, and the upload-preview and materialize-backlog scans can
   // be slow on a mid-sync client).
-  const [blocks, blocksSynced, uploadQueueBlocks, materializeBacklog, syncDivergence] =
+  const [blocks, blocksSynced, uploadQueueBlocks, materializeBacklog, syncDivergence, rejectedUploads] =
     await Promise.all([
       countOf(repo, 'SELECT count(*) AS count FROM blocks WHERE deleted = 0'),
       countOf(repo, 'SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0'),
       countOf(repo, uploadQueuePreviewCountSql),
       countOf(repo, MATERIALIZE_QUEUE_COUNT_SQL),
       repo.syncDivergence(),
+      countOf(repo, 'SELECT count(*) AS count FROM ps_crud_rejected'),
     ])
   return {
+    ...(hostHealth && {host: hostHealth()}),
+    rejectedUploads,
     activeWorkspaceId: repo.activeWorkspaceId,
     blocks,
     blocksSynced,

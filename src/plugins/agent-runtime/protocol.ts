@@ -297,6 +297,7 @@ export interface AuditPropertiesInput {
 }
 
 export interface AgentRuntimeContext {
+  hostHealth?: () => Readonly<Record<string, unknown>>
   repo: Repo
   db: Repo['db']
   runtime: FacetRuntime
@@ -331,6 +332,7 @@ export interface AgentRuntimeContext {
 }
 
 export interface AgentRuntimeBridgeOptions {
+  hostHealth?: AgentRuntimeContext['hostHealth']
   repo: Repo
   runtime: FacetRuntime
   safeMode: boolean

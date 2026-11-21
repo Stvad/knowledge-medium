@@ -2,10 +2,12 @@ import {
   CommonPowerSyncDatabase,
   CrudEntry,
   PowerSyncBackendConnector,
+  SyncStreamConnectionMethod,
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
 import { chunk } from 'lodash-es'
+import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 import { withLock } from '@/utils/webLock.js'
@@ -111,10 +113,7 @@ export class UploadHeldError extends Error {
 
 /** Seal the content columns of each create/patch op whose workspace is e2ee,
  *  before they reach the wire (§9.2). Deletes and plaintext workspaces pass
- *  through untouched. `workspace_id` is read off the payload (always present
- *  per the upload trigger, D-3.1); an op missing it can't be e2ee-routed and
- *  passes through — a genuine e2ee plaintext write would be rejected by the
- *  server-side ciphertext trigger rather than silently stored. */
+ *  through untouched. */
 const encryptUploadOps = async (
   ops: readonly CompactedBlockOperation[],
   getMode: GetWorkspaceMode,
@@ -147,9 +146,9 @@ const encryptUploadOps = async (
       continue
     }
     const workspaceId = op.payload.workspace_id
-    if (typeof workspaceId !== 'string') {
-      out.push(op)
-      continue
+    // Defence in depth: the upload trigger supplies workspace_id for every create and patch.
+    if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+      throw new Error(`Cannot upload ${op.kind} without workspace_id`)
     }
     const mode = await resolveMode(workspaceId)
     if (mode === 'hold') throw new UploadHeldError(workspaceId)
@@ -166,13 +165,6 @@ const encryptUploadOps = async (
   }
   return out
 }
-
-// Fallbacks for a connector built WITHOUT the §6 resolver — tests, and any
-// caller that omits `encryption`. No pin to consult and no key store, so the
-// transform is identity. Production binds the real resolver (`repoProvider`),
-// so these never decide an e2ee workspace's upload.
-const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
-const defaultUploadGetCek: GetCek = async () => null
 
 /** Per-row apply primitives that `applyCompactedBlockOperations` dispatches
  *  to. Factored out so tests can substitute a controllable sink and assert
@@ -964,12 +956,8 @@ const serializedUploadData = (
 export interface PowerSyncConnectorOptions {
   /** The local database file this connector uploads from. */
   readonly dbFilename: string
-  /** §9.2 encrypt-on-upload wiring. The mode and key lookups are ONE option
-   *  because they are inseparable: a mode resolver that can answer 'e2ee' paired
-   *  with a key lookup that cannot answer makes `requireCek` throw, and a bare
-   *  throw classifies transient — so that tx would retry forever and jam the
-   *  queue. Omitted (e.g. in tests) uploads are plaintext pass-through. */
-  readonly encryption?: {
+  /** Defence in depth: every connector resolves the workspace's upload mode before sending. */
+  readonly encryption: {
     readonly getWorkspaceMode: GetWorkspaceMode
     readonly getCek: GetCek
   }
@@ -980,9 +968,21 @@ export const createPowerSyncConnector = (
 ): PowerSyncBackendConnector => ({
   fetchCredentials,
   uploadData: serializedUploadData(options.dbFilename, makeUploadDeps(
-    options.encryption?.getWorkspaceMode ?? defaultGetWorkspaceMode,
-    options.encryption?.getCek ?? defaultUploadGetCek,
+    options.encryption.getWorkspaceMode,
+    options.encryption.getCek,
   )),
+})
+
+export const connectWorkspaceSync = (
+  db: CommonPowerSyncDatabase,
+  dbFilename: string,
+  resolver: SyncResolver,
+): Promise<void> => db.connect(createPowerSyncConnector({
+  dbFilename,
+  encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek},
+}), {
+  // The deployed service uses WebSockets. PowerSync 2 defaults to HTTP streaming.
+  connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET,
 })
 
 export const __encryptUploadOpsForTest = encryptUploadOps

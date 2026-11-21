@@ -25,7 +25,7 @@ import {
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
   CREATE_WORKSPACES_TABLE_SQL,
 } from '@/data/workspaceSchema'
-import { BATCH_SENTINEL_SQL, initializeClientSchema, type SchemaDb } from '@/data/repoProvider'
+import { BATCH_SENTINEL_SQL, initializeClientSchema, type SchemaDb } from '@/data/internals/initializeClientDatabase'
 
 // A recording fake standing in for PowerSync: the point is the ORDER of the
 // statement batches relative to the reads that gate them, and the completion

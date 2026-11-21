@@ -444,11 +444,17 @@ describe('encryptUploadOps (encrypt-on-upload)', () => {
     })
   })
 
-  it('passes through an op missing workspace_id (cannot be e2ee-routed)', async () => {
-    const getCek: GetCek = async () => { throw new Error('getCek must not be called') }
-    const ops: CompactedBlockOperation[] = [patchOp('a', {content: 'x'})]
-    const out = await __encryptUploadOpsForTest(ops, () => 'e2ee', getCek)
-    expect(out).toEqual(ops)
+  describe.each([['create', create], ['patch', patchOp]] as const)('%s upload', (_, operation) => {
+    it.each([['missing', undefined], ['empty', '']] as const)(
+      'refuses a %s workspace_id before resolving its mode',
+      async (_, workspaceId) => {
+        const getMode = vi.fn<GetWorkspaceMode>(() => 'none')
+        await expect(__encryptUploadOpsForTest(
+          [operation('a', {content: 'x', workspace_id: workspaceId})], getMode, async () => null,
+        )).rejects.toThrow(/workspace_id/)
+        expect(getMode).not.toHaveBeenCalled()
+      },
+    )
   })
 })
 
@@ -1372,15 +1378,16 @@ describe('uploadData — one pass per database at a time', () => {
     supabaseRef.rpc
       .mockReturnValueOnce(new Promise(resolve => { landFirst = () => resolve(landed) }))
       .mockResolvedValue(landed)
-    const {uploadData} = createPowerSyncConnector({dbFilename})
+    const encryption = {getWorkspaceMode: () => 'none' as const, getCek: async () => null}
+    const {uploadData} = createPowerSyncConnector({dbFilename, encryption})
 
-    enqueue(1, [patch(1, 'block-a', {content: 'it ', base_updated_at: 100}, 1)])
+    enqueue(1, [patch(1, 'block-a', {workspace_id: 'w', content: 'it ', base_updated_at: 100}, 1)])
     const abandonedPass = uploadData(database)
     await vi.waitFor(() => expect(sentPatches()).toHaveLength(1))
 
     // The SDK stopped waiting on that pass and starts another, with a later
     // edit queued behind the one still in flight.
-    enqueue(2, [patch(2, 'block-a', {content: 'it m', base_updated_at: 200}, 2)])
+    enqueue(2, [patch(2, 'block-a', {workspace_id: 'w', content: 'it m', base_updated_at: 200}, 2)])
     const nextPass = uploadData(database)
     await vi.waitFor(async () => {
       const {pending = []} = await navigator.locks.query()
@@ -1390,15 +1397,15 @@ describe('uploadData — one pass per database at a time', () => {
 
     // Another database's uploads are not behind it.
     const other = uploadQueue()
-    other.enqueue(3, [patch(3, 'block-b', {content: 'elsewhere'}, 3)])
-    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`}).uploadData(other.database)
+    other.enqueue(3, [patch(3, 'block-b', {workspace_id: 'w', content: 'elsewhere'}, 3)])
+    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`, encryption}).uploadData(other.database)
 
     landFirst()
     await Promise.all([abandonedPass, nextPass])
     expect(sentPatches()).toEqual([
-      [{id: 'block-a', content: 'it ', base_updated_at: 100}],
-      [{id: 'block-b', content: 'elsewhere'}],
-      [{id: 'block-a', content: 'it m', base_updated_at: 200}],
+      [{id: 'block-a', workspace_id: 'w', content: 'it ', base_updated_at: 100}],
+      [{id: 'block-b', workspace_id: 'w', content: 'elsewhere'}],
+      [{id: 'block-a', workspace_id: 'w', content: 'it m', base_updated_at: 200}],
     ])
   })
 
