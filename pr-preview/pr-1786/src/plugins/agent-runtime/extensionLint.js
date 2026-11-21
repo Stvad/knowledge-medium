@@ -1,1 +1,0 @@
-export{Wg as lintExtensionSource}from"../../../chunks/app-CHudv01q.js";

@@ -1,1 +1,0 @@
-export{i1 as characterCounterDataExtension}from"../../../chunks/app-CHudv01q.js";

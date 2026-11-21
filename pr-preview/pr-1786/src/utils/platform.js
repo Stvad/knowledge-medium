@@ -1,1 +1,0 @@
-export{NG as isIOS,PG as isMacPlatform}from"../../chunks/app-CHudv01q.js";

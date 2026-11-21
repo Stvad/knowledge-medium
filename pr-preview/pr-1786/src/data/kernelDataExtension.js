@@ -1,1 +1,0 @@
-export{l5 as kernelDataExtension}from"../../chunks/app-CHudv01q.js";

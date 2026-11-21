@@ -1,1 +1,0 @@
-export{vot as MIGRATIONS_PAGE_ALIAS,yot as getOrCreateMigrationsPage,bot as migrationsPageBlockId,xot as migrationsPageSpec}from"../../chunks/app-CHudv01q.js";

@@ -1,1 +1,0 @@
-export{Ib as Wikilink}from"../../../../../chunks/app-CHudv01q.js";

@@ -1,1 +1,0 @@
-export{c4 as instrumentAdapter}from"../../../chunks/app-CHudv01q.js";

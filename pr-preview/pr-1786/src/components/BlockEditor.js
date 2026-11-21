@@ -1,1 +1,0 @@
-export{Iz as BlockEditor}from"../../chunks/app-CHudv01q.js";

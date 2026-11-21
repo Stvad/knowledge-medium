@@ -1,1 +1,0 @@
-export{bJ as staticDataExtensions}from"../../chunks/app-CHudv01q.js";

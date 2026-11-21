@@ -1,1 +1,0 @@
-export{bc as parsePropertiesJson}from"../../../chunks/app-CHudv01q.js";

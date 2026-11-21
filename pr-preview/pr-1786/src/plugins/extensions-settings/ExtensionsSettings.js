@@ -1,1 +1,0 @@
-export{$r as ExtensionsSettings}from"../../../chunks/app-CHudv01q.js";

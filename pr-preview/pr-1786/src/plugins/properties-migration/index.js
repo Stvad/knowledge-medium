@@ -1,1 +1,0 @@
-export{Zo as migratePropertiesToBlocksAction,qo as propertiesMigrationPlugin}from"../../../chunks/app-CHudv01q.js";

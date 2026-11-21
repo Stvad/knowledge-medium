@@ -1,1 +1,0 @@
-export{qo as propertiesMigrationPlugin}from"../../../chunks/app-CHudv01q.js";

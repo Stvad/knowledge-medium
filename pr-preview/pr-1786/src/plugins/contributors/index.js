@@ -1,1 +1,0 @@
-export{yh as contributorsPlugin}from"../../../chunks/app-CHudv01q.js";

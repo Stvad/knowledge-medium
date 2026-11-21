@@ -1,1 +1,0 @@
-export{FK as PropertyShapeButton,IK as PropertyShapeGlyph}from"../../../chunks/app-CHudv01q.js";

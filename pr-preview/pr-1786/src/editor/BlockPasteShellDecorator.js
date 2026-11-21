@@ -1,1 +1,0 @@
-export{YP as BlockPasteShellDecorator,XP as blockPasteShellDecorator}from"../../chunks/app-CHudv01q.js";

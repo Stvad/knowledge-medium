@@ -1,1 +1,0 @@
-export{Kq as omnilinerNamespace}from"../../chunks/app-CHudv01q.js";

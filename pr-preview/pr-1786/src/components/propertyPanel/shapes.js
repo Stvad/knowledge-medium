@@ -1,1 +1,0 @@
-export{LK as propertyShapeLabel}from"../../../chunks/app-CHudv01q.js";
