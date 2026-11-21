@@ -1,1 +1,1 @@
-export{BE as BreadcrumbList}from"../../../chunks/app-DOqSgrox.js";
+export{BE as BreadcrumbList}from"../../../chunks/app-HXWsnutT.js";

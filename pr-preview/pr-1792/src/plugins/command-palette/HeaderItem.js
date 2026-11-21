@@ -1,1 +1,1 @@
-export{sN as CommandPaletteHeaderItem}from"../../../chunks/app-DOqSgrox.js";
+export{sN as CommandPaletteHeaderItem}from"../../../chunks/app-HXWsnutT.js";

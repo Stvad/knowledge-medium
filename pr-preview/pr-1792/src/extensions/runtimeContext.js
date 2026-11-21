@@ -1,1 +1,1 @@
-export{zK as AppRuntimeContextProvider,BK as useAppRuntime}from"../../chunks/app-DOqSgrox.js";
+export{zK as AppRuntimeContextProvider,BK as useAppRuntime}from"../../chunks/app-HXWsnutT.js";

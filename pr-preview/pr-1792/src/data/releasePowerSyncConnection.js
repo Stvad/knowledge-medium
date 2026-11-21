@@ -1,1 +1,1 @@
-export{Bq as releasePowerSyncConnection}from"../../chunks/app-DOqSgrox.js";
+export{Bq as releasePowerSyncConnection}from"../../chunks/app-HXWsnutT.js";

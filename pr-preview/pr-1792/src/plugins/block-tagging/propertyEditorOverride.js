@@ -1,1 +1,1 @@
-export{ld as blockTagsConfigUi}from"../../../chunks/app-DOqSgrox.js";
+export{ld as blockTagsConfigUi}from"../../../chunks/app-HXWsnutT.js";

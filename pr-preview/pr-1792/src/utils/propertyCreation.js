@@ -1,1 +1,1 @@
-export{hz as canConvertEmptyChildBlockToProperty,gz as convertEmptyChildBlockToProperty}from"../../chunks/app-DOqSgrox.js";
+export{hz as canConvertEmptyChildBlockToProperty,gz as convertEmptyChildBlockToProperty}from"../../chunks/app-HXWsnutT.js";

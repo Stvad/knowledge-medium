@@ -1,1 +1,1 @@
-export{yft as SYSTEM_AUTHOR_PREFIX,bft as isSystemAuthor,xft as systemAuthor}from"../../../chunks/app-DOqSgrox.js";
+export{yft as SYSTEM_AUTHOR_PREFIX,bft as isSystemAuthor,xft as systemAuthor}from"../../../chunks/app-HXWsnutT.js";

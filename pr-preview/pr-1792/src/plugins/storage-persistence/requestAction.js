@@ -1,1 +1,1 @@
-export{Vc as requestPersistenceActionContribution}from"../../../chunks/app-DOqSgrox.js";
+export{Vc as requestPersistenceActionContribution}from"../../../chunks/app-HXWsnutT.js";

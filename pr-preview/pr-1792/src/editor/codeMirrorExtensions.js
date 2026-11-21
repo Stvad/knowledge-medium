@@ -1,1 +1,1 @@
-export{eZ as codeMirrorExtensionsFacet}from"../../chunks/app-DOqSgrox.js";
+export{eZ as codeMirrorExtensionsFacet}from"../../chunks/app-HXWsnutT.js";

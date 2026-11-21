@@ -1,1 +1,1 @@
-export{Iz as BlockEditor}from"../../chunks/app-DOqSgrox.js";
+export{Iz as BlockEditor}from"../../chunks/app-HXWsnutT.js";

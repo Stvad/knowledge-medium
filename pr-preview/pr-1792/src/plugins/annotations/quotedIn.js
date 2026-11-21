@@ -1,1 +1,1 @@
-export{zf as quotedInFooterContribution}from"../../../chunks/app-DOqSgrox.js";
+export{zf as quotedInFooterContribution}from"../../../chunks/app-HXWsnutT.js";

@@ -1,1 +1,1 @@
-export{Nb as referencesMarkdownExtension}from"../../../../chunks/app-DOqSgrox.js";
+export{Nb as referencesMarkdownExtension}from"../../../../chunks/app-HXWsnutT.js";

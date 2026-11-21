@@ -1,1 +1,1 @@
-export{mD as WorkspaceSettingsDialog}from"../../../chunks/app-DOqSgrox.js";
+export{mD as WorkspaceSettingsDialog}from"../../../chunks/app-HXWsnutT.js";

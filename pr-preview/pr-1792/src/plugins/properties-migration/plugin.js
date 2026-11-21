@@ -1,1 +1,1 @@
-export{qo as propertiesMigrationPlugin}from"../../../chunks/app-DOqSgrox.js";
+export{qo as propertiesMigrationPlugin}from"../../../chunks/app-HXWsnutT.js";
