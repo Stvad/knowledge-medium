@@ -96,10 +96,14 @@ accepted and repaired instead of rejected (§6.4).
 - Access is per region, by role: `editor` or `viewer`. Members are unaffected: they see and write
   every region under their workspace role, and share membership grants nothing to a member.
 - Access follows tree position. Moving a block under a root shares it; moving it out unshares it.
-- **A region is guest-writable, so nothing in it may define schema or load code for the
-  workspace.** Member clients skip rows that have a region when discovering property definitions,
-  block types and extensions; the share gesture refuses a subtree that contains one, and
-  schema-authoring gestures are refused inside a region for everyone.
+- **A row a guest has written never defines schema or loads code for the workspace.** The server
+  marks such a row (`blocks.guest_written`, §5.3) and the mark is permanent: it survives
+  unsharing, moves and later edits by a member. Member clients skip marked rows when discovering
+  property definitions, block types and extensions, so trust follows who wrote the row, not where
+  it currently sits. Only the owner can clear a mark, by an explicit gesture on that block. To
+  keep a guest from knocking out a real definition by editing it, the share gesture refuses a
+  subtree that contains one, and schema-authoring gestures are refused inside a region for
+  everyone.
 
 ## 5. Access plane (server)
 
@@ -110,7 +114,8 @@ shares            (id, workspace_id, wrapped_key, key_canary, created_by, create
 share_roots       (share_id, block_id UNIQUE, workspace_id, root_auth, create_time)
 share_members     (id, share_id, workspace_id, user_id, role, create_time)   -- role: editor | viewer
 share_invitations (id, share_id, workspace_id, email, role, invited_by_user_id, create_time)
-blocks.share_id   text NULL          -- the block's region. Server-maintained only.
+blocks.share_id       text NULL      -- the block's region. Server-maintained only.
+blocks.guest_written  boolean        -- set once by the server, cleared only by the owner (§5.3).
 ```
 
 - `shares.id` is the share block's id, and the share block has its own `share_roots` row like any
@@ -181,7 +186,11 @@ lists a share's audience through an RPC.
 `properties_json`, `references_json`, `parent_id`, `order_key`, `deleted` and the two edit
 timestamps. `id`, `workspace_id`, `created_at` and `created_by` are frozen on update and
 `created_by` is `auth.uid()` on insert; `updated_by` is `auth.uid()` whenever a content column
-changed. On a root row, `parent_id`, `order_key` and `deleted` are frozen too: a guest can edit a
+changed. The same trigger sets `guest_written` on every row a guest inserts or changes a content
+column of, in the same write, so the mark arrives with the content it describes. No client can
+write the column; an owner-only RPC clears it for one block. This is what §4's schema rule reads,
+and it is enforced here because refusing a gesture in the UI does not constrain a direct write. On
+a root row, `parent_id`, `order_key` and `deleted` are frozen too: a guest can edit a
 shared page's title and contents but not delete, move or reorder the page among siblings they
 cannot see. A guest's `parent_id` change is also walked upward from the new parent and refused if
 it reaches the row itself: a guest must not be able to detach the owner's blocks from the tree
@@ -531,7 +540,8 @@ for lack of it, according to the earlier design's test plan.
   the root afterwards: nothing in the disconnected component may keep the label.
 - A pgTAP matrix over {member, workspace viewer who was a guest, guest editor, guest viewer,
   stranger} × {read, insert, edit, move in, move out, move under own descendant, root structure,
-  frozen columns, direct `share_id` write, tombstones}.
+  frozen columns, direct `share_id` or `guest_written` write, tombstones}; and that a block a guest
+  typed as a definition stays out of a member's registry after its share is revoked.
 - A property test that a re-key never changes plaintext and never overwrites a concurrent edit,
   including a peer write landing on a stamp the device already holds, and a move out racing a
   re-key in.
