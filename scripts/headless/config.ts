@@ -10,12 +10,13 @@ const common = {
   workspaceId: z.string().trim().min(1),
   stateDir: z.string().trim().min(1),
   profile: z.string().trim().min(1).transform(normalizeProfileName),
+  writable: z.boolean().default(false),
 }
 const configSchema = z.discriminatedUnion('mode', [
   z.strictObject({...common, mode: z.literal('e2ee'), keyFile: z.string().trim().min(1)}),
   z.strictObject({...common, mode: z.literal('plaintext')}),
 ])
-export type HeadlessConfig = z.infer<typeof configSchema>
+export type HeadlessConfig = z.input<typeof configSchema>
 
 export const readConfig = async (file: string): Promise<HeadlessConfig> => {
   const config = configSchema.parse(JSON.parse(await readFile(file, 'utf8')))

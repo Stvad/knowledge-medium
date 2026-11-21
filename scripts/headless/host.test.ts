@@ -1,11 +1,14 @@
 // @vitest-environment node
 import {PowerSyncDatabase} from '@powersync/node'
+import type {PowerSyncBackendConnector, Transaction} from '@powersync/common'
 import {createClientPowerSyncSchema, initializeClientDatabase} from '@/data/internals/initializeClientDatabase'
 import {randomUUID} from 'node:crypto'
 import {writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {startReadGate} from './gate'
@@ -13,11 +16,17 @@ import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, t
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
-import {RECONCILE_RESCAN_MARKER_PREFIX} from '@/data/internals/clientSchema'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
+import {statusProp} from '@/plugins/todo/schema'
 import {serveDatabase} from './host'
 import {assertReadSurface} from './test/readSurface'
 import type {HeadlessConfig} from './config'
+
+const {rpc} = vi.hoisted(() => ({rpc: vi.fn(() => ({abortSignal: async () => ({error: null, status: 200})}))}))
+vi.mock('@/services/supabase', async importOriginal => ({
+  ...await importOriginal<typeof import('@/services/supabase')>(),
+  supabase: {rpc},
+}))
 
 const workspaceId = 'scratch'
 const user = {id: 'member', name: 'Test'}
@@ -37,12 +46,13 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   await getWorkspaceKeyStore().delete(user.id, workspaceId)
+  rpc.mockClear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 afterAll(async () => { await fixture.cleanup() })
 
-function start(config: HeadlessConfig, connect: () => Promise<void>, db = fixture.db) {
+function start(config: HeadlessConfig, connect: NonNullable<Parameters<typeof serveDatabase>[4]>, db = fixture.db) {
   const controller = new AbortController()
   type Execute = (cmd: KnownAgentCommand) => Promise<unknown>
   let registered!: (execute: Execute) => void
@@ -58,6 +68,7 @@ function start(config: HeadlessConfig, connect: () => Promise<void>, db = fixtur
 }
 
 const plaintext = (): HeadlessConfig => ({mode: 'plaintext', workspaceId, profile: 'fixture', stateDir: fixture.dir})
+const writable = () => ({...plaintext(), writable: true})
 
 // This database boot took 0.36–1.45 s in the focused run.
 it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes or returning device secrets', async mode => {
@@ -122,19 +133,98 @@ it('keeps a warm persisted checkpoint closed, opens on a new checkpoint, and clo
   }
 }, 20_000)
 
-// This database boot took 0.35 s in the focused run.
-it('holds a rejoining member behind a durable materialization gap until repaired', async () => {
+// Real bootstrap on both sides of promotion took 8.85 s with another suite running.
+it('uploads a write after promotion and refuses the next write after demotion', async () => {
+  const {db} = fixture
+  const id = randomUUID()
+  const deliver = syncServer(db)
+  let uploader: PowerSyncBackendConnector | undefined
+  const host = start(writable(), async (_db, connector) => {
+    uploader = connector
+    await deliver([serverWorkspace(testWorkspaceRow(workspaceId)),
+      {...member, data: {...member.data, role: 'viewer'}}, stagedBlock(id, workspaceId)])
+  })
+  const update = (content: string) => host.execute({type: 'update-block', id, content, contributorId: null})
+  const expectOpen = (readOnly: boolean) => vi.waitFor(async () => {
+    expect(await host.execute({type: 'health'})).toMatchObject({host: {readOnly, closedReason: null}})
+  }, {timeout: 15_000})
+  try {
+    await expectOpen(true)
+    await expect(update('viewer edit')).rejects.toThrow(/read-only mode/)
+    expect(await db.get('SELECT content FROM blocks WHERE id = ?', [id])).toEqual({content: id})
+
+    await deliver([member])
+    await expectOpen(false)
+    await update('accepted edit')
+    expect(await db.get('SELECT content FROM blocks WHERE id = ?', [id])).toEqual({content: 'accepted edit'})
+    expect(uploader).toBeDefined()
+    await uploader!.uploadData(db)
+    expect(rpc).toHaveBeenCalledWith('apply_block_patches', {
+      patches: expect.arrayContaining([expect.objectContaining({id, content: 'accepted edit'})]),
+    })
+    expect(await db.getOptional("SELECT 1 FROM ps_crud WHERE json_extract(data, '$.id') = ?", [id])).toBeNull()
+
+    // The fake sink acknowledges queue entries. Apply the role change directly
+    // to the replica because it does not supply a server write checkpoint.
+    await db.execute("UPDATE workspace_members SET role = 'viewer' WHERE id = ?", [member.id])
+    await expect(update('edit after demotion')).rejects.toThrow(/read-only mode|gate closed/)
+    expect(await host.execute({type: 'health'})).toMatchObject({host: {readOnly: true}})
+    expect(await db.get('SELECT content FROM blocks WHERE id = ?', [id])).toEqual({content: 'accepted edit'})
+  } finally {
+    await host.stop()
+  }
+}, 40_000)
+
+// Bootstrapping and queuing the real seed rows took 1.53 s in the focused run.
+it('uploads fresh workspace seed rows with zero-version stamps', async () => {
+  const {db} = fixture
+  const deliver = syncServer(db)
+  let uploader: PowerSyncBackendConnector | undefined
+  const host = start(writable(), async (_db, connector) => {
+    uploader = connector
+    await deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(randomUUID(), workspaceId)])
+  })
+  const health = () => host.execute({type: 'health'})
+  const seedId = propertyDefinitionBlockId(workspaceId, statusProp.seedKey)
+  try {
+    await vi.waitFor(async () => {
+      expect(await health()).toMatchObject({host: {closedReason: null, readOnly: false}})
+      expect(await db.getOptional(
+        `SELECT 1 AS queued FROM ps_crud WHERE json_extract(data, '$.op') = 'PUT'
+           AND json_extract(data, '$.id') = ? AND json_extract(data, '$.data.updated_at') = 0`, [seedId],
+      )).toEqual({queued: 1})
+    }, {timeout: 15_000})
+    expect(uploader).toBeDefined()
+    await uploader!.uploadData(db)
+    expect(rpc).toHaveBeenCalledWith('apply_block_creates', {
+      creates: expect.arrayContaining([expect.objectContaining({
+        id: seedId, content: statusProp.name, parent_id: propertiesPageBlockId(workspaceId), updated_at: 0,
+      })]),
+    })
+    expect(await db.getOptional("SELECT 1 FROM ps_crud WHERE json_extract(data, '$.id') = ?", [seedId])).toBeNull()
+    expect(await health()).toMatchObject({host: {closedReason: null, readOnly: false, uploadHold: null}})
+  } finally {
+    await host.stop()
+  }
+}, 30_000)
+
+// Real bootstrap and rejoin took 8.59 s in the focused run.
+it('holds a rejoining editor read-only behind a durable materialization gap until repaired', async () => {
   const id = randomUUID()
   const deliver = syncServer(fixture.db)
-  const host = start(plaintext(), () => deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(id, workspaceId)]))
+  const host = start(writable(), () => deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(id, workspaceId)]))
   try {
     const read = () => host.execute({type: 'get-block', id})
-    await vi.waitFor(async () => expect(await read()).toMatchObject({id}))
+    const update = (content: string) => host.execute({type: 'update-block', id, content, contributorId: null})
+    const health = () => host.execute({type: 'health'})
+    const expectWritable = () => vi.waitFor(async () => {
+      expect(await health()).toMatchObject({host: {readOnly: false, closedReason: null}})
+    }, {timeout: 15_000})
+    await expectWritable()
+    expect(await read()).toMatchObject({id, content: id})
     await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
-    await expect(read()).rejects.toThrow('local member row')
-    await vi.waitFor(async () => expect(await fixture.db.getOptional(
-      'SELECT 1 FROM client_schema_state WHERE key = ?', [RECONCILE_RESCAN_MARKER_PREFIX + workspaceId],
-    )).toBeTruthy())
+    await expect(update('edit after removal')).rejects.toThrow('local member row')
+    expect(await health()).toMatchObject({host: {readOnly: true, closedReason: 'Waiting for the local member row'}})
     await fixture.db.writeTransaction(async tx => {
       await tx.execute('UPDATE blocks_synced SET needs_apply = 1 WHERE id = ?', [id])
       await tx.execute('INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, 1)',
@@ -142,12 +232,17 @@ it('holds a rejoining member behind a durable materialization gap until repaired
     })
     expect(await fixture.db.get('SELECT needs_apply FROM blocks_synced WHERE id = ?', [id])).toEqual({needs_apply: 1})
     await vi.waitFor(async () => { await expect(read()).rejects.toThrow('have not been verified locally') })
+    await expect(update('edit before repair')).rejects.toThrow('have not been verified locally')
+    expect(await health()).toMatchObject({host: {readOnly: true}})
     await host.execute({type: 'rematerialize-workspace'})
-    await vi.waitFor(async () => expect(await read()).toMatchObject({id}))
+    await expectWritable()
+    expect(await read()).toMatchObject({id, content: id})
+    await update('edit after repair')
+    expect(await read()).toMatchObject({id, content: 'edit after repair'})
   } finally {
     await host.stop()
   }
-}, 20_000)
+}, 40_000)
 
 it('preserves an existing upload queue and refuses before connecting', async () => {
   await fixture.db.execute("INSERT INTO ps_crud (data) VALUES ('{}')")
@@ -219,6 +314,77 @@ it('keeps watchers, reads and the same bootstrap through ordinary downloads and 
   }
 })
 
+it.each(['editor', 'owner'])('sets the %s role before writable bootstrap and keeps the gate closed until it finishes', async role => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)),
+    {...member, data: {...member.data, role: 'viewer'}}])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  let finishBootstrap!: () => void
+  const bootstrap = new Promise<void>(resolve => { finishBootstrap = resolve })
+  const open = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    .mockImplementationOnce(async () => { expect(repo.isReadOnly).toBe(true) })
+    .mockImplementationOnce(async () => {
+      expect(repo.isReadOnly).toBe(false)
+      await bootstrap
+    })
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, () => {},
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(true)
+    await fixture.db.execute('UPDATE workspace_members SET role = ? WHERE id = ?', [role, member.id])
+    await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2))
+    expect(await gate.readReason()).toBe('Opening workspace data')
+    finishBootstrap()
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(repo.isReadOnly).toBe(false)
+    expect(open).toHaveBeenCalledTimes(2)
+  } finally {
+    finishBootstrap()
+    await gate.stop()
+  }
+})
+
+it('refuses stale write access before the membership notification arrives', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  vi.spyOn(fixture.db, 'onChange').mockImplementation(() => () => {})
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, async () => {}, () => {},
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(repo.isReadOnly).toBe(false)
+    await fixture.db.execute("UPDATE workspace_members SET role = 'viewer' WHERE id = ?", [member.id])
+    expect(repo.isReadOnly).toBe(false)
+    await gate.readReason()
+    expect(repo.isReadOnly).toBe(true)
+  } finally {
+    await gate.stop()
+  }
+})
+
+it('closes the gate on a failed membership snapshot during command admission', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  const visibility = vi.fn()
+  const cause = new Error('private-device-marker')
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, async () => {}, visibility,
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(repo.isReadOnly).toBe(false)
+    vi.spyOn(fixture.db, 'readTransaction').mockRejectedValueOnce(cause)
+    expect(await gate.readReason()).toBe('Could not check the workspace view')
+    expect(gate.reason()).toBe('Could not check the workspace view')
+    expect(repo.isReadOnly).toBe(true)
+    expect(visibility.mock.calls).toEqual([[true], [false]])
+    expect(logged).toHaveBeenCalledWith(expect.any(String), cause)
+  } finally {
+    await gate.stop()
+  }
+})
+
 it('cancels a stalled open on membership loss and admits the restored member once', async () => {
   await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
   const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
@@ -243,6 +409,91 @@ it('cancels a stalled open on membership loss and admits the restored member onc
   }
 })
 
+it('never combines a clean view with membership restored alongside a staged row', async () => {
+  const {db} = fixture
+  await syncServer(db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db, user, isReadOnly: true})
+  vi.spyOn(db, 'onChange').mockImplementation(() => () => {})
+  const flush = vi.spyOn(repo, 'flushSyncObserver').mockResolvedValue(undefined)
+  const open = vi.fn(async () => {})
+  const gate = startReadGate(db, repo, workspaceId, undefined, open, () => {},
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(false)
+    await db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
+    expect(await gate.readReason()).toBe('Waiting for the local member row')
+    expect(await repo.workspaceViewGap(workspaceId)).toBeNull()
+
+    const restore = () => db.writeTransaction(async tx => {
+      await tx.execute('INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, 1)',
+        [member.id, workspaceId, user.id, 'editor'])
+      await tx.execute("INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'delete')", ['staged-removal'])
+    })
+    const readGap = repo.workspaceViewGap.bind(repo)
+    const readTransaction = db.readTransaction.bind(db)
+    // Put the restore at the first snapshot boundary. With split reads, it
+    // lands after the clean gap check and before the membership lookup.
+    const restored = vi.fn(restore)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementationOnce(async (...args) => {
+      const gap = await readGap(...args)
+      if (!restored.mock.calls.length) await restored()
+      return gap
+    })
+    vi.spyOn(db, 'readTransaction').mockImplementationOnce(async <T>(callback: (tx: Transaction) => Promise<T>) => {
+      const result = await readTransaction(callback)
+      if (!restored.mock.calls.length) await restored()
+      return result
+    })
+    await vi.waitFor(async () => {
+      await gate.readReason()
+      expect(flush.mock.calls.length + open.mock.calls.length).toBeGreaterThan(1)
+    })
+    expect(restored).toHaveBeenCalledOnce()
+    expect(await db.getOptional('SELECT 1 FROM blocks_synced_changes')).toBeTruthy()
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(true)
+    await drainStaged(db)
+    await vi.waitFor(async () => expect(await gate.readReason()).toBeNull())
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(repo.isReadOnly).toBe(false)
+  } finally {
+    await gate.stop()
+  }
+})
+
+it('checks the staging queue before replacing an unadmitted viewer bootstrap with an editor bootstrap', async () => {
+  const {db} = fixture
+  await syncServer(db)([serverWorkspace(testWorkspaceRow(workspaceId)), {...member, data: {...member.data, role: 'viewer'}}])
+  const {repo} = createTestRepo({db, user, isReadOnly: true})
+  const open = vi.fn<(signal: AbortSignal) => Promise<void>>().mockResolvedValue(undefined)
+    .mockImplementationOnce(() => new Promise<void>(() => {}))
+  const flush = vi.spyOn(repo, 'flushSyncObserver').mockResolvedValue(undefined)
+  const gate = startReadGate(db, repo, workspaceId, undefined, open, () => {},
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
+    expect(gate.reason()).toBe('Opening workspace data')
+    expect(repo.isReadOnly).toBe(true)
+    await db.writeTransaction(async tx => {
+      await tx.execute("UPDATE workspace_members SET role = 'editor' WHERE id = ?", [member.id])
+      await tx.execute("INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'delete')", ['staged-removal'])
+    })
+    await vi.waitFor(() => expect(flush.mock.calls.length + open.mock.calls.length).toBeGreaterThan(1))
+    expect(open.mock.calls[0]![0].aborted).toBe(true)
+    expect(await db.getOptional('SELECT 1 FROM blocks_synced_changes')).toBeTruthy()
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(true)
+    await drainStaged(db)
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(repo.isReadOnly).toBe(false)
+  } finally {
+    await gate.stop()
+  }
+})
+
 it('stops while workspace data is still opening', async () => {
   await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
   const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
@@ -260,9 +511,15 @@ it('keeps a bootstrap error in local logs and returns a fixed reason to the call
   const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
   const cause = new Error('private-device-marker')
   const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
-  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, async () => { throw cause }, vi.fn())
+  const open = async () => {
+    expect(repo.isReadOnly).toBe(false)
+    throw cause
+  }
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, vi.fn(),
+    {writable: true, isUploadHeld: () => false})
   try {
     await vi.waitFor(() => expect(gate.reason()).toBe('Could not open workspace data'))
+    expect(repo.isReadOnly).toBe(true)
     expect(await gate.readReason()).toBe('Could not open workspace data')
     expect(logged).toHaveBeenCalledWith(expect.any(String), cause)
   } finally {
@@ -335,6 +592,39 @@ it('requires the local member row before bootstrapping a fully synced workspace'
     await vi.waitFor(() => expect(gate.reason()).toBeNull())
     expect(open).toHaveBeenCalledOnce()
   } finally {
+    await gate.stop()
+  }
+})
+
+it('admits a rejoining member with the role observed after its staged backlog drains', async () => {
+  const deliver = syncServer(fixture.db)
+  await deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true, startSyncObserver: false})
+  const opened: boolean[] = []
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, async () => { opened.push(repo.isReadOnly) },
+    () => {}, {writable: true, isUploadHeld: () => false})
+  let finishDrain!: () => void
+  const release = new Promise<void>(resolve => { finishDrain = resolve })
+  const flush = vi.spyOn(repo, 'flushSyncObserver').mockImplementation(async () => {
+    await release
+    await drainStaged(fixture.db)
+  })
+  try {
+    await vi.waitFor(() => expect(opened).toEqual([false]))
+    await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
+    await vi.waitFor(() => expect(gate.reason()).toContain('local member row'))
+    await deliver([member, stagedBlock(randomUUID(), workspaceId)])
+    await vi.waitFor(() => expect(flush).toHaveBeenCalled())
+    expect(await fixture.db.getOptional('SELECT 1 FROM blocks_synced_changes')).toBeTruthy()
+    expect(await gate.readReason()).toEqual(expect.any(String))
+    expect(repo.isReadOnly).toBe(true)
+    await fixture.db.execute("UPDATE workspace_members SET role = 'viewer' WHERE id = ?", [member.id])
+    finishDrain()
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(opened).toEqual([false, true])
+    expect(repo.isReadOnly).toBe(true)
+  } finally {
+    finishDrain()
     await gate.stop()
   }
 })

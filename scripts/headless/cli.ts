@@ -5,7 +5,7 @@ import {setAuthStorage} from '@/services/authStorage'
 import {DEVICE_STORAGE_FILENAME, PID_FILENAME, readConfig} from './config'
 
 async function main() {
-  const [action, file] = process.argv.slice(2)
+  const [action, file, option] = process.argv.slice(2)
   const config = await readConfig(file)
   const lock = {file: join(config.stateDir, PID_FILENAME), daemonName: 'headless'}
   await acquirePidfile(lock)
@@ -43,7 +43,7 @@ async function main() {
         const {restoreHeadlessSession} = await import('./session')
         const session = await restoreHeadlessSession(supabase.auth)
         const {runHost} = await import('./host')
-        await runHost(config, sessionUserToAppUser(session), controller.signal)
+        await runHost(config, sessionUserToAppUser(session), controller.signal, option === '--release-stale-queue')
       } finally {
         process.off('SIGTERM', terminate)
         process.off('SIGINT', terminate)
