@@ -1,1 +1,1 @@
-export{Hz as useShortcutSurfaceActivations}from"../../chunks/app-D20NQDTR.js";
+export{Uz as useShortcutSurfaceActivations}from"../../chunks/app-B8AS4kfu.js";

@@ -1,1 +1,1 @@
-export{li as nextAnalysisDelayMs,ui as perfAnalysisEffect,di as perfAnalysisEffectContribution,fi as runPerfAnalysisNow}from"../../../chunks/app-D20NQDTR.js";
+export{li as nextAnalysisDelayMs,ui as perfAnalysisEffect,di as perfAnalysisEffectContribution,fi as runPerfAnalysisNow}from"../../../chunks/app-B8AS4kfu.js";

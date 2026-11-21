@@ -1,1 +1,1 @@
-export{c_ as addComment,l_ as anchorForQuote,u_ as suggestedContent}from"../../../chunks/app-D20NQDTR.js";
+export{c_ as addComment,l_ as anchorForQuote,u_ as suggestedContent}from"../../../chunks/app-B8AS4kfu.js";

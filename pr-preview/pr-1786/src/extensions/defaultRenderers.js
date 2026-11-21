@@ -1,1 +1,1 @@
-export{XI as defaultRegistry,ZI as defaultRendererContributions,QI as defaultRenderersExtension}from"../../chunks/app-D20NQDTR.js";
+export{ZI as defaultRegistry,QI as defaultRendererContributions,$I as defaultRenderersExtension}from"../../chunks/app-B8AS4kfu.js";

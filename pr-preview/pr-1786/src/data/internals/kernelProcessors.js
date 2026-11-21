@@ -1,1 +1,1 @@
-export{i7 as KERNEL_PROCESSORS}from"../../../chunks/app-D20NQDTR.js";
+export{a7 as KERNEL_PROCESSORS}from"../../../chunks/app-B8AS4kfu.js";

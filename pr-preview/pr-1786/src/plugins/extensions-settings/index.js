@@ -1,1 +1,1 @@
-export{xg as extensionsOverridesProp,Sg as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-D20NQDTR.js";
+export{xg as extensionsOverridesProp,Sg as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-B8AS4kfu.js";

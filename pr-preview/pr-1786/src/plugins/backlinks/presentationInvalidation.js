@@ -1,1 +1,1 @@
-export{U1 as BACKLINK_PRESENTATION_CHANNEL,W1 as backlinkPresentationInvalidation,G1 as backlinkPresentationTargetKey}from"../../../chunks/app-D20NQDTR.js";
+export{W1 as BACKLINK_PRESENTATION_CHANNEL,G1 as backlinkPresentationInvalidation,K1 as backlinkPresentationTargetKey}from"../../../chunks/app-B8AS4kfu.js";

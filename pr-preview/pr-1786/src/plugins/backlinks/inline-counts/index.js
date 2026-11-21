@@ -1,1 +1,1 @@
-export{Py as inlineBacklinkCountsExtension}from"../../../../chunks/app-D20NQDTR.js";
+export{Fy as inlineBacklinkCountsExtension}from"../../../../chunks/app-B8AS4kfu.js";

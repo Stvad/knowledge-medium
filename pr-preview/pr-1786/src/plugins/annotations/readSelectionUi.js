@@ -1,1 +1,1 @@
-export{ip as ReadSelectionMenu,ap as nestedReadSelectionMenuContribution,op as readSelectionShortcutsMount}from"../../../chunks/app-D20NQDTR.js";
+export{ip as ReadSelectionMenu,ap as nestedReadSelectionMenuContribution,op as readSelectionShortcutsMount}from"../../../chunks/app-B8AS4kfu.js";

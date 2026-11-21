@@ -1,1 +1,1 @@
-export{JV as markdownExtensionsFacet,YV as resolveMarkdownRenderConfig}from"../../chunks/app-D20NQDTR.js";
+export{YV as markdownExtensionsFacet,XV as resolveMarkdownRenderConfig}from"../../chunks/app-B8AS4kfu.js";
