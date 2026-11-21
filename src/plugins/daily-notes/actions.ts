@@ -33,6 +33,7 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { ChangeScope } from '@/data/api'
 import { getLayoutSessionBlock } from '@/data/stateBlocks.js'
+import { grabSoftKeyboard } from '@/utils/softKeyboardGrab.js'
 import {
   activePanelIdProp,
   aliasesProp,
@@ -211,6 +212,10 @@ export const dailyNotesActions = (
     context: ActionContextTypes.GLOBAL,
     icon: CalendarPlus,
     handler: async ({uiStateBlock}) => {
+      // Before the first await: the new block's editor focuses after a
+      // database round trip, outside the tap's gesture, and iOS raises the
+      // keyboard only for a focus inside it. See grabSoftKeyboard.
+      if (!repo.isReadOnly) grabSoftKeyboard()
       const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
       await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
     },

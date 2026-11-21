@@ -1,4 +1,5 @@
 import { createContext } from 'react'
+import type { AnyPropertySchema } from '@/data/api'
 import {
   NO_PROPERTY_DISPLAY_SCOPE,
   type PropertyDisplayScopeLevels,
@@ -22,4 +23,7 @@ export const PropertyRowListingContext = createContext<string | null>(null)
 
 /** The field row whose value column this is, provided by a field row drawn as
  *  a property row around its own children. */
-export const PropertyFieldRowContext = createContext<string | null>(null)
+export const PropertyFieldRowContext = createContext<{
+  id: string
+  schema?: AnyPropertySchema
+} | null>(null)

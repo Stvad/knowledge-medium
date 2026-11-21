@@ -47,6 +47,7 @@ import {
   NO_REGISTRY_RECOGNITION_PARAMS,
   NON_HIDDEN_CHILDREN_IDS_SQL,
   NON_HIDDEN_CHILDREN_SQL,
+  recognizedFieldRowSql,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
@@ -297,6 +298,25 @@ const blockTypeInSql = `
      AND bt.type IN (SELECT value FROM json_each(?))
 `
 
+/** A content search's property rows: `'all'` (the default) searches them like
+ *  any other block; `'none'` leaves them out. */
+export type SearchPropertyChildrenView = Exclude<PropertyChildrenView, 'non-hidden'>
+
+/** The `'none'` view's clause: a recognized field row, or a value row — a
+ *  DIRECT child of one. A block nested under a value row is ordinary content
+ *  and stays, where `core.subtree`'s `'none'` prunes the whole branch: that
+ *  one answers what an outline draws, this one what counts as note text.
+ *  Binds {@link RecognitionParams} twice. */
+const NOT_PROPERTY_ROW_SQL = `
+    AND NOT (${recognizedFieldRowSql('b')})
+    AND NOT EXISTS (
+      SELECT 1 FROM blocks field_row
+       WHERE field_row.id = b.parent_id
+         AND field_row.workspace_id = b.workspace_id
+         AND (${recognizedFieldRowSql('field_row')})
+    )
+`
+
 /** Content search — case-insensitive trigram FTS substring match, optionally
  *  narrowed by a {@link BlockSearchFilter}. Every clause sits in the WHERE,
  *  ahead of the LIMIT. The descendant walk has no depth cap: UNION (not
@@ -307,8 +327,12 @@ const blockTypeInSql = `
  *  ancestry check must run on every match ahead of the LIMIT, and a common
  *  word matches most of the graph. Binds, in order: `[underId]` when filtering by
  *  ancestry, workspaceId (twice when filtering by ancestry), the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
- *  then the two rank parameters and the limit. */
-export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string => `
+ *  the recognition params twice under `propertyChildren: 'none'`, then the
+ *  two rank parameters and the limit. */
+export const selectBlocksByContentSql = (
+  filter: BlockSearchFilter = {},
+  propertyChildren: SearchPropertyChildrenView = 'all',
+): string => `
   ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id, workspace_id) AS (SELECT ?, ?),
   under_tree(id) AS (
     SELECT c.id FROM blocks c, under_root
@@ -331,6 +355,7 @@ export const selectBlocksByContentSql = (filter: BlockSearchFilter = {}): string
     ${filter.types?.length ? `AND EXISTS (${blockTypeInSql})` : ''}
     ${filter.excludeTypes?.length ? `AND NOT EXISTS (${blockTypeInSql})` : ''}
     ${filter.underId !== undefined ? 'AND b.id IN (SELECT id FROM under_tree)' : ''}
+    ${propertyChildren === 'none' ? NOT_PROPERTY_ROW_SQL : ''}
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
@@ -462,10 +487,10 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
  *  about where `[[Name]]` points. Lookups go through
  *  `idx_block_aliases_ws_alias`; the blocks JOIN reads the row by
  *  primary key. */
-const liveAliasLookupSql = (aliasExpression: string) => `
+const liveAliasLookupSql = (aliasExpression: string, workspaceExpression = '?') => `
   FROM block_aliases ba
   JOIN blocks ON blocks.id = ba.block_id
-  WHERE ba.workspace_id = ?
+  WHERE ba.workspace_id = ${workspaceExpression}
     AND ba.alias = ${aliasExpression}
     AND blocks.deleted = 0
   ORDER BY blocks.created_at, blocks.id
@@ -482,6 +507,15 @@ export const selectAliasTargetIdsSql = (count: number): string => `
   WITH requested(alias) AS (VALUES ${Array.from({length: count}, () => '(?)').join(', ')})
   SELECT requested.alias, (SELECT blocks.id ${liveAliasLookupSql('requested.alias')}) AS id
   FROM requested
+`
+
+/** Prefer the selected label among names that resolve back to this block. */
+export const SELECT_RESOLVING_ALIASES_FOR_BLOCK_SQL = `
+  SELECT a.alias
+    FROM block_aliases a INDEXED BY sqlite_autoindex_block_aliases_1
+   WHERE a.workspace_id = ? AND a.block_id = ?
+     AND a.block_id = (SELECT blocks.id ${liveAliasLookupSql('a.alias', 'a.workspace_id')})
+   ORDER BY a.alias = ? DESC, a.alias
 `
 
 /** ALL live claimants of an exact alias in a workspace — no `LIMIT 1`.
@@ -567,29 +601,31 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  Falls back to a workspace-scoped scan when `tokenCount === 0` (empty
  *  query) so the same query handle can also serve the "browse all
  *  aliases" path. */
-export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
+export const buildFuzzyAliasMatchesSql = (tokenCount: number, constrainTypes = false): string => {
   const filters = tokenCount > 0
-    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
+    ? Array(tokenCount).fill(`a.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
     : '1=1'
   return `
     SELECT
-      ba.alias AS alias,
+      a.alias AS alias,
       b.id AS blockId,
       b.content AS content,
       coalesce(b.user_updated_at, b.updated_at) AS updatedAt
-    FROM block_aliases ba
-    JOIN blocks b ON b.id = ba.block_id
-    WHERE ba.workspace_id = ?
+    FROM block_aliases a
+    JOIN blocks b ON b.id = a.block_id
+    WHERE a.workspace_id = ?
       AND b.deleted = 0
       AND (${filters})
+      ${constrainTypes ? `AND b.id = (SELECT blocks.id ${liveAliasLookupSql('a.alias', 'a.workspace_id')})
+        AND EXISTS (${blockTypeInSql})` : ''}
     ORDER BY
       CASE
-        WHEN ba.alias_lower = ? THEN 0
-        WHEN ba.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
+        WHEN a.alias_lower = ? THEN 0
+        WHEN a.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
         ELSE 2
       END,
       b.created_at,
-      ba.alias
+      a.alias
     LIMIT ?
   `
 }
@@ -1350,7 +1386,7 @@ const declareAncestorDeps = async (
  *  that compose typed-query semantics — sharing this resolver keeps
  *  the dep declarations and SQL in one place. */
 export const resolveTypedBlocks = async (
-  query: ResolvedTypedBlockQuery,
+  query: ResolvedTypedBlockQuery & {limit?: number},
   ctx: QueryCtx,
 ): Promise<BlockData[]> => {
   if (!query.workspaceId) return []
@@ -1372,21 +1408,19 @@ export const resolveTypedBlocks = async (
     await declareAncestorDeps(normalized, ctx, 'row', ancestorTargetProps)
   }
 
-  if (
+  const fastPath =
     types.length === 1 &&
     normalized.where === undefined &&
     referencedBy === undefined &&
     matchPredicates.length === 0 &&
     excludePredicates.length === 0 &&
     normalized.order !== 'created-desc'
-  ) {
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, types[0]],
-    )
-    return ctx.hydrateBlocks(asBlockRows(rows))
-  }
-  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
-  const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
+  const compiled = fastPath
+    ? {sql: SELECT_BLOCKS_BY_TYPE_SQL, params: [workspaceId, types[0]]}
+    : compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
+  const sql = query.limit === undefined ? compiled.sql : `${compiled.sql} LIMIT ?`
+  const params = query.limit === undefined ? [...compiled.params] : [...compiled.params, query.limit]
+  const rows = await ctx.db.getAll<BlockRow>(sql, params)
   return ctx.hydrateBlocks(asBlockRows(rows))
 }
 
@@ -1431,9 +1465,9 @@ export const resolveTypedBlockIds = async (
  *  result. The old `{kind:'workspace', workspaceId}` dep was too coarse
  *  — UiState focus writes (and unrelated content edits) re-fired it
  *  needlessly. */
-export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]>({
+export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery & {limit?: number}, BlockData[]>({
   name: 'core.typedBlocks',
-  argsSchema: typedBlocksArgsSchema,
+  argsSchema: typedBlocksArgsSchema.extend({limit: z.number().int().nonnegative().optional()}),
   resultSchema: blockDataArraySchema,
   resolve: (query, ctx) => resolveTypedBlocks(query, ctx),
 })
@@ -1475,7 +1509,13 @@ export const typedBlockCountQuery = defineQuery<ResolvedTypedBlockQuery, number>
 
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
-  {workspaceId: string; query: string; limit?: number; filter?: BlockSearchFilter},
+  {
+    workspaceId: string
+    query: string
+    limit?: number
+    filter?: BlockSearchFilter
+    propertyChildren?: SearchPropertyChildrenView
+  },
   BlockData[]
 >({
   name: 'core.searchByContent',
@@ -1488,9 +1528,10 @@ export const searchByContentQuery = defineQuery<
       excludeTypes: z.array(z.string()).optional(),
       underId: z.string().optional(),
     }).optional(),
+    propertyChildren: propertyChildrenViewSchema.exclude(['non-hidden']).optional(),
   }),
   resultSchema: blockDataArraySchema,
-  resolve: async ({workspaceId, query, limit = 50, filter}, ctx) => {
+  resolve: async ({workspaceId, query, limit = 50, filter, propertyChildren = 'all'}, ctx) => {
     const compiledQuery = compileBlocksContentSearchQuery(query)
     if (compiledQuery === null) return []
     // Narrow `kernel.content` channel — fires only when content
@@ -1506,18 +1547,21 @@ export const searchByContentQuery = defineQuery<
     // the query rank as literals); the exact `= LOWER(?)` rank takes the
     // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a
     // tiebreaker over the already-matched rows.
-    // A filter reads types and ancestry, which the content channel does not
-    // announce — so a filtered handle depends on the whole workspace.
+    // A filter reads types and ancestry, and the `'none'` view reads each
+    // match's parent, none of which the content channel announces — so such a
+    // handle depends on the whole workspace.
     const active = isActiveSearchFilter(filter) ? filter : undefined
-    if (active) ctx.depend({kind: 'workspace', workspaceId})
+    if (active || propertyChildren === 'none') ctx.depend({kind: 'workspace', workspaceId})
+    const recognition = propertyChildren === 'none' ? dependOnRecognitionParams(ctx) : []
     const rows = await ctx.db.getAll<BlockRow>(
-      active ? selectBlocksByContentSql(active) : SELECT_BLOCKS_BY_CONTENT_SQL,
+      selectBlocksByContentSql(active, propertyChildren),
       [
         ...(active?.underId !== undefined ? [active.underId, workspaceId] : []),
         workspaceId,
         compiledQuery.matchQuery,
         ...(active?.types?.length ? [JSON.stringify(active.types)] : []),
         ...(active?.excludeTypes?.length ? [JSON.stringify(active.excludeTypes)] : []),
+        ...recognition, ...recognition,
         compiledQuery.rankQuery,
         escapeLikePattern(compiledQuery.rankQuery),
         limit,
@@ -1840,13 +1884,14 @@ export const aliasMatchesQuery = defineQuery<
  *  Empty `prefixes` returns every (alias, block) pair in the workspace
  *  up to `limit`, suitable for the "browse all" path. */
 export const aliasMatchesFuzzyQuery = defineQuery<
-  {workspaceId: string; prefixes: string[]; query?: string; limit?: number},
+  {workspaceId: string; prefixes: string[]; query?: string; limit?: number; targetTypes?: string[]},
   AliasMatchWithRecency[]
 >({
   name: 'core.aliasMatchesFuzzy',
   argsSchema: z.object({
     workspaceId: z.string(),
     prefixes: z.array(z.string()),
+    targetTypes: z.array(z.string()).optional(),
     query: z.string().optional(),
     limit: z.number().optional(),
   }),
@@ -1856,14 +1901,17 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     content: z.string(),
     updatedAt: z.number(),
   })),
-  resolve: async ({workspaceId, prefixes, query = '', limit = 100}, ctx) => {
+  resolve: async ({workspaceId, prefixes, query = '', limit = 100, targetTypes}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({
       kind: 'plugin',
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
-    const sql = buildFuzzyAliasMatchesSql(prefixes.length)
+    for (const type of targetTypes ?? []) {
+      ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, type)})
+    }
+    const sql = buildFuzzyAliasMatchesSql(prefixes.length, !!targetTypes?.length)
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.
     // Prefixes are literal token substrings (first-3 of each query token,
@@ -1874,7 +1922,7 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     const queryLower = query.toLowerCase()
     const escapedPrefixes = prefixes.map(escapeLikePattern)
     const params: (string | number)[] = [
-      workspaceId, ...escapedPrefixes, queryLower, escapeLikePattern(queryLower), limit,
+      workspaceId, ...escapedPrefixes, ...(targetTypes?.length ? [JSON.stringify(targetTypes)] : []), queryLower, escapeLikePattern(queryLower), limit,
     ]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row

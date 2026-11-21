@@ -590,7 +590,7 @@ const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; o
   return (
     <div className="space-y-0.5">
     <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-      <span className="line-clamp-3 min-w-0 flex-1 basis-32 text-muted-foreground"><ThreadQuote block={block} root={root}/></span>
+      <span className={`${awaitingDecision ? 'basis-full' : 'line-clamp-3 flex-1 basis-32'} min-w-0 text-muted-foreground`}><ThreadQuote block={block} root={root}/></span>
       {anchorShown && state !== 'exact' && (
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
       )}

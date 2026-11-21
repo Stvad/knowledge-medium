@@ -396,6 +396,44 @@
     text-decoration-color: hsl(var(--muted-foreground) / 0.78);
   }
 
+  /* Markdown syntax while EDITING. `markdownHighlightStyle` (codemirror.ts)
+     marks each construct with one of these classes instead of CodeMirror's
+     generated ones, so the editor paints from the same tokens as the read
+     view and a theme or extension stylesheet can reach every rule. A
+     `[[wikilink]]` parses as a shortcut-reference link, so `km-md-link` is
+     deliberately left unpainted: it would underline every wikilink in the
+     external-link hue. */
+  .cm-content .km-md-url {
+    color: hsl(var(--link));
+  }
+
+  .cm-content .km-md-heading {
+    font-weight: 700;
+  }
+
+  .cm-content .km-md-emphasis {
+    font-style: italic;
+  }
+
+  .cm-content .km-md-strong {
+    font-weight: 700;
+  }
+
+  .cm-content .km-md-strikethrough {
+    text-decoration-line: line-through;
+  }
+
+  .cm-content .km-md-code {
+    @apply font-mono;
+  }
+
+  /* Marks and apparatus are subordinate to the text they shape, like the
+     list markers inside a rendered block. */
+  .cm-content .km-md-mark,
+  .cm-content .km-md-meta {
+    color: hsl(var(--muted-foreground));
+  }
+
   /* Not a link: its target is missing, so it must not read as one. */
   .blockref.blockref--missing,
   .blockref.blockref--missing:hover {

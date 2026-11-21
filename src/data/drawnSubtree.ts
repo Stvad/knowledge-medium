@@ -1,9 +1,8 @@
 import type { SubtreeRow } from '@/data/api'
-import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
 import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
 import {
   isLeftOutOfChildrenView,
-  type IsPropertyFieldDefinition,
   type PropertyRowClassifier,
 } from '@/data/propertyChildren'
 import {
@@ -37,13 +36,6 @@ export const pruneSubtreeToDrawn = (
     out.push(row)
   }
   return out
-}
-
-/** "Does this id name a property definition?" for `workspaceId`, by the repo's
- *  live registry: the recognition the outline's queries bind. */
-export const repoFieldDefinitionTest = (repo: Repo, workspaceId: string): IsPropertyFieldDefinition => {
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
-  return fieldId => isResolvableFieldDefinition(resolver.resolveField(fieldId))
 }
 
 /** The classifier for `workspaceId` from the repo's live registry: the same

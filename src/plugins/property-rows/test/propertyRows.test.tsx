@@ -105,7 +105,12 @@ const relatedSourcesProp = seedProperty({
   preset: 'refList', defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
 
-const rowSeeds = [statusProp, secretProp, tagsProp, jsonListProp, ratingProp, sourceProp, requiredSourceProp, relatedSourcesProp, readyProp]
+const constrainedRefs = seedProperty({
+  seedKey: 'test/property/constrained-refs', revision: 1, name: 'rows:constrained-refs',
+  preset: 'refList', config: {targetTypes: ['person']}, defaultValue: [], changeScope: ChangeScope.BlockDefault,
+})
+
+const rowSeeds = [constrainedRefs, statusProp, secretProp, tagsProp, jsonListProp, ratingProp, sourceProp, requiredSourceProp, relatedSourcesProp, readyProp]
 
 let sharedDb: TestDb
 let repo: Repo
@@ -1108,4 +1113,23 @@ describe('field row expansion affordance', () => {
     await act(() => repo.block(OWNER).set(tagsProp, ['alpha']))
     await waitFor(() => expect(row.getAttribute('data-expanded-single-leaf')).toBe('true'))
   })
+})
+
+
+it('warns for a wrong-type list member in read and edit mode while retaining the value', async () => {
+  await repo.tx(tx => tx.create({id: 'target', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Target', properties: {types: ['place']}}), {scope: ChangeScope.BlockDefault})
+  await repo.block(OWNER).set(constrainedRefs, ['target'])
+  const field = await fieldRow(constrainedRefs.name)
+  const [value] = await repo.query.children({id: field.id, propertyChildren: 'all'}).load()
+  mount({workspace: 'non-hidden'})
+  const row = () => document.querySelector<HTMLElement>(`[data-block-id="${value.id}"]`)!
+  await waitFor(() => expect(row()?.querySelector('[data-reference-type-warning]')?.getAttribute('title')).toContain('rows:constrained-refs expects person'))
+  expect((await repo.load(value.id))?.content).toBe('((target))')
+  await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
+  const view = await editorFor(value.id)
+  await waitFor(() => expect(view.dom.querySelector('[data-reference-type-warning]')).not.toBeNull())
+  writeInEditor(view, 'partial')
+  expect(view.dom.querySelector('[data-reference-type-warning]')).toBeNull()
+  expect(view.state.doc.toString()).toBe('partial')
+  expect(EditorView.findFromDOM(view.dom)).toBe(view)
 })

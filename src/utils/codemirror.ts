@@ -2,6 +2,8 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { javascript } from '@codemirror/lang-javascript'
 import { insertNewline } from '@codemirror/commands'
 import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
@@ -257,11 +259,33 @@ export const BLOCK_EDITOR_BASIC_SETUP = {
   completionKeymap: false,
 } as const satisfies BasicSetupOptions
 
+/** Markdown syntax in the block editor is marked with STATIC classes and
+ *  painted from the palette tokens in index.css (`.km-md-*`), so every theme
+ *  reaches it — and so can an extension's stylesheet. @uiw's basicSetup
+ *  supplies `defaultHighlightStyle` only as a FALLBACK, so removing this
+ *  main highlighter leaves light-only hardcoded colors, not no highlighting. */
+const markdownHighlightStyle = HighlightStyle.define([
+  {tag: tags.url, class: 'km-md-url'},
+  {tag: tags.link, class: 'km-md-link'},
+  {tag: tags.heading, class: 'km-md-heading'},
+  {tag: tags.emphasis, class: 'km-md-emphasis'},
+  {tag: tags.strong, class: 'km-md-strong'},
+  {tag: tags.strikethrough, class: 'km-md-strikethrough'},
+  {tag: tags.monospace, class: 'km-md-code'},
+  // The marks themselves: `#`, `**`, `-`, `>`, link brackets, `[ ]`.
+  {tag: [tags.processingInstruction, tags.atom], class: 'km-md-mark'},
+  // Apparatus that is neither prose nor a mark: `---`, a reference-style
+  // link label or a fence's language word, a comment. Not `tags.string`:
+  // in markdown it also covers entities and emoji shortcodes, which are text.
+  {tag: [tags.contentSeparator, tags.labelName, tags.comment], class: 'km-md-meta'},
+])
+
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
+    syntaxHighlighting(markdownHighlightStyle),
     keymap.of(markdownFormattingKeymap),
     softLineBreakOnBeforeInput,
     acceptCompletionBeforeIOSDefer,

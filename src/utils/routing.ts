@@ -433,6 +433,11 @@ export const parseAppHash = (hash: string | undefined | null): AppRoute => {
 export const buildAppHash = (workspaceId: string, blockId?: string): string =>
   buildLayout(workspaceId, blockId ? [blockId] : [])
 
+/** A hash that opens `workspaceId`: `hash` itself when it already names it
+ *  (keeping its deep link), else the workspace's bare hash. */
+export const hashOpeningWorkspace = (hash: string, workspaceId: string): string =>
+  parseLayout(hash).workspaceId === workspaceId ? hash : buildAppHash(workspaceId)
+
 /**
  * `buildAppHash` + the CURRENT hash's same-workspace ws-context (e.g.
  * `;persp=…`) re-attached: `#ws;persp=lane/block`.

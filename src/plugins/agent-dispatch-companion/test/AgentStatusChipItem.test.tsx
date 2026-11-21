@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import type { BlockGutterItem } from '@/extensions/blockInteraction.js'
@@ -59,12 +59,76 @@ describe('AgentStatusChipItem', () => {
     expect(chip.textContent).toContain('20s')
     expect(chip.getAttribute('title')).not.toContain('No progress')
     expect(chip.getAttribute('title')?.match(/km: comments/g)).toHaveLength(1)
-    expect(chip.getAttribute('aria-label')).toContain('Claude task actions')
+    expect(chip.getAttribute('aria-label')).toContain('task actions')
 
     act(() => { vi.advanceTimersByTime(1_000) })
     expect(chip.getAttribute('title')).toContain('No progress for 21s')
     expect(chip.textContent).toContain('⚠')
-    expect(chip.getAttribute('aria-label')).toContain('warning: no progress for 21s')
+    expect(chip.getAttribute('aria-label')).toContain('No progress for 21s')
+  })
+
+  it('shows compact activity and step age while details keep exact activity and total runtime', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    withProperties({
+      'agent:status': 'running',
+      'agent:updated-at': 88_000,
+      'agent:activity': 'km: get_block',
+      'agent:activity-at': 97_000,
+    })
+    const view = render(<Chip block={block} />)
+    const chip = chipNode(view.container)!
+    expect(chip.textContent).toContain('Reading')
+    expect(chip.textContent).toContain('3s')
+    expect(chip.textContent).not.toContain('km: get_block')
+    expect(chip.getAttribute('title')).toContain('km: get_block')
+    expect(chip.getAttribute('title')).toContain('3s on this step')
+    expect(chip.getAttribute('title')).toContain('12s total')
+    expect(chip.getAttribute('aria-label')).toContain('Reading: km: get_block · 3s on this step')
+
+    fireEvent.pointerDown(chip, {button: 0, ctrlKey: false, pointerType: 'mouse'})
+    expect(document.body.textContent).toContain('km: get_block · 3s on this step · 12s total')
+
+    act(() => { vi.advanceTimersByTime(3_000) })
+    withProperties({
+      'agent:status': 'running',
+      'agent:updated-at': 88_000,
+      'agent:activity': 'Thinking',
+      'agent:activity-at': 102_000,
+    })
+    act(() => view.rerender(<Chip block={block} />))
+    const updatedChip = chipNode(view.container)!
+    expect(updatedChip.textContent).toContain('Thinking')
+    expect(updatedChip.textContent).toContain('1s')
+    expect(updatedChip.getAttribute('title')).toContain('1s on this step')
+    expect(updatedChip.getAttribute('title')).toContain('15s total')
+  })
+
+  it('uses Working for unknown activity and omits step age when its timestamp is missing', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    withProperties({
+      'agent:status': 'running',
+      'agent:updated-at': 90_000,
+      'agent:activity': 'km: future_tool',
+      'agent:activity-at': 98_000,
+    })
+    const { container, rerender } = render(<Chip block={block} />)
+    expect(chipNode(container)?.textContent).toContain('Working')
+    expect(chipNode(container)?.textContent).toContain('2s')
+
+    withProperties({
+      'agent:status': 'running',
+      'agent:updated-at': 90_000,
+      'agent:activity': 'km: future_tool',
+    })
+    act(() => rerender(<Chip block={block} />))
+    const chip = chipNode(container)!
+    expect(chip.textContent).toContain('Working')
+    expect(chip.textContent).not.toMatch(/\b\d+s\b/)
+    expect(chip.getAttribute('title')).toContain('km: future_tool')
+    expect(chip.getAttribute('title')).not.toContain('on this step')
+    expect(chip.getAttribute('title')).toContain('10s total')
   })
 
   it('starts the clock with current time, and stops ticking when cancelling or ended', () => {

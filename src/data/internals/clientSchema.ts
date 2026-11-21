@@ -18,6 +18,7 @@ import {
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
 import {
+  BLOCK_LOCAL_COLUMN_NAMES,
   BLOCKS_TABLE_COLUMN_NAMES,
   STAGING_LOCAL_COLUMNS,
   buildBlockSnapshotJsonSql,
@@ -421,7 +422,8 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // row_events for invalidation — the Layout B observer owns that — so this is a
 // history substrate (local change-history / time-travel; the only durable
 // record of incoming sync changes), read by the agent-runtime history views and
-// db-mirror's change marker.
+// db-mirror's change marker. The exceptions are a bulk load's creates and the
+// derived-column stamps on its rows (`syncBulkLoadScope`).
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
@@ -451,9 +453,38 @@ const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1),
 /** Undo-group token (issue #306) — same source-gated projection as tx_id. */
 const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
+/** What the sync observer writes to `tx_context.scope`, beside a NULL
+ *  `source`, for a window of a bulk load: the workspaces a gate is holding
+ *  (`BlocksSyncedObserver.holdBulkLoad`).
+ *  `sync-bulk:<workspace id>:<workspace id>:` — every id is followed by a
+ *  colon, so a trigger finds its row's workspace as `:<id>:`; the ids are
+ *  uuids and hold no colon of their own. No local transaction can carry it,
+ *  since every `ChangeScope` comes with a non-NULL source. */
+const SYNC_BULK_LOAD_SCOPE_PREFIX = 'sync-bulk:'
+export const syncBulkLoadScope = (workspaceIds: readonly string[]): string | null =>
+  workspaceIds.length === 0 ? null : `${SYNC_BULK_LOAD_SCOPE_PREFIX}${workspaceIds.map(id => `${id}:`).join('')}`
+
+/** True for a row of a workspace the current transaction is bulk-loading.
+ *  EXISTS, so it is never NULL: a WHEN that is NULL skips its trigger.
+ *
+ *  The `source IS NULL` half is DEFENCE IN DEPTH: a local write must be logged
+ *  whatever scope string it was given. */
+const IN_BULK_LOAD_SQL = `EXISTS (
+    SELECT 1 FROM tx_context
+    WHERE id = 1
+      AND source IS NULL
+      AND instr(scope, '${SYNC_BULK_LOAD_SCOPE_PREFIX}') = 1
+      AND instr(scope, ':' || NEW.workspace_id || ':') > 0
+  )`
+
+/** A row a bulk load creates gets no 'create' event: it records that the row
+ *  arrived on this device, for every row of the workspace, and nothing a user
+ *  did. Its later changes are logged as any other row's, each with its before
+ *  state. */
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
+  WHEN NOT ${IN_BULK_LOAD_SQL}
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -470,21 +501,34 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   END
 `
 
+const columnsChangedSql = (names: readonly string[]): string =>
+  names.map(name => `OLD.${name} IS NOT NEW.${name}`).join('\n    OR ')
+
 /** An update that moves only the row version is not logged (#1299): it would
  *  store two full snapshots of a row whose data did not change — for every row,
  *  on every device, when a workspace is re-sealed. Raw columns, not the
  *  snapshot: the snapshot normalizes some stored changes away (`json()`, the
  *  boolean CASEs, `userUpdatedAt`'s fallback to `updated_at`), and a column it
  *  lacks would otherwise go unlogged. */
-const blockRowChangedBesidesVersionSql = BLOCKS_TABLE_COLUMN_NAMES
-  .filter(name => name !== 'updated_at')
-  .map(name => `OLD.${name} IS NOT NEW.${name}`)
-  .join('\n    OR ')
+const BLOCK_VERSIONLESS_COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES.filter(name => name !== 'updated_at')
+const blockSyncedColumnsChangedSql = columnsChangedSql(
+  BLOCK_VERSIONLESS_COLUMN_NAMES.filter(name => !BLOCK_LOCAL_COLUMN_NAMES.includes(name)),
+)
+/** The columns a device derives for itself. During a bulk load a change to
+ *  these alone is not logged: it is the stamp the load puts on the rows a
+ *  window wrote, later in the same transaction, and would cost two snapshots
+ *  where an insert cost one. A synced change is logged before the stamp that
+ *  follows it, so its event shows these columns as they were; no reader uses
+ *  them. */
+const blockLocalColumnsChangedSql = columnsChangedSql(
+  BLOCK_VERSIONLESS_COLUMN_NAMES.filter(name => BLOCK_LOCAL_COLUMN_NAMES.includes(name)),
+)
 
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
-  WHEN ${blockRowChangedBesidesVersionSql}
+  WHEN (${blockSyncedColumnsChangedSql})
+    OR ((${blockLocalColumnsChangedSql}) AND NOT ${IN_BULK_LOAD_SQL})
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -1028,6 +1072,21 @@ export const recordMarkerSql = (key: string): string => `
   VALUES ('${key}', strftime('%s', 'now') * 1000)
 `
 
+/** A KEYED marker — the key is bound (`?`), so these three serve every family
+ *  whose keys are built at runtime (a prefix plus a workspace id or a name). */
+export const RECORD_KEYED_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+export const SELECT_KEYED_MARKER_SQL = `
+  SELECT key FROM client_schema_state WHERE key = ?
+`
+
+export const DELETE_KEYED_MARKER_SQL = `
+  DELETE FROM client_schema_state WHERE key = ?
+`
+
 /** Takes the SQL rather than the key so call sites keep naming their own
  *  `SELECT_*_DONE_SQL` const, which is also what tests reach for. */
 export const isMarkerSet = async (
@@ -1222,30 +1281,12 @@ export const SELECT_REPROJECT_REF_MARKERS_SQL = `
   SELECT key FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'
 `
 
-export const RECORD_REPROJECT_REF_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
-export const CLEAR_REPROJECT_REF_MARKER_SQL = `
-  DELETE FROM client_schema_state WHERE key = ?
-`
-
 /** Completion markers for workspace-scoped repo.tx data backfills
  *  (`workspaceBackfillsFacet`). Keyed `workspace_backfill:<workspaceId>:<id>`;
  *  a row lands once a backfill has run for a workspace, so subsequent opens
  *  skip it. Local (never synced) — like the reproject markers, each device
  *  records its own completion. */
 export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
-
-export const SELECT_WORKSPACE_BACKFILL_MARKERS_SQL = `
-  SELECT key FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'
-`
-
-export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
 
 /** One-time post-upgrade marker: this client has re-scanned a workspace's
  *  staged `blocks_synced` rows under the relaxed reconcile gate, to heal
@@ -1255,13 +1296,28 @@ export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
  *  client. */
 export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
 
-export const SELECT_RECONCILE_RESCAN_MARKER_SQL = `
-  SELECT key FROM client_schema_state WHERE key = ?
-`
+/** Per-workspace: this device has caught up on the workspace's first sync, so
+ *  it opens without the sync gate (`workspaceFirstSync.ts`). Keyed
+ *  `workspace_first_sync_v1:<workspaceId>`. */
+export const WORKSPACE_FIRST_SYNC_MARKER_PREFIX = 'workspace_first_sync_v1:'
 
-export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
+/** One-shot: workspaces this device already holds blocks for were opened here
+ *  before the sync gate existed, so they are recorded as caught up rather than
+ *  gated — the gate's repair pass can write a staged row over an unechoed
+ *  local edit, which only a never-opened workspace is free of. A workspace
+ *  mid-first-sync at the upgrade is recorded too, as it would have opened
+ *  before. */
+export const WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY = 'workspace_first_sync_grandfathered_v1'
+
+const SELECT_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL = markerDoneSql(WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY)
+
+const RECORD_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL = recordMarkerSql(WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY)
+
+const GRANDFATHER_WORKSPACE_FIRST_SYNC_SQL = `
+  INSERT OR IGNORE INTO client_schema_state (key, completed_at)
+  SELECT '${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}' || w.id, strftime('%s', 'now') * 1000
+    FROM workspaces w
+   WHERE EXISTS (SELECT 1 FROM blocks b WHERE b.workspace_id = w.id)
 `
 
 // ============================================================================
@@ -1464,6 +1520,14 @@ export const backfillBlocksFtsIfEmpty = async (
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
+}
+
+export const grandfatherWorkspaceFirstSync = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<void> => {
+  if (await isMarkerSet(db, SELECT_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL)) return
+  await db.execute(GRANDFATHER_WORKSPACE_FIRST_SYNC_SQL)
+  await db.execute(RECORD_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL)
 }
 
 /**
@@ -1765,13 +1829,6 @@ const analyzeUnbounded = async (
  *  still going. The writer's own refresh covers the rest unless it dies too. */
 export const ANALYZE_OWED_MARKER_PREFIX = 'analyze_owed:'
 
-const RECORD_ANALYZE_OWED_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
-const CLEAR_ANALYZE_OWED_SQL = `DELETE FROM client_schema_state WHERE key = ?`
-
 /** One row, so it reads through `getOptional`: the bootstrap shims' `execute`
  *  hands back no rows. */
 const SELECT_ANALYZE_OWED_SQL = String.raw`
@@ -1786,10 +1843,10 @@ export const recordAnalyzeOwed = async (
   db: ClientSchemaBootstrapDb,
   tables: readonly string[],
 ): Promise<void> => {
-  for (const table of tables) await db.execute(RECORD_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+  for (const table of tables) await db.execute(RECORD_KEYED_MARKER_SQL, [analyzeOwedKey(table)])
 }
 
-const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
+export const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
   const row = await db.getOptional<{tables: string | null}>(SELECT_ANALYZE_OWED_SQL)
   return row?.tables ? row.tables.split('\x1f') : []
 }
@@ -1803,7 +1860,7 @@ const analyzeTablesUnbounded = async (
   await analyzeUnbounded(
     db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
   )
-  for (const table of tables) await db.execute(CLEAR_ANALYZE_OWED_SQL, [analyzeOwedKey(table)])
+  for (const table of tables) await db.execute(DELETE_KEYED_MARKER_SQL, [analyzeOwedKey(table)])
 }
 
 /** Unconditional ANALYZE of the named tables, for a bulk writer that KNOWS it

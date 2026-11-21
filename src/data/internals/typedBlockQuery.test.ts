@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@/test/waitFor'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -24,6 +24,7 @@ import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
 import type { AnyPropertySchema, ResolvedTypedBlockQuery } from '@/data/api'
 import { trackTestRepo } from '@/data/test/testRepoScope'
+import { LoaderHandle } from './handleStore'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -144,6 +145,17 @@ const create = async (args: {
 }
 
 const ids = (rows: readonly {id: string}[]) => rows.map(row => row.id)
+
+describe('hydrated typedBlocks limit', () => {
+  it('limits both single-type and multi-type results after ordering', async () => {
+    await create({id: 'first', types: ['todo']})
+    await create({id: 'second', types: ['todo', 'task']})
+    await create({id: 'third', types: ['task']})
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 1}).load())).toEqual(['first'])
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo', 'task'], limit: 2}).load())).toEqual(['first', 'second'])
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 0}).load())).toEqual([])
+  })
+})
 
 describe('repo.queryBlocks', () => {
   it('rejects calls that omit workspaceId at the type level', () => {
@@ -778,6 +790,17 @@ describe('repo.queryBlocks', () => {
 })
 
 describe('repo.subscribeBlocks', () => {
+  it('asks only a projector-mode subscription\'s handle to rerun on a stale mark', () => {
+    const asked = vi.spyOn(LoaderHandle.prototype, 'rerunOnStaleMark')
+
+    env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, () => {})()
+    expect(asked).not.toHaveBeenCalled()
+
+    env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, () => {}, {freshInitial: true})()
+    expect(asked).toHaveBeenCalledTimes(1)
+    asked.mockRestore()
+  })
+
   it('updates when local writes change type membership', async () => {
     const fired: string[][] = []
     const off = env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, rows => {

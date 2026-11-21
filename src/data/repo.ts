@@ -95,6 +95,7 @@ import {
   type RematerializeProgressListener,
   type RematerializeReport,
   type RematerializeScope,
+  type SyncDrainStats,
 } from '@/data/internals/syncObserver/observer'
 import {
   readSyncDivergence,
@@ -107,13 +108,12 @@ import {
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
 import {
-  CLEAR_REPROJECT_REF_MARKER_SQL,
-  RECORD_REPROJECT_REF_MARKER_SQL,
+  DELETE_KEYED_MARKER_SQL,
+  RECORD_KEYED_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
   RECONCILE_RESCAN_MARKER_PREFIX,
-  SELECT_RECONCILE_RESCAN_MARKER_SQL,
-  RECORD_RECONCILE_RESCAN_MARKER_SQL,
+  SELECT_KEYED_MARKER_SQL,
 } from './internals/clientSchema'
 import {
   deriveReferenceColumns,
@@ -667,6 +667,10 @@ export interface RunOptions {
   description?: string
 }
 
+/** Bound on {@link Repo.onSyncDrainStats}'s held drains, for a session in which
+ *  nothing ever subscribes. */
+const MAX_HELD_SYNC_DRAIN_STATS = 50
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -742,6 +746,9 @@ export class Repo {
   private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
   private readonly readOnlyListeners = new CallbackSet('Repo.readOnly')
   private readonly metricsResetListeners = new CallbackSet('Repo.metricsReset')
+  private readonly syncDrainStatsListeners = new CallbackSet<[SyncDrainStats]>('Repo.syncDrainStats')
+  /** Drains that ended with nobody subscribed — see {@link onSyncDrainStats}. */
+  private readonly heldSyncDrainStats: SyncDrainStats[] = []
   /** Global query-registry epoch. Bumped by `swapQueries` (via
    *  `setFacetRuntime` / `__setQueriesForTesting`) when an existing query is
    *  REPLACED or REMOVED — NOT for a purely-additive swap (see
@@ -1148,8 +1155,8 @@ export class Repo {
       this.db,
       REPROJECT_REF_MARKER_PREFIX,
       SELECT_REPROJECT_REF_MARKERS_SQL,
-      RECORD_REPROJECT_REF_MARKER_SQL,
-      CLEAR_REPROJECT_REF_MARKER_SQL,
+      RECORD_KEYED_MARKER_SQL,
+      DELETE_KEYED_MARKER_SQL,
     )
     this.backfillCompletionClaim = opts.backfillCompletionClaim
     this.backfillSyncGate = opts.backfillSyncGate
@@ -1336,6 +1343,7 @@ export class Repo {
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
       onError: options?.onError,
+      onDrainStats: stats => this.reportSyncDrainStats(stats),
     })
     return this.syncObserver
   }
@@ -1357,6 +1365,39 @@ export class Repo {
     }
   }
 
+  /** Hear what each sync drain did and where its time went. Fires for every
+   *  drain that ran a window — per arrival in steady state — so a listener
+   *  that persists anything picks which ones are worth it.
+   *
+   *  The first subscriber is also handed the drains that ended before anyone
+   *  subscribed: an encrypted workspace's unlock drain, the largest a device
+   *  ever runs, finishes before the app runtime that hosts listeners mounts. */
+  onSyncDrainStats(cb: (stats: SyncDrainStats) => void): () => void {
+    const unsubscribe = this.syncDrainStatsListeners.add(cb)
+    for (const stats of this.heldSyncDrainStats.splice(0)) this.syncDrainStatsListeners.notify(stats)
+    return unsubscribe
+  }
+
+  private reportSyncDrainStats(stats: SyncDrainStats): void {
+    if (this.syncDrainStatsListeners.size > 0) {
+      this.syncDrainStatsListeners.notify(stats)
+      return
+    }
+    const held = this.heldSyncDrainStats
+    held.push(stats)
+    if (held.length > MAX_HELD_SYNC_DRAIN_STATS) {
+      // Over the bound, the smallest drain is the one least worth keeping.
+      held.splice(held.reduce((min, s, i) => (s.rows < held[min]!.rows ? i : min), 0), 1)
+    }
+  }
+
+  /** Treat a workspace's sync deliveries as a bulk load until the returned
+   *  release is called — see `BlocksSyncedObserver.holdBulkLoad` for what that changes
+   *  and who may. */
+  holdBulkSyncLoad(workspaceId: string): () => void {
+    return this.syncObserver?.holdBulkLoad(workspaceId) ?? (() => {})
+  }
+
   /** Manually flush the sync observer — drains any pending `blocks_synced`
    *  changes into `blocks` and walks `handleStore.invalidate(...)`. Tests
    *  use this instead of waiting on the throttle window; it's a real settle
@@ -1376,7 +1417,7 @@ export class Repo {
     if (!this.syncObserver) return null
     const report = await this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress)
     if (report.deferred === 0 && report.quarantined === 0) {
-      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
+      await this.db.execute(RECORD_KEYED_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
     }
     return report
   }
@@ -2572,6 +2613,9 @@ export class Repo {
   ): Unsubscribe {
     const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
     if (options?.freshInitial) {
+      // A projector's registries are what a local transaction encodes with,
+      // so its rows may not wait out a sync backlog's held invalidations.
+      handle.rerunOnStaleMark()
       let initialPending = true
       const unsubscribe = handle.subscribe(rows => {
         if (!initialPending) listener(rows)
@@ -4792,7 +4836,7 @@ export class Repo {
 
   private async runReconcileRescan(workspaceId: string): Promise<void> {
     const key = `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`
-    const done = await this.db.getOptional<{key: string}>(SELECT_RECONCILE_RESCAN_MARKER_SQL, [key])
+    const done = await this.db.getOptional<{key: string}>(SELECT_KEYED_MARKER_SQL, [key])
     if (done) return
     try {
       await this.drainSyncWorkspace(workspaceId)

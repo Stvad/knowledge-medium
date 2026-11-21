@@ -1,7 +1,7 @@
 import type { AnyPropertySchema, BlockData } from '@/data/api'
 import { memberCodecOf } from '@/data/api'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
-import { repoFieldDefinitionTest } from '@/data/drawnSubtree'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
 import type { Repo } from '@/data/repo'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import { useCallback, useSyncExternalStore } from 'react'

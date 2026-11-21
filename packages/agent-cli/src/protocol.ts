@@ -660,6 +660,11 @@ const viewFields = {
     'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
     + 'focused tab), and is refused when no connected tab does.',
   ),
+  expandRefs: z.boolean().optional().describe(
+    'Show what references display in the app (default true): each ((id)) is followed by a preview of its '
+    + "target's text, and subtree expands embeds (!((id)), ![[Page]]) into rows carrying the embedded "
+    + 'blocks\' own ids. false prints content only',
+  ),
   ...formatField,
 }
 

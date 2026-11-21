@@ -20,6 +20,7 @@
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  */
 
+import { trackInitialDownload } from '@/data/internals/initialDownload.js'
 import {
   LogLevels,
   PowerSyncDatabase,
@@ -82,6 +83,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
+  grandfatherWorkspaceFirstSync,
   ensureBlockUserUpdatedAtColumn,
   ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
@@ -437,6 +439,8 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
     return
   }
 
+  trackInitialDownload(db)
+
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and
   // we want render to proceed against the local cache.
@@ -644,6 +648,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
+  await grandfatherWorkspaceFirstSync(backfillDb)
   const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
   await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
   markStartup('localSchemaApplied')

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it} from 'vitest'
-import {byPlacement, fitColumn, placeCards, scrollToShow, type MarginCard} from './placement'
+import {adjacentCard, byPlacement, fitColumn, marginWheel, outOfView, placeCards, releasesPin, scrollToShow, type MarginCard} from './placement'
 
 const cards = (...pairs: Array<[anchor: number, height: number]>) => pairs.map(([anchor, height]) => ({anchor, height}))
 
@@ -128,5 +128,84 @@ describe('scrollToShow', () => {
 
   it('shows the top of a box taller than the clip', () => {
     expect(scrollToShow({top: 1000, bottom: 2500}, clip, 8)).toBe(892)
+  })
+})
+
+describe('adjacentCard', () => {
+  it('is the next or previous card in placement order', () => {
+    expect(adjacentCard(['a', 'b', 'c'], 'a', 1)).toBe('b')
+    expect(adjacentCard(['a', 'b', 'c'], 'b', -1)).toBe('a')
+  })
+
+  it('is none past either end, or for a card not placed', () => {
+    expect(adjacentCard(['a', 'b'], 'b', 1)).toBeUndefined()
+    expect(adjacentCard(['a', 'b'], 'a', -1)).toBeUndefined()
+    expect(adjacentCard(['a', 'b'], 'gone', 1)).toBeUndefined()
+  })
+})
+
+describe('outOfView', () => {
+  it('is a span wholly above or below the view', () => {
+    expect(outOfView({top: -50, bottom: 0}, 1000)).toBe(true)
+    expect(outOfView({top: 1000, bottom: 1040}, 1000)).toBe(true)
+    expect(outOfView({top: -50, bottom: 1}, 1000)).toBe(false)
+    expect(outOfView({top: 999, bottom: 1040}, 1000)).toBe(false)
+  })
+})
+
+describe('releasesPin', () => {
+  const pin = {userScrolling: true, writing: false, placed: true, wasInView: true, inView: false}
+
+  it('releases when the user scrolls its row from in view to out of it', () => {
+    expect(releasesPin(pin)).toBe(true)
+  })
+
+  it('keeps it while the row stays out of view, as after a link in it scrolled the page', () => {
+    expect(releasesPin({...pin, wasInView: false})).toBe(false)
+    expect(releasesPin({...pin, wasInView: undefined})).toBe(false)
+  })
+
+  it('keeps it for a scroll the app made, or while writing in the card', () => {
+    expect(releasesPin({...pin, userScrolling: false})).toBe(false)
+    expect(releasesPin({...pin, writing: true})).toBe(false)
+  })
+
+  it('keeps it while its row is in view', () => {
+    expect(releasesPin({...pin, inView: true})).toBe(false)
+  })
+
+  it('releases a pin with no row here, from another page, once the user scrolls', () => {
+    expect(releasesPin({...pin, placed: false, wasInView: undefined})).toBe(true)
+    expect(releasesPin({...pin, placed: false, userScrolling: false})).toBe(false)
+  })
+})
+
+describe('marginWheel', () => {
+  const wheel = {
+    paused: false, horizontal: false, innerCanScroll: false,
+    overActive: true, activeClipped: false, writing: false, hasNext: true,
+  }
+
+  it('moves on to the next card from the end of the active one', () => {
+    expect(marginWheel(wheel)).toBe('move-on')
+  })
+
+  it('drops the rest of a gesture after moving on', () => {
+    expect(marginWheel({...wheel, paused: true})).toBe('drop')
+  })
+
+  it('leaves a sideways swipe and a scroller with room to the browser', () => {
+    expect(marginWheel({...wheel, horizontal: true})).toBe('native')
+    expect(marginWheel({...wheel, innerCanScroll: true})).toBe('native')
+  })
+
+  it('first shows the part of the active card the column cuts off', () => {
+    expect(marginWheel({...wheel, activeClipped: true})).toBe('reveal')
+  })
+
+  it('scrolls the page from elsewhere in the margin, past the last card, or while writing in the card', () => {
+    expect(marginWheel({...wheel, overActive: false})).toBe('page')
+    expect(marginWheel({...wheel, hasNext: false})).toBe('page')
+    expect(marginWheel({...wheel, writing: true})).toBe('page')
   })
 })

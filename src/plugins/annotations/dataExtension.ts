@@ -6,6 +6,7 @@
 import {definitionSeedsFacet, queriesFacet, sameTxProcessorsFacet, systemPagesFacet, typeSeedsFacet} from '@/data/facets'
 import type {AppExtension} from '@/facets/facet'
 import {backlinkEdgeExclusionsFacet} from '@/plugins/backlinks/edgeExclusions.js'
+import {panelUrlFlagsFacet} from '@/utils/panelUrlFlags.js'
 import {commentsPageSpec} from './container.ts'
 import {annotationMarginOpenProp, annotationMarginShareProp} from './marginSchema.ts'
 import {commentLinksForBlockQuery, threadIdsForBlockQuery} from './queries.ts'
@@ -21,6 +22,7 @@ export const annotationsDataExtension: AppExtension = [
   annotationPropertySeeds.map(prop => definitionSeedsFacet.of(prop, {source: SOURCE})),
   definitionSeedsFacet.of(annotationMarginOpenProp, {source: SOURCE}),
   definitionSeedsFacet.of(annotationMarginShareProp, {source: SOURCE}),
+  panelUrlFlagsFacet.of({key: 'comments', property: annotationMarginOpenProp}, {source: SOURCE}),
   typeSeedsFacet.of(annotationThreadType, {source: SOURCE}),
   queriesFacet.of(threadIdsForBlockQuery, {source: SOURCE}),
   queriesFacet.of(commentLinksForBlockQuery, {source: SOURCE}),
