@@ -126,11 +126,18 @@ export interface BlockContextType {
     panelViewMode?: string
     /** Mount outside the editor when its surface clips tooltips. */
     editorTooltipParent?: HTMLElement
+    /** Suppress property-creation (`::`) and type-tagging (`#`) completions. */
+    disableStructuralCompletions?: boolean
+    /** Refuse the Split block action for editors on this surface. */
+    disableBlockSplit?: boolean
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
      *  one rendered occurrence of that block, even when the same block is
      *  visible in the main outline and one or more embeds/backlink rows. */
     renderScopeId?: string
+    /** Name written to the block shell's `data-block-surface`. Blocks in the
+     *  same render scope can have different names. */
+    surfaceName?: string
     /** Id of the block rendered as the root of this surface's visible
      *  subtree: the panel's zoom root for the main outline, the shown
      *  block for a backlink entry, the embedded block for an embed, a

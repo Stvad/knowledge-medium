@@ -84,6 +84,15 @@ const lowerHalf = (id: string) => rects.get(rows.get(id)!)!.top + ROW_HEIGHT * 0
 const column = (depth: number) => INDENT * (depth - 1) + 10
 
 describe('resolveDropTarget', () => {
+  it('declines a hit inside a protected subtree of an otherwise valid outline row', () => {
+    const hit = document.createElement('span')
+    rows.get('a1x')!.append(hit)
+    expect(resolveDropTarget(hit, column(3), lowerHalf('a1x'), context())).not.toBeNull()
+
+    hit.setAttribute('data-no-block-gestures', '')
+    expect(resolveDropTarget(hit, column(3), lowerHalf('a1x'), context())).toBeNull()
+  })
+
   it('nests or places after a sibling by the pointer column, and draws the line there', () => {
     const y = lowerHalf('a1x') // between a1x (depth 3) and b (depth 1)
     const hit = rows.get('a1x')!
