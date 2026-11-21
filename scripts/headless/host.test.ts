@@ -7,7 +7,8 @@ import {writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
-import * as bootstrap from '@/bootstrap/openWorkspaceData'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {startReadGate} from './gate'
@@ -16,7 +17,7 @@ import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
-import {UploadHeldError} from '@/services/powersync'
+import {statusProp} from '@/plugins/todo/schema'
 import {serveDatabase} from './host'
 import {assertReadSurface} from './test/readSurface'
 import type {HeadlessConfig} from './config'
@@ -132,10 +133,8 @@ it('keeps a warm persisted checkpoint closed, opens on a new checkpoint, and clo
   }
 }, 20_000)
 
+// Real bootstrap on both sides of promotion took 8.85 s with another suite running.
 it('uploads a write after promotion and refuses the next write after demotion', async () => {
-  // Isolate role changes from seed creation. The parity fixture supplies the
-  // complete, tab-initialized data for the real writable bootstrap path.
-  vi.spyOn(bootstrap, 'openWorkspaceData').mockResolvedValue([])
   const {db} = fixture
   const id = randomUUID()
   const deliver = syncServer(db)
@@ -148,7 +147,7 @@ it('uploads a write after promotion and refuses the next write after demotion', 
   const update = (content: string) => host.execute({type: 'update-block', id, content, contributorId: null})
   const expectOpen = (readOnly: boolean) => vi.waitFor(async () => {
     expect(await host.execute({type: 'health'})).toMatchObject({host: {readOnly, closedReason: null}})
-  }, {timeout: 5000})
+  }, {timeout: 15_000})
   try {
     await expectOpen(true)
     await expect(update('viewer edit')).rejects.toThrow(/read-only mode/)
@@ -174,9 +173,10 @@ it('uploads a write after promotion and refuses the next write after demotion', 
   } finally {
     await host.stop()
   }
-}, 20_000)
+}, 40_000)
 
-it('holds first-open writes when workspace bootstrap creates zero-version seed rows', async () => {
+// Bootstrapping and queuing the real seed rows took 1.53 s in the focused run.
+it('uploads fresh workspace seed rows with zero-version stamps', async () => {
   const {db} = fixture
   const deliver = syncServer(db)
   let uploader: PowerSyncBackendConnector | undefined
@@ -185,27 +185,33 @@ it('holds first-open writes when workspace bootstrap creates zero-version seed r
     await deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(randomUUID(), workspaceId)])
   })
   const health = () => host.execute({type: 'health'})
+  const seedId = propertyDefinitionBlockId(workspaceId, statusProp.seedKey)
   try {
     await vi.waitFor(async () => {
       expect(await health()).toMatchObject({host: {closedReason: null, readOnly: false}})
-    }, {timeout: 5000})
-    expect(await db.getOptional(
-      "SELECT 1 FROM ps_crud WHERE json_extract(data, '$.op') = 'PUT' AND json_extract(data, '$.data.updated_at') = 0 LIMIT 1",
-    )).toBeTruthy()
+      expect(await db.getOptional(
+        `SELECT 1 AS queued FROM ps_crud WHERE json_extract(data, '$.op') = 'PUT'
+           AND json_extract(data, '$.id') = ? AND json_extract(data, '$.data.updated_at') = 0`, [seedId],
+      )).toEqual({queued: 1})
+    }, {timeout: 15_000})
     expect(uploader).toBeDefined()
-    await expect(uploader!.uploadData(db)).rejects.toBeInstanceOf(UploadHeldError)
-    expect(await health()).toMatchObject({host: {readOnly: true, uploadHold: expect.any(String)}})
-    expect(rpc).not.toHaveBeenCalled()
+    await uploader!.uploadData(db)
+    expect(rpc).toHaveBeenCalledWith('apply_block_creates', {
+      creates: expect.arrayContaining([expect.objectContaining({
+        id: seedId, content: statusProp.name, parent_id: propertiesPageBlockId(workspaceId), updated_at: 0,
+      })]),
+    })
+    expect(await db.getOptional("SELECT 1 FROM ps_crud WHERE json_extract(data, '$.id') = ?", [seedId])).toBeNull()
+    expect(await health()).toMatchObject({host: {closedReason: null, readOnly: false, uploadHold: null}})
   } finally {
     await host.stop()
   }
-}, 20_000)
+}, 30_000)
 
-// The database boot and rejoin took 2.10 s in the focused run.
+// Real bootstrap and rejoin took 8.59 s in the focused run.
 it('holds a rejoining editor read-only behind a durable materialization gap until repaired', async () => {
   const id = randomUUID()
   const deliver = syncServer(fixture.db)
-  vi.spyOn(bootstrap, 'openWorkspaceData').mockResolvedValue([])
   const host = start(writable(), () => deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(id, workspaceId)]))
   try {
     const read = () => host.execute({type: 'get-block', id})
@@ -213,7 +219,7 @@ it('holds a rejoining editor read-only behind a durable materialization gap unti
     const health = () => host.execute({type: 'health'})
     const expectWritable = () => vi.waitFor(async () => {
       expect(await health()).toMatchObject({host: {readOnly: false, closedReason: null}})
-    }, {timeout: 5000})
+    }, {timeout: 15_000})
     await expectWritable()
     expect(await read()).toMatchObject({id, content: id})
     await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
@@ -236,7 +242,7 @@ it('holds a rejoining editor read-only behind a durable materialization gap unti
   } finally {
     await host.stop()
   }
-}, 20_000)
+}, 40_000)
 
 it('preserves an existing upload queue and refuses before connecting', async () => {
   await fixture.db.execute("INSERT INTO ps_crud (data) VALUES ('{}')")

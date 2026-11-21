@@ -21,8 +21,9 @@ import {resolveAppRuntimeSync} from '@/facets/resolveAppRuntime'
 import * as commands from '@/plugins/agent-runtime/commands'
 import {commentsPageBlockId} from '@/plugins/annotations/container'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
+import {dailyNoteBlockId, journalBlockId} from '@/plugins/daily-notes/dailyNotes'
 import {statusProp} from '@/plugins/todo/schema'
-import {createWorkspaceConnector, UploadHeldError} from '@/services/powersync'
+import {createWorkspaceConnector} from '@/services/powersync'
 import {contentAad} from '@/sync/crypto/aad'
 import {open} from '@/sync/crypto/aead'
 import {unlockWorkspaceWithKey} from '@/sync/keys/flows/unlockWorkspaceWithKey'
@@ -33,7 +34,6 @@ import {createSyncResolver} from '@/sync/keys/resolver'
 import {encryptUploadColumns, SEALED_COLUMNS} from '@/sync/transform'
 import {buildLayout} from '@/utils/routing'
 import {serveDatabase} from './host'
-import {STALE_QUEUE_REASON} from './uploadHold'
 
 type WireRow = Record<string, unknown> & {id: string}
 type Rpc = (method: string, args: {creates?: WireRow[]; patches?: WireRow[]}) =>
@@ -135,8 +135,8 @@ const serverAfterTabOpen = (initial: ServerRow[]): ServerRow[] => {
   return [...rows.values()]
 }
 
-// Two real SQLite databases, several thousand tab seed rows and an encrypted
-// host restart took 27 s under parallel gate load.
+// Two real SQLite databases and several thousand tab seed rows took up to
+// 27 s under parallel gate load.
 it('writes the same rows as the tab and seals every uploaded content column', async () => {
   const key = await mintWorkspaceKey(workspaceId)
   const keyFile = join(host.dir, 'fixture-key')
@@ -200,40 +200,30 @@ it('writes the same rows as the tab and seals every uploaded content column', as
   // place. The fake transport delivers the core checkpoint and retains uploadCrud.
   type Connector = {uploadCrud?: (signal: AbortSignal) => Promise<void>}
   const {connectionManager} = host.db as unknown as {connectionManager: {connect(connector: Connector): Promise<void>}}
-  const connect = vi.spyOn(connectionManager, 'connect').mockResolvedValue(undefined).mockImplementationOnce(async () => {
+  const connect = vi.spyOn(connectionManager, 'connect').mockImplementation(async () => {
     await syncServer(host.db)(serverRows)
   })
   vi.spyOn(Object.getPrototypeOf(host.db.currentStatus), 'connected', 'get').mockReturnValue(true)
   const contexts = vi.spyOn(commands, 'createAgentRuntimeContext')
-  const start = (releaseStaleQueue = false) => {
-    const controller = new AbortController()
-    let register!: (execute: Execute) => void
-    const ready = new Promise<Execute>(resolve => { register = resolve })
-    const running = serveDatabase(host.db, {
-      workspaceId, stateDir: host.dir, profile: 'fixture', mode: 'e2ee', keyFile, writable: true,
-    }, user, controller.signal, undefined, async (_config, _user, execute) => {
-      register(execute)
-      return {postEvent: async () => {}, close: async () => {}}
-    }, releaseStaleQueue)
-    return {
-      ready: Promise.race([ready, running.then(() => { throw new Error('Host stopped') })]),
-      upload: () => {
-        const upload = connect.mock.lastCall?.[0].uploadCrud
-        expect(upload).toBeTypeOf('function')
-        return upload!(controller.signal)
-      },
-      stop: () => { controller.abort(); return running },
-    }
-  }
-  let active = start()
+  const controller = new AbortController()
+  let register!: (execute: Execute) => void
+  const ready = new Promise<Execute>(resolve => { register = resolve })
+  const running = serveDatabase(host.db, {
+    workspaceId, stateDir: host.dir, profile: 'fixture', mode: 'e2ee', keyFile, writable: true,
+  }, user, controller.signal, undefined, async (_config, _user, execute) => {
+    register(execute)
+    return {postEvent: async () => {}, close: async () => {}}
+  })
   try {
-    const hostCommand = await active.ready
+    const hostCommand = await Promise.race([ready, running.then(() => { throw new Error('Host stopped') })])
     await vi.waitFor(async () => {
       expect(await hostCommand({type: 'get-block', id: fromId})).toMatchObject({id: fromId, content: fromId})
       expect(propertyPass).toHaveBeenCalled()
       expect(typePass).toHaveBeenCalled()
     }, {timeout: 20_000})
     expect(await hostCommand({type: 'health'})).toMatchObject({host: {closedReason: null, readOnly: false}})
+    const upload = connect.mock.lastCall?.[0].uploadCrud
+    expect(upload).toBeTypeOf('function')
     const passes = [...propertyPass.mock.results, ...typePass.mock.results]
     for (const pass of passes) {
       expect(await pass.value).toEqual({created: 0, restored: 0, skippedReadOnly: false})
@@ -247,6 +237,12 @@ it('writes the same rows as the tab and seals every uploaded content column', as
     const hostBaseline = await rowsIn(host.db)
     expect(hostBaseline).toEqual(tabBaseline)
 
+    const iso = '2026-01-15'
+    const dailyId = dailyNoteBlockId(workspaceId, iso)
+    const commentsId = commentsPageBlockId(workspaceId)
+    const baselineIds = hostBaseline.map(row => row.id)
+    expect(baselineIds).not.toContain(dailyId)
+    expect(baselineIds).not.toContain(commentsId)
     const steps: KnownAgentCommand[] = [
       {type: 'create-block', parentId: fromId, data: {id: noteId}, content: 'draft', properties: {status: 'open'}, contributorId: creator},
       {type: 'update-block', id: noteId, content: `edited ((${toId}))`, properties: {status: 'done'}, contributorId: editor},
@@ -254,6 +250,7 @@ it('writes the same rows as the tab and seals every uploaded content column', as
       {type: 'delete-block', id: noteId, contributorId: editor},
       {type: 'restore-block', id: noteId, contributorId: editor},
       {type: 'append-markdown', target: noteId, format: 'json', markdown: `- child\n  - ((${fromId}))`, contributorId: creator},
+      {type: 'create-page', date: iso, contributorId: null},
       {type: 'add-comment', target: noteId, quote: 'edited', content: `See ((${fromId}))`, contributorId: editor},
     ]
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
@@ -276,28 +273,18 @@ it('writes the same rows as the tab and seals every uploaded content column', as
       if (step.type === 'delete-block') expect(note.deleted).toBe(1)
       if (step.type === 'restore-block') expect(note.deleted).toBe(0)
       if (step.type === 'append-markdown') expect(result).toMatchObject({appended: 2})
+      if (step.type === 'create-page') expect(result).toMatchObject({id: dailyId, kind: 'daily', created: true})
       if (step.type === 'add-comment') expect(result).toMatchObject({quote: 'edited', commentId: expect.any(String)})
       expect(await changedSnapshot(host.db, hostBaseline), step.type).toEqual(await changedSnapshot(tab.db, tabBaseline))
 
       rpc.mockClear()
-      if (step.type === 'add-comment') {
-        // The first comment lazily mints its pristine container with stamp 0.
-        const queued = await queue(host.db)
-        expect(queued.map(row => JSON.parse(row.data))).toContainEqual(expect.objectContaining({
-          id: commentsPageBlockId(workspaceId), op: 'PUT', data: expect.objectContaining({updated_at: 0}),
+      if (step.type === 'create-page' || step.type === 'add-comment') {
+        expect((await queue(host.db)).map(row => JSON.parse(row.data))).toContainEqual(expect.objectContaining({
+          id: step.type === 'create-page' ? dailyId : commentsId,
+          op: 'PUT', data: expect.objectContaining({updated_at: 0}),
         }))
-        await expect(active.upload()).rejects.toBeInstanceOf(UploadHeldError)
-        expect(await hostCommand({type: 'health'})).toMatchObject({host: {
-          readOnly: true, uploadHold: STALE_QUEUE_REASON, queuedEntries: queued.length,
-        }})
-        expect(rpc).not.toHaveBeenCalled()
-        expect(await queue(host.db)).toEqual(queued)
-        await active.stop()
-        active = start(true)
-        await active.ready
-        expect(await queue(host.db)).toEqual(queued)
       }
-      await active.upload()
+      await expect(upload!(controller.signal), step.type).resolves.toBeUndefined()
       expect(await queue(host.db)).toEqual([])
       const calls = rpc.mock.calls
       expect(calls.length, step.type).toBeGreaterThan(0)
@@ -305,6 +292,18 @@ it('writes the same rows as the tab and seals every uploaded content column', as
         expect(calls).toContainEqual(['apply_block_patches', {patches: expect.arrayContaining([
           expect.objectContaining({id: noteId, content: expect.any(String), properties_json: expect.any(String), references_json: expect.any(String)}),
         ])}])
+      }
+      if (step.type === 'create-page') {
+        const creates = calls.flatMap(([, {creates}]) => creates ?? [])
+        expect(creates).toContainEqual(expect.objectContaining({
+          id: dailyId, parent_id: journalBlockId(workspaceId), updated_at: 0,
+        }))
+      }
+      if (step.type === 'add-comment') {
+        const creates = calls.flatMap(([, {creates}]) => creates ?? [])
+        expect(creates).toContainEqual(expect.objectContaining({id: commentsId, updated_at: 0}))
+        expect(creates.map(row => row.id)).toContain((result as {commentId: string}).commentId)
+        expect(await hostCommand({type: 'health'})).toMatchObject({host: {closedReason: null, readOnly: false, uploadHold: null}})
       }
       const opened = new Map<string, Partial<Record<(typeof SEALED_COLUMNS)[number], string>>>()
       for (const [method, {creates, patches}] of calls) {
@@ -326,6 +325,7 @@ it('writes the same rows as the tab and seals every uploaded content column', as
       }
     }
   } finally {
-    await active.stop()
+    controller.abort()
+    await running
   }
 }, 60_000)

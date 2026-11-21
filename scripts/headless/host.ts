@@ -20,7 +20,7 @@ import type {User} from '@/types'
 import {resolveAppVersion} from '../app-version'
 import {openDeviceWorkspace} from './access'
 import {startReadGate} from './gate'
-import {readUploadQueue, staleUploadHold, STALE_QUEUE_REASON} from './uploadHold'
+import {openUploadHold} from './uploadHold'
 import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
@@ -46,21 +46,20 @@ export async function serveDatabase(
   await db.waitForReady()
   const baseline = db.currentStatus.lastSyncedAt?.getTime()
   await initializeClientDatabase(db, 'node')
-  const queue = await readUploadQueue(db)
-  if (!config.writable && queue.queuedEntries) {
+  let gate: ReturnType<typeof startReadGate> | undefined
+  const hold = await openUploadHold(db, workspaceId, releaseStaleQueue, () => gate?.uploadHoldChanged())
+  if (!config.writable && hold.queuedAtBoot) {
     throw new Error('Read-only host found queued writes. Preserve this database for recovery.')
   }
   const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(db, id))
   let repo: Repo | undefined
-  let gate: ReturnType<typeof startReadGate> | undefined
   let bridge: HostBridge | undefined
   let releaseBulk: (() => void) | undefined
   try {
     const existing = await db.getOptional<WorkspaceRow>(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId])
     // A cold database can download to discover its mode. Replaying prior writes
     // requires a validated workspace row and pin before installing the uploader.
-    if (!existing && queue.queuedEntries) throw new Error('Queued writes without a workspace row. Preserve this database for recovery.')
-    const hold = staleUploadHold(db, workspaceId, queue, releaseStaleQueue, () => gate?.uploadHoldChanged())
+    if (!existing && hold.queuedAtBoot) throw new Error('Queued writes without a workspace row. Preserve this database for recovery.')
     const connector = config.writable
       ? createWorkspaceConnector(dbFilenameForUser(user.id), resolver, hold.beforeUploadBatch)
       : undefined
@@ -79,16 +78,13 @@ export async function serveDatabase(
     const commit = resolveAppVersion().sha
     const context = createAgentRuntimeContext({
       repo: active, runtime, safeMode: false,
-      hostHealth: async () => {
-        const {queuedEntries, oldestQueuedAgeMs} = await readUploadQueue(db)
-        return {
-          queuedEntries, oldestQueuedAgeMs, uploadHold: hold.isHeld() ? STALE_QUEUE_REASON : null,
-          commit, readOnly: active.isReadOnly,
-          baselineSyncedAt: baseline ?? null,
-          lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
-          closedReason: gate ? gate.reason() : 'Starting gate',
-        }
-      },
+      hostHealth: async () => ({
+        ...await hold.health(),
+        commit, readOnly: active.isReadOnly,
+        baselineSyncedAt: baseline ?? null,
+        lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
+        closedReason: gate ? gate.reason() : 'Starting gate',
+      }),
     })
     bridge = await register(config, user, async command => {
       signal.throwIfAborted()
