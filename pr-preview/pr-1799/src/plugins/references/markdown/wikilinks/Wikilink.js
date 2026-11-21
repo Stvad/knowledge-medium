@@ -1,1 +1,0 @@
-export{Gb as Wikilink}from"../../../../../chunks/app-D9Uavi2w.js";

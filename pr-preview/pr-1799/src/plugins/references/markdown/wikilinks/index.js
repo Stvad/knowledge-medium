@@ -1,1 +1,0 @@
-export{Wb as wikilinkMarkdownExtension}from"../../../../../chunks/app-D9Uavi2w.js";

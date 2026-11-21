@@ -1,1 +1,0 @@
-export{bP as DEFAULT_TYPE_COLORS,xP as defaultTypeColor,SP as pickLeastUsedTypeColor}from"../../chunks/app-D9Uavi2w.js";

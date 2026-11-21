@@ -1,1 +1,0 @@
-export{_F as ExtensionPromptSurface,vF as extensionPromptsExtension}from"../../../chunks/app-D9Uavi2w.js";

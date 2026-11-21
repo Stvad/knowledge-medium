@@ -1,1 +1,0 @@
-export{HK as floatingAnchorFromRect,UK as useAnchoredFloating}from"../../../chunks/app-D9Uavi2w.js";

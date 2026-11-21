@@ -1,1 +1,0 @@
-export{oS as richPastePlugin}from"../../../chunks/app-D9Uavi2w.js";

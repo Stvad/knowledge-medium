@@ -1,1 +1,0 @@
-export{i0 as pluginPrefsExtension,a0 as pluginUIStateExtension}from"../../chunks/app-D9Uavi2w.js";

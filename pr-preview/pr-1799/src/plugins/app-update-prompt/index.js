@@ -1,1 +1,0 @@
-export{jF as appUpdatePromptExtension}from"../../../chunks/app-D9Uavi2w.js";

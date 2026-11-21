@@ -1,1 +1,0 @@
-export{SI as extensionDisplayName,CI as extensionName,wI as userExtensionShellToggle,TI as userExtensionToggle}from"../../chunks/app-D9Uavi2w.js";

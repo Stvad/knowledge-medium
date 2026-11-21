@@ -1,1 +1,0 @@
-export{JP as resolveStructuralEditPolicy,YP as structuralEditPolicyForBlock}from"../../chunks/app-D9Uavi2w.js";

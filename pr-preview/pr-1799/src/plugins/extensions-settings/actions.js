@@ -1,1 +1,0 @@
-export{ii as openExtensionsSettingsAction}from"../../../chunks/app-D9Uavi2w.js";

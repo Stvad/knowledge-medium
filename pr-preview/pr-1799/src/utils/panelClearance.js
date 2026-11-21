@@ -1,1 +1,0 @@
-export{ux as PANEL_BOTTOM_CLEARANCE,dx as PANEL_CONTENT_RIGHT_INSET,fx as PANEL_RIGHT_CLEARANCE,px as PANEL_TEXT_MIN_WIDTH_PX}from"../../chunks/app-D9Uavi2w.js";
