@@ -1,4 +1,5 @@
 export const uploadQueueCountCap = 1000
+export const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 // Count distinct *blocks* with pending changes, not raw `ps_crud` rows. A
 // single editing burst (typing, focus changes, reorders) fans out to many
