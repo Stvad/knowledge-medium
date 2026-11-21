@@ -288,8 +288,12 @@ const compileTargetTraversal = (
   }
 }
 
-export const virtualFieldFor = (name: string, context: WhereContext): QueryableField | undefined =>
-  context.properties.has(name) ? undefined : context.fields?.get(name)
+/** Refuse a stored/virtual name collision so a new registration cannot reinterpret a saved query. */
+export const virtualFieldFor = (name: string, context: WhereContext): QueryableField | undefined => {
+  const field = context.fields?.get(name)
+  if (field && context.properties.has(name)) throw new Error(`[queryBlocks] ambiguous field ${JSON.stringify(name)}: both a stored property and a virtual field`)
+  return field
+}
 
 // Skip SQLite quoted tokens and comments before counting anonymous parameter slots.
 const sqlTokens = /'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|\?\d*|[:@$][\w\u0080-\uFFFF]+|[a-zA-Z_\u0080-\uFFFF][\w$\u0080-\uFFFF]*/gu

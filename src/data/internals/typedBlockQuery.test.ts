@@ -1679,18 +1679,21 @@ describe('typed query disjunctions and extended where operators', () => {
     }).load()).toEqual(['child'])
   })
 
-  it('keeps stored properties authoritative and virtual fields outside the ancestor bound', async () => {
-    const virtual = {
-      value: () => ({sql: '1', params: []}),
-      encode: Number,
-      dependencies: [(workspaceId: string) => ({kind: 'workspace', workspaceId} as const)],
-    } as const
-    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [
-      {...virtual, name: statusProp.name}, {...virtual, name: 'test:always'},
-    ])
-    await create({id: 'first', properties: {status: 'open'}})
-    await create({id: 'other'})
-    expect(await env.repo.query.typedBlockIds({workspaceId: WS, where: {status: 'open'}}).load()).toEqual(['first'])
+  it.each(['created', 'updated'])('refuses ambiguous timestamp names in filters and sorts (%s)', async name => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await create({id: 'definition', properties: {types: ['property-schema'], 'property-schema:name': name, 'property-schema:preset': 'string'}})
+    await waitFor(() => expect(env.repo.propertySchemas.has(name)).toBe(true))
+    for (const term of [{where: {[name]: 'yesterday'}}, {order: {property: name, direction: 'desc' as const}}]) {
+      await expect(env.repo.query.typedBlockIds({workspaceId: WS, ...term}).load())
+        .rejects.toThrow(new RegExp(`ambiguous.*${name}`))
+    }
+  })
+
+  it('keeps virtual fields outside the ancestor bound by default', async () => {
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+      name: 'test:always', value: () => ({sql: '1', params: []}), encode: Number,
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }])
     await expect(env.repo.query.typedBlockIds({
       workspaceId: WS, where: {'test:always': true}, match: [{scope: 'ancestor', id: 'first'}],
     }).load()).rejects.toThrow('require at least one candidate filter')
