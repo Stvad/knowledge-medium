@@ -1,22 +1,9 @@
-/**
- * Contributable seam for the spatial-navigation walker's excluded-surface
- * set (`walker.ts`'s `isNavigable`). Previously a closed module constant
- * (`NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])`) — a plugin
- * contributing its own `data-block-surface` value (a grid/kanban/canvas
- * renderer tagging its own cells per the walker's tagging contract, see
- * `walker.ts`'s header comment) had no way to opt its cells out of the
- * arrow-key walker the way core opts breadcrumbs out.
- *
- * Contributions are single surface-name strings (mirrors `actionsFacet`'s
- * one-item-per-contribution convention); {@link spatialNavExclusionsFacet}
- * folds them into a `Set` via its own `empty()` (`new Set()`) when nothing
- * is contributed — that's the correct combine-contract for the raw facet.
- * Callers should use {@link resolveSpatialNavExclusions} instead of reading
- * the facet directly: it adds the partial-runtime fallback documented below.
- */
 import { defineFacet, type FacetRuntime } from '@/facets/facet.js'
 import { DEFAULT_NON_NAVIGABLE_SURFACES } from './walker.ts'
 
+/** Contribute the `surfaceName` set in the block context.
+ *  The shell decorator tags the block and the walker skips matching rows.
+ *  Use {@link resolveSpatialNavExclusions} to read the effective exclusions. */
 export const spatialNavExclusionsFacet = defineFacet<string, ReadonlySet<string>>({
   id: 'spatial-navigation.non-navigable-surfaces',
   combine: values => new Set(values),

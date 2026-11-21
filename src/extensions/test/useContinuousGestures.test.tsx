@@ -25,7 +25,9 @@ const Harness = ({which}: {which: 'a' | 'b'}) => {
   const elementRef = useRef<HTMLElement | null>(null)
   const context = useMemo(() => resolveContext, [])
   const gestureRef = useContinuousGestures(context, elementRef)
-  return <div key={which} data-testid={which} ref={gestureRef}/>
+  return <div key={which} data-testid={which} ref={gestureRef}>
+    <div data-no-block-gestures="" data-testid="protected-child"/>
+  </div>
 }
 
 const firePointer = (type: string, el: HTMLElement): void => {
@@ -43,6 +45,40 @@ afterEach(() => {
 })
 
 describe('useContinuousGestures', () => {
+  it('leaves a protected content surface without recognizers or a touch-action restriction', () => {
+    const onPointerDown = vi.fn(() => GESTURE_IDLE)
+    const runtime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(() => ({id: 'r', onPointerDown, touchAction: 'pan-y'})),
+    ])
+    const {getByTestId} = render(
+      <AppRuntimeContextProvider value={runtime}>
+        <div data-no-block-gestures=""><Harness which="a"/></div>
+      </AppRuntimeContextProvider>,
+    )
+
+    const content = getByTestId('a')
+    expect(content.style.touchAction ?? '').toBe('')
+    firePointerDown(content)
+    expect(onPointerDown).not.toHaveBeenCalled()
+  })
+
+  it('allows a surface to recognize a press outside its protected subtree', () => {
+    const onPointerDown = vi.fn(() => GESTURE_IDLE)
+    const runtime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(() => ({id: 'r', onPointerDown, touchAction: 'pan-y'})),
+    ])
+    const {getByTestId} = render(
+      <AppRuntimeContextProvider value={runtime}><Harness which="a"/></AppRuntimeContextProvider>,
+    )
+
+    const content = getByTestId('a')
+    expect(content.style.touchAction).toBe('pan-y')
+    firePointerDown(getByTestId('protected-child'))
+    expect(onPointerDown).not.toHaveBeenCalled()
+    firePointerDown(content)
+    expect(onPointerDown).toHaveBeenCalledTimes(1)
+  })
+
   it('reattaches listeners to the new node when the content surface remounts', () => {
     // A stable ref object alone wouldn't re-trigger the listener effect on a
     // node swap, leaving listeners bound to the detached old node. The callback

@@ -724,6 +724,25 @@ describe('spatial navigation jump-to-edge actions', () => {
 })
 
 describe('spatial navigation vertical actions', () => {
+  it('delegates to the outline model when the next model row is excluded from the DOM walk', async () => {
+    const scope = 'panel:outline'
+    const excluded = 'grid-cell'
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, spatialNavExclusionsFacet.of(excluded)]))
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: scope},
+      {blockId: 'B', renderScopeId: scope, surface: excluded},
+      {blockId: 'C', renderScopeId: scope},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: scope})
+
+    const {modelWalk} = await pressNavigationKey('move_down', {
+      block: env.repo.block('A'), uiStateBlock: panel, renderScopeId: scope, scopeRootId: 'top',
+    })
+
+    expect(modelWalk).toHaveBeenCalledOnce()
+  })
+
   it('does not fall through when the focused rendered location is missing and has no safe recovery anchor', async () => {
     buildPanelDom([{blockId: 'A', renderScopeId: 'panel:outline'}])
     const panel = env.repo.block('panel')
