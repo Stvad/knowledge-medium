@@ -1,1 +1,0 @@
-export{QC as videoPlayerMarkdownExtension}from"../../../chunks/app-Bob5CDCH.js";

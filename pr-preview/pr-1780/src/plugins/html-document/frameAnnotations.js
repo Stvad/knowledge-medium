@@ -1,1 +1,0 @@
-export{Tn as AnnotatedFrame,En as gesturesPlacement}from"../../../chunks/app-Bob5CDCH.js";

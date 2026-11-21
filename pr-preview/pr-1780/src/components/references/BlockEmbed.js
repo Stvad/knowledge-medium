@@ -1,1 +1,0 @@
-export{QN as BlockEmbed}from"../../../chunks/app-Bob5CDCH.js";

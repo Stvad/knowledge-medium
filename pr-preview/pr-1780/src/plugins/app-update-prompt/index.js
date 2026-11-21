@@ -1,1 +1,0 @@
-export{bF as appUpdatePromptExtension}from"../../../chunks/app-Bob5CDCH.js";

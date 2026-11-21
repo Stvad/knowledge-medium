@@ -1,1 +1,0 @@
-export{Gat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Kat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,qat as __resetLayoutSessionIdForTesting,Jat as getLayoutSessionId,Yat as isInstalledAppDisplayMode,Xat as readOrCreateLayoutSessionId}from"../../chunks/app-Bob5CDCH.js";
