@@ -4305,6 +4305,10 @@ export class Repo {
           // inside, at both ends, where it costs no connection.
           await assertBatchMayWrite()
           const value = await this.tx(async t => {
+            // A backfill writes for the user, not as their edit: none of its
+            // writes is a user write (`SameTxCtx.hasUserWrite`), so no owner
+            // the pass re-projects takes its time as an edit time.
+            ;(t as TxImpl).finishUserWrites()
             this.assertBackfillSessionUnchanged(workspaceId, backfill.id, generation)
             // The claim can change while waiting for this lock, even without
             // an observed sync gap. Check every batch on this transaction's view.

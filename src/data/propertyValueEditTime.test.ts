@@ -11,8 +11,6 @@ import { ChangeScope, codecs, defineProperty, defineSameTxProcessor, type AnyPro
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
-import { kernelDataExtension } from '@/data/kernelDataExtension.js'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { PROPERTY_VALUES_RESOLVED_EVENT } from './internals/propertyChildrenProcessor'
 import type { Repo } from './repo'
 
@@ -55,13 +53,11 @@ const registerDefinition = (repo: Repo, fieldId: string, schema: AnyPropertySche
 }
 
 const setup = (extraProcessors: Parameters<typeof sameTxProcessorsFacet.of>[0][] = []): Repo => {
-  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-  if (extraProcessors.length > 0) {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      kernelDataExtension,
-      ...extraProcessors.map(processor => sameTxProcessorsFacet.of(processor, {source: 'test'})),
-    ]))
-  }
+  const {repo} = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'user-1'},
+    extensions: extraProcessors.map(processor => sameTxProcessorsFacet.of(processor, {source: 'test'})),
+  })
   repo.setActiveWorkspaceId(WS)
   registerDefinition(repo, STATUS_FIELD_ID, statusSchema)
   return repo
@@ -116,6 +112,17 @@ describe('owner edit time follows a user edit of a property value row', () => {
     const before = await ownerStamp('p')
 
     await repo.tx(tx => tx.delete(valueId), {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()
+    expect((await ownerStamp('p')).user_updated_at).toBeGreaterThan(before.user_updated_at)
+  })
+
+  it('deleting the field row moves the owner\'s user_updated_at', async () => {
+    const repo = setup()
+    const {fieldId} = await seedOwner(repo)
+    const before = await ownerStamp('p')
+
+    await repo.tx(tx => tx.delete(fieldId), {scope: ChangeScope.BlockDefault})
 
     expect(await cellValue('p')).toBeUndefined()
     expect((await ownerStamp('p')).user_updated_at).toBeGreaterThan(before.user_updated_at)
@@ -186,8 +193,7 @@ describe('owner edit time follows a user edit of a property value row', () => {
     const edited = await ownerStamp('p')
     await repo.undo(ChangeScope.BlockDefault)
 
-    // Undo is itself a user edit (`applyRaw` stamps replayed rows `now`), and
-    // the server clamps `user_updated_at` to move forward only.
+    // Undo is itself a user edit: `applyRaw` stamps replayed rows `now`.
     expect(await cellValue('p')).toBe('draft')
     expect((await ownerStamp('p')).user_updated_at).toBeGreaterThanOrEqual(edited.user_updated_at)
   })

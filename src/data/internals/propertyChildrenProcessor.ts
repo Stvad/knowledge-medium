@@ -151,16 +151,15 @@ type AffectedOwners = Map<string, AffectedOwner>
 
 interface AffectedOwner {
   readonly fields: Map<string, AnyPropertySchema>
-  /** A row the user wrote in this tx reaches this owner, so a changed cell is
-   *  the user's edit of the owner and carries its edit time. */
+  /** A field or value row the user wrote in this tx (`SameTxCtx.hasUserWrite`)
+   *  reaches this owner, so a changed cell is the user's edit of the owner and
+   *  is stamped as `setProperty` stamps one. Otherwise the cell write is
+   *  bookkeeping and keeps the owner's edit time. An importer that wrote field
+   *  rows itself with `sourceTimestamps` would see its owner stamped `now`;
+   *  none does (Roam import writes the cell, and materialize's children are
+   *  not user writes). */
   userEdited: boolean
 }
-
-/** Whether the user (not a processor, a materialization or sync) wrote row
- *  `id` in this tx — `SameTxCtx.hasUserWrite`. */
-export type IsUserWrite = (id: string) => boolean
-
-const noUserWrites: IsUserWrite = () => false
 
 const addAffectedProjection = (
   out: AffectedOwners,
@@ -202,10 +201,9 @@ const collectAffectedProjection = async (
   row: ProjectableRow | null,
   lookups: ProjectionLookups,
   readParent: ParentReader,
-  isUserWrite: IsUserWrite,
+  userEdited: boolean,
 ): Promise<void> => {
   if (row === null) return
-  const userEdited = isUserWrite(row.id)
   // The row as a FIELD ROW (parent = owning block): §9 selection keys on
   // the bit — an unmarked ref row is never a field row. The before side of
   // a bit change carries its own snapshot's bit, so a row that just left
@@ -335,9 +333,6 @@ const reprojectOwner = async (
   }
   // Idempotence short-circuit (§5 invariant 1).
   if (propertiesEqual(parent.properties, nextProperties)) return
-  // A user's value-row edit is an edit of the owner, stamped as `setProperty`
-  // stamps one; anything else is bookkeeping over children that already carry
-  // their own time.
   await tx.update(parent.id, {properties: nextProperties}, userEdited ? undefined : {skipMetadata: true})
 }
 
@@ -357,16 +352,16 @@ const reprojectOwner = async (
  *
  * Caller owns the flip gate: pre-flip there are no cells to project.
  *
- * `isUserWrite` names the row states the user wrote in this tx: an owner one
- * of them reaches takes the user's edit time when its cell changes. Repair
- * paths keep the default, since nothing they project is a user's edit.
+ * `isUserWrite` is the tx's `SameTxCtx.hasUserWrite` (see
+ * `AffectedOwner.userEdited`); repair paths omit it, since nothing they
+ * project is a user's edit.
  */
 export const reprojectOwnersForRowStates = async (
   tx: Tx,
   rowStates: Iterable<ProjectableRow | null>,
   lookups: ProjectionLookups,
   mode: ProjectionMode,
-  isUserWrite: IsUserWrite = noUserWrites,
+  isUserWrite?: SameTxCtx['hasUserWrite'],
 ): Promise<void> => {
   const affected: AffectedOwners = new Map()
   // Collection reads; re-projection writes. Keeping them as two loops is what
@@ -381,7 +376,8 @@ export const reprojectOwnersForRowStates = async (
     return parent
   }
   for (const row of rowStates) {
-    await collectAffectedProjection(affected, row, lookups, readParent, isUserWrite)
+    const userEdited = row !== null && (isUserWrite?.(row.id) ?? false)
+    await collectAffectedProjection(affected, row, lookups, readParent, userEdited)
   }
   for (const [parentId, owner] of affected) {
     await reprojectOwner(tx, parentId, owner, mode)
