@@ -1,0 +1,1 @@
+export{VE as plainOutlinerPlugin}from"../../../chunks/app-DOqSgrox.js";

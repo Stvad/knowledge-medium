@@ -1,0 +1,1 @@
+export{kn as useFrameThemeCss}from"../../../chunks/app-DOqSgrox.js";

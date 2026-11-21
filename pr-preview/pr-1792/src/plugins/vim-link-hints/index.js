@@ -1,0 +1,1 @@
+export{qw as vimLinkHintsPlugin}from"../../../chunks/app-DOqSgrox.js";

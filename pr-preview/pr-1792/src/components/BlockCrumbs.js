@@ -1,0 +1,1 @@
+export{Kk as BlockCrumbs}from"../../chunks/app-DOqSgrox.js";

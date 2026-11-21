@@ -1,0 +1,1 @@
+export{Uz as useShortcutSurfaceActivations}from"../../chunks/app-DOqSgrox.js";

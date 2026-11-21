@@ -1,0 +1,1 @@
+export{VV as defineVariant,HV as defineVariantFacet}from"../../chunks/app-DOqSgrox.js";

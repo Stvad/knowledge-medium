@@ -1,0 +1,1 @@
+export{eP as BlockEmbed}from"../../../chunks/app-DOqSgrox.js";

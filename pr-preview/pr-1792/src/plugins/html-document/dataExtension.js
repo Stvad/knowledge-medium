@@ -1,0 +1,1 @@
+export{AY as htmlDocumentDataExtension}from"../../../chunks/app-DOqSgrox.js";

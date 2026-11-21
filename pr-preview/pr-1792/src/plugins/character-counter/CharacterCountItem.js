@@ -1,0 +1,1 @@
+export{Qn as characterCountItemContribution}from"../../../chunks/app-DOqSgrox.js";

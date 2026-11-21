@@ -1,0 +1,1 @@
+export{zG as withMoveTransition}from"../../chunks/app-DOqSgrox.js";

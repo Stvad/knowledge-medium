@@ -1,0 +1,1 @@
+export{SC as useAssetObjectUrl}from"../../../chunks/app-DOqSgrox.js";

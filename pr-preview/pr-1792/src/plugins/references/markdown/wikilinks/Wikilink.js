@@ -1,0 +1,1 @@
+export{Ib as Wikilink}from"../../../../../chunks/app-DOqSgrox.js";

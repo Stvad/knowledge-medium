@@ -1,0 +1,1 @@
+export{frt as ancestorWalk}from"../../../chunks/app-DOqSgrox.js";

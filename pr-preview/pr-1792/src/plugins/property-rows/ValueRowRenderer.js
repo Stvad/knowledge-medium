@@ -1,0 +1,1 @@
+export{Co as propertyReadContentContribution}from"../../../chunks/app-DOqSgrox.js";

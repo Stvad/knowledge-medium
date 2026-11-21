@@ -1,0 +1,1 @@
+export{PL as PropertyDisplayScope}from"../../../chunks/app-DOqSgrox.js";

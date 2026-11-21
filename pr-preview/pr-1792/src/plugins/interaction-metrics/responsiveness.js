@@ -1,0 +1,1 @@
+export{ha as ResponsivenessTotals,ga as SLOW_MS,_a as observeResponsiveness}from"../../../chunks/app-DOqSgrox.js";

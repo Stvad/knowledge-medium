@@ -1,0 +1,1 @@
+export{DH as typePropertyGroups}from"../../chunks/app-DOqSgrox.js";

@@ -1,0 +1,1 @@
+export{Vy as inlineBacklinksApplies}from"../../../../chunks/app-DOqSgrox.js";

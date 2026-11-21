@@ -1,0 +1,1 @@
+export{_F as approveExtensionHere}from"../../chunks/app-DOqSgrox.js";

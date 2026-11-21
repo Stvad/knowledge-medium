@@ -1,0 +1,1 @@
+export{gT as SpatialNavigationShellDecorator}from"../../../chunks/app-DOqSgrox.js";

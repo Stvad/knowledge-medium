@@ -1,0 +1,1 @@
+export{iV as BLOCK_TITLE_TEXT_CLASS,aV as useBlockTitleTextClass}from"../../../chunks/app-DOqSgrox.js";

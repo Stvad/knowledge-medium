@@ -1,0 +1,1 @@
+export{by as updateIndicatorPlugin}from"../../../chunks/app-DOqSgrox.js";

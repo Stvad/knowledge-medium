@@ -1,0 +1,1 @@
+export{Gg as findExtensionBlock}from"../../chunks/app-DOqSgrox.js";

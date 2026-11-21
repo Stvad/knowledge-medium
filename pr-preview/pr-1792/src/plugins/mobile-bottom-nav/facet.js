@@ -1,0 +1,1 @@
+export{AE as mobileBottomNavItemsFacet}from"../../../chunks/app-DOqSgrox.js";

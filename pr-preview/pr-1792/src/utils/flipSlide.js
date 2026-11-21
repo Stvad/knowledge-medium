@@ -1,0 +1,1 @@
+export{FP as withRowSlide}from"../../chunks/app-DOqSgrox.js";

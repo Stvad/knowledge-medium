@@ -1,0 +1,1 @@
+export{vy as blockInfoPlugin}from"../../../chunks/app-DOqSgrox.js";

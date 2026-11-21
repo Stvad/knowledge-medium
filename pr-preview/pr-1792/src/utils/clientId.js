@@ -1,0 +1,1 @@
+export{cot as deviceSurface,lot as getClientId,uot as getDeviceLabel,dot as isClientIdPersistent,fot as resetClientIdCache}from"../../chunks/app-DOqSgrox.js";

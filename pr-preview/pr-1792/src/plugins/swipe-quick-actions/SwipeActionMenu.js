@@ -1,0 +1,1 @@
+export{vN as SwipeActionMenu}from"../../../chunks/app-DOqSgrox.js";

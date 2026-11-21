@@ -1,0 +1,1 @@
+export{$t as AppRuntimeProvider}from"../../chunks/app-DOqSgrox.js";

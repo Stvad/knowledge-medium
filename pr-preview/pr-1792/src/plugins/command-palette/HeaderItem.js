@@ -1,0 +1,1 @@
+export{sN as CommandPaletteHeaderItem}from"../../../chunks/app-DOqSgrox.js";

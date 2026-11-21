@@ -1,0 +1,1 @@
+export{yk as useMinuteClock}from"../../chunks/app-DOqSgrox.js";

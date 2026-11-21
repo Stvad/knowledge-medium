@@ -1,0 +1,1 @@
+export{ew as videoPlayerMarkdownExtension}from"../../../chunks/app-DOqSgrox.js";

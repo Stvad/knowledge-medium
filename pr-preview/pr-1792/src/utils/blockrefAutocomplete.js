@@ -1,0 +1,1 @@
+export{Kb as blockrefCompletionSource}from"../../chunks/app-DOqSgrox.js";

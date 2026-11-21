@@ -1,0 +1,1 @@
+export{Wst as getOrCreatePropertiesPage,Gst as propertiesPageBlockId,Kst as propertiesPageSpec}from"../../chunks/app-DOqSgrox.js";

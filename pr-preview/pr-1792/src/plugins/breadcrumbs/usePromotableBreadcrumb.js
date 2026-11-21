@@ -1,0 +1,1 @@
+export{FE as usePromotableBreadcrumb}from"../../../chunks/app-DOqSgrox.js";

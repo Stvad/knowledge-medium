@@ -1,0 +1,1 @@
+export{ld as blockTagsConfigUi}from"../../../chunks/app-DOqSgrox.js";

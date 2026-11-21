@@ -1,0 +1,1 @@
+export{vpt as CHANGE_SCOPE_POLICIES,ypt as ChangeScope,bpt as isChangeScope,xpt as policyForScope,Spt as scopeAllowedInReadOnly,Cpt as scopeIsUndoable,wpt as scopePoliciesEquivalent,Tpt as scopeUploadsToServer,Ept as sourceForScope}from"../../../chunks/app-DOqSgrox.js";

@@ -1,0 +1,1 @@
+export{sj as dailyDateWikilinkDecorator}from"../../../chunks/app-DOqSgrox.js";

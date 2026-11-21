@@ -1,0 +1,1 @@
+export{VQ as adoptTypedBlock,HQ as createTypedChild,nlt as derivedBlockId,UQ as getOrCreateTypedChild}from"../../chunks/app-DOqSgrox.js";

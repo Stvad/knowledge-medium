@@ -1,0 +1,1 @@
+export{Wg as lintExtensionSource}from"../../../chunks/app-DOqSgrox.js";

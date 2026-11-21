@@ -1,0 +1,1 @@
+export{l5 as kernelDataExtension}from"../../chunks/app-DOqSgrox.js";

@@ -1,0 +1,1 @@
+export{aF as editorAutocompleteExtension}from"../../chunks/app-DOqSgrox.js";

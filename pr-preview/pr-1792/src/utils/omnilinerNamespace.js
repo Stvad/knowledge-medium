@@ -1,0 +1,1 @@
+export{Kq as omnilinerNamespace}from"../../chunks/app-DOqSgrox.js";

@@ -1,0 +1,1 @@
+export{aR as ConfirmBulkDeleteDialog}from"../../chunks/app-DOqSgrox.js";

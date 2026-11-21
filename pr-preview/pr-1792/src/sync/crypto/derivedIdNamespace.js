@@ -1,0 +1,1 @@
+export{Dct as deriveWorkspaceIdNamespace}from"../../../chunks/app-DOqSgrox.js";

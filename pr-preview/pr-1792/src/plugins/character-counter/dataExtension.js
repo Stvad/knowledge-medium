@@ -1,0 +1,1 @@
+export{i1 as characterCounterDataExtension}from"../../../chunks/app-DOqSgrox.js";

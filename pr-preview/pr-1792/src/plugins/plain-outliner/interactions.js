@@ -1,0 +1,1 @@
+export{WE as blockEditingContentRenderer}from"../../../chunks/app-DOqSgrox.js";
