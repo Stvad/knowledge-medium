@@ -1,1 +1,1 @@
-export{Yx as richPastePlugin}from"../../../chunks/app-CWkUhrGq.js";
+export{Yx as richPastePlugin}from"../../../chunks/app-CwzzH21b.js";
