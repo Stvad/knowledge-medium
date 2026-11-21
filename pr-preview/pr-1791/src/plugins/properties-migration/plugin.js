@@ -1,1 +1,1 @@
-export{qo as propertiesMigrationPlugin}from"../../../chunks/app-fpkX8a3L.js";
+export{qo as propertiesMigrationPlugin}from"../../../chunks/app-zB7ItzVy.js";
