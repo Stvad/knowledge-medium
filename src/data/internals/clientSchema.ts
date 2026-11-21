@@ -622,7 +622,9 @@ const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   },
 ]
 
-const blockUploadJsonSql = (rowRef: string) => `
+/** The upload payload's `data` object for the `blocks` row `rowRef`, in the
+ *  encoding the upload triggers write. */
+export const blockUploadJsonSql = (rowRef: string) => `
       json_object(
 ${BLOCK_UPLOAD_COLUMNS.map(column => `        '${column.name}', ${column.jsonValue(rowRef)}`).join(',\n')}
       )

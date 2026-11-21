@@ -15,8 +15,11 @@ beforeAll(async () => { shared = await createTestDb() })
 beforeEach(async () => { await resetTestDb(shared.db) })
 afterAll(async () => { await shared.cleanup() })
 
-const open = () => null
-const closed = () => 'membership missing'
+const viewer = 'the member role viewer cannot write'
+const gate = (reason: string | null, refusal: string | null = viewer) =>
+  () => ({readReason: () => reason, writeRefusal: () => refusal})
+const open = gate(null)
+const closed = gate('membership missing', null)
 const context = () => createTestAgentContext(
   createTestRepo({db: shared.db, user, isReadOnly: true, startSyncObserver: true}).repo,
   workspaceId,
@@ -46,14 +49,14 @@ it.each(refusals)('refuses $type even with an open gate', async command => {
   await expect(executeHeadlessCommand(command, context(), open)).rejects.toThrow(error)
 })
 
-it.each(['ping', 'health', 'rematerialize-workspace'] as const)('serves %s while closed', async type => {
+it.each(['ping', 'health', 'rematerialize-workspace', 'rejected-uploads'] as const)('serves %s while closed', async type => {
   const evaluatingGate = vi.fn(closed)
   await expect(executeHeadlessCommand({type}, context(), evaluatingGate)).resolves.toBeDefined()
   expect(evaluatingGate).not.toHaveBeenCalled()
 })
 
 it('refuses reads and document writes while closed with the gate condition', async () => {
-  const always = new Set(['ping', 'health', 'rematerialize-workspace'])
+  const always = new Set(['ping', 'health', 'rematerialize-workspace', 'rejected-uploads'])
   const commands: KnownAgentCommand[] = [
     ...readCommands('test').filter(command => !always.has(command.type)),
     {type: 'create-block'},
@@ -67,6 +70,7 @@ it('refuses reads and document writes while closed with the gate condition', asy
     {type: 'append-markdown', target: 'test', markdown: 'test'},
     {type: 'reconcile-markdown-subtree', parentId: 'test', markdown: 'test', key: 'test'},
     {type: 'add-comment', target: 'test'},
+    {type: 'retry-rejected-upload', txId: 1},
   ]
   const runtime = context()
   for (const command of commands) {
@@ -76,7 +80,7 @@ it('refuses reads and document writes while closed with the gate condition', asy
 })
 
 it.each([null, 'membership missing'])('refuses SQL execute when the gate reason is %s', async reason => {
-  await expect(executeHeadlessCommand({type: 'sql', mode: 'execute', sql: 'SELECT 1'}, context(), () => reason))
+  await expect(executeHeadlessCommand({type: 'sql', mode: 'execute', sql: 'SELECT 1'}, context(), gate(reason, null)))
     .rejects.toThrow('Headless SQL is read-only')
 })
 
@@ -98,4 +102,21 @@ it('applies the same SQL restriction before registering a watcher', async () => 
     type: 'watch-events', consumer: 'test',
     watchers: [{kind: 'sql', name: 'test', sql: 'EXPLAIN PRAGMA cache_size = 32'}],
   }, context(), open)).rejects.toThrow('Headless watcher SQL is read-only')
+})
+
+it('refuses before the gate has started', async () => {
+  await expect(executeHeadlessCommand({type: 'get-block', id: 'test'}, context(), () => undefined))
+    .rejects.toThrow('Headless gate closed: Starting gate')
+})
+
+it('refuses an upload retry with the reason the host cannot upload, after the gate refreshes', async () => {
+  const order: string[] = []
+  const command = {type: 'retry-rejected-upload', txId: 1} as const
+  await expect(executeHeadlessCommand(command, context(), () => ({
+    readReason: () => { order.push('gate'); return null },
+    writeRefusal: () => { order.push('write'); return viewer },
+  })))
+    .rejects.toThrow('retry-rejected-upload: the member role viewer cannot write')
+  expect(order).toEqual(['gate', 'write'])
+  await expect(executeHeadlessCommand(command, context(), gate(null, null))).rejects.toThrow('No rejected transaction 1')
 })

@@ -4,14 +4,13 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import Database from 'better-sqlite3'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
-import type {PowerSyncBackendConnector} from '@powersync/common'
-import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {clearSyncState, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {UploadHeldError} from '@/services/powersync'
 import {serveDatabase} from './host'
 import {STALE_QUEUE_REASON} from './uploadHold'
+import {startHost} from './test/startHost'
 
 const {rpc} = vi.hoisted(() => ({
   rpc: vi.fn(() => ({abortSignal: async () => ({error: null, status: 200})})),
@@ -53,21 +52,8 @@ const head = (db = fixture.db) => db.getOptional<QueueHead>('SELECT entry_id, fi
 const requireHead = async () => fixture.db.get<QueueHead>('SELECT entry_id, first_seen_ms FROM headless_upload_head')
 
 function start({release = false, db = fixture.db, connect = async () => {}} = {}) {
-  const stop = new AbortController()
-  let connector!: PowerSyncBackendConnector
-  type Execute = (command: KnownAgentCommand) => Promise<unknown>
-  let register!: (execute: Execute) => void
-  const registered = new Promise<Execute>(resolve => { register = resolve })
-  const run = serveDatabase(db, config, user, stop.signal,
-    async (_db, production) => { connector = production!; await connect() },
-    async (_config, _user, execute) => {
-      register(execute)
-      return {close: async () => {}, postEvent: async () => {}}
-    }, release)
-  const ready = Promise.race([registered, run.then(() => { throw new Error('Host stopped') })])
-  const execute = async (command: KnownAgentCommand) => (await ready)(command)
-  return {ready, execute, health: () => execute({type: 'health'}), upload: () => connector.uploadData(db),
-    stop: () => { stop.abort(); return run }}
+  const host = startHost(db, config, user, {connect, release})
+  return {...host, health: () => host.execute({type: 'health'})}
 }
 
 it('starts tracking a legacy queue at first sight and sends fresh patches with zero, skewed or absent row versions', async () => {

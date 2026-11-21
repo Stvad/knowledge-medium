@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
+import { listRejectedUploads, retryRejectedUpload } from '@/data/rejectedUploads'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
 import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
@@ -2623,6 +2624,12 @@ const executeAttributedCommand = async (
           ? undefined
           : requireString(command.scope, 'scope'),
       })
+
+    case 'rejected-uploads':
+      return listRejectedUploads(context.repo.db)
+
+    case 'retry-rejected-upload':
+      return retryRejectedUpload(context.repo.db, command.txId)
 
     case 'run-action':
     case 'action':

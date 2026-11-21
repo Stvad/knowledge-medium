@@ -2,6 +2,7 @@ import type {CommonPowerSyncDatabase} from '@powersync/common'
 import type {Repo, ViewGap} from '@/data/repo'
 import {viewGapReadsOver} from '@/data/internals/syncObserver/reconcile'
 import type {WorkspaceRole} from '@/types'
+import {STALE_QUEUE_REASON} from './uploadHold'
 
 type Admission = {role: WorkspaceRole} | ViewGap
 
@@ -19,8 +20,18 @@ export const startReadGate = (
   let dirty = false
   let stopped = false
 
+  /** Why this host may not write now, or null. Owns the Repo's read-only state. */
+  function writeRefusal(): string | null {
+    if (!access.writable) return 'the host is configured with writable: false'
+    if (access.isUploadHeld()) return STALE_QUEUE_REASON
+    if (role !== 'editor' && role !== 'owner') {
+      return role === null ? 'the workspace is not open' : `the member role ${role} cannot write`
+    }
+    return null
+  }
+
   function applyWritability() {
-    repo.setReadOnly(!(access.writable && (role === 'editor' || role === 'owner') && !access.isUploadHeld()))
+    repo.setReadOnly(writeRefusal() !== null)
   }
 
   function resetPreparation(nextRole: WorkspaceRole | null) {
@@ -124,6 +135,7 @@ export const startReadGate = (
   wake()
   return {
     reason: () => reason,
+    writeRefusal,
     uploadHoldChanged: applyWritability,
     async readReason() {
       if (reason !== null) {

@@ -88,10 +88,7 @@ export async function serveDatabase(
     })
     bridge = await register(config, user, async command => {
       signal.throwIfAborted()
-      return executeHeadlessCommand(command, context, async () => {
-        if (!gate) return 'Starting gate'
-        return gate.readReason()
-      })
+      return executeHeadlessCommand(command, context, () => gate)
     })
     const transport = bridge.postEvent
     gate = startReadGate(db, active, workspaceId, baseline, async signal => {
