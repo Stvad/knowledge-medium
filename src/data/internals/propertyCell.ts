@@ -1,7 +1,7 @@
 import {ChangeScope, CodecError, memberCodecOf, type AnyPropertySchema, type BlockData, type Tx} from '@/data/api'
 import {
   childContentsToEncodedPropertyValue, encodedPropertyValueToChildContents, fieldValueChildren, isFieldValueChild, memberKeysFor, scalarValueRow,
-  propertyCellValueRejection, valueChildContentToEncoded, valueSurvivesChildRoundTrip,
+  propertyCellValueRejection, unionValuesAcrossFieldRows, valueChildContentToEncoded, valueSurvivesChildRoundTrip,
 } from '@/data/propertyChildren'
 import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import {storedPropertyValue} from '@/data/rowProperty'
@@ -9,7 +9,7 @@ import {deleteSubtreeAnnouncedInTx} from '@/data/subtreeDelete'
 import {hasLoneSurrogate} from '@/utils/string'
 import {jsonValuesEqual} from './jsonCanonical'
 import {
-  createValueChild, fieldRowsForSchema, freshSlots, hasPendingCellProjection, matchMemberValueChildren,
+  collapseDuplicateValueChild, createValueChild, fieldRowsForSchema, freshSlots, hasPendingCellProjection, matchMemberValueChildren,
   projectFieldRowValues, requestCellProjection, upsertFieldRow,
 } from './propertyChildrenProcessor'
 
@@ -60,13 +60,35 @@ const appendValue = async (tx: Tx, field: Field, schema: AnyPropertySchema, text
   return createValueChild(tx, field, text, freshSlots(values, 1)[0]!, {valueKey, occurrence})
 }
 
-const foldFields = (tx: Tx, cell: Cell) => {
+const planFieldFold = (cell: Cell) => {
+  const duplicates = new Map<BlockData, BlockData>()
+  const groups = cell.fields.map(({children}) => children.filter(isFieldValueChild))
+  const values = unionValuesAcrossFieldRows(cell.schema, groups, (copy, survivor) => duplicates.set(copy, survivor))
+  // A stored list can explicitly count copies across fields as distinct occurrences.
+  if (duplicates.size && memberCodecOf(cell.schema.codec) && cell.stored !== undefined &&
+    !jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, values), cell.stored) &&
+    jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, cell.values), cell.stored)) {
+    duplicates.clear()
+    return {values: cell.values, duplicates}
+  }
+  return {values, duplicates}
+}
+
+const foldFields = async (tx: Tx, cell: Cell, duplicates?: ReadonlyMap<BlockData, BlockData>) => {
   // A field fold carries its value children across, but cannot transfer an
   // independent property bag. Nested fields can themselves contain such bags.
   for (const {field, children} of cell.fields.slice(1)) {
     if (Object.keys(field.properties).length || children.some(child => child.isFieldForm)) {
       throw new CellRefusedError('resolve-in-outline', 'A duplicate field has properties of its own. Resolve it in the outline.')
     }
+  }
+  if (duplicates) {
+    for (const copy of duplicates.keys()) {
+      if (Object.keys(copy.properties).length || (await tx.childrenOf(copy.id)).some(child => child.isFieldForm)) {
+        throw new CellRefusedError('resolve-in-outline', 'A duplicate value has properties of its own.')
+      }
+    }
+    for (const [copy, survivor] of duplicates) await collapseDuplicateValueChild(tx, survivor.id, copy)
   }
   return upsertFieldRow(tx, cell.owner, cell.fieldId, cell.fields.map(group => group.field), true)
 }
@@ -97,7 +119,8 @@ export const openCell = async (
 ): Promise<OpenedCell> => {
   const cell = await readCell(tx, ownerId, fieldId)
   if (initialText !== undefined) assertValueText(initialText)
-  const {schema, stored, values} = cell
+  const {schema, stored} = cell
+  const {values, duplicates} = planFieldFold(cell)
   const list = memberCodecOf(schema.codec) !== undefined
   const blankCounts = list && (childContentsToEncodedPropertyValue(schema, ['']) as unknown[]).length > 0
   const target = (rows: BlockData[]) => {
@@ -131,7 +154,7 @@ export const openCell = async (
     if (blankCounts && !initialText && jsonValuesEqual(stored, [])) {
       throw new CellRefusedError('would-change-stored-value', 'Opening this empty list would add a stored member.')
     }
-    const field = await foldFields(tx, cell)
+    const field = await foldFields(tx, cell, duplicates)
     await tx.setProperty(ownerId, schema, decoded)
     const materialized = await fieldValueChildren(tx, field.id)
     return openValue(field, target(materialized))
@@ -142,7 +165,7 @@ export const openCell = async (
     const after = childContentsToEncodedPropertyValue(schema, existing ? values : [...values, ''])
     if (!jsonValuesEqual(after, stored)) throw new CellRefusedError('would-change-stored-value', 'Opening this cell would change its stored value.')
   }
-  const field = await foldFields(tx, cell)
+  const field = await foldFields(tx, cell, duplicates)
   return openValue(field, existing)
 }
 

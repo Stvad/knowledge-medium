@@ -1093,23 +1093,27 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
 export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'content'>>(
   schema: AnyPropertySchema | null,
   perFieldRow: readonly (readonly T[])[],
+  onDuplicate?: (copy: T, survivor: T) => void,
 ): T[] => {
   const keys = memberKeysFor(schema)
   const unioned: T[] = []
-  const seen = new Set<string>()
+  const seen = new Map<string, T>()
   for (const values of perFieldRow) {
     // Each row is judged against the rows BEFORE it and never against itself,
     // which is what keeps within-row multiplicity a property of every row
     // rather than only the first: a later row's `[b, b]` is two members, and
     // marking `b` seen as we went folded the second into the first.
-    const rowKeys: string[] = []
+    const rowKeys = new Map<string, T>()
     for (const value of values) {
       const {key} = keys.row(value)
-      rowKeys.push(key)
-      if (seen.has(key)) continue
-      unioned.push(value)
+      const survivor = seen.get(key)
+      if (survivor) onDuplicate?.(value, survivor)
+      else {
+        unioned.push(value)
+        if (!rowKeys.has(key)) rowKeys.set(key, value)
+      }
     }
-    for (const key of rowKeys) seen.add(key)
+    for (const [key, row] of rowKeys) seen.set(key, row)
   }
   return unioned
 }

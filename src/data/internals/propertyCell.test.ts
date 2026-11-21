@@ -209,6 +209,53 @@ describe('openCell', () => {
     expect(await projection()).toEqual({})
   })
 
+  it.each([
+    {schema: numberProperty, stored: 5, text: '5'},
+    {schema: textListProperty, stored: ['x'], text: 'x'},
+  ])('opens value-equal offline copies of $schema.name and relocates their notes', async ({schema, stored, text}) => {
+    const repo = await setup(schema)
+    await seed({id: ownerId, properties: {[schema.name]: stored}}, field(), field('field-b'),
+      value('value-a', text), value('value-b', text, 'field-b'),
+      value('note-a', 'first note', 'value-a'), value('note-b', 'other note', 'value-b'))
+
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    expect(edit).toMatchObject({valueId: 'value-a', created: false})
+    expect(await children(ownerId)).toEqual([{id: 'field-a', content: '::((definition))'}])
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: text}])
+    expect(await children('value-a')).toEqual([{id: 'note-a', content: 'first note'}, {id: 'note-b', content: 'other note'}])
+    expect(await projection()).toEqual({[schema.name]: stored})
+  })
+
+  it.each([
+    {metadata: 'a stored property', properties: {annotation: 'keep'}, nested: []},
+    {metadata: 'a nested field', properties: {}, nested: [field('nested', 'copy-b')]},
+  ])('preserves every row when an offline copy owns $metadata', async ({properties, nested}) => {
+    const repo = await setup(textListProperty)
+    const members = ['first', 'second']
+    await seed({id: ownerId, properties: {[textListProperty.name]: members}}, field(), field('field-b'),
+      value('value-a', 'first'), value('value-b', 'second'),
+      value('copy-a', 'first', 'field-b'), {...value('copy-b', 'second', 'field-b'), properties}, ...nested)
+    const before = await snapshot()
+    await repo.tx(async tx => {
+      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'resolve-in-outline')
+    }, options)
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it('keeps both occurrences introduced together by the later field', async () => {
+    const repo = await setup(textListProperty)
+    const members = ['first', 'second', 'second']
+    await seed({id: ownerId, properties: {[textListProperty.name]: members}}, field(), field('field-b'),
+      value('value-a', 'first'), value('copy-a', 'first', 'field-b'),
+      value('value-b', 'second', 'field-b'), value('value-c', 'second', 'field-b'))
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    expect(edit.valueId).toBe('value-c')
+    expect(await children('field-a')).toEqual([
+      {id: 'value-a', content: 'first'}, {id: 'value-b', content: 'second'}, {id: 'value-c', content: 'second'},
+    ])
+    expect(await projection()).toEqual({[textListProperty.name]: members})
+  })
+
   it('folds duplicate fields while preserving divergent values and nested notes', async () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(), field('field-b'),
