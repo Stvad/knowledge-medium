@@ -1,1 +1,1 @@
-export{Vc as createWorkspaceSnapshotStore}from"../../chunks/app-CiAN7JVZ.js";
+export{Bc as createWorkspaceSnapshotStore}from"../../chunks/app-CdvvFxMJ.js";

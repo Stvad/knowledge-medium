@@ -1,1 +1,1 @@
-export{YG as withMoveTransition}from"../../chunks/app-CiAN7JVZ.js";
+export{JG as withMoveTransition}from"../../chunks/app-CdvvFxMJ.js";

@@ -1,1 +1,1 @@
-export{GM as captureSelection,KM as restoreSelection,qM as withSelection}from"../../../chunks/app-CiAN7JVZ.js";
+export{WM as captureSelection,GM as restoreSelection,KM as withSelection}from"../../../chunks/app-CdvvFxMJ.js";

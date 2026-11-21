@@ -1,1 +1,1 @@
-export{tT as vimLinkHintsPlugin}from"../../../chunks/app-CiAN7JVZ.js";
+export{eT as vimLinkHintsPlugin}from"../../../chunks/app-CdvvFxMJ.js";

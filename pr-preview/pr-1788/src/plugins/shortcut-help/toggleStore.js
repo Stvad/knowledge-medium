@@ -1,1 +1,1 @@
-export{IM as shortcutHelpToggle}from"../../../chunks/app-CiAN7JVZ.js";
+export{FM as shortcutHelpToggle}from"../../../chunks/app-CdvvFxMJ.js";

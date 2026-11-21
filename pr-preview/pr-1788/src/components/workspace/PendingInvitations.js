@@ -1,1 +1,1 @@
-export{kO as PendingInvitations}from"../../../chunks/app-CiAN7JVZ.js";
+export{OO as PendingInvitations}from"../../../chunks/app-CdvvFxMJ.js";

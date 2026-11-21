@@ -1,1 +1,1 @@
-export{UK as usePropertySchemas}from"../../chunks/app-CiAN7JVZ.js";
+export{HK as usePropertySchemas}from"../../chunks/app-CdvvFxMJ.js";

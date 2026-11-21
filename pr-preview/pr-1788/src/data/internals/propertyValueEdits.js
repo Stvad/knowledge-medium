@@ -1,1 +1,1 @@
-export{qo as PropertyEditRefusedError,Jo as clearPropertyValue,Yo as finishPropertyValueEdit,Xo as isPropertyAbsent,Zo as isPropertyValueEditable,Qo as openPropertyValue,$o as settlePropertyField,es as writePropertyText}from"../../../chunks/app-CiAN7JVZ.js";
+export{qo as PropertyEditRefusedError,Jo as clearPropertyValue,Yo as finishPropertyValueEdit,Xo as isPropertyValueEditable,Zo as materializePropertyField,Qo as openPropertyValue,$o as writePropertyText}from"../../../chunks/app-CdvvFxMJ.js";
