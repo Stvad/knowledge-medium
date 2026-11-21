@@ -61,7 +61,10 @@ import {
   type TypedBlockQueryProjection,
   isSelectiveWhereValue,
   normalizeTypedBlockQuery,
-  NOT_PROPERTY_ROW_SQL,
+  notPropertyRow,
+  needsAncestorChain,
+  hasCandidateAxis,
+  predicateGroups,
   inlineJsonPath,
   refListMembersSql,
 } from './typedBlockQuery'
@@ -318,9 +321,9 @@ export type SearchPropertyChildrenView = Exclude<PropertyChildrenView, 'non-hidd
  *  ancestry, workspaceId (twice when filtering by ancestry), the MATCH query, `[typesJson]`, `[excludeTypesJson]`,
  *  the recognition params twice under `propertyChildren: 'none'`, then the
  *  two rank parameters and the limit. */
-export const selectBlocksByContentSql = (
+const selectBlocksByContentSql = (
   filter: BlockSearchFilter = {},
-  propertyChildren: SearchPropertyChildrenView = 'all',
+  propertyRowClause?: string,
 ): string => `
   ${filter.underId !== undefined ? `WITH RECURSIVE under_root(id, workspace_id) AS (SELECT ?, ?),
   under_tree(id) AS (
@@ -344,7 +347,7 @@ export const selectBlocksByContentSql = (
     ${filter.types?.length ? `AND EXISTS (${blockTypeInSql})` : ''}
     ${filter.excludeTypes?.length ? `AND NOT EXISTS (${blockTypeInSql})` : ''}
     ${filter.underId !== undefined ? 'AND b.id IN (SELECT id FROM under_tree)' : ''}
-    ${propertyChildren === 'none' ? `AND ${NOT_PROPERTY_ROW_SQL}` : ''}
+    ${propertyRowClause ? `AND ${propertyRowClause}` : ''}
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
@@ -1215,20 +1218,8 @@ const collectPredicateDeps = (
 const collectTypedBlockAxisDeps = (
   normalized: ResolvedTypedBlockQuery,
   ctx: QueryCtx,
-  ordered = true,
-): {
-  matchPredicates: readonly BlockPredicate[]
-  excludePredicates: readonly BlockPredicate[]
-  /** Properties whose ancestor-scoped `target:` predicate still needs its
-   *  target ids named — see `declareAncestorDeps`. */
-  ancestorTargetProps: ReadonlySet<string>
-} => {
-  const workspaceId = normalized.workspaceId
-  const types = normalized.types ?? []
-  const referencedBy = normalized.referencedBy
-  const matchPredicates = normalized.match ?? []
-  const excludePredicates = normalized.exclude ?? []
-
+): ReadonlySet<string> => {
+  const {workspaceId, types = [], referencedBy} = normalized
   for (const t of types) {
     ctx.depend({
       kind: 'plugin',
@@ -1237,7 +1228,7 @@ const collectTypedBlockAxisDeps = (
     })
   }
   if (normalized.parentId !== undefined) ctx.depend({kind: 'parent-edge', parentId: normalized.parentId})
-  if (ordered && typeof normalized.order === 'object') {
+  if (typeof normalized.order === 'object') {
     ctx.depend({
       kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
       key: typedBlocksPropertyKey(workspaceId, normalized.order.property),
@@ -1249,8 +1240,9 @@ const collectTypedBlockAxisDeps = (
   if (referencedBy !== undefined) {
     collectReferenceFilterDeps(referencedBy, workspaceId, ctx)
   }
-  collectPredicateDeps(matchPredicates, workspaceId, ctx, ancestorTargetProps)
-  collectPredicateDeps(excludePredicates, workspaceId, ctx, ancestorTargetProps)
+  for (const group of predicateGroups(normalized)) {
+    collectPredicateDeps(group, workspaceId, ctx, ancestorTargetProps)
+  }
 
   // Live channel — only when there's no positive membership axis to
   // catch "fresh row could enter the result". A type/referencedBy
@@ -1264,14 +1256,9 @@ const collectTypedBlockAxisDeps = (
   //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
   //     don't need live: matching rows must set `foo='bar'` to
   //     match, which fires the foo property channel.)
-  const hasSelectiveWhere = Object.values(normalized.where ?? {}).some(isSelectiveWhereValue)
-  const hasMatchAxis = matchPredicates.some(p =>
-    p.referencedBy !== undefined ||
-    (p.where !== undefined && Object.values(p.where).some(isSelectiveWhereValue)),
-  )
-  const hasPositiveAxis =
-    normalized.parentId !== undefined || types.length > 0 || referencedBy !== undefined || hasSelectiveWhere || hasMatchAxis
-  if (!hasPositiveAxis) {
+  const hasEntrySignal = (p: BlockPredicate) =>
+    p.referencedBy !== undefined || Object.values(p.where ?? {}).some(isSelectiveWhereValue)
+  if (!hasCandidateAxis(normalized, hasEntrySignal)) {
     ctx.depend({
       kind: 'plugin',
       channel: TYPED_BLOCKS_LIVE_CHANNEL,
@@ -1279,15 +1266,8 @@ const collectTypedBlockAxisDeps = (
     })
   }
 
-  return {matchPredicates, excludePredicates, ancestorTargetProps}
+  return ancestorTargetProps
 }
-
-const typedBlockNeedsAncestorChain = (
-  matchPredicates: readonly BlockPredicate[],
-  excludePredicates: readonly BlockPredicate[],
-): boolean =>
-  matchPredicates.some(p => p.scope === 'ancestor') ||
-  excludePredicates.some(p => p.scope === 'ancestor')
 
 /** One UNION arm per named property, reading the target ids out of the SAME
  *  `properties_json` expression the predicate itself compiles to
@@ -1388,15 +1368,14 @@ const prepareTypedBlockQuery = async (
   ctx: QueryCtx,
   projection: TypedBlockQueryProjection,
 ) => {
-  const normalized = normalizeTypedBlockQuery(query)
+  const normalized = normalizeTypedBlockQuery(query, projection)
   const {workspaceId} = normalized
-  const registry = ctx.repo.propertyDefinitionsFor(workspaceId)
-  const foreign = ctx.repo.activeWorkspaceId !== null && workspaceId !== ctx.repo.activeWorkspaceId
-  const schemas = registry?.schemas ?? (foreign ? new Map<string, AnyPropertySchema>() : ctx.repo.propertySchemas)
+  const workspaceSchemas = ctx.repo.propertySchemasFor(workspaceId)
   const propertyOrder = typeof normalized.order === 'object'
-  if (!registry && foreign && (propertyOrder || normalized.propertyChildren === 'none')) {
+  if (!workspaceSchemas && (propertyOrder || normalized.propertyChildren === 'none')) {
     throw new Error('[queryBlocks] property registry unavailable for the requested workspace')
   }
+  const schemas = workspaceSchemas ?? new Map<string, AnyPropertySchema>()
   if (propertyOrder) ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
   let recognition: RecognitionParams | undefined
   if (normalized.propertyChildren === 'none') {
@@ -1405,12 +1384,11 @@ const prepareTypedBlockQuery = async (
     }
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, key: workspaceId})
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, 'property-schema')})
-    recognition = dependOnRecognitionParams(ctx, registry)
+    recognition = dependOnRecognitionParams(ctx, ctx.repo.propertyDefinitionsFor(workspaceId))
   }
   const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition})
-  const {matchPredicates, excludePredicates, ancestorTargetProps} =
-    collectTypedBlockAxisDeps(normalized, ctx, projection !== 'count')
-  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
+  const ancestorTargetProps = collectTypedBlockAxisDeps(normalized, ctx)
+  if (needsAncestorChain(normalized)) {
     await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', ancestorTargetProps, schemas, recognition)
   }
   return compiled
@@ -1546,16 +1524,16 @@ export const searchByContentQuery = defineQuery<
     // handle depends on the whole workspace.
     const active = isActiveSearchFilter(filter) ? filter : undefined
     if (active || propertyChildren === 'none') ctx.depend({kind: 'workspace', workspaceId})
-    const recognition = propertyChildren === 'none' ? dependOnRecognitionParams(ctx) : []
+    const propertyRow = propertyChildren === 'none' ? notPropertyRow(dependOnRecognitionParams(ctx)) : undefined
     const rows = await ctx.db.getAll<BlockRow>(
-      selectBlocksByContentSql(active, propertyChildren),
+      selectBlocksByContentSql(active, propertyRow?.sql),
       [
         ...(active?.underId !== undefined ? [active.underId, workspaceId] : []),
         workspaceId,
         compiledQuery.matchQuery,
         ...(active?.types?.length ? [JSON.stringify(active.types)] : []),
         ...(active?.excludeTypes?.length ? [JSON.stringify(active.excludeTypes)] : []),
-        ...recognition, ...recognition,
+        ...(propertyRow?.params ?? []),
         compiledQuery.rankQuery,
         escapeLikePattern(compiledQuery.rankQuery),
         limit,

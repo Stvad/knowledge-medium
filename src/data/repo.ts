@@ -387,6 +387,9 @@ const registryForWorkspace = (
       ? previous
       : null
 
+const canUseAmbientSchemas = (activeWorkspaceId: string | null, workspaceId: string): boolean =>
+  activeWorkspaceId === null || workspaceId === activeWorkspaceId
+
 export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
@@ -1021,6 +1024,12 @@ export class Repo {
     return registryForWorkspace(this._propertyDefinitionRegistry, this._previousPropertyDefinitionRegistry, workspaceId)
   }
 
+  /** Null for an unloaded workspace. The active workspace can query code schemas while its registry boots. */
+  propertySchemasFor(workspaceId: string): ReadonlyMap<string, AnyPropertySchema> | null {
+    return this.propertyDefinitionsFor(workspaceId)?.schemas ??
+      (canUseAmbientSchemas(this.activeWorkspaceId, workspaceId) ? this.propertySchemas : null)
+  }
+
   /** Active-workspace type-definition registry snapshot (kernel/plugin code
    *  types are NOT in it — those live only in `types`; this is the block-built +
    *  seed side that `getTypeBlockId` and the seed read-only gates read). Null
@@ -1044,7 +1053,7 @@ export class Repo {
       snapshot,
       workspaceId,
       this._propertySeedNameCounts,
-      this.client.activeWorkspaceId === null || workspaceId === this.client.activeWorkspaceId,
+      canUseAmbientSchemas(this.activeWorkspaceId, workspaceId),
     )
   }
 
@@ -2205,10 +2214,13 @@ export class Repo {
       typeDefinitions: {value: runtime.typeDefinitions},
       valuePresetCores: {value: runtime.valuePresets},
     })
+    facade.propertyDefinitionsFor = runtime.propertyDefinitionRegistryForWorkspace
+    facade.propertySchemasFor = workspaceId => facade.propertyDefinitionsFor(workspaceId)?.schemas ??
+      (canUseAmbientSchemas(runtime.propertySchemaWorkspaceId, workspaceId) ? runtime.propertySchemas : null)
     facade.propertySchemaResolverFor = workspaceId => propertySchemaResolverForWorkspace(
       runtime.propertyDefinitionRegistryForWorkspace(workspaceId), workspaceId,
       runtime.propertySeedNameCounts,
-      runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
+      canUseAmbientSchemas(runtime.propertySchemaWorkspaceId, workspaceId),
     )
     facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
     return facade
