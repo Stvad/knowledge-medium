@@ -126,8 +126,10 @@ export interface BlockContextType {
     panelViewMode?: string
     /** Mount outside the editor when its surface clips tooltips. */
     editorTooltipParent?: HTMLElement
-    /** Suppress the `::` property-field completion: on a value row it would
-     *  convert the row itself into a field row, which a cell cannot show. */
+    /** Drop the `::` property-field completion source: on a value row it
+     *  would convert the row itself into a field row, which a cell cannot
+     *  show. Only the completion is gated; typed or pasted reference text
+     *  still parses as a field row. */
     disablePropertyFieldCompletion?: boolean
     /** Refuse the Split block action for editors on this surface. */
     disableBlockSplit?: boolean

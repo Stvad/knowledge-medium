@@ -252,6 +252,26 @@ describe('ordinary property creation in the outline', () => {
     expect((await repo.load(valueId))?.content).toBe('done')
   })
 
+  it('keeps #type completion on a value row of a surface that disables property-field completion', async () => {
+    const fieldId = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    await choosePropertyField(repo.block(OWNER), stage, repo.block(fieldId), '::', () => true)
+    const valueId = await repo.mutate.createChild({parentId: fieldId, content: '#Expected'})
+    mount('all', OWNER, {disablePropertyFieldCompletion: true})
+    await act(() => focusBlock(repo.block(PANEL), valueId, {edit: true, renderScopeId: 'creation-test'}))
+    const view = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-block-id="${valueId}"] .cm-editor`)
+      expect(node).not.toBeNull()
+      return EditorView.findFromDOM(node!)!
+    })
+    const end = '#Expected'.length
+    act(() => { view.dispatch({selection: {anchor: end}}) })
+    const context = new CompletionContext(view.state, end, true)
+    const sources = view.state.languageDataAt<CompletionSource>('autocomplete', end)
+    const labels = (await Promise.all(sources.map(source => source(context))))
+      .flatMap(result => result?.options.map(option => option.label) ?? [])
+    expect(labels).toContain(expectedType.label)
+  }, 20_000) // Same seeded outline and editor mount as the enum test above.
+
   it.each([false, true])('choosing an existing populated list creates and focuses an ordinary member (collapsed: %s)', async collapsed => {
     await repo.block(OWNER).set(list, ['saved'])
     const definition = repo.propertySchemaResolverFor(WS).resolve(list.name)
