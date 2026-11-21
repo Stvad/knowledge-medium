@@ -1,1 +1,1 @@
-export{fx as blockDragPlugin}from"../../../chunks/app-Bb2Ep3h3.js";
+export{bx as blockDragPlugin}from"../../../chunks/app-BcMqEN88.js";
