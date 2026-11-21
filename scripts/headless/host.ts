@@ -5,9 +5,9 @@ import {createClientPowerSyncSchema, initializeClientDatabase} from '@/data/inte
 import {dbFilenameForUser} from '@/data/localDbStorage'
 import {BlockCache} from '@/data/blockCache'
 import {Repo} from '@/data/repo'
-import {readWorkspaceEncryptionMode} from '@/data/workspaceSchema'
+import {parseWorkspaceRow, readWorkspaceEncryptionMode, type WorkspaceRow} from '@/data/workspaceSchema'
+import {SELECT_LOCAL_WORKSPACE_BY_ID_SQL} from '@/data/workspaces'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
-import type {GateWorkspace} from '@/sync/keys/resolveWorkspaceEntry'
 import {createSyncResolver} from '@/sync/keys/resolver'
 import {connectWorkspaceDownloads, hasRemoteSyncConfig} from '@/services/powersync'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
@@ -24,11 +24,9 @@ import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
 
-const workspaceSql = 'SELECT encryption_mode AS encryptionMode, name, wk_canary AS wkCanary FROM workspaces WHERE id = ?'
-
 async function waitForWorkspace(db: PowerSyncDatabase, workspaceId: string, signal: AbortSignal) {
-  for await (const result of db.watch(workspaceSql, [workspaceId], {signal})) {
-    const row = result.rows?.item(0) as GateWorkspace | undefined
+  for await (const result of db.watch(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId], {signal})) {
+    const row = result.rows?.item<WorkspaceRow>(0)
     if (row) return row
   }
   signal.throwIfAborted()
@@ -51,18 +49,17 @@ export async function serveDatabase(
     throw new Error('Read-only host found queued writes. Preserve this database for recovery.')
   }
   const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(db, id))
-  const connectDb = () => connect(db)
   let repo: Repo | undefined
   let gate: ReturnType<typeof startReadGate> | undefined
   let bridge: HostBridge | undefined
   let releaseBulk: (() => void) | undefined
   try {
-    const existing = await db.getOptional<GateWorkspace>(workspaceSql, [workspaceId])
-    if (!existing) await connectDb()
+    const existing = await db.getOptional<WorkspaceRow>(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId])
+    if (!existing) await connect(db)
     const row = existing ?? await waitForWorkspace(db, workspaceId, signal)
     signal.throwIfAborted()
-    await openDeviceWorkspace(config, user.id, row)
-    if (existing) await connectDb()
+    await openDeviceWorkspace(config, user.id, parseWorkspaceRow(row))
+    if (existing) await connect(db)
     const cold = !await db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
     const active = new Repo({db, user, cache: new BlockCache(), syncObserverDeps: resolver, isReadOnly: true})
     repo = active
@@ -89,7 +86,7 @@ export async function serveDatabase(
     })
     const transport = bridge.postEvent
     gate = startReadGate(db, active, workspaceId, baseline, async signal => {
-      const namespaces = await openWorkspaceData(active, workspaceId, false, undefined, signal)
+      const namespaces = await openWorkspaceData(active, workspaceId, false, signal)
       await untilStopped(Promise.all(namespaces), signal)
     }, visible => {
       if (visible) {

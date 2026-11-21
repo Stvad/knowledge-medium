@@ -41,7 +41,7 @@ it('cancels pending definitions without starting derivations when the late resul
   vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockReturnValue(pending)
   const derive = vi.spyOn(repo, 'scheduleReferenceTargetDerivePass')
   const controller = new AbortController()
-  const opening = openWorkspaceData(repo, 'scratch', false, undefined, controller.signal)
+  const opening = openWorkspaceData(repo, 'scratch', false, controller.signal)
   controller.abort()
   try {
     await expect(opening).rejects.toBe(controller.signal.reason)

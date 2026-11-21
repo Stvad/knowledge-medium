@@ -68,17 +68,13 @@ it('withdraws the token and drains the in-flight result before closing on shutdo
   }
 })
 
-it('keeps the sign-out reason when the bridge is unreachable during token withdrawal', async () => {
+it('closes after one token withdrawal attempt when the bridge is unreachable', async () => {
   let withdrawals = 0
   vi.stubGlobal('fetch', async (_url: URL | string, init: RequestInit) => {
     if (init.body && JSON.parse(String(init.body)).tokens.length === 0) withdrawals++
     throw new TypeError('Bridge offline')
   })
   const bridge = await connectBridge(config, user, async () => undefined)
-  const signedOut = new Error('Session ended. Run headless login.')
-  const shutdown = async () => {
-    try { throw signedOut } finally { await bridge.close() }
-  }
-  await expect(shutdown()).rejects.toBe(signedOut)
+  await expect(bridge.close()).resolves.toBeUndefined()
   expect(withdrawals).toBe(1)
 })

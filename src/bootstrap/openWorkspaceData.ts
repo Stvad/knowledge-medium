@@ -10,7 +10,6 @@ export const openWorkspaceData = async (
   repo: Repo,
   workspaceId: string,
   freshlyCreated = false,
-  onNamespacesStarted?: (workspaceId: string) => void,
   signal?: AbortSignal,
 ): Promise<readonly Promise<unknown>[]> => {
   // A stored definition can shadow a seed. Wait for the complete projector
@@ -29,7 +28,6 @@ export const openWorkspaceData = async (
     console.warn(`[bootstrap] property-child namespace for ${workspaceId} is unresolved`, err)
   })
 
-  onNamespacesStarted?.(workspaceId)
   repo.scheduleWorkspaceBackfills(workspaceId)
   // A workspace may share a ref-typed name with the previous one, leaving no
   // facet diff to trigger a scan of its own rows.

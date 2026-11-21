@@ -3,6 +3,9 @@ import {dirname, resolve} from 'node:path'
 import {normalizeProfileName} from '@knowledge-medium/agent-cli/config'
 import {z} from 'zod'
 
+export const DEVICE_STORAGE_FILENAME = 'device.sqlite'
+export const PID_FILENAME = 'headless.pid'
+
 const common = {
   workspaceId: z.string().trim().min(1),
   stateDir: z.string().trim().min(1),

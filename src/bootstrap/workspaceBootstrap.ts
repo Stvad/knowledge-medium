@@ -114,9 +114,8 @@ export const bootstrapWorkspace = async ({
   requestedHash,
   requestedWorkspaceId,
 }: WorkspaceBootstrapArgs): Promise<Block> => {
-  // Remember the default only after the gates and definition readiness. A PWA
-  // launch should return to a workspace the user can open.
-  await openWorkspaceData(repo, workspaceId, freshlyCreated, rememberWorkspace)
+  await openWorkspaceData(repo, workspaceId, freshlyCreated)
+  rememberWorkspace(workspaceId)
 
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())

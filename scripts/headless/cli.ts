@@ -2,15 +2,15 @@ import {join} from 'node:path'
 import {createInterface} from 'node:readline/promises'
 import {acquirePidfile, releasePidfile} from '../../packages/agent-dispatch/src/pidfile'
 import {setAuthStorage} from '@/services/authStorage'
-import {readConfig} from './config'
+import {DEVICE_STORAGE_FILENAME, PID_FILENAME, readConfig} from './config'
 
 async function main() {
   const [action, file] = process.argv.slice(2)
   const config = await readConfig(file)
-  const lock = {file: join(config.stateDir, 'headless.pid'), daemonName: 'headless'}
+  const lock = {file: join(config.stateDir, PID_FILENAME), daemonName: 'headless'}
   await acquirePidfile(lock)
   try {
-    if (!process.execArgv.includes(`--localstorage-file=${join(config.stateDir, 'device.sqlite')}`)) {
+    if (!process.execArgv.includes(`--localstorage-file=${join(config.stateDir, DEVICE_STORAGE_FILENAME)}`)) {
       throw new Error('Start this host with pnpm headless to select its persistent device storage')
     }
     setAuthStorage(globalThis.localStorage)
