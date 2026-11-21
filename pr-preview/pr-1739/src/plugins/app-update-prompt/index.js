@@ -1,1 +1,1 @@
-export{hP as appUpdatePromptExtension}from"../../../chunks/app-hWTxfK70.js";
+export{bF as appUpdatePromptExtension}from"../../../chunks/app-BswXElea.js";
