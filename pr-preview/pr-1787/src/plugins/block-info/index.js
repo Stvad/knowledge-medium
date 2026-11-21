@@ -1,1 +1,0 @@
-export{vy as blockInfoPlugin}from"../../../chunks/app-qNTgWuXT.js";
