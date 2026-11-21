@@ -1,1 +1,0 @@
-export{yh as contributorsPlugin}from"../../../chunks/app-CLTWxLmb.js";

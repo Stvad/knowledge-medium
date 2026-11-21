@@ -1,1 +1,0 @@
-export{B$ as contributorsDataExtension}from"../../../chunks/app-CLTWxLmb.js";

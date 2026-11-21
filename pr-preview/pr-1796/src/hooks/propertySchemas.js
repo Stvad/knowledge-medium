@@ -1,1 +1,0 @@
-export{FK as usePropertySchemas}from"../../chunks/app-CLTWxLmb.js";

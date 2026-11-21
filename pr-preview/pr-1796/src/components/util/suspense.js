@@ -1,1 +1,0 @@
-export{Sq as SuspenseFallback}from"../../../chunks/app-CLTWxLmb.js";

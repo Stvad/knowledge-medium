@@ -1,1 +1,0 @@
-export{m$ as annotationMarginOpenProp,h$ as annotationMarginShareProp}from"../../../chunks/app-CLTWxLmb.js";

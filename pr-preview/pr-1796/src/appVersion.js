@@ -1,1 +1,0 @@
-export{gl as appVersion}from"../chunks/app-CLTWxLmb.js";

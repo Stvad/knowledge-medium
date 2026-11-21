@@ -1,1 +1,0 @@
-export{UV as defineVariant,WV as defineVariantFacet}from"../../chunks/app-CLTWxLmb.js";

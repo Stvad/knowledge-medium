@@ -1,1 +1,0 @@
-export{cF as ExtensionPromptSurface,lF as extensionPromptsExtension}from"../../../chunks/app-CLTWxLmb.js";

@@ -1,1 +1,0 @@
-export{iH as BlockProperties}from"../../chunks/app-CLTWxLmb.js";

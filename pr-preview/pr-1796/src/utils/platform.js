@@ -1,1 +1,0 @@
-export{FG as isIOS,IG as isMacPlatform}from"../../chunks/app-CLTWxLmb.js";

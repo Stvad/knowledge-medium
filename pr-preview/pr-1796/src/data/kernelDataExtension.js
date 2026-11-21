@@ -1,1 +1,0 @@
-export{d5 as kernelDataExtension}from"../../chunks/app-CLTWxLmb.js";

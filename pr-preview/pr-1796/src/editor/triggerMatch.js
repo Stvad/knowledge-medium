@@ -1,1 +1,0 @@
-export{VX as matchCharTrigger}from"../../chunks/app-CLTWxLmb.js";

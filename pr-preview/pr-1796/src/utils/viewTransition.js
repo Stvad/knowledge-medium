@@ -1,1 +1,0 @@
-export{VG as withMoveTransition}from"../../chunks/app-CLTWxLmb.js";

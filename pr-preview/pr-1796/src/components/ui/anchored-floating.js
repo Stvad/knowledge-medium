@@ -1,1 +1,0 @@
-export{NK as floatingAnchorFromRect,PK as useAnchoredFloating}from"../../../chunks/app-CLTWxLmb.js";

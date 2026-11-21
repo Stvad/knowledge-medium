@@ -1,1 +1,0 @@
-export{SJ as staticDataExtensions}from"../../chunks/app-CLTWxLmb.js";

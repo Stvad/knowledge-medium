@@ -1,1 +1,0 @@
-export{RB as ExtensionRenderBoundary}from"../../chunks/app-CLTWxLmb.js";

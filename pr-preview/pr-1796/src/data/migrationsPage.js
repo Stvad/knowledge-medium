@@ -1,1 +1,0 @@
-export{Pot as MIGRATIONS_PAGE_ALIAS,Fot as getOrCreateMigrationsPage,Iot as migrationsPageBlockId,Lot as migrationsPageSpec}from"../../chunks/app-CLTWxLmb.js";

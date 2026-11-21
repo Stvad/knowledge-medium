@@ -1,1 +1,0 @@
-export{BK as adoptOrCreatePropertySchema}from"../../chunks/app-CLTWxLmb.js";

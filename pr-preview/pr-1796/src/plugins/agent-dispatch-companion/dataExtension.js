@@ -1,1 +1,0 @@
-export{C2 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CLTWxLmb.js";

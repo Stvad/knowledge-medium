@@ -1,1 +1,0 @@
-export{zK as propertyShapeLabel}from"../../../chunks/app-CLTWxLmb.js";

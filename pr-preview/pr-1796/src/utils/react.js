@@ -1,1 +1,0 @@
-export{KR as useIsMobile,qR as usePointerCoarse}from"../../chunks/app-CLTWxLmb.js";

@@ -1,1 +1,0 @@
-export{UQ as adoptTypedBlock,WQ as createTypedChild,slt as derivedBlockId,GQ as getOrCreateTypedChild}from"../../chunks/app-CLTWxLmb.js";

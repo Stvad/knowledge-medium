@@ -1,1 +1,0 @@
-export{o1 as characterCounterDataExtension}from"../../../chunks/app-CLTWxLmb.js";

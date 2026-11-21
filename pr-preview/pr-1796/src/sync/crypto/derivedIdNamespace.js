@@ -1,1 +1,0 @@
-export{Mct as deriveWorkspaceIdNamespace}from"../../../chunks/app-CLTWxLmb.js";

@@ -1,1 +1,0 @@
-export{FE as usePromotableBreadcrumb}from"../../../chunks/app-CLTWxLmb.js";

@@ -1,1 +1,0 @@
-export{alt as isChildBackedPropertiesWorkspace}from"../chunks/app-CLTWxLmb.js";
