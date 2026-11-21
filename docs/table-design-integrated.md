@@ -191,11 +191,11 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 
 - **Host layout.** A `blockLayoutFacet` contribution on the host, gated on the table type. That slot is single-winner, last wins (read), so the contribution's precedence is stated in the plugin.
 - **A row is a block layout for R**, built on `BlockFrame`: R's content in the first column, cells after it. Rows are mounted the way backlink entries mount a block from elsewhere (`BlockEntry`), in a render scope of the table's own (`surfaceRenderScopeId`). Cells use that scope; an expanded row's subtree uses a different one, so a value row is never mounted twice in one scope.
-- **Focus is always on the row block.** The cursor is (focused row, column), where the row comes from app focus and only the column is grid state. A value block takes app focus only while it is being edited. Empty cells need no special case, because R always exists.
+- **Focus is always on the row block.** The cursor is (focused row, column), where the row comes from app focus and only the column is grid state. Arrows, Enter, Escape and Tab held the row and column across a 28-block fixture with no structural change (measured in the risk check, headless Chromium, dev build). Change the column synchronously: a deferred row `focus()` stole focus back from a just-activated inline control. A value block takes app focus only while it is being edited. Empty cells need no special case, because R always exists.
   - Row actions (toggle todo, open in panel, delete, reorder among children) work unchanged, because they target R.
   - Up and down step between rows. Cell blocks are excluded from the spatial walker through its exclusions facet, which names this case; a context needs a small way to name its surface (read).
   - After a reload the row is restored by the existing focus path; the column resets to the first.
-- **Mounting.** Rows mount lazily through the existing `LazyViewportMount` and `FocusedRowLazyMount`, which already keep the focused row mounted and restore scroll (read). Mounting is sticky, so the row cap is in the hundreds; measure at the cap before fixing it. Windowed virtualization (`@tanstack/react-virtual`, measured at 5000×5 with 106 blocks mounted) is deferred until the cap hurts, and designed together with focus.
+- **Mounting.** Rows mount lazily through the existing `LazyViewportMount` and `FocusedRowLazyMount`, which already keep the focused row mounted and restore scroll (read). The panel is the vertical observer root; the horizontal scroll wrapper sets `overflow-y: hidden`, because a wrapper with unbounded vertical overflow makes every row mount at once (that explains the earlier 5000-row timeout: 5000 of 5000 mounted, against 39 with the fix) (measured in the risk check, headless Chromium, dev build). Mounting is sticky, so the cap starts at 300 rows: 47 rows mount at first, each further row costs about 15 ms, and query handles rose from 91 to 325 at 300×5 (measured in the risk check, headless Chromium, dev build). Windowed virtualization (`@tanstack/react-virtual`, measured at 5000×5 with 106 blocks mounted) is deferred until the cap hurts, and designed together with focus.
 - **Layout.** CSS grid, sticky header, frozen first column, rows grow to fit wrapped text, the panel scrolls (measured, including iOS).
 - **Row expansion.** An expanded row mounts R's real subtree under the row.
 
@@ -203,13 +203,14 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 
 Three modes, bound through the shortcut-surface activation seam that backlink entries use.
 
-- **Row focused:** left and right move the column, Shift+arrow extends a range, Enter or typing opens the cell (typing passes its first character to open-cell), Delete clears.
+- **Row focused:** left and right move the column, Shift+arrow extends a range, Enter or typing opens the cell (typing passes its first character to open-cell, and the grid hands it to the mounted editor explicitly rather than relying on the key event), Delete clears. At 300 rows the first arrow after a click was sometimes lost; cause unknown, so the grid's acceptance test presses a key immediately after a click.
 - **Editing a cell:** Enter commits and moves down, Tab commits and moves right, Escape leaves, arrows stay with the editor. The grid's Enter must win over block split.
-- **Inline control focused** (checkbox, date, select): the control activates a modal context that shadows block bindings (read), so the grid handles Tab, Enter and Escape for it explicitly. Not spiked.
+- **Inline control focused** (checkbox, date, select): the control activates a modal context that shadows block bindings (read), so the grid handles Tab, Enter and Escape for it explicitly. Checkbox, date and select each took focus on Enter, operated by key, and returned to row focus on Escape, Tab and Enter (measured in the risk check, headless Chromium, dev build).
 
 ### Guards
 
-- **Each cell's value block is its own scope root.** The structural edit policy already refuses indent, outdent and merge-up at a scope root, and vertical move never moves one (read). Backlink entries rely on the same policy. No wildcard action guard: it would block undo, the palette and every extension action while a cell is focused. If something still leaks, deny it by id.
+- **Each cell's value block is its own scope root.** The structural edit policy already refuses indent, outdent and merge-up at a scope root, and vertical move never moves one (read). Backlink entries rely on the same policy. Indent, outdent, merge-up and vertical move were refused at a cell (measured in the risk check, headless Chromium, dev build). **Split is not covered:** Split block from the palette created a persisted child of the value row that the cell does not show. Split is refused for a table cell at action dispatch, so the palette and the keyboard share one rule. No wildcard action guard: it would block undo, the palette and every extension action while a cell is focused. If something still leaks, deny it by id.
+- **Undo** stays per editor flush: two flushes of one cell edit are two undo steps, and `undoGroup` over `block(id).setContent` did not merge them (only `mutate.setContent` writes did) (measured in the risk check, headless Chromium, dev build). One undo per cell edit would need a grouped write path through the editor; not planned.
 - **Completions are not actions.** In a cell editor, `::` would turn the value row into a nested field row and `#type` would tag it (read). Both are switched off for the table's surface. This needs one small seam: completions that can be disabled per render surface.
 - **Paste.** The grid owns every paste inside it, bound on the host's shell so it also fires when the row is focused. Editing a cell: always a single-block insert, and an armed cut is refused. Row focused: TSV into the range.
 - **Shift-click** extends the grid range and never reaches block selection (measured).
@@ -240,6 +241,7 @@ Editable. In the Simulator: horizontal swipe scrolled the table, the frozen colu
 | Completions can be disabled per render surface | editor extensions | small |
 | A context can name its surface for spatial-navigation exclusions | `spatial-navigation` | small |
 | One owner for "no block gestures here" | `continuousGestures.ts` | small |
+| Split refused inside a table cell, decided at action dispatch so the palette and keyboard share it (the scope-root structural policy does not cover split) | structural edit policy / action dispatch | small |
 | Export the value preset inline-editor lookup | `property-rows` | tiny |
 
 Everything else is in the tables plugin.
@@ -252,7 +254,7 @@ Everything else is in the tables plugin.
 
 ## 10. Build order
 
-1. **Risk check, throwaway.** A row layout with cells in their own scope, focus on the row, scope-root cells; the inline-control key mode; completions switched off; lazy mounting at the cap.
+1. **Risk check, throwaway.** Done 2026-11-21; its results are folded into §7 and §12.
 2. **Core seams** (§8).
 3. **Smallest table.** Children as rows, one view, column blocks, cells, the three key modes, the guards. No sort, no query.
 4. **Query and sort.** Parser onto `TypedBlockQuery`, query bar, term errors, new-row back-fill, the editing freeze.
@@ -271,11 +273,12 @@ Also settled: no tweak layer; view blocks are visible children; lazy mounting be
 
 ## 12. Not verified
 
-- Anything in §7's focus model. The spike measured cell-level focus in the panel's scope; row focus, the table scope and scope-root cells are unmeasured.
-- The inline-control key mode, and typing's first character landing after open-cell.
-- Lazy mounting at the cap (a 5000-row `LazyViewportMount` run timed out, unexplained).
-- Whether one edit session can be one undo group (`repo.undoGroup` exists; span unverified).
-- Handle count per mounted row. A real device. Production bundle size.
+The risk check (§10 step 1) measured the focus model, scope-root cells, the inline-control key mode, completions off, lazy mounting at 300 rows and undo, in headless Chromium against a dev build with synthetic data and pre-resolved cell ids. Still unmeasured:
+
+- The intermittent loss of the first arrow after a click at 300 rows.
+- A real table query and per-cell lookup in the loop; a 5000-row grid of real blocks.
+- IME, fast multi-character typing, focus restoration after reload, the row-title editor, reference-value completion.
+- A release build, a real phone, production bundle size.
 
 ## 13. What the review changed
 
