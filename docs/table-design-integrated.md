@@ -129,7 +129,7 @@ One subscription returns **ordered row ids** from `core.typedBlockIds`, which do
 Engine additions on the typed query (read: none exists today):
 
 1. A direct-parent predicate. Small.
-2. `order`: outline order, or one property ascending or descending. A property order adds that property's channel as a dependency.
+2. `order`: outline order, or one property ascending or descending. A property order adds that property's channel as a dependency, and applies the same storage-shape test as `where` (read: `STORAGE_TEST` in `typedBlockQuery.ts`, which `where` already applies). A row whose stored value has the wrong shape for the codec, such as a string left in a property re-typed to number, sorts with the rows that lack the value, after the well-shaped ones in either direction, never compared against them.
 3. `propertyChildren: 'none'`, reusing `NOT_PROPERTY_ROW_SQL`. Smallish: that SQL is private to the kernel queries and its parameters must be threaded through the compiler.
 4. `limit` on the ids query.
 
@@ -170,7 +170,7 @@ Constraints on the seam:
 
 Kept from #363 §4.3: the term shapes, `name^fieldId` as the saved form, bare names for hand and agent authoring, an unresolvable name as a visible term error, `under=` needing a bounding term.
 
-Property terms compile through `resolvePropertyFilter` in the backlinks plugin, which already owns which operators a codec admits and how operands parse (read). It hard-codes ancestor scope today; that becomes a parameter. The backlinks filter store stays a separate stored encoding; neither replaces the other.
+Scalar property terms, and ref terms whose target type registers a filter default, compile through `resolvePropertyFilter` in the backlinks plugin, which already owns which operators a codec admits and how operands parse (read). It hard-codes ancestor scope today; that becomes a parameter. A ref or ref-list term with no target default gets only presence operators from it (read: `presenceOnlyAffordance`), so the parser compiles ref equality itself: `assignee=[[Mary]]` becomes `referencedBy {id: Mary, sourceField: assignee}`, which the engine supports today (read). The backlinks filter store stays a separate stored encoding; neither replaces the other.
 
 ### While editing
 
