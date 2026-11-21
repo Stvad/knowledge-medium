@@ -12,6 +12,7 @@ vi.mock('@/services/supabase.js', () => ({
 
 import {
   UploadHeldError,
+  __prepareBlockUploadForTest,
   __encryptUploadOpsForTest,
   __uploadTransactionsWithFallbackForTest,
   type CompactedBlockOperation,
@@ -62,7 +63,7 @@ const buildDeps = () => {
   const deps: UploadDeps = {
     applyOperations,
     recordRejection,
-    encryptOps: ops => __encryptUploadOpsForTest(ops, resolver.getUploadMode, resolver.getCek),
+    prepareOperations: entries => __prepareBlockUploadForTest(entries, resolver.getUploadMode, resolver.getCek),
   }
   return {deps, applyOperations, recordRejection}
 }

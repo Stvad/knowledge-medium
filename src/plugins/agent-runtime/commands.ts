@@ -2241,8 +2241,10 @@ export const createAgentRuntimeContext = ({
   repo,
   runtime,
   safeMode,
+  hostHealth,
 }: AgentRuntimeBridgeOptions): AgentRuntimeContext => {
   const context: AgentRuntimeContext = {
+    hostHealth,
     repo,
     db: repo.db,
     runtime,
@@ -2299,6 +2301,7 @@ export const executeCommand = async (
       repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
       runtime: context.runtime,
       safeMode: context.safeMode,
+      hostHealth: context.hostHealth,
     })
   }
   return executeAttributedCommand(command, context)
@@ -2322,7 +2325,7 @@ const executeAttributedCommand = async (
       return describeRuntimeSummary(context)
 
     case 'health':
-      return runHealthCommand(context.repo)
+      return runHealthCommand(context.repo, context.hostHealth)
 
     case 'describe-runtime':
       return describeRuntime(context, {
