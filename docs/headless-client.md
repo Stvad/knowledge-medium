@@ -1,6 +1,6 @@
 # Headless client
 
-> **Status:** Slices 1 and 3 implemented for local verification. Last verified against code: 2026-11-21. Hosted scratch-workspace checks remain for the owner. The real-graph runs in slices 2 and 4 remain future work.
+> **Status:** Slices 1 and 3 implemented; slice 1's hosted checks run on a scratch workspace and slice 2 run read-only on the real graph, both 2026-11-21 (results in §4 and §13). Last verified against code: 2026-11-21. Slice 4 remains future work.
 > Each claim is tagged **[read]** (seen in the code, by the author or a reviewer citing the line), **[measured]** (run or queried, with where) or **[reasoned]** (inferred; the slice that verifies it is named in [§13](#13-still-open)).
 > Not re-read since 2026-11-19: the §4 table, the row-level-security and per-user-row claims in §8, the count of app-side-only seed plugins in §10.
 
@@ -42,9 +42,22 @@ Read-only queries against a live client:
 | Local database file | about 6.3 GB, no free pages **[measured]** |
 | Data behaviour contributed by installed extensions | property and type seeds only. Every mutator, processor, invalidation rule, query and local-schema contribution in the live runtime comes from the kernel or a plugin already in `staticDataExtensions` **[measured]** |
 
-Not measured, and needed before trusting the host on the real graph: cold sync plus materialization time under Node, peak memory, the Node database size.
+### Slice 2: the host's first sync of that graph
 
-The only figure for a first sync of this graph is a browser's, from #1773: 173 rows/s with the app's live queries mounted and 381 rows/s with their re-runs stubbed out, which it reads as the write transaction's own rate. For 1.18 M rows that is between about 50 minutes and 2 hours. The host has no live queries and a different SQLite, so its rate is unknown in both directions.
+Read-only, download-only host on an Apple M2 Max laptop (12 cores, 64 GB RAM, Node 26), sampled once a minute; 2026-11-21. **[measured]**
+
+| | |
+|---|---|
+| Download | about 1.14 M staged rows in roughly 3 minutes |
+| Drain into `blocks` | about 4,000 rows/s early, falling to about 2,100 rows/s over the last 400 k as the file grew |
+| Start to the gate opening | about 15 minutes, including a full re-materialization that ran for about 4 minutes after the drain had finished (#1805) |
+| After opening | several minutes at full CPU during which reads queued and timed out (#1808); a warm restart admitted in 7 s and answered at once |
+| Peak memory | 2.5 GB RSS during the drain, about 2.0 GB when open, about 0.4 GB after a warm restart |
+| State directory | 4.8 GB (the browser's database for the same graph: 6.3 GB) |
+| Agreement with a tab | block totals, live blocks, typed rows, reference rows and alias rows equal to within 18 rows, which the tab has staged but not applied. Byte-identical outputs for `daily-note` (3 dates), `search` (2), `data-model`, `get-subtree`, `backlinks`. `grouped-backlinks` groups differently (#1809). `recent-changes` is empty on the host, since it reads this device's local transaction log, which a new device starts without |
+| Planner statistics | none: the host never runs the `ANALYZE` check a tab schedules at boot, and `grouped-backlinks` timed out until a manual `ANALYZE` (#1807) |
+
+The browser figure for the same graph, from #1773 and #1771 (a 4-core Linux VM): 140-381 rows/s depending on what is mounted. The two runs differ in hardware, SQLite build and VFS, so the gap is not attributed; the sync-throughput epic (#1806) holds both.
 
 ## 5. Shape
 
@@ -342,10 +355,9 @@ What this design keeps open for it at no cost: the state directory is the whole 
 
 | Unverified | Settled in |
 |---|---|
-| `lastSyncedAt` moving on a reconnect with nothing changed, on the current SDK and against the hosted service | owner scratch run |
-| Dedicated-member login, browser invitation acceptance and process supervision in the deployment | owner scratch run |
-| Hosted first-download checkpoint boundaries | owner scratch run |
-| Cold sync time, memory and file size under Node | slice 2 |
+| Process supervision (launchd or systemd) in the deployment; the 2026-11-21 runs were in the foreground | owner |
+| Plaintext mode against the hosted service | owner scratch run |
+| The host serving its own `ANALYZE` check, grouped backlinks matching a tab's, and the first-open busy window | #1807, #1809, #1808 |
 | Writable open on the deployed scratch workspace (tab-prepared writable open covered locally) | owner scratch run |
 | How often the hosted sync stream reconnects | owner scratch run |
 | Upgrading a host's plaintext pin after the workspace is converted (the tab has `upgradeWorkspacePin` for this) | when a plaintext workspace served by a host is first converted |
