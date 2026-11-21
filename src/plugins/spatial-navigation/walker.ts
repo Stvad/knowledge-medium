@@ -26,7 +26,7 @@ import type { SelectionRangeRow } from '@/utils/selection.js'
  *   Block shell:           `data-block-nav-item="true"`
  *                          `data-block-id="<block.id>"`
  *                          `data-render-scope-id="<render scope>"`
- *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
+ *                          `data-block-surface="<surface name>"`
  *   Block visibility target: `data-block-visibility-target="true"`
  *   Lane beside the panel's content: `data-panel-lane="<name>"`
  *                          (`PANEL_LANE_ATTRIBUTE`, on a panel mount's root)
@@ -547,7 +547,9 @@ export const instanceAt = (
  * "is it mounted", and the one a caller comparing DOM order needs. Returns its
  * live nav item when mounted, and otherwise the placeholder `LazyViewportMount`
  * reserves for it (`data-lazy-block-id`), which holds the row's place in
- * document order long before the row itself exists.
+ * document order long before the row itself exists. An occurrence known to
+ * sit on an excluded surface returns 'excluded', so a model fallback cannot
+ * put focus there.
  *
  * A slot names the occurrence it holds a place for, both block AND scope, so
  * an embed's deferred copy of a block never answers for the outline's. The
@@ -565,15 +567,19 @@ export const rowSlotIn = (
   panelId: string,
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null => {
-  const mounted = instanceAt(panelId, location, excludedSurfaces)
-  if (mounted) return mounted
+): HTMLElement | 'excluded' | null => {
   const panel = panelById(panelId)
   if (!panel) return null
-  return panel.querySelector<HTMLElement>(
+  const mounted = Array.from(panel.querySelectorAll<HTMLElement>(
+    `${NAV_ITEM_SELECTOR}[data-block-id="${CSS.escape(location.blockId)}"]` +
+    `[data-render-scope-id="${CSS.escape(location.renderScopeId)}"]`,
+  )).find(el => panelOf(el) === panel)
+  if (mounted) return isNavigable(mounted, excludedSurfaces) ? mounted : 'excluded'
+  const slot = panel.querySelector<HTMLElement>(
     `[data-lazy-block-id="${CSS.escape(location.blockId)}"]` +
     `[data-lazy-render-scope-id="${CSS.escape(location.renderScopeId)}"]`,
   )
+  return slot && isInExcludedSurface(slot, excludedSurfaces) ? 'excluded' : slot
 }
 
 /**
