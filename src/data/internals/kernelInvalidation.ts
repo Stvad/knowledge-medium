@@ -52,6 +52,7 @@ import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_MOVES_CHANNEL,
   TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
@@ -221,9 +222,10 @@ export const emitKernelInvalidations = (
     before?.workspaceId !== after?.workspaceId
   )
   if (fieldChanged || (beforeLive && afterLive && before?.parentId !== after?.parentId)) {
-    if (before?.workspaceId) emit(TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, before.workspaceId)
+    const channel = fieldChanged ? TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL : TYPED_BLOCKS_MOVES_CHANNEL
+    if (before?.workspaceId) emit(channel, before.workspaceId)
     if (after?.workspaceId && after.workspaceId !== before?.workspaceId) {
-      emit(TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, after.workspaceId)
+      emit(channel, after.workspaceId)
     }
   }
 

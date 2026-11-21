@@ -75,6 +75,7 @@ import {
   QUERY_PROPERTY_SCHEMAS_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_MOVES_CHANNEL,
   TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
@@ -1399,6 +1400,9 @@ const prepareTypedBlockQuery = async (
   if (propertyOrder) ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
   let recognition: RecognitionParams | undefined
   if (normalized.propertyChildren === 'none') {
+    if (normalized.parentId === undefined) {
+      ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_MOVES_CHANNEL, key: workspaceId})
+    }
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, key: workspaceId})
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, 'property-schema')})
     recognition = dependOnRecognitionParams(ctx, registry)

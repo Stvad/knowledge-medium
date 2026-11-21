@@ -255,6 +255,9 @@ describe('typed queries for table rows', () => {
       const before = env.repo.handleStore.metrics.loaderInvalidations
       await env.repo.tx(tx => tx.update('a', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
       await create({id: 'elsewhere', parentId: 'other-parent'})
+      await env.repo.tx(
+        tx => tx.move('elsewhere', {parentId: null, orderKey: 'a'}), {scope: ChangeScope.BlockDefault},
+      )
       expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
 
       await env.repo.tx(
