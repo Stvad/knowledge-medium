@@ -140,9 +140,15 @@ share_id :=  the row's own share            if the row is in share_roots
 ```
 
 When a row's value changes, or a live row is inserted, the change cascades to its children that
-are not roots: live children take the new value, tombstones lose theirs. `add_share_root`,
-`remove_share_root` and `revoke_share` run the same cascade from the root; revoke also clears by
-`share_id`, which catches rows a `parent_id` cycle keeps out of reach of any walk.
+are not roots: live children take the new value, tombstones lose theirs. `add_share_root` runs the
+same cascade from the new root.
+
+Removing access is a **sweep by label, not a walk from the removed root**: `remove_share_root` and
+`revoke_share` find what the share's remaining roots still reach and recompute every other row
+labelled with that share, through the `share_id` index. A downward walk alone would miss a
+component that a `parent_id` cycle has disconnected from its root, and those rows would keep their
+label after the owner unshared them. The server does not prevent cycles today, and two devices
+moving concurrently can produce one, so the sweep cannot assume there are none.
 
 **Serialization.** One advisory lock per workspace: taken exclusively by anything that can change
 a region (the share RPCs, a `parent_id` change, a restore) and shared by plain inserts. Region
@@ -177,7 +183,9 @@ timestamps. `id`, `workspace_id`, `created_at` and `created_by` are frozen on up
 `created_by` is `auth.uid()` on insert; `updated_by` is `auth.uid()` whenever a content column
 changed. On a root row, `parent_id`, `order_key` and `deleted` are frozen too: a guest can edit a
 shared page's title and contents but not delete, move or reorder the page among siblings they
-cannot see. In an e2ee workspace each content column a guest *changes* must be a v2 envelope
+cannot see. A guest's `parent_id` change is also walked upward from the new parent and refused if
+it reaches the row itself: a guest must not be able to detach the owner's blocks from the tree
+into a cycle. In an e2ee workspace each content column a guest *changes* must be a v2 envelope
 naming a share they edit (§6.2). No `DELETE` policy on `blocks`, and Storage gets read and insert
 only.
 
@@ -277,9 +285,18 @@ device lands in, and a pasted SK defeats the claim.
 ### 6.4 Sealing, and repairing the wrong key
 
 At upload a client computes the row's region itself, by walking local ancestors to the nearest
-authenticated root, and seals under that region's key. That walk is the single client-side owner
-of "which region is this row in"; the commit gate (§7.2) uses the same function. The server's
-`share_id` stamp is used for one thing only: noticing a disagreement.
+root, and seals under that region's key. That walk is the single client-side owner of "which
+region is this row in"; the commit gate (§7.2) uses the same function. The server's `share_id`
+stamp is used for one thing only: noticing a disagreement.
+
+What counts as a root depends on who is asking, and the function takes the root set as its input:
+
+- **A member's** root set is the `share_roots` rows whose `root_auth` opens under WK. This is the
+  set every disclosure decision uses.
+- **A guest's** root set is the `share_roots` rows delivered for shares whose key they hold. A
+  guest has no WK and cannot check `root_auth`, and does not need to: a guest can seal only under
+  a share key they already hold, and the server accepts their write only inside their regions. A
+  forged root can at worst misdirect a guest's own new text between two shares that guest is in.
 
 The server does not reject a member's write sealed under the "wrong" key. A device that has not
 heard about a share or a move seals under WK, and rejecting that would turn a stale view into a
@@ -510,10 +527,11 @@ for lack of it, according to the earlier design's test plan.
 
 - A property test of the region rule: random sequences of add root, remove root, revoke, insert
   (including child before parent), move, delete, restore and a `parent_id` cycle, comparing every
-  row's `share_id` with an oracle that walks up `parent_id`.
+  row's `share_id` with an oracle that walks up `parent_id`. The cycle case must include removing
+  the root afterwards: nothing in the disconnected component may keep the label.
 - A pgTAP matrix over {member, workspace viewer who was a guest, guest editor, guest viewer,
-  stranger} × {read, insert, edit, move in, move out, root structure, frozen columns, direct
-  `share_id` write, tombstones}.
+  stranger} × {read, insert, edit, move in, move out, move under own descendant, root structure,
+  frozen columns, direct `share_id` write, tombstones}.
 - A property test that a re-key never changes plaintext and never overwrites a concurrent edit,
   including a peer write landing on a stamp the device already holds, and a move out racing a
   re-key in.
