@@ -1,1 +1,1 @@
-export{VK as appRuntimeUpdateEvent,HK as refreshAppRuntime}from"../../chunks/app-DD8kI2Id.js";
+export{VK as appRuntimeUpdateEvent,HK as refreshAppRuntime}from"../../chunks/app-CHudv01q.js";

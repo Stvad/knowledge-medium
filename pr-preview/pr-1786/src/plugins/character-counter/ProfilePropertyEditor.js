@@ -1,1 +1,1 @@
-export{Xn as ProfilePropertyEditor,Zn as charProfileEditorOverride}from"../../../chunks/app-DD8kI2Id.js";
+export{Xn as ProfilePropertyEditor,Zn as charProfileEditorOverride}from"../../../chunks/app-CHudv01q.js";
