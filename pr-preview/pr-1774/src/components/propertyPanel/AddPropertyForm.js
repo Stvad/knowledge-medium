@@ -1,1 +1,1 @@
-export{jH as AddPropertyForm}from"../../../chunks/app-CwzzH21b.js";
+export{jH as AddPropertyForm}from"../../../chunks/app-BDv7LkfI.js";

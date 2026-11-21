@@ -1,1 +1,1 @@
-export{IE as getBreadcrumbContentPreview}from"../../../chunks/app-CwzzH21b.js";
+export{IE as getBreadcrumbContentPreview}from"../../../chunks/app-BDv7LkfI.js";

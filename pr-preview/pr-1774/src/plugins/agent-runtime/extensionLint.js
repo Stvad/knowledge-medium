@@ -1,1 +1,1 @@
-export{Ug as lintExtensionSource}from"../../../chunks/app-CwzzH21b.js";
+export{Ug as lintExtensionSource}from"../../../chunks/app-BDv7LkfI.js";

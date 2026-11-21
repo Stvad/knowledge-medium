@@ -1,1 +1,1 @@
-export{QY as acceptCompletionInsert,$Y as editorContentFlushFacet,eX as flushEditorContent}from"../../chunks/app-CwzzH21b.js";
+export{QY as acceptCompletionInsert,$Y as editorContentFlushFacet,eX as flushEditorContent}from"../../chunks/app-BDv7LkfI.js";

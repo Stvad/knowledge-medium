@@ -1,1 +1,1 @@
-export{Sc as createUserActivity,Cc as userActivity}from"../../chunks/app-CwzzH21b.js";
+export{Sc as createUserActivity,Cc as userActivity}from"../../chunks/app-BDv7LkfI.js";
