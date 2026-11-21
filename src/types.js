@@ -1,1 +1,1 @@
-export{Zct as isChildBackedPropertiesWorkspace}from"../chunks/app-VV6GtXQC.js";
+export{alt as isChildBackedPropertiesWorkspace}from"../chunks/app-COIx8n3n.js";

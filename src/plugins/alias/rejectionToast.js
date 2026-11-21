@@ -1,1 +1,1 @@
-export{Kx as aliasCollisionRejectionToast}from"../../../chunks/app-VV6GtXQC.js";
+export{Kx as aliasCollisionRejectionToast}from"../../../chunks/app-COIx8n3n.js";

@@ -1,1 +1,1 @@
-export{yk as useMinuteClock}from"../../chunks/app-VV6GtXQC.js";
+export{yk as useMinuteClock}from"../../chunks/app-COIx8n3n.js";

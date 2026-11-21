@@ -1,1 +1,1 @@
-export{FP as withRowSlide}from"../../chunks/app-VV6GtXQC.js";
+export{FP as withRowSlide}from"../../chunks/app-COIx8n3n.js";

@@ -1,1 +1,1 @@
-export{FF as kernelPageDeletionGuard}from"../../chunks/app-VV6GtXQC.js";
+export{FF as kernelPageDeletionGuard}from"../../chunks/app-COIx8n3n.js";
