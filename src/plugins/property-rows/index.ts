@@ -17,6 +17,8 @@ import { propertyReadContentContribution } from './ValueRowRenderer'
 
 const SOURCE = 'property-rows'
 
+export { resolvePropertyValueInlinePresentation } from './resolvePropertyValueInlinePresentation'
+
 /** The doc's per-block reveal: show every property row on this block, or hand
  *  it back to the default. Decided at click time, so the static label never
  *  goes stale. On every block, cell-backed workspaces included: a contribution
