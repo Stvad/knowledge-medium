@@ -1,0 +1,1 @@
+export{Rft as definePostCommitProcessor}from"../../../chunks/app-C52TGttp.js";

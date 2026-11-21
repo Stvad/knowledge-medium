@@ -1,0 +1,1 @@
+export{B$ as contributorsDataExtension}from"../../../chunks/app-C52TGttp.js";

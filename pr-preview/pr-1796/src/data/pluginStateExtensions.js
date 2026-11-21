@@ -1,0 +1,1 @@
+export{Y1 as pluginPrefsExtension,X1 as pluginUIStateExtension}from"../../chunks/app-C52TGttp.js";

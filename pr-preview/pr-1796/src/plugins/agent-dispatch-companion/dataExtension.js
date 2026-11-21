@@ -1,0 +1,1 @@
+export{C2 as agentDispatchCompanionDataExtension}from"../../../chunks/app-C52TGttp.js";

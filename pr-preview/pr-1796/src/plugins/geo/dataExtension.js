@@ -1,0 +1,1 @@
+export{sX as geoDataExtension}from"../../../chunks/app-C52TGttp.js";

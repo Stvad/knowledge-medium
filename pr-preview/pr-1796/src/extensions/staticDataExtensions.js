@@ -1,0 +1,1 @@
+export{SJ as staticDataExtensions}from"../../chunks/app-C52TGttp.js";

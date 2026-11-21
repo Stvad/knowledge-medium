@@ -1,0 +1,1 @@
+export{RE as getBreadcrumbContentPreview}from"../../../chunks/app-C52TGttp.js";

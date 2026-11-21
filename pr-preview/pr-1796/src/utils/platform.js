@@ -1,0 +1,1 @@
+export{FG as isIOS,IG as isMacPlatform}from"../../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{Jq as omnilinerNamespace}from"../../chunks/app-C52TGttp.js";

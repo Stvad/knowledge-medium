@@ -1,0 +1,1 @@
+export{s_ as authorIdOf}from"../../../chunks/app-C52TGttp.js";

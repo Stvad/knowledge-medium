@@ -1,0 +1,1 @@
+export{Lf as annotationsPlugin}from"../../../chunks/app-C52TGttp.js";

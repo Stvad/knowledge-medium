@@ -1,0 +1,1 @@
+export{B0 as aliasDataExtension}from"../../../chunks/app-C52TGttp.js";

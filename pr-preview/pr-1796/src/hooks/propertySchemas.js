@@ -1,0 +1,1 @@
+export{FK as usePropertySchemas}from"../../chunks/app-C52TGttp.js";

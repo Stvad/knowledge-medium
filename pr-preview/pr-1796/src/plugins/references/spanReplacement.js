@@ -1,0 +1,1 @@
+export{vY as preferredSpanReplacement}from"../../../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{FE as usePromotableBreadcrumb}from"../../../chunks/app-C52TGttp.js";

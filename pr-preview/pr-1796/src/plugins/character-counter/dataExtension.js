@@ -1,0 +1,1 @@
+export{o1 as characterCounterDataExtension}from"../../../chunks/app-C52TGttp.js";

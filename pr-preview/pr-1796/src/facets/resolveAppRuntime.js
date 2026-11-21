@@ -1,0 +1,1 @@
+export{aI as resolveAppRuntime,oI as resolveAppRuntimeSync}from"../../chunks/app-C52TGttp.js";

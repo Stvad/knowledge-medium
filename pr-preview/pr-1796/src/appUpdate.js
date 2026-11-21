@@ -1,0 +1,1 @@
+export{NF as appUpdate,PF as useAppUpdateAvailable}from"../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{JG as BackgroundSubtreeContext,YG as BackgroundSubtreeProvider,XG as useIsBackgroundSubtree}from"../../chunks/app-C52TGttp.js";

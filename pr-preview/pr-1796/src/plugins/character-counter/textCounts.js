@@ -1,0 +1,1 @@
+export{or as countCharacters,sr as countWords}from"../../../chunks/app-C52TGttp.js";

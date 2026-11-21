@@ -1,0 +1,1 @@
+export{Gz as useShortcutSurfaceActivations}from"../../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{VX as matchCharTrigger}from"../../chunks/app-C52TGttp.js";

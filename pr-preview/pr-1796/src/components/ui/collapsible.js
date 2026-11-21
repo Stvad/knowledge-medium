@@ -1,0 +1,1 @@
+"use client";export{eH as Collapsible,tH as CollapsibleContent,nH as CollapsibleTrigger}from"../../../chunks/app-C52TGttp.js";

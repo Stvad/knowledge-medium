@@ -1,0 +1,1 @@
+export{SC as useAssetObjectUrl}from"../../../chunks/app-C52TGttp.js";

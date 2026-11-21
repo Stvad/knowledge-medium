@@ -1,0 +1,1 @@
+export{Vc as requestPersistenceActionContribution}from"../../../chunks/app-C52TGttp.js";

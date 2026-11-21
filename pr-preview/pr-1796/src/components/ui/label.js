@@ -1,0 +1,1 @@
+export{wA as Label}from"../../../chunks/app-C52TGttp.js";

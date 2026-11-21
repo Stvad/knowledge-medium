@@ -1,0 +1,1 @@
+export{gl as appVersion}from"../chunks/app-C52TGttp.js";

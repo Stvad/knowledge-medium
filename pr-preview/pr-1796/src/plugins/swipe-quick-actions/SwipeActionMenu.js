@@ -1,0 +1,1 @@
+export{vN as SwipeActionMenu}from"../../../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{HI as LazyBlockComponent}from"../../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{z2 as SYNCED_TABLES,B2 as syncedWriteTarget,V2 as writeTargets}from"../../chunks/app-C52TGttp.js";

@@ -1,0 +1,1 @@
+export{NK as floatingAnchorFromRect,PK as useAnchoredFloating}from"../../../chunks/app-C52TGttp.js";

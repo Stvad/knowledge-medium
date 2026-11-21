@@ -1,0 +1,1 @@
+export{L7 as agree,R7 as pluralize}from"../../chunks/app-C52TGttp.js";

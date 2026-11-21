@@ -1,0 +1,1 @@
+export{YP as BlockPasteShellDecorator,XP as blockPasteShellDecorator}from"../../chunks/app-C52TGttp.js";

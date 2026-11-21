@@ -1,0 +1,1 @@
+export{xq as BootFallback}from"../../../chunks/app-C52TGttp.js";

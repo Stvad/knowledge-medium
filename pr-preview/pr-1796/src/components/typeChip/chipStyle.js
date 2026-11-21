@@ -1,0 +1,1 @@
+export{uP as chipStyle}from"../../../chunks/app-C52TGttp.js";

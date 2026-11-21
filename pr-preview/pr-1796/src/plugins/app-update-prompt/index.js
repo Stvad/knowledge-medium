@@ -1,0 +1,1 @@
+export{SF as appUpdatePromptExtension}from"../../../chunks/app-C52TGttp.js";

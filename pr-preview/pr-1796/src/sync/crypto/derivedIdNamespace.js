@@ -1,0 +1,1 @@
+export{Mct as deriveWorkspaceIdNamespace}from"../../../chunks/app-C52TGttp.js";

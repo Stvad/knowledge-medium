@@ -1,0 +1,1 @@
+export{Kk as BlockCrumbs}from"../../chunks/app-C52TGttp.js";
