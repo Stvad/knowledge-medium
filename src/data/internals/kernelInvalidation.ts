@@ -52,6 +52,8 @@ import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_MOVES_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
   TYPED_BLOCKS_REFS_OF_CHANNEL,
@@ -209,6 +211,23 @@ export const emitKernelInvalidations = (
   const beforeLive = !!snapshot.before && !snapshot.before.deleted
   const afterLive = !!snapshot.after && !snapshot.after.deleted
   const blockId = snapshot.after?.id ?? snapshot.before?.id ?? fallbackBlockId
+
+  // A field stamp classifies the row AND its children. A value can also move
+  // between two parents without changing its own stamp, type or properties.
+  const {before, after} = snapshot
+  const fieldChanged = (before?.isFieldForm || after?.isFieldForm) && (
+    before?.referenceTargetId !== after?.referenceTargetId ||
+    before?.isFieldForm !== after?.isFieldForm ||
+    before?.parentId !== after?.parentId ||
+    before?.workspaceId !== after?.workspaceId
+  )
+  if (fieldChanged || (beforeLive && afterLive && before?.parentId !== after?.parentId)) {
+    const channel = fieldChanged ? TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL : TYPED_BLOCKS_MOVES_CHANNEL
+    if (before?.workspaceId) emit(channel, before.workspaceId)
+    if (after?.workspaceId && after.workspaceId !== before?.workspaceId) {
+      emit(channel, after.workspaceId)
+    }
+  }
 
   const emittedTypes = new Set<string>()
   const emittedProps = new Set<string>()
