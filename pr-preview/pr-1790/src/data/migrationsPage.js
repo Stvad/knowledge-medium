@@ -1,1 +1,1 @@
-export{vot as MIGRATIONS_PAGE_ALIAS,yot as getOrCreateMigrationsPage,bot as migrationsPageBlockId,xot as migrationsPageSpec}from"../../chunks/app-DJ7FLaVq.js";
+export{vot as MIGRATIONS_PAGE_ALIAS,yot as getOrCreateMigrationsPage,bot as migrationsPageBlockId,xot as migrationsPageSpec}from"../../chunks/app-DYrnuTOU.js";
