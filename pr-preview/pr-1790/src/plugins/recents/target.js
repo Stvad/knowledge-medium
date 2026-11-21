@@ -1,1 +1,1 @@
-export{xk as openRecentsPage}from"../../../chunks/app-CFNISOsB.js";
+export{xk as openRecentsPage}from"../../../chunks/app-DJ7FLaVq.js";

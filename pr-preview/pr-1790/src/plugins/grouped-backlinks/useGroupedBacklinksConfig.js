@@ -1,1 +1,1 @@
-export{Ny as useGroupedBacklinksConfig}from"../../../chunks/app-CFNISOsB.js";
+export{Ny as useGroupedBacklinksConfig}from"../../../chunks/app-DJ7FLaVq.js";

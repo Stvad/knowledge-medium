@@ -1,1 +1,1 @@
-export{zr as keybindingsSettingsDataExtension}from"../../../chunks/app-CFNISOsB.js";
+export{zr as keybindingsSettingsDataExtension}from"../../../chunks/app-DJ7FLaVq.js";

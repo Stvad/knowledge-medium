@@ -1,1 +1,1 @@
-export{a7 as KERNEL_PROCESSORS}from"../../../chunks/app-CFNISOsB.js";
+export{a7 as KERNEL_PROCESSORS}from"../../../chunks/app-DJ7FLaVq.js";

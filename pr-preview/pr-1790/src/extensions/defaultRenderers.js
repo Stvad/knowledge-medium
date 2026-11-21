@@ -1,1 +1,1 @@
-export{ZI as defaultRegistry,QI as defaultRendererContributions,$I as defaultRenderersExtension}from"../../chunks/app-CFNISOsB.js";
+export{ZI as defaultRegistry,QI as defaultRendererContributions,$I as defaultRenderersExtension}from"../../chunks/app-DJ7FLaVq.js";

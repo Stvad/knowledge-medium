@@ -1,1 +1,1 @@
-export{RK as adoptOrCreatePropertySchema}from"../../chunks/app-CFNISOsB.js";
+export{RK as adoptOrCreatePropertySchema}from"../../chunks/app-DJ7FLaVq.js";

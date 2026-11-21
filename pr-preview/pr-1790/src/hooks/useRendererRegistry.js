@@ -1,1 +1,1 @@
-export{ZI as defaultRegistry,YI as refreshRendererRegistry,XI as useRenderer}from"../../chunks/app-CFNISOsB.js";
+export{ZI as defaultRegistry,YI as refreshRendererRegistry,XI as useRenderer}from"../../chunks/app-DJ7FLaVq.js";
