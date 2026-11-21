@@ -32,9 +32,12 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   definitionSeedsFacet,
+  KERNEL_QUERYABLE_FIELDS,
   mutatorsFacet,
   propertyEditorOverridesFacet,
   queriesFacet,
+  queryableFieldsFacet,
+  type QueryableField,
   typeSeedsFacet,
   valuePresetCoresFacet,
 } from '../facets'
@@ -167,6 +170,71 @@ describe('setFacetRuntime + mutatorsFacet', () => {
     // Kernel mutator NOT in the runtime — dispatch fails.
     await expect(repo.run('core.setContent', {id: 'p1', content: 'x'}))
       .rejects.toThrow(MutatorNotRegisteredError)
+  })
+})
+
+describe('queryableFieldsFacet', () => {
+  const field: QueryableField = {
+    name: 'plugin:score',
+    operators: {eq: (_alias, value) => ({sql: '1 = ?', params: [value]})},
+    dependencies: [workspaceId => ({kind: 'plugin', channel: 'scores', key: workspaceId})],
+  }
+
+  it('resolves a custom field by name and drops malformed contributions', () => {
+    const invalid = [
+      {...field, name: ''},
+      {...field, name: 'no-operators', operators: {}},
+      {...field, name: 'blank-operator', operators: {' ': field.operators.eq}},
+      {...field, name: 'invalid-operator', operators: {eq: 'equals'}},
+      {...field, name: 'missing-dependencies', dependencies: undefined},
+      {...field, name: 'empty-dependencies', dependencies: []},
+      {...field, name: 'invalid-dependencies', dependencies: ['scores']},
+    ]
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        queryableFieldsFacet.of(field),
+        ...invalid.map(value => queryableFieldsFacet.of(value as unknown as QueryableField)),
+      ])
+      expect(runtime.read(queryableFieldsFacet)).toEqual(new Map([[field.name, field]]))
+      expect(error).toHaveBeenCalledTimes(invalid.length)
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('keeps the registered field when an invalid runtime contribution has the same name', () => {
+    const runtime = resolveFacetRuntimeSync([queryableFieldsFacet.of(field)])
+    runtime.setRuntimeContributions(queryableFieldsFacet, 'plugin', [
+      {...field, dependencies: []} as unknown as QueryableField,
+    ])
+    expect(runtime.read(queryableFieldsFacet).get(field.name)).toBe(field)
+  })
+})
+
+describe('kernel queryable timestamps', () => {
+  const [created, updated] = KERNEL_QUERYABLE_FIELDS
+  const leapDay = Date.UTC(2024, 1, 29)
+
+  it('binds milliseconds, Dates and canonical strings as timestamp parameters', () => {
+    for (const operand of [leapDay, new Date(leapDay), '2024-02-29T00:00:00.000Z', '2024-02-29']) {
+      expect(created.operators.eq('candidate', operand)).toEqual({
+        sql: 'candidate.created_at = ?',
+        params: [leapDay],
+      })
+    }
+    expect(updated.operators.between('candidate', [leapDay, '2024-03-01'])).toEqual({
+      sql: 'coalesce(candidate.user_updated_at, candidate.updated_at) BETWEEN ? AND ?',
+      params: [leapDay, Date.UTC(2024, 2, 1)],
+    })
+  })
+
+  it('rejects normalized calendar dates and invalid operands', () => {
+    for (const operand of [Infinity, new Date(NaN), '2023-02-29', '2024-02-30T00:00:00.000Z', '2024-2-9']) {
+      expect(() => created.operators.eq('candidate', operand)).toThrow('timestamp operand')
+    }
+    expect(() => updated.operators.between('candidate', [leapDay])).toThrow('two timestamp operands')
+    expect(() => updated.operators.between('candidate', [leapDay, '2024-02-30'])).toThrow('timestamp operand')
   })
 })
 

@@ -53,6 +53,7 @@ export type WhereOperator =
   | { readonly gte: unknown }
   | { readonly between: readonly [unknown, unknown] }
   | { readonly exists: boolean }
+  | { readonly contains: unknown }
   | { readonly target: Readonly<Record<string, unknown>> }
 
 /** A single block predicate. Compiled against either the block itself
@@ -106,6 +107,8 @@ export interface TypedBlockQuery {
    *  scope, so the same query can mix block-itself and block-or-any-
    *  ancestor filters. */
   readonly match?: readonly BlockPredicate[]
+  /** At least one alternative must match. An explicitly empty disjunction matches nothing. */
+  readonly anyOf?: readonly BlockPredicate[]
   /** NORed predicates: a block matches iff none of these match. Same
    *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or
    *  `where` entry is dropped here as in `match`, so it excludes nothing. */

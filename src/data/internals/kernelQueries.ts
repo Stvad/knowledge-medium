@@ -38,6 +38,7 @@ import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
 import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
+import { queryableFieldsFacet } from '@/data/facets'
 import { refCodecKind } from './refProjection'
 import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
@@ -59,11 +60,13 @@ import {
   buildCandidatesCte,
   compileTypedBlockQuery,
   type TypedBlockQueryProjection,
-  isSelectiveWhereValue,
+  hasSelectiveProperty,
+  needsAncestorChain,
+  type WhereContext,
   normalizeTypedBlockQuery,
   NOT_PROPERTY_ROW_SQL,
   inlineJsonPath,
-  refListMembersSql,
+  listMembersSql,
 } from './typedBlockQuery'
 import {
   KERNEL_ALIASES_CHANNEL,
@@ -1058,6 +1061,7 @@ const typedBlocksArgsSchema = z.object({
   referencedBy: referenceFilterSchema.optional(),
   match: z.array(blockPredicateSchema).optional(),
   exclude: z.array(blockPredicateSchema).optional(),
+  anyOf: z.array(blockPredicateSchema).optional(),
   parentId: z.string().optional(),
   propertyChildren: z.literal('none').optional(),
   order: z.union([
@@ -1119,10 +1123,16 @@ const collectWhereDeps = (
    *  target ids (`declareAncestorDeps`); null means fall back to the
    *  workspace-wide live channel. */
   enumerableTargetProps: Set<string> | null,
+  context: WhereContext,
 ): void => {
   if (where === undefined) return
   ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
   for (const [name, value] of Object.entries(where)) {
+    const field = !context.properties.has(name) && context.fields?.get(name)
+    if (field) {
+      for (const dependency of field.dependencies) ctx.depend(dependency(workspaceId))
+      continue
+    }
     ctx.depend({
       kind: 'plugin',
       channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -1135,7 +1145,7 @@ const collectWhereDeps = (
     if (op !== 'target') continue
     if (operand === null || typeof operand !== 'object' || Array.isArray(operand)) continue
     const inner = operand as Record<string, unknown>
-    const innerHasSelective = Object.values(inner).some(isSelectiveWhereValue)
+    const innerHasSelective = hasSelectiveProperty(inner, context)
     if (!innerHasSelective) {
       // An ancestor-scope caller reaches every row this predicate is
       // evaluated against, so it can depend on the handful of target ids
@@ -1158,7 +1168,7 @@ const collectWhereDeps = (
     //
     // `null`, not the sink: a nested target hangs off the TARGET row, which
     // the ancestor walk never reaches, so its ids are not enumerable here.
-    collectWhereDeps(inner, workspaceId, ctx, null)
+    collectWhereDeps(inner, workspaceId, ctx, null, context)
   }
 }
 
@@ -1195,6 +1205,7 @@ const collectPredicateDeps = (
   workspaceId: string,
   ctx: QueryCtx,
   ancestorTargetProps: Set<string>,
+  context: WhereContext,
 ): void => {
   for (const predicate of predicates) {
     collectWhereDeps(
@@ -1202,6 +1213,7 @@ const collectPredicateDeps = (
       workspaceId,
       ctx,
       predicate.scope === 'ancestor' ? ancestorTargetProps : null,
+      context,
     )
     if (predicate.referencedBy !== undefined) {
       collectReferenceFilterDeps(predicate.referencedBy, workspaceId, ctx, {
@@ -1214,14 +1226,9 @@ const collectPredicateDeps = (
 const collectTypedBlockAxisDeps = (
   normalized: ResolvedTypedBlockQuery,
   ctx: QueryCtx,
-  ordered = true,
-): {
-  matchPredicates: readonly BlockPredicate[]
-  excludePredicates: readonly BlockPredicate[]
-  /** Properties whose ancestor-scoped `target:` predicate still needs its
-   *  target ids named — see `declareAncestorDeps`. */
-  ancestorTargetProps: ReadonlySet<string>
-} => {
+  ordered: boolean,
+  context: WhereContext,
+): ReadonlySet<string> => {
   const workspaceId = normalized.workspaceId
   const types = normalized.types ?? []
   const referencedBy = normalized.referencedBy
@@ -1244,12 +1251,13 @@ const collectTypedBlockAxisDeps = (
   }
   const ancestorTargetProps = new Set<string>()
   // Top-level `where` is self scope — not enumerable (see collectWhereDeps).
-  collectWhereDeps(normalized.where, workspaceId, ctx, null)
+  collectWhereDeps(normalized.where, workspaceId, ctx, null, context)
   if (referencedBy !== undefined) {
     collectReferenceFilterDeps(referencedBy, workspaceId, ctx)
   }
-  collectPredicateDeps(matchPredicates, workspaceId, ctx, ancestorTargetProps)
-  collectPredicateDeps(excludePredicates, workspaceId, ctx, ancestorTargetProps)
+  collectPredicateDeps(matchPredicates, workspaceId, ctx, ancestorTargetProps, context)
+  collectPredicateDeps(excludePredicates, workspaceId, ctx, ancestorTargetProps, context)
+  collectPredicateDeps(normalized.anyOf ?? [], workspaceId, ctx, ancestorTargetProps, context)
 
   // Live channel — only when there's no positive membership axis to
   // catch "fresh row could enter the result". A type/referencedBy
@@ -1263,10 +1271,9 @@ const collectTypedBlockAxisDeps = (
   //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
   //     don't need live: matching rows must set `foo='bar'` to
   //     match, which fires the foo property channel.)
-  const hasSelectiveWhere = Object.values(normalized.where ?? {}).some(isSelectiveWhereValue)
+  const hasSelectiveWhere = hasSelectiveProperty(normalized.where, context)
   const hasMatchAxis = matchPredicates.some(p =>
-    p.referencedBy !== undefined ||
-    (p.where !== undefined && Object.values(p.where).some(isSelectiveWhereValue)),
+    p.scope !== 'ancestor' && (p.referencedBy !== undefined || hasSelectiveProperty(p.where, context)),
   )
   const hasPositiveAxis =
     normalized.parentId !== undefined || types.length > 0 || referencedBy !== undefined || hasSelectiveWhere || hasMatchAxis
@@ -1278,15 +1285,8 @@ const collectTypedBlockAxisDeps = (
     })
   }
 
-  return {matchPredicates, excludePredicates, ancestorTargetProps}
+  return ancestorTargetProps
 }
-
-const typedBlockNeedsAncestorChain = (
-  matchPredicates: readonly BlockPredicate[],
-  excludePredicates: readonly BlockPredicate[],
-): boolean =>
-  matchPredicates.some(p => p.scope === 'ancestor') ||
-  excludePredicates.some(p => p.scope === 'ancestor')
 
 /** One UNION arm per named property, reading the target ids out of the SAME
  *  `properties_json` expression the predicate itself compiles to
@@ -1321,7 +1321,7 @@ const targetLivenessArms = (
     } else if (kind === 'refList') {
       arms.push(
         `SELECT DISTINCT '${TARGET_DEP_KIND}', je.value\n` +
-        `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id, ${refListMembersSql('b', name)} je`,
+        `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id, ${listMembersSql('b', name)} je`,
       )
     }
   }
@@ -1338,14 +1338,14 @@ const declareAncestorDeps = async (
    *  (which `collectWhereDeps` already did) without also picking up the
    *  precise ids that replace it — the under-firing direction. */
   targetProps: ReadonlySet<string>,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   recognition: RecognitionParams | undefined,
 ): Promise<void> => {
-  const candidatesCte = buildCandidatesCte(normalized, schemas, recognition)
+  const candidatesCte = buildCandidatesCte(normalized, context, recognition)
   const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string | null}>(
     ANCESTOR_DEP_NODES_SQL(
       candidatesCte.sql,
-      targetLivenessArms(targetProps, schemas),
+      targetLivenessArms(targetProps, context.properties),
     ),
     [...candidatesCte.params],
   )
@@ -1403,11 +1403,11 @@ const prepareTypedBlockQuery = async (
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, 'property-schema')})
     recognition = dependOnRecognitionParams(ctx, registry)
   }
-  const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition})
-  const {matchPredicates, excludePredicates, ancestorTargetProps} =
-    collectTypedBlockAxisDeps(normalized, ctx, projection !== 'count')
-  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
-    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', ancestorTargetProps, schemas, recognition)
+  const context: WhereContext = {properties: schemas, fields: ctx.repo.facetRuntime?.read(queryableFieldsFacet)}
+  const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition, fields: context.fields})
+  const targetProps = collectTypedBlockAxisDeps(normalized, ctx, projection !== 'count', context)
+  if (needsAncestorChain(normalized)) {
+    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', targetProps, context, recognition)
   }
   return compiled
 }

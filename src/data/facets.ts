@@ -16,6 +16,7 @@ import type {
   AnyValuePresetPresentation,
   BlockData,
   BlockReference,
+  Dependency,
   Tx,
 } from '@/data/api'
 import {
@@ -290,6 +291,88 @@ const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlock
 export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
+
+
+type QueryableFieldOperator = (alias: string, operand: unknown) => {
+  sql: string
+  params: readonly unknown[]
+}
+
+type QueryableFieldDependency = (workspaceId: string) => Dependency
+
+/** A predicate over the candidate block row. Operators validate operands and
+ * bind them as SQL parameters. Dependencies cover every change that can
+ * alter the predicate's result. */
+export interface QueryableField {
+  name: string
+  operators: Readonly<Record<string, QueryableFieldOperator>>
+  dependencies: readonly [QueryableFieldDependency, ...QueryableFieldDependency[]]
+}
+
+const isQueryableField = (value: unknown): value is QueryableField => {
+  if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim()) return false
+  if (!isRecord(value.operators) || Array.isArray(value.operators)) return false
+  const operators = Object.entries(value.operators)
+  return operators.length > 0 &&
+    operators.every(([name, operator]) => name.trim() && typeof operator === 'function') &&
+    Array.isArray(value.dependencies) && value.dependencies.length > 0 &&
+    [...value.dependencies].every(dependency => typeof dependency === 'function')
+}
+
+const queryableFieldsByName = keyedMapFacet<QueryableField>('data.queryable-fields', field => field.name)
+
+export const queryableFieldsFacet = defineFacet({
+  id: queryableFieldsByName.id,
+  empty: queryableFieldsByName.empty,
+  validate: isQueryableField,
+  // Runtime buckets reach the combiner without the static contribution check.
+  combine: (fields, context) => queryableFieldsByName.combine(fields.filter(isQueryableField), context),
+})
+
+const timestampOperand = (field: string, operand: unknown): number => {
+  if (typeof operand === 'number' && Number.isFinite(operand)) return operand
+  if (operand instanceof Date && Number.isFinite(operand.getTime())) return operand.getTime()
+  if (typeof operand === 'string') {
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(operand) ? `${operand}T00:00:00.000Z` : operand
+    const date = new Date(iso)
+    // Date normalizes some invalid dates. Require the original spelling to round-trip.
+    if (Number.isFinite(date.getTime()) && date.toISOString() === iso) return date.getTime()
+  }
+  throw new TypeError(`Expected a timestamp operand for ${field}`)
+}
+
+const timestampField = (name: string, column: (alias: string) => string): QueryableField => {
+  const compare = (operator: string): QueryableFieldOperator => (alias, operand) => ({
+    sql: `${column(alias)} ${operator} ?`,
+    params: [timestampOperand(name, operand)],
+  })
+  return {
+    name,
+    operators: {
+      eq: compare('='),
+      lt: compare('<'),
+      lte: compare('<='),
+      gt: compare('>'),
+      gte: compare('>='),
+      between: (alias, operand) => {
+        if (!Array.isArray(operand) || operand.length !== 2) {
+          throw new TypeError(`Expected two timestamp operands for ${name}`)
+        }
+        return {
+          sql: `${column(alias)} BETWEEN ? AND ?`,
+          params: [timestampOperand(name, operand[0]), timestampOperand(name, operand[1])],
+        }
+      },
+    },
+    // Both stamps can change on existing rows, including during import and replay.
+    dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+  }
+}
+
+export const KERNEL_QUERYABLE_FIELDS: readonly QueryableField[] = [
+  timestampField('created', alias => `${alias}.created_at`),
+  timestampField('updated', alias => `coalesce(${alias}.user_updated_at, ${alias}.updated_at)`),
+]
 
 /** Code-owned property definitions. The declaration object is also the typed
  * PropertyHandle returned by seedProperty. This is deliberately a list facet,
