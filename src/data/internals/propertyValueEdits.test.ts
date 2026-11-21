@@ -474,22 +474,31 @@ describe('clearPropertyValue', () => {
     expect(await projection()).toEqual({})
   })
 
-  it('clears only the value text when it has a nested note and keeps a field with nested machinery', async () => {
+  it.each([
+    {state: 'a nested note', rows: [value('note', 'keep this note', 'value-a')], properties: {}},
+    {state: 'properties', rows: [], properties: {annotation: 'keep'}},
+  ])('refuses to clear when a value row carries $state', async ({rows, properties}) => {
     const repo = await setup()
     await seed({id: ownerId, properties: {[textProperty.name]: 'first'}}, field(), field('field-b'),
-      value('value-a', 'first'), value('note', 'keep this note', 'value-a'), value('value-b', 'second', 'field-b'),
-      field('nested-field', 'field-b'), value('nested-value', 'keep this property', 'nested-field'))
+      value('value-b', 'second', 'field-b'), {...value('value-a', 'first'), properties}, ...rows)
+    await expectCommittedRefusal(repo, tx => clearPropertyValue(tx, ownerId, fieldId), 'resolve-in-outline')
+    await expectCommittedRefusal(repo, tx => writePropertyText(tx, ownerId, fieldId, ''), 'resolve-in-outline')
+  })
+
+  it.each([
+    {state: 'a nested field', fieldProperties: {}, rows: [field('nested-field', 'field-b'), value('nested-value', 'keep', 'nested-field')]},
+    {state: 'properties', fieldProperties: {annotation: 'keep'}, rows: []},
+  ])('deletes every value and keeps a field row carrying $state', async ({fieldProperties, rows}) => {
+    const repo = await setup()
+    await seed({id: ownerId, properties: {[textProperty.name]: 'first'}}, field(), {...field('field-b'), properties: fieldProperties},
+      value('value-a', 'first'), value('value-b', 'second', 'field-b'), ...rows)
 
     await repo.tx(tx => clearPropertyValue(tx, ownerId, fieldId), options)
 
-    expect(await children(ownerId)).toEqual([
-      {id: 'field-a', content: '::((definition))'}, {id: 'field-b', content: '::((definition))'},
-    ])
-    expect(await children('field-a')).toEqual([{id: 'value-a', content: ''}])
-    expect(await children('field-b')).toEqual([{id: 'nested-field', content: '::((definition))'}])
-    expect(await children('value-a')).toEqual([{id: 'note', content: 'keep this note'}])
-    expect(await children('nested-field')).toEqual([{id: 'nested-value', content: 'keep this property'}])
-    expect(await projection()).toEqual({[textProperty.name]: ''})
+    expect(await children(ownerId)).toEqual([{id: 'field-b', content: '::((definition))'}])
+    expect((await children('field-b')).map(row => row.id)).toEqual(rows.slice(0, 1).map(row => row.id))
+    expect(await projection('field-b')).toEqual(fieldProperties)
+    expect(await projection()).toEqual({})
   })
 
   it('clears an empty field projection without deleting its nested field row', async () => {
@@ -501,23 +510,6 @@ describe('clearPropertyValue', () => {
     expect(await children(ownerId)).toEqual([{id: 'field-a', content: '::((definition))'}])
     expect(await children('field-a')).toEqual([{id: 'nested-field', content: '::((definition))'}])
     expect(await projection()).toEqual({})
-  })
-
-  it('retains a value and a field carrying properties without descendant rows', async () => {
-    const repo = await setup()
-    const properties = {annotation: 'keep'}
-    await seed({id: ownerId, properties: {[textProperty.name]: 'before'}}, field(),
-      {...field('field-b'), properties}, {...value('value-a', 'before'), properties})
-
-    await repo.tx(tx => clearPropertyValue(tx, ownerId, fieldId), options)
-
-    expect(await children(ownerId)).toEqual([
-      {id: 'field-a', content: '::((definition))'}, {id: 'field-b', content: '::((definition))'},
-    ])
-    expect(await children('field-a')).toEqual([{id: 'value-a', content: ''}])
-    expect(await projection('value-a')).toEqual(properties)
-    expect(await projection('field-b')).toEqual(properties)
-    expect(await projection()).toEqual({[textProperty.name]: ''})
   })
 
   it('keeps final text live through edit end and a late editor flush', async () => {
@@ -830,17 +822,11 @@ describe('list properties', () => {
     expect(await projection()).toEqual({})
   })
 
-  it('clears the list and preserves the annotated member as a blank value row', async () => {
+  it('refuses to clear a list with an annotated member', async () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId, properties: {[refListProperty.name]: ['first', 'second']}}, field(),
       value('value-a', '((first))'), value('value-b', '((second))'), value('note', 'keep', 'value-b'))
-
-    await repo.tx(tx => clearPropertyValue(tx, ownerId, fieldId), options)
-
-    expect(await children(ownerId)).toEqual([{id: 'field-a', content: '::((definition))'}])
-    expect(await children('field-a')).toEqual([{id: 'value-b', content: ''}])
-    expect(await children('value-b')).toEqual([{id: 'note', content: 'keep'}])
-    expect(await projection()).toEqual({[refListProperty.name]: []})
+    await expectCommittedRefusal(repo, tx => clearPropertyValue(tx, ownerId, fieldId), 'resolve-in-outline')
   })
 })
 
@@ -959,20 +945,32 @@ describe('several edits to the same property in one transaction', () => {
     expect(await projection()).toEqual({})
   })
 
-  it.each([false, true])('honors a clear after writing a valid scalar (with note: %s)', async withNote => {
+  it('honors a clear after writing a valid scalar', async () => {
     const repo = await setup()
-    await seed({id: ownerId, properties: {[textProperty.name]: 'before'}}, field(), value('value-a', 'before'),
-      ...(withNote ? [value('note', 'keep', 'value-a')] : []))
+    await seed({id: ownerId, properties: {[textProperty.name]: 'before'}}, field(), value('value-a', 'before'))
 
     await repo.tx(async tx => {
       await writePropertyText(tx, ownerId, fieldId, 'after')
       await clearPropertyValue(tx, ownerId, fieldId)
     }, options)
 
-    expect(await children(ownerId)).toEqual(withNote ? [{id: 'field-a', content: '::((definition))'}] : [])
-    expect(await children('field-a')).toEqual(withNote ? [{id: 'value-a', content: ''}] : [])
-    expect(await children('value-a')).toEqual(withNote ? [{id: 'note', content: 'keep'}] : [])
-    expect(await projection()).toEqual(withNote ? {[textProperty.name]: ''} : {})
+    expect(await children(ownerId)).toEqual([])
+    expect(await projection()).toEqual({})
+  })
+
+  it('keeps an earlier write when a clear of the annotated row refuses', async () => {
+    const repo = await setup()
+    await seed({id: ownerId, properties: {[textProperty.name]: 'before'}}, field(), value('value-a', 'before'),
+      value('note', 'keep', 'value-a'))
+
+    await repo.tx(async tx => {
+      await writePropertyText(tx, ownerId, fieldId, 'after')
+      await expectRefusal(clearPropertyValue(tx, ownerId, fieldId), 'resolve-in-outline')
+    }, options)
+
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: 'after'}])
+    expect(await children('value-a')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[textProperty.name]: 'after'})
   })
 
   it('opens a blank row after clearing a pending key without rematerializing the cleared value', async () => {

@@ -295,14 +295,18 @@ export const finishPropertyValueEdit = async (
   requestProjection(tx, rows)
 }
 
-/** Unset the property. A value row with children or properties is blanked rather than removed. */
+/** Unset the property: every value row goes, then each field row left with no data of its own.
+ *  A value row with nested blocks or properties refuses the whole clear before any write: blanking
+ *  it would keep the property set, so it is resolved in the outline. */
 export const clearPropertyValue = async (tx: Tx, ownerId: string, fieldId: string): Promise<void> => {
   const rows = await readPropertyRows(tx, ownerId, fieldId)
-  for (const {field, children} of rows.fields) {
-    for (const value of children.filter(isFieldValueChild)) {
-      if (await carriesData(tx, value)) await tx.update(value.id, {content: ''})
-      else await deleteSubtreeAnnouncedInTx(tx, value.id)
+  for (const value of rows.values) {
+    if (await carriesData(tx, value)) {
+      throw new PropertyEditRefusedError('resolve-in-outline', 'A value has notes or properties of its own. Resolve it in the outline.')
     }
+  }
+  for (const {field, children} of rows.fields) {
+    for (const value of children.filter(isFieldValueChild)) await deleteSubtreeAnnouncedInTx(tx, value.id)
     if (!await carriesData(tx, field)) await deleteSubtreeAnnouncedInTx(tx, field.id)
   }
   requestProjection(tx, rows)
