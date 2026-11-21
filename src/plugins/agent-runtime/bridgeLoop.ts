@@ -73,11 +73,13 @@ export interface BridgeLoop {
   /** POSTs to the bridge as this client. */
   post: (path: string, body: unknown) => Promise<Response>
   stop: () => void
+  stopAndDrain: () => Promise<void>
 }
 
 export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   const {clientId} = options
   const abortController = new AbortController()
+  const resultsController = new AbortController()
   let retryMs = retryBaseMs
   let attempts = 0
   let wakeResolve: (() => void) | null = null
@@ -107,7 +109,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
     }
   }
 
-  const postJson = async (url: string, body: unknown, withClientId: boolean) => {
+  const postJson = async (url: string, body: unknown, withClientId: boolean, signal = abortController.signal) => {
     const response = await options.fetch(url, {
       method: 'POST',
       headers: {
@@ -116,7 +118,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
         ...(withClientId ? {'x-agent-runtime-client-id': clientId} : {}),
       },
       body: JSON.stringify(body),
-      signal: abortController.signal,
+      signal,
     })
 
     if (!response.ok) {
@@ -141,7 +143,7 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
   }
 
   const reportResult = (commandId: string, payload: unknown, baseUrl: string) =>
-    postJson(`${baseUrl}/runtime/commands/${commandId}/result`, payload, true)
+    postJson(`${baseUrl}/runtime/commands/${commandId}/result`, payload, true, resultsController.signal)
 
   const inFlightCommands = new Set<Promise<void>>()
 
@@ -258,7 +260,13 @@ export const startBridgeLoop = (options: BridgeLoopOptions): BridgeLoop => {
     register: () => register(),
     wake,
     post: (path, body) => postJson(`${options.baseUrl()}${path}`, body, true),
+    async stopAndDrain() {
+      abortController.abort()
+      wake()
+      await Promise.allSettled(inFlightCommands)
+    },
     stop: () => {
+      resultsController.abort()
       abortController.abort()
       wake()
     },

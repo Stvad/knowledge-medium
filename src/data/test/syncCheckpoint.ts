@@ -24,7 +24,7 @@ interface CoreAccess {
 const core = (db: PowerSyncDatabase): CoreAccess => db as unknown as CoreAccess
 
 export interface ServerRow {
-  readonly type: 'blocks_synced' | 'workspaces'
+  readonly type: 'blocks_synced' | 'workspaces' | 'workspace_members'
   readonly id: string
   readonly data: Record<string, unknown>
 }

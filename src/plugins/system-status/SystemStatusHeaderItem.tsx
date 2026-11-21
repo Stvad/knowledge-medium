@@ -29,6 +29,7 @@ import { dbFilenameForUser } from '@/data/localDbStorage.js'
 import { isSyncStreamLockHeld } from '@/data/syncStreamLock.js'
 import {
   formatPendingChanges,
+  rejectedCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -43,7 +44,6 @@ interface UploadQueueCountRow {
 }
 
 const uploadQueuePreviewThrottleMs = 1_000
-const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 // Network sync errors are noisy: a dropped connection or a token refresh
 // caught mid-flight surfaces an error for a second or two before PowerSync

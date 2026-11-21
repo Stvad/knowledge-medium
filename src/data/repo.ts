@@ -21,7 +21,6 @@ import type {
   Query,
   QueryCtx,
   QueryRegistry,
-  ResolvedTypedBlockQuery,
   RepoTxOptions,
   TypedBlockQuery,
   TypeContribution,
@@ -152,6 +151,8 @@ import {
   KERNEL_FIELD_RECOGNITION_CHANNEL,
   KERNEL_FIELD_OUTLINE_SKIP_KEY,
   KERNEL_FIELD_RECOGNITION_KEY,
+  QUERY_SCHEMA_CHANNEL,
+  QUERY_PROPERTY_SCHEMAS_KEY,
   type InvalidationRule,
 } from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
@@ -385,6 +386,9 @@ const registryForWorkspace = (
     : previous?.workspaceId === workspaceId
       ? previous
       : null
+
+const canUseAmbientSchemas = (activeWorkspaceId: string | null, workspaceId: string): boolean =>
+  activeWorkspaceId === null || workspaceId === activeWorkspaceId
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -1015,6 +1019,17 @@ export class Repo {
     return this._propertyDefinitionRegistry
   }
 
+  /** Active or immediately previous workspace snapshot. An unloaded workspace has no registry. */
+  propertyDefinitionsFor(workspaceId: string): PropertyDefinitionRegistrySnapshot | null {
+    return registryForWorkspace(this._propertyDefinitionRegistry, this._previousPropertyDefinitionRegistry, workspaceId)
+  }
+
+  /** Null for an unloaded workspace. The active workspace can query code schemas while its registry boots. */
+  propertySchemasFor(workspaceId: string): ReadonlyMap<string, AnyPropertySchema> | null {
+    return this.propertyDefinitionsFor(workspaceId)?.schemas ??
+      (canUseAmbientSchemas(this.activeWorkspaceId, workspaceId) ? this.propertySchemas : null)
+  }
+
   /** Active-workspace type-definition registry snapshot (kernel/plugin code
    *  types are NOT in it — those live only in `types`; this is the block-built +
    *  seed side that `getTypeBlockId` and the seed read-only gates read). Null
@@ -1033,16 +1048,12 @@ export class Repo {
     // for a workspace whose definitions aren't loaded (which could resolve a
     // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
     // allow-plain) still uses the transitional resolver.
-    const snapshot = registryForWorkspace(
-      this._propertyDefinitionRegistry,
-      this._previousPropertyDefinitionRegistry,
-      workspaceId,
-    )
+    const snapshot = this.propertyDefinitionsFor(workspaceId)
     return propertySchemaResolverForWorkspace(
       snapshot,
       workspaceId,
       this._propertySeedNameCounts,
-      this.client.activeWorkspaceId === null || workspaceId === this.client.activeWorkspaceId,
+      canUseAmbientSchemas(this.activeWorkspaceId, workspaceId),
     )
   }
 
@@ -1214,6 +1225,7 @@ export class Repo {
         propertySeedNameCounts,
         typeDefinitions,
       ) => {
+        const codecsChanged = !sameKeyedMap(this._propertySchemas, propertySchemas, (a, b) => a.codec === b.codec)
         this._types = types
         this._propertySchemas = propertySchemas
         // Retain the outgoing workspace's faithful snapshot when pinning a
@@ -1263,11 +1275,12 @@ export class Repo {
           ...(recognitionChanged ? [KERNEL_FIELD_RECOGNITION_KEY] : []),
           ...(outlineSkipsChanged ? [KERNEL_FIELD_OUTLINE_SKIP_KEY] : []),
         ]
-        if (recognitionKeys.length > 0) {
-          this.handleStore.invalidate({plugin: new Map([
-            [KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys],
-          ])})
+        const registryChanges = new Map<string, string[]>()
+        if (recognitionKeys.length) registryChanges.set(KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys)
+        if (codecsChanged || incomingWorkspaceId !== currentWorkspaceId) {
+          registryChanges.set(QUERY_SCHEMA_CHANNEL, [QUERY_PROPERTY_SCHEMAS_KEY])
         }
+        if (registryChanges.size) this.handleStore.invalidate({plugin: registryChanges})
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
@@ -2201,10 +2214,13 @@ export class Repo {
       typeDefinitions: {value: runtime.typeDefinitions},
       valuePresetCores: {value: runtime.valuePresets},
     })
+    facade.propertyDefinitionsFor = runtime.propertyDefinitionRegistryForWorkspace
+    facade.propertySchemasFor = workspaceId => facade.propertyDefinitionsFor(workspaceId)?.schemas ??
+      (canUseAmbientSchemas(runtime.propertySchemaWorkspaceId, workspaceId) ? runtime.propertySchemas : null)
     facade.propertySchemaResolverFor = workspaceId => propertySchemaResolverForWorkspace(
       runtime.propertyDefinitionRegistryForWorkspace(workspaceId), workspaceId,
       runtime.propertySeedNameCounts,
-      runtime.propertySchemaWorkspaceId === null || workspaceId === runtime.propertySchemaWorkspaceId,
+      canUseAmbientSchemas(runtime.propertySchemaWorkspaceId, workspaceId),
     )
     facade.snapshotTypeRegistries = () => ({types: runtime.types, propertySchemas: runtime.propertySchemas})
     return facade
@@ -2577,25 +2593,13 @@ export class Repo {
     return this.dispatchQuery(name)(args).load() as Promise<R>
   }
 
-  private resolveTypedBlockQuery(query: TypedBlockQuery): ResolvedTypedBlockQuery {
-    return normalizeTypedBlockQuery({
-      workspaceId: query.workspaceId,
-      types: query.types,
-      where: query.where,
-      referencedBy: query.referencedBy,
-      match: query.match,
-      exclude: query.exclude,
-      order: query.order,
-    })
-  }
-
   /** Run a typed block query once. `workspaceId` is required: callers
    *  that want the user's currently-active workspace use
    *  `queryActiveWorkspace` instead — making the workspace explicit at
    *  the call site prevents background flows / import runs from silently
    *  mis-scoping on a workspace switch. */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
-    return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
+    return this.query.typedBlocks(normalizeTypedBlockQuery(query)).load()
   }
 
   /** Subscribe to a typed block query. `workspaceId` is required: callers
@@ -2611,7 +2615,7 @@ export class Repo {
       onInitialError?: (error: unknown) => void
     },
   ): Unsubscribe {
-    const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
+    const handle = this.query.typedBlocks(normalizeTypedBlockQuery(query))
     if (options?.freshInitial) {
       // A projector's registries are what a local transaction encodes with,
       // so its rows may not wait out a sync backlog's held invalidations.
@@ -2668,7 +2672,7 @@ export class Repo {
    *  the rows are unchanged. For `ProjectorLifecycle.upsert`, its only caller;
    *  `LoaderHandle.forgetNotifiedValue` carries the reasoning. */
   requireNextBlockDelivery(query: TypedBlockQuery): void {
-    this.query.typedBlocks(this.resolveTypedBlockQuery(query)).forgetNotifiedValue()
+    this.query.typedBlocks(normalizeTypedBlockQuery(query)).forgetNotifiedValue()
   }
 
   /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
@@ -3427,11 +3431,7 @@ export class Repo {
    *  locally and red on CI. Pinning it wants a Repo whose priming is
    *  injectable, which does not exist yet. */
   private propertyRegistryReadyFor(workspaceId: string): boolean {
-    return registryForWorkspace(
-      this._propertyDefinitionRegistry,
-      this._previousPropertyDefinitionRegistry,
-      workspaceId,
-    ) !== null
+    return this.propertyDefinitionsFor(workspaceId) !== null
   }
 
   /** Is this device caught up right now? Same predicate the scheduler gates

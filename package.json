@@ -44,6 +44,7 @@
     "agent:server": "node packages/agent-cli/dist/server.js",
     "agent": "node packages/agent-cli/dist/cli.js",
     "agent-dispatch": "node packages/agent-dispatch/dist/daemon.js",
+    "headless": "node scripts/headless/launch.ts",
     "agent-eval": "vite-node --config vitest.config.ts scripts/agent-eval/cli.ts --"
   },
   "dependencies": {
