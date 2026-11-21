@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ASSETS_ROOT, InMemoryByteStore, OpfsByteStore, assetPathSegments } from './byteStore.js'
+import { ASSETS_ROOT, InMemoryByteStore, OpfsByteStore, assetPathSegments, type ByteStore } from './byteStore.js'
+import { handleWriteRequest, type WriteReply, type WriteRequest, type WriterWorkerLike } from './byteStoreWriter.js'
 
 const U = 'user-1'
 const WS = 'ws-A'
@@ -18,7 +19,30 @@ class FakeFileHandle {
   static nextWrites: Array<() => Promise<void>> = []
   async getFile() {
     // A fresh copy each read, like a real File over OPFS.
-    return { arrayBuffer: async () => this.data.slice().buffer }
+    return { size: this.data.length, arrayBuffer: async () => this.data.slice().buffer }
+  }
+  /** Fails a sync-handle write after this many bytes landed, as a full disk does. */
+  static failSyncWriteAfter: number | null = null
+  static openSyncHandles = 0
+  /** The in-place write primitive: unlike a writable, what it wrote stays on failure. */
+  async createSyncAccessHandle() {
+    FakeFileHandle.openSyncHandles++
+    return {
+      truncate: (size: number) => { this.data = this.data.slice(0, size) },
+      write: (chunk: Uint8Array, opts?: { at?: number }) => {
+        const limit = FakeFileHandle.failSyncWriteAfter
+        const taken = limit === null ? chunk : chunk.subarray(0, limit)
+        const at = opts?.at ?? 0
+        const out = new Uint8Array(Math.max(this.data.length, at + taken.length))
+        out.set(this.data)
+        out.set(taken, at)
+        this.data = out
+        if (limit !== null) throw new DOMException('full', 'QuotaExceededError')
+        return taken.length
+      },
+      flush: () => {},
+      close: () => { FakeFileHandle.openSyncHandles-- },
+    }
   }
   async createWritable() {
     if (FakeFileHandle.failOpens) throw FakeFileHandle.failOpens
@@ -82,18 +106,67 @@ class FakeDirHandle {
     for (const name of this.files.keys()) yield name
     for (const name of this.dirs.keys()) yield name
   }
+
+  async *entries(): AsyncGenerator<[string, FakeFileHandle | FakeDirHandle]> {
+    yield* this.files
+    yield* this.dirs
+  }
+}
+
+const asRoot = (root: FakeDirHandle) => root as unknown as FileSystemDirectoryHandle
+
+/** The writer worker, in-thread: the real handler over the fake tree. `hang` never
+ *  answers; `crash` fires onerror. */
+class FakeWriterWorker implements WriterWorkerLike {
+  static spawned = 0
+  onmessage: ((event: MessageEvent<WriteReply>) => void) | null = null
+  onerror: ((event: ErrorEvent) => void) | null = null
+  terminated = false
+  constructor(
+    private readonly root: FakeDirHandle,
+    private readonly mode: 'ok' | 'hang' | 'crash',
+  ) {
+    FakeWriterWorker.spawned++
+  }
+  postMessage(message: WriteRequest, transfer: Transferable[]): void {
+    // Detaches the sender's buffer, as a real transfer does.
+    const received = structuredClone(message, { transfer })
+    if (this.mode === 'hang') return
+    if (this.mode === 'crash') return void Promise.resolve().then(() => this.onerror?.({ message: 'boom' } as ErrorEvent))
+    void handleWriteRequest(async () => asRoot(this.root), received).then((reply) => {
+      if (!this.terminated) this.onmessage?.({ data: reply } as MessageEvent<WriteReply>)
+    })
+  }
+  terminate(): void {
+    this.terminated = true
+  }
 }
 
 const opfsWithRoot = () => {
   const root = new FakeDirHandle()
-  const store = new OpfsByteStore({ getRoot: async () => root as unknown as FileSystemDirectoryHandle })
+  const store = new OpfsByteStore({ getRoot: async () => asRoot(root), hasWritableStream: true })
   return { store, root }
 }
 
+/** A store on an engine without `createWritable`: every put goes through the worker. */
+const workerOpfs = (...modes: Array<'ok' | 'hang' | 'crash'>) => {
+  const root = new FakeDirHandle()
+  const store = new OpfsByteStore({
+    getRoot: async () => asRoot(root),
+    hasWritableStream: false,
+    spawnWriterWorker: () => new FakeWriterWorker(root, modes.shift() ?? 'ok'),
+    writeTimeoutMs: 20,
+  })
+  return { store, root }
+}
+
+const fileAt = (root: FakeDirHandle, key = KEY) => root.dirs.get(ASSETS_ROOT)?.dirs.get(U)?.dirs.get(WS)?.files.get(key)
+
 // ── The behavioral contract both implementations must satisfy ─────────────────
-describe.each([
+describe.each<[string, () => ByteStore]>([
   ['InMemoryByteStore', () => new InMemoryByteStore()],
-  ['OpfsByteStore', () => opfsWithRoot().store],
+  ['OpfsByteStore (createWritable)', () => opfsWithRoot().store],
+  ['OpfsByteStore (worker + sync access handle)', () => workerOpfs().store],
 ])('ByteStore contract — %s', (_name, make) => {
   it('returns null on a miss', async () => {
     expect(await make().get(U, WS, KEY)).toBeNull()
@@ -105,6 +178,31 @@ describe.each([
     await store.put(U, WS, KEY, bytes(1, 2, 3))
     expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2, 3))
     expect(await store.has(U, WS, KEY)).toBe(true)
+  })
+
+  it('a re-put replaces the bytes, leaving no tail of a longer previous copy', async () => {
+    const store = make()
+    await store.put(U, WS, KEY, bytes(1, 2, 3, 4))
+    await store.put(U, WS, KEY, bytes(9))
+    expect(await store.get(U, WS, KEY)).toEqual(bytes(9))
+  })
+
+  it('put leaves the caller’s buffer usable (the resolver serves the bytes it just stored)', async () => {
+    const store = make()
+    const src = bytes(5, 6, 7)
+    await store.put(U, WS, KEY, src)
+    expect(src).toEqual(bytes(5, 6, 7))
+  })
+
+  it('an empty entry is neither present nor listed, and a put over it stores the bytes', async () => {
+    const store = make()
+    await store.put(U, WS, KEY, bytes())
+    expect(await store.has(U, WS, KEY)).toBe(false)
+    expect(await store.listWorkspaceKeys(U, WS)).toEqual(new Set())
+
+    await store.put(U, WS, KEY, bytes(1))
+    expect(await store.has(U, WS, KEY)).toBe(true)
+    expect(await store.listWorkspaceKeys(U, WS)).toEqual(new Set([KEY]))
   })
 
   it('isolates by user, workspace, and key', async () => {
@@ -272,5 +370,57 @@ describe('OpfsByteStore — on-disk layout', () => {
     await store.purgeWorkspace(U, WS)
     const userDir = root.dirs.get(ASSETS_ROOT)!.dirs.get(U)!
     expect(userDir.dirs.has(WS)).toBe(false)
+  })
+})
+
+describe('OpfsByteStore — writing where the engine has no createWritable (WebKit before Safari 26)', () => {
+  it('writes through one worker, reused across puts, and closes each handle', async () => {
+    const before = FakeWriterWorker.spawned
+    const { store, root } = workerOpfs()
+    await store.put(U, WS, KEY, bytes(1, 2, 3))
+    await store.put(U, WS, 'other', bytes(4))
+
+    expect(fileAt(root)?.data).toEqual(bytes(1, 2, 3))
+    expect(FakeWriterWorker.spawned - before).toBe(1)
+    expect(FakeFileHandle.openSyncHandles).toBe(0)
+  })
+
+  it('a write that fails part-way rejects with the engine’s error and leaves no entry it created', async () => {
+    const { store, root } = workerOpfs()
+    FakeFileHandle.failSyncWriteAfter = 2
+    try {
+      await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toMatchObject({ name: 'QuotaExceededError' })
+    } finally {
+      FakeFileHandle.failSyncWriteAfter = null
+    }
+    expect(fileAt(root)).toBeUndefined()
+    expect(FakeFileHandle.openSyncHandles).toBe(0)
+  })
+
+  it('a re-put that fails part-way leaves the complete copy already there', async () => {
+    // It may be the only copy of a capture not yet uploaded.
+    const { store } = workerOpfs()
+    await store.put(U, WS, KEY, bytes(1, 2, 3, 4))
+    FakeFileHandle.failSyncWriteAfter = 2
+    try {
+      await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toMatchObject({ name: 'QuotaExceededError' })
+    } finally {
+      FakeFileHandle.failSyncWriteAfter = null
+    }
+    expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2, 3, 4))
+  })
+
+  it('a write the worker never answers times out, and the next put uses a fresh worker', async () => {
+    const { store } = workerOpfs('hang')
+    await expect(store.put(U, WS, KEY, bytes(1, 2, 3, 4))).rejects.toThrow(/timed out/)
+    await store.put(U, WS, KEY, bytes(1, 2, 3, 4))
+    expect(await store.get(U, WS, KEY)).toEqual(bytes(1, 2, 3, 4))
+  })
+
+  it('a worker that dies rejects the pending put, and the next put spawns another', async () => {
+    const { store } = workerOpfs('crash')
+    await expect(store.put(U, WS, KEY, bytes(1))).rejects.toThrow(/worker failed/)
+    await store.put(U, WS, KEY, bytes(1))
+    expect(await store.get(U, WS, KEY)).toEqual(bytes(1))
   })
 })

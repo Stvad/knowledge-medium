@@ -30,6 +30,7 @@
  */
 
 import { verifyObjectBytes } from '@/sync/byteTransform.js'
+import { verifyContentHash } from '@/sync/crypto/contentHash.js'
 import {
   materializabilityToMode,
   type GetCek,
@@ -209,17 +210,23 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     return { ok: true, userId, mode, contentKey: key.objectKey, localKeys: key.localKeys }
   }
 
-  /** The first local name holding the plaintext, or null. A transient read error
-   *  is a MISS for that name (the bytes are re-fetchable, §8), not a failure. */
+  /** The first local name holding the block's bytes, or null. An entry is not
+   *  proof of its content (byteStore.ts), so a copy is a hit only if it hashes
+   *  to `contentHash`; one that doesn't is a MISS, as is a transient read error
+   *  (the bytes are re-fetchable, §8). It is left in place: nothing serves it,
+   *  and deleting here could race a put still writing it. */
   const readLocal = async (
     userId: string,
     workspaceId: string,
     localKeys: readonly string[],
+    contentHash: string,
   ): Promise<Uint8Array<ArrayBuffer> | null> => {
     for (const key of localKeys) {
       try {
         const local = await byteStore.get(userId, workspaceId, key)
-        if (local) return local
+        if (!local) continue
+        if (await verifyContentHash(local, contentHash)) return local
+        console.warn(`[assetResolver] local copy in ${workspaceId} (${local.byteLength} bytes) is not its content; re-fetching`)
       } catch (err) {
         console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
       }
@@ -238,9 +245,9 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       if (!prep.ok) return fail(prep.reason)
       const { userId, mode, contentKey, localKeys } = prep
 
-      // (3) Local hit — already verified when stored (§8), serve directly; a miss
-      // on every local name falls through to the network.
-      const local = await readLocal(userId, workspaceId, localKeys)
+      // (3) Local hit — verified like a download (`readLocal`), then served
+      // directly; a miss on every local name falls through to the network.
+      const local = await readLocal(userId, workspaceId, localKeys, contentHash)
       if (local) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
 
       // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).

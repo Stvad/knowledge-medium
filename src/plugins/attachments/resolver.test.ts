@@ -88,7 +88,7 @@ describe('createAssetResolver — happy paths', () => {
     expect(await byteStore.get(USER, WS, key)).toEqual(plain) // decrypted at rest
   })
 
-  it('serves a local hit WITHOUT fetching (already verified when stored, §8)', async () => {
+  it('serves a local hit WITHOUT fetching', async () => {
     const plain = bytes(4, 2)
     const contentHash = await hashOf(plain)
     const byteStore = new InMemoryByteStore()
@@ -238,6 +238,77 @@ describe('createAssetResolver — fail-closed (the §7.3/§5.1 acceptance gate)'
     })
     expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'hash-mismatch' })
     expect(await byteStore.has(USER, WS, await contentKeyFor('none', contentHash))).toBe(false)
+  })
+})
+
+describe('createAssetResolver — a local copy is served only if it hashes to the block', () => {
+  // An entry can exist that was never written (empty), was cut short, or holds
+  // other bytes. Any of them is a miss: re-fetched under the download path's rule.
+  const stored = async (mode: 'none' | 'e2ee', contentHash: string, local: Uint8Array<ArrayBuffer>) => {
+    const byteStore = new InMemoryByteStore()
+    const key = await contentKeyFor(mode, contentHash)
+    await byteStore.put(USER, WS, key, local)
+    return { byteStore, key }
+  }
+
+  it.each([
+    ['empty', bytes()],
+    ['cut short', bytes(1, 2)],
+    ['the right length but other bytes', bytes(9, 9, 9, 9)],
+  ])('a local copy that is %s is re-fetched, and the fetched bytes replace it', async (_what, local) => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await stored('e2ee', contentHash, local)
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('decrypt'),
+      byteStore,
+      serve: async () => seal('e2ee', plain, contentHash),
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, key)).toEqual(plain)
+  })
+
+  it('with the remote unreachable it fails closed: the bad copy is never served', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore } = await stored('none', contentHash, bytes())
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => {
+        throw new Error('offline')
+      },
+    })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+  })
+
+  it('a bad copy under the keyed name does not hide a good pre-conversion copy under the raw one', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const { byteStore } = await stored('e2ee', contentHash, bytes())
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const { resolver, blobGet } = build({ getMaterializability: mat('decrypt'), byteStore })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('replicate: an empty local entry is not "present" — it is fetched and replicated', async () => {
+    const plain = bytes(5, 5, 5)
+    const contentHash = await hashOf(plain)
+    const { byteStore, key } = await stored('none', contentHash, bytes())
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, key)).toEqual(plain)
   })
 })
 

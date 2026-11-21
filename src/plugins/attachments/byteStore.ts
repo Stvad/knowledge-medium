@@ -11,9 +11,12 @@
  *     (`purgeWorkspace`, the §8 one-shot claw-back primitive).
  *   - `<content-key>` is the §10 object path segment the resolver derives.
  *
- * Bytes are written ONCE, already verified (the resolver hash-checks before
- * `put`, §5.1/§7.3), so the store is a dumb content-addressed blob cache — it
- * holds no keys and makes no trust decisions. The backing store is OPFS
+ * The store holds no keys and makes no trust decisions, and an entry existing
+ * is NOT proof its bytes are the content: OPFS mints a file before any byte
+ * lands, and a writer can die between the two. So every reader that acts on the
+ * bytes hashes them first (the resolver's local hit, the up-lane drain), and the
+ * presence probes (`has`, `listWorkspaceKeys`) report only entries with bytes,
+ * so the down-lane re-fetches an empty one. The backing store is OPFS
  * (`OpfsByteStore`); `InMemoryByteStore` is the test double + no-OPFS fallback.
  *
  * Destruction is the coarse platform clear (§7.2) — this store has no per-store
@@ -22,6 +25,7 @@
  */
 
 import { withLock } from '@/utils/webLock.js'
+import { createWorkerFileWriter, type WorkerFileWriter, type WriterWorkerLike } from './byteStoreWriter.js'
 
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'
@@ -56,7 +60,7 @@ const decodeSegment = (s: string): string => {
 export interface ByteStore {
   /** The stored plaintext bytes, or `null` on a miss. */
   get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
-  /** Write already-verified plaintext bytes (the resolver hash-checks first). */
+  /** Write plaintext bytes the caller has verified or just captured. */
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
   /** Is the object present locally? (the §6 down-lane's "already replicated?" probe). */
   has(userId: string, workspaceId: string, contentKey: string): Promise<boolean>
@@ -123,14 +127,14 @@ export class InMemoryByteStore implements ByteStore {
   }
 
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
-    return this.blobs.has(this.key(userId, workspaceId, contentKey))
+    return (this.blobs.get(this.key(userId, workspaceId, contentKey))?.byteLength ?? 0) > 0
   }
 
   async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
     const prefix = this.wsPrefix(userId, workspaceId)
     const out = new Set<string>()
-    for (const k of this.blobs.keys()) {
-      if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
+    for (const [k, v] of this.blobs) {
+      if (k.startsWith(prefix) && v.byteLength > 0) out.add(decodeSegment(k.slice(prefix.length)))
     }
     return out
   }
@@ -150,7 +154,23 @@ export class InMemoryByteStore implements ByteStore {
 export interface OpfsByteStoreDeps {
   /** The OPFS root; injectable for tests. Defaults to the real origin root. */
   getRoot?: () => Promise<FileSystemDirectoryHandle>
+  /** Overrides {@link engineHasWritableStream}; `false` forces the worker path in tests. */
+  hasWritableStream?: boolean
+  /** Spawns the writer worker (byteStoreWriter.worker.ts); injectable for tests. */
+  spawnWriterWorker?: () => WriterWorkerLike
+  /** How long a worker write may take before it is abandoned; injectable for tests. */
+  writeTimeoutMs?: number
 }
+
+/** Chromium, Firefox and Safari 26+ have the stream write API. WebKit before that
+ *  (every iOS 18 browser) can write OPFS only through a sync access handle, which
+ *  exists only inside a Worker. */
+const engineHasWritableStream = (): boolean =>
+  typeof FileSystemFileHandle !== 'undefined' &&
+  typeof (FileSystemFileHandle.prototype as { createWritable?: unknown }).createWritable === 'function'
+
+const spawnRealWriterWorker = (): WriterWorkerLike =>
+  new Worker(new URL('./byteStoreWriter.worker.ts', import.meta.url), { type: 'module' })
 
 /**
  * OPFS-backed store (the production §8 store). Each `(user, workspace, key)`
@@ -159,6 +179,8 @@ export interface OpfsByteStoreDeps {
  */
 export class OpfsByteStore implements ByteStore {
   private readonly getRoot: () => Promise<FileSystemDirectoryHandle>
+  private readonly hasWritableStream: boolean
+  private readonly workerWriter: WorkerFileWriter
   /** Cached OPFS root + per-(user,ws) dir handles, so repeated ops (the down-lane's
    *  probes, capture/demand reads+writes) skip re-walking the 3-level chain from the
    *  root each call. Only SUCCESSFUL resolutions are cached. Invalidated on
@@ -169,6 +191,8 @@ export class OpfsByteStore implements ByteStore {
 
   constructor(deps: OpfsByteStoreDeps = {}) {
     this.getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory())
+    this.hasWritableStream = deps.hasWritableStream ?? engineHasWritableStream()
+    this.workerWriter = createWorkerFileWriter(deps.spawnWriterWorker ?? spawnRealWriterWorker, deps.writeTimeoutMs)
   }
 
   private root(): Promise<FileSystemDirectoryHandle> {
@@ -222,6 +246,9 @@ export class OpfsByteStore implements ByteStore {
 
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
     return withLock(writeLockName(userId, workspaceId, contentKey), async () => {
+      if (!this.hasWritableStream) {
+        return this.workerWriter.write(assetPathSegments(userId, workspaceId, contentKey), bytes)
+      }
       try {
         await this.writeFile(userId, workspaceId, contentKey, bytes)
       } catch {
@@ -264,8 +291,8 @@ export class OpfsByteStore implements ByteStore {
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
-      await dir.getFileHandle(encodeSegment(contentKey))
-      return true
+      const fileHandle = await dir.getFileHandle(encodeSegment(contentKey))
+      return (await fileHandle.getFile()).size > 0
     } catch (err) {
       if (isNotFound(err)) return false
       throw err
@@ -276,7 +303,12 @@ export class OpfsByteStore implements ByteStore {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
       const keys = new Set<string>()
-      for await (const name of dir.keys()) keys.add(decodeSegment(name))
+      for await (const [name, entry] of dir.entries()) {
+        if (entry.kind !== 'file') continue
+        // An entry that can't be read is not present either.
+        const size = await (entry as FileSystemFileHandle).getFile().then((f) => f.size, () => 0)
+        if (size > 0) keys.add(decodeSegment(name))
+      }
       return keys
     } catch (err) {
       if (isNotFound(err)) return new Set() // no objects stored for this (user, workspace) yet
