@@ -1,0 +1,1 @@
+export{kq as SuspenseFallback}from"../../../chunks/app-B0EseEM3.js";

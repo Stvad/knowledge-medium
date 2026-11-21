@@ -1,0 +1,1 @@
+export{YI as LazyBlockComponent}from"../../chunks/app-B0EseEM3.js";

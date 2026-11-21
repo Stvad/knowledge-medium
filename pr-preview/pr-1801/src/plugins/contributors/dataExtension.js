@@ -1,0 +1,1 @@
+export{q$ as contributorsDataExtension}from"../../../chunks/app-B0EseEM3.js";

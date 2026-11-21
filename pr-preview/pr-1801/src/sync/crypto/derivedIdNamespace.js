@@ -1,0 +1,1 @@
+export{Qct as deriveWorkspaceIdNamespace}from"../../../chunks/app-B0EseEM3.js";

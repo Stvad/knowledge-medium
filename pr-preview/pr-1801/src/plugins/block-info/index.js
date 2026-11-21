@@ -1,0 +1,1 @@
+export{Ty as blockInfoPlugin}from"../../../chunks/app-B0EseEM3.js";

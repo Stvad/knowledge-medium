@@ -1,0 +1,1 @@
+export{KP as resolveStructuralEditPolicy,qP as structuralEditPolicyForBlock}from"../../chunks/app-B0EseEM3.js";

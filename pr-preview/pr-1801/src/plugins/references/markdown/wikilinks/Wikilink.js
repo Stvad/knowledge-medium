@@ -1,0 +1,1 @@
+export{Ub as Wikilink}from"../../../../../chunks/app-B0EseEM3.js";

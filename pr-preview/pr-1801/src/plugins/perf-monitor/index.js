@@ -1,0 +1,1 @@
+export{ai as perfMonitorPlugin}from"../../../chunks/app-B0EseEM3.js";

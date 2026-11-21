@@ -1,0 +1,1 @@
+export{UM as useCommandPaletteActions}from"../../../chunks/app-B0EseEM3.js";

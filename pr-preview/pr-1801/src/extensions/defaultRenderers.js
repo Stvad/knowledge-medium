@@ -1,0 +1,1 @@
+export{iL as defaultRegistry,aL as defaultRendererContributions,oL as defaultRenderersExtension}from"../../chunks/app-B0EseEM3.js";

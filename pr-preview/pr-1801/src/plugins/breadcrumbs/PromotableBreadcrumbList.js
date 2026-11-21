@@ -1,0 +1,1 @@
+export{UE as PromotableBreadcrumbList}from"../../../chunks/app-B0EseEM3.js";

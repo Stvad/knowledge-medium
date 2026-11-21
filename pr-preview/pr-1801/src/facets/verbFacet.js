@@ -1,0 +1,1 @@
+export{D2 as defineVerbFacet}from"../../chunks/app-B0EseEM3.js";

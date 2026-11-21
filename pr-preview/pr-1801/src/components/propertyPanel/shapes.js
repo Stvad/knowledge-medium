@@ -1,0 +1,1 @@
+export{KK as propertyShapeLabel}from"../../../chunks/app-B0EseEM3.js";

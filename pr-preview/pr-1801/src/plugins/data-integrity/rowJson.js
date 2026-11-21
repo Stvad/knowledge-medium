@@ -1,0 +1,1 @@
+export{Dc as parsePropertiesJson}from"../../../chunks/app-B0EseEM3.js";

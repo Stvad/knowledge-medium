@@ -1,0 +1,1 @@
+export{p1 as characterCounterDataExtension}from"../../../chunks/app-B0EseEM3.js";

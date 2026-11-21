@@ -1,0 +1,1 @@
+export{fct as getOrCreateTypesPage,pct as typesPageBlockId,mct as typesPageSpec}from"../../chunks/app-B0EseEM3.js";

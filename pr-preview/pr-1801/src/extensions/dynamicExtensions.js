@@ -1,0 +1,1 @@
+export{mI as dynamicExtensionsExtension}from"../../chunks/app-B0EseEM3.js";

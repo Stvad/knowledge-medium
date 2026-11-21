@@ -1,0 +1,1 @@
+export{IH as typePropertyGroups}from"../../chunks/app-B0EseEM3.js";

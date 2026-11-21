@@ -1,0 +1,1 @@
+export{_d as BlockTagsConfigEditor}from"../../../chunks/app-B0EseEM3.js";

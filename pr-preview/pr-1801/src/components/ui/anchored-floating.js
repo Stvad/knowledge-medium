@@ -1,0 +1,1 @@
+export{BK as floatingAnchorFromRect,VK as useAnchoredFloating}from"../../../chunks/app-B0EseEM3.js";

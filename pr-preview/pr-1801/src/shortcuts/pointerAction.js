@@ -1,0 +1,1 @@
+export{$F as dispatchPointerAction,eI as setPointerActionDispatcher}from"../../chunks/app-B0EseEM3.js";

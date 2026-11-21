@@ -1,0 +1,1 @@
+export{kJ as staticDataExtensions}from"../../chunks/app-B0EseEM3.js";

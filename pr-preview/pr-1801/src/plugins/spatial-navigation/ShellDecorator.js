@@ -1,0 +1,1 @@
+export{CT as SpatialNavigationShellDecorator}from"../../../chunks/app-B0EseEM3.js";

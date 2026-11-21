@@ -1,0 +1,1 @@
+export{wk as BlockLink}from"../../../chunks/app-B0EseEM3.js";

@@ -1,0 +1,1 @@
+export{yd as blockTaggingDataExtension}from"../../../chunks/app-B0EseEM3.js";

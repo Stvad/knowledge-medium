@@ -1,0 +1,1 @@
+export{QV as isFocalRender,$V as useIsFocalRender}from"../../chunks/app-B0EseEM3.js";

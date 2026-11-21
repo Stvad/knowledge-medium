@@ -1,0 +1,1 @@
+export{JE as plainOutlinerPlugin}from"../../../chunks/app-B0EseEM3.js";

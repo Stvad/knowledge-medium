@@ -1,0 +1,1 @@
+export{Kf as quotedInFooterContribution}from"../../../chunks/app-B0EseEM3.js";

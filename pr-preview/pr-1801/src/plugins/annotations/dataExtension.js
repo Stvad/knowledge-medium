@@ -1,0 +1,1 @@
+export{UZ as annotationsDataExtension}from"../../../chunks/app-B0EseEM3.js";

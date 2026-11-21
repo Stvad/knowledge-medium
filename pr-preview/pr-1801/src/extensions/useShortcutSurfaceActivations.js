@@ -1,0 +1,1 @@
+export{Qz as useShortcutSurfaceActivations}from"../../chunks/app-B0EseEM3.js";

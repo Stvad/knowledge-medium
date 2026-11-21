@@ -1,0 +1,1 @@
+export{sP as BlockEmbed}from"../../../chunks/app-B0EseEM3.js";

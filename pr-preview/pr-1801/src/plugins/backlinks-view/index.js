@@ -1,0 +1,1 @@
+export{Py as backlinksViewPlugin}from"../../../chunks/app-B0EseEM3.js";

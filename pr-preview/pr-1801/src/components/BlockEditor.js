@@ -1,0 +1,1 @@
+export{Gz as BlockEditor}from"../../chunks/app-B0EseEM3.js";

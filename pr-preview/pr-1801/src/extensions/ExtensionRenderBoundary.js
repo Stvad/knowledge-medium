@@ -1,0 +1,1 @@
+export{GB as ExtensionRenderBoundary}from"../../chunks/app-B0EseEM3.js";

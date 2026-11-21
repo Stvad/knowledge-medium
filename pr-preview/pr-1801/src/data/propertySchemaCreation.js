@@ -1,0 +1,1 @@
+export{qK as adoptOrCreatePropertySchema}from"../../chunks/app-B0EseEM3.js";

@@ -1,0 +1,1 @@
+export{v5 as kernelDataExtension}from"../../chunks/app-B0EseEM3.js";
