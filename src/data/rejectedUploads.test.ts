@@ -52,7 +52,7 @@ describe('rejected uploads', () => {
   })
 
   it('requeues every row of a multi-row transaction under its transaction id and clears its quarantine', async () => {
-    const {a, b} = await setup()
+    await setup()
     const before = await queued()
     await rejectQueue()
     const [{txId}] = await listRejectedUploads(shared.db)
