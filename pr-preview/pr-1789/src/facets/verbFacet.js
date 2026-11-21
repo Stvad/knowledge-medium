@@ -1,1 +1,1 @@
-export{S2 as defineVerbFacet}from"../../chunks/app-CU0-BBhH.js";
+export{C2 as defineVerbFacet}from"../../chunks/app-nW5YCSRm.js";

@@ -1,1 +1,1 @@
-export{Nat as InvalidBlockIdError,Pat as assertCanonicalBlockId}from"../../chunks/app-CU0-BBhH.js";
+export{Pat as InvalidBlockIdError,Fat as assertCanonicalBlockId}from"../../chunks/app-nW5YCSRm.js";

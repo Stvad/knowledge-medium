@@ -1,1 +1,1 @@
-export{Yk as CRUMB_ELLIPSIS,Xk as CRUMB_MAX_CHARS,Zk as CRUMB_MAX_SEGMENTS,Qk as collapseCrumbs,$k as crumbsFromAncestors}from"../../chunks/app-CU0-BBhH.js";
+export{Yk as CRUMB_ELLIPSIS,Xk as CRUMB_MAX_CHARS,Zk as CRUMB_MAX_SEGMENTS,Qk as collapseCrumbs,$k as crumbsFromAncestors}from"../../chunks/app-nW5YCSRm.js";
