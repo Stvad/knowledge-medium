@@ -724,45 +724,15 @@ describe('spatial navigation jump-to-edge actions', () => {
 })
 
 describe('spatial navigation vertical actions', () => {
-  it.each([
-    {action: 'move_down', from: 'A', to: 'C', deferred: false},
-    {action: 'move_up', from: 'C', to: 'A', deferred: false},
-    {action: 'move_down', from: 'A', to: 'C', deferred: true},
-  ] as const)('skips an excluded model row on $action (deferred: $deferred)', async ({action, from, to, deferred}) => {
+  it('delegates to the outline model when the next model row is excluded from the DOM walk', async () => {
     const scope = 'panel:outline'
     const excluded = 'grid-cell'
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, spatialNavExclusionsFacet.of(excluded)]))
-    await env.repo.block('B').set(isCollapsedProp, true)
     buildPanelDom([
       {blockId: 'A', renderScopeId: scope},
-      deferred
-        ? {blockId: 'X', renderScopeId: 'panel:nested', surface: excluded, nested: [
-          {deferredBlockId: 'B', deferredScopeId: scope},
-        ]}
-        : {blockId: 'B', renderScopeId: scope, surface: excluded},
+      {blockId: 'B', renderScopeId: scope, surface: excluded},
       {blockId: 'C', renderScopeId: scope},
     ])
-    const panel = env.repo.block('panel')
-    await focusBlock(panel, from, {renderScopeId: scope})
-
-    const {modelWalk} = await pressNavigationKey(action, {
-      block: env.repo.block(from), uiStateBlock: panel, renderScopeId: scope, scopeRootId: 'top',
-    })
-
-    expect(modelWalk).not.toHaveBeenCalled()
-    await waitFor(() => expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: to, renderScopeId: scope}))
-  })
-
-  it('focuses the deferred model row after an excluded row', async () => {
-    const scope = 'panel:outline'
-    const excluded = 'grid-cell'
-    env.repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, spatialNavExclusionsFacet.of(excluded)]))
-    await env.repo.block('B').set(isCollapsedProp, true)
-    buildPanelDom([{blockId: 'top', renderScopeId: scope, nested: [
-      {blockId: 'A', renderScopeId: scope},
-      {blockId: 'B', renderScopeId: scope, surface: excluded},
-      {deferredBlockId: 'C', deferredScopeId: scope},
-    ]}])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: scope})
 
@@ -770,8 +740,7 @@ describe('spatial navigation vertical actions', () => {
       block: env.repo.block('A'), uiStateBlock: panel, renderScopeId: scope, scopeRootId: 'top',
     })
 
-    expect(modelWalk).not.toHaveBeenCalled()
-    await waitFor(() => expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'C', renderScopeId: scope}))
+    expect(modelWalk).toHaveBeenCalledOnce()
   })
 
   it('does not fall through when the focused rendered location is missing and has no safe recovery anchor', async () => {

@@ -214,8 +214,8 @@ const extendSelectionVertical = async (
  *     genuine edge where neither the model nor the DOM has anywhere
  *     left to go.
  *
- * The model walk stays inside the scope, and each known occurrence is
- * subject to its surface's exclusions. Every surface supplies its own `scopeRootId` (a
+ * Which SURFACE the row sits on doesn't enter into it. What matters is
+ * the scope, and every surface supplies its own `scopeRootId` (a
  * backlink entry's is its shown block, not the page), so the model
  * walk is always scope-local and cannot wander into another page.
  * Rows inside a backlink entry are lazily mounted under the ordinary
@@ -291,26 +291,14 @@ const moveVertical = async (
   // SKIPPING the model's next row? That is a question about POSITION, and the
   // DOM answers it even for a row that hasn't mounted — see the check below.
   //
-  // The model handler has no view exclusions. Walk past occurrences the
-  // panel can identify as excluded before comparing with the DOM neighbour.
+  // Costs one O(depth) walk per keystroke over handle-cached rows — the same
+  // walk the model handler does on its own when spatial nav is off.
   const surface = outlineSurfaceOf(deps)
-  const step = direction === 'down' ? nextVisibleBlock : previousVisibleBlock
-  let modelNext = surface ? await step(block, surface) : null
-  let modelRowSlot: HTMLElement | null = null
-  let skippedExcluded = false
-  while (surface && modelNext) {
-    const slot = rowSlotIn(
-      uiStateBlock.id,
-      {blockId: modelNext.id, renderScopeId: currentLocation.renderScopeId},
-      excludedSurfaces,
-    )
-    if (slot !== 'excluded') {
-      modelRowSlot = slot
-      break
-    }
-    skippedExcluded = true
-    modelNext = await step(modelNext, surface)
-  }
+  const modelNext = surface
+    ? (direction === 'down'
+        ? await nextVisibleBlock(block, surface)
+        : await previousVisibleBlock(block, surface))
+    : null
 
   // A second keystroke or a click can land while that walk waits on an
   // uncached `childIds`. Everything below is computed from a row that no
@@ -329,7 +317,7 @@ const moveVertical = async (
   // goes through `panelOf(current)`, which in a detached subtree returns the
   // DEAD panel — so the scope edge would find a dead slot and write focus to a
   // row that no longer exists. Declining here is what keeps both on one DOM.
-  if (!current.isConnected) return skippedExcluded
+  if (!current.isConnected) return false
 
   // Read the neighbour AFTER the walk, never before: resolving the `childIds`
   // that walk awaits is itself what mounts the rows under this one, so a
@@ -342,6 +330,17 @@ const moveVertical = async (
   const nextPanelId = next ? panelOf(next)?.dataset.panelId : undefined
 
   if (modelNext) {
+    // Where the model's row sits in the rendered panel — its own nav item if
+    // mounted, else the placeholder holding its place (`rowSlotIn`). Asking for
+    // the POSITION rather than "is it mounted" is what makes one test cover
+    // every surface: a nested surface's rows, a trailing footer list, and a
+    // hole left by lazy mounting differ only in where they fall relative to it.
+    const modelRowSlot = rowSlotIn(
+      uiStateBlock.id,
+      {blockId: modelNext.id, renderScopeId: currentLocation.renderScopeId},
+      excludedSurfaces,
+    )
+
     // Within this scope, document order IS model order, so the only same-scope
     // row that can come next is the model's own. Anything else is DOM the model
     // has already moved past and React hasn't caught up with — a collapsed
@@ -353,8 +352,8 @@ const moveVertical = async (
     // belong to their OWN scope, so no walk of this one can name them, and
     // position is the only thing left to judge them by: fine as long as taking
     // one can't skip the model's row — at, or on the near side of, its slot. On
-    // the far side the rows between are missing from the DOM, so we take the
-    // model row and let `FocusedRowLazyMount` mount it.
+    // the far side the rows between are missing from the DOM, so we decline and
+    // let the model handler resolve the row and `FocusedRowLazyMount` mount it.
     //
     // No slot at all means the DOM can't answer — the row's parent hasn't
     // rendered its children yet — which is also a decline.
@@ -373,13 +372,7 @@ const moveVertical = async (
       nextPanelId === uiStateBlock.id &&
       (takesTheModelRow || stepsIntoANestedSurface),
     )
-    if (!canTakeTheNeighbour) {
-      if (!skippedExcluded) return false
-      // The base action would restart from the original row and focus the
-      // excluded occurrence. Land on the eligible model row ourselves.
-      void focusBlock(uiStateBlock, modelNext.id, {renderScopeId: currentLocation.renderScopeId})
-      return true
-    }
+    if (!canTakeTheNeighbour) return false
   }
 
   // Scope edge: this scope's model has nothing more, so the rendered order
@@ -403,7 +396,7 @@ const moveVertical = async (
       void focusBlock(uiStateBlock, reserved.blockId, {renderScopeId: reserved.renderScopeId})
       return true
     }
-    if (nextLocation?.renderScopeId === currentLocation.renderScopeId) return skippedExcluded
+    if (nextLocation?.renderScopeId === currentLocation.renderScopeId) return false
   }
 
   // Nothing in the model and nothing in the DOM — a real edge.
