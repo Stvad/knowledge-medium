@@ -1,1 +1,1 @@
-export{IY as htmlDocumentTypeSeed}from"../../../chunks/app-nW5YCSRm.js";
+export{NY as htmlDocumentTypeSeed}from"../../../chunks/app-ecsRuifu.js";

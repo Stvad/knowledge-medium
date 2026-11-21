@@ -1,1 +1,1 @@
-export{So as propertyRowsPlugin,wo as resolvePropertyValueInlinePresentation}from"../../../chunks/app-nW5YCSRm.js";
+export{So as propertyRowsPlugin}from"../../../chunks/app-ecsRuifu.js";

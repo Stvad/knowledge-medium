@@ -1,1 +1,1 @@
-export{On as HtmlFrame}from"../../../chunks/app-nW5YCSRm.js";
+export{On as HtmlFrame}from"../../../chunks/app-ecsRuifu.js";

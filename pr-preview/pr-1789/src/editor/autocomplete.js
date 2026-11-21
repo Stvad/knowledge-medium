@@ -1,1 +1,1 @@
-export{Lz as disabledEditorAutocomplete,Rz as editorAutocompleteExtension}from"../../chunks/app-nW5YCSRm.js";
+export{aF as editorAutocompleteExtension}from"../../chunks/app-ecsRuifu.js";

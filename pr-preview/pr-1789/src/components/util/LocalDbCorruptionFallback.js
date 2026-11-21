@@ -1,1 +1,1 @@
-export{KB as LocalDbCorruptionFallback}from"../../../chunks/app-nW5YCSRm.js";
+export{UB as LocalDbCorruptionFallback}from"../../../chunks/app-ecsRuifu.js";

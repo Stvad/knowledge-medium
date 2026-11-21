@@ -1,1 +1,1 @@
-export{Py as useGroupedBacklinksConfig}from"../../../chunks/app-nW5YCSRm.js";
+export{Ny as useGroupedBacklinksConfig}from"../../../chunks/app-ecsRuifu.js";

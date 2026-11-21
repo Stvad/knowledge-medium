@@ -1,1 +1,1 @@
-export{Gg as lintExtensionSource}from"../../../chunks/app-nW5YCSRm.js";
+export{Wg as lintExtensionSource}from"../../../chunks/app-ecsRuifu.js";

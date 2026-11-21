@@ -1,1 +1,1 @@
-export{IP as withRowSlide}from"../../chunks/app-nW5YCSRm.js";
+export{FP as withRowSlide}from"../../chunks/app-ecsRuifu.js";
