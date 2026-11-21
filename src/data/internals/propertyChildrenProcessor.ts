@@ -616,7 +616,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // never a silent skip-and-delete here.
       continue
     }
-    if (lookups.editedCells?.get(row.id)?.has(schema.fieldId)) continue
+    if (lookups.editedCells?.get(row.id)?.fields.has(schema.fieldId)) continue
     const matchingChildren = fieldRowsForSchema(children, schema.fieldId)
     const encoded = storedPropertyValue(row.properties, name)
 
@@ -1379,7 +1379,7 @@ const cellEdits = new WeakMap<Tx['meta'], AffectedOwners>()
 const REPROJECT_CELL_EVENT = 'core.reprojectPropertyCell'
 
 export const hasPendingCellProjection = (tx: Tx, ownerId: string, fieldId: string): boolean =>
-  cellEdits.get(tx.meta)?.get(ownerId)?.has(fieldId) === true
+  cellEdits.get(tx.meta)?.get(ownerId)?.fields.has(fieldId) === true
 
 export const requestCellProjection = (
   tx: Tx, owner: BlockData, fieldId: string, schema: AnyPropertySchema,
@@ -1390,9 +1390,12 @@ export const requestCellProjection = (
     owners = new Map()
     cellEdits.set(tx.meta, owners)
   }
-  let fields = owners.get(owner.id)
-  if (!fields) owners.set(owner.id, fields = new Map())
-  fields.set(fieldId, schema)
+  // Only user edit gestures register a cell, so a cell this pass changes is
+  // stamped. Defence in depth: the edited value row is itself a user write, so
+  // the ordinary projection has already stamped the owner.
+  let edited = owners.get(owner.id)
+  if (!edited) owners.set(owner.id, edited = {fields: new Map(), userEdited: true})
+  edited.fields.set(fieldId, schema)
 }
 
 /** A pending bag key can be cleared without a source-row change. Only
@@ -1402,8 +1405,8 @@ export const REPROJECT_CELL_PROCESSOR = defineSameTxProcessor({
   watches: {kind: 'event', events: [REPROJECT_CELL_EVENT]},
   settledWrites: true,
   apply: async (_event, ctx) => {
-    for (const [ownerId, fields] of cellEdits.get(ctx.tx.meta) ?? []) {
-      await reprojectOwner(ctx.tx, ownerId, fields, 'full')
+    for (const [ownerId, edited] of cellEdits.get(ctx.tx.meta) ?? []) {
+      await reprojectOwner(ctx.tx, ownerId, edited, 'full')
     }
   },
 })
