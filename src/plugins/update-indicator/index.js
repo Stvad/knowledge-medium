@@ -1,1 +1,1 @@
-export{vy as updateIndicatorPlugin}from"../../../chunks/app-37w1JA_-.js";
+export{vy as updateIndicatorPlugin}from"../../../chunks/app-WB1EPy5Y.js";

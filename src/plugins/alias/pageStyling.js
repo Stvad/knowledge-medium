@@ -1,1 +1,1 @@
-export{Bx as aliasPageBullet,Vx as aliasPageBulletContribution,Hx as aliasPageStyling,Ux as aliasPageStylingContribution}from"../../../chunks/app-37w1JA_-.js";
+export{Bx as aliasPageBullet,Vx as aliasPageBulletContribution,Hx as aliasPageStyling,Ux as aliasPageStylingContribution}from"../../../chunks/app-WB1EPy5Y.js";
