@@ -1,1 +1,0 @@
-export{fd as blockTaggingDataExtension}from"../../../chunks/app-zB7ItzVy.js";
