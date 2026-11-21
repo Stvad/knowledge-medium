@@ -1,8 +1,10 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
 import {
   dispatchGesture,
@@ -211,6 +213,32 @@ const LayoutKeydownWhenActive = ({
   return null
 }
 
+/**
+ * Calls `onReconciled` once `context` is active AND the reconciler has
+ * installed the bindings for that commit.
+ *
+ * Placement is load-bearing: this must render AFTER `<HotkeyReconciler/>`.
+ * Passive effects flush in tree order, so this effect running means the
+ * reconciler's own install effect — the one that fills `installedRef` —
+ * already ran for the same commit. Rendered before it, the probe would fire
+ * a commit too early.
+ */
+const ReconciledContextProbe = ({
+  context,
+  onReconciled,
+}: {
+  context: ActionContextType
+  onReconciled: () => void
+}) => {
+  const active = useActiveContextsState()
+
+  useEffect(() => {
+    if (active.has(context)) onReconciled()
+  }, [active, context, onReconciled])
+
+  return null
+}
+
 const Harness = ({
   actions,
   transforms = [],
@@ -415,6 +443,31 @@ describe('HotkeyReconciler', () => {
 
       act(() => dispatchKeydown('k'))
       expect(globalHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('shadows the surface underneath an open dialog', () => {
+      // The real DIALOG config, not a stand-in: a dialog inherits whatever
+      // context was active when it opened, and the editor's Enter binding
+      // matches a keypress aimed at a dialog button — a context's eventFilter
+      // is additive, and the default heuristic admits any non-editable target.
+      const surfaceHandler = vi.fn()
+      const dialogContextConfig = defaultActionContextConfigs
+        .find(config => config.type === ActionContextTypes.DIALOG)!
+      const surfaceAction = buildAction({
+        id: 'test.surface',
+        context: TEST_CONTEXT,
+        handler: surfaceHandler,
+        defaultBinding: {keys: 'Enter'},
+      })
+
+      render(
+        <Harness actions={[surfaceAction]} contexts={[testContextConfig, dialogContextConfig]}>
+          <SequentialActivator contexts={[TEST_CONTEXT, ActionContextTypes.DIALOG]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('Enter'))
+      expect(surfaceHandler).not.toHaveBeenCalled()
     })
 
     it('shadows every non-global context while a modal is active', () => {
@@ -1808,10 +1861,13 @@ describe('HotkeyReconciler', () => {
       it('hold-fired modal shadowing works with real timers and no extra act wrapping around the keydown', async () => {
         const baseHandler = vi.fn()
         const modalHandler = vi.fn()
+        let holdFired = false
+        let modalReconciled = false
         const enterAction = buildAction({
           id: 'test.hold-real-enter',
           handler: (_deps, _trigger, dispatch) => {
             dispatch?.activate(MODAL_CONTEXT, mockDeps)
+            holdFired = true
           },
           defaultBinding: {keys: 's', phase: 'hold', holdMs: 20},
         })
@@ -1834,28 +1890,39 @@ describe('HotkeyReconciler', () => {
             contexts={[testContextConfig, modalContextConfig]}
           >
             <Activator context={TEST_CONTEXT}/>
+            <ReconciledContextProbe
+              context={MODAL_CONTEXT}
+              onReconciled={() => {
+                modalReconciled = true
+              }}
+            />
           </Harness>,
         )
 
-        // Real-time hold: dispatch s, wait past holdMs, then dispatch h
-        // WITHOUT wrapping the h in another act(). Mirrors the browser
-        // path where the user's next keypress arrives between React's
-        // commit and useEffect flushing.
+        // Real-time hold — no fake timers anywhere in this test: `s` arms a
+        // genuine 20ms hold timer, whose callback activates the modal context.
         dispatchKeydown('s')
-        await new Promise(r => setTimeout(r, 80))
+
+        // Fence on the POSTCONDITION — the modal binding installed — never on
+        // wall clock and never on a fixed number of React turns, because the
+        // `h` keydown below is a ONE-SHOT event: dispatched before that
+        // binding exists it isn't late, it's lost (the reconciler routes it
+        // against the pre-activation binding set and nothing re-delivers it).
+        // Declined: a handler-side flag or a single `await act(async () => {})`
+        // — neither observes the install. `holdFired` is checked first only so
+        // a timeout names the earliest missing precondition. Only the keydown
+        // stays outside act(); that unwrapped keypress is what this test
+        // exists to pin, and it mirrors the browser path where the next press
+        // arrives on a commit React drove itself.
+        await vi.waitFor(() => {
+          expect(holdFired, 'hold timer never fired').toBe(true)
+          expect(modalReconciled, 'modal activation not reconciled').toBe(true)
+        }, {timeout: 2000, interval: 5})
+
         dispatchKeydown('h')
-        // The modal handler fires once React flushes the post-hold commit.
-        // Wait for that observable outcome rather than a fixed settle, then
-        // assert the base-context handler was suppressed. (The 80ms above is a
-        // genuine real-time hold duration and stays.) This test runs on REAL
-        // timers, so under full-suite CPU contention the commit+flush can lag —
-        // give vi.waitFor a generous budget (default is 1000ms) to avoid a
-        // load-dependent flake; on success it still resolves the instant the
-        // handler fires.
-        await vi.waitFor(() => expect(modalHandler).toHaveBeenCalledTimes(1), {
-          timeout: 5000,
-          interval: 25,
-        })
+        // Synchronous: the coordinator dispatches the winning candidate inline
+        // on the event (same as the fake-timer sibling above).
+        expect(modalHandler).toHaveBeenCalledTimes(1)
         expect(baseHandler).not.toHaveBeenCalled()
       })
 

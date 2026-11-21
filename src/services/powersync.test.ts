@@ -1,13 +1,30 @@
-import { CrudEntry, UpdateType, type CrudTransaction, type AbstractPowerSyncDatabase } from '@powersync/common'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { type CrudEntry, UpdateType, type CrudTransaction, type CommonPowerSyncDatabase } from '@powersync/common'
+import { crudEntry } from '@/data/test/crudEntry'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
   from: vi.fn(),
+  /** The signal each request was bounded with, in order. */
+  deadlines: [] as AbortSignal[],
 }))
 
+/** A PostgREST request as the upload path uses one: awaitable, and able to
+ *  take the signal that bounds it. */
+const request = vi.hoisted(() => <T>(result: T) =>
+  Object.assign(Promise.resolve(result), {
+    abortSignal(signal: AbortSignal) {
+      supabaseRef.deadlines.push(signal)
+      return this
+    },
+  }))
+
 vi.mock('@/services/supabase.js', () => ({
-  supabase: supabaseRef,
+  supabase: {
+    rpc: (...args: unknown[]) => request(supabaseRef.rpc(...args)),
+    from: (...args: unknown[]) => supabaseRef.from(...args),
+  },
   hasSupabaseAuthConfig: true,
 }))
 
@@ -21,8 +38,10 @@ import {
   __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
   __encryptUploadOpsForTest,
-  __orderedBlockUpsertsForTest,
+  __chunkBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
+  createPowerSyncConnector,
+  uploadLockName,
   type BlockUploadSink,
   type CompactedBlockOperation,
   type GetWorkspaceMode,
@@ -38,17 +57,17 @@ const put = (
   id: string,
   data: Record<string, unknown>,
   txId = 1,
-) => new CrudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
+) => crudEntry(clientId, UpdateType.PUT, 'blocks', id, txId, data)
 
 const patch = (
   clientId: number,
   id: string,
   data: Record<string, unknown>,
   txId = 1,
-) => new CrudEntry(clientId, UpdateType.PATCH, 'blocks', id, txId, data)
+) => crudEntry(clientId, UpdateType.PATCH, 'blocks', id, txId, data)
 
 const del = (clientId: number, id: string, txId = 1) =>
-  new CrudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
+  crudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
 
 describe('PowerSync upload compaction', () => {
   it('fuses same-tx PUT + PATCH into a single create with merged columns', () => {
@@ -197,6 +216,73 @@ describe('PowerSync upload compaction', () => {
     ])
   })
 
+  it('keeps the EARLIEST base_updated_at when coalescing a burst of patches (#381)', () => {
+    // Every other column is last-write-wins — the newest value is what ships.
+    // The base is the opposite: it describes the server state the burst started
+    // from, and only the first patch knows that. Each later patch was stamped
+    // against the previous LOCAL version, which the server has never seen, so
+    // taking the last one could make a genuinely drifted burst look clean and
+    // silently reintroduce the equal-stamp skip this key exists to prevent.
+    const operations = __compactBlockCrudEntriesForTest([
+      patch(1, 'block-a', {content: 'v1', updated_at: 101, base_updated_at: 100}, 1),
+      patch(2, 'block-a', {content: 'v2', updated_at: 102, base_updated_at: 101}, 2),
+      patch(3, 'block-a', {content: 'v3', updated_at: 103, base_updated_at: 102}, 3),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {content: 'v3', updated_at: 103, base_updated_at: 100},
+      },
+    ])
+  })
+
+  it('keeps the earliest base UNKNOWN when a pre-upgrade patch leads the burst (#381)', () => {
+    // `ps_crud` is persistent, so an upgrade can leave a PATCH queued by the
+    // previous bundle (no base — it predates the trigger change) ahead of one
+    // queued after the reload (base present). An absent base is not "no
+    // opinion": the protocol reads unknown as drifted. Inheriting the later
+    // patch's base would assert a starting point this burst never had, and if
+    // that stamp happened to match the server's current version the merged
+    // patch would read as CLEAN — the equal-stamp skip, right back again.
+    const operations = __compactBlockCrudEntriesForTest([
+      patch(1, 'block-a', {content: 'v1', updated_at: 101}, 1),
+      patch(2, 'block-a', {content: 'v2', updated_at: 102, base_updated_at: 101}, 2),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {content: 'v2', updated_at: 102},
+      },
+    ])
+  })
+
+  it('drops base_updated_at when a same-tx PATCH fuses into its CREATE', () => {
+    // Creates go to apply_block_creates, which has no drift concept: an INSERT
+    // has no prior version and the ON CONFLICT branch is a deliberate no-op
+    // TOUCH that must not advance the stamp (#244). The key would be ignored by
+    // that RPC's closed column list anyway — stripping keeps the create payload
+    // to real columns.
+    const operations = __compactBlockCrudEntriesForTest([
+      put(1, 'block-a', {workspace_id: 'ws', content: 'A', updated_at: 1}, 1),
+      patch(2, 'block-a', {content: 'A2', updated_at: 2, base_updated_at: 1}, 1),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'create',
+        id: 'block-a',
+        order: 0,
+        payload: {id: 'block-a', workspace_id: 'ws', content: 'A2', updated_at: 2},
+      },
+    ])
+  })
+
   it('lets a final delete supersede earlier writes for the same block', () => {
     const operations = __compactBlockCrudEntriesForTest([
       put(1, 'block-a', {content: 'A'}),
@@ -214,13 +300,27 @@ describe('PowerSync upload compaction', () => {
   })
 
   it('orders parent upserts before child upserts within a bulk request', () => {
-    const ordered = __orderedBlockUpsertsForTest([
+    const chunks = __chunkBlockUpsertsForTest([
       {id: 'child', parent_id: 'parent', content: 'child'},
       {id: 'parent', parent_id: null, content: 'parent'},
       {id: 'sibling', parent_id: 'parent', content: 'sibling'},
-    ])
+    ], 500)
 
-    expect(ordered.map(row => row.id)).toEqual(['parent', 'child', 'sibling'])
+    expect(chunks.map(chunk => chunk.map(row => row.id))).toEqual([['parent', 'child', 'sibling']])
+  })
+
+  it('places a row listed before the parent cycle it hangs from after that cycle', () => {
+    const chunks = __chunkBlockUpsertsForTest([
+      {id: 'below', parent_id: 'a', content: 'below'},
+      {id: 'a', parent_id: 'b', content: 'a'},
+      {id: 'b', parent_id: 'a', content: 'b'},
+      {id: 'self-child', parent_id: 'self', content: 'self-child'},
+      {id: 'self', parent_id: 'self', content: 'self'},
+    ], 500)
+
+    const ids = chunks.flat().map(row => row.id)
+    expect(ids.indexOf('a')).toBeLessThan(ids.indexOf('below'))
+    expect(ids.indexOf('self')).toBeLessThan(ids.indexOf('self-child'))
   })
 })
 
@@ -256,7 +356,7 @@ const fakeTx = (transactionId: number, entries: CrudEntry[]): FakeTransaction =>
   return tx
 }
 
-const fakeDb = {} as AbstractPowerSyncDatabase
+const fakeDb = {} as CommonPowerSyncDatabase
 
 const fkError = (): Error => {
   const err = new Error('insert or update on table "blocks" violates foreign key constraint')
@@ -311,32 +411,72 @@ describe('encryptUploadOps (encrypt-on-upload)', () => {
     expect(hasEnvelopePrefix(p.payload.content as string)).toBe(true)
   })
 
-  it('passes through an op missing workspace_id (cannot be e2ee-routed)', async () => {
-    const getCek: GetCek = async () => { throw new Error('getCek must not be called') }
-    const ops: CompactedBlockOperation[] = [patchOp('a', {content: 'x'})]
-    const out = await __encryptUploadOpsForTest(ops, () => 'e2ee', getCek)
-    expect(out).toEqual(ops)
+  describe('key reads', () => {
+    const manyOps = (): CompactedBlockOperation[] => [
+      ...Array.from({length: 5}, (_, i) => create(`a${i}`, {workspace_id: 'w1', content: 'x'})),
+      ...Array.from({length: 5}, (_, i) => patchOp(`b${i}`, {workspace_id: 'w2', content: 'y'})),
+    ]
+
+    it('reads the key once per workspace per call, not once per op', async () => {
+      const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+      const getCek = vi.fn<GetCek>(async () => key)
+      await __encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek)
+      expect(getCek.mock.calls.map(([ws]) => ws).sort()).toEqual(['w1', 'w2'])
+    })
+
+    it('still rejects the batch when the key lookup rejects', async () => {
+      const getCek = vi.fn<GetCek>(async () => { throw new Error('idb unavailable') })
+      await expect(__encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek))
+        .rejects.toThrow('idb unavailable')
+      expect(getCek.mock.calls.length).toBeLessThanOrEqual(2)
+    })
+
+    it('still rejects the batch when the key is missing', async () => {
+      await expect(__encryptUploadOpsForTest(manyOps(), () => 'e2ee', async () => null))
+        .rejects.toThrow(/no workspace key/)
+    })
+
+    it('reads the key again on the next call', async () => {
+      const key = await importWorkspaceKey(generateWorkspaceKeyBytes())
+      const getCek = vi.fn<GetCek>(async () => key)
+      await __encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek)
+      await __encryptUploadOpsForTest(manyOps(), () => 'e2ee', getCek)
+      expect(getCek).toHaveBeenCalledTimes(4)
+    })
+  })
+
+  describe.each([['create', create], ['patch', patchOp]] as const)('%s upload', (_, operation) => {
+    it.each([['missing', undefined], ['empty', '']] as const)(
+      'refuses a %s workspace_id before resolving its mode',
+      async (_, workspaceId) => {
+        const getMode = vi.fn<GetWorkspaceMode>(() => 'none')
+        await expect(__encryptUploadOpsForTest(
+          [operation('a', {content: 'x', workspace_id: workspaceId})], getMode, async () => null,
+        )).rejects.toThrow(/workspace_id/)
+        expect(getMode).not.toHaveBeenCalled()
+      },
+    )
   })
 })
 
 describe('uploadTransactionsWithFallback', () => {
-  it('applies encryptOps to the compacted batch before handing it to applyOperations', async () => {
+  it('sends the prepared batch to applyOperations', async () => {
     const {applyOperations, recordRejection} = collectCalls()
-    // encryptOps returns its own transformed ops; assert those exact ops are
+    // prepareOperations returns its own transformed ops; assert those exact ops are
     // what applyOperations receives (i.e. encryption sits in the pipeline).
     const sealed: CompactedBlockOperation[] = [
       {kind: 'create', id: 'b1', order: 0, payload: {id: 'b1', workspace_id: 'w', content: 'SEALED'}},
     ]
-    const encryptOps = vi.fn(async () => sealed)
-    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
+    const prepareOperations = vi.fn(async () => sealed)
+    const tx = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, encryptOps},
+      {applyOperations, recordRejection, prepareOperations},
     )
 
-    expect(encryptOps).toHaveBeenCalledTimes(1)
+    expect(prepareOperations).toHaveBeenCalledTimes(1)
     expect(applyOperations.mock.calls[0]![1]).toBe(sealed)
   })
 
@@ -347,10 +487,10 @@ describe('uploadTransactionsWithFallback', () => {
     // ps_crud). Mock applyOperations resolves cleanly; the fallback
     // loop must not run.
     const tx1 = fakeTx(1, [
-      new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'}),
+      crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'}),
     ])
     const tx2 = fakeTx(2, [
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 2, {content: 'B'}),
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 2, {content: 'B'}),
     ])
     const {applyOperations, recordRejection} = collectCalls()
 
@@ -371,10 +511,10 @@ describe('uploadTransactionsWithFallback', () => {
     // 23503; classifier marks permanent; per-tx fallback applies
     // tx1 (succeeds), tx2 (fails — recorded), tx3 (succeeds). All
     // three end up complete()'d so ps_crud drains; only tx2 lands
-    // in ps_crud_rejected.
-    const tx1 = fakeTx(10, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
-    const tx2 = fakeTx(20, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 20, {deleted: true})])
-    const tx3 = fakeTx(30, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
+    // in ps_crud_rejected. Fixing commit: 58140b90d (issue #459).
+    const tx1 = fakeTx(10, [crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
+    const tx2 = fakeTx(20, [crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 20, {deleted: true})])
+    const tx3 = fakeTx(30, [crudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
     const {applyOperations, recordRejection} = collectCalls()
     // Batch call (call 1) fails. Per-tx calls: tx1 ok, tx2 fails, tx3 ok.
     applyOperations
@@ -405,9 +545,9 @@ describe('uploadTransactionsWithFallback', () => {
     // batch every ~5s, re-running apply_block_creates and re-touching every
     // already-landed create (tx1) — a real WAL write + fleet echo each — for the
     // life of the transient. tx1 drains once; tx2 stays queued (not recorded —
-    // transient is not a rejection).
-    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
-    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
+    // transient is not a rejection). Fixing commit: 05fe86074 (issue #459).
+    const tx1 = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
     applyOperations
       .mockRejectedValueOnce(networkError()) // batch fails transiently → per-tx
@@ -435,9 +575,9 @@ describe('uploadTransactionsWithFallback', () => {
     // calls uploadData again, we re-pull tx2 + tx3, retry. The
     // alternative (recording transient as a rejection) would silently
     // discard data on a temporary blip.
-    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
-    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
-    const tx3 = fakeTx(3, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 3, {content: 'C'})])
+    const tx1 = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
+    const tx3 = fakeTx(3, [crudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 3, {content: 'C'})])
     const {applyOperations, recordRejection} = collectCalls()
     applyOperations
       .mockRejectedValueOnce(fkError())      // batch fails permanently → fallback
@@ -460,19 +600,20 @@ describe('uploadTransactionsWithFallback', () => {
 
   it('un-encryptable tx (missing e2ee key) does not jam the batch: drains the OK prefix, stops at it', async () => {
     // tx1 is plaintext (encryptable); tx2 is an e2ee workspace whose key is
-    // momentarily unavailable, so encryptOps throws for any batch containing it.
+    // momentarily unavailable, so prepareOperations throws for any batch containing it.
     // The guard must NOT abort the whole batch preflight: tx1 (the OK prefix)
     // drains, and we stop at tx2 (throw → PowerSync retries it once the key is
     // back). tx2 is NOT recorded as a rejection — a missing key is transient, so
     // discarding the edit would be data loss.
     const tx1 = fakeTx(1, [
-      new CrudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w-ok', content: 'A'}),
+      crudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w-ok', content: 'A'}),
     ])
     const tx2 = fakeTx(2, [
-      new CrudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
+      crudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
     ])
     const {applyOperations, recordRejection} = collectCalls()
-    const encryptOps = vi.fn(async (ops: readonly CompactedBlockOperation[]) => {
+    const prepareOperations = vi.fn(async (entries: readonly CrudEntry[]) => {
+      const ops = __compactBlockCrudEntriesForTest(entries)
       if (
         ops.some(
           o => o.kind !== 'delete' && (o.payload as {workspace_id?: string}).workspace_id === 'w-locked',
@@ -487,7 +628,7 @@ describe('uploadTransactionsWithFallback', () => {
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
         [tx1, tx2] as unknown as CrudTransaction[],
-        {applyOperations, recordRejection, encryptOps},
+        {applyOperations, recordRejection, prepareOperations},
       ),
     ).rejects.toThrow(/workspace key/)
 
@@ -504,14 +645,14 @@ describe('uploadTransactionsWithFallback', () => {
     // bootstrap (user_prefs etc.) where the server already has the
     // row would receive a bare PATCH that wipes properties_json.
     const tx1 = fakeTx(1, [
-      new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {
+      crudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {
         workspace_id: 'w', parent_id: null, content: 'A', properties_json: '{}',
       }),
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 1, {
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 1, {
         properties_json: '{"types":["page"]}',
       }),
     ])
-    const tx2 = fakeTx(2, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-b', 2, {content: 'B'})])
+    const tx2 = fakeTx(2, [crudEntry(3, UpdateType.PUT, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
     applyOperations
       .mockRejectedValueOnce(fkError())      // force per-tx path
@@ -555,7 +696,7 @@ const stubSink = (overrides: Partial<BlockUploadSink> = {}): BlockUploadSink => 
   ...overrides,
 })
 
-const fakeDatabase = {} as AbstractPowerSyncDatabase
+const fakeDatabase = {} as CommonPowerSyncDatabase
 
 describe('applyCompactedBlockOperations — patch routing', () => {
   it('ships every compacted PATCH as a single applyPatches call with verbatim payloads', async () => {
@@ -716,7 +857,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // PowerSync retries the same oversized batch forever and the queue never
     // drains. Cap the per-RPC size so each call stays well under the timeout;
     // the patches are column-narrow and idempotent, so splitting them across
-    // separate RPC transactions is safe.
+    // separate RPC transactions is safe. Fixing commit: 9fc1b8729 (issue #459).
     supabaseRef.rpc.mockResolvedValue({data: null, error: null})
     const total = MAX_PATCHES_PER_SUPABASE_RPC * 2 + 1
     const patches = Array.from({length: total}, (_, i) => ({
@@ -787,6 +928,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // a code, so it gets a retry budget then quarantine. Note: unlike the
     // standalone classifier tests, this error carries no `.status` of its own —
     // it gets one only because the sink threads it (the production shape).
+    // Fixing commit: 71bd72efe (issue #459).
     supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyBlockPatchesRpcForTest([
@@ -795,6 +937,41 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
     expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+
+  it('throws a named Error, so the upload status shows its message rather than "Non-Error rejection"', async () => {
+    // postgrest-js (non-throwing mode) hands every failure back as a PLAIN
+    // object with no `name`. PowerSync's worker serializes a thrown value without
+    // a string `name` as the generic "Non-Error rejection", discarding the
+    // message. This is the shape a request aborted by the upload deadline takes.
+    const aborted = {
+      message: 'TimeoutError: signal timed out',
+      details: '',
+      hint: 'Request was aborted (timeout or manual cancellation)',
+      code: '',
+    }
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: aborted, status: 0})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).toMatchObject({...aborted, name: 'PostgrestError', status: 0})
+    expect(classifyUploadError(thrown)).toBe('transient')
+  })
+
+  it('falls back to the whole body as the message when an error body has no string message', async () => {
+    // postgrest-js returns any JSON error body as is, e.g. a gateway's own shape.
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {error: 'upstream unavailable'}, status: 503})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('upstream unavailable')
+    expect(classifyUploadError(thrown)).toBe('transient')
   })
 
   it('retries an ambiguous codeless 4xx across the budget, then quarantines it (#190)', async () => {
@@ -813,7 +990,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
       recordRejection,
     }
     const onePass = () => {
-      const tx = fakeTx(7, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 7, {content: 'B'})])
+      const tx = fakeTx(7, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 7, {content: 'B'})])
       const run = __uploadTransactionsWithFallbackForTest(
         fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
       )
@@ -849,7 +1026,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
       recordRejection,
     }
     const onePass = () => {
-      const tx = fakeTx(9, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 9, {content: 'B'})])
+      const tx = fakeTx(9, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 9, {content: 'B'})])
       const run = __uploadTransactionsWithFallbackForTest(
         fakeDb, [tx] as unknown as CrudTransaction[], deps, attempts,
       )
@@ -889,7 +1066,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // transient credentials problem, the exact silent-data-loss the classifier
     // is built to avoid.
     supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'JWT expired'}, status: 401})
-    const tx = fakeTx(1, [new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
+    const tx = fakeTx(1, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 1, {content: 'B'})])
     const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
 
     await expect(
@@ -949,9 +1126,9 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
   })
 
   it('chunks an oversized create batch into capped RPC calls, order preserved across chunks', async () => {
-    // orderedBlockUpserts runs before chunk(), so a parent never lands in a later
-    // chunk than its child — each chunk is a separate RPC = separate transaction,
-    // and the parent self-FK is only DEFERRABLE within one transaction.
+    // A parent never lands in a later chunk than its child — each chunk is a
+    // separate RPC = separate transaction, and the parent self-FK is only
+    // DEFERRABLE within one transaction.
     supabaseRef.rpc.mockResolvedValue({data: null, error: null})
     const total = MAX_CREATES_PER_SUPABASE_RPC * 2 + 1
     const rows = Array.from({length: total}, (_, i) => ({
@@ -978,6 +1155,58 @@ describe('applyBlockCreates — RPC wire + chunking', () => {
     await __applyBlockCreatesForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
   })
+
+  // Each RPC is one server transaction, and the server keeps the FIRST create of
+  // an id. A block and the rows created under it must land in the same one, or
+  // a peer's upload between two RPCs can win the block while this device wins
+  // its children (or the reverse) — the property machinery under a block two
+  // devices both created is what that splits apart.
+  it('keeps a new block and the rows created under it in one RPC', async () => {
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const singles = Array.from({length: MAX_CREATES_PER_SUPABASE_RPC - 1}, (_, i) => ({
+      id: `single-${i}`, workspace_id: 'w', parent_id: null, content: `s${i}`,
+    }))
+    const family = [
+      {id: 'owner', workspace_id: 'w', parent_id: null, content: 'owner'},
+      {id: 'field', workspace_id: 'w', parent_id: 'owner', content: 'field'},
+      {id: 'value', workspace_id: 'w', parent_id: 'field', content: 'value'},
+    ]
+
+    await __applyBlockCreatesForTest([...singles, ...family])
+
+    const calls = supabaseRef.rpc.mock.calls.map(
+      call => (call[1] as {creates: Array<{id: string}>}).creates.map(row => row.id))
+    expect(calls).toHaveLength(2)
+    expect(calls.find(ids => ids.includes('owner'))).toEqual(['owner', 'field', 'value'])
+  })
+
+  it('splits a subtree bigger than one RPC only between whole child subtrees, parents first', async () => {
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const messages = Math.ceil(MAX_CREATES_PER_SUPABASE_RPC / 3) + 10
+    const rows: Array<{id: string; workspace_id: string; parent_id: string | null; content: string}> =
+      [{id: 'day', workspace_id: 'w', parent_id: null, content: 'day'}]
+    for (let i = 0; i < messages; i++) {
+      rows.push(
+        {id: `m${i}`, workspace_id: 'w', parent_id: 'day', content: 'message'},
+        {id: `m${i}-field`, workspace_id: 'w', parent_id: `m${i}`, content: 'field'},
+        {id: `m${i}-value`, workspace_id: 'w', parent_id: `m${i}-field`, content: 'value'},
+      )
+    }
+
+    await __applyBlockCreatesForTest(rows)
+
+    const calls = supabaseRef.rpc.mock.calls.map(
+      call => (call[1] as {creates: Array<{id: string}>}).creates.map(row => row.id))
+    expect(calls.length).toBeGreaterThan(1)
+    const chunkOf = new Map(calls.flatMap((ids, chunk) => ids.map(id => [id, chunk] as const)))
+    expect(chunkOf.size).toBe(rows.length)
+    for (let i = 0; i < messages; i++) {
+      expect(chunkOf.get(`m${i}-field`)).toBe(chunkOf.get(`m${i}`))
+      expect(chunkOf.get(`m${i}-value`)).toBe(chunkOf.get(`m${i}`))
+      expect(chunkOf.get('day')!).toBeLessThanOrEqual(chunkOf.get(`m${i}`)!)
+    }
+    for (const ids of calls) expect(ids.length).toBeLessThanOrEqual(MAX_CREATES_PER_SUPABASE_RPC)
+  })
 })
 
 // ===========================================================================
@@ -998,6 +1227,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
+    // Fixing commit: 71bd72efe (issue #459).
     supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyCompactedBlockOperationsForTest(
@@ -1013,7 +1243,8 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
-    const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
+    // Fixing commit: 71bd72efe (issue #459).
+    const eq = vi.fn(() => request({data: null, error: {message: 'Bad Request'}, status: 400}))
     const del = vi.fn().mockReturnValue({eq})
     supabaseRef.from.mockReturnValue({delete: del})
 
@@ -1056,15 +1287,16 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
           },
         })
       },
-    } as unknown as AbstractPowerSyncDatabase
+    } as unknown as CommonPowerSyncDatabase
     return {db, calls, directExecute, writeTxCount: () => writeTxCount}
   }
 
   it('records every entry in one writeTransaction, led by a DELETE-by-tx_id', async () => {
+    // Fixing commit: 267558e29 (issue #459).
     const {db, calls, directExecute, writeTxCount} = collectWrites()
     const tx = fakeTx(42, [
-      new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),
-      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 42, {content: 'B'}),
+      crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),
+      crudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 42, {content: 'B'}),
     ])
     const err = Object.assign(new Error('Bad Request'), {status: 400})
 
@@ -1082,5 +1314,157 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     expect(inserts.every(c => /INSERT INTO ps_crud_rejected/.test(c.sql))).toBe(true)
     expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
     expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
+  })
+
+  it('keeps a PostgREST error envelope in error_message, which the rejection dialog parses', async () => {
+    const fkViolation = {
+      message: 'insert or update on table "blocks" violates foreign key constraint',
+      details: 'Key (parent_id) is not present in table "blocks".',
+      hint: 'Create the parent first',
+      code: '23503',
+    }
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: fkViolation, status: 409})
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+    const {db, calls} = collectWrites()
+    const tx = fakeTx(42, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'B'})])
+
+    await __recordRejectionToTableForTest(db, tx as unknown as CrudTransaction, thrown)
+
+    const [, , , errorCode, errorMessage] = calls[1]!.params
+    expect(errorCode).toBe('23503')
+    expect(JSON.parse(errorMessage as string)).toMatchObject(fkViolation)
+  })
+})
+
+describe('uploadData — malformed workspace envelopes', () => {
+  let fixture: TestDb
+  beforeAll(async () => { fixture = await createTestDb() })
+  beforeEach(async () => {
+    await resetTestDb(fixture.db)
+    supabaseRef.rpc.mockReset().mockResolvedValue({data: null, error: null})
+  })
+  afterAll(async () => { await fixture.cleanup() })
+
+  it.each(['PUT', 'PATCH'])('quarantines the original %s transaction and drains the valid same-block edit behind it', async op => {
+    const malformed = {op, type: 'blocks', id: 'item', data: {content: 'preserve this', base_updated_at: 17}}
+    const sibling = {op: 'PATCH', type: 'blocks', id: 'sibling', data: {workspace_id: 'ws', content: 'same transaction'}}
+    // Two PATCHes for the same block compact across transactions: the later
+    // workspace_id must never legitimize the earlier envelope.
+    const valid = {op: 'PATCH', type: 'blocks', id: 'item', data: {workspace_id: 'ws', updated_at: 20}}
+    for (const [txId, row] of [[1, malformed], [1, sibling], [2, valid]] as const) {
+      await fixture.db.execute('INSERT INTO ps_crud (tx_id, data) VALUES (?, ?)', [txId, JSON.stringify(row)])
+    }
+    const original = await fixture.db.getAll<{original_id: number, tx_id: number, data: string}>(
+      'SELECT id AS original_id, tx_id, data FROM ps_crud WHERE tx_id = 1 ORDER BY id',
+    )
+    expect(original.map(row => JSON.parse(row.data))).toEqual([malformed, sibling])
+
+    const connector = createPowerSyncConnector({
+      dbFilename: 'upload-test', encryption: {getWorkspaceMode: () => 'none', getCek: async () => null},
+    })
+    await connector.uploadData(fixture.db)
+
+    const rejected = await fixture.db.getAll(
+      'SELECT original_id, tx_id, data, error_message FROM ps_crud_rejected ORDER BY original_id',
+    )
+    expect(rejected).toEqual(original.map(row => ({...row, error_message: expect.stringContaining('workspace_id')})))
+    expect(await fixture.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+    expect(supabaseRef.rpc.mock.calls).toEqual([['apply_block_patches', {patches: [{id: valid.id, ...valid.data}]}]])
+  })
+})
+
+describe('uploadData — one pass per database at a time', () => {
+  /** The upload queue as the connector reads it: completing a transaction
+   *  drains it and everything queued before it. */
+  const uploadQueue = () => {
+    const queued: CrudTransaction[] = []
+    const enqueue = (transactionId: number, entries: CrudEntry[]) => {
+      const tx = {
+        transactionId,
+        crud: entries,
+        complete: async () => { queued.splice(0, queued.indexOf(tx) + 1) },
+      } as unknown as CrudTransaction
+      queued.push(tx)
+    }
+    const database = {
+      getCrudTransactions: () => ({
+        [Symbol.asyncIterator]: () => {
+          const snapshot = [...queued]
+          return {next: async () => snapshot.length > 0
+            ? {done: false as const, value: snapshot.shift()!}
+            : {done: true as const, value: undefined}}
+        },
+      }),
+    } as unknown as CommonPowerSyncDatabase
+    return {database, enqueue}
+  }
+
+  /** The patches each `apply_block_patches` request carried, in send order. */
+  const sentPatches = () => supabaseRef.rpc.mock.calls.map(([, body]) => body.patches)
+  const landed = {data: null, error: null}
+
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+    supabaseRef.deadlines.length = 0
+  })
+
+  it('holds a second pass until the request already in flight has landed', async () => {
+    const dbFilename = `upload-lock-${crypto.randomUUID()}`
+    const {database, enqueue} = uploadQueue()
+    let landFirst!: () => void
+    supabaseRef.rpc
+      .mockReturnValueOnce(new Promise(resolve => { landFirst = () => resolve(landed) }))
+      .mockResolvedValue(landed)
+    const encryption = {getWorkspaceMode: () => 'none' as const, getCek: async () => null}
+    const {uploadData} = createPowerSyncConnector({dbFilename, encryption})
+
+    enqueue(1, [patch(1, 'block-a', {workspace_id: 'w', content: 'it ', base_updated_at: 100}, 1)])
+    const abandonedPass = uploadData(database)
+    await vi.waitFor(() => expect(sentPatches()).toHaveLength(1))
+
+    // The SDK stopped waiting on that pass and starts another, with a later
+    // edit queued behind the one still in flight.
+    enqueue(2, [patch(2, 'block-a', {workspace_id: 'w', content: 'it m', base_updated_at: 200}, 2)])
+    const nextPass = uploadData(database)
+    await vi.waitFor(async () => {
+      const {pending = []} = await navigator.locks.query()
+      expect(sentPatches().length > 1 || pending.some(lock => lock.name === uploadLockName(dbFilename))).toBe(true)
+    })
+    expect(sentPatches()).toHaveLength(1)
+
+    // Another database's uploads are not behind it.
+    const other = uploadQueue()
+    other.enqueue(3, [patch(3, 'block-b', {workspace_id: 'w', content: 'elsewhere'}, 3)])
+    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`, encryption}).uploadData(other.database)
+
+    landFirst()
+    await Promise.all([abandonedPass, nextPass])
+    expect(sentPatches()).toEqual([
+      [{id: 'block-a', workspace_id: 'w', content: 'it ', base_updated_at: 100}],
+      [{id: 'block-b', workspace_id: 'w', content: 'elsewhere'}],
+      [{id: 'block-a', workspace_id: 'w', content: 'it m', base_updated_at: 200}],
+    ])
+  })
+
+  it('bounds every upload request, and one that hit the bound is retried rather than quarantined', async () => {
+    // What postgrest-js resolves with when the signal aborts the request.
+    const aborted = {data: null, error: {message: 'TimeoutError: signal timed out', code: ''}, status: 0}
+    supabaseRef.rpc.mockResolvedValue(aborted)
+    const eq = vi.fn(() => request(aborted))
+    supabaseRef.from.mockReturnValue({delete: () => ({eq})})
+
+    const errors: unknown[] = []
+    for (const op of [
+      {kind: 'create', id: 'block-a', payload: {id: 'block-a'}, order: 0},
+      {kind: 'patch', id: 'block-a', payload: {content: 'A'}, order: 0},
+      {kind: 'delete', id: 'block-a', order: 0},
+    ] satisfies CompactedBlockOperation[]) {
+      errors.push(await __applyCompactedBlockOperationsForTest(fakeDatabase, [op]).catch((err: unknown) => err))
+    }
+
+    expect(supabaseRef.deadlines).toHaveLength(3)
+    expect(errors.map(classifyUploadError)).toEqual(['transient', 'transient', 'transient'])
   })
 })

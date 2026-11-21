@@ -28,14 +28,24 @@
 import { isEqual } from 'lodash-es'
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
 } from 'react'
-import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
+import type { BlockData, Handle, PropertyChildrenView, PropertySchema, TypedBlockQuery } from '@/data/api'
+import { getAliases } from '@/data/properties.js'
+import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'
+import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo.js'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import {
+  blockPropertyDisplaySetting,
+  resolvePropertyDisplayMode,
+  type PropertyDisplayMode,
+} from '@/data/propertyDisplayMode'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
@@ -67,6 +77,25 @@ const areSelectedValuesEqual = <T,>(left: T, right: T): boolean => {
 }
 
 const identitySelector = <V,>(v: V): V => v
+
+/** Ensure-load for a handle a hook has just started observing.
+ *
+ *  `'error'` is retried alongside `'idle'`: a FIRST-load failure leaves
+ *  the handle with no deps, so no change can ever invalidate it into a
+ *  retry, and an arriving observer is the only retry such a handle can
+ *  get until failure is observable in its own right (#930). Bounded by
+ *  mounts and by changes to the observed set, so a persistently failing
+ *  query costs one read per those, not a spin. */
+const ensureLoaded = (handle: Handle<unknown>): void => {
+  const status = handle.status()
+  if (status !== 'idle' && status !== 'error') return
+  // Logged rather than swallowed: the handle stores the error but nothing
+  // reads it, so a surface that fails quietly by design (breadcrumbs, any
+  // decoration) would otherwise leave a blank line and no trace of why.
+  void handle.load().catch(error => {
+    console.error(`[handle] load failed for ${handle.key}`, error)
+  })
+}
 
 export interface UseHandleOptions<T, S> {
   /** Project the handle's value before returning. The hook applies
@@ -109,7 +138,7 @@ export function useHandle<T, S = T | undefined>(
   // written by the post-commit useEffect below — so an abandoned render
   // (concurrent mode) can never pollute it. This is the structural
   // replacement for the previous useState-bag-mutated-during-render
-  // shape (reviewer P3).
+  // shape.
   const committedRef = useRef<CommittedSelection<S>>({
     hasValue: false,
     value: undefined as S,
@@ -122,7 +151,7 @@ export function useHandle<T, S = T | undefined>(
   // observed state — selectors that allocate (e.g. `data => data.map(…)`)
   // would otherwise return a new array on each call.
   //
-  // Why this is safe under concurrent mode (reviewer P3): the `let`
+  // Why this is safe under concurrent mode: the `let`
   // bindings are scoped to the closure useMemo returned. They never
   // appear on a shared object — an abandoned render that calls
   // getSelection only mutates locals on that render's closure (and only
@@ -172,13 +201,12 @@ export function useHandle<T, S = T | undefined>(
   /* eslint-enable react-hooks/immutability */
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
-  // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready.
-  useEffect(() => {
-    if (handle.status() === 'idle') {
-      void handle.load().catch(() => {/* error stored on the handle */})
-    }
-  }, [handle])
+  // Block both dedup their inflight load promise). A disposed handle
+  // reports its live replacement's status, so this reads the replacement
+  // rather than a corpse; with the key vacant it reports 'disposed' and we
+  // skip — the subscribe below mints a live handle at that key, whose own
+  // first-subscriber load covers the ensure-load we declined.
+  useEffect(() => { ensureLoaded(handle) }, [handle])
 
   // Stable subscribe — only changes when the handle changes, so we
   // don't tear down handle.subscribe on every render that produces a
@@ -186,6 +214,13 @@ export function useHandle<T, S = T | undefined>(
   // change is bailed out by useSyncExternalStore: it re-checks
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
+  //
+  // No disposed-handle branch here on purpose. A subtree whose effects were
+  // unmounted long enough for the store to GC its handle
+  // (`<Activity mode="hidden">`) recovers because `handle.subscribe` itself
+  // resolves to whatever is live at the key — and it has to live there rather
+  // than in this hook, because the caller cannot re-acquire under React
+  // Compiler. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
   const subscribe = useCallback(
     (listener: () => void) => handle.subscribe(listener),
     [handle],
@@ -202,6 +237,73 @@ export function useHandle<T, S = T | undefined>(
   }, [value])
 
   return value
+}
+
+/** A value stabilized by its CONTENT, for a caller that builds it inline.
+ *
+ *  `useHandles` keys its subscriptions on the handle array's identity, and
+ *  that array is built from a list a caller assembles per render — so
+ *  without this every render tears down N subscriptions and opens N more.
+ *
+ *  Serialized as JSON rather than joined on a delimiter: `blockId.ts`
+ *  enforces canonical uuids only on the tx INSERT path and exempts
+ *  sync-applied and `applyRaw` rows, so an id containing the delimiter is
+ *  not impossible, and encoding it away removes the assumption. */
+export const useStableJson = <T,>(value: T): T => {
+  const key = JSON.stringify(value)
+  return useMemo(() => JSON.parse(key) as T, [key])
+}
+
+/** `useHandle` for a SET of handles: one subscription each, values in
+ *  the caller's order, `undefined` for a member that hasn't resolved.
+ *
+ *  Reach for it when the set itself moves — one handle per member is what
+ *  lets a member that stays keep its resolved value across a change to
+ *  the set. See `core.ancestors` for the shape this exists to serve.
+ *
+ *  The caller owns `handles`' identity: build the array from
+ *  `useStableJson`'d ids, not from the source array.
+ *
+ *  Members are compared with `useHandle`'s equality, not by identity: a
+ *  `LoaderHandle` stores every reload's value and applies its structural
+ *  diff only to the NOTIFY, so `peek()` hands back a fresh array after a
+ *  reload that changed nothing. Identity alone would rebuild the whole
+ *  aggregate on each of those, and every consumer memo with it.
+ *
+ *  No `committedRef` counterpart to `useHandle`'s, because the memo below
+ *  is rebuilt only when `handles` changes — which means the id set
+ *  changed, and a new array is then the honest answer. */
+export const useHandles = <T,>(
+  handles: readonly Handle<T>[],
+): readonly (T | undefined)[] => {
+  // Same closure-local memo as `useHandle`, and safe for the same reason:
+  // the bindings live in the closure `useMemo` returned, never on a shared
+  // object, so an abandoned render can at worst prime the memo with a
+  // superseded value array.
+  /* eslint-disable react-hooks/immutability */
+  const getSnapshot = useMemo(() => {
+    let memoized: (T | undefined)[] | null = null
+    return (): readonly (T | undefined)[] => {
+      const next = handles.map(handle => handle.peek())
+      if (memoized !== null && areSelectedValuesEqual(memoized, next)) return memoized
+      memoized = next
+      return next
+    }
+  }, [handles])
+  /* eslint-enable react-hooks/immutability */
+
+  const subscribe = useCallback((listener: () => void) => {
+    const unsubscribes = handles.map(handle => handle.subscribe(listener))
+    return () => { for (const unsubscribe of unsubscribes) unsubscribe() }
+  }, [handles])
+
+  // Every member starts in the same tick, which is what lets a batching
+  // loader answer them with one read.
+  useEffect(() => {
+    for (const handle of handles) ensureLoaded(handle)
+  }, [handles])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -260,13 +362,12 @@ export function useProperty<T>(
   block: Block,
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] {
+  // Reads the cell under `schema.name`, while `block.get` and this hook's own
+  // setter resolve the workspace's winner first, so for a shadowed or renamed
+  // user definition the hook can show a different cell than it writes. Not
+  // resolved here: the selector would also have to re-run on registry changes (#1555).
   const value = useHandle(block, {
-    selector: doc => {
-      if (!doc) return schema.defaultValue
-      const stored = doc.properties[schema.name]
-      if (stored === undefined) return schema.defaultValue
-      return schema.codec.decode(stored)
-    },
+    selector: doc => doc ? decodeRowProperty(doc, schema) : schema.defaultValue,
   }) as T
 
   const setValue = useCallback(
@@ -286,6 +387,22 @@ export const usePropertyValue = useProperty
 
 const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
 
+/** The block's page names (`alias`), reactively.
+ *
+ *  Deliberately NOT `usePropertyValue(block, aliasesProp)`: that calls
+ *  `codec.decode` with no catch, and this read runs for EVERY rendered block
+ *  (it feeds the page-styling seams — `useBlockTitleTextClass` and the bullet).
+ *  One malformed stored value —
+ *  imported, hand-written, arrived over sync — would throw inside the renderer
+ *  itself, above the per-block error boundary, and blank out that block's whole
+ *  subtree. `getAliases` is the codebase's existing tolerant decode for exactly
+ *  this case; the shared empty array keeps the common no-alias path
+ *  identity-stable through `useHandle`'s equality bail-out. */
+export const useBlockAliases = (block: Block): readonly string[] =>
+  useHandle(block, {
+    selector: data => (data ? getAliases(data) : EMPTY_STRING_ARRAY),
+  }) as readonly string[]
+
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
  *  while the handle is loading or for a leaf block.
  *
@@ -301,11 +418,49 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  this, every LazyBlockComponent that mounts on intersection would
  *  pay its own `block.load()` round-trip and the page would visibly
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
- *  non-rendering callers (counting / id-only scans). */
+ *  non-rendering callers (counting / id-only scans).
+ *
+ *  Lists the children the outline shows: which property rows are among
+ *  them is `usePropertyDisplayMode`'s answer for this block. */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
-    selector: ids => ids ?? EMPTY_STRING_ARRAY,
-  }) as string[]
+  useChildIdsForMode(block, usePropertyDisplayMode(block))
+
+/** {@link useChildIds} for a caller that already resolved the mode. */
+export const useChildIdsForMode = (block: Block, mode: PropertyDisplayMode): string[] => {
+  const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
+    selector: ids => ids,
+  })
+  return ids ?? loadedListOfAnotherView(block, mode)
+}
+
+/** While a non-default view's list loads, a loaded list of another view of
+ *  the same parent: the other non-default view first (still live right after
+ *  a show-all ↔ show-non-hidden switch), then the default. Answering `[]`
+ *  instead unmounts every child — editor and lazy-mount state with it — only
+ *  to mount them again a moment later. Nothing for the default view, so an
+ *  outline that never switches allocates nothing here; switching back to
+ *  hide-all can remount the listing once. */
+const loadedListOfAnotherView = (block: Block, view: PropertyChildrenView): string[] => {
+  if (view === 'none') return EMPTY_STRING_ARRAY as string[]
+  const others: readonly PropertyChildrenView[] = view === 'non-hidden' ? ['all', 'none'] : ['non-hidden', 'none']
+  for (const other of others) {
+    const ids = block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: other}).peek()
+    if (ids) return ids
+  }
+  return EMPTY_STRING_ARRAY as string[]
+}
+
+/** The outline's property display mode for `block`'s children here: the
+ *  block's own switch over the panel's scope (`PropertyDisplayScope`), combined
+ *  by `resolvePropertyDisplayMode`, the one resolver. The block setting
+ *  is read tolerantly, above the per-block error boundary. */
+export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
+  const scope = useContext(PropertyDisplayScopeContext)
+  const blockSetting = useHandle(block, {
+    selector: blockPropertyDisplaySetting,
+  })
+  return resolvePropertyDisplayMode({...scope, block: blockSetting})
+}
 
 /** Reactive child Block facades. Same structural-equality bail-out
  *  story as `useChildIds` — `repo.block(id)` is identity-stable, so the
@@ -317,7 +472,8 @@ export const useChildIds = (block: Block): string[] =>
  *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.children({id: block.id}), {
+  // Mode `none` (every property field row excluded, §9), whatever the outline's mode.
+  return useHandle(block.repo.query.children({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -333,59 +489,113 @@ export const useChildren = (block: Block): Block[] => {
  *  — every block that renders a bullet (BlockBullet) also renders its
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
-export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
-    selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
+export const useHasChildren = (block: Block): boolean => {
+  const mode = usePropertyDisplayMode(block)
+  const hasChildren = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
+    selector: ids => ids === undefined ? undefined : ids.length > 0,
   })
+  return hasChildren ?? loadedListOfAnotherView(block, mode).length > 0
+}
+
+/** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`
+ *  walks leaf-to-root; every consumer renders root-first. */
+const parentsFromChain = (repo: Repo, chain: readonly BlockData[]): Block[] =>
+  chain.map(data => repo.block(data.id)).reverse()
+
+const EMPTY_PARENTS: Block[] = []
 
 /** Reactive parent chain (root → … → immediate parent), excluding
- *  `block` itself. `repo.ancestors()` walks leaf-to-root, so reverse
- *  for the breadcrumb-friendly order callers expect. */
+ *  `block` itself. `[]` while the walk is still in flight, and `[]` for a
+ *  root — no consumer has yet needed those told apart, and a caller that
+ *  holds a chain of its own prefers it over this outright rather than
+ *  only while it is pending (see `BlockEntry`). */
 export const useParents = (block: Block): Block[] => {
   const repo = block.repo
   return useHandle(block.repo.query.ancestors({id: block.id}), {
-    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
+    selector: data => (data ? parentsFromChain(repo, data.ancestors) : EMPTY_PARENTS),
   })
 }
 
 const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
 
-/** Batched variant of `useParents` — runs one `core.manyAncestors`
- *  query for every id in `blocks`. Returns a Map<id, Block[]> in the
- *  same root→…→immediate-parent order each per-id `useParents` would
- *  produce.
+/** Batched variant of `useParents` — the parent chain for every id in
+ *  `blocks`, as a Map<id, Block[]> in the same root→…→immediate-parent
+ *  order each per-id `useParents` would produce.
  *
- *  Use over N `useParents` calls when a parent component knows the
- *  full id set up front (backlinks panel, tag list, etc.). One SQL
- *  round-trip vs. N: on a contended SQLite connection during cold
- *  start, the win is meaningful (a 15-entry backlinks panel went
- *  from ~2.3 s of summed ancestor wall time to ~150 ms in
- *  measurements).
+ *  One `core.ancestors` handle per id — see that query for why the set
+ *  is not the unit. The walks coalesce into one statement, so the cold
+ *  case costs what a single batched query did.
  *
- *  Stability: the query handle is keyed by the sorted id list, so
- *  re-renders with the same blocks (stable identity) hit the same
- *  cached handle. Block facade identity is stable per id, so the
- *  returned arrays compare equal across re-fires when the chain is
- *  unchanged. Empty entries land for ids whose row is missing. */
+ *  One handle, one subscription and one set of deps per id, so an
+ *  ancestor shared by several chains is a dep on each of them.
+ *
+ *  A chain that has never resolved is absent from the map rather than
+ *  empty, so a consumer can tell "not yet" from "this block is a root".
+ *  A chain whose load FAILED is absent by the same route, and stays that
+ *  way until an observer arrives or the id set changes: a first-load
+ *  failure leaves the handle with no deps, so no change can invalidate it
+ *  into a retry and `ensureLoaded` is the only thing that re-asks (#930). */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
-  // Sort the ids so logically-equal block sets in different orders
-  // hit the same handle slot.
-  const ids = useMemo(
-    () => Array.from(new Set(blocks.map(b => b.id))).sort(),
-    [blocks],
+  // Deduped and sorted so logically-equal block sets in different orders
+  // share one set of handles.
+  const ids = useStableJson(Array.from(new Set(blocks.map(block => block.id))).sort())
+  const handles = useMemo(
+    () => ids.map(id => repo.query.ancestors({id})),
+    [ids, repo],
   )
-  return useHandle(repo.query.manyAncestors({ids}), {
-    selector: data => {
-      if (!data || data.length === 0) return EMPTY_PARENT_MAP
-      const out = new Map<string, Block[]>()
-      for (const entry of data) {
-        const parents = entry.ancestors.map(d => repo.block(d.id)).reverse()
-        out.set(entry.startId, parents)
-      }
-      return out
-    },
-  }) as ReadonlyMap<string, Block[]>
+  const walks = useHandles(handles)
+
+  return useMemo(() => {
+    const out = new Map<string, Block[]>()
+    ids.forEach((id, index) => {
+      const walk = walks[index]
+      if (walk) out.set(id, parentsFromChain(repo, walk.ancestors))
+    })
+    return out.size === 0 ? EMPTY_PARENT_MAP : out
+  }, [ids, walks, repo])
+}
+
+/** Hold one `core.ancestors` handle per block for as long as the CALLER
+ *  renders, whatever it renders.
+ *
+ *  Why a surface wants it: a collapsed section unmounts its entries, the
+ *  store disposes an unobserved handle after its GC window, and
+ *  `LazyViewportMount` remembers which rows were mounted and brings them
+ *  straight back — so without this a reopen paints every row without its
+ *  breadcrumb and then grows a line under the rows below it. Call it
+ *  OUTSIDE the collapse branch; inside it is a no-op that looks like a
+ *  fix.
+ *
+ *  It does NOT walk the chains. `handle.retain()` holds a handle against
+ *  GC without observing it, so a block nobody has scrolled to keeps a cold
+ *  handle, and its chain is read when its entry mounts. Not `useManyParents`:
+ *  its subscription loads every chain (the first subscriber to a cold handle
+ *  starts its load), and reading its values re-renders the caller once per
+ *  landing walk for a result this hook discards.
+ *
+ *  Retaining every id rather than only the resolved ones keeps the retained
+ *  set STABLE: it is the caller's id list, so the effect runs once per
+ *  id-set change instead of re-running as chains land (#956).
+ *
+ *  A chain invalidated while collapsed is re-resolved when its entry
+ *  re-observes it, so a reopen can paint one stale frame first. Accepted:
+ *  staying subscribed to keep it warm only narrows that window — a reload in
+ *  flight still peeks the old value — while costing a re-resolve per retained
+ *  chain on every matching write, which is the zero-listener work the store
+ *  defers on purpose. Painting nothing until fresh is the blank breadcrumb
+ *  this hook exists to prevent. */
+export const useRetainParents = (blocks: readonly Block[]): void => {
+  const repo = useRepo()
+  const ids = useStableJson(Array.from(new Set(blocks.map(block => block.id))).sort())
+  useEffect(() => {
+    // Acquired here rather than from a render-phase memo: `retain()` is a
+    // silent no-op on a disposed handle, and only a handle the store just
+    // handed back is guaranteed live.
+    const handles = ids.map(id => repo.query.ancestors({id}))
+    for (const handle of handles) handle.retain()
+    return () => { for (const handle of handles) handle.release() }
+  }, [ids, repo])
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
@@ -393,7 +603,8 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.subtree({id: block.id}), {
+  // Mode `none` (every property field row excluded, §9), whatever the outline's mode.
+  return useHandle(block.repo.query.subtree({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -402,8 +613,7 @@ export const useSubtree = (block: Block): Block[] => {
  *  passed query — pass `repo.activeWorkspaceId` explicitly when you
  *  really do want the user's currently-active workspace. Requiring the
  *  field at the type level prevents background flows / import surfaces
- *  from silently mis-scoping when the user switches workspaces mid-flight
- *  (PR #47 review). */
+ *  from silently mis-scoping when the user switches workspaces mid-flight. */
 export const useBlockQuery = (query: TypedBlockQuery): BlockData[] => {
   const repo = useRepo()
   return useHandle(repo.query.typedBlocks(query), {

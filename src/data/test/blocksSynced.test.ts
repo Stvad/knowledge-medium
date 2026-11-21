@@ -20,7 +20,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_LOCAL_COLUMNS,
+  STAGING_LOCAL_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
@@ -56,17 +57,45 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 describe('blocks_synced staging table', () => {
-  it('mirrors the blocks column shape exactly (name + type + nullability)', async () => {
+  it('mirrors the blocks column shape exactly, minus the local-only columns (name + type + nullability)', async () => {
+    // `blocks` gained LOCAL-only derived columns
+    // (`reference_target_id`, `is_field_form`) that are deliberately never
+    // staged/synced.
+    // `blocks_synced` must still match `blocks` on every STORAGE column.
     const normalize = (rows: ColumnInfo[]) =>
       rows.map(({ name, type, notnull, pk }) => ({ name, type, notnull, pk }))
     const blocks = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks)')
     const staged = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks_synced)')
     expect(staged.length).toBeGreaterThan(0)
-    expect(normalize(staged)).toEqual(normalize(blocks))
+    const localNames = new Set(BLOCK_LOCAL_COLUMNS.map(column => column.name as string))
+    const storageOnlyBlocks = blocks.filter(column => !localNames.has(column.name))
+    // Each side carries its own local-only columns now — `blocks_synced` gained
+    // `needs_apply`, the drain's record of what it has applied — so the mirror
+    // is storage-column to storage-column, not table to table.
+    const stagedLocalNames = new Set(STAGING_LOCAL_COLUMNS.map(column => column.name as string))
+    const storageOnlyStaged = staged.filter(column => !stagedLocalNames.has(column.name))
+    expect(normalize(storageOnlyStaged)).toEqual(normalize(storageOnlyBlocks))
+  })
+
+  it('keeps every local column local-only: present on blocks, absent on blocks_synced', async () => {
+    // This asymmetry is deliberate, not an oversight — see
+    // BLOCK_LOCAL_COLUMNS in blockSchema.ts.
+    const blocks = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks)')
+    const staged = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks_synced)')
+    for (const local of BLOCK_LOCAL_COLUMNS) {
+      expect(blocks.some(column => column.name === local.name)).toBe(true)
+      expect(staged.some(column => column.name === local.name)).toBe(false)
+    }
+    // And the other direction: the drain's own bookkeeping never reaches the
+    // app-visible table, where a `SELECT *` consumer would parse it as a field.
+    for (const local of STAGING_LOCAL_COLUMNS) {
+      expect(staged.some(column => column.name === local.name)).toBe(true)
+      expect(blocks.some(column => column.name === local.name)).toBe(false)
+    }
   })
 
   it('is a passive landing zone — a write enqueues no upload and logs no row_event', async () => {
-    await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(fixture))
+    await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(fixture))
 
     const crud = await env.db.getAll('SELECT id FROM ps_crud')
     expect(crud).toHaveLength(0)
@@ -83,10 +112,10 @@ describe('blocks_synced staging table', () => {
   })
 
   it('replaces in place on re-delivery of the same id (plain INSERT OR REPLACE, no guarded upsert)', async () => {
-    await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(fixture))
+    await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(fixture))
     await env.db.execute(
       BLOCKS_SYNCED_RAW_TABLE.put.sql,
-      blockToRowParams({ ...fixture, content: 'edited', updatedAt: fixture.updatedAt + 1 }),
+      blockToSyncedRowParams({ ...fixture, content: 'edited', updatedAt: fixture.updatedAt + 1 }),
     )
     const rows = await env.db.getAll<{ id: string; content: string }>(
       'SELECT id, content FROM blocks_synced',
@@ -95,7 +124,7 @@ describe('blocks_synced staging table', () => {
   })
 
   it('delete removes the staged row by id', async () => {
-    await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(fixture))
+    await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(fixture))
     await env.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [fixture.id])
     const rows = await env.db.getAll('SELECT id FROM blocks_synced')
     expect(rows).toHaveLength(0)

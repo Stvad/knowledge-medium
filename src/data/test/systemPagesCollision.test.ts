@@ -16,9 +16,10 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ProcessorRejection } from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { aliasesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
@@ -92,19 +93,22 @@ describe('system-pages alias-collision fix', () => {
     expect((await lookup('Locations'))?.id).toBe(locationsPageBlockId(WS))
   })
 
-  it('negative control: without the eager page, the same scenario collides', async () => {
+  it('negative control: without the eager page, the rival keeps the alias', async () => {
     // No ensureSystemPages. The wiki-link auto-creates a rival "Journal" at a
     // seat id…
     await seedBlockLinking('[[Journal]]')
     const rival = await lookup('Journal')
     expect(rival?.id).not.toBe(journalBlockId(WS))
 
-    // …so daily-notes later creating its canonical Journal page collides.
-    let caught: unknown
-    try {
-      await getOrCreateJournalBlock(env.repo, WS)
-    } catch (err) { caught = err }
-    expect(caught).toBeInstanceOf(ProcessorRejection)
-    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    // …so the canonical Journal comes up WITHOUT its own name: the rival holds
+    // it, and `[[Journal]]` keeps resolving there until the two are merged.
+    // This used to throw `alias.collision` instead, which killed the tx the
+    // page was created in and left it permanently uncreatable — the reason
+    // eager creation matters, and what the merge flow now resolves.
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    expect(journal.id).toBe(journalBlockId(WS))
+    expect(await env.repo.load(journal.id)).not.toBeNull()
+    expect(journal.peekProperty(aliasesProp) ?? []).not.toContain('Journal')
+    expect((await lookup('Journal'))?.id).toBe(rival?.id)
   })
 })

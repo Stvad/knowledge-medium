@@ -1,0 +1,107 @@
+/**
+ * An edit suggestion's part of its card: the change as a diff, with Accept
+ * and Reject while it is open, and what became of it once it is closed. The
+ * card's header (`ui.tsx`) mounts it in place of the quote.
+ */
+
+import {useState, type MouseEvent, type ReactNode} from 'react'
+import type {BlockData} from '@/data/api'
+import type {Repo} from '@/data/repo'
+import {safeDecodeRowProperty} from '@/data/rowProperty'
+import {useRepo} from '@/context/repo.js'
+import {truncate} from '@/utils/string.js'
+import {reportFailure} from './actions.ts'
+import {annotationStatusProp, threadIsOpen, threadSuggestionOf, type ThreadStatus, type ThreadSuggestion} from './schema.ts'
+import {acceptSuggestion, rejectSuggestion} from './suggestions.ts'
+import {AnchorChangedError, isThreadRefusal} from './threads.ts'
+
+type RootFields = Pick<BlockData, 'content' | 'properties'>
+
+/** Does the card show where the quote resolves now, and offer to re-anchor
+ *  it? Not for a closed suggestion, which reads from its properties alone:
+ *  accepting changed the text around its quote on purpose, and re-anchoring
+ *  it would make it applicable a second time. */
+export const showsAnchorState = (root: RootFields): boolean => threadIsOpen(root) || !threadSuggestionOf(root)
+
+/** The closed status a suggestion's card reads as, or null while it is open.
+ *  `resolved` (set by hand, or before suggestions existed) reads as closed. */
+const closedAs = (root: RootFields): ThreadStatus | null =>
+  threadIsOpen(root) ? null : safeDecodeRowProperty(root, annotationStatusProp)
+
+/** An accepted suggestion keeps its status (`setThreadStatus` refuses any
+ *  change to it), so its card offers no Reopen. */
+export const isAccepted = (root: RootFields): boolean => closedAs(root) === 'accepted'
+
+const clipped = (text: string): string => truncate(text, 160)
+
+/** Read off the properties: the anchor is not rewritten on accept, so the
+ *  quote is the text the replacement took the place of. An open suggestion
+ *  shows both texts whole, whitespace and line breaks included, since Accept
+ *  applies exactly the replacement; a closed one, history only, is clipped. */
+export const SuggestionText = ({root, suggestion: {anchor: {quote}, replacement}}: {root: RootFields; suggestion: ThreadSuggestion}) => {
+  const closed = closedAs(root)
+  if (closed === 'accepted') {
+    return <span className="break-words">Replaced “{clipped(quote)}” with “{clipped(replacement)}”</span>
+  }
+  if (closed === 'rejected') {
+    return <span className="break-words">Rejected replacing “{clipped(quote)}” with “{clipped(replacement)}”</span>
+  }
+  if (closed) {
+    return <span className="break-words">Closed without applying: replace “{clipped(quote)}” with “{clipped(replacement)}”</span>
+  }
+  return (
+    <span className="block w-full space-y-1 break-words" aria-label={`Suggested edit: replace “${quote}” with “${replacement}”`}>
+      <span className="block whitespace-pre-wrap break-words"><span className="font-medium">Before: </span><del className="text-muted-foreground decoration-red-600/70">{quote}</del></span>
+      <span className="block whitespace-pre-wrap break-words"><span className="font-medium">After: </span><ins className="rounded-sm bg-sky-400/20 px-0.5 text-foreground no-underline">{replacement}</ins></span>
+    </span>
+  )
+}
+
+/** Accept is a click, which blurs the target's editor and so flushes its
+ *  pending write ahead of the accept's transaction (`suggestions.ts`). One
+ *  decision at a time: both buttons wait while one is in flight, and each
+ *  transaction also refuses a suggestion that is no longer open. */
+export const SuggestionActions = ({threadId, recovery}: {threadId: string; recovery?: ReactNode}) => {
+  const repo = useRepo()
+  const [deciding, setDeciding] = useState(false)
+  const [refusal, setRefusal] = useState<{message: string; canRecoverAnchor: boolean} | null>(null)
+  const decide = (write: (repo: Repo, threadId: string) => Promise<void>) => (event: MouseEvent) => {
+    event.stopPropagation()
+    setRefusal(null)
+    setDeciding(true)
+    write(repo, threadId).catch(error => {
+      if (isThreadRefusal(error)) setRefusal({message: error.message, canRecoverAnchor: error instanceof AnchorChangedError})
+      else reportFailure(error)
+    }).finally(() => setDeciding(false))
+  }
+  return (
+    <>
+      <button
+        type="button"
+        disabled={deciding}
+        onClick={decide(acceptSuggestion)}
+        className="rounded bg-primary px-1.5 text-xs text-primary-foreground hover:opacity-90 disabled:opacity-50"
+      >
+        Accept
+      </button>
+      <button
+        type="button"
+        disabled={deciding}
+        onClick={decide(rejectSuggestion)}
+        className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+      >
+        Reject
+      </button>
+      {refusal && (
+        <div className="basis-full rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-foreground" role="alert">
+          <p>{refusal.message}</p>
+          {refusal.canRecoverAnchor && recovery && (
+            <div className="mt-2 space-y-1.5">
+              {recovery}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}

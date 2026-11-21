@@ -1,5 +1,5 @@
 import { blockChildrenFooterFacet } from '@/extensions/blockInteraction.js'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { backlinksViewFooterContribution } from './BacklinksViewSection.tsx'
@@ -14,6 +14,6 @@ export const backlinksViewPlugin: AppExtension = systemToggle({
   name: 'Backlinks view',
   description: 'Picker that switches each block between the flat and grouped backlinks renderings.',
 }).of([
-  propertySchemasFacet.of(backlinksViewProp, {source: 'backlinks-view'}),
+  definitionSeedsFacet.of(backlinksViewProp, {source: 'backlinks-view'}),
   blockChildrenFooterFacet.of(backlinksViewFooterContribution, {source: 'backlinks-view'}),
 ])

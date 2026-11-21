@@ -12,9 +12,13 @@
 */
 
 import type { ThemeContribution } from '@/plugins/theme-toggle'
+import {
+  DEFAULT_THEME_ID_DARK,
+  DEFAULT_THEME_ID_LIGHT,
+} from '@/themeBootDefaults.js'
 
 const SUNSET_WARM_LIGHT: ThemeContribution = {
-  id: 'sunset-warm-light',
+  id: DEFAULT_THEME_ID_LIGHT,
   label: 'Sunset Warm Light',
   mode: 'light',
   tokens: {
@@ -51,7 +55,7 @@ const SUNSET_WARM_LIGHT: ThemeContribution = {
 }
 
 const SUNSET_WARM_DARK: ThemeContribution = {
-  id: 'sunset-warm-dark',
+  id: DEFAULT_THEME_ID_DARK,
   label: 'Sunset Warm Dark',
   mode: 'dark',
   tokens: {
@@ -325,10 +329,9 @@ export const defaultThemeContributions: readonly ThemeContribution[] = [
   SOLARIZED_DARK,
 ] as const
 
-/** The id pre-paint falls back to when nothing is persisted and the
- *  system preference is "light". Kept in sync with index.html. */
-export const DEFAULT_THEME_ID_LIGHT = SUNSET_WARM_LIGHT.id
-
-/** The id pre-paint falls back to when nothing is persisted and the
- *  system preference is "dark". */
-export const DEFAULT_THEME_ID_DARK = SUNSET_WARM_DARK.id
+/** Re-exported so existing consumers (this plugin's index.ts) keep
+ *  working unchanged. Generated into the index.html pre-paint script at
+ *  build/dev time — see src/themeBootDefaults.ts, the single source of
+ *  truth these ids (and SUNSET_WARM_LIGHT/_DARK's `id` above) derive
+ *  from, and vite-plugins/injectThemeBootDefaults.ts. */
+export { DEFAULT_THEME_ID_LIGHT, DEFAULT_THEME_ID_DARK }

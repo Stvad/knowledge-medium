@@ -6,7 +6,7 @@
  *     `block-type` block on the workspace's Types page with the
  *     caller's label + property-schema refList, then wait for
  *     `UserTypesService` to publish the contribution into the
- *     `typesFacet` user-data bucket. Returns the new block id, which
+ *     `projectedTypeDefinitionsFacet` user-data bucket. Returns the new block id, which
  *     IS the type id (the user-defined-types block-id = type-id rule).
  *
  *  2. `retagBlocks(repo, args)` — apply a type to an explicit list of
@@ -45,6 +45,10 @@ import {
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createChild } from '@/data/mutators'
+import {
+  assertNotGrammarShapedLabel,
+  assertRoundTrippableReferenceLabel,
+} from '@/data/referenceBlock'
 import { pickLeastUsedTypeColor } from '@/data/typeColors'
 import { typesPageBlockId } from '@/data/typesPage'
 
@@ -52,7 +56,7 @@ import { typesPageBlockId } from '@/data/typesPage'
 
 /** Thrown by `createTypeBlock`'s Phase A→bridge handoff when the
  *  `UserTypesService` subscription doesn't publish the new id into
- *  `typesFacet`'s user-data bucket within `registrationTimeoutMs`.
+ *  `projectedTypeDefinitionsFacet`'s user-data bucket within `registrationTimeoutMs`.
  *  Realistic cause: `tryBuildType` returned null (the block-type
  *  block failed to parse — e.g. a property-schema ref doesn't
  *  resolve in the live registry). */
@@ -133,6 +137,14 @@ export async function createTypeBlock(
       `UserTypesService.tryBuildType silently drops a block-type block with an empty label.`,
     )
   }
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): the label is mirrored into the definition
+  // block's `content` below, AND claimed as its alias so the type doubles
+  // as its `[[label]]` page. Both halves, matching the property-name path
+  // — a label that can't be written as `[[label]]` and read back (`]]`
+  // renders lossily, over `MAX_ALIAS_LENGTH` isn't read as a reference at
+  // all) would claim an alias nothing can link to.
+  assertNotGrammarShapedLabel(trimmedLabel, 'createTypeBlock: label')
+  assertRoundTrippableReferenceLabel(trimmedLabel, 'createTypeBlock: label')
 
   // The Types page must exist in `args.workspaceId` before we can
   // parent the new type block under it. We resolve the id from

@@ -8,23 +8,57 @@ const windowVisibilityBounds = (): VerticalVisibilityBounds => ({
   bottom: window.innerHeight || document.documentElement.clientHeight,
 })
 
-export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
-  const windowBounds = windowVisibilityBounds()
+/** The closest ancestor that scrolls `element` vertically, or null when the
+ *  page itself is the only scrollport. Callers that measure visibility want
+ *  its rect; callers that observe intersection want it as the observer root
+ *  (an `IntersectionObserver` `rootMargin` expands only the ROOT's rect —
+ *  clip rects of scrolling ancestors in between are applied unexpanded, so
+ *  an observer rooted at the viewport gets no overscan at all inside one of
+ *  these).
+ *
+ *  Note the predicate reads COMPUTED `overflowY`, which CSS propagates from
+ *  `overflow-x` — an `overflow-x: auto` element with no explicit `overflow-y`
+ *  computes `auto` here and counts as a match, which is why this asks about a
+ *  scrollport rather than claiming the element definitely scrolls. A sideways
+ *  scroller that can hold block rows therefore has to set `overflow-y` itself,
+ *  as `.markdown-table-scroll` does. */
+export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | null => {
   let ancestor = element.parentElement
-
   while (ancestor) {
     const {overflowY} = window.getComputedStyle(ancestor)
-    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') return ancestor
+    ancestor = ancestor.parentElement
+  }
+  return null
+}
+
+const CLIPPING_OVERFLOW: ReadonlySet<string> = new Set(['auto', 'scroll', 'overlay', 'hidden', 'clip'])
+
+/** Where `element` can actually be seen: the window, clipped by EVERY ancestor
+ *  between it and the root that clips its overflow, a scrollport or a box that
+ *  clips without scrolling (the comments margin's column).
+ *
+ *  All of them, not just the nearest: panes nest. A note row inside the
+ *  video-notes aside sits in that aside's scrollport, and the whole pane is
+ *  clipped again by the shared scrollport a stacked slot puts around it. Taking
+ *  only the nearest, a row scrolled out of sight behind the OUTER clip still
+ *  measured as visible — so the focus decorator saw no reason to scroll it in
+ *  and cursor-follows-scroll saw no reason to move off it. */
+export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
+  let bounds = windowVisibilityBounds()
+  let ancestor = element.parentElement
+  while (ancestor) {
+    const {overflowY} = window.getComputedStyle(ancestor)
+    if (CLIPPING_OVERFLOW.has(overflowY)) {
       const rect = ancestor.getBoundingClientRect()
-      return {
-        top: Math.max(windowBounds.top, rect.top),
-        bottom: Math.min(windowBounds.bottom, rect.bottom),
+      bounds = {
+        top: Math.max(bounds.top, rect.top),
+        bottom: Math.min(bounds.bottom, rect.bottom),
       }
     }
     ancestor = ancestor.parentElement
   }
-
-  return windowBounds
+  return bounds
 }
 
 export const isElementProperlyVisible = (
@@ -33,24 +67,24 @@ export const isElementProperlyVisible = (
 ): boolean => {
   const rect = element.getBoundingClientRect()
   const viewportHeight = Math.max(0, visibilityBounds.bottom - visibilityBounds.top)
-  if (viewportHeight <= 0) return false
-
   const elementHeight = rect.height
+  if (viewportHeight <= 0 || elementHeight <= 0) return false
 
   // Get computed line height for this element
   const computedStyle = window.getComputedStyle(element)
   const lineHeight = parseFloat(computedStyle.lineHeight) ||
     parseFloat(computedStyle.fontSize) * 1.2 // Fallback to 1.2 * fontSize
 
-  // Use line height as minimum visibility threshold
-  const minVisibleHeight = lineHeight
+  // A line must be in view, or the whole element when it is shorter than one
+  // (a row in a smaller font than the line height it inherits).
+  const minVisibleHeight = Math.min(lineHeight, elementHeight)
 
   // Calculate how much of the element is visible vertically
   const visibleTop = Math.max(visibilityBounds.top, rect.top)
   const visibleBottom = Math.min(visibilityBounds.bottom, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
 
-  // For small elements (shorter than viewport): require at least one line height to be visible
+  // For small elements (shorter than viewport): require that line in view
   if (elementHeight <= viewportHeight) {
     return visibleHeight >= minVisibleHeight
   }

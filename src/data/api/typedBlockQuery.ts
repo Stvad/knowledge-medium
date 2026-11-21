@@ -23,6 +23,11 @@ export interface TypedBlockQueryReferenceFilter {
  *  "property is set" (`IS NOT NULL`), `false` for "unset" (`IS NULL`,
  *  same as the `null` shorthand).
  *
+ *  A comparator (equality included) matches only a cell in its codec's
+ *  `WhereStorage` shape. Any other cell, such as a re-type's leftover,
+ *  matches none, so no `exclude` removes it either. Dates compare within
+ *  years 0000–9999; an operand outside them is refused.
+ *
  *  `target` is the ref-traversal operator. Valid only on `ref`-typed
  *  (and `refList`-typed) properties; the operand is an inner where-map
  *  compiled against the referenced block's `properties_json`. Lets
@@ -78,7 +83,7 @@ export interface TypedBlockQuery {
    *  required at the type level prevents background flows, import runs,
    *  and any code that operates on a workspace other than the
    *  currently-active one from silently mis-scoping when the user
-   *  switches workspaces mid-flight (see PR #47 review). */
+   *  switches workspaces mid-flight. */
   readonly workspaceId: string
   /** Contains any of these type ids. Empty/omitted means no type filter. */
   readonly types?: readonly string[]
@@ -98,7 +103,8 @@ export interface TypedBlockQuery {
    *  ancestor filters. */
   readonly match?: readonly BlockPredicate[]
   /** NORed predicates: a block matches iff none of these match. Same
-   *  predicate shape as `match`. */
+   *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or
+   *  `where` entry is dropped here as in `match`, so it excludes nothing. */
   readonly exclude?: readonly BlockPredicate[]
   /** Result ordering. Default `created-asc`. Backlinks panels use
    *  `created-desc` to put newest sources first. */

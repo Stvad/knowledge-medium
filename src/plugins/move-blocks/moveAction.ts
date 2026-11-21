@@ -1,0 +1,75 @@
+/**
+ * "Move block(s) to…" action — opens the move-destination picker over
+ * the focused block (NORMAL_MODE) or the current multi-selection
+ * (MULTI_SELECT_MODE), then runs `moveBlocksTo` once the user picks a
+ * destination. Paired via `defineBlocksAction` so the dialog opens
+ * exactly once regardless of how many blocks are being moved.
+ *
+ * No default keybinding. The bullet's "Move to…" context-menu entry
+ * (`contextMenuItem.ts`) is the dependable single-block entry point;
+ * the palette only lists these when a block context is actually active.
+ */
+import { FolderInput } from 'lucide-react'
+import type { Block } from '@/data/block'
+import { defineBlocksAction, type BlocksActionContext } from '@/shortcuts/utils.js'
+import { showError, showSuccess } from '@/utils/toast.js'
+import { openDialog } from '@/utils/dialogs.js'
+import { pluralize } from '@/utils/pluralize.js'
+import { MoveDestinationPicker } from './MoveDestinationPicker.tsx'
+import { moveBlocksTo } from './moveBlocks.ts'
+import { unselectMovedBlocks } from './selectionAfterMove.ts'
+
+export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
+
+/** Pick a destination (one dialog per invocation) and move every block
+ *  in `blocks` there. Used by both context variants — the picker opens
+ *  exactly once regardless of how many blocks are being moved.
+ *
+ *  Exported because the bullet context-menu entry needs the same flow:
+ *  the global ⌘K palette does NOT surface NORMAL_MODE actions (it opens
+ *  without the block-focus step `commandPaletteForBlockAction` does, so
+ *  the block context isn't active and only Global commands list), which
+ *  leaves the context menu as the dependable entry point. */
+export const runMoveFlow = async (
+  blocks: readonly Block[],
+  context?: BlocksActionContext,
+): Promise<void> => {
+  if (blocks.length === 0) return
+  const repo = blocks[0].repo
+  const firstData = blocks[0].peek() ?? await blocks[0].load()
+  if (!firstData) return
+
+  const blockIds = blocks.map(block => block.id)
+  const choice = await openDialog(MoveDestinationPicker, {
+    blockIds,
+    workspaceId: firstData.workspaceId,
+  })
+  if (!choice) return
+
+  try {
+    // Picking a destination block means "put them inside it", i.e. at
+    // the end of its children — the picker offers no finer placement.
+    const result = await moveBlocksTo(repo, blockIds, {
+      parentId: choice.destinationId,
+      position: { kind: 'last' },
+    })
+    if (context) await unselectMovedBlocks(repo, context.uiStateBlock, result.movedIds)
+    showSuccess(`Moved ${pluralize(result.movedIds.length, 'block')}`)
+  } catch (error) {
+    showError(
+      error instanceof Error ? error.message : 'Failed to move blocks',
+    )
+  }
+}
+
+const pair = defineBlocksAction({
+  id: MOVE_BLOCKS_ACTION_ID,
+  icon: FolderInput,
+  blockDescription: 'Move block to…',
+  blocksDescription: 'Move selected blocks to…',
+  flow: runMoveFlow,
+})
+
+export const moveBlockAction = pair.block
+export const moveBlocksAction = pair.blocks
+export const MULTI_SELECT_MOVE_BLOCKS_ACTION_ID = pair.blocks.id

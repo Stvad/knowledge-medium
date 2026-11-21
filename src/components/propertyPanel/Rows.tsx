@@ -1,8 +1,7 @@
 import { Settings2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { useRepo } from '@/context/repo.js'
 import { useOpenBlock } from '@/utils/navigation.js'
-import { buildAppHash } from '@/utils/routing.js'
+import { useAppHashInContext } from '@/context/layoutWsContext.js'
 import { METADATA_ROW_GRID_STYLE, PROPERTY_ROW_GRID_STYLE } from './layout'
 import type { PropertyPanelMetadataRow, PropertyPanelModelSection } from './model'
 
@@ -25,12 +24,16 @@ export function PropertySectionLabel({section}: {section: PropertyPanelModelSect
 }
 
 export function MetadataRow({row}: {row: PropertyPanelMetadataRow}) {
-  const repo = useRepo()
-  const workspaceId = repo.activeWorkspaceId ?? undefined
+  // Both the href and the opener come from the row's own link target, so
+  // they can't disagree about the workspace. Reading `activeWorkspaceId`
+  // here instead would route a block id resolved in the panel block's
+  // workspace through whichever workspace happens to be active.
+  const {blockId, workspaceId} = row.linkTo ?? {}
   // Hooks must be unconditional; the opener is only wired up for rows
   // that actually carry a link target (currently just "Changed by").
-  const openBlock = useOpenBlock({blockId: row.linkToBlockId ?? '', workspaceId})
-  const showLink = Boolean(row.linkToBlockId) && Boolean(workspaceId)
+  const openBlock = useOpenBlock({blockId: blockId ?? '', workspaceId})
+  const href = useAppHashInContext(workspaceId ?? '', blockId)
+  const showLink = Boolean(row.linkTo)
 
   return (
     <div
@@ -41,7 +44,7 @@ export function MetadataRow({row}: {row: PropertyPanelMetadataRow}) {
       <div className="truncate text-muted-foreground" title={row.label}>{row.label}</div>
       {showLink ? (
         <a
-          href={buildAppHash(workspaceId!, row.linkToBlockId!)}
+          href={href}
           onClick={openBlock}
           title={row.value}
           className="inline-flex h-7 min-w-0 items-center rounded-sm px-2 text-sm text-foreground no-underline hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

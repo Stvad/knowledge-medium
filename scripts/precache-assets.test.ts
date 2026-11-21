@@ -1,11 +1,12 @@
 import {describe, expect, it} from 'vitest'
-import {collectRestAssets, isPrecacheableAsset} from './precache-assets'
+import {bootWorkerAssets, collectPrecacheManifest, collectRestAssets, isPrecacheableAsset} from './precache-assets'
+import {contentDigest} from '../src/sw/assets'
 
 describe('isPrecacheableAsset', () => {
   it('accepts the same-origin runtime asset types the SW serves cache-first', () => {
     for (const rel of [
       'src/main.js',
-      'src/extensions/api.js',
+      'src/extensions/blockInteraction.js',
       'assets/index.css',
       'node_modules/@journeyapps/wa-sqlite/wa-sqlite.wasm',
       'assets/inter.woff2',
@@ -39,7 +40,7 @@ describe('collectRestAssets', () => {
     const allFiles = [
       'src/main.js', // first-paint — excluded
       'assets/index.css', // first-paint — excluded
-      'src/extensions/api.js', // lazy — the module whose skew this precache fixes
+      'src/extensions/blockInteraction.js', // lazy — the module whose skew this precache fixes
       'src/data/api/blockType.js', // lazy
       'node_modules/@babel/standalone/babel.js', // lazy (was the babel-only list)
     ]
@@ -51,7 +52,7 @@ describe('collectRestAssets', () => {
     expect(restAssets).toEqual([
       '/node_modules/@babel/standalone/babel.js',
       '/src/data/api/blockType.js',
-      '/src/extensions/api.js',
+      '/src/extensions/blockInteraction.js',
     ])
   })
 
@@ -62,12 +63,12 @@ describe('collectRestAssets', () => {
         'sw.js',
         'version.json',
         'index.html',
-        'src/extensions/api.js',
+        'src/extensions/blockInteraction.js',
       ],
       firstPaint: [],
       toBaseUrl,
     })
-    expect(restAssets).toEqual(['/src/extensions/api.js'])
+    expect(restAssets).toEqual(['/src/extensions/blockInteraction.js'])
   })
 
   it('excludes ONLY the root sw.js — a nested dep sw.js stays precached (not grafted)', () => {
@@ -87,5 +88,72 @@ describe('collectRestAssets', () => {
       toBaseUrl: baseUrl,
     })
     expect(restAssets).toEqual(['/knowledge-medium/src/lazy.js'])
+  })
+})
+
+describe('bootWorkerAssets', () => {
+  it('selects the DB worker graph and its selectable VFS + wasm variants, never the cipher builds', () => {
+    const files = [
+      'assets/worker-1pScv-ee.js',
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
+      'assets/FacadeVFS-BssyCf6W.js',
+      'assets/AccessHandlePoolVFS-D652Ioon.js',
+      'assets/IDBBatchAtomicVFS-CPkeeMBk.js',
+      'assets/wa-sqlite-Di4Pf_yS.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+      'assets/wa-sqlite-async-B563xfYH.js',
+      'assets/wa-sqlite-async-rHzzC98y.wasm',
+      'assets/mc-wa-sqlite-CwE5dkAg.js',
+      'assets/mc-wa-sqlite-CnHbhWvs.wasm',
+      'src/main.js',
+      'wa-sqlite.wasm',
+    ]
+    expect(new Set(bootWorkerAssets(files))).toEqual(new Set([
+      'assets/FacadeVFS-BssyCf6W.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/OPFSWriteAheadVFS-DVmrx1MA.js',
+      'assets/worker-1pScv-ee.js',
+      'assets/wa-sqlite-Di4Pf_yS.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+      'assets/wa-sqlite-async-B563xfYH.js',
+      'assets/wa-sqlite-async-rHzzC98y.wasm',
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+    ]))
+  })
+
+  it('fails the build when a required member of the DB worker graph is not emitted under its pinned name', () => {
+    expect(() => bootWorkerAssets([
+      'assets/writeAheadVfsProbe.worker-BWKVI_xt.js',
+      'assets/OPFSCoopSyncVFS-BdCNXBiI.js',
+      'assets/wa-sqlite-XZW__iJk.wasm',
+    ])).toThrow(/assets\\\/worker-/)
+  })
+})
+
+describe('collectPrecacheManifest', () => {
+  const files: Record<string, string> = {'index.html': '<html>', 'src/main.js': 'main'}
+  const read = (rel: string) => {
+    if (!(rel in files)) throw new Error(`no ${rel}`)
+    return new TextEncoder().encode(files[rel])
+  }
+
+  it('digests each URL from its dist file, the scope root as index.html', async () => {
+    const digests = await collectPrecacheManifest({
+      urls: ['/knowledge-medium/', '/knowledge-medium/index.html', '/knowledge-medium/src/main.js'],
+      base: '/knowledge-medium/',
+      read,
+    })
+    expect(digests).toEqual({
+      '/knowledge-medium/': await contentDigest(read('index.html')),
+      '/knowledge-medium/index.html': await contentDigest(read('index.html')),
+      '/knowledge-medium/src/main.js': await contentDigest(read('src/main.js')),
+    })
+  })
+
+  it('throws for a URL outside the base', async () => {
+    await expect(collectPrecacheManifest({urls: ['/elsewhere/a.js'], base: '/knowledge-medium/', read}))
+      .rejects.toThrow('/elsewhere/a.js')
   })
 })

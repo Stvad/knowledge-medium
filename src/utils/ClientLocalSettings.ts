@@ -3,7 +3,13 @@
  * Provides type-safe access to localStorage with fallback values
  */
 export class ClientLocalSettings {
-  constructor(private readonly storage = localStorage) {}
+  constructor(private readonly storageOverride?: Storage) {}
+
+  /** Resolved per call, so importing this module never touches `localStorage`. */
+  private get storage(): Storage {
+    return this.storageOverride ?? localStorage;
+  }
+
   /**
    * Get a value from localStorage
    * @param key The key to retrieve
@@ -72,6 +78,21 @@ export class ClientLocalSettings {
       this.storage.removeItem(key);
     } catch (error) {
       console.error(`Error removing ${key} from localStorage:`, error);
+    }
+  }
+
+  /** Every key currently stored. */
+  keys(): string[] {
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < this.storage.length; i += 1) {
+        const key = this.storage.key(i);
+        if (key !== null) keys.push(key);
+      }
+      return keys;
+    } catch (error) {
+      console.error('Error listing localStorage keys:', error);
+      return [];
     }
   }
 

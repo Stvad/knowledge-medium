@@ -49,6 +49,18 @@ const startStubBridge = async (): Promise<StubBridge> => {
         return
       }
 
+      if (req.method === 'GET' && req.url === '/runtime/whoami') {
+        res.writeHead(200, {'content-type': 'application/json'})
+        res.end(JSON.stringify({
+          clientId: 'client-1',
+          audience: {userId: 'user-1', workspaceId: 'ws-stub-1', label: 'stub'},
+          scope: 'read-write',
+          connected: true,
+          clientLastSeen: Date.now(),
+        }))
+        return
+      }
+
       if (req.method === 'POST' && req.url === '/runtime/commands') {
         const parsed = body ? JSON.parse(body) : null
         resolveBody(parsed)
@@ -122,7 +134,10 @@ const runEval = async (args: string[]) =>
     },
   })
 
-describe('kmagent eval --data / --data-json', () => {
+// Each test spawns the real compiled CLI against a live bridge, so its
+// wall-clock is Node process startup — the first thing to stretch when the
+// machine is oversubscribed. ~1.5s idle leaves under 3.5x under the 5s default.
+describe('kmagent eval --data / --data-json', {timeout: 30_000}, () => {
   it('reads JSON from --data <path> and binds it as `data` in the wire envelope', async () => {
     const dataPath = path.join(tempDir, 'plans.json')
     const payload = {plans: [{id: 'p-1', op: 'rename'}, {id: 'p-2', op: 'merge'}]}
@@ -132,6 +147,7 @@ describe('kmagent eval --data / --data-json', () => {
     const body = await bridge.receivedBody as Record<string, unknown>
 
     expect(body.type).toBe('eval')
+    expect(body.workspaceId).toBe('ws-stub-1')
     expect(body.code).toBe('return data.plans.length')
     expect(body.data).toEqual(payload)
   })
@@ -141,6 +157,7 @@ describe('kmagent eval --data / --data-json', () => {
     const body = await bridge.receivedBody as Record<string, unknown>
 
     expect(body.type).toBe('eval')
+    expect(body.workspaceId).toBe('ws-stub-1')
     expect(body.data).toEqual({x: 1, y: [true, null]})
   })
 
@@ -149,6 +166,7 @@ describe('kmagent eval --data / --data-json', () => {
     const body = await bridge.receivedBody as Record<string, unknown>
 
     expect(body.type).toBe('eval')
+    expect(body.workspaceId).toBe('ws-stub-1')
     expect(body.code).toBe('return 42')
     expect('data' in body).toBe(false)
   })

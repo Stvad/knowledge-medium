@@ -1,4 +1,4 @@
-import {ChangeScope} from '@/extensions/api.js'
+import {ChangeScope} from '@/data/api/index.js'
 import {getBlockTypes} from '@/data/properties.js'
 import {
   CHAR_COUNTER_TYPE,

@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 5,
+  "label": "2026-10-17T2337-d8082b0-sonnet-cli",
+  "startedAt": "2026-10-17T23:38:03.124Z",
+  "finishedAt": "2026-10-17T23:38:34.066Z",
+  "git": {
+    "sha": "d8082b0b09a2068fe64624523bfa8a0cdb7b3b36",
+    "branch": "claude/optimistic-khorana-4c3ab5",
+    "dirty": false
+  },
+  "model": "sonnet",
+  "conditions": {
+    "fixture": "9d499d1fadc8",
+    "importedFixture": "b7fdfa24fe35",
+    "surface": "cli",
+    "tools": "a2b5c5fb0930",
+    "model": "claude-sonnet-5-5",
+    "effort": "default",
+    "mcpOutputTokens": 25000,
+    "bashOutputChars": 30000,
+    "timeoutMs": 600000,
+    "workers": 4
+  },
+  "claudeCodeVersion": "2.1.285",
+  "allowedTools": [
+    "Bash(kmagent:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(grep:*)",
+    "Bash(jq:*)",
+    "Bash(wc:*)",
+    "Bash(sort:*)"
+  ],
+  "taskHashes": {
+    "reading-log-filter": "190a1c7a59b5"
+  },
+  "outputSizes": {
+    "search:pricing": 677,
+    "search:kestrel": 1651,
+    "backlinks:Meeting": 2647,
+    "backlinks:Kestrel": 2406,
+    "subtree:Reading Log": 9559,
+    "subtree:pasted source": 471,
+    "subtree:daily note": 1212,
+    "subtree:project page": 1690,
+    "subtree:design doc": 1872,
+    "page:Project Orchard": 571
+  },
+  "probeHashes": {
+    "search:pricing": "31bb52c81619",
+    "search:kestrel": "f6ca516143cf",
+    "backlinks:Meeting": "c52958f5a382",
+    "backlinks:Kestrel": "ac22d82ee278",
+    "subtree:Reading Log": "76396684b332",
+    "subtree:pasted source": "6ff7df904bba",
+    "subtree:daily note": "8f114897c8fd",
+    "subtree:project page": "35067d3b027b",
+    "subtree:design doc": "da55b7f140a2",
+    "page:Project Orchard": "22e6163754c4"
+  },
+  "runs": [
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 1,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 6,
+      "graphCommands": {
+        "view-outline": 1,
+        "view-search": 1,
+        "sql": 2
+      },
+      "toolErrors": 1,
+      "seenChars": 16667,
+      "maxSeenChars": 9559,
+      "cappedCalls": 0,
+      "returnedChars": 16667,
+      "apiCalls": 7,
+      "tokens": {
+        "input": 14,
+        "cacheCreation": 10455,
+        "cacheRead": 58184,
+        "output": 1069,
+        "contextTotal": 68653,
+        "peakContext": 12387
+      },
+      "elapsedMs": 23873,
+      "costUsd": 0.0641748,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2337-d8082b0-sonnet-cli/transcripts/reading-log-filter-1.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 2,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 3,
+      "graphCommands": {
+        "page": 1,
+        "view-outline": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 16484,
+      "maxSeenChars": 10115,
+      "cappedCalls": 0,
+      "returnedChars": 16484,
+      "apiCalls": 4,
+      "tokens": {
+        "input": 8,
+        "cacheCreation": 10030,
+        "cacheRead": 23729,
+        "output": 763,
+        "contextTotal": 33767,
+        "peakContext": 11962
+      },
+      "elapsedMs": 17642,
+      "costUsd": 0.0525118,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2337-d8082b0-sonnet-cli/transcripts/reading-log-filter-2.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 3,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "page": 1,
+        "view-outline": 1,
+        "sql": 1
+      },
+      "toolErrors": 0,
+      "seenChars": 16483,
+      "maxSeenChars": 9559,
+      "cappedCalls": 0,
+      "returnedChars": 16483,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 10107,
+        "cacheRead": 30330,
+        "output": 821,
+        "contextTotal": 40447,
+        "peakContext": 12039
+      },
+      "elapsedMs": 18220,
+      "costUsd": 0.054723999999999995,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2337-d8082b0-sonnet-cli/transcripts/reading-log-filter-3.jsonl"
+    },
+    {
+      "task": "reading-log-filter",
+      "kind": "read",
+      "rep": 4,
+      "pass": true,
+      "detail": "all 12 matched",
+      "toolCalls": 4,
+      "graphCommands": {
+        "view-outline": 1,
+        "sql": 2
+      },
+      "toolErrors": 0,
+      "seenChars": 16008,
+      "maxSeenChars": 9559,
+      "cappedCalls": 0,
+      "returnedChars": 16008,
+      "apiCalls": 5,
+      "tokens": {
+        "input": 10,
+        "cacheCreation": 9916,
+        "cacheRead": 35010,
+        "output": 796,
+        "contextTotal": 44936,
+        "peakContext": 11848
+      },
+      "elapsedMs": 18880,
+      "costUsd": 0.054646,
+      "terminalReason": "completed",
+      "exitCode": 0,
+      "timedOut": false,
+      "writes": {
+        "created": 0,
+        "modified": 0,
+        "removed": 0
+      },
+      "transcript": "tmp/agent-eval/runs/2026-10-17T2337-d8082b0-sonnet-cli/transcripts/reading-log-filter-4.jsonl"
+    }
+  ]
+}

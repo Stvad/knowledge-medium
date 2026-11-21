@@ -16,8 +16,10 @@ import { bytesToHex, hexToBytes } from './hex.js'
 /** Prefix tag on the stored hash string — `sha256:<lowercase-hex>`. */
 export const CONTENT_HASH_PREFIX = 'sha256:'
 
-/** Raw sha256 digest length in bytes (sha256 = 256 bits). */
-const SHA256_BYTES = 32
+/** Raw sha256 digest length in bytes (sha256 = 256 bits). Exported because it
+ *  is also the length of every OTHER input `K_id` signs, which is what
+ *  domain-separates {@link deriveWorkspaceIdNamespace}'s labels from it. */
+export const SHA256_BYTES = 32
 
 /** Raw sha256 digest of the plaintext bytes (32 bytes). The content-key
  *  derivation (§10) consumes this digest; {@link computeContentHash} formats
@@ -62,4 +64,15 @@ export const digestFromContentHash = (contentHash: string): Uint8Array<ArrayBuff
     throw new Error(`content hash: expected ${SHA256_BYTES}-byte digest, got ${digest.length}`)
   }
   return digest
+}
+
+/** Whether `value` is a canonical content hash, one {@link digestFromContentHash}
+ *  reads: anything else names no object. */
+export const isContentHash = (value: string): boolean => {
+  try {
+    digestFromContentHash(value)
+    return true
+  } catch {
+    return false
+  }
 }

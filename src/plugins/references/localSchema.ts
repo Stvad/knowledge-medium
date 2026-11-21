@@ -1,4 +1,5 @@
 import type { LocalSchemaContribution, LocalSchemaDb } from '@/data/facets.js'
+import { isMarkerSet, markerDoneSql, recordMarkerSql } from '@/data/internals/clientSchema.js'
 
 export const CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references
@@ -22,6 +23,20 @@ export const CREATE_BLOCK_REFERENCES_TABLE_SQL = `
 export const CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_block_references_target
   ON block_references (target_id, workspace_id)
+`
+
+/** Alias-keyed edge lookup. The rename plan enumerates a removed alias's
+ *  spans by `(workspace_id, alias)` and applies its target disjunction in
+ *  JS (`renameProcessor.ts`), because a span whose edge already moved onto
+ *  a window-minted seat matches the alias but NOT the renaming target.
+ *  Neither the PK `(source_id, …)` nor `idx_block_references_target
+ *  (target_id, …)` has a usable leading column for that, so without this
+ *  index the enumeration degrades to a full scan of every edge on the
+ *  device — measured 10x slower at 400k edges, and paid even when the
+ *  alias has no backlinks at all. Mirrors `idx_block_aliases_ws_alias`. */
+export const CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_block_references_ws_alias
+  ON block_references (workspace_id, alias)
 `
 
 const referencesInsertSelectSql = (rowRef: 'NEW') => `
@@ -84,23 +99,13 @@ export const CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL = `
 export const BLOCK_REFERENCES_BACKFILL_MARKER_KEY = 'block_references_backfill_v1'
 export const BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY = 'block_references_source_field_v1'
 
-export const SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL = markerDoneSql(BLOCK_REFERENCES_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL = recordMarkerSql(BLOCK_REFERENCES_BACKFILL_MARKER_KEY)
 
-export const SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}'
-`
+export const SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = markerDoneSql(BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY)
 
-export const RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = recordMarkerSql(BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY)
 
 export const BACKFILL_BLOCK_REFERENCES_SQL = `
   INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)
@@ -123,8 +128,7 @@ export const BACKFILL_BLOCK_REFERENCES_SQL = `
 export const backfillBlockReferencesIfEmpty = async (
   db: LocalSchemaDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_REFERENCES_SQL)
   await db.execute(RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
 }
@@ -138,8 +142,7 @@ export const BLOCK_REFERENCES_TRIGGER_NAMES = [
 export const backfillBlockReferencesSourceFieldIfNeeded = async (
   db: LocalSchemaDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL)) return
 
   for (const triggerName of BLOCK_REFERENCES_TRIGGER_NAMES) {
     await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`)
@@ -147,6 +150,13 @@ export const backfillBlockReferencesSourceFieldIfNeeded = async (
   await db.execute('DROP TABLE IF EXISTS block_references')
   await db.execute(CREATE_BLOCK_REFERENCES_TABLE_SQL)
   await db.execute(CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL)
+  // Every index on the table went with the DROP above. `statements` ran
+  // BEFORE this backfill (applyLocalSchemaContributions does all
+  // statements, then all backfills), so anything created there is gone
+  // and must be recreated HERE — otherwise the install spends its whole
+  // first session without it and only self-heals on the next boot,
+  // which is exactly why tests and manual checks miss the gap.
+  await db.execute(CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL)
@@ -160,11 +170,20 @@ export const referencesLocalSchema: LocalSchemaContribution = {
     CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
     CREATE_BLOCK_REFERENCES_TABLE_SQL,
     CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
+    CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL,
     CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,
     CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,
     CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
   ],
   triggerNames: BLOCK_REFERENCES_TRIGGER_NAMES,
+  // The probe matches `idx_block_references_ws_alias` on its leading columns, so
+  // the plan is a SEARCH and it actually arms — see `LocalSchemaAnalyzeTable`.
+  analyzeTables: [
+    {
+      name: 'block_references',
+      probe: `SELECT target_id FROM block_references WHERE workspace_id = '' AND alias = ''`,
+    },
+  ],
   backfills: [
     {
       id: 'references.block-references-source-field',

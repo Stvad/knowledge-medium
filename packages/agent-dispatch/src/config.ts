@@ -17,7 +17,8 @@ import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
 export const PROPS = {
-  /** queued | running | done | error — presence means "seen". */
+  /** queued | running | done | error — presence means "seen"; `queued` is
+   *  seen but not yet claimed, so it stays pending. */
   status: 'agent:status',
   /** Executor session/thread id (enables resume where supported). */
   session: 'agent:session',
@@ -41,30 +42,42 @@ export const PROPS = {
    *  (written as '') on every terminal status write so a stale label
    *  never outlives the run. */
   activity: 'agent:activity',
+  /** Current activity start (ms epoch); 0 when activity is cleared. */
+  activityAt: 'agent:activity-at',
   /** Cancellation REQUEST written by the UI (companion Stop action) on a
    *  running block. The daemon owns the child process, so it can't be
    *  killed from the app — this is the graph signal: the daemon sees it,
    *  aborts the run, parks the task `error: cancelled`, and clears this
    *  (written as '') on the terminal write so it never re-cancels a rerun. */
   cancel: 'agent:cancel',
+  /** When the UI's Ask Agent gesture last fired: an explicit "go". */
+  askedAt: 'agent:asked-at',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
 export type Executor = 'claude' | 'codex'
 
+/** The longest `runner.timeoutMs` a watcher may set. The stale-running
+ *  sweep window (STALE_RUNNING_MS, watchers.ts) is derived from it, so a
+ *  live slow run is never concurrently re-claimed as crashed. */
+export const MAX_RUN_TIMEOUT_MS = 60 * 60_000
+
 const runnerBase = {
   /** Working directory for the spawned agent process. */
   cwd: z.string().optional(),
   model: z.string().optional(),
-  /** Kill the agent run after this long. Capped WELL below the
-   *  30-minute stale-running sweep (watchers.ts) so a live slow run is
-   *  never concurrently re-claimed as crashed. */
-  timeoutMs: z.number().int().positive().max(25 * 60_000).default(10 * 60_000),
+  /** Kill the agent run after this long. */
+  timeoutMs: z.number().int().positive().max(MAX_RUN_TIMEOUT_MS).default(10 * 60_000),
 }
+
+const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
 
 const claudeRunnerSchema = z.strictObject({
   executor: z.literal('claude'),
   ...runnerBase,
+  /** `claude --effort`. Unset, a run takes the effort its model has in the
+   *  user's Claude Code settings. */
+  effort: claudeEffortSchema.optional(),
   /** EXTRA --allowedTools entries beyond the km MCP graph tools.
    *  Empty by default: mention tasks get graph access only, no Bash. */
   allowedTools: z.array(z.string()).default([]),
@@ -129,6 +142,7 @@ const runnerSchema = z.preprocess(
 })
 
 export type Runner = z.infer<typeof runnerSchema>
+export type ClaudeEffort = z.infer<typeof claudeEffortSchema>
 export type CodexSandbox = z.infer<typeof codexSandboxSchema>
 export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>
 export type CodexApprovalsReviewer = z.infer<typeof codexApprovalsReviewerSchema>
@@ -160,38 +174,40 @@ const backlinksWatcherSchema = z.strictObject({
   target: z.string().min(1),
   /** Resume the nearest ancestor thread session when present. */
   resume: z.boolean().default(true),
-  /** Don't claim a mention until the block has been quiet this long —
-   *  otherwise the daemon snapshots (and bills) a half-typed request.
-   *  Capped at the tab-side settleMs bound: the push watcher registers
-   *  with settleMs = quietMs, and an over-cap value would fail the
-   *  tab's schema — misdiagnosed as an unsupported bundle. */
-  quietMs: z.number().int().nonnegative()
-    .max(WATCH_EVENTS_MAX_SETTLE_MS, `quietMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
-    .default(15_000),
+  /** Removed in 0.8.0: refused with a pointer to its replacements, since
+   *  keeping the name would turn an old quiet period into the edit-hold cap. */
+  quietMs: z.never({error: 'quietMs was removed in 0.8.0: use settleMs and editHoldMs (README "Upgrade to 0.8.0")'}).optional(),
+  /** Wait this long after a mention's last change, so the final debounced
+   *  write of an edit lands before the daemon snapshots the block. */
+  settleMs: z.number().int().nonnegative()
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `settleMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
+    .default(250),
+  /** A mention still open in an editor is not claimed until it has gone
+   *  unedited this long: the user may just be thinking, but a device that
+   *  vanished mid-edit leaves its editing flag set forever. */
+  editHoldMs: z.number().int().nonnegative().default(120_000),
   /** Show the reply being BUILT LIVE as the run streams, instead of posting
    *  it only once at the end. Orthogonal to `splitReply`: streaming just
    *  reconciles the reply subtree with the growing text on each tick (a
    *  block reply grows in place; a split reply threads out as it's written).
-   *  Reconciles are throttled to ~1.5s apart — each is a synced graph
-   *  mutation writing only the diff, so leave this off where that churn
-   *  matters. */
+   *  Reconciles are throttled, but each is a synced graph mutation writing
+   *  the diff, so leave this off where that churn matters. */
   streamReply: z.boolean().default(false),
   /** Shape the reply as a block HIERARCHY split along its markdown outline
    *  (nested bullets → child blocks, headings → nesting, code fences kept
    *  whole) instead of one big block. ON by default — a threaded reply reads
    *  far better in an outliner. Parsing + insertion happen APP-SIDE via the
-   *  `reconcile-markdown-subtree` bridge command (the app's own paste
-   *  parser), so the split matches "paste as markdown" and the whole subtree
-   *  lands in one transaction — a failure never leaves a partial reply. The
-   *  write is idempotent (keyed per run), so a transient bridge blip is
-   *  RETRIED in place rather than surfacing as `status=error`. Set `false`
-   *  to keep the reply as a single block. A structureless reply (one
-   *  paragraph) lands as a single block either way. The spawned run is
-   *  nudged (see prompt.ts) to write a nested outline so the split threads
-   *  naturally. Ignored for `delivery: 'channel'` (the ambient session posts
-   *  its own reply). Requires an app build new enough to handle the bridge
-   *  command. */
+   *  `reconcile-markdown-subtree` bridge command, so the split matches "paste
+   *  as markdown" and the whole subtree lands in one transaction. Set `false`
+   *  to keep the reply as a single block; a structureless reply lands as one
+   *  block either way. The spawned run is nudged (see prompt.ts) to write a
+   *  nested outline so the split threads naturally. Ignored for
+   *  `delivery: 'channel'` (the ambient session posts its own reply). */
   splitReply: z.boolean().default(true),
+  /** Keep a memory under the target page (memory.ts), injected into every
+   *  run and kept by the run itself. Off for a watcher whose custom `prompt`
+   *  should not write to the notes. */
+  memory: z.boolean().default(true),
 })
 
 const queryWatcherSchema = z.strictObject({
@@ -228,20 +244,30 @@ export type BacklinksWatcher = ActiveWatcher<RawBacklinksWatcher>
 export type QueryWatcher = ActiveWatcher<RawQueryWatcher>
 export type Watcher = BacklinksWatcher | QueryWatcher
 
+const workspaceIdRequired = 'workspaceId is required: the id of the workspace this daemon acts on. List yours with `kmagent --profile <profile> sql all "SELECT id, name FROM workspaces"`.'
+
 const rawConfigSchema = z.strictObject({
   /** kmagent token profile the daemon pairs under. Keep it dedicated
    *  (not "default") so its access can be revoked independently.
    *  Validated here with the bridge client's own rules — an invalid
    *  name must be a CONFIG error (clean exit 0) rather than a later
    *  client throw that launchd restart-loops on. */
-  profile: z.string().default('agent-dispatch').refine(name => {
+  profile: z.string().default('agent-dispatch').transform((name, ctx) => {
     try {
-      normalizeProfileName(name)
-      return true
+      return normalizeProfileName(name)
     } catch {
-      return false
+      ctx.addIssue({
+        code: 'custom',
+        message: 'profile names may only contain letters, numbers, underscores, dots, and dashes',
+      })
+      return z.NEVER
     }
-  }, {message: 'profile names may only contain letters, numbers, underscores, dots, and dashes'}),
+  }),
+  /** The workspace the daemon acts on. Every bridge call it and its runs
+   *  make names it: one that named none would act on whichever workspace the
+   *  user's focused app tab has open, and move as they navigate. Its writes
+   *  run only while an app tab has this workspace open. */
+  workspaceId: z.string({error: workspaceIdRequired}).trim().min(1, workspaceIdRequired),
   /** Sweep cadence. With push active (see `push`) this is only the
    *  correctness backstop — 30s is plenty; without push it is the
    *  detection latency, so keep it low. */
@@ -267,19 +293,21 @@ const rawConfigSchema = z.strictObject({
   /** Tools EVERY spawned Claude run may use, beyond the km MCP graph
    *  tools; per-watcher `runner.allowedTools` adds on top. Defaults to
    *  web research (WebSearch + WebFetch) — the common "look this up for
-   *  me" mention needs it, and neither tool touches the local machine.
+   *  me" mention needs it, and neither tool touches the local machine —
+   *  and subagents (Agent), which get only the tools the run itself is
+   *  offered.
    *  TRADE-OFF: WebFetch ingests arbitrary page text, so a
    *  prompt-injected page can steer a run that also holds graph WRITE
    *  tools — including exfiltrating note content through crafted fetch
    *  URLs. Accepted default here; set `defaultAllowedTools: []` to run
    *  Claude graph-only. */
-  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
-  maxConcurrent: z.number().int().positive().default(2),
+  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch', 'Agent']),
+  maxConcurrent: z.number().int().positive().default(4),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all
    *  watchers. Converts any trigger-loop bug from an unbounded bill
    *  into a bounded one. */
-  runsPerHour: z.number().int().positive().default(10),
+  runsPerHour: z.number().int().positive().default(45),
   /** Loopback port the dispatch channel MCP listener binds when the
    *  ambient session runs (watchers with delivery: 'channel' post here). */
   channelPort: z.number().int().positive().default(8790),

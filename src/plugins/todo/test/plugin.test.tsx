@@ -1,6 +1,6 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import {
   blockContentDecoratorsFacet,
   type BlockResolveContext,
@@ -11,21 +11,19 @@ import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import type { BlockRenderer } from '@/types.js'
 import {
-  roamTodoStateProp,
   statusProp,
   TODO_TYPE,
   todoPlugin,
 } from '../index.tsx'
 
 describe('todoPlugin', () => {
-  it('contributes todo type and directly-owned property schemas', () => {
+  it('contributes the native status property and todo type', () => {
     const runtime = resolveFacetRuntimeSync(todoPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
-    const types = runtime.read(typesFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
+    const types = runtime.read(typeSeedsFacet)
 
-    expect(schemas.has(statusProp.name)).toBe(false)
-    expect(schemas.get(roamTodoStateProp.name)).toBe(roamTodoStateProp)
-    expect(types.get(TODO_TYPE)?.properties).toEqual([statusProp])
+    expect(seeds).toEqual([statusProp])
+    expect(types.find(t => t.id === TODO_TYPE)?.properties).toEqual([statusProp])
   })
 
   it('contributes Roam-style cmd-enter todo cycle actions', () => {

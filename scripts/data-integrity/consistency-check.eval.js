@@ -11,11 +11,14 @@
 //   - local_server_divergence     blocks <-> blocks_synced (+ bounded e2ee spot-check)
 //   - materialized_still_ciphertext  local row still holding enc:v1: (decrypt-verified)
 //   - e2ee_content_divergence     EXHAUSTIVE decrypt-compare of equal-stamp e2ee rows
+//   - property_field_row_duplicates  >1 live field row per (owner, definition)
+//   - property_cell_coverage      registered cells with no live field row
+//   - property_cell_divergence    cell keys that differ from their children's projection
 // The always-on data-integrity plugin runs the SAME engine in lean mode — no
 // check logic is duplicated between this bridge script and the engine.
 //
 // Run via the agent bridge (target tab must be focused/connected):
-//   yarn agent --profile <name> eval --file scripts/data-integrity/consistency-check.eval.js
+//   pnpm agent --profile <name> eval --file scripts/data-integrity/consistency-check.eval.js
 //   ... --data-json '{"workspaceId":"…"}'                # one workspace (default: active)
 //   ... --data-json '{"allWorkspaces":true}'             # every workspace on the client
 //   ... --data-json '{"sampleLimit":20,"candidateCap":80000,"contentCap":2000000}'
@@ -73,7 +76,11 @@ for (const ws of workspaceIds) {
     // Debounce a transient mid-sync divergence pass (report the settled counts).
     divergenceRecheckMs: 4000,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    syncedThroughMs: () => repo.lastSyncedAt?.getTime(),
     decrypt,
+    // Resolves property keys for the property-children checks. Its registry is
+    // the active workspace's, so for any other workspace they report `error`.
+    repo,
     full: {
       // Precise projection is sound only for the ACTIVE workspace (repo.propertySchemas
       // is active-only); the engine skips it for any other ws.

@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /** Renderer for `'block-type'` blocks (user-defined-types Phase 1).
  *  Wraps the default block layout and replaces the content area with a
  *  type editor — label input, description textarea, and a properties
@@ -18,6 +19,14 @@ import {
   getAliases,
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { decodeRowProperty } from '@/data/rowProperty'
+import {
+  assertNotGrammarShapedLabel,
+  assertRoundTrippableReferenceLabel,
+  UnwritableLabelError,
+} from '@/data/referenceBlock'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
 import { Input } from '@/components/ui/input.js'
@@ -31,6 +40,8 @@ import {
 } from '@/components/propertyPanel/PropertyPicker.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
+import { trimIfEdited } from '@/utils/nameFieldCommit.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -39,7 +50,35 @@ export const writeBlockTypeLabel = async (
   next: string,
 ): Promise<void> => {
   if (next === currentLabel && next === currentContent) return
+  // Name hygiene (docs/properties-as-blocks-migration.html §7): the label
+  // is mirrored into `content` below, so a grammar-shaped label would
+  // silently turn this type's own block into
+  // a reference span. Refuse rather than mirror; the caller reverts the
+  // draft. (Blanking the label is a real operation — see the release path
+  // below — so only a non-empty one is checked.)
+  // BOTH halves of the hygiene, matching the property-name path: the
+  // grammar check alone lets through a label that is plainly a name but
+  // can't be written as `[[label]]` and read back (a `]]` renders lossily;
+  // over `MAX_ALIAS_LENGTH` doesn't parse as a reference at all). Since a
+  // defined type DOUBLES as its `[[label]]` page — the alias claim below
+  // is that contract — such a label leaves the type unlinkable by name.
+  if (next !== '') {
+    assertNotGrammarShapedLabel(next, 'Type label')
+    assertRoundTrippableReferenceLabel(next, 'Type label')
+  }
   await block.repo.tx(async tx => {
+    // What the release path below must drop is the name this block is STORED
+    // as, not the one this editor rendered. A rename — remote, or from a
+    // second view — can land between that render and this tx, and releasing
+    // the stale captured name leaves the stored one claimed: blanking also
+    // empties `content`, so `aliasSyncProcessor`'s blank-content guard will
+    // not come back for it. Read before the writes below, which would
+    // otherwise hand back `next`.
+    const fresh = await tx.get(block.id)
+    const storedLabel = typeof fresh?.properties[blockTypeLabelProp.name] === 'string'
+      ? fresh.properties[blockTypeLabelProp.name] as string
+      : currentLabel
+    const storedContent = fresh?.content ?? currentContent
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
     }
@@ -55,7 +94,8 @@ export const writeBlockTypeLabel = async (
     // a colliding label is rejected by the alias-uniqueness trigger.
     if (next !== '') {
       const row = await tx.get(block.id)
-      if (row && getAliases(row).length === 0) {
+      const aliases = row ? getAliases(row) : []
+      if (row && aliases.length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
       }
     } else {
@@ -68,7 +108,7 @@ export const writeBlockTypeLabel = async (
       // aliases stay.
       const row = await tx.get(block.id)
       if (row) {
-        const stale = new Set([currentLabel, currentContent])
+        const stale = new Set([storedLabel, storedContent])
         const aliases = getAliases(row)
         const remaining = aliases.filter(alias => !stale.has(alias))
         if (remaining.length !== aliases.length) {
@@ -79,36 +119,35 @@ export const writeBlockTypeLabel = async (
   }, {scope: ChangeScope.BlockDefault, description: 'edit block-type label'})
 }
 
-const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
+export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
+      workspaceId: d.workspaceId,
       content: d.content,
       properties: d.properties,
     } : undefined,
   })
-  const readOnly = block.repo.isReadOnly
+  // A materialized type seed is code-owned and unshadowable — lock its backing
+  // row read-only, same rationale as PropertySchemaContentRenderer. A viewer
+  // (repo read-only) is the same lock for a different reason.
+  const isSeedBacked = data ? isValidSeededDefinition(data) : false
+  const readOnly = block.repo.isReadOnly || isSeedBacked
   const runtime = useAppRuntime()
   const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const userSchemas = block.repo.userSchemas
 
   const label = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[blockTypeLabelProp.name]
-    return raw === undefined ? blockTypeLabelProp.defaultValue : blockTypeLabelProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypeLabelProp) : ''
   }, [data])
 
   const description = useMemo<string>(() => {
-    if (!data) return ''
-    const raw = data.properties[blockTypeDescriptionProp.name]
-    return raw === undefined ? blockTypeDescriptionProp.defaultValue : blockTypeDescriptionProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypeDescriptionProp) : ''
   }, [data])
 
   const propertyRefs = useMemo<readonly string[]>(() => {
-    if (!data) return []
-    const raw = data.properties[blockTypePropertiesProp.name]
-    return raw === undefined ? blockTypePropertiesProp.defaultValue : blockTypePropertiesProp.codec.decode(raw)
+    return data ? decodeRowProperty(data, blockTypePropertiesProp) : []
   }, [data])
 
   // Resolve each block-id ref to its published schema. Unresolved refs
@@ -142,9 +181,27 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
     setDraftDescription(description)
   }
 
-  const writeLabel = useCallback(async (next: string) => {
+  const writeLabel = useCallback(async (draft: string) => {
+    const next = trimIfEdited(draft, label)
+    // Nothing to commit. Not redundant with the writer's own no-op, which
+    // needs the label AND the `content` it mirrors into to BOTH match: with
+    // those two diverged, a bare focus-and-leave rewrote `content` (and, for
+    // a row carrying no alias yet, seeded one). Losing those incidental
+    // repairs is the point — repair belongs to a processor, not to whoever
+    // last tabbed through the field.
+    if (next === label) return
     const currentContent = data?.content ?? ''
-    await writeBlockTypeLabel(block, label, currentContent, next)
+    try {
+      await writeBlockTypeLabel(block, label, currentContent, next)
+    } catch (err) {
+      // The BASE class, so a refusal reason added later reverts the field
+      // without anyone having to remember to widen this check.
+      if (!(err instanceof UnwritableLabelError)) throw err
+      // Refused: snap the field back to the committed label so it never
+      // shows a name that wasn't saved.
+      console.error(`[BlockTypeBlockRenderer] ${err.message}`)
+      setDraftLabel(label)
+    }
   }, [block, data?.content, label])
 
   const writeDescription = useCallback(async (next: string) => {
@@ -178,16 +235,8 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
   }, [propertyRefs, userSchemas, writeRefs])
 
   const handlePick = useCallback(async (args: AddPropertyArgs) => {
-    if (args.adopted) {
-      await appendSchema(args.adopted)
-      return
-    }
-    // Inline create: same path AddPropertyForm uses.
-    const created = await block.repo.userSchemas.addSchema({
-      name: args.name,
-      presetId: args.presetId,
-    })
-    await appendSchema(created)
+    const {schema} = await adoptOrCreatePropertySchema(block.repo, args)
+    await appendSchema(schema)
   }, [appendSchema, block])
 
   // Glyph-click: register the schema if it doesn't exist, then return it
@@ -204,12 +253,12 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
     )
     if (existing) return existing
     try {
-      return await userSchemas.addSchema({name: trimmed, presetId: args.presetId})
+      return (await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId: args.presetId})).schema
     } catch (err) {
       console.error(`[BlockTypeBlockRenderer] failed to register schema "${trimmed}":`, err)
       return undefined
     }
-  }, [userSchemas])
+  }, [block.repo, userSchemas])
 
   const removeRef = useCallback(async (refId: string) => {
     await writeRefs(propertyRefs.filter(r => r !== refId))
@@ -217,7 +266,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const performDelete = useCallback(async () => {
-    await block.repo.mutate.delete({id: block.id})
+    await deleteBlockThroughUi(block)
   }, [block])
 
   if (!data) return null
@@ -230,7 +279,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
           placeholder="type label"
           readOnly={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftLabel(e.target.value)}
-          onBlur={() => { void writeLabel(draftLabel.trim()) }}
+          onBlur={() => { void writeLabel(draftLabel) }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
@@ -265,7 +314,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
                 <>
                   <PropertyShapeGlyph
                     shape={entry.schema.codec.type}
-                    Glyph={uis.get(entry.schema.name)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
+                    Glyph={resolveEditorOverride(entry.schema.name, block.repo.propertyDefinitions, uis, entry.schema)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
                     className="text-muted-foreground"
                   />
                   <span className="flex-1 truncate">{entry.schema.name}</span>

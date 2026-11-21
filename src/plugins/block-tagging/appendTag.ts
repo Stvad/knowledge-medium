@@ -1,5 +1,6 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
+import { takesTextEdit } from '@/data/blockTypes'
 import { parseReferences, renderWikilink } from '@/plugins/references/referenceParser.js'
 import { isValidTagName } from './config.ts'
 
@@ -31,8 +32,12 @@ export const appendTagToContent = (content: string, name: string): string => {
   if (!isValidTagName(name)) return content
   const trimmedName = name.trim()
   if (hasTagReference(content, trimmedName)) return content
+  // `isValidTagName` above already implies this, but the narrowing is what
+  // stops the template literal below interpolating a null as "null".
+  const rendered = renderWikilink(trimmedName)
+  if (rendered === null) return content
   const separator = content.length === 0 || /\s$/.test(content) ? '' : ' '
-  return `${content}${separator}${renderWikilink(trimmedName)}`
+  return `${content}${separator}${rendered}`
 }
 
 /** Append ` [[name]]` to every block's content (skipping blocks that
@@ -54,7 +59,8 @@ export const appendTagToBlocks = async (
   await repo.tx(async tx => {
     for (const block of blocks) {
       const row = await tx.get(block.id)
-      if (!row) continue
+      // A link written into source tags nothing and changes the source.
+      if (!takesTextEdit(row)) continue
       if (hasTagReference(row.content, trimmedName)) {
         alreadyTagged += 1
         continue

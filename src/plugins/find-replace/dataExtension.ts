@@ -12,10 +12,17 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
+  valueChildContentToEncoded,
+  resolvePropertyValueFieldSchema,
+  contentLosesPropertyValue,
+} from '@/data/propertyChildren'
+import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,
+  caseInsensitiveVariants,
   replaceLiteralMatches,
 } from './search.ts'
+import { deriveReferenceColumns, sameTxReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor'
 import type {
   ApplyContentReplaceArgs,
   ApplyContentReplaceResult,
@@ -70,6 +77,7 @@ const applyContentReplaceArgsSchema = z.object({
     blockId: z.string(),
     originalContent: z.string(),
   })),
+  force: z.boolean().optional(),
 }) as unknown as Schema<ApplyContentReplaceArgs>
 
 interface ContentCandidateRow {
@@ -77,16 +85,51 @@ interface ContentCandidateRow {
   content: string
 }
 
-const SELECT_CONTENT_CANDIDATES_SQL = `
+interface CandidateFilter {
+  sql: string
+  arg: string
+}
+
+/** The only non-ASCII code points the case-insensitive search folds onto an
+ *  ASCII letter (U+017F onto `s`, U+212A onto `k`); SQLite's `LOWER` folds
+ *  ASCII alone, so they are mapped before it. */
+const ASCII_FOLDED_CONTENT_SQL =
+  `LOWER(replace(replace(content, char(383), 's'), char(8490), 'k'))`
+
+const GLOB_SPECIAL_CHARS = new Set(['*', '?', '[', ']'])
+
+/** Holds for every content where a case-insensitive `findLiteralMatches`
+ *  finds `needle`: each needle code point becomes the class of its variants.
+ *  A class of several variants holds only letters, never a bracket-syntax
+ *  character. */
+const caseInsensitiveGlob = (needle: string): string => {
+  let pattern = '*'
+  for (const char of needle) {
+    const variants = caseInsensitiveVariants(char)
+    pattern += variants.length === 1 && !GLOB_SPECIAL_CHARS.has(char)
+      ? char
+      : `[${variants.join('')}]`
+  }
+  return `${pattern}*`
+}
+
+const isAscii = (text: string): boolean => /^\p{ASCII}*$/u.test(text)
+
+/** The SQL prefilter never excludes a block `buildContentSearchMatch` would
+ *  match; it may admit some it does not. */
+const candidateFilter = (needle: string, matchCase: boolean): CandidateFilter => {
+  if (matchCase) return {sql: 'instr(content, ?) > 0', arg: needle}
+  if (isAscii(needle)) return {sql: `instr(${ASCII_FOLDED_CONTENT_SQL}, LOWER(?)) > 0`, arg: needle}
+  return {sql: 'content GLOB ?', arg: caseInsensitiveGlob(needle)}
+}
+
+const selectContentCandidatesSql = (filterSql: string): string => `
   SELECT id, content
   FROM blocks
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-    AND (
-      (? != 0 AND instr(content, ?) > 0)
-      OR (? = 0 AND instr(LOWER(content), LOWER(?)) > 0)
-    )
+    AND ${filterSql}
   ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
@@ -117,10 +160,10 @@ export const searchContentQuery = defineQuery<
       key: kernelContentKey(workspaceId),
     })
 
-    const matchCase = normalizedOptions.matchCase ? 1 : 0
+    const filter = candidateFilter(trimmed, normalizedOptions.matchCase)
     const rows = await ctx.db.getAll<ContentCandidateRow>(
-      SELECT_CONTENT_CANDIDATES_SQL,
-      [workspaceId, matchCase, trimmed, matchCase, trimmed, candidateLimit + 1],
+      selectContentCandidatesSql(filter.sql),
+      [workspaceId, filter.arg, candidateLimit + 1],
     )
     const candidateRows = rows.slice(0, candidateLimit)
     const matches = candidateRows
@@ -135,6 +178,16 @@ export const searchContentQuery = defineQuery<
   },
 })
 
+const emptyResult = (): ApplyContentReplaceResult => ({
+  updatedBlocks: 0,
+  replacements: 0,
+  skippedChangedBlocks: 0,
+  skippedUnavailableBlocks: 0,
+  skippedUnparseableProperty: 0,
+  unparseableProperties: [],
+  retryableSkips: [],
+})
+
 export const applyContentReplaceMutator = defineMutator<
   ApplyContentReplaceArgs,
   ApplyContentReplaceResult
@@ -146,23 +199,15 @@ export const applyContentReplaceMutator = defineMutator<
   describe: ({items}) => `replace content across ${items.length} blocks`,
   apply: async (tx, args) => {
     const find = args.find.trim()
-    if (!find) {
-      return {
-        updatedBlocks: 0,
-        replacements: 0,
-        skippedChangedBlocks: 0,
-        skippedUnavailableBlocks: 0,
-      }
-    }
+    if (!find) return emptyResult()
 
     const seen = new Set<string>()
     const options = normalizeOptions(args.options)
-    const result: ApplyContentReplaceResult = {
-      updatedBlocks: 0,
-      replacements: 0,
-      skippedChangedBlocks: 0,
-      skippedUnavailableBlocks: 0,
-    }
+    const force = args.force === true
+    const result = emptyResult()
+    // #404 item 5: which properties were skipped, so the caller's summary can
+    // name them (the dialog renders this result directly).
+    const unparseableProperties = new Set<string>()
 
     for (const item of args.items) {
       if (seen.has(item.blockId)) continue
@@ -186,10 +231,78 @@ export const applyContentReplaceMutator = defineMutator<
       )
       if (replaced.replacementCount === 0) continue
 
+      // A FIELD row (content `((fieldId))`) is deliberately NOT special-cased.
+      // Find-replace is a content edit, and editing a field row's content is
+      // the same operation as editing it directly in the outline: the
+      // derive/project pass re-roles the property deterministically and
+      // visibly, exactly as a direct edit or a move does — the intended
+      // everything-is-a-block semantics (§9/§10). There is no invisible
+      // failure to guard (the row's own content visibly changed) and no codec
+      // to break (its content is a ref, not a typed value), so a field row
+      // falls through to the ordinary write below like any other block. (Only
+      // VALUE rows get the codec skip — see below — because a broken value
+      // fails SILENTLY: the key drops from the owner's cell with no error.)
+      //
+      // #404 item 5: under properties-as-blocks
+      // (docs/properties-as-blocks-migration.html §9), a property
+      // VALUE child's `content` IS its typed value — writing straight
+      // through here can leave it unparseable under its codec (a
+      // `number`/`date`/`boolean` value in particular), and PROJECT's
+      // `firstProjectedFieldValue` would then silently skip the child and
+      // drop the property key from the owner's cell, with no error
+      // surfaced to the user who ran the replace.
+      //
+      // Default: SKIP the write rather than write-then-report. Same rule as
+      // `core.migratePropertyDefinition`, which refuses a definition change
+      // outright rather than committing one that drops a value (#1024); a
+      // replace is per-value, so skipping this one is the same answer at this
+      // grain. The original (still-valid) text is preserved either way. Writing the broken text would be "replace
+      // succeeded, property silently detached". The skip is returned in
+      // `retryableSkips` so the caller can offer "replace anyway"; on that
+      // forced re-run the write goes through and the property reads unset
+      // (visible in the value row, undo-recoverable) until the text is fixed.
+      //
+      // Live in an un-flipped workspace too: the cell→children backfill
+      // mints value rows before the flip, and rewriting one corrupts a typed
+      // value exactly as it would after.
+      const schema = await resolvePropertyValueFieldSchema(tx, current)
+      if (schema !== null && !force) {
+        // Resolve the proposed text: the stored target belongs to the old text.
+        const derived = await deriveReferenceColumns(
+          replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx))
+        // Decoding is NOT the whole question, and asking only it let #688
+        // through here: `codecs.string` / `codecs.url` accept any string, so a
+        // replace that turned a value into `::((id))` decoded fine, was
+        // written, and then had the row classified as a field row out from
+        // under it — the owner's key dropped with no error. `setProperty`
+        // ESCAPES such a value; this path writes content the user chose, so it
+        // refuses instead and offers "replace anyway" like every other skip.
+        const unsafeToWrite = (() => {
+          try {
+            valueChildContentToEncoded(schema, {content: replaced.content, referenceTargetId: derived.targetId})
+          } catch {
+            return true
+          }
+          return contentLosesPropertyValue(schema, replaced.content)
+        })()
+        if (unsafeToWrite) {
+          result.skippedUnparseableProperty += 1
+          unparseableProperties.add(schema.name)
+          result.retryableSkips.push({
+            blockId: current.id,
+            originalContent: current.content,
+            property: schema.name,
+          })
+          continue
+        }
+      }
+
       await tx.update(current.id, {content: replaced.content})
       result.updatedBlocks += 1
       result.replacements += replaced.replacementCount
     }
+
+    result.unparseableProperties = [...unparseableProperties].sort()
 
     return result
   },

@@ -7,6 +7,12 @@ export interface ChangeSnapshotSide {
   orderKey?: string
   workspaceId: string
   deleted?: boolean
+  /** LOCAL derived recognition column. Type-level only — runtime values are
+   *  full `BlockData` snapshots; this is the slim view rules see. */
+  referenceTargetId?: string | null
+  /** LOCAL derived recognition column. Type-level only — runtime values are
+   *  full `BlockData` snapshots; this is the slim view rules see. */
+  isFieldForm?: boolean
   /** Block content. Surfaced here for the kernel `content` invalidation
    *  channel — fires when content actually changes, so substring-search
    *  / recent-blocks queries don't invalidate on UiState property
@@ -64,17 +70,12 @@ export const collectPluginInvalidationsFromSnapshots = (
   if (rules.length === 0 || snapshots.size === 0) return undefined
   const out: MutablePluginInvalidationMap = new Map()
   const emit = createPluginInvalidationEmitter(out)
-  // Isolate each plugin rule. `InvalidationRule` is a live extension point, and
-  // this loop runs inside the sync observer's drain window BEFORE its watermark
-  // DELETE. A throw from one rule must not abort the pass: it would skip the
-  // watermark advance and the handle invalidation, and on retry the disk gate
-  // skip-stales the now-equal stamp, so the handle never re-fires — a
-  // permanently-stale UI (issue #191). The kernel rowIds/parentIds/workspaceIds
-  // are computed by the caller independently of this loop, so the affected ids'
-  // row/parent deps still invalidate regardless; only deps that depend SOLELY on
-  // a throwing rule's channel can miss this window. We keep whatever the rule
-  // emitted before it threw (over-firing an invalidation is a harmless re-read;
-  // under-firing is the bug), drop the rest, and log loudly.
+  // Isolate each plugin rule: this loop runs inside the sync observer's drain
+  // window BEFORE the watermark DELETE, so a throw would skip the watermark
+  // advance, the retry would skip-stale the now-equal stamp, and the handle
+  // would never re-fire (issue #191). Over-firing an invalidation is a
+  // harmless re-read; under-firing is the bug — so keep whatever the rule
+  // emitted before it threw, drop the rest, and log loudly.
   for (const rule of rules) {
     try {
       rule.collectFromSnapshots?.(snapshots, emit)
@@ -118,6 +119,17 @@ export const TYPED_BLOCKS_REFS_OF_CHANNEL = 'typedBlocks.refsOf'
 export const TYPED_BLOCKS_LABEL_CHANNEL = 'typedBlocks.label'
 export const KERNEL_ALIASES_CHANNEL = 'kernel.aliases'
 export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
+/** Fired by the Repo, not by a rule, when the active property registry
+ *  changes which field ids it recognizes as definitions — the state a
+ *  visible-children query binds through `RecognitionParams`. It is the
+ *  registry's answer, which moves after the write that caused it, so no
+ *  snapshot rule can see it. One key: there is one active registry. */
+export const KERNEL_FIELD_RECOGNITION_CHANNEL = 'kernel.fieldRecognition'
+export const KERNEL_FIELD_RECOGNITION_KEY = 'active-registry'
+/** Same channel, the outline-skip half: fired when the active registry changes
+ *  which definitions the outline's default view skips — what that child
+ *  view binds. */
+export const KERNEL_FIELD_OUTLINE_SKIP_KEY = 'active-registry-outline-skips'
 
 const SEP = '\u0000'
 

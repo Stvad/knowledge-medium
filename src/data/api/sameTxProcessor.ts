@@ -14,11 +14,12 @@
  * paid by the user-commit path, so it has to stay cheap.
  *
  * What same-tx is NOT for: hot-path expensive enrichment
- * (parseReferences), typing-time cross-row writes (rename rewriting
- * backlinks across many sources), delayed cleanup. Those stay
- * post-commit per §7.1. Rare correctness-critical domain events
- * (e.g. merge retargeting) may still use same-tx when atomicity is
- * worth the extra commit cost.
+ * (parseReferences), delayed cleanup. Those stay post-commit per §7.1.
+ * Rare correctness-critical domain events (e.g. merge retargeting) may
+ * still use same-tx when atomicity is worth the extra commit cost.
+ *
+ * Cross-row writes are not disqualifying on their own — what matters is
+ * whether the GESTURE is on a hot path.
  *
  * Capabilities of `apply`:
  *   - Reads via `ctx.tx` — sees the live staged state of the user's
@@ -46,7 +47,9 @@
  */
 
 import type { BlockData } from './blockData'
-import type { AnyPropertySchema } from './propertySchema'
+import type { TypeContribution } from './blockType'
+import type { AnyPropertySchema, PropertySchemaResolution } from './propertySchema'
+import type { AnyValuePresetCore } from './valuePresetCore'
 import type { ChangeScope } from './changeScope'
 import type { ChangedRow } from './processor'
 import type { Tx } from './tx'
@@ -98,6 +101,48 @@ export type SameTxProcessor = {
         events: ReadonlyArray<string>
       }
   readonly apply: (event: SameTxEvent, ctx: SameTxCtx) => Promise<void>
+  /** Derivation-liveness re-run (issue #402). When true, the commit
+   *  pipeline runs this processor a SECOND time after the full single
+   *  pass, over just the rows written after its first run — so a
+   *  derivation whose input a later processor rewrote re-derives from
+   *  final inputs instead of committing stale. Field-watch only
+   *  (`defineSameTxProcessor` enforces it).
+   *
+   *  Opting in is a CONTRACT: `apply` must be idempotent (early-return
+   *  when the derived output already matches) — the re-run pass is
+   *  bounded at one and relies on idempotence, not a fixpoint, for
+   *  convergence. The re-run event's `changedRows.before` is a MERGED
+   *  baseline: a field path diffs against `after` iff it changed since
+   *  TX START or since this processor's pass-one WATERMARK, except that
+   *  field paths whose last writer was a `settledWrites` processor read
+   *  as their final values and never diff (see `settledWrites`).
+   *  Transition detection must still tolerate seeing an already-handled
+   *  transition again.
+   *
+   *  Ordering caveat the re-run does NOT lift: pass two runs in
+   *  registration order, so a content rewriter must inline-recompute any
+   *  stamp it invalidates — there is no third pass. */
+  readonly rerunOnDirtyRows?: boolean
+  /** Explicit-intent channel (issue #402): declares this processor's
+   *  writes settled — already convergent with every derivation, or
+   *  deliberately final in a way a re-derivation must not
+   *  second-guess. Two enforcement halves in the commit pipeline:
+   *  rows written by this processor are NOT marked dirty for the
+   *  re-run pass, and the field paths it wrote are MASKED out of the
+   *  re-run diff (`before` reads their final values) even when an
+   *  unsettled co-writer later dirties the same row — without the
+   *  mask, that co-write would launder the settled amendment into the
+   *  re-run as apparent user intent. A later unsettled write to the
+   *  same field path un-settles it: last writer wins, matching the
+   *  sequential processor order. Canonical
+   *  consumers: `core.migratePropertyDefinition`, whose consuming-cell
+   *  re-keys would otherwise be re-read by a re-run MATERIALIZE
+   *  against the stale tx-start registry and misinterpreted as a
+   *  user's key deletion, and PROJECT's cell writes (including the
+   *  deliberate lossy key-unset for an unparseable value child, which
+   *  a re-run MATERIALIZE must never treat as a user deleting the
+   *  property). */
+  readonly settledWrites?: boolean
 }
 
 export interface SameTxEvent {
@@ -118,7 +163,27 @@ export interface SameTxEvent {
   emittedEvents: SameTxEmittedEvent[]
 }
 
+/** The type-ownership facts a same-tx processor may consult — which membership
+ *  tokens the registry publishes, and which block backs each. Declared
+ *  structurally here rather than importing `TypeDefinitionRegistrySnapshot`,
+ *  which lives above this layer; that snapshot satisfies this shape.
+ *
+ *  Enough to answer the one question a row cannot: "does THIS block own that
+ *  token?". Carrying the `block-type` tag does not settle it — the registry
+ *  refuses to publish a row whose block id collides with an already-published
+ *  id, so a tagged row can look like a definition while owning nothing. */
+export interface SameTxTypeOwnership {
+  readonly typesById: ReadonlyMap<string, TypeContribution>
+  readonly blockIdByTypeId: ReadonlyMap<string, string>
+}
+
 export interface SameTxCtx {
+  /** Whether the user callback wrote the row without skipping intent metadata.
+   * Internal property materialization and processor writes do not count. */
+  hasUserWrite(id: string): boolean
+  /** Whether the typed API explicitly unset a canonical property key,
+   * rather than omitting it from a replacement bag. */
+  wasPropertyUnset(id: string, name: string): boolean
   /** Active `Tx` — same handle the user fn used. Reads see staged
    *  state; writes amend the same tx. Throws here roll back the
    *  whole user tx via SQLite's `writeTransaction` abort. */
@@ -128,6 +193,85 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Merged type registry captured alongside the property schemas. */
+  types: ReadonlyMap<string, TypeContribution>
+  /** Registered value presets, snapshotted at tx start alongside
+   *  `propertySchemas`. What `propertySchemas` CANNOT give you: a codec for a
+   *  definition as the tx is about to leave it. That registry is frozen at tx
+   *  start, so it still answers with the OLD codec for a definition this tx
+   *  re-types; `tryBuildSchema(row, valuePresets, metadata)` builds the new one
+   *  from the definition row's own staged bag. Consumer:
+   *  `core.migratePropertyDefinition`. */
+  valuePresets: ReadonlyMap<string, AnyValuePresetCore>
+  /** Type-definition ownership for THIS TX'S workspace, snapshotted at tx start.
+   *  `null` when no workspace is pinned, or when the tx's workspace is not the
+   *  one whose registry was captured — fail closed rather than answer ownership
+   *  questions from a different workspace's registry, which would report every
+   *  local token as unknown. Tx-start is the useful moment for a merge: source
+   *  and destination were both still live then, so it still says what each
+   *  owned. */
+  typeDefinitions: SameTxTypeOwnership | null
+  /** Resolve a property-schema NAME against `workspaceId`'s deterministic
+   *  fleet-wide winner map — the same tx-start-captured identity primitive
+   *  `tx.setProperty` resolves through (schema unification §7). `resolved`
+   *  carries the branded `ResolvedPropertySchema` (with `fieldId`);
+   *  shadowed/ambiguous names come back as a structured
+   *  `identity-unavailable`, never a per-client guess. Synchronous — pure
+   *  snapshot lookups. */
+  resolvePropertySchemaName(
+    workspaceId: string,
+    name: string,
+  ): PropertySchemaResolution<unknown>
+  /** Resolve a durable fieldId (definition block id) against the same
+   *  snapshot — the recognition primitive for field rows
+   *  (`reference_target_id` → schema). Shadowed definitions resolve as
+   *  `identity-unavailable` with reason 'shadowed', and a winner this device
+   *  cannot build a codec for with 'behavior-unavailable' (both keep their
+   *  field rows classifying at read sites, but never project into a cell —
+   *  unification §7). */
+  resolvePropertySchemaField(
+    workspaceId: string,
+    fieldId: string,
+  ): PropertySchemaResolution<unknown>
+  /** Every definition claiming `name` in `workspaceId`, by fieldId, in the
+   *  registry's own winner-first order — the multiplicity the two resolvers
+   *  above collapse.
+   *
+   *  Both of them answer about the WINNER, which is the wrong answer either
+   *  side of a rename. Renaming the winner AWAY hands its name to the next
+   *  claimant, and asking who owns that name while the winner still holds it
+   *  names the renamer itself; renaming a SHADOWED definition is a different
+   *  refusal that "does it resolve" conflates with "does it have a codec".
+   *  `null` — never an empty list — whenever this workspace's registry is not
+   *  LIVE: a foreign workspace, one whose projection has not primed, or the
+   *  retained previous workspace, whose snapshot stops updating when the
+   *  projector disposes its subscription on a pin.
+   *  Empty would read as "nobody claims this name", which is the permissive
+   *  answer to every question a caller asks here; the resolvers fail closed in
+   *  that situation and so must anything built on this. */
+  propertyDefinitionsClaimingName(
+    workspaceId: string,
+    name: string,
+  ): readonly string[] | null
+  /** The baseline a "what did this tx write" diff runs against: a row's state
+   *  at TX START, with every path a `settledWrites` processor wrote LAST read
+   *  as its current value — `null` for a row the tx created, `undefined` for
+   *  one it has not written. Unlike an event's `before`, which on the
+   *  `rerunOnDirtyRows` pass is a merged baseline over just the rows dirtied
+   *  since the processor's first run, this answers for ANY row, which a
+   *  processor that reaches rows outside its event needs. Raw tx start is the
+   *  wrong baseline: PROJECT's lossy unset would read as the tx removing the
+   *  key. */
+  txBaselineOf(id: string): BlockData | null | undefined
+  /** Whether row `id` was tombstoned at tx start or by any write of this tx —
+   *  including a row a later write restored, whose net `deleted` is unchanged
+   *  and so shows in no field diff. */
+  tombstonedDuringTx(id: string): boolean
+  /** Row `id`'s parent's liveness at the last write of this tx that
+   *  tombstoned `id`: `'live'` for a delete of the row itself, `'tombstoned'`
+   *  for a subtree delete's cascade, which tombstones the parent first.
+   *  `undefined` for a row this tx did not tombstone, or a root. */
+  parentLivenessWhenTombstoned(id: string): Promise<'live' | 'tombstoned' | undefined>
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The
@@ -154,7 +298,20 @@ export class ProcessorRejection extends Error {
 
 export const defineSameTxProcessor = (
   processor: SameTxProcessor,
-): SameTxProcessor => processor
+): SameTxProcessor => {
+  // The re-run pass collects rows by diffing watched FIELDS against the
+  // dirty-row set; an event-watch processor has no field diff to re-run
+  // against (its events already fired once, and re-delivering them would
+  // be a duplicate dispatch, not a re-derivation). Fail at definition
+  // time, not silently at commit time.
+  if (processor.rerunOnDirtyRows && processor.watches.kind !== 'field') {
+    throw new Error(
+      `Same-tx processor "${processor.name}" declares rerunOnDirtyRows but has ` +
+      `an event watch — the derivation re-run pass is field-watch only.`,
+    )
+  }
+  return processor
+}
 
 /** Variance-erased same-tx processor type for heterogeneous
  *  collections (the engine's facet registry). Parallel to

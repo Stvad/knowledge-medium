@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * The edit-mode Ask Agent action must work from the LIVE editor doc,
  * not the persisted block: the DB trails the editor by the
@@ -26,9 +26,9 @@ const makeView = (doc: string): EditorView => {
 
 /** Fake block whose persisted content deliberately TRAILS the editor
  *  doc (the debounce window), capturing what the action writes. */
-const makeFakeBlock = (persistedContent: string) => {
+const makeFakeBlock = (persistedContent: string, properties: Record<string, unknown> = {}) => {
   const updates: Array<{content?: string}> = []
-  const row = {id: 'block-1', content: persistedContent, properties: {} as Record<string, unknown>}
+  const row = {id: 'block-1', content: persistedContent, properties}
   const block = {
     id: 'block-1',
     peek: () => row,
@@ -38,6 +38,10 @@ const makeFakeBlock = (persistedContent: string) => {
         fn({
           get: async () => row,
           update: async (_id: string, patch: {content?: string}) => { updates.push(patch) },
+          // askAgent now writes asked-at via the typed setProperties path; the
+          // edit-mode tests only assert on the content write, so this just
+          // needs to exist (no-op) so the action doesn't throw.
+          setProperties: async () => {},
         }),
     },
   } as unknown as Block
@@ -50,6 +54,16 @@ const run = async (view: EditorView, block: Block) => {
 }
 
 describe('edit-mode Ask Agent', () => {
+  it('writes no mention into source, in the doc or the block', async () => {
+    const view = makeView('<p>source</p>')
+    const {block, updates} = makeFakeBlock('<p>source</p>', {types: ['html-document']})
+
+    await run(view, block)
+
+    expect(view.state.doc.toString()).toBe('<p>source</p>')
+    expect(updates).toEqual([])
+  })
+
   it('writes the live doc text (not the stale persisted content) and puts the mention into the doc', async () => {
     const view = makeView('freshly typed text')
     const {block, updates} = makeFakeBlock('older persisted text')

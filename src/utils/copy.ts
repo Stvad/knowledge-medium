@@ -2,6 +2,9 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
+import { ChangeScope } from '@/data/api'
+import { armCut, disarmCut } from '@/paste/armedCut.js'
+import { copiedSubtree, type PropertyCopy } from '@/data/drawnSubtree.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
   const indentBy = '  '
@@ -9,12 +12,18 @@ const createIndentedContent = (content: string, depth: number): string => {
   return `${indentation}- ${content.split('\n').join('\n' + indentation + indentBy)}`
 }
 
-export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
-  // One SQL query hydrates the entire subtree in document order
-  // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
-  // the root (0 for the root). No per-parent handle creation, no recursive
-  // cache reads, and no re-deriving depth here.
-  const blocks = await block.repo.query.subtree({id: block.id}).load()
+/** The subtree under `block` as clipboard text. WYSIWYG: by default exactly
+ *  what the copying surface draws (`properties` is its display scope), so a
+ *  drawn property row travels with its whole subtree, content nested under
+ *  its values included, and a row the surface leaves out prunes whole —
+ *  content under it too, as the outline shows none of it. `'all'` is the
+ *  explicit "with hidden properties" copy. Rows come in document order with
+ *  root-relative depths. */
+export const serializeBlock = async (
+  block: Block,
+  properties?: PropertyCopy,
+): Promise<ClipboardData> => {
+  const blocks = await copiedSubtree(block.repo, block.id, properties)
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
@@ -40,10 +49,39 @@ const createClipboardItem = (data: ClipboardData): ClipboardItem =>
   })
 
 const writeToClipboard = async (data: ClipboardData): Promise<void> =>
+  // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
   navigator.clipboard.write([createClipboardItem(data)])
 
-export const copyBlockToClipboard = async (block: Block): Promise<void> =>
-  writeToClipboard(await serializeBlock(block))
+/** Copy: the clipboard no longer holds a cut, so a paste must not move one.
+ *  Disarmed only once the write RESOLVED; a refused write leaves the cut on
+ *  the clipboard. */
+const copyToClipboard = async (data: ClipboardData): Promise<void> => {
+  await writeToClipboard(data)
+  disarmCut()
+}
+
+/** Write `text` to the clipboard: the app's one plain-text clipboard writer,
+ *  enforced by lint. Whatever it writes replaces a cut on the clipboard, so it
+ *  disarms that cut once the write resolved (see {@link copyToClipboard}).
+ *
+ *  Text that needs async work first comes as a promise, and the write starts
+ *  at the call: Safari refuses one that starts after the gesture's handler has
+ *  awaited. A rejected `text` rejects the write and leaves the clipboard as it
+ *  was. */
+export const writeTextToClipboard = async (text: string | Promise<string>): Promise<void> => {
+  if (typeof text === 'string') {
+    // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+    await navigator.clipboard.writeText(text)
+  } else {
+    const blob = text.then(value => new Blob([value], {type: 'text/plain'}))
+    // eslint-disable-next-line no-restricted-syntax -- this module is the clipboard writer
+    await navigator.clipboard.write([new ClipboardItem({'text/plain': blob})])
+  }
+  disarmCut()
+}
+
+export const copyBlockToClipboard = async (block: Block, properties?: PropertyCopy): Promise<void> =>
+  copyToClipboard(await serializeBlock(block, properties))
 
 const getSelectionState = (uiStateBlock: Block) =>
   uiStateBlock.peekProperty(selectionStateProp)
@@ -51,13 +89,14 @@ const getSelectionState = (uiStateBlock: Block) =>
 export const serializeSelectedBlocks = async (
   blockIds: string[],
   repo: Repo,
+  properties?: PropertyCopy,
 ): Promise<ClipboardData> => {
   const blockResults = await Promise.all(
     blockIds
       .map(id => repo.block(id))
       .map(async block => {
         try {
-          return await serializeBlock(block)
+          return await serializeBlock(block, properties)
         } catch (error) {
           console.error(`Failed to serialize block ${block.id}:`, error)
           return null
@@ -71,8 +110,17 @@ export const serializeSelectedBlocks = async (
     throw new Error('No block data could be serialized for copying')
   }
 
+  // Next to other roots a bare single line is re-read as markdown on paste (a
+  // childless `b` before `- a` adopts `a`), so it is bulleted. A multi-line
+  // lone block stays bare: a fence, quote or table pastes back whole only
+  // unbulleted.
+  if (validResults.length === 1) return validResults[0]
+  const bulletsAsRoot = (r: ClipboardData): boolean =>
+    r.blocks.length === 1 && !r.blocks[0].content.includes('\n')
   return {
-    markdown: validResults.map(r => r.markdown).join('\n'),
+    markdown: validResults
+      .map(r => bulletsAsRoot(r) ? createIndentedContent(r.blocks[0].content, 0) : r.markdown)
+      .join('\n'),
     blocks: validResults.flatMap(r => r.blocks),
   }
 }
@@ -80,6 +128,7 @@ export const serializeSelectedBlocks = async (
 export const copySelectedBlocksToClipboard = async (
   uiStateBlock: Block,
   repo: Repo,
+  properties?: PropertyCopy,
 ): Promise<void> => {
   if (!uiStateBlock || !repo) return
 
@@ -89,6 +138,50 @@ export const copySelectedBlocksToClipboard = async (
     return
   }
 
-  const clipboardData = await serializeSelectedBlocks(selectionState.selectedBlockIds, repo)
-  await writeToClipboard(clipboardData)
+  await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo, properties)
+}
+
+/** Copy an explicit set of blocks, for callers whose deps name them rather
+ *  than the ui-state selection (a group-header button, the agent bridge). */
+export const copyBlockIdsToClipboard = async (
+  blockIds: readonly string[],
+  repo: Repo,
+  properties?: PropertyCopy,
+): Promise<void> => {
+  if (!blockIds.length) {
+    console.log('No blocks selected to copy')
+    return
+  }
+  await copyToClipboard(await serializeSelectedBlocks([...blockIds], repo, properties))
+}
+
+/** Cut `blockIds` (roots, in document order): put them on the clipboard and
+ *  arm them to MOVE on the next paste in the app (`@/paste/armedCut.js`).
+ *  Deletes nothing: the blocks stay where they are until that paste.
+ *
+ *  Armed only after the write resolved. A refused write throws, and the
+ *  clipboard still holds whatever it held before, which the cut must not
+ *  claim.
+ *
+ *  `'empty'`: the blocks serialize to no text (one blank, childless block),
+ *  and a paste of no text never reaches the paste handlers, so nothing could
+ *  complete the cut. Nothing is written or armed. */
+export const cutBlockIdsToClipboard = async (
+  blockIds: readonly string[],
+  repo: Repo,
+  properties?: PropertyCopy,
+): Promise<'cut' | 'empty'> => {
+  if (!blockIds.length) return 'empty'
+  const first = repo.block(blockIds[0])
+  const workspaceId = (first.peek() ?? await first.load())?.workspaceId
+  if (!workspaceId) throw new Error(`Cannot cut: block ${blockIds[0]} not found`)
+  const data = await serializeSelectedBlocks([...blockIds], repo, properties)
+  if (data.markdown === '') return 'empty'
+  await writeToClipboard(data)
+  await armCut(data.markdown, {
+    workspaceId,
+    rootIds: blockIds,
+    undoTop: repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault),
+  })
+  return 'cut'
 }

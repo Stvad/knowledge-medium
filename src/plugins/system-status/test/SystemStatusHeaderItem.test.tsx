@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -6,8 +6,10 @@ import {
   resetConsistencyAuditStore,
 } from '@/plugins/data-integrity/store'
 import { SystemStatusHeaderItem } from '../SystemStatusHeaderItem.tsx'
+import { MATERIALIZE_QUEUE_COUNT_SQL } from '@/data/internals/syncObserver/observer'
+import { dbFilenameForUser } from '@/data/localDbStorage'
+import { syncStreamLockName } from '@/data/syncStreamLock'
 import {
-  materializeQueueCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
@@ -23,12 +25,10 @@ const mocks = vi.hoisted(() => ({
     connected: true,
     connecting: false,
     hasSynced: true,
-    dataFlowStatus: {
-      uploading: false,
-      downloading: false,
-      uploadError: null as {message: string} | null,
-      downloadError: null as {message: string} | null,
-    },
+    uploading: false,
+    downloading: false,
+    uploadError: null as {message: string} | null,
+    downloadError: null as {message: string} | null,
     downloadProgress: null,
     lastSyncedAt: undefined,
   },
@@ -49,12 +49,16 @@ vi.mock('@powersync/react', () => ({
 
 vi.mock('@/components/Login.js', () => ({
   useIsLocalOnly: () => mocks.localOnly,
+  useUser: () => ({id: 'user-1'}),
 }))
 
 // The dropdown's diagnostic buttons (Inspect / Reload / Enable) dispatch by
 // action id through runActionById; assert the id rather than the side effect.
 vi.mock('@/shortcuts/runAction.js', () => ({
-  runActionById: (...args: unknown[]) => mocks.runActionById(...args),
+  runActionByIdSafely: async (...args: unknown[]) => {
+    mocks.runActionById(...args)
+    return true
+  },
 }))
 
 vi.mock('../RejectionDialog.tsx', () => ({
@@ -107,12 +111,10 @@ const defaultStatus = () => ({
   connected: true,
   connecting: false,
   hasSynced: true,
-  dataFlowStatus: {
-    uploading: false,
-    downloading: false,
-    uploadError: null as {message: string} | null,
-    downloadError: null as {message: string} | null,
-  },
+  uploading: false,
+  downloading: false,
+  uploadError: null as {message: string} | null,
+  downloadError: null as {message: string} | null,
   downloadProgress: null,
   lastSyncedAt: undefined,
 })
@@ -120,6 +122,18 @@ const defaultStatus = () => ({
 const setDeviceOnline = (online: boolean) => {
   Object.defineProperty(navigator, 'onLine', {configurable: true, value: online})
 }
+
+// Web Locks as another client sees them: each name held, nothing queued.
+const setHeldLocks = (names: string[] | null) => {
+  const query = vi.fn(async () => ({
+    held: (names ?? []).map(name => ({name, mode: 'exclusive' as const, clientId: 'other'})),
+    pending: [],
+  }))
+  Object.defineProperty(navigator, 'locks', {configurable: true, value: names ? {query} : undefined})
+  return query
+}
+
+const thisDatabaseSyncLock = () => syncStreamLockName(dbFilenameForUser('user-1'))
 
 describe('SystemStatusHeaderItem', () => {
   beforeEach(() => {
@@ -140,6 +154,7 @@ describe('SystemStatusHeaderItem', () => {
   afterEach(() => {
     cleanup()
     setDeviceOnline(true)
+    setHeldLocks(null)
     resetConsistencyAuditStore()
   })
 
@@ -184,7 +199,7 @@ describe('SystemStatusHeaderItem', () => {
   it('surfaces the materialization backlog as a processing state with a count', async () => {
     // No pending uploads — just a staged backlog the observer hasn't applied yet.
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
-    mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 12_340}]})
+    mocks.queryResponses.set(MATERIALIZE_QUEUE_COUNT_SQL, {data: [{count: 12_340}]})
 
     render(<SystemStatusHeaderItem/>)
 
@@ -198,7 +213,7 @@ describe('SystemStatusHeaderItem', () => {
   it('shows the materializing state over a pending upload backlog (content is still missing)', () => {
     // Default mock has a capped (1000+) pending-upload count → would be "pending";
     // an unapplied staged backlog is the more important signal.
-    mocks.queryResponses.set(materializeQueueCountSql, {data: [{count: 5}]})
+    mocks.queryResponses.set(MATERIALIZE_QUEUE_COUNT_SQL, {data: [{count: 5}]})
 
     render(<SystemStatusHeaderItem/>)
 
@@ -211,7 +226,7 @@ describe('SystemStatusHeaderItem', () => {
 
     render(<SystemStatusHeaderItem/>)
 
-    expect(mocks.queryCalls.some(call => call.sql === materializeQueueCountSql)).toBe(false)
+    expect(mocks.queryCalls.some(call => call.sql === MATERIALIZE_QUEUE_COUNT_SQL)).toBe(false)
   })
 
   it('shows a calm "offline" state instead of the websocket error when the device is offline', () => {
@@ -219,12 +234,7 @@ describe('SystemStatusHeaderItem', () => {
     mocks.status = {
       ...defaultStatus(),
       connected: false,
-      dataFlowStatus: {
-        uploading: false,
-        downloading: false,
-        uploadError: null,
-        downloadError: {message: 'WebSocket connection failed: 1006'},
-      },
+      downloadError: {message: 'WebSocket connection failed: 1006'},
     }
     mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
@@ -233,6 +243,61 @@ describe('SystemStatusHeaderItem', () => {
     const label = screen.getByRole('button').getAttribute('aria-label') ?? ''
     expect(label.toLowerCase()).toContain('offline')
     expect(label).not.toContain('WebSocket')
+  })
+
+  it('says another tab is syncing instead of offline while another client holds this database\'s sync lock', async () => {
+    mocks.status = {...defaultStatus(), connected: false}
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    setHeldLocks([thisDatabaseSyncLock()])
+
+    render(<SystemStatusHeaderItem/>)
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/another open tab/i)
+    })
+    expect(screen.getByRole('button').getAttribute('aria-label')).not.toMatch(/offline/i)
+  })
+
+  it('falls back to offline when the device goes offline while another tab held the sync lock', async () => {
+    mocks.status = {...defaultStatus(), connected: false}
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    setHeldLocks([thisDatabaseSyncLock()])
+    render(<SystemStatusHeaderItem/>)
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/another open tab/i)
+    })
+
+    act(() => {
+      setDeviceOnline(false)
+      window.dispatchEvent(new Event('offline'))
+    })
+
+    expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/offline/i)
+  })
+
+  it.each([
+    ['connected', {connected: true}, true],
+    ['connecting', {connected: false, connecting: true}, true],
+    ['the device is offline', {connected: false}, false],
+  ])('does not consult Web Locks while %s', (_case, status, online) => {
+    setDeviceOnline(online)
+    mocks.status = {...defaultStatus(), ...status}
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+    const query = setHeldLocks([thisDatabaseSyncLock()])
+
+    render(<SystemStatusHeaderItem/>)
+
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('does not consult Web Locks for the local-only header state', () => {
+    mocks.localOnly = true
+    mocks.status = {...defaultStatus(), connected: false}
+    const query = setHeldLocks([thisDatabaseSyncLock()])
+
+    render(<SystemStatusHeaderItem/>)
+
+    expect(query).not.toHaveBeenCalled()
   })
 
   it('surfaces a persistent sync error when the device is online but sync is disconnected', () => {
@@ -247,12 +312,7 @@ describe('SystemStatusHeaderItem', () => {
         ...defaultStatus(),
         connected: false,
         connecting: true,
-        dataFlowStatus: {
-          uploading: false,
-          downloading: false,
-          uploadError: null,
-          downloadError: {message: 'PowerSync endpoint returned 401'},
-        },
+        downloadError: {message: 'PowerSync endpoint returned 401'},
       }
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
@@ -278,12 +338,7 @@ describe('SystemStatusHeaderItem', () => {
       mocks.status = {
         ...defaultStatus(),
         connected: true,
-        dataFlowStatus: {
-          uploading: false,
-          downloading: false,
-          uploadError: {message: 'token refresh hiccup'},
-          downloadError: null,
-        },
+        uploadError: {message: 'token refresh hiccup'},
       }
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
 
@@ -310,12 +365,7 @@ describe('SystemStatusHeaderItem', () => {
       const erroring = {
         ...defaultStatus(),
         connected: true,
-        dataFlowStatus: {
-          uploading: false,
-          downloading: false,
-          uploadError: {message: 'token refresh hiccup'},
-          downloadError: null,
-        },
+        uploadError: {message: 'token refresh hiccup'},
       }
       const healthy = {...defaultStatus(), connected: true}
       mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
@@ -430,6 +480,94 @@ describe('SystemStatusHeaderItem', () => {
     expect(screen.queryByText(/Data integrity/)).not.toBeInTheDocument()
   })
 
+  describe('calm chip while typing', () => {
+    // The chip's icon and its spin; the tooltip stays live regardless.
+    const chipIcon = () => screen.getByRole('button').querySelector('svg')!
+    const isSpinning = () => chipIcon().classList.contains('animate-spin')
+
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('does not spin for an upload shorter than the activity delay', () => {
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+      const {rerender} = render(<SystemStatusHeaderItem/>)
+      const idleIcon = chipIcon().getAttribute('class')
+
+      mocks.status = {...defaultStatus(), uploading: true}
+      rerender(<SystemStatusHeaderItem/>)
+      act(() => vi.advanceTimersByTime(1_500))
+      expect(screen.getByRole('button').getAttribute('aria-label')).toMatch(/uploading/i)
+      expect(chipIcon().getAttribute('class')).toBe(idleIcon)
+
+      mocks.status = defaultStatus()
+      rerender(<SystemStatusHeaderItem/>)
+      act(() => vi.advanceTimersByTime(5_000))
+      expect(isSpinning()).toBe(false)
+    })
+
+    it('spins once activity outlasts the delay', () => {
+      mocks.status = {...defaultStatus(), downloading: true}
+      render(<SystemStatusHeaderItem/>)
+      expect(isSpinning()).toBe(false)
+
+      act(() => vi.advanceTimersByTime(2_000))
+      expect(isSpinning()).toBe(true)
+    })
+
+    it('warns only once queued changes sit without an upload for the stuck delay', () => {
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      render(<SystemStatusHeaderItem/>)
+      expect(screen.getByRole('button').className).not.toMatch(/destructive/)
+
+      act(() => vi.advanceTimersByTime(30_000))
+      expect(screen.getByRole('button').className).toMatch(/destructive/)
+    })
+
+    it('calls changes stuck while every upload attempt fails', () => {
+      // A different message per attempt keeps the error grace window from
+      // ever elapsing, so only the stuck rule can raise the warning.
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      const {rerender} = render(<SystemStatusHeaderItem/>)
+      for (let i = 0; i < 10; i++) {
+        mocks.status = {...defaultStatus(), uploading: true, uploadError: {message: `attempt ${i}`}}
+        rerender(<SystemStatusHeaderItem/>)
+        act(() => vi.advanceTimersByTime(500))
+        mocks.status = {...defaultStatus(), uploadError: {message: `attempt ${i} failed`}}
+        rerender(<SystemStatusHeaderItem/>)
+        act(() => vi.advanceTimersByTime(3_000))
+      }
+      expect(screen.getByRole('button').getAttribute('aria-label')).not.toMatch(/needs attention/i)
+      expect(screen.getByRole('button').className).toMatch(/destructive/)
+    })
+
+    it('does not call changes stuck while another tab holds the sync stream', async () => {
+      mocks.status = {...defaultStatus(), connected: false}
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      setHeldLocks([thisDatabaseSyncLock()])
+      render(<SystemStatusHeaderItem/>)
+      // The lock was read: queued edits draw the cloud, not the offline icon.
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(chipIcon().getAttribute('class')).toMatch(/lucide-cloud(?!-)/)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(31_000) })
+      expect(screen.getByRole('button').className).not.toMatch(/destructive/)
+    })
+
+    it('does not call an edit stream stuck while uploads keep starting', () => {
+      mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 3}]})
+      const {rerender} = render(<SystemStatusHeaderItem/>)
+      for (let i = 0; i < 4; i++) {
+        act(() => vi.advanceTimersByTime(20_000))
+        mocks.status = {...defaultStatus(), uploading: true}
+        rerender(<SystemStatusHeaderItem/>)
+        act(() => vi.advanceTimersByTime(500))
+        mocks.status = defaultStatus()
+        rerender(<SystemStatusHeaderItem/>)
+      }
+      expect(screen.getByRole('button').className).not.toMatch(/destructive/)
+    })
+  })
+
   it('surfaces an app-update nudge with a Reload action when a new build is ready', async () => {
     mocks.updateAvailable = true
 
@@ -446,4 +584,5 @@ describe('SystemStatusHeaderItem', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
     expect(mocks.runActionById).toHaveBeenCalledWith('app.reload', expect.anything())
   })
+
 })

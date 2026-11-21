@@ -9,10 +9,10 @@
     { "path": "./packages/agent-dispatch" }
   ],
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@knowledge-medium/agent-cli/protocol": ["./packages/agent-cli/src/protocol.ts"]
+      "@knowledge-medium/agent-cli/protocol": ["./packages/agent-cli/src/protocol.ts"],
+      "@knowledge-medium/agent-cli/mcpShared": ["./packages/agent-cli/src/mcpShared.ts"]
     }
   }
 }

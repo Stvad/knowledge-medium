@@ -5,7 +5,7 @@ import { useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.js'
-import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.js'
+import { LazyBlockEntry } from '@/plugins/backlinks/BlockEntry.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
 import { BacklinksEmptyState } from '@/plugins/backlinks-view/BacklinksEmptyState.js'
 import {
@@ -27,6 +27,11 @@ import { GroupHeaderActionButton } from './GroupHeaderActionButton.tsx'
 interface GroupedBacklinksSnapshot {
   unfilteredBacklinks: Block[]
   grouped: GroupedBacklinksResult
+  /** The chain each entry PAINTS, not a stand-in for one: an entry keeps
+   *  it for as long as that source is the block it shows. Captured with
+   *  the rest of the snapshot, so a paused panel holds the ancestry its
+   *  grouping was built from instead of drifting to a live walk while the
+   *  row stays under its old group. */
   initialParentsByBacklinkId: ReadonlyMap<string, Block[]>
 }
 
@@ -398,7 +403,7 @@ const GroupItems = ({
       {open && (
         <div className="mt-1 flex flex-col gap-2">
           {sourceBlocks.map(source => (
-            <LazyBacklinkItem
+            <LazyBlockEntry
               key={source.id}
               block={source}
               scopeId={`group:${group.groupId}:${source.id}`}

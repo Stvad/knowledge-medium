@@ -8,6 +8,7 @@
  *  Note: FindTypeInstancesDialog uses its own custom row renderer
  *  (typed editors per property) rather than this picker. */
 
+import { decodeRowProperty } from '@/data/rowProperty'
 import { useMemo } from 'react'
 import type { Repo } from '@/data/repo'
 import {
@@ -95,10 +96,7 @@ export const buildTypeShapeChoices = (
   repo: Repo,
   typeBlock: BlockData,
 ): readonly PropertyShapeChoice[] => {
-  const raw = typeBlock.properties[blockTypePropertiesProp.name]
-  const schemaIds = raw === undefined
-    ? blockTypePropertiesProp.defaultValue
-    : blockTypePropertiesProp.codec.decode(raw)
+  const schemaIds = decodeRowProperty(typeBlock, blockTypePropertiesProp)
   const out: PropertyShapeChoice[] = []
   for (const schemaId of schemaIds) {
     const schema = repo.userSchemas.getSchemaForBlockId(schemaId)

@@ -1,7 +1,15 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, type BlockData } from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  defineProperty,
+  type BlockData,
+  type PropertySchema,
+} from '@/data/api'
 import { Repo } from '@/data/repo'
+import { kernelValuePresetCoresById } from '@/data/kernelValuePresetCores'
+import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -9,12 +17,14 @@ import {
   FIND_REPLACE_SEARCH_CONTENT_QUERY,
   findReplaceDataExtension,
 } from '../dataExtension.ts'
+import { buildContentSearchMatch } from '../search.ts'
 import type {
   ApplyContentReplaceResult,
   ContentSearchResult,
 } from '../types.ts'
 
 const WS = 'ws-1'
+const insensitive = {matchCase: false, wholeWord: false}
 const OTHER_WS = 'ws-2'
 
 interface Harness {
@@ -29,6 +39,11 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     extensions: [findReplaceDataExtension],
   })
+  // Property-definition registry snapshots are built for the ACTIVE
+  // workspace (repo.ts's FacetBridge wiring) — the codec-guard tests below
+  // register a definition for WS via `setRuntimeContributions` and need it
+  // actually resolvable through `tx.setProperty` / `resolvePropertyFieldSchema`.
+  repo.setActiveWorkspaceId(WS)
   return {h: sharedDb, repo}
 }
 
@@ -54,11 +69,77 @@ const create = async (args: {
       orderKey: `key-${args.id}`,
       content: args.content ?? '',
     })
-  }, {scope: ChangeScope.BlockDefault})
+  }, {
+    scope: ChangeScope.BlockDefault,
+    ...(args.workspaceId !== undefined && args.workspaceId !== WS ? {allowUnloadedWorkspace: true} : {}),
+  })
 }
 
 const load = (id: string): Promise<BlockData | null> =>
   env.repo.load(id)
+
+/** Flip WS to child-backed, register one projected definition, and set the
+ *  property on `owner` through the REAL dual-write (`tx.setProperty`), not
+ *  hand-built field/value rows — the flipped-workspace seeding pattern from
+ *  `inlineDeletedBlockRefsProcessor.test.ts` / `propertyChildren.test.ts`.
+ *  Returns the value child's id, which is the row every codec-guard test
+ *  below runs its replacement against. */
+const seedFlippedWorkspaceWithProperty = async <T>(args: {
+  fieldId: string
+  schema: PropertySchema<T>
+  value: T
+  /** Extra blocks to create in the same tx, for tests that need more than
+   *  the definition + owner (the alias claimant the ref cases rely on). */
+  alsoCreate?: ReadonlyArray<{id: string; content: string; properties?: Record<string, unknown>}>
+}): Promise<{valueId: string}> => {
+  await env.h.db.execute(
+    `INSERT INTO workspaces
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+     VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+    [WS],
+  )
+  env.repo.setRuntimeContributions(
+    projectedPropertyDefinitionsFacet,
+    `test-${args.schema.name}-definition`,
+    [{
+      metadata: {
+        fieldId: args.fieldId,
+        workspaceId: WS,
+        createdAt: 1,
+        name: args.schema.name,
+        changeScope: args.schema.changeScope,
+        hidden: false,
+        origin: 'user' as const,
+      },
+      schema: args.schema,
+    }],
+    {workspaceId: WS},
+  )
+  await env.repo.tx(async tx => {
+    await tx.create({
+      id: args.fieldId, workspaceId: WS, parentId: null, orderKey: 'a0',
+      content: args.schema.name, properties: {types: ['property-schema']},
+    })
+    await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'owner'})
+    for (const [i, extra] of (args.alsoCreate ?? []).entries()) {
+      await tx.create({
+        id: extra.id, workspaceId: WS, parentId: null, orderKey: `a${i + 2}`,
+        content: extra.content, properties: extra.properties,
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault})
+  await env.repo.tx(tx => tx.setProperty('owner', args.schema, args.value),
+    {scope: ChangeScope.BlockDefault})
+
+  const [field] = await env.h.db.getAll<{id: string}>(
+    `SELECT id FROM blocks WHERE parent_id = 'owner' AND reference_target_id = ? AND deleted = 0`,
+    [args.fieldId],
+  )
+  const [value] = await env.h.db.getAll<{id: string}>(
+    `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [field!.id],
+  )
+  return {valueId: value!.id}
+}
 
 const search = (args: {
   query: string
@@ -109,6 +190,32 @@ describe('findReplaceDataExtension', () => {
       ])
   })
 
+  it('offers every block the case-insensitive matcher matches, whatever the query script', async () => {
+    const contents: Record<string, string> = {
+      'acute-lower': 'élan',
+      'acute-upper': 'ÉCLAIR',
+      cyrillic: 'Привет, МИР',
+      sharp: 'STRAẞE',
+      sigma: 'ΟΔΟΣ οδος',
+      kelvin: '300 \u212A',
+      'long-s': 'mi\u017Fs',
+      brackets: 'É]x [é*?] é[b]',
+      cherokee: '\uAB70',
+      cjk: '日本語',
+    }
+    for (const [id, content] of Object.entries(contents)) await create({id, content})
+    const expected = (query: string) => Object.entries(contents)
+      .filter(([id, content]) => buildContentSearchMatch(id, content, query, insensitive) !== null)
+      .map(([id]) => id)
+      .sort()
+
+    for (const query of ['É', 'é', 'привет', 'мир', 'ß', 'ς', 'k', 'miss', 'é]', '[É*?]', 'É[B]', '\u13A0', '日本']) {
+      const found = (await search({query})).matches.map(match => match.blockId).sort()
+      expect(expected(query), `oracle finds something for ${query}`).not.toEqual([])
+      expect(found, query).toEqual(expected(query))
+    }
+  })
+
   it('reports when search results are capped', async () => {
     await create({id: 'a', content: 'alpha'})
     await create({id: 'b', content: 'alpha'})
@@ -143,6 +250,9 @@ describe('findReplaceDataExtension', () => {
       replacements: 3,
       skippedChangedBlocks: 0,
       skippedUnavailableBlocks: 0,
+      skippedUnparseableProperty: 0,
+      unparseableProperties: [],
+      retryableSkips: [],
     })
     expect((await load('a'))?.content).toBe('omega omega')
     expect((await load('b'))?.content).toBe('omega')
@@ -174,7 +284,581 @@ describe('findReplaceDataExtension', () => {
       replacements: 0,
       skippedChangedBlocks: 1,
       skippedUnavailableBlocks: 0,
+      skippedUnparseableProperty: 0,
+      unparseableProperties: [],
+      retryableSkips: [],
     })
     expect((await load('a'))?.content).toBe('alpha user edit')
+  })
+
+  // #404 item 5: `applyContentReplaceMutator` wrote straight to `content`
+  // with no codec awareness. Under properties-as-blocks
+  // (docs/properties-as-blocks-migration.html §9), a property VALUE child's
+  // content IS its typed value — a replacement that
+  // leaves it unparseable used to get written anyway, and PROJECT's
+  // `firstProjectedFieldValue` would silently drop the property from the
+  // owner's cell with no error surfaced to the user who ran the replace.
+  describe('property-value codec guard', () => {
+    const DEF = '55555555-5555-4555-8555-555555555555'
+    const countSchema = defineProperty<number>('count', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seedFlippedWorkspaceWithCountProperty = (): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({fieldId: DEF, schema: countSchema, value: 42})
+
+    // The skip is reported in the RESULT, not through the error channel: the
+    // dialog that ran the replace consumes this object directly and renders
+    // it, so there is nothing to route around. Throwing would also roll back
+    // any valid replacements sharing the batch.
+    it('skips the write and names the property when the only value would break its codec', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithCountProperty()
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '42',
+          replace: 'abc',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: '42'}],
+        },
+      )
+
+      expect(result).toEqual({
+        updatedBlocks: 0,
+        replacements: 0,
+        skippedChangedBlocks: 0,
+        skippedUnavailableBlocks: 0,
+        skippedUnparseableProperty: 1,
+        unparseableProperties: [countSchema.name],
+        retryableSkips: [{blockId: valueId, originalContent: '42', property: countSchema.name}],
+      })
+      // Original valid content preserved — never overwritten with 'abc'.
+      expect((await load(valueId))?.content).toBe('42')
+      // The owning cell keeps the original, still-decodable value.
+      const owner = await load('owner')
+      expect(owner?.properties[countSchema.name]).toBe(42)
+    })
+
+    // `force: true` is the "replace anyway" re-run: the user accepted that the
+    // property reads unset until the text is fixed. The write goes through, the
+    // broken text lands, and the cell drops the now-undecodable key.
+    it('writes the broken value on a forced re-run and drops the cell key', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithCountProperty()
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '42',
+          replace: 'abc',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: '42'}],
+          force: true,
+        },
+      )
+
+      expect(result.updatedBlocks).toBe(1)
+      expect(result.replacements).toBe(1)
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.retryableSkips).toEqual([])
+      // The broken text is written and visible in the value row...
+      expect((await load(valueId))?.content).toBe('abc')
+      // ...and the owner's cell no longer carries the (now-undecodable) key.
+      expect((await load('owner'))?.properties[countSchema.name]).toBeUndefined()
+    })
+
+    // The valid replacement elsewhere in the same call must survive the skip.
+    it('skips only the codec-breaking row in a mixed batch, keeping the valid replacement', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithCountProperty()
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'plain', workspaceId: WS, parentId: null, orderKey: 'z0', content: '42 units'})
+      }, {scope: ChangeScope.BlockDefault})
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '42',
+          replace: 'abc',
+          options: {matchCase: false, wholeWord: false},
+          items: [
+            {blockId: 'plain', originalContent: '42 units'},
+            {blockId: valueId, originalContent: '42'},
+          ],
+        },
+      )
+      expect(result).toEqual({
+        updatedBlocks: 1,
+        replacements: 1,
+        skippedChangedBlocks: 0,
+        skippedUnavailableBlocks: 0,
+        skippedUnparseableProperty: 1,
+        unparseableProperties: [countSchema.name],
+        retryableSkips: [{blockId: valueId, originalContent: '42', property: countSchema.name}],
+      })
+      expect((await load('plain'))?.content).toBe('abc units')
+      expect((await load(valueId))?.content).toBe('42')
+      const owner = await load('owner')
+      expect(owner?.properties[countSchema.name]).toBe(42)
+    })
+
+    // A field row is a NORMAL block — find-replace edits its content like any
+    // other, NOT special-cased. Rewriting `((fieldId))` re-roles the property
+    // deterministically (same as a direct edit or a move), so nothing is
+    // skipped and nothing is held back for a forced re-run.
+    it('edits a field row like a normal block, re-roling the property', async () => {
+      await seedFlippedWorkspaceWithCountProperty()
+      const [field] = await env.h.db.getAll<{id: string; content: string}>(
+        `SELECT id, content FROM blocks WHERE parent_id = 'owner' AND reference_target_id = ? AND deleted = 0`,
+        [DEF],
+      )
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: DEF,
+          replace: 'clobbered',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: field!.id, originalContent: field!.content}],
+        },
+      )
+
+      // Written, not skipped — no special case, no retry offer.
+      expect(result.updatedBlocks).toBe(1)
+      expect(result.replacements).toBe(1)
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.retryableSkips).toEqual([])
+      // The field row's content changed like any block's would (the ::
+      // marker is literal text around the span, so it survives the splice)...
+      expect((await load(field!.id))?.content).toBe('::((clobbered))')
+      // ...and the stamp follows the text (a `((id))` ref derives purely
+      // textually, no existence check), so it now points at `clobbered` —
+      // which is not a definition. The row is therefore no longer a
+      // recognized field row, and the owner's cell re-roles: the count key
+      // is gone. Same outcome as editing the row directly.
+      expect((await load(field!.id))?.referenceTargetId).toBe('clobbered')
+      expect((await load('owner'))?.properties[countSchema.name]).toBeUndefined()
+    })
+
+    // Dormancy: recognition is flip-gated like every other §9 primitive —
+    // an un-flipped workspace has no property machinery to recognize, so a
+    // value-shaped row is ordinary content and the replacement proceeds.
+    it('is dormant in an un-flipped workspace', async () => {
+      // `setProperty`'s dual-write is itself flip-gated and wouldn't create
+      // field/value rows un-flipped, so build the shape by hand.
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'owner2', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'owner2'})
+        await tx.create({id: 'field2', workspaceId: WS, parentId: 'owner2', orderKey: 'a0', content: `((${DEF}))`})
+        await tx.create({id: 'value2', workspaceId: WS, parentId: 'field2', orderKey: 'a0', content: '42'})
+      }, {scope: ChangeScope.BlockDefault})
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '42',
+          replace: 'abc',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: 'value2', originalContent: '42'}],
+        },
+      )
+
+      expect(result).toEqual({
+        updatedBlocks: 1,
+        replacements: 1,
+        skippedChangedBlocks: 0,
+        skippedUnavailableBlocks: 0,
+        skippedUnparseableProperty: 0,
+        unparseableProperties: [],
+        retryableSkips: [],
+      })
+      expect((await load('value2'))?.content).toBe('abc')
+    })
+  })
+
+  describe('ref-typed value guard resolves the proposed text', () => {
+    const REF_DEF = '66666666-6666-4666-8666-666666666666'
+    const TARGET = '77777777-7777-4777-8777-777777777777'
+    const relatedSchema = defineProperty<string>('related', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seedRefProperty = (): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({
+        fieldId: REF_DEF,
+        schema: relatedSchema,
+        value: TARGET,
+        alsoCreate: [{id: 'mary-page', content: 'Mary', properties: {alias: ['Mary']}}],
+      })
+
+    it('accepts a replacement that turns the ref into a resolvable wikilink', async () => {
+      const {valueId} = await seedRefProperty()
+      const original = `((${TARGET}))`
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: original,
+          replace: '[[Mary]]',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: original}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.unparseableProperties).toEqual([])
+      expect((await load(valueId))?.content).toBe('[[Mary]]')
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe('mary-page')
+    })
+
+    // km-h1hy: a multi-valued property's value children are its MEMBERS, and
+    // a member's content was written under the MEMBER codec — so the guard has
+    // to ask that one. Asking the owning `string-list` codec instead answers
+    // "not a string or url, nothing to lose" and waves through a replacement
+    // that turns the member into a field row: the bit stamps, the row leaves
+    // the value set, and the member vanishes from the list with no error.
+    it('skips a replacement that marks a string-list MEMBER into a field row', async () => {
+      const TAGS_DEF = '88888888-8888-4888-8888-888888888888'
+      const tagsSchema = defineProperty<readonly string[]>('tags', {
+        codec: kernelValuePresetCoresById['string-list'].build(),
+        defaultValue: [],
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: TAGS_DEF,
+        schema: tagsSchema,
+        value: ['plain', 'other'],
+      })
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'plain',
+          replace: `::((${TARGET}))`,
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'plain'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([tagsSchema.name])
+      expect((await load(valueId))?.content).toBe('plain')
+      expect((await load('owner'))?.properties[tagsSchema.name])
+        .toEqual(['plain', 'other'])
+    })
+
+    it('skips a replacement that marks the value row into a field row', async () => {
+      const {valueId} = await seedRefProperty()
+      const original = `((${TARGET}))`
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '((',
+          replace: '::((',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: original}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect((await load(valueId))?.content).toBe(original)
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe(TARGET)
+    })
+
+    it('still allows a replacement that retargets the ref to another id', async () => {
+      // Liveness: the guard must not have become "refuse every ref edit".
+      const {valueId} = await seedRefProperty()
+      const original = `((${TARGET}))`
+      const other = '88888888-8888-4888-8888-888888888888'
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: TARGET,
+          replace: other,
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: original}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe(`((${other}))`)
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe(other)
+    })
+  })
+
+  /** `enum` joined the verbatim-storing family in #1080, and brought a
+   *  destroyer the other two do not have. Its reader unwraps the JSON
+   *  spelling, which value children were written with before that change and
+   *  which therefore stays reserved — so text carrying none of the shapes
+   *  above can still land the owner on a DIFFERENT declared option than the
+   *  text names. Not the key vanishing, a wrong value, which no later read
+   *  can tell from a correct one. */
+  describe('#1080 — enum value guard, where the text is not simply the value', () => {
+    const ENUM_DEF = '77777777-7777-4777-8777-777777777777'
+    // The pathological option set this needs: one option is the quoted
+    // spelling of the other, so `"open"` is BOTH a legal value and the old
+    // spelling of a different legal value.
+    const statusSchema = defineProperty<string>('status', {
+      codec: codecs.enum(['open', '"open"']),
+      defaultValue: 'open',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seedStatus = (value: string): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({fieldId: ENUM_DEF, schema: statusSchema, value})
+
+    it('skips a replacement whose result the reader would unwrap to another option', async () => {
+      // Stored ESCAPED, because the encoder knows the plain spelling of this
+      // option would be read as the other one.
+      const {valueId} = await seedStatus('"open"')
+      const stored = (await load(valueId))?.content
+      expect(stored).not.toBe('"open"')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: stored!,
+          replace: '"open"',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: stored!}],
+        },
+      )
+
+      // Decoding alone never refuses this — `"open"` reads as the option
+      // `open`, which is perfectly valid. Only the escape question catches it.
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([statusSchema.name])
+      expect((await load(valueId))?.content).toBe(stored)
+      expect((await load('owner'))?.properties[statusSchema.name]).toBe('"open"')
+    })
+
+    it('allows a safe edit inside a row still in the LEGACY JSON spelling', async () => {
+      // The common case until those rows drift, and the one an
+      // escape-shaped rule gets wrong: a value child written before #1080
+      // holds `"open"`, and replacing open with done leaves `"done"` — which
+      // reads as the option `done` and is exactly right. The text `"done"` is
+      // not itself an option, so there is no second reading to be wrong about.
+      const plainSchema = defineProperty<string>('legacy', {
+        codec: codecs.enum(['open', 'done']),
+        defaultValue: 'open',
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: ENUM_DEF, schema: plainSchema, value: 'open',
+      })
+      // Put the row back into the spelling it would have had before the
+      // change. RAW, so no processor reprojects the owner from it on the way
+      // in — which is also the shape a row synced from an older client has.
+      await env.h.db.execute('UPDATE blocks SET content = ? WHERE id = ?',
+        ['"open"', valueId])
+      expect((await load(valueId))?.content).toBe('"open"')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'open',
+          replace: 'done',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: '"open"'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('"done"')
+      expect((await load('owner'))?.properties[plainSchema.name]).toBe('done')
+    })
+
+    it('allows an ordinary replacement between two plainly spelled options', async () => {
+      // The common case has to keep working, or the clause above is a bulk
+      // edit that has silently stopped touching Choice rows. An ORDINARY
+      // option set, because the one above has no pair of options that are
+      // plain spellings of each other.
+      const plainSchema = defineProperty<string>('state', {
+        codec: codecs.enum(['open', 'done']),
+        defaultValue: 'open',
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: ENUM_DEF, schema: plainSchema, value: 'open',
+      })
+      expect((await load(valueId))?.content).toBe('open')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'open',
+          replace: 'done',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'open'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('done')
+      expect((await load('owner'))?.properties[plainSchema.name]).toBe('done')
+    })
+  })
+
+  /** The same guard for the codec family that had none (#688). `codecs.string`
+   *  and `codecs.url` accept ANY string, so the decode-only guard above could
+   *  never fire for them — a replace could turn a value row into a field row
+   *  and drop the owner's key with nothing reported. `setProperty` escapes such
+   *  a value; this path writes text the user chose, so it refuses instead. */
+  describe('#688 — string/url value guard, where decoding alone never refuses', () => {
+    const STR_DEF = '99999999-9999-4999-8999-999999999999'
+    const noteSchema = defineProperty<string>('note', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const nullableNoteSchema = defineProperty<string | undefined>('maybe-note', {
+      codec: codecs.optionalString,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seedStringProperty = (value: string): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({
+        fieldId: STR_DEF,
+        schema: noteSchema,
+        value,
+      })
+
+    it.each([
+      ['a field-form span, which would delete the property', 'x', `::((${STR_DEF}))`],
+      ['a lone surrogate, which the content column mangles to U+FFFD', 'x', 'a\uD800b'],
+    ])('skips a replacement producing %s', async (_name, find, replace) => {
+      const {valueId} = await seedStringProperty(find)
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find,
+          replace,
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: find}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([noteSchema.name])
+      // Untouched in BOTH forms — the row keeps its text and the cell its value.
+      expect((await load(valueId))?.content).toBe(find)
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe(find)
+    })
+
+    // The gap between the two predicates, and the reason it exists. An UNMARKED
+    // span keeps the bit clear, so the row stays in the value set and decodes
+    // back to the text -- nothing is lost, the value has just become a link.
+    // `Roadmap` -> `[[Roadmap]]` across the workspace is an ordinary bulk edit,
+    // and refusing it on property rows only would buy no safety.
+    it('allows a replacement that turns the value into an unmarked reference', async () => {
+      const {valueId} = await seedStringProperty('Roadmap')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'Roadmap',
+          replace: '[[Roadmap]]',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'Roadmap'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('[[Roadmap]]')
+      // The property is intact -- that is what makes refusing it unjustified.
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('[[Roadmap]]')
+    })
+
+    // The third destroyer. Bare `null` content IS the unset value to a codec
+    // that accepts one, so this cleared the property with nothing reported --
+    // the guard checked spans and surrogates but not the sentinel the
+    // encoder itself escapes for.
+    it('skips a replacement producing the null sentinel for a nullable property', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithProperty({
+        fieldId: '55555555-5555-4555-8555-555555555555',
+        schema: nullableNoteSchema,
+        value: 'placeholder',
+      })
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'placeholder',
+          replace: 'null',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'placeholder'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect((await load(valueId))?.content).toBe('placeholder')
+      expect((await load('owner'))?.properties[nullableNoteSchema.name]).toBe('placeholder')
+    })
+
+    // ...and the same text is harmless for a codec with no null sentinel, so
+    // the clause stays gated on the codec rather than on the word.
+    it('allows the literal text "null" for a non-nullable string property', async () => {
+      const {valueId} = await seedStringProperty('placeholder')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'placeholder',
+          replace: 'null',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'placeholder'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('null')
+    })
+
+    it('still allows an ordinary string replacement', async () => {
+      // Liveness: the guard must not have become "refuse every string edit".
+      const {valueId} = await seedStringProperty('draft')
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: 'draft',
+          replace: 'shipped',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: 'draft'}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe('shipped')
+      expect((await load('owner'))?.properties[noteSchema.name]).toBe('shipped')
+    })
   })
 })

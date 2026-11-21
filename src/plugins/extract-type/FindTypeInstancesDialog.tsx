@@ -41,6 +41,7 @@ import {
   type PropertyShapeFilter,
 } from '@/data/typeExtraction'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import { ReferenceSearch } from '@/components/propertyEditors/RefPropertyEditor.js'
 import type { Block } from '@/data/block'
 import type { AnyPropertySchema } from '@/data/api'
@@ -342,7 +343,12 @@ function TypeInstanceRows({
           name: choice.name,
           encodedValue: undefined,
           schemas: repo.propertySchemas,
-          uis: repo.propertyEditorOverrides,
+          override: resolveEditorOverride(
+            choice.name,
+            repo.propertyDefinitions,
+            repo.propertyEditorOverrides,
+            repo.propertySchemas.get(choice.name),
+          ),
           presets,
         })
         const Editor = display.Editor

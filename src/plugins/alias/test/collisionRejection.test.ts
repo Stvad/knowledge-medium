@@ -24,9 +24,10 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
-import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { computeAliasSeatId } from '@/data/targets'
+import { PLAINTEXT_ALIAS_SEATS } from '@/data/test/plaintextAliasSeats'
 import { aliasDataExtension } from '../dataExtension.ts'
 
 const WS = 'ws-1'
@@ -89,7 +90,7 @@ const flush = async () => {
  *  below which exercises the alternative-id path the collision
  *  check has to cover too. */
 const seatAt = async (alias: string, content: string): Promise<string> => {
-  const id = computeAliasSeatId(alias, WS, 0)
+  const id = computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, alias, WS, 0)
   await env.repo.tx(async tx => {
     await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content})
     await tx.setProperty(id, aliasesProp, [alias])

@@ -1,18 +1,22 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /**
  * Property panel shell. The lookup chain/model lives in
  * `propertyPanel/model.ts`; row actions live in `propertyPanel/actions.ts`;
  * row/add/config UI lives under `propertyPanel/`.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { useChildIds, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock, useUserPage } from '@/data/globalState.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
-import { propertyEditorOverridesFacet, typesFacet } from '../data/facets.ts'
+import { useTypes } from '@/hooks/typeRegistry.js'
+import { propertyEditorOverridesFacet } from '../data/facets.ts'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import {
   editorSelection,
@@ -27,7 +31,6 @@ import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
   deleteProperty,
-  renameProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import {
@@ -57,14 +60,20 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         properties: data.properties,
         userUpdatedAt: data.userUpdatedAt,
         updatedBy: data.updatedBy,
+        workspaceId: data.workspaceId,
       }
       : undefined,
   })
   const childIds = useChildIds(block)
-  const updatedByUser = useUserPage(blockData?.updatedBy ?? '')
+  // Resolve the author's user page in the BLOCK's own workspace (same rule as
+  // BlockMetaCard). Against the active workspace instead, a panel showing a
+  // block from another workspace looks up a page id derived from the wrong
+  // workspace, finds nothing, and "Changed by" degrades to the raw user id.
+  const updatedByUser = useUserPage(blockData?.updatedBy ?? '', blockData?.workspaceId)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
   const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -89,9 +98,17 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // FacetRuntime memoises combine() results, so these reads are identity-stable
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
+  const propertyDefinitions = block.repo.propertyDefinitions
+  // The type registry too, so a materialized type-seed backing block's panel
+  // locks (its provenance lives in `typeDefinitions.definitionsByBlockId`, not
+  // the property registry).
+  const typeDefinitions = block.repo.typeDefinitions
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
-  const typesRegistry = runtime.read(typesFacet)
+  // Merged registry (kernel + plugin + block-built user types) via repo.types,
+  // reactive on type-registry changes. Reading the raw type facets directly would
+  // miss user-defined types after the C3b projector re-route.
+  const typesRegistry = useTypes()
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
   const syntheticRows = useMemo(
@@ -99,31 +116,37 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       .filter(ref =>
         ref.blockId === block.id
         && !Object.hasOwn(properties, ref.name)
-        && schemas.has(ref.name),
+        && (
+          schemas.has(ref.name)
+          || propertyDefinitions?.definitionsByName.has(ref.name) === true
+        ),
       )
       .map(ref => ({
         name: ref.name,
         encodedValue: undefined,
         isSet: false,
       })),
-    [block.id, properties, schemas, syntheticProperties],
+    [block.id, properties, propertyDefinitions, schemas, syntheticProperties],
   )
 
   const model = useMemo(() => blockData
     ? buildPropertyPanelModel({
       blockId: blockData.id,
+      workspaceId: blockData.workspaceId,
       updatedAt: blockData.userUpdatedAt,
       updatedBy: updatedByUser.name,
       updatedByBlockId: updatedByUser.blockId,
       properties,
       schemas,
+      propertyDefinitions,
+      typeDefinitions,
       uis,
       presets,
       typesRegistry,
       syntheticRows,
     })
     : null,
-  [blockData, presets, properties, schemas, syntheticRows, typesRegistry, uis, updatedByUser])
+  [blockData, presets, properties, propertyDefinitions, typeDefinitions, schemas, syntheticRows, typesRegistry, uis, updatedByUser])
 
   if (!blockData || !model) return null
 
@@ -153,9 +176,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    if (!scopeRootId) return
+    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
+    if (!surface) return
 
-    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
+    const next = await nextVisibleBlock(block, surface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})
@@ -185,6 +209,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const handleConfigure = async (row: PropertyPanelModelRow) => {
+    if (row.isHidden) return
     // 1. User-defined schema → open its backing block in the side panel.
     const existingId = block.repo.userSchemas.getSchemaBlockId(row.name)
     if (existingId) {
@@ -216,8 +241,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     // canConfigure: user-data schema (block exists) OR unregistered
     // (will materialize on click). Kernel/plugin rows fall through and
     // get a disabled glyph button.
-    const canConfigure = row.schemaUnknown
+    const canConfigure = !row.isHidden && (
+      row.schemaUnknown
       || block.repo.userSchemas.getSchemaBlockId(row.name) !== undefined
+    )
     return (
       <PropertyRow
         key={`${sectionId}:${row.name}`}
@@ -235,14 +262,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
             )
           })
         }}
-        onRename={(newName) => void renameProperty({
-          block,
-          properties,
-          schemas,
-          uis,
-          oldName: row.name,
-          newName,
-        })}
         onDelete={() => void deleteProperty({
           block,
           properties,
@@ -300,23 +319,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               openSchemaPanel(existingId)
               return schemas.get(trimmed)
             }
-            // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. There's
-            // no panel to open (kernel schemas have no block) but the
-            // form still gets a schema back to submit with.
-            const kernelSchema = schemas.get(trimmed)
-            if (kernelSchema) return kernelSchema
             try {
-              const schema = await block.repo.userSchemas.addSchema({
-                name: trimmed,
-                presetId,
-              })
+              const result = await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId})
               const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-              if (newId) {
+              if (result.kind === 'created' && newId) {
                 flashRecent(trimmed)
                 openSchemaPanel(newId)
               }
-              return schema
+              return result.schema
             } catch (err) {
               console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
               return undefined

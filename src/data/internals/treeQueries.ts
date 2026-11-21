@@ -1,4 +1,4 @@
-/**
+/*
  * Recursive CTEs for tree operations against the v2 blocks schema (§11
  * of the data-layer redesign). Two guards on every recursion:
  *
@@ -28,9 +28,22 @@
  * Path is internal to the CTE; consumers ignore it.
  */
 
+import { buildInClause } from './sqlBinds'
+
 /** Returns the rooted subtree, ordered by path (i.e. depth-first, with
  *  siblings sorted by `(order_key, id)` via the path encoding). Filters
- *  `deleted = 0`. */
+ *  `deleted = 0`.
+ *
+ *  The `INDEXED BY` on the recursive join is load-bearing: SQLite has no
+ *  cardinality estimate for a recursive CTE, so whether it uses
+ *  `idx_blocks_parent_order` or builds a transient AUTOMATIC index over
+ *  every live row — O(table) per execution, ~190ms on a 117k-row DB even
+ *  for a 3-row subtree — is a per-database coin flip decided by whatever
+ *  `sqlite_stat1` happens to hold (a fresh ANALYZE does not reliably fix
+ *  it). The hint pins the good plan; it errors at prepare time if the
+ *  index is ever renamed or dropped, which is the loud failure we want.
+ *  The query's own `deleted = 0` filter satisfies the partial-index
+ *  predicate. See docs/subtree-cte-planner-perf.html. */
 export const SUBTREE_SQL = `
   WITH RECURSIVE subtree AS (
     SELECT *,
@@ -43,7 +56,8 @@ export const SUBTREE_SQL = `
            subtree.path || child.order_key || '!' || hex(child.id) || '/',
            subtree.depth + 1
       FROM subtree
-      JOIN blocks AS child ON child.parent_id = subtree.id
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
      WHERE child.deleted = 0
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
@@ -51,42 +65,28 @@ export const SUBTREE_SQL = `
   SELECT * FROM subtree ORDER BY path
 `
 
-/** Returns the leaf-to-root chain, excluding the start id. Filters
- *  `deleted = 0`. */
-export const ANCESTORS_SQL = `
-  WITH RECURSIVE chain AS (
-    SELECT *,
-           '!' || hex(id) || '/' AS path,
-           0 AS depth
-      FROM blocks
-     WHERE id = ? AND deleted = 0
-    UNION ALL
-    SELECT parent.*,
-           chain.path || '!' || hex(parent.id) || '/',
-           chain.depth + 1
-      FROM chain
-      JOIN blocks AS parent ON parent.id = chain.parent_id
-     WHERE parent.deleted = 0
-       AND chain.depth < 100
-       AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
-  )
-  SELECT * FROM chain WHERE id != ? ORDER BY depth ASC
-`
-
-/** Many-id variant of `ANCESTORS_SQL` — runs the recursive walk for
- *  every seed id in one statement, tagging each row with the seed it
- *  belongs to. Used by `core.manyAncestors` to avoid N round-trips
- *  when a backlinks panel needs the parent chain for every visible
- *  source block.
+/** Returns the leaf-to-root chain for every seed id, INCLUDING the seed
+ *  itself at `depth = 0`, in one statement, tagging each row with the
+ *  seed it belongs to. Filters `deleted = 0`.
+ *
+ *  THE ancestor walk — there is no single-id variant, because every
+ *  caller reaches it through `ancestorWalk`, which coalesces
+ *  concurrent single-id walks into one of these and is what re-excludes
+ *  the seed for the callers that want only the ancestors.
+ *
+ *  The seed is carried rather than filtered here because its `parent_id`
+ *  is the only thing that distinguishes a chain that reached the ROOT
+ *  from one the walk could not finish — a parent that is soft-deleted or
+ *  has not been materialized yet stops the walk and is absent from the
+ *  result, so without the seed row an empty chain is unreadable.
  *
  *  Caller supplies `idCount` `?` placeholders bound to the seed ids;
  *  ordering of the input array is not preserved in the result, so
  *  consumers must group by `chain_start_id` themselves. Each chain is
- *  returned leaf-to-root (ascending `depth`) so it matches the
- *  single-id `ANCESTORS_SQL` shape exactly. */
+ *  returned leaf-to-root (ascending `depth`). */
 export const manyAncestorsSql = (idCount: number): string => {
   if (idCount <= 0) throw new Error('manyAncestorsSql: idCount must be >= 1')
-  const placeholders = Array(idCount).fill('?').join(', ')
+  const placeholders = buildInClause(idCount)
   return `
     WITH RECURSIVE chain AS (
       SELECT blocks.*,
@@ -107,7 +107,6 @@ export const manyAncestorsSql = (idCount: number): string => {
          AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
     )
     SELECT * FROM chain
-    WHERE chain.id != chain.chain_start_id
     ORDER BY chain.chain_start_id, chain.depth ASC
   `
 }
@@ -197,7 +196,9 @@ export const cycleScanSql = (idCount: number): string => {
 }
 
 /** Direct children of a parent, ordered `(order_key, id)`, filtered
- *  `deleted = 0`. */
+ *  `deleted = 0`. Machinery form: property field rows INCLUDED — copy,
+ *  export, delete-cascade, and the property-children processors must see
+ *  them (docs/properties-as-blocks-migration.html §9). */
 export const CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -206,9 +207,203 @@ export const CHILDREN_SQL = `
 
 /** Same as CHILDREN_SQL but returns only `id` — for the child-id-only
  *  handle (`repo.childIds`) which doesn't need to hydrate the full row
- *  and only declares structural deps (`parent-edge`). */
+ *  and only declares structural deps (`parent-edge`). Machinery form:
+ *  field rows included. */
 export const CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
+   ORDER BY order_key, id
+`
+
+/** Every property FIELD ROW under `parentCount` parents, live and tombstoned
+ *  alike, bound as `[workspaceId, ...parentIds]`. Callers chunk the parents
+ *  at `MAX_IDS_PER_IN_CLAUSE`.
+ *
+ *  The `INDEXED BY` and the workspace term that reaches it are load-bearing:
+ *  every other field-row index is `WHERE deleted = 0`, so letting the planner
+ *  choose scans the whole database's field rows. */
+export const propertyFieldRowsForParentsSql = (columns: string, parentCount: number): string => `
+  SELECT ${columns} FROM blocks INDEXED BY idx_blocks_any_field_form
+   WHERE workspace_id = ? AND parent_id IN (${buildInClause(parentCount)})
+     AND is_field_form = 1 AND reference_target_id IS NOT NULL
+   ORDER BY order_key, id
+`
+
+/** The registry's half of {@link recognizedFieldRowSql}, bound in this order
+ *  after the statement's own parameters: the JSON id list of `property-schema`
+ *  blocks the registry cannot parse, the JSON id list of its seed definitions,
+ *  and the workspace that registry belongs to. */
+export type RecognitionParams = readonly [
+  unparseableDefinitionIdsJson: string,
+  seedDefinitionIdsJson: string,
+  registryWorkspaceId: string,
+]
+
+/** Recognition with no registry: `block_types` alone decides. */
+export const NO_REGISTRY_RECOGNITION_PARAMS: RecognitionParams = ['[]', '[]', '']
+
+/**
+ * VISIBLE-children predicate: excludes a recognized field row
+ * (`is_field_form = 1`) from ordinary child listings at any depth — the
+ * opt-in view (`propertyChildren: 'none'`), not the default. The outline's
+ * hide-all property display; its show-non-hidden display is
+ * {@link NON_HIDDEN_CHILDREN_SQL}.
+ *
+ * Condition 3 (the target names a definition) is the REGISTRY's decision —
+ * `isResolvableFieldDefinition` on the tx side. This SQL reads it from the
+ * `block_types` index, corrected by the bound {@link RecognitionParams}
+ * where the index disagrees with the registry: a tagged block the registry
+ * cannot parse is no definition, and a code seed the registry knows is one
+ * before its row materializes (issue #389 item 7). The two agree once the
+ * registry has caught up with the rows. NOT gated on `properties_migration` —
+ * the cell→children backfill mints field rows in un-flipped workspaces too.
+ *
+ * Both legs are workspace-guarded because a foreign workspace's definition
+ * id must degrade to a VISIBLE "unknown field" row per §9.
+ *
+ * NULL-SAFETY is load-bearing (caught by this file's own tests): the bit
+ * is NULL on every unmarked row, and this fragment is consumed under
+ * `NOT (...)` — a bare `is_field_form = 1` yields NULL there, and `NOT
+ * NULL` is NULL, which WHERE treats as false, silently HIDING every
+ * ordinary child. COALESCE pins the three-valued logic down.
+ */
+export const recognizedFieldRowSql = (rowRef: string): string => `
+     COALESCE(${rowRef}.is_field_form, 0) = 1
+     AND ${rowRef}.parent_id IS NOT NULL
+     AND (
+       EXISTS (
+         SELECT 1 FROM block_types bt
+          WHERE bt.block_id = ${rowRef}.reference_target_id
+            AND bt.type = 'property-schema'
+            AND bt.workspace_id = ${rowRef}.workspace_id
+            AND bt.block_id NOT IN (SELECT value FROM json_each(?))
+       )
+       OR EXISTS (
+         SELECT 1 FROM json_each(?) seed
+          WHERE seed.value = ${rowRef}.reference_target_id
+            AND ${rowRef}.workspace_id = ?
+       )
+     )
+`
+
+const VISIBLE_CHILD_PREDICATE_SQL = `
+   AND NOT (
+${recognizedFieldRowSql('blocks')}
+   )
+`
+
+/** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows.
+ *  Bind `[parentId, ...RecognitionParams]`. Omitting them binds NULL, which
+ *  `json_each` reads as zero rows, so a caller that forgets silently gets the
+ *  `block_types`-only answer rather than an error. */
+export const VISIBLE_CHILDREN_SQL = `
+  SELECT * FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${VISIBLE_CHILD_PREDICATE_SQL}
+   ORDER BY order_key, id
+`
+
+/** Outline form of {@link CHILDREN_IDS_SQL}. Bind
+ *  `[parentId, ...RecognitionParams]` — see {@link VISIBLE_CHILDREN_SQL}. */
+export const VISIBLE_CHILDREN_IDS_SQL = `
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${VISIBLE_CHILD_PREDICATE_SQL}
+   ORDER BY order_key, id
+`
+
+/**
+ * VISIBLE-subtree form of {@link SUBTREE_SQL}: subtree consumers (panels,
+ * navigation, shortcuts, copy in mode `none` on a cell-backed scope) get the
+ * same view as the outline rather than a second, more permissive one. Same INTERIM scope as
+ * {@link recognizedFieldRowSql}.
+ *
+ * The recursive descent refuses to step INTO a recognized field-row child,
+ * so its entire subtree (value child, comments, everything) is excluded in
+ * one step. The ROOT itself is never pruned: it is the seed the caller
+ * explicitly asked for, so opening a field row shows its subtree.
+ *
+ * Bind `[rootId, ...RecognitionParams]` (see {@link VISIBLE_CHILDREN_SQL});
+ * the trailing three sit inside the recursive term and are bound once for the
+ * statement. Same selected columns + depth
+ * semantics as SUBTREE_SQL; the `INDEXED BY` planner-pin note there
+ * applies here too.
+ */
+export const VISIBLE_SUBTREE_SQL = `
+  WITH RECURSIVE
+  subtree AS (
+    SELECT *,
+           '!' || hex(id) || '/' AS path,
+           0 AS depth
+      FROM blocks
+     WHERE id = ? AND deleted = 0
+    UNION ALL
+    SELECT child.*,
+           subtree.path || child.order_key || '!' || hex(child.id) || '/',
+           subtree.depth + 1
+      FROM subtree
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
+     WHERE child.deleted = 0
+       AND subtree.depth < 100
+       AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
+       AND NOT (
+${recognizedFieldRowSql('child')}
+       )
+  )
+  SELECT * FROM subtree ORDER BY path
+`
+
+/** The registry's half of {@link outlineSkippedFieldRowSql}, bound after the
+ *  statement's own parameters: the JSON id list of definitions the outline's default view skips
+ *  (`outlineSkippedFieldIds`) and the workspace that registry belongs to. */
+export type OutlineSkipParams = readonly [
+  skippedDefinitionIdsJson: string,
+  registryWorkspaceId: string,
+]
+
+export const NO_REGISTRY_OUTLINE_SKIP_PARAMS: OutlineSkipParams = ['[]', '']
+
+/**
+ * A field row the outline's default property display skips: one
+ * (`is_field_form = 1`, non-root) whose target is in the bound skip list
+ * (`outlineSkippedFieldIds` — hidden, or hidden in the outline). Narrower than {@link recognizedFieldRowSql}: every
+ * id in the bound list is a definition the registry resolved, so condition 3
+ * holds by construction and needs no `block_types` leg. Workspace-guarded for
+ * the same reason as there. NULL-safe under `NOT (...)` the same way: an
+ * `EXISTS` is never NULL, where `IN` over a NULL target (a marked row whose
+ * span resolves nothing) is NULL and would hide the row.
+ */
+const outlineSkippedFieldRowSql = (rowRef: string): string => `
+     COALESCE(${rowRef}.is_field_form, 0) = 1
+     AND ${rowRef}.parent_id IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM json_each(?) skipped
+        WHERE skipped.value = ${rowRef}.reference_target_id
+          AND ${rowRef}.workspace_id = ?
+     )
+`
+
+const NON_HIDDEN_CHILD_PREDICATE_SQL = `
+   AND NOT (
+${outlineSkippedFieldRowSql('blocks')}
+   )
+`
+
+/** Tier-aware outline form of {@link CHILDREN_SQL}: every child except the
+ *  field rows the outline's default view skips. Bind `[parentId, ...OutlineSkipParams]`. */
+export const NON_HIDDEN_CHILDREN_SQL = `
+  SELECT * FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${NON_HIDDEN_CHILD_PREDICATE_SQL}
+   ORDER BY order_key, id
+`
+
+/** Tier-aware outline form of {@link CHILDREN_IDS_SQL}. Bind
+ *  `[parentId, ...OutlineSkipParams]`. */
+export const NON_HIDDEN_CHILDREN_IDS_SQL = `
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${NON_HIDDEN_CHILD_PREDICATE_SQL}
    ORDER BY order_key, id
 `

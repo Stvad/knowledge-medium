@@ -72,6 +72,17 @@ describe('addedTypes / removedTypes', () => {
     expect(removedTypes(r)).toEqual([])
   })
 
+  it('reads a malformed types cell on either side as no types instead of throwing', () => {
+    const malformed = (types: readonly string[]): BlockData =>
+      ({...blockData(types), properties: {[typesProp.name]: 'not-a-list'}})
+    const fromMalformed: ChangedRow = {id: 'b1', before: malformed([]), after: blockData(['task'])}
+    expect(addedTypes(fromMalformed)).toEqual(['task'])
+    expect(removedTypes(fromMalformed)).toEqual([])
+    const toMalformed: ChangedRow = {id: 'b1', before: blockData(['task']), after: malformed([])}
+    expect(addedTypes(toMalformed)).toEqual([])
+    expect(removedTypes(toMalformed)).toEqual(['task'])
+  })
+
   it('falls back to typesProp.defaultValue when properties lack the key', () => {
     const after: BlockData = {...blockData([]), properties: {}}
     const r: ChangedRow = {id: 'b1', before: blockData(['task']), after}

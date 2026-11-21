@@ -106,7 +106,7 @@ Per-type behavior moves from a <code>setup</code> callback to same-tx processors
 <p class="lede">
 <b>Companion file:</b> <a href="design.ts"><code>design.ts</code></a> specifies the type surfaces this doc
 describes by importing real codebase types. Drift between the prose and the codebase fails
-<code>yarn tsc --noEmit --project docs/tsconfig.json</code>. Pattern follows
+<code>pnpm tsc --noEmit --project docs/tsconfig.json</code>. Pattern follows
 <a href="../plugin-runtime-toggle/design.html"><code>plugin-runtime-toggle</code></a>.
 </p>
 
@@ -1412,7 +1412,7 @@ adding the same fields as their own user-defined type is workable &mdash; just n
   <li>Replace <code>setup</code> with same-tx processors for atomic per-add behavior. Type contributions become pure metadata. Do this before any current kernel use lands. Behaviors that must run on sync-applied type changes from other devices use a separate post-commit processor on the row_events tail (same path <code>parseReferences</code> uses).</li>
   <li>Roam <code>isa</code> adoption rides one primitive (<code>promoteToType</code>) usable from import time or after-the-fact. <b>Two-tx flow</b> bridged by the subscription rebuild &mdash; no <code>withProvisional</code>-style primitive (per &sect;Lessons).</li>
   <li>Template materialization (Phase 4): refList on <code>block-type:template</code>; descendants-only clone (root not duplicated); cycle detection at tx-time via a <code>ProcessorRejection</code>.</li>
-  <li><b>Companion <code>design.ts</code> typechecks against real codebase types.</b> Drift between this prose and the codebase fails <code>yarn tsc --noEmit --project docs/tsconfig.json</code>.</li>
+  <li><b>Companion <code>design.ts</code> typechecks against real codebase types.</b> Drift between this prose and the codebase fails <code>pnpm tsc --noEmit --project docs/tsconfig.json</code>.</li>
 </ul>
 
 </body>

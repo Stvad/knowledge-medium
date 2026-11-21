@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { scheduleDeepIdle } from '../scheduleIdle.js'
+import { installIdleCallbackPolyfill } from '../idleCallbackPolyfill.js'
 
 type IdleCb = (deadline: { didTimeout: boolean; timeRemaining: () => number }) => void
 
@@ -11,6 +12,7 @@ type IdleCb = (deadline: { didTimeout: boolean; timeRemaining: () => number }) =
 describe('scheduleDeepIdle (browser path)', () => {
   let ricCalls: Array<{ cb: IdleCb; opts?: { timeout: number } }>
   let originalRic: unknown
+  let originalCancel: unknown
 
   const idle = (timeRemaining: number) => ({ didTimeout: false, timeRemaining: () => timeRemaining })
   const timedOut = { didTimeout: true, timeRemaining: () => 0 }
@@ -21,6 +23,7 @@ describe('scheduleDeepIdle (browser path)', () => {
     vi.setSystemTime(new Date(2026, 0, 1))
     ricCalls = []
     originalRic = glob.requestIdleCallback
+    originalCancel = glob.cancelIdleCallback
     glob.requestIdleCallback = (cb: IdleCb, opts?: { timeout: number }) => {
       ricCalls.push({ cb, opts })
       return ricCalls.length
@@ -28,6 +31,7 @@ describe('scheduleDeepIdle (browser path)', () => {
   })
   afterEach(() => {
     glob.requestIdleCallback = originalRic
+    glob.cancelIdleCallback = originalCancel
     vi.useRealTimers()
   })
 
@@ -91,6 +95,20 @@ describe('scheduleDeepIdle (browser path)', () => {
     vi.advanceTimersByTime(5_000)
     expect(fn).toHaveBeenCalledTimes(1)
     expect(ricCalls).toHaveLength(0)
+  })
+
+  // WebKit has no rIC and gets the polyfill from main.tsx; the floor must hold
+  // under it (the no-rIC fallback below is the test path only).
+  it('with the polyfill on a host lacking requestIdleCallback, the floor still holds', () => {
+    glob.requestIdleCallback = undefined
+    installIdleCallbackPolyfill()
+    const fn = vi.fn()
+    scheduleDeepIdle(fn, { minDelayMs: 10_000, fallbackMs: 30_000 })
+
+    vi.advanceTimersByTime(9_999)
+    expect(fn).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(10)
+    expect(fn).toHaveBeenCalledTimes(1)
   })
 
   it('falls back to a macrotask defer when requestIdleCallback is unavailable', () => {

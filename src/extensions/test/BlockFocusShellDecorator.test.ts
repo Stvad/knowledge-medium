@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { describe, expect, it } from 'vitest'
 import { shouldScrollFocusedBlockIntoView } from '@/extensions/BlockFocusShellDecorator.js'
@@ -21,6 +21,10 @@ const elementWithRect = (rect: DOMRect): HTMLElement => {
   element.style.fontSize = '16px'
   element.style.lineHeight = '20px'
   element.getBoundingClientRect = () => rect
+  // Attach: happy-dom's getComputedStyle resolves to '' on detached elements,
+  // which turned the line-height threshold into NaN. Attached matches
+  // production anyway; later append() calls just re-parent within the document.
+  document.body.append(element)
   return element
 }
 

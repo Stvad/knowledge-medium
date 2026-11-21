@@ -9,9 +9,11 @@ import type {
   Ref,
   RefObject,
   ReactNode,
+  SVGProps,
 } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
+import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import {
   editorSelection,
   focusBlock,
@@ -27,7 +29,6 @@ import {
   type VariantResolver,
 } from '@/facets/variantFacet.js'
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
-import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
 
 export interface BlockContentRendererSlot {
@@ -44,9 +45,31 @@ export interface BlockContentRendererSlot {
  * facet resolver and reswap every decorator/layout/slot identity on
  * each focus toggle.
  *
+ * "Reswap every slot identity" is not a performance note, it is data
+ * loss. `DefaultBlockRenderer` builds each layout slot as a `useMemo`
+ * over this object, so a new identity is a new React element TYPE:
+ * React unmounts the old subtree and mounts a fresh one. For `Content`
+ * and `Shell` that subtree is the live CodeMirror editor, and a remount
+ * mid-typing rebuilds it from the last COMMITTED content — dropping the
+ * characters typed since, killing an open autocomplete, and moving the
+ * caret. So a field belongs here only if it is stable across ordinary
+ * editing; anything a keystroke can change does not. `aliases` was on
+ * this context for exactly one release and broke page-title editing that
+ * way: `alias.sync` mirrors a page's content into its own `alias`
+ * property in the same tx, so every debounced commit churned it. It is
+ * gone rather than narrowed — page-ness reaches the surfaces that style it
+ * through `blockTextClassFacet` / `blockBulletClassFacet`, whose calling
+ * hooks feed them `useBlockAliases(block)` reactively, and any other
+ * contribution that must FOLLOW naming reads the same hook inside its own
+ * rendered component.
+ *
  * Contributions that need reactive state read it inside their rendered
  * components via `useInFocus(block.id)` / `useInEditMode(block.id)` /
- * `useIsSelected(block.id)`, or at fire time via snapshot helpers.
+ * `useIsSelected(block.id)`, or at fire time via snapshot helpers. Facets
+ * whose contributions are pure functions (no component to hold a hook)
+ * declare their own context type and let the calling HOOK feed the
+ * reactive read — see `blockTextClassFacet` / `blockBulletClassFacet`,
+ * which is how page-ness reaches the alias plugin's styling.
  */
 export interface BlockResolveContext {
   block: Block
@@ -149,26 +172,49 @@ export type BlockContentSurfaceContribution =
 export type BlockContentSurfaceResolver =
   (context: BlockResolveContext) => BlockContentSurfaceProps
 
-// Slot for sections rendered above a block's body — navigation chrome
-// such as top-level breadcrumbs lives here. Mirrors
-// `blockChildrenFooterFacet` exactly: each contribution returns a
-// renderer (or null/undefined/false to opt out for this block); the
-// layout renders all returned components in contribution order.
-export type BlockHeaderContribution =
+// A section slot's contribution returns a renderer, or null/undefined/false to
+// opt out for this block; the resolver gives what's left in contribution order.
+type BlockSectionContribution =
   (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 
-export type BlockHeaderResolver =
+export type BlockSectionsResolver =
   (context: BlockResolveContext) => readonly BlockRenderer[]
+
+// Slot for sections rendered above a block's body — navigation chrome
+// such as top-level breadcrumbs lives here.
+export type BlockHeaderContribution = BlockSectionContribution
+
+// Slot for sections rendered directly under a block's own content and
+// properties, ahead of its children — what a block expands to show about
+// itself (its comments, its references) stays next to it however long the
+// subtree is. What follows the subtree goes in `blockChildrenFooterFacet`.
+export type BlockBelowContentContribution = BlockSectionContribution
 
 // Slot for sections rendered after a block's children — Roam-style "Linked
-// References" lives here. Each contribution returns a renderer (or null/
-// undefined/false to opt out for this block); the DefaultBlockRenderer
-// renders all returned components in contribution order.
-export type BlockChildrenFooterContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
+// References" lives here.
+export type BlockChildrenFooterContribution = BlockSectionContribution
 
-export type BlockChildrenFooterResolver =
-  (context: BlockResolveContext) => readonly BlockRenderer[]
+export type BlockGutterCorner = 'top-right' | 'bottom-right'
+
+export interface BlockGutterItem {
+  corner: BlockGutterCorner
+  /** Renders the item, or null to show nothing for this block right now. */
+  component: BlockRenderer
+}
+
+export type BlockGutterItemContribution =
+  (context: BlockResolveContext) => BlockGutterItem | readonly BlockGutterItem[] | null | undefined | false
+
+export type BlockGutterItemsResolver =
+  (context: BlockResolveContext) => readonly BlockGutterItem[]
+
+// Slot for sections rendered inside a block's bullet hover-card — block
+// metadata (created/edited/by, counts, id) lives here. `BlockBullet` shows a
+// floating card populated with all returned components when the bullet is
+// hovered. When NO contribution returns a
+// renderer, the bullet attaches no hover listeners and renders no card —
+// the feature is pure opt-in and costs nothing on a stock build.
+export type BlockBulletHoverContribution = BlockSectionContribution
 
 // Block layout — owns the entire shape of a block as rendered (the
 // outer wrapper, controls placement, collapse behavior, and where the
@@ -197,7 +243,42 @@ export type BlockChildrenFooterResolver =
 // layout (a block reference) simply doesn't render `Shell`, so it pays for
 // none of that — the lazy-slot equivalent of "don't allocate what you don't
 // use".
+/** Marks the element a layout spreads `shellProps` onto as this block's shell —
+ *  the outer half of a block's DOM boundary (`.block-content` is the inner
+ *  half). Travels with the props rather than with the default layout's class so
+ *  a layout that styles its own wrapper still declares the boundary, and any
+ *  handler resolving ownership can ask one question of both halves. */
+export const BLOCK_SHELL_ATTRIBUTE = 'data-block-shell'
+
+/** Every row one render scope draws, in document order: the shells of mounted
+ *  rows, and the placeholders `LazyViewportMount` labels with the scope for
+ *  rows not mounted yet. A wrapper that mints its own scope (a backlink entry,
+ *  an embed) labels its rows with that scope, so they never match another. */
+export const scopeRowSelector = (renderScopeId: string): string => {
+  const scope = CSS.escape(renderScopeId)
+  return `[${BLOCK_SHELL_ATTRIBUTE}][data-block-id][data-render-scope-id="${scope}"], ` +
+    `[data-lazy-block-id][data-lazy-render-scope-id="${scope}"]`
+}
+
+/** The block a {@link scopeRowSelector} row stands for, mounted or not. */
+export const scopeRowBlockId = (row: HTMLElement): string | undefined =>
+  row.dataset.blockId ?? row.dataset.lazyBlockId
+
+/** Marks a block's bullet — the handle plugins attach row-level pointer
+ *  gestures to (block drag-and-drop) by delegating from the document, so the
+ *  bullet needs no per-gesture handler props. Its block is the enclosing
+ *  {@link BLOCK_SHELL_ATTRIBUTE} element's. */
+export const BLOCK_BULLET_ATTRIBUTE = 'data-block-bullet'
+
+/** Marks a content slot that holds a VIEW — a review backlog, a review deck, a
+ *  recents list — rather than the block's own text. Written by the slot, which
+ *  is the only place that knows: it resolved the renderer. Callers reasoning
+ *  about a row's GEOMETRY need it, because such a row's rect describes
+ *  everything it shows rather than the block itself. */
+export const BLOCK_CONTENT_VIEW_ATTRIBUTE = 'data-block-content-view'
+
 export interface BlockShellProps {
+  'data-block-shell': 'true'
   'data-block-id': string
   'data-render-scope-id'?: string
   'data-editing': 'true' | 'false'
@@ -243,6 +324,20 @@ export type BlockShellRender = (shellProps: BlockShellProps) => ReactNode
 
 export interface BlockShellSlotProps {
   children: BlockShellRender
+  /**
+   * This layout wants the shell's shortcut surface and decorators but is NOT
+   * making an element the block's own surface, so it deliberately ignores
+   * `shellProps`. Say so, and the dev-time check that catches an accidental
+   * drop stays useful.
+   *
+   * Legitimate: a layout whose body is a composed pane rather than the block
+   * (video-notes puts the block's children in an aside; putting the props on
+   * that pane would make the whole thing focusable and click-to-edit). NOT
+   * legitimate for a layout that renders the block itself — dropping them
+   * there costs the block its identity, and every consumer then resolves to an
+   * ancestor.
+   */
+  shortcutsOnly?: boolean
 }
 
 /** Opt-in interactive block surface. Rendering it runs the shell decorators
@@ -267,6 +362,8 @@ export interface BlockLayoutSlots {
   RawContent: ComponentType
   /** Block properties (metadata key/value pairs); `null` when hidden. */
   Properties: ComponentType | null
+  /** Sections contributed via `blockBelowContentFacet`, between the block's own content and its children. Outside any collapsible: collapsing hides children, not these. */
+  BelowContent: ComponentType
   /** Block children subtree (raw `BlockChildren`; layout decides whether to wrap in CollapsibleContent). */
   Children: ComponentType
   /** After-children sections contributed via `blockChildrenFooterFacet`. */
@@ -296,38 +393,122 @@ export type BlockLayoutContribution =
 export type BlockLayoutResolver =
   VariantResolver<BlockResolveContext, BlockLayout>
 
+/**
+ * The `combine` shared by every "each plugin offers zero or more <things>
+ * for this block" facet below. Runs each contribution against
+ * the context and keeps what it returns, in registration order; a
+ * contribution opts out for this block by returning null/undefined/false.
+ *
+ * A contribution may return one value or a list of them. Distinguishing
+ * the two by `Array.isArray` is safe for all of them: their payloads are
+ * components, decorators and plain item objects, never arrays themselves.
+ */
+const collectPerContext = <Context, Value>(
+  contributions: readonly ((context: Context) => Value | readonly Value[] | null | undefined | false)[],
+) => (context: Context): Value[] => {
+  const result: Value[] = []
+  for (const contribution of contributions) {
+    const value = contribution(context)
+    if (!value) continue
+    if (Array.isArray(value)) result.push(...value as readonly Value[])
+    else result.push(value as Value)
+  }
+  return result
+}
+
 export const blockHeaderFacet = defineFacet<
   BlockHeaderContribution,
-  BlockHeaderResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-header',
-  combine: contributions => context => {
-    const result: BlockRenderer[] = []
-    for (const contribution of contributions) {
-      const renderer = contribution(context)
-      if (renderer) result.push(renderer)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockHeaderContribution>,
 })
 
+export const blockBelowContentFacet = defineFacet<
+  BlockBelowContentContribution,
+  BlockSectionsResolver
+>({
+  id: 'core.block-below-content',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockBelowContentContribution>,
+})
+
 export const blockChildrenFooterFacet = defineFacet<
   BlockChildrenFooterContribution,
-  BlockChildrenFooterResolver
+  BlockSectionsResolver
 >({
   id: 'core.block-children-footer',
-  combine: contributions => context => {
-    const result: BlockRenderer[] = []
-    for (const contribution of contributions) {
-      const renderer = contribution(context)
-      if (renderer) result.push(renderer)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockChildrenFooterContribution>,
+})
+
+// Small items in a corner of a block's content: counts, status chips, markers.
+// `BlockGutterHost` lays every one of them out, so an item never positions
+// itself. Within a corner they run in contribution order (precedence, then
+// registration), first leftmost. The gate is structural, as the note on
+// `blockContentDecoratorsFacet` says; an item hides itself by rendering null.
+export const blockGutterItemsFacet = defineFacet<
+  BlockGutterItemContribution,
+  BlockGutterItemsResolver
+>({
+  id: 'core.block-gutter-items',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockGutterItemContribution>,
+})
+
+export const blockBulletHoverFacet = defineFacet<
+  BlockBulletHoverContribution,
+  BlockSectionsResolver
+>({
+  id: 'core.block-bullet-hover',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockBulletHoverContribution>,
+})
+
+/** One entry in the bullet's context menu, contributed by a plugin. */
+export interface BlockContextMenuItem {
+  /** Stable identity, also the React key. Namespace it per plugin. */
+  id: string
+  label: string
+  icon?: ComponentType<SVGProps<SVGSVGElement>>
+  onSelect: () => void
+  destructive?: boolean
+}
+
+export type BlockContextMenuItemsContribution =
+  (context: BlockResolveContext) => BlockContextMenuItem | readonly BlockContextMenuItem[] | null
+
+export type BlockContextMenuItemsResolver =
+  (context: BlockResolveContext) => readonly BlockContextMenuItem[]
+
+// Slot for items appended to the block bullet's context menu — the plugin
+// side of a menu core otherwise owns outright. Mirrors `blockBulletHoverFacet`:
+// each contribution returns an item, a list of items, or null/undefined/false
+// to opt out for this block; `BlockBullet` renders every returned item, in
+// contribution order, after core's own items and behind a separator that
+// appears only when there is at least one contribution.
+//
+// Core's five existing items (Copy ID / Copy Block Ref / Copy Block Embed /
+// Zoom In / Show-Hide Properties) stay hardcoded rather than becoming
+// contributions through this same facet — they close over hook-local state
+// (`setShowProperties`, `panelId`, `workspaceId`) that isn't on
+// `BlockResolveContext`, and converting them would be a much larger refactor
+// of the shell for no gain today. The asymmetry is deliberate, not
+// unfinished.
+export const blockContextMenuItemsFacet = defineFacet<
+  BlockContextMenuItemsContribution,
+  BlockContextMenuItemsResolver
+>({
+  id: 'core.block-context-menu-items',
+  combine: collectPerContext,
+  empty: () => () => [],
+  validate: isFunction<BlockContextMenuItemsContribution>,
 })
 
 export const blockLayoutFacet = defineVariantFacet<BlockResolveContext, BlockLayout>({
@@ -339,14 +520,7 @@ export const blockShellDecoratorsFacet = defineFacet<
   BlockShellDecoratorResolver
 >({
   id: 'core.block-shell-decorators',
-  combine: contributions => context => {
-    const result: BlockShellDecorator[] = []
-    for (const contribution of contributions) {
-      const decorator = contribution(context)
-      if (decorator) result.push(decorator)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockShellDecoratorContribution>,
 })
@@ -384,11 +558,21 @@ export const blockContentRendererFacet = defineVariantFacet<BlockResolveContext,
 // content). Returning null/undefined/false from a contribution skips it
 // for that block. Decorator authors should memoize the wrapped component
 // per-inner so React doesn't unmount the inner subtree on every render.
-export const blockContentDecoratorsFacet = defineFacet<
+//
+// A CONTRIBUTION IS A STRUCTURAL GATE, NOT A REACTIVE ONE. It runs when the
+// decorator set is resolved for a block, and is NOT re-run because the world
+// moved underneath it — so anything it decides from a clock, a query result,
+// or another block's state freezes at resolve time. Two bugs of exactly that
+// shape shipped from one gate that tested "is this today's daily note": a note
+// left open across midnight kept a hint that had become wrong, and tomorrow's
+// note, opened before midnight, could never gain one. Decide on `ctx.types`,
+// `ctx.isTopLevel`, `ctx.blockContext` and the like; put anything time- or
+// data-dependent inside the decorating component, where a hook can re-run it.
+const contentDecoratorsFacet = (id: string) => defineFacet<
   BlockContentDecoratorContribution,
   BlockContentDecoratorResolver
 >({
-  id: 'core.block-content-decorators',
+  id,
   combine: contributions => (context, inner) => {
     let renderer = inner
     for (const contribution of contributions) {
@@ -400,6 +584,12 @@ export const blockContentDecoratorsFacet = defineFacet<
   empty: () => (_context, inner) => inner,
   validate: isFunction<BlockContentDecoratorContribution>,
 })
+
+/** Decorates the chosen read renderer before edit-mode dispatch. A decorator
+ *  may specialize plain content without replacing a type renderer or editor. */
+export const blockReadContentDecoratorsFacet = contentDecoratorsFacet('core.block-read-content-decorators')
+
+export const blockContentDecoratorsFacet = contentDecoratorsFacet('core.block-content-decorators')
 
 export const blockClickHandlersFacet = defineFacet<
   BlockClickContribution,
@@ -455,6 +645,84 @@ export const blockContentSurfacePropsFacet = defineFacet<
   validate: isFunction<BlockContentSurfaceContribution>,
 })
 
+/** What a text-class contribution gets to decide from. Deliberately tiny: the
+ *  renderers that draw block text have a `block`, not a full
+ *  `BlockResolveContext`. `aliases` is read reactively by the hook (a
+ *  contribution can't call hooks, and `block.peek()` would freeze at resolve
+ *  time — the failure mode `blockContentDecoratorsFacet` documents). */
+export interface BlockTextClassContext {
+  block: Block
+  /** This render is its panel's document body — see `useIsFocalRender`. */
+  isFocal: boolean
+  /** The block's page names, or `[]`. */
+  aliases: readonly string[]
+}
+
+export type BlockTextClassContribution = (ctx: BlockTextClassContext) => string | null
+export type BlockTextClassResolver = (ctx: BlockTextClassContext) => string
+
+/**
+ * Classes for the block's own TEXT, contributed by plugins.
+ *
+ * The counterpart to `blockContentSurfacePropsFacet`, and the difference is
+ * load-bearing. That one styles the content SLOT, whose occupant is whatever
+ * won `blockContentRendererFacet` — a review deck, a recents list, a video
+ * player. font-size/weight/line-height inherit, so anything typographic put
+ * there styles an arbitrary plugin subtree (see `blockTitleText.ts` for the
+ * bug that taught us). Use this facet for typography and that one for box
+ * properties the slot genuinely owns.
+ */
+export const blockTextClassFacet = defineFacet<
+  BlockTextClassContribution,
+  BlockTextClassResolver
+>({
+  id: 'core.block-text-class',
+  combine: contributions => context =>
+    contributions.map(contribute => contribute(context)).filter(Boolean).join(' '),
+  empty: () => () => '',
+  validate: isFunction<BlockTextClassContribution>,
+})
+
+/** What a bullet-class contribution gets to decide from. No `isFocal`: the
+ *  focal block renders no bullet at all (the controls slot returns null for
+ *  it), so there is no focal case to decide. `aliases` is read reactively at
+ *  the bullet, same reason as above. */
+export interface BlockBulletClassContext {
+  block: Block
+  /** The block's page names, or `[]`. */
+  aliases: readonly string[]
+}
+
+export type BlockBulletClassContribution = (ctx: BlockBulletClassContext) => string | null
+export type BlockBulletClassResolver = (ctx: BlockBulletClassContext) => string
+
+/**
+ * Classes for the block's BULLET, contributed by plugins.
+ *
+ * The third of the sibling class seams, and the one to reach for when the
+ * mark should not be part of the text at all. Nothing here inherits into the
+ * content subtree, nothing here can be resized or re-flowed by a decorator
+ * that wraps the content (the type chips make the content container
+ * shrink-to-fit, which is what made a border on the title text render at two
+ * different widths), and the bullet column is where an outline already
+ * carries structural facts — collapsed-with-children draws its halo here.
+ *
+ * Contributions land on the dot itself, so they compose with that halo rather
+ * than replacing it: keep them to paint (color, background, box-shadow) and
+ * to the dot's own size. Anything that changes the bullet's FOOTPRINT would
+ * move every row's text, since the surrounding anchor is fixed-size.
+ */
+export const blockBulletClassFacet = defineFacet<
+  BlockBulletClassContribution,
+  BlockBulletClassResolver
+>({
+  id: 'core.block-bullet-class',
+  combine: contributions => context =>
+    contributions.map(contribute => contribute(context)).filter(Boolean).join(' '),
+  empty: () => () => '',
+  validate: isFunction<BlockBulletClassContribution>,
+})
+
 export const resolveShortcutActivations = (
   contributions: readonly ShortcutActivationContribution[],
   context: ShortcutSurfaceContext,
@@ -496,13 +764,59 @@ const interactiveContentSelector = [
   '[data-block-interaction="ignore"]',
 ].join(',')
 
-export const isInteractiveContentEvent = (event: { target: EventTarget | null }) => {
-  const target = event.target
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
-  const element = target.nodeType === Node.ELEMENT_NODE
-    ? target as Element
-    : target.parentElement
-  return Boolean(element?.closest(interactiveContentSelector))
+export const elementOf = (target: EventTarget | null): Element | null => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return null
+  return target.nodeType === Node.ELEMENT_NODE ? target as Element : target.parentElement
+}
+
+export const isInteractiveContentEvent = (event: { target: EventTarget | null }) =>
+  Boolean(elementOf(event.target)?.closest(interactiveContentSelector))
+
+/** Whether a content-surface gesture (a swipe, a scrub, a hold) may start on
+ *  `target`: anywhere but an interactive descendant, except links and video.
+ *  Those fill much of readable content and keep their taps, since only a
+ *  gesture that completes takes the event from them. */
+export const isGestureSurfaceTarget = (target: EventTarget | null): boolean => {
+  const element = elementOf(target)
+  return !element?.closest(interactiveContentSelector) || Boolean(element.closest('a[href],video'))
+}
+
+/**
+ * Where one block's DOM ends and another's begins: a content surface
+ * (`DefaultBlockRenderer`'s content slot) or a block shell. Walking up from an
+ * event target, the first of these decides which block the target belongs to.
+ *
+ * BOTH are needed. A shell holds more than its content slot — the bullet, the
+ * property panel, a breadcrumb chain, whatever chrome a surface adds — and a
+ * target there has no `.block-content` above it until the CONTAINER's, which
+ * would read as the container's own. Neither marker alone spans a block.
+ *
+ * The shell half is an attribute carried by `shellProps`, not the default
+ * layout's class: a layout is free to style its own wrapper, and one that does
+ * must still be recognisable as a block.
+ */
+export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE}]`
+
+/**
+ * Is this event's target on OUR surface, rather than on a nested block's?
+ *
+ * Innermost wins unconditionally, whether or not the nested block handles that
+ * gesture: an ancestor must not inherit a gesture the block under the pointer
+ * declined (a nested block in edit mode disables its swipe, and "swipe the
+ * container instead" is never the right reading of that).
+ *
+ * Propagation cannot stand in for this. A renderer that fills a content slot
+ * with real block rows puts one surface inside another, and then each phase
+ * fails its own way: bubbling lets the container act LAST and overwrite,
+ * capturing lets it act FIRST and consume. Ordinary outline children sit
+ * outside their parent's content slot, which is why only such surfaces are
+ * affected — and why testing this needs one of them.
+ */
+export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
+  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
+  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  return !boundary || boundary === element
 }
 
 /**
@@ -527,14 +841,15 @@ export const enterEditModeForBlock = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
-
+  // Before focusBlock: BlockEditor places the cursor in the commit that mounts
+  // it, so a selection written after edit mode moves misses that placement.
   if (selection) {
-    void uiStateBlock.set(editorSelection, {
+    await uiStateBlock.set(editorSelection, {
       blockId: block.id,
       ...selection,
     })
   }
+  await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId})
 
   requestEditorFocus(uiStateBlock)
 }
@@ -569,17 +884,26 @@ export const isSelectionClick = (event: MouseEvent) =>
 
 /**
  * Build the deps a pointer-dispatched block gesture needs from a block's
- * resolve context plus the live event — the clicked/tapped block, the surface
- * boundary, and the DOM node the event targeted. `currentTarget` is read
- * synchronously here (the caller is still inside the React handler) because
- * React nulls it once the handler returns, and pointer actions (the spatial
- * selection walker) need the bound element to locate the gesture among visible
- * blocks. Shared by the block shell's click path and the content surface's
- * double-click/tap path so the supplied-deps shape stays in one place.
+ * resolve context plus the element the gesture is bound to — the clicked,
+ * tapped or held block, the surface boundary, and that element. A React
+ * caller passes `event.currentTarget`, read synchronously inside its handler
+ * because React nulls it once the handler returns; pointer actions (the
+ * spatial selection walker) need the bound element to locate the gesture
+ * among visible blocks. Shared by the block shell's click path, the content
+ * surface's double-click/tap path and the gesture recognizers, so the
+ * supplied-deps shape stays in one place.
+ *
+ * `propertyDisplay` is the surface's display scope, which the resolve context
+ * cannot hold (a mode switch would change it under every block's slots): a
+ * caller rendered inside the surface reads it from context and passes it, so
+ * a gesture that walks the outline (shift-click's range) walks the drawn
+ * list. The content-surface and recognizer callers have no render to read it
+ * in; the actions bound to their gestures do not walk the outline.
  */
 export const blockPointerDepsFrom = (
   context: BlockResolveContext,
-  event: PointerGestureEvent,
+  targetElement: HTMLElement,
+  propertyDisplay?: PropertyDisplayScopeLevels,
 ): BlockPointerDependencies => {
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
@@ -589,7 +913,8 @@ export const blockPointerDepsFrom = (
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: event.currentTarget,
+    targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),
+    ...(propertyDisplay ? {propertyDisplay} : {}),
   }
 }

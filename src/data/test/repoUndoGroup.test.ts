@@ -25,8 +25,8 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { ChangeScope, defineBlockType, defineQuery } from '@/data/api'
-import { queriesFacet, typesFacet } from '@/data/facets'
+import { ChangeScope, defineQuery, seedType } from '@/data/api'
+import { queriesFacet, typeSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -237,6 +237,21 @@ describe('grouped.mutate joins the group (invariant 6)', () => {
   })
 })
 
+describe('run with a description', () => {
+  it('describes the mutator\'s tx as the caller says, grouped or not', async () => {
+    const {h, repo} = env
+    await seedRoot(repo, 'r1', 'v0')
+    await repo.run('core.setContent', {id: 'r1', content: 'v1'}, {description: 'caller says so'})
+    await repo.undoGroup(async (grouped) => {
+      await grouped.run('core.setContent', {id: 'r1', content: 'v2'}, {description: 'grouped caller'})
+    })
+    const described = await h.db.getAll<{description: string | null}>(
+      'SELECT description FROM command_events ORDER BY rowid',
+    )
+    expect(described.map(row => row.description).slice(-2)).toEqual(['caller says so', 'grouped caller'])
+  })
+})
+
 describe('ungrouped txs unchanged (invariant 7 — regression)', () => {
   it('two plain txs still record two separate entries', async () => {
     const {repo} = env
@@ -323,7 +338,7 @@ describe('facade hygiene — no group-token leak into shared state (review findi
     const {repo} = env
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await seedRoot(repo, 't1', 'v0')
 

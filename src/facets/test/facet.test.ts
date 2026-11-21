@@ -303,6 +303,51 @@ describe('FacetRuntime runtime contributions', () => {
       error.mockRestore()
     }
   })
+
+  it('keeps same-source workspace buckets separate and filters reads by the active workspace', () => {
+    const runtime = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['workspace-a'], {
+      durable: true,
+      workspaceId: 'ws-a',
+    })
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['workspace-b'], {
+      durable: true,
+      workspaceId: 'ws-b',
+    })
+
+    expect(runtime.read(labelsFacet)).toBe('static')
+    runtime.setActiveWorkspaceId('ws-a')
+    expect(runtime.read(labelsFacet)).toBe('static,workspace-a')
+    runtime.setActiveWorkspaceId('ws-b')
+    expect(runtime.read(labelsFacet)).toBe('static,workspace-b')
+    runtime.setActiveWorkspaceId(null)
+    expect(runtime.read(labelsFacet)).toBe('static')
+  })
+
+  it('clears only the addressed workspace bucket and not the same source in another workspace', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['a'], {workspaceId: 'ws-a'})
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['b'], {workspaceId: 'ws-b'})
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', [], {workspaceId: 'ws-a'})
+
+    runtime.setActiveWorkspaceId('ws-a')
+    expect(runtime.read(labelsFacet)).toBe('')
+    runtime.setActiveWorkspaceId('ws-b')
+    expect(runtime.read(labelsFacet)).toBe('b')
+  })
+
+  it('invalidates scoped facet reads and notifies listeners when the workspace filter flips', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['a'], {workspaceId: 'ws-a'})
+    const fired = vi.fn()
+    runtime.onFacetChange(labelsFacet.id, fired)
+
+    runtime.setActiveWorkspaceId('ws-a')
+    expect(runtime.read(labelsFacet)).toBe('a')
+    runtime.setActiveWorkspaceId('ws-b')
+    expect(runtime.read(labelsFacet)).toBe('')
+    expect(fired).toHaveBeenCalledTimes(2)
+  })
 })
 
 // adoptDurableContributionsFrom is how a `setFacetRuntime` swap carries
@@ -353,5 +398,24 @@ describe('FacetRuntime.adoptDurableContributionsFrom', () => {
     const next = resolveFacetRuntimeSync([])
     next.adoptDurableContributionsFrom(previous)
     expect(next.read(labelsFacet)).toBe('')
+  })
+
+  it('adopts every durable workspace bucket without merging same-source workspaces', () => {
+    const previous = resolveFacetRuntimeSync([])
+    previous.setRuntimeContributions(labelsFacet, 'user-data', ['a'], {
+      durable: true,
+      workspaceId: 'ws-a',
+    })
+    previous.setRuntimeContributions(labelsFacet, 'user-data', ['b'], {
+      durable: true,
+      workspaceId: 'ws-b',
+    })
+
+    const next = resolveFacetRuntimeSync([])
+    next.adoptDurableContributionsFrom(previous)
+    next.setActiveWorkspaceId('ws-a')
+    expect(next.read(labelsFacet)).toBe('a')
+    next.setActiveWorkspaceId('ws-b')
+    expect(next.read(labelsFacet)).toBe('b')
   })
 })

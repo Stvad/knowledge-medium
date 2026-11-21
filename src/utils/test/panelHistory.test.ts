@@ -90,6 +90,53 @@ describe('PanelHistoryStore', () => {
     })
   })
 
+  describe('viewModeEnter rides the entry pair', () => {
+    it('survives a back/forward round trip (and a second one)', () => {
+      // Enter gesture from A: the entry it left FROM is stamped.
+      store.push('p1', {blockId: 'b-A', viewModeEnter: 'm'})
+
+      // Chevron back (currently on B): the stamp carries onto the entry
+      // pushed to the forward stack…
+      const backDest = store.back('p1', e('b-B'))
+      expect(backDest?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B', viewModeEnter: 'm'})
+
+      // …and chevron forward re-stamps the entry pushed back onto back.
+      const forwardDest = store.forward('p1', e('b-A'))
+      expect(forwardDest?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A', viewModeEnter: 'm'})
+
+      // Second round trip: still stamped on both sides.
+      store.back('p1', e('b-B'))
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B', viewModeEnter: 'm'})
+      store.forward('p1', e('b-A'))
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A', viewModeEnter: 'm'})
+    })
+
+    it('unstamped entries stay unstamped through round trips', () => {
+      store.push('p1', e('b-A'))
+      store.back('p1', e('b-B'))
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B'})
+      store.forward('p1', e('b-A'))
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A'})
+    })
+
+    it('survives browser-driven (reconcileUrlNavigation) round trips too', () => {
+      store.push('p1', {blockId: 'b-A', viewModeEnter: 'm'})
+
+      // Browser Back (on B, URL says A): pops the stamped entry, stamp
+      // carries onto the forward reconstruction.
+      const back = store.reconcileUrlNavigation('p1', e('b-B'), 'b-A')
+      expect(back?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B', viewModeEnter: 'm'})
+
+      // Browser Forward (on A, URL says B): re-stamps the back entry.
+      const forward = store.reconcileUrlNavigation('p1', e('b-A'), 'b-B')
+      expect(forward?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A', viewModeEnter: 'm'})
+    })
+  })
+
   describe('snapshotter', () => {
     it('snapshot() returns undefined when no snapshotter is registered', () => {
       expect(store.snapshot('p1')).toBeUndefined()
@@ -220,5 +267,58 @@ describe('PanelHistoryStore', () => {
       const b = store.getSnapshot('p1')
       expect(a).toBe(b)
     })
+  })
+
+  describe('peek / dropTop (content recovery)', () => {
+    it('peek reads the top of either stack without consuming it', () => {
+      store.push('p1', e('b-a'))
+      store.push('p1', e('b-b'))
+      store.back('p1', e('cur')) // cur -> forward, b-b -> current
+      expect(store.peek('p1', 'back')).toEqual(e('b-a'))
+      expect(store.peek('p1', 'forward')).toEqual(e('cur'))
+      // Non-consuming: repeat reads see the same entries.
+      expect(store.peek('p1', 'back')).toEqual(e('b-a'))
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: [e('cur')]})
+      expect(store.peek('p2', 'back')).toBeNull()
+    })
+
+    it('dropTop discards without reconstructing on the opposite stack', () => {
+      store.push('p1', e('b-a'))
+      store.push('p1', e('b-b'))
+      store.dropTop('p1', 'back')
+      // Unlike back(), the popped entry does NOT reappear on forward — recovery
+      // must not park the dead page where a Forward click would re-expose it.
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: []})
+      store.dropTop('p1', 'back')
+      expect(store.getSnapshot('p1')).toEqual({back: [], forward: []})
+      expect(() => store.dropTop('p1', 'back')).not.toThrow()
+    })
+
+    it('dropTop with an expected entry refuses to drop a different top', () => {
+      // A caller that decided to drop after an await must not discard whatever
+      // a concurrent navigation pushed in the meantime.
+      store.push('p1', e('b-a'))
+      const inspected = store.peek('p1', 'back')!
+      store.push('p1', e('pushed-during-await'))
+
+      expect(store.dropTop('p1', 'back', inspected)).toBe(false)
+      expect(store.getSnapshot('p1').back.map(x => x.blockId))
+        .toEqual(['b-a', 'pushed-during-await'])
+
+      const top = store.peek('p1', 'back')!
+      expect(store.dropTop('p1', 'back', top)).toBe(true)
+      expect(store.getSnapshot('p1').back.map(x => x.blockId)).toEqual(['b-a'])
+    })
+
+    it('dropTop notifies only when something was removed', () => {
+      let n = 0
+      store.push('p1', e('b-a'))
+      store.subscribe('p1', () => { n += 1 })
+      store.dropTop('p1', 'forward') // forward stack is empty
+      expect(n).toBe(0)
+      store.dropTop('p1', 'back')
+      expect(n).toBe(1)
+    })
+
   })
 })

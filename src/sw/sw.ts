@@ -5,8 +5,8 @@
  *   - BUILD_ID (injected per build) namespaces this generation's caches:
  *     km-shell-<id> (HTML shell + icons) and km-assets-<id> (JS/CSS/fonts).
  *   - Same-origin app assets are served CACHE-FIRST with no revalidation.
- *     The Vite preserveModules build emits modules at UNHASHED, stable URLs
- *     (so plugins can import them through the import map), which means a
+ *     The build emits every module at an UNHASHED, stable URL (so plugins
+ *     can import them through the import map), which means a
  *     URL's *bytes* differ between deploys. Pinning each generation to its
  *     own cache and never overwriting an entry in place is what keeps a
  *     generation internally consistent — a page only ever sees the single
@@ -25,6 +25,14 @@
  *     there still network-grafts. Fully closing the miss path (so the fallback
  *     refuses cross-generation bytes) needs a per-generation guard and is a
  *     follow-up, not done here.
+ *   - Install takes ONLY this build's bytes. A deploy can land while install
+ *     is fetching the graph, and the unhashed URLs then serve the next build's
+ *     bytes for the rest of it. So the build stamps each precached URL with a
+ *     digest of its bytes, and install fails, discarding everything it
+ *     cached, on any mismatch; the previous generation keeps serving and the
+ *     next update check installs whatever build is live. BUILD_ID is likewise
+ *     derived from this worker's source and those digests, so two different
+ *     builds never share a generation's caches.
  *   - We deliberately do NOT call clients.claim(). A freshly installed
  *     worker self-skipWaiting()s so it becomes the ACTIVE worker (and thus
  *     controls the NEXT load — so one reload, the user's own or our update
@@ -38,12 +46,10 @@
  *     previous, tracked by an install-order ledger) so a tab still on the
  *     previous build has a consistent cache to read from. Older generations
  *     are garbage-collected.
- *   - esm.sh imports: cache-first in a single shared, un-namespaced cache —
- *     those URLs carry version + integrity, so they're immutable across
- *     generations and need not be re-fetched on every deploy. The React vendor
- *     set (the import map's integrity keys, __PRECACHE_VENDOR__) is precached at
- *     install so the app boots offline; anything else esm.sh serves is filled
- *     lazily on first use.
+ *   - esm.sh imports (an extension's URL imports): cache-first in a single
+ *     shared, un-namespaced cache — those URLs pin a version, so they're
+ *     immutable across generations and need not be re-fetched on every deploy.
+ *     Filled lazily on first use.
  *   - HTML navigations: CACHE-FIRST from this generation's own shell cache
  *     (network only on a cold miss). The shell is pinned like the assets, so a
  *     controlled load never mixes a new build's HTML with an old build's assets;
@@ -55,17 +61,27 @@
  * This file is just the BOOTSTRAP: it reads the build-injected config, builds a
  * worker from it (src/sw/worker.ts holds the actual ledger/install/activate/
  * fetch logic, parameterized by its globals so it's unit-testable outside a
- * worker), and wires it to the SW events. BUILD_ID / PRECACHE_ASSETS /
+ * worker), and wires it to the SW events. BUILD_ID / PRECACHE_SHELL / PRECACHE_ASSETS /
  * PRECACHE_REST_ASSETS are replaced by scripts/inject-sw-build-id.ts after the
  * SW build. In dev the placeholders are harmless (the SW isn't registered there).
  */
 import {createServiceWorker} from './worker'
+import {idbBootStore} from './bootStore'
+import type {PrecacheManifest} from './assets'
 
 // The worker's global scope. `sw.ts` is a module (it imports), so this ambient
 // declaration shadows lib.webworker's generic `self` with the service-worker
 // type — giving `self.registration`, `self.skipWaiting()`, and correctly-typed
 // install/activate/fetch/message events.
 declare const self: ServiceWorkerGlobalScope
+
+// Boot marks for on-device profiling (ios-device-debug skill): a page asks with
+// `BOOT_MARKS` over a MessageChannel and gets this worker's own start time,
+// when this script finished evaluating, and when the first navigation fetch
+// arrived and was answered — all ms, `timeOrigin` as epoch so the page can
+// place them on its own clock.
+const bootMarks: Record<string, number> = {timeOrigin: performance.timeOrigin, evaluatedAt: 0, firstNavReceivedAt: 0, firstNavAnsweredAt: 0}
+const mark = (name: string): void => { if (!bootMarks[name]) bootMarks[name] = performance.now() }
 
 const sw = createServiceWorker(
   {
@@ -85,16 +101,14 @@ const sw = createServiceWorker(
     // A still-used preview refreshes its ledger at most once a day so it isn't
     // reaped for lack of a redeploy (well under the 14-day stale window).
     touchIntervalMs: 24 * 60 * 60 * 1000,
-    // Build-injected: first-paint assets (entry script + modulepreload +
-    // stylesheets — the offline-boot-critical set) and the rest of the emitted
-    // graph (lazy chunks, @babel/standalone, wasm, fonts). Precaching all of it
-    // is what makes each generation's cache self-contained (no network graft)
-    // and the app offline-capable.
-    precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as string[],
-    precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as string[],
-    // Cross-origin esm.sh React URLs (import-map integrity keys) — precached into
-    // the shared vendor cache at install so React resolves on an offline first load.
-    precacheVendor: JSON.parse('__PRECACHE_VENDOR__') as string[],
+    // Build-injected URL → digest manifests: the shell, the first-paint assets
+    // (entry script + modulepreload + stylesheets — the offline-boot-critical
+    // set) and the rest of the emitted graph (lazy chunks, @babel/standalone,
+    // wasm, fonts). Precaching all of it is what makes each generation's cache
+    // self-contained (no network graft) and the app offline-capable.
+    precacheShell: JSON.parse('__PRECACHE_SHELL__') as PrecacheManifest,
+    precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as PrecacheManifest,
+    precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as PrecacheManifest,
   },
   {
     caches,
@@ -103,8 +117,16 @@ const sw = createServiceWorker(
     now: () => Date.now(),
     storage: navigator.storage,
     indexedDB,
+    mark,
+    // WebKit only: the ~600 ms it saves is WebKit's Cache Storage start-up
+    // cost, and a synthesised Response forfeits Chromium's V8 code cache,
+    // which only rides on a `cache.match()` response. Every iOS browser is
+    // WebKit; desktop Chrome and Android are not.
+    bootStore: /AppleWebKit/.test(navigator.userAgent) && !/Chrom/.test(navigator.userAgent) ? idbBootStore() : undefined,
   },
 )
+
+
 
 self.addEventListener('install', (event) => {
   event.waitUntil(sw.install())
@@ -119,11 +141,18 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting()
+  if (event.data === 'BOOT_MARKS') event.ports[0]?.postMessage(bootMarks)
 })
 
 self.addEventListener('fetch', (event) => {
   // Pass waitUntil so the preview ledger heartbeat (maybeTouchOwnLedger) is tied
   // to this event's lifetime and can't be dropped by early worker termination.
   const response = sw.handleFetch(event.request, (p) => event.waitUntil(p))
+  if (response && event.request.mode === 'navigate' && !bootMarks.firstNavReceivedAt) {
+    mark('firstNavReceivedAt')
+    void response.then(() => mark('firstNavAnsweredAt'), () => {})
+  }
   if (response) event.respondWith(response)
 })
+
+mark('evaluatedAt')

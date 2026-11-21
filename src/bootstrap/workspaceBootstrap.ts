@@ -1,6 +1,6 @@
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
-import { buildLayout, preserveHashQueryParams } from '@/utils/routing.js'
+import { buildLayout, buildLayoutFromSlots, parseLayout, preserveHashQueryParams } from '@/utils/routing.js'
 import { rememberWorkspace } from '@/utils/lastWorkspace.js'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
@@ -11,6 +11,7 @@ import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { applyCurrentLayoutUrl, createPanelRowInTx } from '@/utils/panelLayoutProjection.js'
 import { keyAtEnd } from '@/data/orderKey.js'
 import { ChangeScope } from '@/data/api'
+import { openWorkspaceData } from './openWorkspaceData.js'
 
 const replaceHash = (hash: string): void => {
   if (typeof window === 'undefined') return
@@ -113,102 +114,58 @@ export const bootstrapWorkspace = async ({
   requestedHash,
   requestedWorkspaceId,
 }: WorkspaceBootstrapArgs): Promise<Block> => {
-  // Only NOW remember it as the default. Remembering a locked/waiting workspace
-  // would make the next empty-hash visit re-select it and render only the key
-  // gate (no switcher), trapping the user away from accessible spaces.
+  await openWorkspaceData(repo, workspaceId, freshlyCreated)
   rememberWorkspace(workspaceId)
 
-  // Workspace-scoped one-shot data backfills (workspaceBackfillsFacet) — e.g.
-  // daily-notes deriving daily-note:date for pre-existing rows. Fire-and-forget:
-  // the repo defers it off this critical path and gates it to run once per
-  // workspace. Placed AFTER the access gate (in the caller) so we never write
-  // into a locked / read-only workspace; routed through repo.tx so the derived
-  // rows upload — a raw write would stay local, which is exactly how the
-  // original daily-note:date backfill silently never synced.
-  repo.scheduleWorkspaceBackfills(workspaceId)
+  const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+  const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
+  const hashForResolvedWorkspace = requestedWorkspaceId && requestedWorkspaceId !== workspaceId
+    ? buildLayout(workspaceId)
+    : requestedHash
 
-  // One-time post-upgrade recovery for the deterministic-id shadow: clients that
-  // skip-staled the server's authoritative row under the old reconcile gate
-  // consumed its change-queue entry, so a normal startup never re-evaluates it.
-  // Re-scan the workspace's staged rows once (marker-gated, deferred) so those
-  // shadows heal on disk; visible on the next reload (the live cache LWW still
-  // holds the default this session).
-  repo.scheduleReconcileRescan(workspaceId)
+  const applyResult = await applyCurrentLayoutUrl({
+    repo,
+    workspaceId,
+    layoutSessionBlock,
+    hash: hashForResolvedWorkspace,
+    replaceHash,
+  })
 
-  // The built-in data-integrity self-audit (L3) is now scheduled by the
-  // data-integrity plugin's AppEffect (cadenced, read-only, deferred to idle),
-  // which runs on workspace open and surfaces health via the diagnostics seam.
-
-  // First-run starter content (the Tutorial pages + the [[Tutorial]]
-  // discoverability bullet) is no longer seeded here: it's owned by the
-  // onboarding plugin, which contributes a `workspaceLandingFacet` resolver
-  // that seeds on `freshlyCreated` and then defers the landing target to
-  // daily-notes (see src/plugins/onboarding). That keeps first-run content
-  // out of the kernel and lets disabling the plugin remove it cleanly. The
-  // tutorial's typed demos seed against `repo.snapshotTypeRegistries()`,
-  // which is populated from `staticDataExtensions` at repo construction.
-
-  // Resolve the layout-session block the app paints — the warm-start critical
-  // path. This chain is genuinely serial: each ui-state child's deterministic id
-  // derives from its parent (user-page → ui-state → layout-sessions → session),
-  // so it can't be collapsed, and the URL→layout projection + landing decision
-  // depend on the session block. Runs concurrently with the kernel pages below.
-  const resolveLayoutSession = async (): Promise<Block> => {
-    const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-    const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
-    const hashForResolvedWorkspace = requestedWorkspaceId && requestedWorkspaceId !== workspaceId
-      ? buildLayout(workspaceId)
-      : requestedHash
-
-    const applyResult = await applyCurrentLayoutUrl({
-      repo,
-      workspaceId,
-      layoutSessionBlock,
-      hash: hashForResolvedWorkspace,
-      replaceHash,
-    })
-
-    if (applyResult.kind === 'empty') {
-      // Empty layout — ask plugins via `workspaceLandingFacet` what block
-      // to land on. The daily-notes plugin contributes the historical
-      // "open today's note (and seed a [[Tutorial]] bullet on first
-      // run)" behavior; other plugins (or none) can override. We resolve
-      // the static-extension runtime here SYNCHRONOUSLY rather than
-      // waiting for AppRuntimeProvider's full async resolution because
-      // the landing decision blocks the first paint — dynamic
-      // user-defined plugins shouldn't be able to redirect the bootstrap
-      // before we've even built a layout, and the sync runtime carries
-      // the same kernel + static plugin contributions
-      // AppRuntimeProvider's initial render uses.
-      const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
-      if (landingId) {
-        replaceHash(buildLayout(workspaceId, [landingId]))
-        await repo.tx(async tx => {
-          const parent = await tx.get(layoutSessionBlock.id)
-          if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
-          await createPanelRowInTx(repo, tx, {
-            workspaceId,
-            parentId: layoutSessionBlock.id,
-            orderKey: keyAtEnd(null),
-            blockId: landingId,
-          })
-        }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
-      }
+  if (applyResult.kind === 'empty') {
+    // Empty layout — ask plugins via `workspaceLandingFacet` what block
+    // to land on. The daily-notes plugin contributes the historical
+    // "open today's note (and seed a [[Tutorial]] bullet on first
+    // run)" behavior; other plugins (or none) can override. We resolve
+    // the static-extension runtime here SYNCHRONOUSLY rather than
+    // waiting for AppRuntimeProvider's full async resolution because
+    // the landing decision blocks the first paint — dynamic
+    // user-defined plugins shouldn't be able to redirect the bootstrap
+    // before we've even built a layout, and the sync runtime carries
+    // the same kernel + static plugin contributions
+    // AppRuntimeProvider's initial render uses.
+    const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
+    if (landingId) {
+      // Carry the inbound hash's ws-context (`;persp=` etc.) onto the
+      // landing hash: an empty layout is exactly how a fresh perspective
+      // session boots, and dropping the context here would strip the
+      // extension-side lane marker on its very first paint.
+      replaceHash(buildLayoutFromSlots(
+        workspaceId,
+        [{kind: 'leaf', blockId: landingId}],
+        parseLayout(hashForResolvedWorkspace).wsContext,
+      ))
+      await repo.tx(async tx => {
+        const parent = await tx.get(layoutSessionBlock.id)
+        if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
+        await createPanelRowInTx(repo, tx, {
+          workspaceId,
+          parentId: layoutSessionBlock.id,
+          orderKey: keyAtEnd(null),
+          blockId: landingId,
+        })
+      }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
     }
-
-    return layoutSessionBlock
   }
 
-  // Materialise the workspace's singleton system pages (Properties/Types/
-  // Recents/Journal/Locations + any other `systemPagesFacet` contribution)
-  // BEFORE resolving the layout. The landing resolver may seed content with
-  // `[[reserved alias]]` wiki-links, and those must resolve to the canonical
-  // page rather than auto-create a rival (alias.collision) — so the pages have
-  // to exist first. That's why this is serialized ahead of the layout chain
-  // rather than racing it the way these kernel pages used to (each is
-  // idempotent + deterministic-id, so on a warm start it's just a cached read).
-  await repo.ensureSystemPages(workspaceId)
-
-  const layoutSessionBlock = await resolveLayoutSession()
   return layoutSessionBlock
 }

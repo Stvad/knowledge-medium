@@ -35,11 +35,6 @@ describe('enc:v1: envelope', () => {
     expect(() => decodeEnvelope('plaintext value')).toThrow(/prefix/)
   })
 
-  it('rejects a payload too short to hold a nonce and tag', () => {
-    const tooShort = encodeEnvelope(filled(NONCE_BYTES, 0), filled(GCM_TAG_BYTES - 1, 0))
-    expect(() => decodeEnvelope(tooShort)).toThrow(/too short/)
-  })
-
   it('pins the nonce+tag floor: rejects every payload below it, accepts it exactly', () => {
     // The floor is the smallest legal payload: a nonce plus a bare GCM tag
     // (what the empty plaintext seals to). Walk every truncated length in

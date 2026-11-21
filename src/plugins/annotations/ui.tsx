@@ -1,0 +1,729 @@
+/**
+ * The comments UI on outline blocks and in thread cards (the side margin's
+ * column is `margin.tsx`):
+ *
+ * - a comment pill in the gutter, after the reference pill, on every
+ *   non-nested surface, the focal block included (nothing else shows a focal
+ *   block's comments). It also hands the block's threads to the read-mode
+ *   highlights (`readHighlights.ts`);
+ * - its inline expansion under the block, holding an edit suggestion's
+ *   composer and a card per thread, and the switch that opens the panel's
+ *   margin;
+ * - each card renders the thread root through `BlockComponent` in a nested
+ *   surface, so comments are ordinary editable blocks. The root's own line is
+ *   the card header (`ThreadRootContent`), and each comment gets Reply and
+ *   Delete (`CommentActions`). A card zoomed into a comment renders that
+ *   comment in the root's place (`ZoomableSurface`).
+ */
+
+import {useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type MouseEvent, type ReactNode} from 'react'
+import type {ReactCodeMirrorRef} from '@uiw/react-codemirror'
+import {MessageSquare, PanelRight} from 'lucide-react'
+import type {Block} from '@/data/block'
+import type {BlockData} from '@/data/api'
+import type {Repo} from '@/data/repo'
+import {useInEditMode, useUIStateBlock} from '@/data/globalState.js'
+import {exitEditModeForBlock} from '@/data/properties.js'
+import {BlockComponent} from '@/components/BlockComponent.js'
+import {DraftEditor} from '@/components/DraftEditor.js'
+import {NestedBlockContextProvider, useBlockContext} from '@/context/block.js'
+import {MarkdownInputProvider} from '@/markdown/context.js'
+import {useRepo} from '@/context/repo.js'
+import {useHandle, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
+import {
+  cachedContentDecorator,
+  enterEditModeForBlock,
+  type BlockBelowContentContribution,
+  type BlockContentDecoratorContribution,
+  type BlockContextMenuItemsContribution,
+  type BlockGutterItem,
+  type BlockGutterItemContribution,
+  type BlockResolveContext,
+} from '@/extensions/blockInteraction.js'
+import {defineVariant, type VariantContribution} from '@/facets/variantFacet.js'
+import {CONTRIBUTOR_CARD_HEADER_KEY, CONTRIBUTOR_CARD_MODE_KEY} from '@/plugins/contributors/ContributorBadges.js'
+import type {BlockRenderer} from '@/types.js'
+import {GutterPill} from '@/components/GutterPill.js'
+import {SurfaceZoomCrumbs, ZoomableSurface, type SurfaceZoom} from '@/components/ZoomableSurface.js'
+import {ReferenceLink} from '@/components/references/ReferenceLink.js'
+import {MarkdownContentRenderer} from '@/components/renderer/MarkdownContentRenderer.js'
+import {isPanelRenderScopeId} from '@/utils/renderScope.js'
+import {firstLine, truncate} from '@/utils/string.js'
+import {showError} from '@/utils/toast.js'
+import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
+import {ANCHOR_BADGES, useAnchorState} from './anchorState.ts'
+import {composerReady, readSelectionGesturesIn, reportFailure, submitComposer} from './actions.ts'
+import {highlightRanges} from './highlights.ts'
+import {AnnotationSurfaceContext, type AnnotationSurface} from './surface.ts'
+import {outlineLinkedBlocks} from './commentLinks.ts'
+import {deleteCommentFromCard} from './deleteComment.ts'
+import {moveCommentToOwnThread} from './ownThreadPicker.tsx'
+import {annotationMarginOpenProp} from './marginSchema.ts'
+import {startComment} from './newComment.ts'
+import {reanchorThread} from './reanchor.ts'
+import {isAccepted, showsAnchorState, SuggestionActions, SuggestionText} from './suggestionCard.tsx'
+import {THREAD_HIGHLIGHTS_INPUT, type ThreadHighlightsFeed} from './readHighlights.ts'
+import {ReadSelectionMenu} from './readSelectionUi.tsx'
+import {
+  THREAD_TYPE,
+  threadAnchorOf,
+  threadIsOpen,
+  threadSuggestionOf,
+  threadTargetIdOf,
+  type ThreadAnchor,
+} from './schema.ts'
+import {drawsHighlight, pillCount, THREADS_FOR_BLOCK_QUERY, type HighlightThread, type ThreadSummary} from './summaries.ts'
+import {isThreadRefusal, replyTo, setThreadStatus} from './threads.ts'
+import {
+  activateThread,
+  cardRenderScopeId,
+  closeComposer,
+  releasePendingReanchor,
+  showClosedThreads,
+  startReanchor,
+  toggleShowResolved,
+  toggleThreadsExpanded,
+  updateComposer,
+  useActiveThread,
+  useComposer,
+  useMarginShowing,
+  usePendingReanchor,
+  useShowResolved,
+  useThreadsExpanded,
+  viewKey,
+  type CardSurface,
+  type ComposerState,
+} from './uiStore.ts'
+
+/** Set to the card's render scope on a card's nested surface; read by the
+ *  root's header renderer, the per-comment actions and "Quoted in". */
+export const COMMENT_CARD_KEY = 'annotations.commentCard'
+
+/** A block of a thread's card, not of a surface nested in it. Block context is
+ *  inherited, but every nested surface (an embed, a reference, a backlink
+ *  entry under "Quoted in") sets a render scope of its own, so the card's
+ *  blocks are those still in the card's. Breadcrumbs keep their surface's
+ *  scope, so they are excluded by name. */
+export const inCard = (blockContext: Record<string, unknown> | undefined): boolean =>
+  typeof blockContext?.[COMMENT_CARD_KEY] === 'string' && blockContext[COMMENT_CARD_KEY] === blockContext.renderScopeId &&
+  blockContext.isBreadcrumb !== true
+
+const useReadOnly = (repo: Repo): boolean =>
+  useSyncExternalStore(useCallback(onChange => repo.onReadOnlyChange(onChange), [repo]), () => repo.isReadOnly)
+
+const NO_THREADS: readonly ThreadSummary[] = Object.freeze([])
+
+export const appliesToOutlineBlock = (ctx: BlockResolveContext): boolean => !ctx.blockContext?.isNestedSurface
+
+const NO_HIGHLIGHTS: readonly HighlightThread[] = Object.freeze([])
+
+export const highlightsOf = (threads: readonly ThreadSummary[] | undefined): readonly HighlightThread[] =>
+  threads?.filter(drawsHighlight).map(({id, open, anchor, suggestion}) => ({id, open, anchor, suggestion})) ?? NO_HIGHLIGHTS
+
+/** The block's highlights, only, for this render scope: the selection keeps
+ *  its identity while just a thread's comments change, and so does the feed
+ *  built from it, so a new comment doesn't re-render the content. Threads a
+ *  card already encloses are left out. */
+const useHighlightFeed = (block: Block, exclude: readonly string[] = NO_IDS): ThreadHighlightsFeed => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  const {renderScopeId} = useBlockContext()
+  const threads = useHandle(block.repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}), {selector: highlightsOf})
+  return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
+    threads: exclude.length === 0 ? threads : threads.filter(thread => !exclude.includes(thread.id)),
+  }), [block.id, renderScopeId, threads, exclude])
+}
+
+const NO_IDS: readonly string[] = Object.freeze([])
+
+export const useThreadSummaries = (block: Block): readonly ThreadSummary[] => {
+  const repo = useRepo()
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
+  return useHandle(
+    block.repo.query[THREADS_FOR_BLOCK_QUERY]({workspaceId, id: block.id}),
+    {selector: threads => threads ?? NO_THREADS},
+  )
+}
+
+// ──── Pill ────
+
+export type PillClick =
+  | {kind: 'expand-inline'}
+  | {kind: 'activate'; threadId: string; revealClosed: boolean}
+
+/** What a click on the pill does. With the margin drawn it pins the block's
+ *  first open thread's card, or, for a block whose threads are all resolved,
+ *  the first one's, revealing closed threads so the card is there to pin. */
+export const pillClick = (threads: readonly ThreadSummary[], inMargin: boolean): PillClick => {
+  const first = threads.find(thread => thread.open) ?? threads[0]
+  return inMargin && first
+    ? {kind: 'activate', threadId: first.id, revealClosed: !first.open}
+    : {kind: 'expand-inline'}
+}
+
+/** Whether the panel's margin shows this row's threads: it is drawn, and the
+ *  row is in the panel's own outline, the rows the margin lays out, not in an
+ *  embed or a backlink inside the panel. */
+const useInMargin = ({panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}): boolean =>
+  useMarginShowing(panelId) && isPanelRenderScopeId(renderScopeId ?? '')
+
+/** The surface an outline block's text sits in: its read-mode selection menu
+ *  and the highlights of the threads anchored in it. */
+const CommentSurface = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const highlights = useHighlightFeed(block)
+  const surface = useAnnotationSurfaceFor(block, highlights)
+  return (
+    <ReadSelectionMenu block={block}>
+      <div>
+        <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+          <AnnotationSurfaceContext value={surface}>
+            <Inner block={block}/>
+          </AnnotationSurfaceContext>
+        </MarkdownInputProvider>
+      </div>
+    </ReadSelectionMenu>
+  )
+}
+
+const CommentPill: BlockRenderer = ({block}) => {
+  const threads = useThreadSummaries(block)
+  const blockContext = useBlockContext()
+  const key = viewKey(blockContext.renderScopeId, block.id)
+  const panelId = blockContext.panelId
+  // With the margin drawn, the threads are already beside the block: the pill
+  // pins its first card instead of expanding them a second time inline.
+  const inMargin = useInMargin(blockContext)
+  const activeThread = useActiveThread(panelId ?? '')
+  const inlineExpanded = useThreadsExpanded(key)
+  const expanded = inMargin ? threads.some(thread => thread.id === activeThread) : inlineExpanded
+  const onPill = () => {
+    const click = pillClick(threads, inMargin)
+    if (click.kind === 'expand-inline') {
+      toggleThreadsExpanded(key)
+      return
+    }
+    if (click.revealClosed) showClosedThreads(panelId!)
+    activateThread(panelId!, click.threadId)
+  }
+  const count = pillCount(threads)
+  if (count === null && !expanded) return null
+  const label = count ? `${count} open comment thread${count === 1 ? '' : 's'}` : 'Comments'
+  return (
+    <GutterPill
+      count={count}
+      expanded={expanded}
+      onClick={event => { event.stopPropagation(); onPill() }}
+      label={label}
+      icon={MessageSquare}
+      tone="amber"
+    />
+  )
+}
+
+/** The read-mode gestures and highlights, for a renderer that draws the text
+ *  itself (`surface.ts`). Same feed as the markdown's, so the two agree. */
+const useAnnotationSurfaceFor = (block: Block, feed: ThreadHighlightsFeed): AnnotationSurface => {
+  const {renderScopeId} = feed
+  return useMemo(() => ({
+    blockId: block.id,
+    renderScopeId,
+    highlightsIn: content => highlightRanges(content, feed.threads),
+    gestures: readSelectionGesturesIn(renderScopeId).map(gesture => ({
+      id: gesture.actionId,
+      label: gesture.label,
+      icon: gesture.icon,
+      run: range => gesture.step({block, renderScopeId, range}).catch(error => {
+        reportFailure(error)
+        return false
+      }),
+    })),
+  }), [block, renderScopeId, feed.threads])
+}
+
+const decorateSurface = cachedContentDecorator(CommentSurface, 'WithCommentSurface')
+
+export const commentSurfaceContribution: BlockContentDecoratorContribution = ctx =>
+  appliesToOutlineBlock(ctx) ? decorateSurface : null
+
+const commentPillItem: BlockGutterItem = {corner: 'top-right', component: CommentPill}
+
+export const commentPillContribution: BlockGutterItemContribution = ctx =>
+  appliesToOutlineBlock(ctx) ? commentPillItem : null
+
+// ──── Inline expansion ────
+
+/** The quote as rendered markdown, so a reference in it is a link. Rendered
+ *  as a reference renders (`quotedRange.tsx`): inline, and never as a focal
+ *  title. `source` is a block the quote's references resolve against: the
+ *  thread root, or the target before a root exists. The line holding it
+ *  clamps its length, since a clamp makes its own element a block. */
+const QuoteText = ({anchor, source}: {anchor: ThreadAnchor; source: Block}) =>
+  anchor.kind === 'block'
+    ? <span className="italic">whole block</span>
+    : (
+      <span className="break-words">
+        “<NestedBlockContextProvider overrides={QUOTE_CONTEXT}>
+          <MarkdownContentRenderer block={source} contentTransform={() => anchor.quote}/>
+        </NestedBlockContextProvider>”
+      </span>
+    )
+
+const QUOTE_CONTEXT = {isNestedSurface: true, isReference: true}
+
+const COMPOSER_FIELD = 'min-h-[3.25em] rounded border bg-background px-2 py-1 text-sm focus-within:ring-2 focus-within:ring-ring'
+
+/** An edit suggestion's composer: the replacement, prefilled with the quote,
+ *  and an optional comment. Each field is a `DraftEditor`: the draft lives in
+ *  the UI store and is written only on submit. */
+const Composer = ({block, composerKey, composer}: {block: Block; composerKey: string; composer: ComposerState}) => {
+  const input = useRef<ReactCodeMirrorRef>(null)
+  // A frame late, on open and on re-aim: a menu that opened the composer
+  // returns focus to its trigger as it closes. At the end of the text, where
+  // a prefilled replacement is usually extended.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const view = input.current?.view
+      view?.dispatch({selection: {anchor: view.state.doc.length}})
+      view?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [composer.anchor])
+  const submit = async () => {
+    try {
+      await submitComposer(block.repo, composerKey)
+    } catch (error) {
+      reportFailure(error)
+    }
+  }
+  const fieldProps = {
+    readOnly: composer.submitting,
+    onSubmit: () => void submit(),
+    onCancel: () => closeComposer(composerKey),
+    className: COMPOSER_FIELD,
+  }
+  return (
+    <div className="min-w-0 space-y-1 rounded border bg-background p-2" data-testid="comment-composer">
+      <div className="line-clamp-3 text-xs text-muted-foreground">
+        Suggest a change to <QuoteText anchor={{kind: 'range', ...composer.anchor}} source={block}/>
+      </div>
+      <DraftEditor
+        {...fieldProps}
+        ref={input}
+        label="Replacement"
+        value={composer.replacement}
+        onChange={replacement => updateComposer(composerKey, {replacement, error: null})}
+      />
+      <DraftEditor
+        {...fieldProps}
+        label="Comment (optional)"
+        placeholder="Why (optional)"
+        value={composer.draft}
+        onChange={draft => updateComposer(composerKey, {draft, error: null})}
+      />
+      {composer.error && <p role="alert" className="text-xs text-destructive">{composer.error}</p>}
+      <div className="flex gap-2 text-xs">
+        <button
+          type="button"
+          disabled={composer.submitting || !composerReady(composer)}
+          onClick={() => void submit()}
+          className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50"
+        >
+          Suggest
+        </button>
+        <button type="button" onClick={() => closeComposer(composerKey)} className="px-1 text-muted-foreground hover:text-foreground">
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** The thread ids of the cards enclosing this one, outermost first: a thread
+ *  anchored to a comment renders inside that comment's card, and a thread
+ *  anchored (by hand or by an agent) to a comment of itself must not render
+ *  itself forever. */
+const CARD_CHAIN_KEY = 'annotations.cardChain'
+
+const cardChainOf = (blockContext: Record<string, unknown>): readonly string[] =>
+  Array.isArray(blockContext[CARD_CHAIN_KEY]) ? blockContext[CARD_CHAIN_KEY] as string[] : NO_IDS
+
+/** One thread, its root rendered through `BlockComponent` in a nested surface.
+ *  `surface` keeps an inline card and a margin card of the same thread in
+ *  distinct render scopes. */
+export const ThreadCard = ({thread, surface = 'comments'}: {thread: ThreadSummary; surface?: CardSurface}) => {
+  const parent = useBlockContext()
+  const renderScopeId = cardRenderScopeId(surface, parent.renderScopeId ?? '', thread.id)
+  return (
+    <ZoomableSurface renderScopeId={renderScopeId} rootId={thread.id}>
+      {zoom => <ThreadCardBody thread={thread} renderScopeId={renderScopeId} zoom={zoom}/>}
+    </ZoomableSurface>
+  )
+}
+
+const rootCrumbLabel = (anchor: ThreadAnchor): string =>
+  anchor.kind === 'block' ? 'Thread' : `“${truncate(firstLine(anchor.quote), 32)}”`
+
+/** A zoomed card shows a comment in the root's place, so the thread's header
+ *  and the comments outside the zoom are hidden until it is zoomed out. */
+const ThreadCardBody = ({thread, renderScopeId, zoom}: {thread: ThreadSummary; renderScopeId: string; zoom: SurfaceZoom | null}) => {
+  const parent = useBlockContext()
+  const shownId = zoom?.blockId ?? thread.id
+  // Stable across the card's own re-renders (a zoom), which would otherwise
+  // hand every block in it a new context.
+  const outerChain = cardChainOf(parent)
+  const chain = useMemo(() => [...outerChain, thread.id], [outerChain, thread.id])
+  return (
+    <div className="rounded border bg-background px-1 py-0.5" data-testid="comment-thread">
+      {zoom && (
+        <SurfaceZoomCrumbs
+          renderScopeId={renderScopeId}
+          zoom={zoom}
+          rootLabel={rootCrumbLabel(thread.anchor)}
+          label="Zoomed in comment thread"
+        />
+      )}
+      <NestedBlockContextProvider overrides={{
+        isNestedSurface: true,
+        layoutBoundary: false,
+        renderScopeId,
+        scopeRootId: shownId,
+        [COMMENT_CARD_KEY]: renderScopeId,
+        [CONTRIBUTOR_CARD_MODE_KEY]: shownId,
+        [CONTRIBUTOR_CARD_HEADER_KEY]: thread.id,
+        [CARD_CHAIN_KEY]: chain,
+      }}>
+        <BlockComponent blockId={shownId}/>
+      </NestedBlockContextProvider>
+    </div>
+  )
+}
+
+const ThreadsSection = ({block}: {block: Block}) => {
+  const threads = useThreadSummaries(block)
+  const blockContext = useBlockContext()
+  const key = viewKey(blockContext.renderScopeId, block.id)
+  const composer = useComposer(key)
+  const showResolved = useShowResolved(key)
+  const inMargin = useInMargin(blockContext)
+  // The margin shows the threads; only a composer opened here stays inline.
+  if (inMargin) {
+    return composer
+      ? <section aria-label="Comments" className="my-1 ml-6 min-w-0"><Composer block={block} composerKey={key} composer={composer}/></section>
+      : null
+  }
+  const open = threads.filter(thread => thread.open)
+  const closed = threads.filter(thread => !thread.open)
+  return (
+    <section aria-label="Comments" className="my-1 ml-6 min-w-0 space-y-1.5 rounded-md border border-dashed p-1.5">
+      {composer && <Composer block={block} composerKey={key} composer={composer}/>}
+      {open.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
+      {!composer && open.length === 0 && closed.length === 0 && (
+        <p className="px-1 text-xs text-muted-foreground">No comments.</p>
+      )}
+      <div className="flex items-center gap-3 px-1">
+        {closed.length > 0 && (
+          <button type="button" onClick={() => toggleShowResolved(key)} className="text-xs text-muted-foreground hover:text-foreground">
+            {showResolved ? 'Hide' : 'Show'} {closed.length} closed
+          </button>
+        )}
+        {blockContext.panelId && isPanelRenderScopeId(blockContext.renderScopeId ?? '') && (
+          <MarginSwitch panelId={blockContext.panelId}/>
+        )}
+      </div>
+      {showResolved && closed.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
+    </section>
+  )
+}
+
+/** Opens the panel's margin. Absent once it is open: an open margin that
+ *  isn't drawn is waiting for a pane wide enough. Not offered below md, where
+ *  no pane is wide enough. */
+const MarginSwitch = ({panelId}: {panelId: string}) => {
+  const panel = useRepo().block(panelId)
+  const [open] = usePropertyValue(panel, annotationMarginOpenProp)
+  if (open) return null
+  return (
+    <button
+      type="button"
+      onClick={() => void panel.set(annotationMarginOpenProp, true)}
+      className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground max-md:hidden"
+    >
+      <PanelRight className="h-3 w-3" aria-hidden/>
+      Show in margin
+    </button>
+  )
+}
+
+export const commentsBelowContentContribution: BlockBelowContentContribution = ctx => {
+  if (!appliesToOutlineBlock(ctx)) return null
+  const Section: BlockRenderer = ({block}) =>
+    useThreadsExpanded(viewKey(useBlockContext().renderScopeId, block.id)) ? <ThreadsSection block={block}/> : null
+  Section.displayName = 'InlineCommentThreads'
+  return Section
+}
+
+// ──── The thread root's line ────
+
+const useFocusNewComment = () => {
+  const uiStateBlock = useUIStateBlock()
+  const {renderScopeId} = useBlockContext()
+  return (id: string) => enterEditModeForBlock(uiStateBlock.repo.block(id), uiStateBlock, renderScopeId, {start: 0})
+}
+
+const ActionButton = ({onClick, children, bordered = false}: {onClick: () => void; children: ReactNode; bordered?: boolean}) => (
+  <button
+    type="button"
+    onClick={event => { event.stopPropagation(); onClick() }}
+    className={bordered
+      ? 'rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-muted'
+      : 'text-xs text-muted-foreground hover:text-foreground hover:underline'}
+  >
+    {children}
+  </button>
+)
+
+const TargetLink = ({targetId}: {targetId: string}) => {
+  const repo = useRepo()
+  const target = repo.block(targetId)
+  const excerpt = useHandle(target, {selector: data => truncate(firstLine(data?.content ?? ''), 80)})
+  return <ReferenceLink block={target}>{excerpt || 'a block'}</ReferenceLink>
+}
+
+const ThreadRootContent: BlockRenderer = ({block}) => {
+  const root = useHandle(block, {selector: data => data && {
+    id: data.id, workspaceId: data.workspaceId, content: data.content, properties: data.properties,
+  }})
+  const blockContext = useBlockContext()
+  const focusNewComment = useFocusNewComment()
+  const uiStateBlock = useUIStateBlock()
+  // The root renders no editor, so edit mode on it (a click on the quote, an
+  // arrow up from the first comment) would leave the keyboard with nowhere to
+  // go. Drop to plain focus instead.
+  const editing = useInEditMode(block.id)
+  useEffect(() => {
+    if (editing) void exitEditModeForBlock(uiStateBlock, block.id, blockContext.renderScopeId)
+  }, [editing, uiStateBlock, block.id, blockContext.renderScopeId])
+  if (!root) return null
+  return inCard(blockContext)
+    ? <ThreadHeader block={block} root={root} onReply={async () => focusNewComment(await replyTo(block.repo, block.id))}/>
+    : <ThreadElsewhere block={block} root={root}/>
+}
+
+type RootFields = Pick<BlockData, 'id' | 'workspaceId' | 'content' | 'properties'>
+
+const reportRefusal = (error: unknown): void => {
+  if (isThreadRefusal(error)) showError(error.message)
+  else reportFailure(error)
+}
+
+/** Re-anchoring a moved or stale quote: confirm it where it now sits, select
+ *  new text for it (the next comment-on-selection in its block re-anchors
+ *  it), or anchor it to the whole block, which a suggestion can't be: it
+ *  would have nothing to replace. */
+export const ReanchorControls = ({root, targetContent}: {
+  root: RootFields
+  targetContent: string
+}) => {
+  const repo = useRepo()
+  const pending = usePendingReanchor()
+  const anchor = threadAnchorOf(root) as {kind: 'range'} & RangeAnchor
+  const targetId = threadTargetIdOf(root)
+  const resolved = resolveAnchor(targetContent, anchor)
+  const preview = resolved?.state === 'moved' ? {
+    before: targetContent.slice(Math.max(0, resolved.from - 32), resolved.from),
+    quote: targetContent.slice(resolved.from, resolved.to),
+    after: targetContent.slice(resolved.to, Math.min(targetContent.length, resolved.to + 32)),
+    hasBefore: resolved.from > 32,
+    hasAfter: resolved.to + 32 < targetContent.length,
+  } : null
+  useEffect(() => () => releasePendingReanchor(root.id), [root.id])
+  if (pending?.threadId === root.id) {
+    return (
+      <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground" role="status">
+        <span>Select the new text in the block, then choose Comment in its context menu.</span>
+        <ActionButton bordered onClick={() => startReanchor(null)}>Cancel</ActionButton>
+      </div>
+    )
+  }
+  const confirm = () => {
+    const next = resolved.state === 'moved' ? recaptureAnchor(targetContent, resolved.from, anchor.quote) : null
+    if (!next) {
+      showError('This quote can\u2019t be confirmed where it is now. Select it again.')
+      return
+    }
+    reanchorThread(repo, root.id, next).catch(reportRefusal)
+  }
+  return (
+    <div className="space-y-1.5">
+      {preview && <div className="text-xs text-muted-foreground">
+        <p>Suggested position (review before confirming):</p>
+        <p className="whitespace-pre-wrap break-words rounded bg-muted/50 px-1.5 py-1" aria-label={`Candidate quote: ${preview.before}${preview.quote}${preview.after}`}>
+          {preview.hasBefore && '…'}{preview.before}<mark className="rounded bg-amber-300/50 text-foreground">{preview.quote}</mark>{preview.after}{preview.hasAfter && '…'}
+        </p>
+      </div>}
+      <div className="flex flex-wrap gap-x-2">
+      {resolved.state === 'moved' && <ActionButton bordered onClick={confirm}>Confirm position</ActionButton>}
+      {targetId && <ActionButton bordered onClick={() => startReanchor({threadId: root.id, targetId})}>Reselect</ActionButton>}
+      {!threadSuggestionOf(root) && (
+        <ActionButton bordered onClick={() => reanchorThread(repo, root.id, null).catch(reportRefusal)}>Whole block</ActionButton>
+      )}
+      </div>
+    </div>
+  )
+}
+
+/** What a thread's line shows: a suggestion's change, or the quote. */
+const ThreadQuote = ({block, root}: {block: Block; root: RootFields}) => {
+  const suggestion = threadSuggestionOf(root)
+  return suggestion ? <SuggestionText root={root} suggestion={suggestion}/> : <QuoteText anchor={threadAnchorOf(root)} source={block}/>
+}
+
+const ThreadHeader = ({block, root, onReply}: {block: Block; root: RootFields; onReply: () => Promise<void>}) => {
+  const repo = useRepo()
+  const readOnly = useReadOnly(repo)
+  const {state, targetContent} = useAnchorState(root)
+  const open = threadIsOpen(root)
+  const awaitingDecision = open && threadSuggestionOf(root) !== null
+  const anchorShown = showsAnchorState(root)
+  return (
+    <div className="space-y-0.5">
+    <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+      <span className={`${awaitingDecision ? 'basis-full' : 'line-clamp-3 flex-1 basis-32'} min-w-0 text-muted-foreground`}><ThreadQuote block={block} root={root}/></span>
+      {anchorShown && state !== 'exact' && (
+        <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{ANCHOR_BADGES[state]}</span>
+      )}
+      {!readOnly && <>
+        {awaitingDecision && <SuggestionActions
+          threadId={root.id}
+          recovery={targetContent === null ? undefined : <ReanchorControls
+            root={root}
+            targetContent={targetContent}
+          />}
+        />}
+        <ActionButton onClick={() => onReply().catch(reportFailure)}>Reply</ActionButton>
+        {!awaitingDecision && !isAccepted(root) && (
+          <ActionButton onClick={() => setThreadStatus(repo, root.id, open ? 'resolved' : 'open').catch(reportFailure)}>
+            {open ? 'Resolve' : 'Reopen'}
+          </ActionButton>
+        )}
+      </>}
+    </div>
+    {anchorShown && !awaitingDecision && !readOnly && targetContent !== null && (state === 'moved' || state === 'stale') && (
+      <ReanchorControls root={root} targetContent={targetContent}/>
+    )}
+    </div>
+  )
+}
+
+/** On the container page, in search results and anywhere else a root shows
+ *  outside a card: which block it is on, and what it quotes. */
+const ThreadElsewhere = ({block, root}: {block: Block; root: RootFields}) => {
+  const targetId = threadTargetIdOf(root)
+  const {state} = useAnchorState(root)
+  return (
+    <div className="line-clamp-3 text-sm text-muted-foreground">
+      <span>on </span>
+      {targetId ? <TargetLink targetId={targetId}/> : <span>a missing block</span>}
+      <span> · </span>
+      <ThreadQuote block={block} root={root}/>
+      {showsAnchorState(root) && state !== 'exact' && <span className="ml-1 rounded bg-muted px-1 text-xs">{ANCHOR_BADGES[state]}</span>}
+    </div>
+  )
+}
+
+/** The root's content is display-only: editing it would move the anchor. */
+export const threadRootContentContribution: VariantContribution<BlockResolveContext, BlockRenderer> = ctx =>
+  ctx.types.includes(THREAD_TYPE) ? defineVariant('annotations.thread-root', 'Comment thread', ThreadRootContent) : null
+
+// ──── Per-comment actions ────
+
+/** The threads a comment's card shows under it: the open ones, less any card
+ *  already open around it. */
+export const threadsUnderComment = (
+  threads: readonly ThreadSummary[],
+  chain: readonly string[],
+): readonly ThreadSummary[] => threads.filter(thread => thread.open && !chain.includes(thread.id))
+
+/** Threads anchored to a comment (a quote-reply, a note on a phrase) render
+ *  inside that comment's card, highlighted in its text with their cards under
+ *  it; they never get a margin card of their own. */
+const CommentActions = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const focusNewComment = useFocusNewComment()
+  const readOnly = useReadOnly(block.repo)
+  const blockContext = useBlockContext()
+  const chain = cardChainOf(blockContext)
+  const all = useThreadSummaries(block)
+  const threads = useMemo(() => threadsUnderComment(all, chain), [all, chain])
+  const highlights = useHighlightFeed(block, chain)
+  const outlineLinked = useOutlineLinked(block)
+  return (
+    <div className="w-full" {...outlineLinked}>
+      <MarkdownInputProvider name={THREAD_HIGHLIGHTS_INPUT} value={highlights}>
+        <Inner block={block}/>
+      </MarkdownInputProvider>
+      {!readOnly && (
+        <div className="flex gap-2 pb-0.5">
+          <ActionButton onClick={() => replyTo(block.repo, block.id).then(focusNewComment).catch(reportFailure)}>Reply</ActionButton>
+          <ActionButton onClick={() => deleteCommentFromCard(block).catch(reportFailure)}>Delete</ActionButton>
+          <ActionButton onClick={() => moveCommentToOwnThread(block, blockContext.panelId).catch(reportFailure)}>
+            Own thread
+          </ActionButton>
+        </div>
+      )}
+      {threads.length > 0 && (
+        <div className="mb-1 space-y-1 border-l-2 border-yellow-500/50 pl-1.5" aria-label="Comments on this comment">
+          {threads.map(thread => <ThreadCard key={thread.id} thread={thread}/>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Pointer handlers outlining the page's blocks the comment links while the
+ *  pointer is over it. */
+const useOutlineLinked = (block: Block) => {
+  const undo = useRef<(() => void) | null>(null)
+  const clear = useCallback(() => {
+    undo.current?.()
+    undo.current = null
+  }, [])
+  useEffect(() => clear, [clear])
+  return {
+    onMouseEnter: (event: MouseEvent<HTMLElement>) => {
+      clear()
+      const panelEl = event.currentTarget.closest<HTMLElement>('[data-panel-id]')
+      const comment = block.peek()
+      if (panelEl && comment) undo.current = outlineLinkedBlocks(block.repo, panelEl, comment)
+    },
+    onMouseLeave: clear,
+  }
+}
+
+const decorateComment = cachedContentDecorator(CommentActions, 'WithCommentActions')
+
+/** A property row, or a value row under one, belongs to its owner, not the
+ *  thread: it is not a comment to reply to, delete or move. */
+const isPropertyRow = (ctx: BlockResolveContext): boolean => {
+  const data = ctx.block.peek()
+  return data?.isFieldForm === true || (!!data?.parentId && ctx.repo.block(data.parentId).peek()?.isFieldForm === true)
+}
+
+export const commentActionsContribution: BlockContentDecoratorContribution = ctx =>
+  inCard(ctx.blockContext) && !ctx.types.includes(THREAD_TYPE) && !isPropertyRow(ctx) ? decorateComment : null
+
+// ──── Bullet menu ────
+
+/** Only where a thread's card can render: the inline threads live on outline
+ *  blocks, not on nested surfaces. */
+export const commentContextMenuItem: BlockContextMenuItemsContribution = ctx =>
+  appliesToOutlineBlock(ctx)
+    ? {
+      id: 'annotations.comment', label: 'Comment', icon: MessageSquare,
+      onSelect: () => {
+        startComment(ctx.repo, {targetId: ctx.block.id, anchor: null, renderScopeId: ctx.blockContext?.renderScopeId})
+          .catch(reportFailure)
+      },
+    }
+    : null

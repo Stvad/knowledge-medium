@@ -1,22 +1,21 @@
-/**
- * Renders the flat `get-subtree` result as a depth-indented outline for
- * the `kmagent subtree` CLI default.
+/*
+ * Renders the flat `get-subtree` result as a depth-indented outline.
+ * agent-dispatch renders its prompt subtree with it, through the package's
+ * `./subtreeOutline` export; the CLI and MCP `subtree` show the bounded
+ * outline view instead.
  *
- * Lives in its own module (not inline in `cli.ts`) so it's unit-testable
- * — importing `cli.ts` would run the CLI entrypoint. The invariant it
- * pins is the reason this code exists: the subtree array arrives already
- * in pre-order with siblings in `(order_key, id)` order (the runtime's
- * `SUBTREE_SQL` sorts by path), so it is rendered top-to-bottom verbatim
- * and MUST NOT be re-sorted. A consumer that re-sorted siblings with
- * `localeCompare` once silently inverted an outline's meaning.
+ * INVARIANT: the subtree array arrives already in pre-order with siblings
+ * in `(order_key, id)` order (the runtime's `SUBTREE_SQL` sorts by path),
+ * so it is rendered top-to-bottom verbatim and MUST NOT be re-sorted —
+ * re-sorting siblings silently inverts an outline's meaning.
  */
 
-/** One node of the flat `get-subtree` result we read for the outline.
- *  The wire payload carries the full `SubtreeRow`; the outline only needs
- *  these. `depth` is the authoritative root-relative depth the runtime
- *  computed (0 at the root); `parentId` is only a fallback for deriving
- *  depth if `depth` is ever absent. `properties` is rendered only when the
- *  caller opts in (`includeProperties`). */
+import { neutralizeDisplayText } from './protocol.js'
+
+/** The subset of the flat `get-subtree` row this outline reads (the wire
+ *  payload carries the full `SubtreeRow`). `depth` is the authoritative
+ *  root-relative depth the runtime computed (0 at the root); `parentId` is
+ *  only a fallback for deriving depth when `depth` is absent. */
 export interface SubtreeOutlineRow {
   id: string
   parentId: string | null
@@ -27,8 +26,8 @@ export interface SubtreeOutlineRow {
 
 export interface RenderSubtreeOptions {
   /** Append each block's properties as compact JSON after its content.
-   *  Off by default so existing callers (and the human `subtree` CLI)
-   *  keep the lean id+content outline. */
+   *  Off by default so the human `subtree` CLI keeps the lean id+content
+   *  outline. */
   includeProperties?: boolean
 }
 
@@ -40,49 +39,126 @@ const isSubtreeOutlineRow = (value: unknown): value is SubtreeOutlineRow =>
 const isDepth = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0
 
-/** SUBTREE_SQL caps recursion at depth < 100, so real rows never exceed
- *  that. Clamp the indent anyway: `renderSubtreeOutline` is exported and
- *  pure, and an out-of-range `depth` on a direct call must not blow up
+/** SUBTREE_SQL caps recursion at this depth, so real rows never exceed it.
+ *  Clamped anyway as defence in depth: `renderSubtreeOutline` is exported
+ *  and pure, and an out-of-range `depth` on a direct call must not blow up
  *  `String.prototype.repeat` (OOM, or RangeError past 2**53). */
 const MAX_OUTLINE_DEPTH = 100
 
-/** Collapse every character a terminal, a `splitlines`-style parser, or an
- *  LLM reading the outline may treat as a vertical break — LF, CR, VT, FF,
- *  the C0 information separators FS/GS/RS/US (U+001C–U+001F), plus
- *  NEL/LS/PS — to a single `⏎` marker, so a value can't spill onto a second
- *  visual line and forge an id-less `- [id]`-shaped bullet. Applied to BOTH
- *  content and the rendered properties. The two paths need the FULL set for
- *  different reasons: properties go through `JSON.stringify`, which escapes
- *  every char < U+0020 (FS/GS/RS/US already inert there) but NOT
- *  U+0085/U+2028/U+2029 (all ≥ U+0080); content is NOT stringified, so the
- *  C0 separators reach the outline literally and must be collapsed here.
- *  Covering everything on both keeps the one-line-per-block invariant on
- *  either path. */
-const collapseVerticalMotion = (text: string): string =>
-  // Matching the C0 separators (U+001C-U+001F) is the whole point:
-  // neutralize control chars that could forge a line break, rather than
-  // treat them as innocent text.
-  // eslint-disable-next-line no-control-regex -- intentional control-char match
-  text.replace(/[\r\n\v\f\u001c-\u001f\u0085\u2028\u2029]+/g, ' ⏎ ')
+/** Content and the rendered properties are prose, so they go through the
+ *  shared lossy {@link neutralizeDisplayText}: one block renders as exactly
+ *  one line with no reordering. `id` must round-trip instead and does NOT go
+ *  through it — see `encodeOutlineId`. */
+const neutralizeOutlineField = neutralizeDisplayText
+
+/**
+ * `id`'s hostile-character boundary — a CATEGORY, not an enumerated list,
+ * so it cannot be defeated by naming a rendering-relevant character nobody
+ * thought of. Percent-encode every `\p{C}` codepoint (Cc control, Cf
+ * format, Cs surrogate, Co private-use, Cn unassigned), plus three things
+ * outside that category:
+ *  - `%`, so the encoding stays injective (see `encodeOutlineId`).
+ *  - `]`, so the surrounding `- [<id>] <content>` grammar stays unambiguous.
+ *  - U+2028/U+2029, which are Zl/Zp — General_Category "Other" and
+ *    "Separator" are siblings, so `\p{C}` does NOT cover these and dropping
+ *    them from this list would silently regress line-separator handling for
+ *    `id` specifically.
+ *
+ * TAB is deliberately NOT exempted here the way it is for prose: `id` is
+ * percent-encoded losslessly whatever the character, so keeping the
+ * category boundary total (no exceptions) costs nothing.
+ */
+const ID_ENCODE_REGEX = /\p{C}|[\u2028\u2029%\]]/gu
+
+/**
+ * Percent-encode the hostile characters in a block `id` — REVERSIBLY,
+ * unlike `neutralizeOutlineField`'s lossy collapse. An id is not prose: it
+ * is the token a CLI user or an MCP-connected agent copies back out of the
+ * outline to address the SAME block. So this transform must be the exact
+ * inverse of `decodeOutlineId`, and INJECTIVE — two distinct ids may never
+ * render as one token. Injectivity is why `%` itself is encoded: without
+ * that, an id containing the literal three characters `%0A` and an id
+ * containing an actual LF byte would both render as `%0A`.
+ *
+ * THE PARSING RULE THIS MODULE COMMITS TO: the id token is everything
+ * between the leading `- [` and the FIRST `]` that follows — a first-match
+ * scan, NOT bracket-matching. Encoding every `]` is what makes that rule
+ * well-defined, since the first raw `]` on the line is then guaranteed to
+ * be the structural delimiter. `[` is deliberately left raw: under a
+ * first-`]` scan it is inert and cannot shift where the token ends. Any
+ * consumer parsing the outline back into ids MUST follow this rule (pinned
+ * by the whole-grammar properties in subtreeOutline.fuzz.test.ts).
+ *
+ * `encodeURIComponent` is used rather than a bespoke hex scheme so the
+ * encoding is the one any consumer already knows how to reverse. It throws
+ * on a LONE (unpaired) surrogate — `\p{C}` matches one, and UTF-8 has no
+ * byte sequence for it — and trading a display-forgery bug for a crash
+ * would be worse, hence the `%uXXXX` code-unit fallback. Mixing the two
+ * escapes stays unambiguous: every `%` the standard encoder emits is
+ * followed by exactly two uppercase hex digits, never `u`, and every other
+ * `%` in the output is one we escaped from a literal `%` (always `%25`).
+ */
+const encodeOutlineId = (id: string): string =>
+  id.replace(ID_ENCODE_REGEX, char => {
+    try {
+      return encodeURIComponent(char)
+    } catch {
+      return `%u${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`
+    }
+  })
+
+/** Exact inverse of {@link encodeOutlineId}. Takes the id TOKEN itself —
+ *  everything between the leading `- [` and the first `]` that follows, per
+ *  the parsing rule on {@link encodeOutlineId} — not a raw outline line.
+ *
+ *  Not a bare `decodeURIComponent` call: that understands only 2-hex-digit
+ *  `%XX` escapes and throws on the `%uXXXX` lone-surrogate fallback, so
+ *  those tokens are split out and rebuilt as raw code units first —
+ *  unambiguously, for the reason {@link encodeOutlineId} gives.
+ *
+ *  Exported as the documented inverse for anyone parsing the text outline
+ *  back into ids; it has no in-tree caller, because nothing at the CLI/MCP
+ *  command boundaries decodes ids (see {@link renderSubtreeOutline}). */
+export const decodeOutlineId = (encoded: string): string => {
+  const LONE_SURROGATE_ESCAPE = /%u([0-9A-Fa-f]{4})/g
+  let result = ''
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = LONE_SURROGATE_ESCAPE.exec(encoded)) !== null) {
+    result += decodeURIComponent(encoded.slice(cursor, match.index))
+    result += String.fromCharCode(parseInt(match[1], 16))
+    cursor = LONE_SURROGATE_ESCAPE.lastIndex
+  }
+  return result + decodeURIComponent(encoded.slice(cursor))
+}
 
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
  *
- * Depth comes from the authoritative `depth` field the payload carries
- * (SUBTREE_SQL-computed, root-relative). For robustness against any
- * producer that omits it, we fall back to a single pre-order pass over
- * `parentId` (a parent always precedes its children in pre-order, so its
- * depth is already known). We never re-sort.
+ * Depth comes from the payload's authoritative `depth`; when a producer
+ * omits it we fall back to one pre-order pass over `parentId` (a parent
+ * always precedes its children in pre-order, so its depth is already
+ * known).
  *
  * Each block is rendered as exactly ONE line:
- *   `<indent>- [<id>] <content>`            (default)
+ *   `<indent>- [<id>] <content>`             (default)
  *   `<indent>- [<id>] <content> <propsJSON>` (with `includeProperties`)
- * — the id comes first (right after the bullet) so arbitrary content can
+ * The id comes first, right after the bullet, so arbitrary content can
  * never push it off the line or forge a second id-shaped token where the
- * real id is expected; content (for reading) follows. Every vertical-break
- * character in content AND in the rendered properties is collapsed to a
- * `⏎` marker (see collapseVerticalMotion) so a block can't spill into
- * id-less lines that masquerade as child bullets: line count == block count.
+ * real id is expected. EVERY field is neutralized before interpolation,
+ * which is what gives the rendering invariant: line count == block count
+ * AND display order == byte order.
+ *
+ * ADDRESSABILITY: this outline is a DISPLAY surface, not an addressable
+ * one. Nothing at the CLI/MCP command boundaries decodes an `[id]` token
+ * copied out of it, so an id that needed encoding cannot be pasted into
+ * `get-block`/`update-block`/`delete-block` or their MCP equivalents.
+ * Blanket-decoding at those boundaries was considered and rejected: a
+ * legitimate id containing a literal `%` is indistinguishable from an
+ * encoded token, so decoding unconditionally would CORRUPT real ids. The
+ * bounded outline view's `--json` / `format: "json"` carries ids exactly
+ * as stored. Issue #456 tracks the durable fix — rejecting hostile ids at
+ * block-creation time.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {
@@ -105,12 +181,13 @@ export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptio
     depthById.set(row.id, depth)
     const indent = '  '.repeat(Math.min(depth, MAX_OUTLINE_DEPTH))
     const content = typeof row.content === 'string' ? row.content : ''
-    const oneLine = collapseVerticalMotion(content)
+    const oneLine = neutralizeOutlineField(content)
+    const id = encodeOutlineId(row.id)
     const props = options.includeProperties
       && row.properties && typeof row.properties === 'object' && Object.keys(row.properties).length > 0
-      ? ` ${collapseVerticalMotion(JSON.stringify(row.properties))}`
+      ? ` ${neutralizeOutlineField(JSON.stringify(row.properties))}`
       : ''
-    return `${indent}- [${row.id}] ${oneLine}${props}`
+    return `${indent}- [${id}] ${oneLine}${props}`
   })
   return lines.join('\n')
 }

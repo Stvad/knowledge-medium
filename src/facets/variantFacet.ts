@@ -13,6 +13,27 @@ export interface Variant<Render> {
   id: string
   label: string
   render: Render
+  /**
+   * Does this fill a block's content slot with OTHER blocks' rows — a review
+   * backlog, a review deck, a recents list — rather than drawing the block it
+   * was given? Consumers care because such a row's rect describes everything
+   * it shows instead of the block, which anything reasoning about row geometry
+   * has to know.
+   *
+   * A fact about the CHOICE, not about the component: put it on the component
+   * and every wrapper has to hand it on, which the editing dispatcher — in
+   * front of the content renderer for every block in the app — silently did
+   * not. Meaningless for slots whose variants aren't content renderers; those
+   * simply omit it.
+   *
+   * `'as-composed'` is for a variant that renders whatever the block's own
+   * renderer composed rather than replacing it — the editing dispatcher, which
+   * picks between the read and edit slots. Only such a variant may defer; a
+   * variant that REPLACES the composed renderer draws its own content, and
+   * inheriting the displaced renderer's answer would describe the wrong thing.
+   * Omitting it therefore means "not a view", never "ask whoever I displaced".
+   */
+  showsOtherBlocks?: boolean | 'as-composed'
 }
 
 /**

@@ -27,7 +27,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { attachmentObjectPath } from './storagePaths.js'
+import { attachmentObjectPath, storageObjectUrl } from './storagePaths.js'
 
 export const ATTACHMENTS_BUCKET = 'attachments'
 
@@ -68,14 +68,33 @@ export interface BlobStore {
    *  The bytes come from `encodeBytes` (§5), which is ArrayBuffer-backed. */
   put(workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<'written' | 'exists'>
   /** Direct RLS-gated GET of the stored object bytes (ArrayBuffer-backed, so it
-   *  feeds `decodeBytes` directly). Throws if absent/denied. */
+   *  feeds `verifyObjectBytes` directly). Throws if absent/denied. */
   get(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer>>
-  /** Direct RLS-gated delete (writer). Idempotent: supabase-js `remove` returns
-   *  200 with an EMPTY list (no error) when the object is absent or RLS-denied,
-   *  so this resolves on a no-op. Fine for §16 GC; the §10.1 poison-correction
-   *  must NOT infer "the path is now free" from this resolving — it GET-verifies
-   *  the path is gone before re-uploading (the §9 re-attempt sweep does this). */
-  delete(workspaceId: string, contentKey: string): Promise<void>
+  /** The §9 recovery actor's presence probe of the content path: the stored object's
+   *  bytes when the path is occupied (so the caller can decode + hash-verify — the
+   *  §9/§17 3-way), or `null` when the path reads as absent (a 404 — free to re-drive).
+   *  Throws on an ambiguous read (offline / 5xx / unknown) so recovery DEFERS rather than
+   *  mistaking a transient failure for "path free" and re-uploading against an object it
+   *  never actually saw was gone. NOTE this can't distinguish a genuinely-absent object
+   *  from an RLS-DENIED one: Supabase Storage hides existence, so an unauthorized download
+   *  returns a 404-shape too, which surfaces here as `null` ("path free"). That's benign
+   *  for recovery — the resulting re-drive is `isActiveUser`-gated (no PUT under the wrong
+   *  session) and self-corrects via the drain's 409-verify. (This is the same direct RLS
+   *  GET as {@link get}; the split is purely about turning the 404 into a value instead of
+   *  a throw, which recovery branches on.) */
+  probe(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
+  /** Direct RLS-gated delete (writer) of one object. Resolves only when Storage
+   *  confirms the delete; throws otherwise, an absent object included, so a
+   *  denied delete never reads as done. `signal` aborts the request. */
+  delete(workspaceId: string, contentKey: string, signal: AbortSignal | undefined): Promise<void>
+}
+
+/** The storage-js bucket API's own request plumbing: `url` is the Storage base,
+ *  `fetch` adds the session's token. Not in its public types. */
+interface StorageFileApiInternals {
+  readonly url: string
+  readonly headers: Record<string, string>
+  readonly fetch: typeof fetch
 }
 
 export interface SupabaseBlobStoreDeps {
@@ -127,6 +146,24 @@ const httpStatusOf = (err: { status?: number; statusCode?: string | number }): n
 export const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean => {
   const sc = err.statusCode != null ? String(err.statusCode) : ''
   return sc === '409' || err.status === 409 || ALREADY_EXISTS_CODES.has(sc)
+}
+
+/** Object-not-found codes (a download's symbolic 404). */
+const NOT_FOUND_STORAGE_CODES = new Set(['NoSuchKey', 'NotFound', 'KeyNotFound'])
+
+/** Storage "object not found" — a DEFINITIVE 404 on a GET/download, i.e. the content
+ *  path is FREE (the §9 recovery probe re-drives on it). Detected on BOTH the real HTTP
+ *  status (via {@link httpStatusOf}, so a numeric `statusCode: '404'` flattened onto
+ *  `.status: 400` is still caught) AND the symbolic word-code shape — the same
+ *  dual-shape robustness {@link isAlreadyExists} needs. Anything NOT matched here stays
+ *  a throw the probe treats as transient (offline / 5xx / unknown) — recovery must not
+ *  read an ambiguous error as "path free". (A genuinely RLS-DENIED read is NOT such an
+ *  error: Storage hides existence, so it returns a 404-shape that DOES match here → null;
+ *  see {@link BlobStore.probe}.) Module-private — only `probe` consumes it
+ *  (unlike `isAlreadyExists`, which the off-path RLS verifier also uses). */
+const isObjectNotFound = (err: { status?: number; statusCode?: string | number }): boolean => {
+  const sc = err.statusCode != null ? String(err.statusCode) : undefined
+  return httpStatusOf(err) === 404 || (sc != null && NOT_FOUND_STORAGE_CODES.has(sc))
 }
 
 export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore => {
@@ -192,11 +229,43 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       return new Uint8Array(await data.arrayBuffer())
     },
 
-    async delete(workspaceId, contentKey) {
-      const { error } = await client.storage
+    async probe(workspaceId, contentKey) {
+      const { data, error } = await client.storage
         .from(ATTACHMENTS_BUCKET)
-        .remove([objectPath(workspaceId, contentKey)])
-      if (error) throw error
+        .download(objectPath(workspaceId, contentKey))
+      if (error) {
+        // Only a DEFINITIVE 404 means "path free" → null (re-drive). Everything else
+        // (offline / 5xx / unknown) is ambiguous — rethrow so recovery defers rather than
+        // re-uploading over an object it never confirmed was gone. (A denied read isn't
+        // ambiguous here — Storage hides existence, so it 404s → null; handled above.)
+        if (isObjectNotFound(error as { status?: number; statusCode?: string | number })) return null
+        throw error
+      }
+      // No error + no body: treat as absent (nothing there to verify). A subsequent
+      // re-drive PUT is first-write-wins idempotent, so if an object DID materialize
+      // between this probe and the PUT, the drain's 409-verify path self-corrects.
+      if (!data) return null
+      return new Uint8Array(await data.arrayBuffer())
+    },
+
+    async delete(workspaceId, contentKey, signal) {
+      // The single-object route, not `remove()`: the bulk route deletes the rows,
+      // then sends one backend DeleteObjects whose per-key errors it never reads,
+      // so a failed key keeps its bytes with no row any listing could find. This
+      // route deletes the backend object inside the row's transaction. storage-js
+      // has no call for it, so it rides the bucket API's own url and authed fetch.
+      const files = client.storage.from(ATTACHMENTS_BUCKET) as unknown as StorageFileApiInternals
+      const path = objectPath(workspaceId, contentKey)
+      const res = await files.fetch(storageObjectUrl(files.url, ATTACHMENTS_BUCKET, path), {
+        method: 'DELETE',
+        headers: files.headers,
+        signal,
+      })
+      if (!res.ok) {
+        // Storage answers a denial and an absence alike with a 400; only the body's code tells them apart.
+        const code = await res.json().then((body: {code?: unknown} | null) => body?.code, () => undefined)
+        throw new Error(`blob delete failed (${res.status}${typeof code === 'string' ? ` ${code}` : ''}) for ${path}`)
+      }
     },
   }
 }

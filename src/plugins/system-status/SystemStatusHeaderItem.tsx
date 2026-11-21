@@ -1,7 +1,7 @@
 import { useQuery, useStatus } from '@powersync/react'
 import {
   CircleAlert,
-  CloudCheck,
+  Cloud,
   CloudOff,
   CloudUpload,
   HardDrive,
@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { appVersion } from '@/appVersion.js'
-import { useIsLocalOnly } from '@/components/Login.js'
+import { useIsLocalOnly, useUser } from '@/components/Login.js'
 import { Button } from '@/components/ui/button.js'
 import {
   DropdownMenu,
@@ -18,27 +18,32 @@ import {
 } from '@/components/ui/dropdown-menu.js'
 import { cn } from '@/lib/utils.js'
 import {
+  getChipAppearance,
   getSyncIndicatorView,
   type SyncIndicatorIcon,
+  type SyncIndicatorInput,
   type SyncIndicatorTone,
 } from './model.ts'
+import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog.js'
+import { dbFilenameForUser } from '@/data/localDbStorage.js'
+import { isSyncStreamLockHeld } from '@/data/syncStreamLock.js'
 import {
   formatPendingChanges,
-  materializeQueueCountSql,
+  rejectedCountSql,
   uploadQueueCountCap,
   uploadQueueExactCountSql,
   uploadQueuePreviewCountSql,
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
+import { useHysteresis } from './useHysteresis.ts'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
-import { runActionById } from '@/shortcuts/runAction.js'
+import { runActionByIdSafely } from '@/shortcuts/runAction.js'
 
 interface UploadQueueCountRow {
   count: number
 }
 
 const uploadQueuePreviewThrottleMs = 1_000
-const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 
 // Network sync errors are noisy: a dropped connection or a token refresh
 // caught mid-flight surfaces an error for a second or two before PowerSync
@@ -46,6 +51,16 @@ const rejectedCountSql = 'SELECT COUNT(*) AS count FROM ps_crud_rejected'
 // has persisted continuously for this long; clear it immediately when it
 // resolves. (Offline is handled separately — see `SyncStatusHeaderContent`.)
 const networkErrorGraceMs = 5_000
+
+// The chip spins only for activity that outlasts `activityEnterMs` (an upload
+// after a keystroke finishes well inside it), and keeps spinning for
+// `activityExitMs` after it ends so back-to-back batches read as one.
+const activityEnterMs = 2_000
+const activityExitMs = 1_000
+
+// Queued changes turn the chip into a warning once no upload has started for
+// this long — the point where "it'll upload in a moment" stops being true.
+const pendingStuckMs = 30_000
 
 // Debounce the *appearance* of an error: surface `message` only after it has
 // stayed non-null for `delayMs`, and drop it the instant it clears. Keeps the
@@ -91,21 +106,39 @@ function useIsDeviceOnline(): boolean {
   return online
 }
 
+// Web Locks has no change event, so the hold is re-read on this interval.
+const syncStreamLockPollMs = 5_000
+
+// Whether another client holds this database's sync stream lock, re-read while
+// `active`. Never true while inactive: the last reading is kept, not cleared.
+function useSyncingInOtherTab(dbFilename: string, active: boolean): boolean {
+  const [held, setHeld] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const check = () => {
+      isSyncStreamLockHeld(dbFilename).then(
+        (next) => { if (!cancelled) setHeld(next) },
+        () => {},
+      )
+    }
+    check()
+    const timer = setInterval(check, syncStreamLockPollMs)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [dbFilename, active])
+  return active && held
+}
+
 type SyncStatus = ReturnType<typeof useStatus>
 
-// Theme-aware tones. `success` reads `--success` (per-theme green
-// hue) rather than `--primary` so warm-primary palettes like
-// sunset-warm don't paint the "synced OK" chip in alarming reds.
-// `active` keeps the primary tint — a spinning icon plus primary
-// hue communicates "in progress" without colliding with the
-// "good/bad" semantic of success/error. `warning` is a softer
-// destructive shade so a glance still differentiates "needs
-// attention" from a hard error.
+// `warning` is a softer destructive shade so a glance still differentiates
+// "needs attention" from a hard error.
 const toneClass: Record<SyncIndicatorTone, string> = {
   error: 'border-destructive/30 bg-destructive/10 text-destructive',
   warning: 'border-destructive/20 bg-destructive/5 text-destructive',
-  active: 'border-primary/30 bg-primary/10 text-primary',
-  success: 'border-success/30 bg-success/10 text-success',
   local: 'border-border bg-muted/50 text-muted-foreground',
   neutral: 'border-border bg-background text-muted-foreground',
 }
@@ -116,13 +149,20 @@ const iconByName = {
   upload: CloudUpload,
   sync: RefreshCw,
   offline: CloudOff,
-  check: CloudCheck,
+  cloud: Cloud,
 } satisfies Record<SyncIndicatorIcon, typeof CircleAlert>
 
 const formatLastSyncedAt = (date: Date | undefined): string => {
   if (!date) return 'Not synced yet'
   return date.toLocaleString()
 }
+
+// Fire-and-forget dispatch of a global action by id — the indirection every
+// control in this dropdown uses (a diagnostic's Inspect / Reload). Failures
+// are logged, never surfaced into render.
+const dispatchAction = (actionId: string): Promise<boolean> =>
+  runActionByIdSafely(actionId, new CustomEvent('run-diagnostic-action'))
+
 
 // The build the client is running — the committer-date version (e.g.
 // "2026.06.13-1216"). Rendered as quiet metadata: muted, no underline (the
@@ -208,18 +248,7 @@ function RemoteSyncStatusHeaderContent({
   const pendingChangesApproximate = previewCount > uploadQueueCountCap
   const pendingChanges = pendingChangesApproximate ? uploadQueueCountCap : previewCount
 
-  // Staged rows the Layout B observer hasn't applied to `blocks` yet. The change
-  // queue mutates every drain window, so watch it throttled like the upload
-  // preview; it counts down to 0 as the backlog materializes.
-  const materializeQueue = useQuery<UploadQueueCountRow>(
-    materializeQueueCountSql,
-    [],
-    {
-      reportFetching: false,
-      throttleMs: uploadQueuePreviewThrottleMs,
-    },
-  )
-  const materializingChanges = Number(materializeQueue.data[0]?.count ?? 0)
+  const materializingChanges = useMaterializeBacklog()
 
   return (
     <SyncStatusHeaderContent
@@ -256,7 +285,13 @@ function SyncStatusHeaderContent({
   const [dialogOpen, setDialogOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const deviceOnline = useIsDeviceOnline()
-  const dataFlow = status.dataFlowStatus
+  const user = useUser()
+  // Only the state the chip would otherwise call Offline: a device that is
+  // really offline stays Offline.
+  const syncingInOtherTab = useSyncingInOtherTab(
+    dbFilenameForUser(user.id),
+    !localOnly && deviceOnline && !status.connected && !status.connecting,
+  )
   // Decide whether a sync error is worth showing. When the *device* is
   // offline, any upload/download error is just connectivity noise — show the
   // calm "Offline" chip, not a raw websocket/fetch error. But when the
@@ -267,10 +302,17 @@ function SyncStatusHeaderContent({
   // and hides the very reason sync isn't working. The grace window below
   // still debounces transient blips in both cases.
   const networkError = deviceOnline
-    ? (dataFlow.uploadError?.message ?? dataFlow.downloadError?.message ?? null)
+    ? (status.uploadError?.message ?? status.downloadError?.message ?? null)
     : null
   const stableNetworkError = useStableError(networkError, networkErrorGraceMs)
   const errorMessage = localErrorMessage ?? stableNetworkError
+  // A failing attempt still counts as idle: retries toggle `uploading`, but
+  // nothing leaves the device. Another tab's uploads are invisible from here,
+  // so there is nothing to time while it holds the sync stream.
+  const pendingIdle = pendingChanges > 0
+    && (!status.uploading || status.uploadError != null)
+    && !syncingInOtherTab
+  const pendingStuck = useHysteresis(pendingIdle, pendingStuckMs, 0)
   // Health contributed via the diagnostics seam (the consistency audit is the
   // first source). Only non-ok sources are worth surfacing; an 'ok' source stays
   // silent (a clean audit shows nothing, matching the pre-seam behavior).
@@ -287,33 +329,29 @@ function SyncStatusHeaderContent({
   // already reddens the whole chip (diagnosticAlert), so it doesn't also dot.
   const nudge = diagnosticItems.find((it) => it.snapshot.nudge)
   const showStatusDot = Boolean(nudge) && !errorDiagnostic
-  // Run a diagnostic's inspect action (e.g. re-run the audit + open its dialog).
-  const runDiagnosticAction = (actionId: string): void => {
-    try {
-      void Promise.resolve(
-        runActionById(actionId, new CustomEvent('run-diagnostic-action')),
-      ).catch((e) => console.error('Failed to run diagnostic action', e))
-    } catch (e) {
-      console.error('Failed to run diagnostic action', e)
-    }
-  }
-  const view = getSyncIndicatorView({
+  const indicatorInput: SyncIndicatorInput = {
     localOnly,
     connected: status.connected,
     connecting: status.connecting,
     hasSynced: status.hasSynced,
-    uploading: Boolean(dataFlow.uploading),
-    downloading: Boolean(dataFlow.downloading),
+    uploading: status.uploading,
+    downloading: status.downloading,
     pendingChanges,
     pendingChangesApproximate,
+    pendingStuck,
     rejectedChanges: rejectedCount,
     materializingChanges,
+    syncingInOtherTab,
     downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
     errorMessage,
     lastSyncedAt: status.lastSyncedAt,
     diagnosticAlert,
-  })
+  }
+  const view = getSyncIndicatorView(indicatorInput)
   const Icon = iconByName[view.icon]
+  const activityShown = useHysteresis(view.spinning, activityEnterMs, activityExitMs)
+  const chip = getChipAppearance(indicatorInput, activityShown)
+  const ChipIcon = iconByName[chip.icon]
   // Surface the nudge's one-liner (e.g. "A new version is available") on the
   // chip itself so the dot has an accessible meaning; settled-state errors are
   // already folded into view.title by getSyncIndicatorView.
@@ -329,12 +367,12 @@ function SyncStatusHeaderContent({
             type="button"
             className={cn(
               'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
-              toneClass[view.tone],
+              toneClass[chip.tone],
             )}
             aria-label={chipTitle}
             title={chipTitle}
           >
-            <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
+            <ChipIcon className={cn('h-4 w-4', chip.spinning && 'animate-spin')}/>
             {showStatusDot && (
               <span
                 aria-hidden
@@ -419,7 +457,7 @@ function SyncStatusHeaderContent({
                       size="sm"
                       variant="outline"
                       className="h-7 shrink-0 text-xs"
-                      onClick={() => runDiagnosticAction(item.snapshot.actionId!)}
+                      onClick={() => void dispatchAction(item.snapshot.actionId!)}
                     >
                       {item.snapshot.actionLabel ?? 'Inspect'}
                     </Button>

@@ -2,6 +2,7 @@
  * Copy Agent resume command — bridges the daemon's persisted `agent:session`
  * protocol to a terminal command a user can paste into an interactive CLI.
  */
+import { writeTextToClipboard } from '@/utils/copy.js'
 import type { Block } from '@/data/block'
 import {
   ActionContextTypes,
@@ -91,10 +92,7 @@ export const copyAgentResumeCommand = async (block: Block): Promise<void> => {
   }
 
   try {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) {
-      throw new Error('Clipboard API is unavailable')
-    }
-    await navigator.clipboard.writeText(command)
+    await writeTextToClipboard(command)
     showSuccess('Agent resume command copied.')
   } catch {
     showError("Couldn't copy the Agent resume command.")

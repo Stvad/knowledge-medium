@@ -147,10 +147,19 @@ describe('IdbKeyedStore', () => {
     // `:`-delimited prefix must not reap it (the invariant clearForUser relies on).
     await store.tx('readwrite', s => s.put({n: 3}, idbRecordId('uX', 'a')))
 
+    // The next owner in key order, and a key in the owner's namespace whose
+    // suffix sorts last: the range must reach the second and stop before the first.
+    await store.tx('readwrite', s => s.put({n: 4}, idbKeyPrefix('u').slice(0, -1) + ';'))
+    await store.tx('readwrite', s => s.put({n: 5}, idbKeyPrefix('u') + '\uffff'))
+    await store.tx('readwrite', s => s.put({n: 6}, idbKeyPrefix('u') + '\uffffa'))
+
     await store.deleteByPrefix(idbKeyPrefix('u'))
 
     expect(await store.tx('readonly', s => s.get(idbRecordId('u', 'a')))).toBeUndefined()
     expect(await store.tx('readonly', s => s.get(idbRecordId('u', 'b')))).toBeUndefined()
+    expect(await store.tx('readonly', s => s.get(idbKeyPrefix('u') + '\uffff'))).toBeUndefined()
+    expect(await store.tx('readonly', s => s.get(idbKeyPrefix('u') + '\uffffa'))).toBeUndefined()
     expect(await store.tx('readonly', s => s.get(idbRecordId('uX', 'a')))).toEqual({n: 3})
+    expect(await store.tx('readonly', s => s.get(idbKeyPrefix('u').slice(0, -1) + ';'))).toEqual({n: 4})
   })
 })

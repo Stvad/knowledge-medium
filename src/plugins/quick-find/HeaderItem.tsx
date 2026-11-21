@@ -1,9 +1,9 @@
 import { Search } from 'lucide-react'
 import { Kbd } from '@/components/ui/kbd'
+import { isMacPlatform } from '@/utils/platform.js'
 import { quickFindToggle } from './toggleStore.ts'
 
-const getModKey = () =>
-  navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl+'
+const getModKey = () => (isMacPlatform() ? '⌘' : 'Ctrl+')
 
 export function QuickFindHeaderItem() {
   return (

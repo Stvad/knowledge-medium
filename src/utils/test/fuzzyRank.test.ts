@@ -73,12 +73,95 @@ describe('scoreCandidate', () => {
     expect(scoreCandidate('Apples', 'xyz', tokens('xyz'))).toBeNull()
   })
 
+  describe('word-prefix chain (spaces dropped out of a multi-word title)', () => {
+    const chain = (label: string, query: string) =>
+      scoreCandidate(label, query, tokens(query))
+
+    it('matches run-together word prefixes', () => {
+      expect(chain('Meeting Notes', 'meetnotes')).not.toBeNull()
+      expect(chain('Product Requirements Document', 'prodreq')).not.toBeNull()
+      expect(chain('Strength Training Program', 'strtrain')).not.toBeNull()
+    })
+
+    it('matches initialisms', () => {
+      expect(chain('Product Requirements Document', 'prd')).not.toBeNull()
+      expect(chain('Strength Training Program', 'stp')).not.toBeNull()
+      expect(chain('San Francisco', 'sf')).not.toBeNull()
+    })
+
+    it('skips words between chunks', () => {
+      expect(chain('Product Requirements Document', 'pd')).not.toBeNull()
+      expect(chain('Product Requirements Document', 'proddoc')).not.toBeNull()
+    })
+
+    it('keeps chunk order — a chain may skip words but not reorder them', () => {
+      expect(chain('Product Requirements Document', 'dp')).toBeNull()
+      expect(chain('Meeting Notes', 'notesmeet')).toBeNull()
+    })
+
+    it('requires the whole token to be consumed', () => {
+      expect(chain('Meeting Notes', 'meetnoteszz')).toBeNull()
+      expect(chain('San Francisco', 'sfx')).toBeNull()
+    })
+
+    it('needs every chunk to start at a word start, not mid-word', () => {
+      // Three words, so the run-together form is two dropped spaces away
+      // — out of typo range — and "lpha" is not a prefix of "alpha".
+      expect(chain('Alpha Bravo Charlie', 'lphabravocharlie')).toBeNull()
+      // Same shape with word-start chunks does match, so the assertion
+      // above is pinning the word-start rule and not just the distance.
+      expect(chain('Alpha Bravo Charlie', 'alphbravcharl')).not.toBeNull()
+    })
+
+    it('does not fire on single-word labels (substring/typo already cover those)', () => {
+      expect(chain('Autocomplete', 'atcmp')).toBeNull()
+    })
+
+    it('takes at most one chunk from any single word', () => {
+      // The DP walks reachable offsets high-to-low precisely so a word
+      // cannot extend an offset it just wrote. Walking low-to-high
+      // instead accepts all three of these, and nothing else in the
+      // suite notices — so this is the only thing pinning that walk.
+      expect(chain('Alpha Bravo', 'alal')).toBeNull()
+      expect(chain('Alpha Bravo', 'alphalpha')).toBeNull()
+      expect(chain('Meeting Notes', 'meetmeet')).toBeNull()
+    })
+
+    it('still matches using only the words it can afford on a very long title', () => {
+      // Titles past CHAIN_MAX_WORDS degrade to "consider the first N
+      // words" rather than refusing outright — punctuation splits push
+      // real titles over the cap sooner than the word count suggests.
+      // Three run-together chunks, so the typo tier (one edit) cannot
+      // rescue it — this only passes via the chain.
+      const long = 'Notes from the 2026 Q3 Planning Offsite in San Francisco with the Team'
+      expect(chain(long, 'notesfromthe')).not.toBeNull()
+    })
+
+    it('ranks below a literal substring and above a typo', () => {
+      const substring = scoreCandidate('Strength Training', 'training', tokens('training'))!
+      const chained = scoreCandidate('Strength Training', 'strtrain', tokens('strtrain'))!
+      const typo = scoreCandidate('Strength', 'strenth', tokens('strenth'))!
+      expect(substring).toBeGreaterThan(chained)
+      expect(chained).toBeGreaterThan(typo)
+    })
+  })
+
   it('ranks exact whole-query match above prefix and substring', () => {
     const exact = scoreCandidate('Dating', 'dating', tokens('dating'))!
     const prefix = scoreCandidate('Dating pool', 'dating', tokens('dating'))!
     const contains = scoreCandidate('Online Dating', 'dating', tokens('dating'))!
     expect(exact).toBeGreaterThan(prefix)
     expect(prefix).toBeGreaterThan(contains)
+  })
+
+  it('prefers a later word-start occurrence over an earlier mid-word one', () => {
+    // `indexOf` alone reports whichever occurrence comes first in the
+    // string, not the better one — "sense" hits inside "Nonsense" at 3
+    // before the standalone "Sense" at 9, and the documented tier order
+    // says word-start beats substring.
+    const shadowed = scoreCandidate('Nonsense Sense', 'sense', tokens('sense'))!
+    const plain = scoreCandidate('Nonsense', 'sense', tokens('sense'))!
+    expect(shadowed).toBeGreaterThan(plain)
   })
 
   it('ranks word-start higher than mid-word substring', () => {

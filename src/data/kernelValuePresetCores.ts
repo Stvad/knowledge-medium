@@ -57,6 +57,7 @@ const enumPresetCodec = (options: readonly EnumOption[]): Codec<string> => {
     encode: value => value === '' ? '' : configured.encode(value),
     decode: json => json === '' ? '' : configured.decode(json),
     where: {
+      storage: 'text',
       encode: value => value === '' ? '' : configured.where!.encode(value),
     },
   }
@@ -86,7 +87,17 @@ export const enumValuePresetCore = definePresetCore<string, EnumPresetConfig>({
     defaultValue: '',
     defaultConfig: {options: []},
     configCodec: enumConfigCodec,
-  })
+})
+/** Code-declared fixed unions use strict writes, unlike the user-facing Choice
+ * preset's empty "unset" sentinel. Declarations must persist an explicit
+ * default because no one default can be valid for every configured option set. */
+export const strictEnumValuePresetCore = definePresetCore<string, EnumPresetConfig>({
+  id: 'strict-enum',
+  build: config => codecs.enum(config.options),
+  defaultValue: '',
+  defaultConfig: {options: []},
+  configCodec: enumConfigCodec,
+})
 export const refValuePresetCore = definePresetCore<string, RefCodecOptions>({
     id: 'ref',
     build: cfg => codecs.ref(cfg),
@@ -107,14 +118,12 @@ export const optionalStringValuePresetCore = definePresetCore<string | undefined
 export const optionalNumberValuePresetCore = definePresetCore<number | undefined>({
   id: 'optional-number', build: () => codecs.optionalNumber, defaultValue: undefined,
 })
-const readonlyStringListCodec: Codec<readonly string[]> = {
-  type: 'list',
-  encode: values => values.map(value => codecs.string.encode(value)),
-  decode: json => {
-    if (!Array.isArray(json)) throw new CodecError('string array', json)
-    return json.map(value => codecs.string.decode(value))
-  },
-}
+/** `codecs.list(codecs.string)`, which is member-wise and so opts into the
+ *  multi-value child shape: `types` and `alias` store one value child per
+ *  member rather than one JSON-text child per list. Widened to `readonly`
+ *  elements for the seed handles that expose them that way. */
+const readonlyStringListCodec: Codec<readonly string[]> = codecs.list(codecs.string)
+
 export const stringListValuePresetCore = definePresetCore<readonly string[]>({
   id: 'string-list', build: () => readonlyStringListCodec, defaultValue: [],
 })
@@ -131,21 +140,36 @@ export const jsonValuePresetCore = definePresetCore<unknown>({
 export const optionalJsonValuePresetCore = definePresetCore<unknown | undefined>({
   id: 'optional-json', build: () => codecs.optionalIdentity<unknown>(), defaultValue: undefined,
 })
+/** Identity codec for a property whose stored value is arbitrary JSON of a
+ * shape a typed codec can't pin — a mixed number|string like `agent:cancel`,
+ * or the internal `property-schema:default` metadata. Unlike `optional-json`,
+ * a stored null is a meaningful encoded value and must not collapse to absence;
+ * unlike `json`, an absent field defaults to undefined. */
+export const rawJsonValuePresetCore = definePresetCore<unknown | undefined>({
+  id: 'raw-json', build: () => codecs.unsafeIdentity<unknown | undefined>(), defaultValue: undefined,
+})
 
-export const kernelValuePresetCores: readonly AnyValuePresetCore[] = [
-  stringValuePresetCore,
-  numberValuePresetCore,
-  booleanValuePresetCore,
-  listValuePresetCore,
-  dateValuePresetCore,
-  urlValuePresetCore,
-  enumValuePresetCore,
-  refValuePresetCore,
-  refListValuePresetCore,
-  optionalStringValuePresetCore,
-  optionalNumberValuePresetCore,
-  stringListValuePresetCore,
-  optionalRefValuePresetCore,
-  jsonValuePresetCore,
-  optionalJsonValuePresetCore,
-]
+/** Literal-keyed map keeps the value/config type owned by each kernel preset
+ * id available to typed authoring APIs such as seedProperty. */
+export const kernelValuePresetCoresById = {
+  string: stringValuePresetCore,
+  number: numberValuePresetCore,
+  boolean: booleanValuePresetCore,
+  list: listValuePresetCore,
+  date: dateValuePresetCore,
+  url: urlValuePresetCore,
+  enum: enumValuePresetCore,
+  'strict-enum': strictEnumValuePresetCore,
+  ref: refValuePresetCore,
+  refList: refListValuePresetCore,
+  'optional-string': optionalStringValuePresetCore,
+  'optional-number': optionalNumberValuePresetCore,
+  'string-list': stringListValuePresetCore,
+  'optional-ref': optionalRefValuePresetCore,
+  json: jsonValuePresetCore,
+  'optional-json': optionalJsonValuePresetCore,
+  'raw-json': rawJsonValuePresetCore,
+} as const satisfies Readonly<Record<string, AnyValuePresetCore>>
+
+export const kernelValuePresetCores: readonly AnyValuePresetCore[] =
+  Object.values(kernelValuePresetCoresById)

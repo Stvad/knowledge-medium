@@ -1,10 +1,5 @@
 import type { ReviewProgress } from './schema.ts'
 
-/** Local calendar day (YYYY-MM-DD), used to invalidate a saved session
- *  after a midnight rollover. */
-export const localDayKey = (now: Date = new Date()): string =>
-  `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`
-
 /** The saved session to resume, or null when there's nothing valid to
  *  restore (no save, a different deck tag, or a day rollover). Used as the
  *  lazy initial state so a restored queue is non-null from the first

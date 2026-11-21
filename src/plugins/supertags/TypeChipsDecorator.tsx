@@ -1,7 +1,7 @@
 /** Block content decorator that renders a block's types as trailing
  *  `#label` chips (Tana-style supertags), each with a remove button.
  *
- *  Unlike the character-counter/geo decorators, the contribution does
+ *  Unlike the geo decorator, the contribution does
  *  NOT gate on `ctx.types` — the wrap applies to every block and the
  *  component decides whether to render chips. NOTE the honest scope of
  *  this: a types change still remounts the content subtree regardless,
@@ -13,20 +13,19 @@
  *  edits, late type
  *  publication) re-renders in place instead of re-resolving decorator
  *  gates, and if the renderer's slot identity is ever stabilized the
- *  no-remount invariant holds here without changes. The WeakMap cache
- *  keeps identity stable across parent re-renders (same invariant as
- *  CharacterCountDecorator). */
+ *  no-remount invariant holds here without changes. */
 
+import { useContext } from 'react'
 import type { TypeContribution } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties'
 import { useContent, useProperty, useWorkspaceId } from '@/hooks/block.js'
 import { useTypes } from '@/hooks/typeRegistry.js'
 import { useBlockOpener } from '@/utils/navigation'
-import { buildAppHash } from '@/utils/routing'
+import { appHashForSession, LayoutWsContext } from '@/context/layoutWsContext'
 import { TypeChip } from '@/components/typeChip/TypeChip'
 import {
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
@@ -44,6 +43,9 @@ const TypeChips = ({block, typeIds, registry}: {
   // 'follow-link' role: a chip is an inline link, so plain click swaps
   // this panel; shift / alt / cmd follow the canonical modifier matrix.
   const openBlock = useBlockOpener()
+  // Loop site below — hooks can't run per chip, so read the session once
+  // and build hrefs with the pure core (see layoutWsContext).
+  const wsSession = useContext(LayoutWsContext)
   return (
     // role="group": aria-label is ignored on a generic span, and the
     // row needs an accessible name to announce as one unit.
@@ -71,7 +73,7 @@ const TypeChips = ({block, typeIds, registry}: {
             type={type}
             withHash
             link={definitionId ? {
-              href: buildAppHash(workspaceId, definitionId),
+              href: appHashForSession(wsSession, workspaceId, definitionId),
               onClick: event => openBlock(event, {blockId: definitionId, workspaceId}),
             } : undefined}
             onRemove={removable ? () => { void block.removeType(typeId) } : undefined}
@@ -158,17 +160,6 @@ const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
   )
 }
 
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorate: BlockContentDecorator = inner => {
-  const existing = cache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({block}) => (
-    <TypeChipsDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithTypeChips'
-  cache.set(inner, Decorated)
-  return Decorated
-}
+const decorate = cachedContentDecorator(TypeChipsDecorator, 'WithTypeChips')
 
 export const typeChipsDecoratorContribution: BlockContentDecoratorContribution = () => decorate

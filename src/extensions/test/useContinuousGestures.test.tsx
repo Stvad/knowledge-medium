@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useMemo, useRef } from 'react'
@@ -13,6 +13,8 @@ import {
   type GestureRecognizer,
 } from '@/extensions/continuousGestures'
 import type { BlockResolveContext } from '@/extensions/blockInteraction'
+import { MOBILE_BREAKPOINT_QUERY } from '@/utils/viewport.js'
+import { setGestureActionDispatcher } from '@/shortcuts/gestureAction'
 
 const resolveContext = {} as unknown as BlockResolveContext
 
@@ -26,15 +28,19 @@ const Harness = ({which}: {which: 'a' | 'b'}) => {
   return <div key={which} data-testid={which} ref={gestureRef}/>
 }
 
-const firePointerDown = (el: HTMLElement): void => {
-  const event = new Event('pointerdown', {bubbles: true})
+const firePointer = (type: string, el: HTMLElement): void => {
+  const event = new Event(type, {bubbles: true})
   Object.assign(event, {pointerId: 1, clientX: 5, clientY: 5, pointerType: 'touch'})
   act(() => {
     el.dispatchEvent(event)
   })
 }
+const firePointerDown = (el: HTMLElement): void => firePointer('pointerdown', el)
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 describe('useContinuousGestures', () => {
   it('reattaches listeners to the new node when the content surface remounts', () => {
@@ -67,6 +73,53 @@ describe('useContinuousGestures', () => {
     expect(onPointerDown).toHaveBeenCalledTimes(2)
   })
 
+  it('never runs a hold for a surface that unmounted mid-press', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(() => GESTURE_IDLE)
+    const runtime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(() => ({id: 'hold', hold: {ms: 500, onHold}})),
+    ])
+    const {getByTestId, unmount} = render(
+      <AppRuntimeContextProvider value={runtime}>
+        <Harness which="a"/>
+      </AppRuntimeContextProvider>,
+    )
+
+    firePointerDown(getByTestId('a'))
+    unmount()
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('swallows a held release\'s click wherever it lands, as on a bar that appeared under the finger', () => {
+    vi.useFakeTimers()
+    setGestureActionDispatcher(() => true)
+    const runtime = resolveFacetRuntimeSync([
+      continuousGestureRecognizersFacet.of(() => ({
+        id: 'hold',
+        hold: {ms: 500, onHold: () => ({status: 'commit', gesture: 'hold', deps: {} as never})},
+      })),
+    ])
+    const {getByTestId} = render(
+      <AppRuntimeContextProvider value={runtime}>
+        <Harness which="a"/>
+      </AppRuntimeContextProvider>,
+    )
+    const bar = document.createElement('button')
+    document.body.appendChild(bar)
+
+    firePointerDown(getByTestId('a'))
+    act(() => { vi.advanceTimersByTime(500) })
+    firePointer('pointerup', getByTestId('a'))
+    const click = new MouseEvent('click', {bubbles: true, cancelable: true})
+    bar.dispatchEvent(click)
+
+    expect(click.defaultPrevented).toBe(true)
+    setGestureActionDispatcher(null)
+    bar.remove()
+  })
+
   it('re-applies touch-action when the viewport crosses a recognizer breakpoint', () => {
     // The host re-renders on edit-mode but NOT on a breakpoint cross (its
     // useIsMobile lives in child slots), so without a viewport subscription a
@@ -83,7 +136,7 @@ describe('useContinuousGestures', () => {
 
     const recognizer: GestureRecognizer = {
       id: 'swipe',
-      isEnabled: () => window.matchMedia('(max-width: 767px)').matches,
+      isEnabled: () => window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches,
       touchAction: 'pan-y',
     }
     const runtime = resolveFacetRuntimeSync([
@@ -133,5 +186,19 @@ describe('suppressNextClick', () => {
     expect(childClick).toHaveBeenCalledTimes(1)
 
     el.remove()
+  })
+
+  it('lets a fresh tap through when the gesture produced no click', () => {
+    const surface = document.createElement('div')
+    const button = document.createElement('button')
+    surface.appendChild(button)
+    const onClick = vi.fn()
+    button.addEventListener('click', onClick)
+
+    suppressNextClick(surface)
+    firePointerDown(button)
+    button.click()
+
+    expect(onClick).toHaveBeenCalledTimes(1)
   })
 })

@@ -28,29 +28,44 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
-  AnyValuePreset,
   AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
-import type { Facet, FacetRuntime } from '@/facets/facet'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  buildPropertyDefinitionRegistry,
+  buildUnboundPropertySchemas,
+} from '@/data/propertyDefinitionRegistry'
+import type {TypeDefinitionRegistrySnapshot} from '@/data/typeDefinitionRegistry'
+import {
+  buildTypeDefinitionRegistry,
+  buildUnboundTypes,
+  harvestNestedPropertySeeds,
+} from '@/data/typeDefinitionRegistry'
+import type {
+  Facet,
+  FacetRuntime,
+  WorkspaceRuntimeContributionOptions,
+} from '@/facets/facet'
 import { CallbackSet } from '@/utils/callbackSet'
 import type { InvalidationRule } from './invalidation'
 import {
   invalidationRulesFacet,
+  definitionSeedsFacet,
   mutatorsFacet,
   postCommitProcessorsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
+  projectedPropertyDefinitionsFacet,
+  projectedTypeDefinitionsFacet,
   queriesFacet,
   sameTxProcessorsFacet,
-  typesFacet,
+  typeSeedsFacet,
   valuePresetCoresFacet,
   valuePresetPresentationsFacet,
-  valuePresetsFacet,
   workspaceBackfillsFacet,
   type WorkspaceBackfill,
 } from './facets'
-import { changedRefSchemaNames, mergeLiftedSchemas } from './internals/refProjection'
+import { changedRefSchemaNames } from './internals/refProjection'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
@@ -61,6 +76,8 @@ interface RebuildStep {
   readonly id: string
   readonly inputs: readonly Facet<unknown, unknown>[]
   readonly run: (runtime: FacetRuntime) => void
+  /** Re-run synchronously when the active-workspace read filter changes. */
+  readonly workspaceScoped?: boolean
 }
 
 /** Sink the bridge writes facet-derived state into — implemented by `Repo`
@@ -70,6 +87,13 @@ export interface FacetBridgeTarget {
   /** Current merged property-schema map, read as the "before" snapshot for
    *  the ref-change diff that decides whether a swap needs reprojection. */
   getPropertySchemas(): ReadonlyMap<string, AnyPropertySchema>
+  /** Whether the workspace's persisted property-definition projection has
+   * produced its first complete result. Seed synthesis must not claim names
+   * before this is true: an empty projection and a not-yet-loaded projection
+   * have different winner semantics. */
+  getPropertyDefinitionProjector(): {
+    isPrimedFor(workspaceId: string): boolean
+  } | undefined
   applyMutators(mutators: Map<string, AnyMutator>): void
   applyProcessors(processors: Map<string, AnyPostCommitProcessor>): void
   applySameTxProcessors(processors: Map<string, AnySameTxProcessor>): void
@@ -78,10 +102,12 @@ export interface FacetBridgeTarget {
   applyTypesAndSchemas(
     types: ReadonlyMap<string, TypeContribution>,
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    propertyDefinitions: PropertyDefinitionRegistrySnapshot | null,
+    propertySeedNameCounts: ReadonlyMap<string, number>,
+    typeDefinitions: TypeDefinitionRegistrySnapshot | null,
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
-  applyValuePresets(presets: ReadonlyMap<string, AnyValuePreset>): void
   applyQueries(queries: Map<string, AnyQuery>): void
   /** Defer a ref-typed-property reprojection for the names whose ref-ness
    *  changed in this swap (off the cold-start critical path). */
@@ -95,6 +121,10 @@ export class FacetBridge {
   /** Currently-installed FacetRuntime. Null until the first
    *  `setFacetRuntime` call. */
   private runtime: FacetRuntime | null = null
+  private activeWorkspaceId: string | null = null
+  /** Workspace-scoped inputs may each notify during a filter flip. Their
+   * owning steps run once after the runtime reaches the complete new view. */
+  private workspacePinInProgress = false
   /** Per-facet listener disposers from `onFacetChange` registrations.
    *  Cleared when `setFacetRuntime` swaps to a fresh runtime — old
    *  listeners would fire against stale rebuild closures otherwise. */
@@ -150,6 +180,7 @@ export class FacetBridge {
     // merged view on first read (no flicker through a state where
     // user-data is missing and then re-added).
     if (previous) runtime.adoptDurableContributionsFrom(previous)
+    runtime.setActiveWorkspaceId(this.activeWorkspaceId)
 
     // Run every rebuild step on the fresh runtime.
     for (const step of this.rebuildSteps) step.run(runtime)
@@ -166,7 +197,10 @@ export class FacetBridge {
     }
     for (const [facetId, steps] of stepsByFacetId) {
       const unsub = runtime.onFacetChange(facetId, () => {
-        for (const step of steps) step.run(runtime)
+        for (const step of steps) {
+          if (this.workspacePinInProgress && step.workspaceScoped) continue
+          step.run(runtime)
+        }
       })
       this.runtimeFacetUnsubs.push(unsub)
     }
@@ -184,11 +218,32 @@ export class FacetBridge {
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
+    options?: WorkspaceRuntimeContributionOptions,
   ): void {
     if (!this.runtime) {
       throw new Error('[FacetBridge.setRuntimeContributions] called before setFacetRuntime')
     }
-    this.runtime.setRuntimeContributions(facet, sourceId, contributions, { durable: true })
+    this.runtime.setRuntimeContributions(facet, sourceId, contributions, {
+      durable: true,
+      workspaceId: options?.workspaceId,
+    })
+  }
+
+  /** Synchronously flip the workspace filter on the installed runtime.
+   * The pin is retained across future runtime swaps. */
+  setActiveWorkspaceId(workspaceId: string | null): void {
+    this.activeWorkspaceId = workspaceId
+    if (this.runtime) {
+      this.workspacePinInProgress = true
+      try {
+        this.runtime.setActiveWorkspaceId(workspaceId)
+      } finally {
+        this.workspacePinInProgress = false
+      }
+      for (const step of this.rebuildSteps) {
+        if (step.workspaceScoped) step.run(this.runtime)
+      }
+    }
   }
 
   onPropertySchemasChange(listener: () => void): () => void {
@@ -207,9 +262,22 @@ export class FacetBridge {
     return this.valuePresetsListeners.add(listener)
   }
 
-  /** Rebuild step list. Order matters: types runs before propertySchemas
-   *  (the merge folds in type-lifted schemas); propertySchemas runs before
-   *  the query swap if a future step ever needs it. */
+  private unavailableActiveWorkspaceId(): string | null {
+    const projector = this.target.getPropertyDefinitionProjector()
+    return this.activeWorkspaceId
+      && projector?.isPrimedFor(this.activeWorkspaceId) === false
+      ? this.activeWorkspaceId
+      : null
+  }
+
+  private canBuildPropertyDefinitionsForWorkspace(workspaceId: string): boolean {
+    return workspaceId !== this.unavailableActiveWorkspaceId()
+  }
+
+  /** Rebuild step list. Order matters: value presets run before property
+   * schemas so a runtime swap re-resolves block behavior against the incoming
+   * cores before the final registry snapshot; types are read by the schema
+   * step for the transitional type lift. */
   private makeRebuildSteps(): readonly RebuildStep[] {
     const target = this.target
     return [
@@ -239,22 +307,119 @@ export class FacetBridge {
         run: (rt) => { target.applyWorkspaceBackfills(rt.read(workspaceBackfillsFacet)) },
       },
       {
-        // Reads typesFacet AND propertySchemasFacet — both inputs feed
-        // mergeLiftedSchemas, so a change to either re-runs the merge.
+        id: 'valuePresets',
+        inputs: [
+          valuePresetCoresFacet as Facet<unknown, unknown>,
+          valuePresetPresentationsFacet as Facet<unknown, unknown>,
+        ],
+        // Fires on any core/presentation change so `userSchemasService`
+        // re-resolves schemas when a preset's plugin loads.
+        run: (rt) => {
+          const presets = readValuePresetRegistry(rt)
+          target.applyValuePresetCores(presets.cores)
+          this.valuePresetsListeners.notify()
+        },
+      },
+      {
+        // Owns `repo.types` + `propertySchemas`. Types: fold the block-built
+        // rows (`projectedTypeDefinitionsFacet`) + declared type seeds
+        // (`typeSeedsFacet`) into the declaration-authoritative registry — the
+        // sole type source now that the static `typesFacet` registration path
+        // is gone (Slice D). Schemas: build the property registry from the
+        // property seeds + block-built rows; type-embedded properties reach it
+        // as seeds (explicit or harvested — `harvestNestedPropertySeeds`), not
+        // via the retired type-lift.
         id: 'propertySchemas',
         inputs: [
-          typesFacet as Facet<unknown, unknown>,
-          propertySchemasFacet as Facet<unknown, unknown>,
+          projectedTypeDefinitionsFacet as Facet<unknown, unknown>,
+          typeSeedsFacet as Facet<unknown, unknown>,
+          projectedPropertyDefinitionsFacet as Facet<unknown, unknown>,
+          definitionSeedsFacet as Facet<unknown, unknown>,
         ],
+        workspaceScoped: true,
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
-          const types = rt.read(typesFacet)
-          const propertySchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), types)
-          target.applyTypesAndSchemas(types, propertySchemas)
+          const seedTypes = rt.read(typeSeedsFacet)
+          // The type-definition registry needs a workspace to scope its rows;
+          // before a pin it stays null (identity resolution / `getTypeBlockId` is
+          // correctly unavailable). No priming gate (unlike the property
+          // registry): an unprimed projection is simply an empty projected-rows
+          // map — the registry then holds only declared seeds, which are
+          // code-owned and must be present pre-materialization anyway.
+          const typeDefinitions = this.activeWorkspaceId
+            ? buildTypeDefinitionRegistry({
+              workspaceId: this.activeWorkspaceId,
+              projectedDefinitions: rt.read(projectedTypeDefinitionsFacet),
+              seeds: seedTypes,
+            })
+            : null
+          // The kernel/plugin type seeds live in `typeSeedsFacet`. Mirror
+          // `buildUnboundPropertySchemas` (the `X?.field ?? buildUnbound(...)`
+          // shape used for schemas just below): before a workspace pins the
+          // registry (and in the runtime-install→first-pin window, where
+          // `repo._types` is already facet-driven, not the static `KERNEL_TYPES`
+          // fallback) fall back to the unbound seed synthesis so seeded types
+          // are still readable.
+          const types = typeDefinitions?.typesById ?? buildUnboundTypes(seedTypes)
+          const explicitPropertySeeds = rt.read(definitionSeedsFacet)
+          // Auto-contribute the property seeds a type embedded in its `properties` but
+          // the author didn't seed separately (own-owned only) so an inline-only
+          // property still materializes a backing block instead of dangling — see
+          // `harvestNestedPropertySeeds`. Scoped to the pinned branch: harvest needs
+          // the winner set (`typeDefinitions`), and nothing materializes pre-pin. The
+          // harvested seeds flow through the SAME property-registry build below, so
+          // they reach schema resolution AND `workspaceSeeds` materialization for free.
+          const harvested = typeDefinitions
+            ? harvestNestedPropertySeeds(typeDefinitions, explicitPropertySeeds)
+            : []
+          // Avoid copying the (potentially large) explicit set on every rebuild when
+          // no type carries an own-owned inline property — the common case.
+          const seeds = harvested.length > 0
+            ? [...explicitPropertySeeds, ...harvested]
+            : explicitPropertySeeds
+          const propertySeedNameCounts = new Map<string, number>()
+          for (const seed of seeds) {
+            propertySeedNameCounts.set(
+              seed.name,
+              (propertySeedNameCounts.get(seed.name) ?? 0) + 1,
+            )
+          }
+          const propertyDefinitions = this.activeWorkspaceId
+            && this.canBuildPropertyDefinitionsForWorkspace(this.activeWorkspaceId)
+            ? buildPropertyDefinitionRegistry({
+              workspaceId: this.activeWorkspaceId,
+              projectedDefinitions: rt.read(projectedPropertyDefinitionsFacet),
+              seeds,
+            })
+            : null
+          const propertySchemas = propertyDefinitions?.schemas
+            ?? buildUnboundPropertySchemas(seeds)
+          target.applyTypesAndSchemas(
+            types,
+            propertySchemas,
+            propertyDefinitions,
+            propertySeedNameCounts,
+            typeDefinitions,
+          )
+          // Reproject rows whose ref-ness changed in this rebuild (e.g. a plugin
+          // load makes a name ref-typed). A newly-OPENED workspace's existing
+          // rows are handled separately, once per workspace, by
+          // `scheduleWorkspaceRefBackfill` from `bootstrapWorkspace` — the
+          // prev-vs-new diff here can't see them when a ref-typed name is
+          // unchanged from the previously-active workspace.
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
+          // No property-SPECIFIC reference-target rederive here. Recognition
+          // is form-agnostic (a whole-block reference that resolves to a
+          // definition, §7) and resolution uses the ONE normal alias policy,
+          // so a definition add/rename needs no bespoke property rederive. If
+          // auto-claim (a later change) makes a definition name-resolvable,
+          // that alias claim rides the normal alias-creation path, whose
+          // generic late-binding rederive (referencesProcessor) already
+          // repairs `[[name]]` rows — exactly like a `[[Foo]]` row reclaiming
+          // when page Foo is created.
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
           this.propertySchemasListeners.notify()
@@ -272,20 +437,6 @@ export class FacetBridge {
         run: (rt) => {
           target.applyPropertyEditorOverrides(rt.read(propertyEditorOverridesFacet))
           this.propertyEditorOverridesListeners.notify()
-        },
-      },
-      {
-        id: 'valuePresets',
-        inputs: [
-          valuePresetCoresFacet as Facet<unknown, unknown>,
-          valuePresetPresentationsFacet as Facet<unknown, unknown>,
-          valuePresetsFacet as Facet<unknown, unknown>,
-        ],
-        run: (rt) => {
-          const presets = readValuePresetRegistry(rt)
-          target.applyValuePresetCores(presets.cores)
-          target.applyValuePresets(rt.read(valuePresetsFacet))
-          this.valuePresetsListeners.notify()
         },
       },
       {

@@ -10,7 +10,7 @@ import { actionsFacet } from '@/extensions/core.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
-import { ActionConfig, ActionContextTypes, type ActionTrigger, type BaseShortcutDependencies } from '@/shortcuts/types.js'
+import { ActionConfig, ActionContextTypes, type ActionDispatch, type ActionTrigger, type BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { invokeAction } from '@/shortcuts/actionDispatch.js'
 import {
@@ -335,12 +335,8 @@ describe('srsReschedulingPlugin', () => {
   })
 
   it('binds the reschedule toast to the block\'s workspace, not the active one (#186)', async () => {
-    // The reschedule writes to `block` (ws-1), pinning its undo entry to
-    // ws-1's manager — regardless of which workspace is active. The toast
-    // must capture the reschedule's OWN workspace + entry, NOT the active
-    // workspace: pre-fix it read `activeWorkspaceId` / the active manager
-    // after the `rescheduleBlock` await, so a workspace switch in that
-    // window bound the toast (and its Undo) to an unrelated workspace.
+    // The workspace switch lands after the reschedule commits, before its
+    // toast reads the undo entry.
     showCustomMock.mockClear()
     const { repo } = createTestRepo({
       db: sharedDb.db,
@@ -355,8 +351,13 @@ describe('srsReschedulingPlugin', () => {
     const block = repo.block('card')
     await block.load()
 
-    // User is viewing a DIFFERENT workspace than the block's when cmd-Z'd.
-    repo.setActiveWorkspaceId('ws-2')
+    repo.setActiveWorkspaceId('ws-1')
+    const undoGroup = repo.undoGroup.bind(repo)
+    vi.spyOn(repo, 'undoGroup').mockImplementationOnce(async fn => {
+      const result = await undoGroup(fn)
+      repo.setActiveWorkspaceId('ws-2')
+      return result
+    })
 
     const reschedule = getEffectiveActions(runtime).find(it => it.id === 'srs.reschedule.good')!
     // handler takes (deps, trigger, dispatch?); the reschedule handler ignores
@@ -428,6 +429,100 @@ describe('srsReschedulingPlugin', () => {
     await plainBlock.load()
     await dispatchForBlock(runtime, action, plainBlock)
     expect(baseSwipeRight).toHaveBeenCalledOnce()
+  })
+
+  it('forwards `dispatch` to the handler it delegates to', async () => {
+    // Every other dispatch wrap in the repo forwards it; dropping it here means
+    // an inner handler that wants to trigger a follow-up action gets undefined.
+    const seen: Array<unknown> = []
+    const { repo } = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      extensions: [
+        dailyNotesDataExtension,
+        srsReschedulingPlugin,
+        actionsFacet.of({
+          id: SWIPE_RIGHT_BLOCK_ACTION_ID,
+          description: 'Swipe right',
+          context: ActionContextTypes.NORMAL_MODE,
+          handler: (async (
+            _deps: BaseShortcutDependencies,
+            _trigger: ActionTrigger,
+            dispatch?: ActionDispatch,
+          ) => { seen.push(dispatch) }) as never,
+        }, {source: 'test'}),
+      ],
+    })
+    const runtime = repo.facetRuntime!
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'plain-dispatch',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Plain',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed dispatch block'})
+
+    const action = getEffectiveActions(runtime)
+      .find(it => it.id === SWIPE_RIGHT_BLOCK_ACTION_ID) as ActionConfig
+    const block = repo.block('plain-dispatch')
+    await block.load()
+
+    const dispatch: ActionDispatch = {activate: vi.fn(), deactivate: vi.fn()}
+    await invokeAction(runtime, {
+      action,
+      deps: {block, uiStateBlock: block} as unknown as BaseShortcutDependencies,
+      trigger: {} as ActionTrigger,
+      dispatch,
+    })
+
+    expect(seen).toEqual([dispatch])
+  })
+
+  it('archives once, then lets the press fall through to the todo cycle', async () => {
+    // The archive claim is a latch, not a sink: before this, an SRS block
+    // swallowed cmd-enter forever and nothing downstream ever ran on it.
+    const { repo } = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      extensions: [
+        dailyNotesDataExtension,
+        todoDataExtension,
+        todoActionsExtension,
+        srsReschedulingPlugin,
+      ],
+    })
+    const runtime = repo.facetRuntime!
+
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'srs-latch',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a0',
+        content: 'SRS latch',
+      })
+      await repo.addTypeInTx(tx, 'srs-latch', SRS_SM25_TYPE, {}, snapshot)
+    }, {scope: ChangeScope.BlockDefault, description: 'seed latch block'})
+
+    const action = getEffectiveActions(runtime).find(it =>
+      it.id === TODO_CYCLE_ACTION_ID && it.context === ActionContextTypes.NORMAL_MODE
+    ) as ActionConfig<typeof ActionContextTypes.NORMAL_MODE> | undefined
+
+    const block = repo.block('srs-latch')
+    await block.load()
+
+    await dispatchForBlock(runtime, action, block)
+    expect(block.get(srsArchivedProp)).toBe(true)
+    expect(block.types).not.toContain(TODO_TYPE)
+
+    await dispatchForBlock(runtime, action, block)
+    expect(block.get(srsArchivedProp)).toBe(true)
+    expect(block.types).toContain(TODO_TYPE)
+    expect(block.get(statusProp)).toBe('open')
   })
 
   it('decorates cmd-enter todo cycle actions to archive SRS blocks', async () => {

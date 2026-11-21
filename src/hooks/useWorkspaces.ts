@@ -4,6 +4,7 @@ import { useHash } from 'react-use'
 import { useRepo } from '@/context/repo'
 import { parseAppHash } from '@/utils/routing'
 import type { Workspace, WorkspaceMembership, WorkspaceRole } from '@/types'
+import { parsePropertiesMigration } from '@/data/workspaceSchema'
 
 /** The active workspace id, re-rendered reactively on a workspace switch.
  *
@@ -38,6 +39,7 @@ interface WorkspaceRowResult {
   update_time: number
   encryption_mode: string
   wk_canary: string | null
+  properties_migration: string | null
 }
 
 interface WorkspaceMemberRowResult {
@@ -49,7 +51,8 @@ interface WorkspaceMemberRowResult {
 }
 
 const SELECT_WORKSPACES_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode,
+         wk_canary, properties_migration
   FROM workspaces
   ORDER BY create_time ASC, id ASC
 `
@@ -69,6 +72,7 @@ const parseWorkspace = (row: WorkspaceRowResult): Workspace => ({
   updateTime: row.update_time,
   encryptionMode: row.encryption_mode,
   wkCanary: row.wk_canary,
+  propertiesMigration: parsePropertiesMigration(row.properties_migration),
 })
 
 const parseMember = (row: WorkspaceMemberRowResult): WorkspaceMembership => ({

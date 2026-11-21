@@ -20,6 +20,10 @@ const editorAutocompleteContribution: CodeMirrorExtensionContribution = () => [
   autocompletion({
     defaultKeymap: false,
     icons: false,
+    // The default is 100ms. Local editor sources are already bounded and
+    // async, so a shorter quiet window makes the popup feel immediate while
+    // still coalescing bursty input into the newest completion request.
+    activateOnTypingDelay: 40,
     // Reuses the existing reference-autocomplete theme class so the
     // styles in `referenceAutocompleteTheme` (contributed by the
     // references plugin) apply to every dropdown uniformly. A plugin

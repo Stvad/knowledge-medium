@@ -783,7 +783,7 @@ The **paste / import / agent-runtime** paths must be audited to confirm they do 
 
 ## 10. Phased plan
 
-Each phase is an independent commit; each leaves `yarn tsc -b` and `yarn vitest run` green.
+Each phase is an independent commit; each leaves `pnpm tsc -b` and `pnpm vitest run` green.
 
 ### Phase 1 — Schema + recompute + RLS
 
@@ -832,7 +832,7 @@ Each phase is an independent commit; each leaves `yarn tsc -b` and `yarn vitest 
 - Extend `BlockData` and `parseBlockRow`.
 - Add `applyBlockChange` immutability guard for `effectiveShareIds`.
 
-**Verification:** `yarn tsc -b` clean; existing tests pass with fixture updates that set `effectiveShareIds: []`.
+**Verification:** `pnpm tsc -b` clean; existing tests pass with fixture updates that set `effectiveShareIds: []`.
 
 ### Phase 5 — Routing + share-mode bootstrap
 

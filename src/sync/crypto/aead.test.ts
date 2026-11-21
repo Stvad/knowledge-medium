@@ -29,6 +29,23 @@ describe('AES-256-GCM seal/open', () => {
     expect(await open(key, envelope, aad)).toBe('')
   })
 
+  it('round-trips a leading U+FEFF instead of eating it as a byte-order mark (#534)', async () => {
+    // A default `new TextDecoder()` strips a leading U+FEFF, so `open` used
+    // to return this content one character short — silent corruption of any
+    // encrypted block whose first character is a zero-width no-break space,
+    // made permanent the moment that device saved the block back. Written as
+    // `\ufeff` escapes on purpose: a literal BOM here would be invisible to
+    // a reader and easy for an editor to eat. The cases pin the boundary the
+    // decoder actually has — it strips at most one, and only at offset 0 —
+    // so a doubled BOM must come back with both, and an interior one (never
+    // at risk) guards against over-correcting into a strip-everywhere fix.
+    const key = await keyFrom(0x01)
+    const aad = contentAad('block-1', 'ws-A', 'content')
+    for (const plaintext of ['\ufeff', '\ufeffhi', '\ufeff\ufeffhi', 'a\ufeffb']) {
+      expect(await open(key, await seal(key, plaintext, aad), aad)).toBe(plaintext)
+    }
+  })
+
   it('produces a fresh nonce per seal (distinct envelopes for identical input)', async () => {
     const key = await keyFrom(0x01)
     const aad = contentAad('block-1', 'ws-A', 'content')

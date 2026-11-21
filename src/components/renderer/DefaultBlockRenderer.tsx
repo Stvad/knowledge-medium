@@ -1,10 +1,11 @@
+import { writeTextToClipboard } from '@/utils/copy.js'
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
 import { cn } from '@/lib/utils'
 import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
-import type { ComponentType, FunctionComponent, RefObject } from 'react'
+import type { ComponentType, FunctionComponent, ReactNode, RefObject } from 'react'
 import {
   showPropertiesProp,
   isCollapsedProp,
@@ -13,7 +14,11 @@ import {
 } from '@/data/properties.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
-import { useRef, useMemo } from 'react'
+import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
+import { BlockGutterHost, createGutterControls, useGutterControlsItem, type HostGutterItem } from '@/components/renderer/BlockGutter.js'
+import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
+import { openDialog } from '@/utils/dialogs.js'
+import { useRef, useMemo, useEffect, useState } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -22,8 +27,8 @@ import {
   useInEditMode,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
-import { buildAppHash } from '@/utils/routing.js'
-import { navigate, useOpenBlock } from '@/utils/navigation.js'
+import { useAppHashInContext } from '@/context/layoutWsContext.js'
+import { navigate, useOpenBlock, ZOOM_ORIGIN } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -37,22 +42,31 @@ import {
   ContextMenuContent,
 } from '@/components/ui/context-menu.js'
 import { useBlockContext } from '@/context/block.js'
-import { useHasChildren, usePropertyValue } from '@/hooks/block.js'
+import { useBlockAliases, useHasChildren, usePropertyValue } from '@/hooks/block.js'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import type { Facet } from '@/facets/facet.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
+  blockBulletClassFacet,
+  blockBulletHoverFacet,
+  blockBelowContentFacet,
   blockChildrenFooterFacet,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
+  blockReadContentDecoratorsFacet,
+  BLOCK_BULLET_ATTRIBUTE,
+  BLOCK_CONTENT_VIEW_ATTRIBUTE,
   blockContentSurfacePropsFacet,
+  blockContextMenuItemsFacet,
   blockHeaderFacet,
   blockLayoutFacet,
   blockShellDecoratorsFacet,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
+  type BlockSectionsResolver,
   type BlockShellDecorator,
   type BlockShellRender,
   type BlockShellSlot,
@@ -66,6 +80,14 @@ import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  /** Declares that the `ContentRenderer` composed here fills the slot with
+   *  OTHER blocks' rows — see `Variant.showsOtherBlocks`, which says the same
+   *  thing for a renderer that arrives through the facet instead. */
+  contentShowsOtherBlocks?: boolean;
+  /** The layout for the block this renderer composes, in place of the
+   *  `blockLayoutFacet` resolution — for a renderer whose block has a shape of
+   *  its own (a property row's two-column grid). */
+  Layout?: BlockLayout;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -81,98 +103,204 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
  */
 
 const copyBlockId = (block: Block) => {
-  navigator.clipboard.writeText(block.id)
+  void writeTextToClipboard(block.id)
 }
 
 const copyBlockRef = (block: Block) => {
-  navigator.clipboard.writeText(`((${block.id}))`)
+  void writeTextToClipboard(`((${block.id}))`)
 }
 
 const copyBlockEmbed = (block: Block) => {
-  navigator.clipboard.writeText(`!((${block.id}))`)
+  void writeTextToClipboard(`!((${block.id}))`)
 }
 
-const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {
+const zoomIn = (block: Block, workspaceId: string, {panelId, renderScopeId}: {panelId?: string; renderScopeId?: string}) => {
   if (typeof window !== 'undefined') {
-    navigate(block.repo, panelId
-      ? {blockId: block.id, workspaceId, target: 'panel', panelId}
-      : {blockId: block.id, workspaceId, target: 'active'})
+    const input = {blockId: block.id, workspaceId, origin: ZOOM_ORIGIN, sourceRenderScopeId: renderScopeId}
+    void navigate(block.repo, panelId ? {...input, target: 'panel', panelId} : {...input, target: 'active'})
   }
 }
 
 /** Static bullet visual — pure markup, no link/menu/data dependency.
  *  Exported so LazyBlockComponent can reuse the exact same dot in its
  *  placeholder, keeping placeholder layout aligned with mounted blocks. */
-export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicator?: boolean }) {
+export function BulletDot({withChildrenIndicator = false, className = ''}: {
+  withChildrenIndicator?: boolean
+  /** Plugin-contributed classes for this bullet (`blockBulletClassFacet`).
+   *  Applied to the dot, so it composes with the collapsed halo rather than
+   *  replacing it. */
+  className?: string
+}) {
   return (
     <span
       className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '')}/>
+        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '') +
+        (className ? ` ${className}` : '')}/>
   )
 }
 
-const BlockBullet = ({block}: { block: Block }) => {
+const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: BlockResolveContext }) => {
   const repo = useRepo()
-  const {panelId} = useBlockContext()
+  const runtime = useAppRuntime()
+  const {panelId, renderScopeId} = useBlockContext()
+  const isMobile = useIsMobile()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const hasChildren = useHasChildren(block)
 
+  // Bullet classes contributed by plugins (the alias plugin rings a page's
+  // bullet). `aliases` is read HERE, reactively, for the same reason the text
+  // classes are: a contribution can't call hooks, and reading `block.peek()`
+  // inside one would freeze at resolve time, so naming a block wouldn't
+  // re-mark it. See `blockBulletClassFacet`.
+  const aliases = useBlockAliases(block)
+  const resolveBulletClasses = runtime.read(blockBulletClassFacet)
+  const bulletClass = resolveBulletClasses({block, aliases})
+
+  // Bullet hover-card sections contributed by plugins (block-info, …). Empty
+  // on a stock build — then the hover-intent and "Block info" menu item below
+  // are inert / hidden, so the bullet behaves exactly as before.
+  const resolveBulletHover = runtime.read(blockBulletHoverFacet)
+  const hoverSections = useMemo(
+    () => resolveBulletHover(resolveContext),
+    [resolveBulletHover, resolveContext],
+  )
+  const hasHoverSections = hoverSections.length > 0
+  // Desktop-only hover; touch users reach the same content via the context
+  // menu's "Block info" item (which works with a mouse too).
+  const hover = useBulletHover(hasHoverSections && !isMobile)
+
+  // Context menu items contributed by plugins (see `blockContextMenuItemsFacet`).
+  // Empty on a stock build — then the separator below is skipped and the menu
+  // is exactly the five hardcoded items, unchanged.
+  const resolveContextMenuItems = runtime.read(blockContextMenuItemsFacet)
+  const contributedItems = useMemo(
+    () => resolveContextMenuItems(resolveContext),
+    [resolveContextMenuItems, resolveContext],
+  )
+  const hasContributedItems = contributedItems.length > 0
+
+  const openBlockInfo = () => {
+    // Pass the originating panel — see BlockInfoDialogProps.panelId.
+    void openDialog(BlockInfoDialog, {block, sections: hoverSections, panelId})
+  }
+
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
   const workspaceId = repo.activeWorkspaceId!
-  const onClick = useOpenBlock({blockId: block.id, workspaceId})
+  const onClick = useOpenBlock({blockId: block.id, workspaceId}, {origin: ZOOM_ORIGIN})
+  const bulletHref = useAppHashInContext(workspaceId, block.id)
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <a
-          href={buildAppHash(workspaceId, block.id)}
-          className="bullet-link flex items-center justify-center h-6 w-5"
-          onClick={onClick}
-        >
-          <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
-        </a>
-      </ContextMenuTrigger>
-      <ContextMenuPortal>
-        <ContextMenuContent
-          className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
-        >
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => copyBlockId(block)}
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <a
+            href={bulletHref}
+            className="bullet-link flex items-center justify-center h-6 w-5"
+            {...{[BLOCK_BULLET_ATTRIBUTE]: 'true'}}
+            // An `<a>` is draggable by default; a native link drag would
+            // hijack the press-drag that block drag-and-drop starts here.
+            draggable={false}
+            onClick={(event) => {
+              hover.close()
+              onClick(event)
+            }}
+            onMouseEnter={hover.anchorHoverProps.onMouseEnter}
+            onMouseLeave={hover.anchorHoverProps.onMouseLeave}
           >
-            Copy ID
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => copyBlockRef(block)}
+            <BulletDot withChildrenIndicator={hasChildren && isCollapsed} className={bulletClass}/>
+          </a>
+        </ContextMenuTrigger>
+        <ContextMenuPortal>
+          <ContextMenuContent
+            className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
           >
-            Copy Block Ref
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => copyBlockEmbed(block)}
-          >
-            Copy Block Embed
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => zoomIn(block, workspaceId, panelId)}
-          >
-            Zoom In
-          </ContextMenuItem>
-          <ContextMenuSeparator className="h-px bg-border my-1"/>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => setShowProperties(!showProperties)}
-          >
-            {showProperties ? 'Hide' : 'Show'} Properties
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenuPortal>
-    </ContextMenu>
+            {hasHoverSections && (
+              <>
+                <ContextMenuItem
+                  className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+                  onSelect={openBlockInfo}
+                >
+                  Block info
+                </ContextMenuItem>
+                <ContextMenuSeparator className="h-px bg-border my-1"/>
+              </>
+            )}
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockId(block)}
+            >
+              Copy ID
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockRef(block)}
+            >
+              Copy Block Ref
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockEmbed(block)}
+            >
+              Copy Block Embed
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => zoomIn(block, workspaceId, {panelId, renderScopeId})}
+            >
+              Zoom In
+            </ContextMenuItem>
+            <ContextMenuSeparator className="h-px bg-border my-1"/>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => setShowProperties(!showProperties)}
+            >
+              {showProperties ? 'Hide' : 'Show'} Properties
+            </ContextMenuItem>
+            {hasContributedItems && (
+              <>
+                <ContextMenuSeparator className="h-px bg-border my-1"/>
+                {contributedItems.map(item => (
+                  // Extension boundary: a contributed item that throws while
+                  // RENDERING (e.g. a broken `icon`) stays contained to its own
+                  // row instead of taking out the menu. A throwing `onSelect`
+                  // is an event-handler throw and is deliberately NOT covered —
+                  // React error boundaries can't catch those, and it can't
+                  // corrupt the render either way.
+                  <ExtensionRenderBoundary key={item.id}>
+                    <ContextMenuItem
+                      className={`flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm${
+                        item.destructive ? ' text-destructive hover:bg-destructive/10' : ''
+                      }`}
+                      onSelect={item.onSelect}
+                    >
+                      {item.icon && <item.icon className="mr-2 h-4 w-4"/>}
+                      {item.label}
+                    </ContextMenuItem>
+                  </ExtensionRenderBoundary>
+                ))}
+              </>
+            )}
+          </ContextMenuContent>
+        </ContextMenuPortal>
+      </ContextMenu>
+      <BulletHoverCard
+        open={hover.open}
+        anchorEl={hover.anchorEl}
+        hoverProps={hover.cardHoverProps}
+      >
+        {hoverSections.map((Section, index) => (
+          // Extension boundary (error + Suspense): a contributed section may
+          // throw OR suspend (e.g. block.read()); either must stay contained
+          // to this row, not bubble out of the block renderer.
+          <ExtensionRenderBoundary key={index}>
+            <Section block={block}/>
+          </ExtensionRenderBoundary>
+        ))}
+      </BulletHoverCard>
+    </>
   )
 }
 
@@ -189,13 +317,13 @@ const ExpandButton = ({block}: { block: Block }) => {
 
   // - mobile: always visible (touch UIs have no hover affordance)
   // - desktop with children: hidden until the parent block-group is hovered
-  // - desktop leaf: invisible placeholder so layout doesn't reflow on
-  //   children appearing/disappearing
+  // - desktop leaf: inert, invisible placeholder so layout doesn't reflow on
+  //   children appearing/disappearing, and a miss can't collapse a row unseen
   const visibilityClass = isMobile
     ? 'opacity-100'
     : hasChildren
       ? 'opacity-0 group-hover/block:opacity-100'
-      : 'opacity-0'
+      : 'pointer-events-none opacity-0'
 
   // On touch devices the synthesized `click` arrives after a small
   // delay and after `pointerup`/`touchend`; if anything between those
@@ -211,6 +339,15 @@ const ExpandButton = ({block}: { block: Block }) => {
     })
   }
 
+  // On mobile the button sits in the gutter, beside pills. The glyph keeps to
+  // the box's left edge, so the gap before it matches the gap between pills;
+  // the box's empty right part and the strips above and below it keep the tap
+  // target near 32px without reaching left over the pill. It cannot reach
+  // right instead: `.block-content` clips horizontal overflow, hits included.
+  const sizeClass = isMobile
+    ? 'relative h-6 w-6 justify-start before:absolute before:inset-x-0 before:-inset-y-1'
+    : 'h-6 w-3'
+
   return (
     <Button
       variant="ghost"
@@ -222,7 +359,7 @@ const ExpandButton = ({block}: { block: Block }) => {
         e.stopPropagation()
         toggle()
       }}
-      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, isMobile ? 'h-8 w-8' : 'h-6 w-3')}
+      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, sizeClass)}
     >
       <span className="text-lg text-muted-foreground">
         {isCollapsed ? '▸' : '▾'}
@@ -230,6 +367,10 @@ const ExpandButton = ({block}: { block: Block }) => {
     </Button>
   )
 }
+
+/** On mobile the expand button sits in the gutter: the only item that may draw
+ *  over non-text content, where a row reserved for it alone would read oddly. */
+const MOBILE_EXPAND_GUTTER_ITEM: HostGutterItem = {corner: 'top-right', component: ExpandButton, overlay: true}
 
 
 
@@ -245,17 +386,49 @@ const ExpandButton = ({block}: { block: Block }) => {
  */
 export const DefaultBlockLayout: BlockLayout = ({
   block,
-  Content, Properties, Children, Footer,
+  Content, Properties, BelowContent, Children, Footer,
   Controls, Header,
   Shell,
+}) => (
+  <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}>
+    <div className="block-body flex-grow relative flex flex-col">
+      <div className="flex flex-col rounded-sm">
+        <Content/>
+        {Properties && <Properties/>}
+      </div>
+
+      <BelowContent/>
+
+      <CollapsibleContent>
+        <Children/>
+      </CollapsibleContent>
+
+      <Footer/>
+    </div>
+  </BlockFrame>
+)
+
+/**
+ * A block's interactive frame — the focusable, collapsible shell with its
+ * controls, selection and top-level marks — around a layout's own body. One
+ * owner for that chrome, so a layout that draws a different body (a property
+ * row) keeps every change made to it. The body sits inside the Collapsible, so
+ * a `CollapsibleContent` in it follows the block's collapse.
+ */
+export const BlockFrame = ({
+  block, Header, Shell, Controls, className = '', frameProps, children,
+}: Pick<BlockLayoutSlots, 'block' | 'Header' | 'Shell' | 'Controls'> & {
+  className?: string
+  frameProps?: Record<`data-${string}`, string>
+  children: ReactNode
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
-  // No per-block `view-transition-name`. Tried it (commit b1bfa4ef,
-  // reverted): the slide-between-positions effect was barely
-  // perceptible vs. the root-level crossfade we already get from
+  // No per-block `view-transition-name`. Tried it and reverted: the
+  // slide-between-positions effect was barely perceptible vs. the
+  // root-level crossfade we already get from
   // `withMoveTransition`, and it introduced two real issues —
   //  - per-block snapshots are lifted into the document-root overlay,
   //    so a block scrolled under the (in-flow) app header briefly
@@ -280,23 +453,12 @@ export const DefaultBlockLayout: BlockLayout = ({
           return (
             <Collapsible
               {...collapsibleProps}
+              {...frameProps}
               open={!isCollapsed || isTopLevel}
-              className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+              className={`tm-block${className ? ` ${className}` : ''} group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
-
-              <div className="block-body flex-grow relative flex flex-col">
-                <div className="flex flex-col rounded-sm">
-                  <Content/>
-                  {Properties && <Properties/>}
-                </div>
-
-                <CollapsibleContent>
-                  <Children/>
-                </CollapsibleContent>
-
-                <Footer/>
-              </div>
+              {children}
             </Collapsible>
           )
         }}
@@ -413,6 +575,7 @@ function BlockShell({
   // selection/focus), so paste composes with the rest of the shell decorators
   // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
+    'data-block-shell': 'true',
     'data-block-id': block.id,
     'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
@@ -424,6 +587,7 @@ function BlockShell({
       ? (event) => { void handleBlockClick(event) }
       : undefined,
   }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
+
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(
@@ -454,11 +618,37 @@ function BlockShell({
   )
 }
 
+/** A layout slot rendering a section facet's contributions in order, each in
+ *  its own error boundary. Memoized because the layout mounts the returned
+ *  component: a new identity would remount every section. */
+const useSectionsSlot = <Input,>(
+  facet: Facet<Input, BlockSectionsResolver>,
+  block: Block,
+  resolveContext: BlockResolveContext,
+): ComponentType => {
+  const runtime = useAppRuntime()
+  return useMemo(() => function BlockSectionsSlot() {
+    const resolveSections = runtime.read(facet)
+    const sections = useMemo(() => resolveSections(resolveContext), [resolveSections])
+    return (
+      <>
+        {sections.map((SectionRenderer, index) => (
+          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+            <SectionRenderer block={block}/>
+          </ErrorBoundary>
+        ))}
+      </>
+    )
+  }, [facet, block, resolveContext, runtime])
+}
+
 export function DefaultBlockRenderer(
   {
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    contentShowsOtherBlocks,
+    Layout: ComposedLayout,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -471,77 +661,43 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
+  const [gutterControls] = useState(createGutterControls)
   const isTopLevel = useIsFocalRender(block)
 
-  // The block's READ content, bare: the per-type read renderer in an error
-  // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
-  // The SINGLE definition of "what the read content is": the reference layout
-  // mounts it directly via the `RawContent` slot, AND it is the `primary`
-  // (display) slot of the edit dispatcher below — so the editable `Content` slot
-  // is literally chrome + edit-swap wrapped around this very node
-  // (`<Content><RawContent/></Content>` in read mode), not a parallel re-render of
-  // the same renderer. Built from `DefaultContentRenderer` (NOT the edit
-  // dispatcher), so a reference can never flip into an editor because the target
-  // is in edit mode elsewhere; it renders INLINE automatically inside a reference
-  // (the renderer derives inline from the `isReference` surface — no synthetic flag).
-  // Typed as a `FunctionComponent` (not `ComponentType`) so it's assignable both
-  // to the `RawContent` slot AND directly to the dispatcher's `primary`
-  // `BlockRenderer` slot below — no thunk needed.
+  const scopeRootId = blockContext.scopeRootId
+  const baseContext = useMemo<BlockResolveContext>(() => ({
+    block, repo, uiStateBlock, types, topLevelBlockId, scopeRootId, isTopLevel, blockContext,
+  }), [block, repo, uiStateBlock, types, topLevelBlockId, scopeRootId, isTopLevel, blockContext])
+  const decorateReadContent = runtime.read(blockReadContentDecoratorsFacet)
+  const ReadContentRenderer = useMemo(
+    () => decorateReadContent(baseContext, DefaultContentRenderer),
+    [baseContext, decorateReadContent, DefaultContentRenderer],
+  )
+
+  // References and the read side of edit-mode dispatch share this slot. Keep
+  // its identity independent of focus, selection and edits to the block text.
   const RawContentSlot = useMemo<FunctionComponent>(() => {
     return function BlockRawContentSlot() {
       return (
         <ErrorBoundary FallbackComponent={FallbackComponent}>
-          <DefaultContentRenderer block={block}/>
+          <ReadContentRenderer block={block}/>
         </ErrorBoundary>
       )
     }
-  }, [block, DefaultContentRenderer])
+  }, [block, ReadContentRenderer])
 
-  // Stable per-block resolver context — doesn't change on focus/edit/
-  // selection toggles, so facet resolvers and the components they
-  // produce keep stable identity. This is what stops UpdateIndicator
-  // (and any other content decorator) from remounting on every click.
-  const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
-    block,
-    repo,
-    uiStateBlock,
-    types,
-    topLevelBlockId,
-    scopeRootId,
-    isTopLevel,
-    blockContext,
+    ...baseContext,
     contentRenderers: [
-      // The display (read) slot IS `RawContent`: the edit dispatcher renders it in
-      // read mode (and the editor in edit mode), so the editable `Content` slot
-      // composes the same read node the reference layout mounts — one source of
-      // "the read content", not two.
-      {
-        id: 'primary',
-        renderer: RawContentSlot,
-      },
-      {
-        id: 'secondary',
-        renderer: EditContentRenderer,
-      },
+      {id: 'primary', renderer: RawContentSlot},
+      {id: 'secondary', renderer: EditContentRenderer},
     ],
-  }), [
-    block,
-    repo,
-    uiStateBlock,
-    types,
-    topLevelBlockId,
-    scopeRootId,
-    isTopLevel,
-    blockContext,
-    RawContentSlot,
-    EditContentRenderer,
-  ])
+  }), [baseContext, RawContentSlot, EditContentRenderer])
 
   // Only the layout is resolved eagerly — it decides which slots get mounted,
   // and each slot owns (and only then pays for) its own machinery: the gesture
   // ref + content/click/surface facets live in `Content`, the section facets in
-  // `Header`/`Footer`, and the whole interactive surface (paste, shell
+  // `Header`/`BelowContent`/`Footer`, and the whole interactive surface (paste, shell
   // decorators, shortcut activations) in `Shell`. A read-only layout (a block
   // reference) that mounts only `RawContent` therefore runs none of those
   // hooks — the lazy-slot equivalent of "don't allocate what you don't use".
@@ -549,8 +705,8 @@ export function DefaultBlockRenderer(
   // Last-wins on the variant facet. `DefaultBlockLayout` is the no-contribution
   // fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
-    [resolveContext, resolveBlockLayout],
+    () => ComposedLayout ?? resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
+    [ComposedLayout, resolveContext, resolveBlockLayout],
   )
 
   // Content slot: the editable content surface — gesture ref + surface props +
@@ -566,10 +722,27 @@ export function DefaultBlockRenderer(
       // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
       // hand back a new identity every render and remount the content subtree.
       const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-      const baseContentRenderer = useMemo(
-        () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
+      const contentVariant = useMemo(
+        () => resolveBlockContentRenderer(resolveContext).last,
         [resolveBlockContentRenderer],
       )
+      const baseContentRenderer = contentVariant?.render ?? RawContentSlot
+      // Is this slot filled with other blocks' rows (a review backlog, a deck,
+      // a recents list) rather than the block itself? Read from whoever CHOSE
+      // the renderer, never from the resolved component — that is a wrapper as
+      // often as not, and the editing dispatcher wraps every block's content
+      // renderer in the app.
+      //
+      // A contributed variant answers for itself, EXCEPT the deferring kind
+      // that renders what the block composed. Silence from a variant means
+      // "not a view", not "ask whoever I displaced": an override draws its own
+      // content, so inheriting the displaced view's answer would mark a row
+      // that no longer shows other blocks.
+      const showsOtherBlocks = contentVariant
+        ? (contentVariant.showsOtherBlocks === 'as-composed'
+            ? contentShowsOtherBlocks === true
+            : contentVariant.showsOtherBlocks === true)
+        : contentShowsOtherBlocks === true
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
       const ContentRenderer = useMemo(
         () => decorateContent(resolveContext, baseContentRenderer),
@@ -580,24 +753,37 @@ export function DefaultBlockRenderer(
         () => resolveContentSurfaceProps(resolveContext),
         [resolveContentSurfaceProps],
       )
-      // Top-of-panel content renders as a title: larger font, less bullet-list
-      // weight. The Controls slot already returns null for top-level so there's
-      // no inline bullet to suppress here.
+      // Marks the focal block's content slot. SPACING only — the gap under the
+      // document body, which is the slot's own business whatever it holds.
+      //
+      // Title TYPOGRAPHY is deliberately not here: this slot holds whatever
+      // renderer won the content facet — a review deck, a recents list, a video
+      // player, a Readwise backlog — and font-size/weight inherit, so styling
+      // the container styles an arbitrary plugin subtree. It lives on the
+      // renderers that draw the block's own TEXT instead (`blockTitleText.ts`).
+      // Page styling follows the same rule for the same reason — see
+      // `blockTitleText.ts` and the alias plugin's `pageStyling.ts`.
       const topLevelClass = isTopLevel ? ' top-level-content' : ''
       return (
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
+          {...(showsOtherBlocks ? {[BLOCK_CONTENT_VIEW_ATTRIBUTE]: 'true'} : {})}
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
-          <ErrorBoundary FallbackComponent={FallbackComponent}>
-            <ContentRenderer block={block}/>
-          </ErrorBoundary>
+          <BlockGutterHost resolveContext={resolveContext} controls={gutterControls}>
+            <ErrorBoundary FallbackComponent={FallbackComponent}>
+              <ContentRenderer block={block}/>
+            </ErrorBoundary>
+          </BlockGutterHost>
         </div>
       )
     }
-  }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
+  }, [
+    block, resolveContext, runtime, isTopLevel,
+    RawContentSlot, contentShowsOtherBlocks, contentContainerRef, gutterControls,
+  ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
@@ -612,77 +798,51 @@ export function DefaultBlockRenderer(
     }
   }, [block])
 
-  const FooterSlot = useMemo<ComponentType>(() => {
-    return function BlockFooterSlot() {
-      const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
-      const childrenFooterSections = useMemo(
-        () => resolveChildrenFooterSections(resolveContext),
-        [resolveChildrenFooterSections],
-      )
-      return (
-        <>
-          {childrenFooterSections.map((SectionRenderer, index) => (
-            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-              <SectionRenderer block={block}/>
-            </ErrorBoundary>
-          ))}
-        </>
-      )
-    }
-  }, [block, resolveContext, runtime])
+  const BelowContentSlot = useSectionsSlot(blockBelowContentFacet, block, resolveContext)
+  const FooterSlot = useSectionsSlot(blockChildrenFooterFacet, block, resolveContext)
+  const HeaderSlot = useSectionsSlot(blockHeaderFacet, block, resolveContext)
 
   // Controls slot: bullet + expand affordances. Self-aware of top-level
-  // (returns null since top-level blocks have no bullet) and of mobile
-  // (renders the expand button as a top-right floater rather than inline
-  // because mobile screens don't have desktop's horizontal real estate).
+  // (returns null since top-level blocks have no bullet) and of mobile, where
+  // there is no room for the expand button beside the bullet: it goes to the
+  // gutter instead. Handing it over from HERE, not contributing it to the
+  // gutter facet, is what keeps it off layouts that render Content but never
+  // collapse (a review card).
   const ControlsSlot = useMemo<ComponentType>(() => {
     return function BlockControlsSlot() {
       const isFocal = useIsFocalRender(block)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
+      useGutterControlsItem(gutterControls, !isFocal && isMobile && hasChildren ? MOBILE_EXPAND_GUTTER_ITEM : null)
 
       if (isFocal) return null
 
       return (
-        <>
-          <div className="block-controls flex items-center">
-            {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block}/>
-          </div>
-          {isMobile && hasChildren && (
-            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
-              <ExpandButton block={block}/>
-            </div>
-          )}
-        </>
+        <div className="block-controls flex items-center">
+          {!isMobile && <ExpandButton block={block}/>}
+          <BlockBullet block={block} resolveContext={resolveContext}/>
+        </div>
       )
     }
-  }, [block])
-
-  const HeaderSlot = useMemo<ComponentType>(() => {
-    return function BlockHeaderSlot() {
-      const resolveHeaderSections = runtime.read(blockHeaderFacet)
-      const headerSections = useMemo(
-        () => resolveHeaderSections(resolveContext),
-        [resolveHeaderSections],
-      )
-      return (
-        <>
-          {headerSections.map((SectionRenderer, index) => (
-            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-              <SectionRenderer block={block}/>
-            </ErrorBoundary>
-          ))}
-        </>
-      )
-    }
-  }, [block, resolveContext, runtime])
+  }, [block, resolveContext, gutterControls])
 
   // The opt-in interactive shell. Layouts render `<Shell>{shellProps => …}</Shell>`
   // to become focusable/editable; the shell's machinery (paste/click, shell
   // decorators, shortcut activations) only runs when mounted — see `BlockShell`.
   const ShellSlot = useMemo<BlockShellSlot>(() => {
-    return function BlockShellSlot({children}: BlockShellSlotProps) {
+    return function BlockShellSlot({children, shortcutsOnly}: BlockShellSlotProps) {
+      // Dropping `shellProps` costs the block its identity in the DOM — its
+      // boundary, focus and edit tagging, the shell click, and (through `ref`)
+      // the spatial-nav row. Consumers then resolve to an ancestor instead,
+      // and nothing says so. `ref` is the detector: it can only stay null if no
+      // element received the props.
+      useEffect(() => {
+        if (!import.meta.env.DEV || shortcutsOnly || shellRef.current) return
+        console.error(
+          `Block ${resolveContext.block.id}: its layout mounted Shell without spreading shellProps. ` +
+          'Pass shortcutsOnly if that is deliberate.',
+        )
+      }, [shortcutsOnly])
       return (
         <BlockShell
           resolveContext={resolveContext}
@@ -700,6 +860,7 @@ export function DefaultBlockRenderer(
     Content: ContentSlot,
     RawContent: RawContentSlot,
     Properties: PropertiesSlot,
+    BelowContent: BelowContentSlot,
     Children: ChildrenSlot,
     Footer: FooterSlot,
     Controls: ControlsSlot,

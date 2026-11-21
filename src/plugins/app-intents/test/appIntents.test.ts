@@ -1,20 +1,17 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { editorSelection } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
-  panelRowsInLayoutOrder,
+  allPanelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { __resetAppIntentForTesting, consumeAppIntent, formatSharedContent } from '../appIntents.ts'
 import {
@@ -92,7 +89,7 @@ const seedLandingLayout = async () => {
     })
   }, {scope: ChangeScope.BlockDefault})
   const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-  const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+  const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
   await insertPanelRow(env.repo, layoutSession, 'main-block')
   return {daily, layoutSession}
 }
@@ -118,7 +115,7 @@ describe('consumeAppIntent', () => {
   it('does nothing when no intent params are present', async () => {
     const {daily, layoutSession} = await seedLandingLayout()
     await consumeAppIntent(env.repo, layoutSession)
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(0)
   })
 
@@ -128,7 +125,7 @@ describe('consumeAppIntent', () => {
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(1)
     expect(env.repo.block(dailyChildren[0]).peek()?.content).toBe('')
     expect(window.location.search).toBe('')
@@ -140,7 +137,7 @@ describe('consumeAppIntent', () => {
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(1)
     const expectedContent = 'Hello\nhttps://x/y'
     const newBlockId = dailyChildren[0]
@@ -148,7 +145,7 @@ describe('consumeAppIntent', () => {
     expect(window.location.search).toBe('')
 
     const layoutRows = await env.repo.query.subtree({id: layoutSession.id}).load()
-    const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)
+    const newPanel = allPanelRowsInLayoutOrder(layoutSession.id, layoutRows)
       .find(row => panelBlockId(row) === newBlockId)
     expect(newPanel).toBeTruthy()
     const selection = env.repo.block(newPanel!.id).peekProperty(editorSelection)
@@ -163,7 +160,7 @@ describe('consumeAppIntent', () => {
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(1)
     expect(env.repo.block(dailyChildren[0]).peek()?.content).toBe('Just a note')
   })
@@ -178,7 +175,7 @@ describe('consumeAppIntent', () => {
     setLocationSearch('?intent=new-daily-block')
     await consumeAppIntent(env.repo, layoutSession)
 
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(1)
   })
 
@@ -192,7 +189,7 @@ describe('consumeAppIntent', () => {
     expect(runActionByIdMock.mock.calls[0][0]).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
     expect(window.location.search).toBe('')
     // Picker is a UI-only intent — must not create a block.
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(0)
   })
 
@@ -205,7 +202,7 @@ describe('consumeAppIntent', () => {
     expect(runActionByIdMock).toHaveBeenCalledTimes(1)
     expect(runActionByIdMock.mock.calls[0][0]).toBe(QUICK_FIND_ACTION_ID)
     expect(window.location.search).toBe('')
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(0)
   })
 
@@ -220,7 +217,7 @@ describe('consumeAppIntent', () => {
     // No block created — appendTodayDailyBlockInStack early-returns
     // when read-only — and the URL still carries the share payload
     // so a reload (after read-only is lifted) can retry.
-    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    const dailyChildren = await childIdsOf(env.repo, daily.id)
     expect(dailyChildren).toHaveLength(0)
     expect(window.location.search).toBe(sharedQuery)
   })

@@ -25,7 +25,7 @@ export function Header() {
   const endItems = items.filter(item => item.region === 'end')
 
   return (
-    <div className="flex flex-nowrap items-center gap-x-1 px-2 py-1 sm:gap-x-2 sm:py-2 md:flex-wrap md:justify-between md:gap-x-4 md:gap-y-2 md:px-0">
+    <div className="flex flex-nowrap items-center gap-x-1 px-2.5 py-1 sm:gap-x-2 sm:py-2 md:flex-wrap md:justify-between md:gap-x-4 md:gap-y-2 md:px-2">
       <HeaderRegion items={startItems} className="shrink-0 md:flex-1 md:basis-40"/>
       <HeaderRegion items={endItems} className="ml-auto flex-1 justify-end overflow-hidden md:ml-0 md:max-w-full md:flex-none md:flex-wrap"/>
     </div>

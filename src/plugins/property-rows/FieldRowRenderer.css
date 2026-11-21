@@ -1,0 +1,21 @@
+.tm-property-field-row {
+  container: property-field-row / inline-size;
+}
+
+@container property-field-row (width < 28rem) {
+  .tm-property-field-row [data-property-row-layout="true"] {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.125rem;
+  }
+
+  .tm-property-field-row [data-property-value-cell="true"] {
+    padding-inline-start: 1rem;
+  }
+}
+
+@container property-field-row (width >= 28rem) {
+  .tm-property-field-row[data-expanded-single-leaf="true"] > .block-controls > .expand-collapse-button,
+  .tm-property-field-row[data-expanded-single-leaf="true"] > .block-body > [data-property-row-layout] > [data-property-name-cell] .expand-collapse-button {
+    visibility: hidden;
+  }
+}

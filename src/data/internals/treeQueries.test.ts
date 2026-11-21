@@ -15,17 +15,23 @@
  *     duplicate explosion.
  *   - Depth guard: a non-cyclic deep chain past 100 levels truncates.
  *   - Soft-deleted blocks excluded from results.
- *   - Ancestors leaf-to-root order; subtree skip-self.
+ *   - Ancestors leaf-to-root order.
  *   - isDescendantOf: positive + negative + identity + missing-id.
+ *
+ * `treeQueries.fuzz.test.ts` diffs the same statements against a JS walk on
+ * random graphs; these pin the named shapes and the depth cap it cannot reach.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
-  ANCESTORS_SQL,
   CHILDREN_SQL,
   IS_DESCENDANT_OF_SQL,
+  manyAncestorsSql,
+  NO_REGISTRY_RECOGNITION_PARAMS,
   SUBTREE_SQL,
+  VISIBLE_CHILDREN_SQL,
+  VISIBLE_SUBTREE_SQL,
 } from './treeQueries'
 
 interface Seed {
@@ -34,10 +40,10 @@ interface Seed {
   order_key?: string
   workspace_id?: string
   deleted?: 0 | 1
-  /** Skip the workspace-invariant trigger by leaving tx_context.source NULL.
-   *  Sync-applied seeds (default for tests) bypass parent-validation per §4.1.1. */
 }
 
+/** Skip the workspace-invariant trigger by leaving tx_context.source NULL.
+ *  Sync-applied seeds (default for tests) bypass parent-validation per §4.1.1. */
 const insertOne = async (db: TestDb['db'], seed: Seed): Promise<void> => {
   await db.execute(
     `INSERT INTO blocks
@@ -56,10 +62,14 @@ const insertOne = async (db: TestDb['db'], seed: Seed): Promise<void> => {
 
 const seed = (db: TestDb['db'], rows: Seed[]) => Promise.all(rows.map(r => insertOne(db, r)))
 
+/** One DB for the file; each describe starts from a reset, and the tests
+ *  inside one use disjoint ids. */
+let h: TestDb
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+
 describe('SUBTREE_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   it('returns the root + descendants in depth-first sibling order', async () => {
     await seed(h.db, [
@@ -130,28 +140,75 @@ describe('SUBTREE_SQL', () => {
   })
 })
 
-describe('ANCESTORS_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+describe('manyAncestorsSql', () => {
+  beforeAll(() => resetTestDb(h.db))
 
-  it('returns parents leaf-to-root, excluding self', async () => {
+  /** What `ancestorWalk` does with the result: depth 0 is the seed,
+   *  the rest is the chain. */
+  const walk = (rows: {id: string; depth: number}[]) =>
+    ({seed: rows[0]?.id, chain: rows.slice(1).map(r => r.id)})
+
+  it('returns the seed at depth 0, then its parents leaf-to-root', async () => {
     await seed(h.db, [
       {id: 'gp',    parent_id: null,  order_key: 'a0'},
       {id: 'p',     parent_id: 'gp',  order_key: 'a0'},
       {id: 'self',  parent_id: 'p',   order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string}>(ANCESTORS_SQL, ['self', 'self'])
-    expect(rows.map(r => r.id)).toEqual(['p', 'gp'])
+    const rows = await h.db.getAll<{id: string; depth: number}>(manyAncestorsSql(1), ['self'])
+    expect(walk(rows)).toEqual({seed: 'self', chain: ['p', 'gp']})
   })
 
-  it('returns empty when the row has no parent', async () => {
+  it('returns the seed alone when the row has no parent', async () => {
+    // The seed is what separates this from a walk stopped at its first
+    // hop, which also comes back with no ancestors.
     await seed(h.db, [{id: 'a-root', parent_id: null, order_key: 'a0'}])
-    const rows = await h.db.getAll(ANCESTORS_SQL, ['a-root', 'a-root'])
+    const rows = await h.db.getAll<{id: string; depth: number; parent_id: string | null}>(
+      manyAncestorsSql(1), ['a-root'],
+    )
+    expect(walk(rows)).toEqual({seed: 'a-root', chain: []})
+    expect(rows[0].parent_id).toBeNull()
+  })
+
+  it('carries a non-null parent_id on the seed when the first hop is deleted', async () => {
+    // The unreachable-parent case: no ancestor rows, but the seed says a
+    // parent exists — which is the dep `core.ancestors` declares so the
+    // chain re-resolves when that parent is restored.
+    await seed(h.db, [
+      {id: 'gone', parent_id: null,   order_key: 'a0', deleted: 1},
+      {id: 'orphan', parent_id: 'gone', order_key: 'a0'},
+    ])
+    const rows = await h.db.getAll<{id: string; depth: number; parent_id: string | null}>(
+      manyAncestorsSql(1), ['orphan'],
+    )
+    expect(walk(rows)).toEqual({seed: 'orphan', chain: []})
+    expect(rows[0].parent_id).toBe('gone')
+  })
+
+  it('returns nothing at all for a row that does not exist', async () => {
+    const rows = await h.db.getAll(manyAncestorsSql(1), ['no-such-id'])
     expect(rows).toEqual([])
   })
 
-  it('truncates a non-root cycle (start → A → B → C → B …) at the visited-id guard', async () => {
+  it('keeps each seed chain separate, tagged by chain_start_id', async () => {
+    await seed(h.db, [
+      {id: 'r1',    parent_id: null,  order_key: 'a0'},
+      {id: 'm1',    parent_id: 'r1',  order_key: 'a0'},
+      {id: 'leaf1', parent_id: 'm1',  order_key: 'a0'},
+      {id: 'r2',    parent_id: null,  order_key: 'a0'},
+      {id: 'leaf2', parent_id: 'r2',  order_key: 'a0'},
+    ])
+    const rows = await h.db.getAll<{id: string; chain_start_id: string; depth: number}>(
+      manyAncestorsSql(2), ['leaf1', 'leaf2'],
+    )
+    const byStart = new Map<string, {id: string; depth: number}[]>()
+    for (const row of rows) {
+      byStart.set(row.chain_start_id, [...(byStart.get(row.chain_start_id) ?? []), row])
+    }
+    expect(walk(byStart.get('leaf1')!)).toEqual({seed: 'leaf1', chain: ['m1', 'r1']})
+    expect(walk(byStart.get('leaf2')!)).toEqual({seed: 'leaf2', chain: ['r2']})
+  })
+
+  it('truncates a non-root cycle (start \u2192 A \u2192 B \u2192 C \u2192 B \u2026) at the visited-id guard', async () => {
     // Setup: start has parent A; A has parent B; B has parent C; C has
     // parent B (cycle on B-C, NOT involving start). Pre-v4.25 path
     // encoding only checked the root segment; this test pins the v4.25
@@ -162,17 +219,41 @@ describe('ANCESTORS_SQL', () => {
       {id: 'A',     parent_id: 'B',     order_key: 'a0'},
       {id: 'start', parent_id: 'A',     order_key: 'a0'},
     ])
-    const rows = await h.db.getAll<{id: string}>(ANCESTORS_SQL, ['start', 'start'])
-    // Walk: start → A → B → C → (B blocked by visited-id). Each
+    const rows = await h.db.getAll<{id: string; depth: number}>(manyAncestorsSql(1), ['start'])
+    // Walk: start \u2192 A \u2192 B \u2192 C \u2192 (B blocked by visited-id). Each
     // cycle member appears at most once in the result.
-    expect(rows.map(r => r.id).sort()).toEqual(['A', 'B', 'C'])
+    expect(walk(rows).chain.slice().sort()).toEqual(['A', 'B', 'C'])
+  })
+
+  it('refuses an empty id list rather than emitting `IN ()`', () => {
+    expect(() => manyAncestorsSql(0)).toThrow(/idCount/)
+  })
+})
+
+describe('the depth < 100 cap on a non-cyclic chain', () => {
+  beforeAll(async () => {
+    await resetTestDb(h.db)
+    await seed(h.db, Array.from({length: 105}, (_, i) => ({
+      id: `deep-${i}`,
+      parent_id: i === 0 ? null : `deep-${i - 1}`,
+    })))
+  })
+
+  it('SUBTREE_SQL stops descending at depth 100', async () => {
+    const rows = await h.db.getAll<{id: string; depth: number}>(SUBTREE_SQL, ['deep-0'])
+    expect(rows).toHaveLength(101)
+    expect(rows.at(-1)).toMatchObject({id: 'deep-100', depth: 100})
+  })
+
+  it('manyAncestorsSql stops climbing at depth 100', async () => {
+    const rows = await h.db.getAll<{id: string; depth: number}>(manyAncestorsSql(1), ['deep-104'])
+    expect(rows).toHaveLength(101)
+    expect(rows.at(-1)).toMatchObject({id: 'deep-4', depth: 100})
   })
 })
 
 describe('IS_DESCENDANT_OF_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   it('returns hit=1 when potentialAncestor is in the chain', async () => {
     await seed(h.db, [
@@ -222,9 +303,7 @@ describe('IS_DESCENDANT_OF_SQL', () => {
 })
 
 describe('CHILDREN_SQL', () => {
-  let h: TestDb
-  beforeAll(async () => { h = await createTestDb() })
-  afterAll(async () => { await h.cleanup() })
+  beforeAll(() => resetTestDb(h.db))
 
   it('returns direct children only, ordered by (order_key, id)', async () => {
     await seed(h.db, [
@@ -247,5 +326,186 @@ describe('CHILDREN_SQL', () => {
     ])
     const rows = await h.db.getAll<{id: string}>(CHILDREN_SQL, ['sd-p'])
     expect(rows.map(r => r.id)).toEqual(['sd-2'])
+  })
+})
+
+describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — flat §9 recognition', () => {
+  // The `::` grammar deleted the recursive `up` ancestry walks these views
+  // used to embed (and with them the #404 item-8b cyclic-chain guard those
+  // walks needed): the flat predicate reads only the candidate row's own
+  // columns, so a cyclic parent_id chain (issue #183 shape) cannot even be
+  // consulted. These tests pin the two flat inversions on exactly the old
+  // fixtures: an UNMARKED stamped look-alike is never machinery, and a
+  // MARKED row filters regardless of what its ancestor chain looks like.
+  const WS = 'ws-vis-cycle'
+  const DEF = 'def-cycle'
+
+  beforeAll(async () => {
+    await resetTestDb(h.db)
+    // Shared, static fixture for every test in this describe (workspace flip
+    // + the one property-schema definition) — inserted once since `h` isn't
+    // reset between the `it`s here; each test uses its own disjoint
+    // block ids so they don't collide.
+    await h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'cycle test ws', 'user-1'],
+    )
+    await h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, 'property-schema')`,
+      [DEF, WS],
+    )
+  })
+
+  const insertBlock = (row: {
+    id: string
+    parent_id: string | null
+    reference_target_id?: string | null
+    is_field_form?: 1 | null
+    order_key?: string
+  }) => h.db.execute(
+    `INSERT INTO blocks
+       (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+        created_at, updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form)
+      VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', 0, ?, ?)`,
+    [row.id, WS, row.parent_id, row.order_key ?? 'a0', row.reference_target_id ?? null, row.is_field_form ?? null],
+  )
+
+  it('filters marked rows and ONLY marked rows — an unmarked stamped look-alike stays visible, cyclic ancestors notwithstanding', async () => {
+    // P's own ancestor chain cycles X <-> Y forever (issue #183 shape) —
+    // irrelevant to the flat predicate, which never walks it.
+    await insertBlock({id: 'X', parent_id: 'Y'})
+    await insertBlock({id: 'Y', parent_id: 'X'})
+    await insertBlock({id: 'P', parent_id: 'X'})
+
+    // An ordinary child stays visible.
+    await insertBlock({id: 'C', parent_id: 'P', order_key: 'a0'})
+    // An UNMARKED child whose column happens to name a definition (the old
+    // look-alike: a ref-typed value / plain link) is NOT machinery — only
+    // `::` rows classify.
+    await insertBlock({id: 'L', parent_id: 'P', reference_target_id: DEF, order_key: 'a1'})
+    // A MARKED child targeting the definition IS machinery and filters.
+    await insertBlock({id: 'F', parent_id: 'P', reference_target_id: DEF, is_field_form: 1, order_key: 'a2'})
+
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P', ...NO_REGISTRY_RECOGNITION_PARAMS])
+    expect(rows.map(r => r.id)).toEqual(['C', 'L'])
+  })
+
+  it('filters a marked row in an UN-flipped workspace, where the backfill mints it', async () => {
+    // Recognition used to require `properties_migration IN ('children',
+    // 'cell-off')`, on the premise that an un-flipped workspace holds no field
+    // rows. The backfill mints them while the workspace still reads cells, so
+    // this must answer the same either side of the flip — otherwise the cell
+    // renders the property through the property UI while the field row shows
+    // it a second time in the outline.
+    const UNFLIPPED = 'ws-vis-unflipped'
+    await h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
+      [UNFLIPPED, 'unflipped ws', 'user-1'],
+    )
+    const DEF_U = 'def-unflipped'
+    await h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, 'property-schema')`,
+      [DEF_U, UNFLIPPED],
+    )
+    const insert = (id: string, parent: string | null, ref: string | null,
+                    marked: 1 | null, order: string) =>
+      h.db.execute(
+        `INSERT INTO blocks
+           (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+            created_at, updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form)
+          VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', 0, ?, ?)`,
+        [id, UNFLIPPED, parent, order, ref, marked],
+      )
+    await insert('PU', null, null, null, 'b0')
+    await insert('CU', 'PU', null, null, 'a0')
+    await insert('FU', 'PU', DEF_U, 1, 'a1')
+
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['PU', ...NO_REGISTRY_RECOGNITION_PARAMS])
+    expect(rows.map(r => r.id)).toEqual(['CU'])
+  })
+
+  it('filters a marked row whose SEED definition has not materialized yet (#389 item 7)', async () => {
+    // A code-declared property seed the registry knows but
+    // `materializePropertySeeds` has not written to `blocks` yet — so
+    // `block_types` carries nothing for it. Reachable on a warm device when
+    // a field row arrives over sync ahead of its definition block, which no
+    // boot-time ordering rule covers. The tx-layer checker resolves this
+    // through the registry and hides the row; the SQL predicate consults
+    // only `block_types` and shows it. Same row, two answers.
+    const UNMATERIALIZED_SEED = 'seed-def-not-yet-materialized'
+    await insertBlock({id: 'P3', parent_id: null, order_key: 'b0'})
+    await insertBlock({id: 'C3', parent_id: 'P3', order_key: 'a0'})
+    await insertBlock({
+      id: 'F3', parent_id: 'P3', reference_target_id: UNMATERIALIZED_SEED,
+      is_field_form: 1, order_key: 'a1',
+    })
+
+    // The registry-derived seed-id set is bound into the predicate, so the
+    // row classifies without any DB state for the definition.
+    const rows = await h.db.getAll<{id: string}>(
+      VISIBLE_CHILDREN_SQL, ['P3', '[]', JSON.stringify([UNMATERIALIZED_SEED]), WS],
+    )
+    expect(rows.map(r => r.id)).toEqual(['C3'])
+  })
+
+  it('leaves a row alone when the seed set belongs to a DIFFERENT workspace', async () => {
+    // §9: a foreign workspace's definition id must degrade to a VISIBLE
+    // "unknown field" row. Salting alone does not deliver that — it stops
+    // another workspace's OWN ids from matching, but a row here whose
+    // reference_target_id names the active workspace's seed (a cross-workspace
+    // copy) would match on id and be hidden.
+    const FOREIGN_SEED = 'seed-def-owned-by-another-workspace'
+    await insertBlock({id: 'P4', parent_id: null, order_key: 'c0'})
+    await insertBlock({id: 'C4', parent_id: 'P4', order_key: 'a0'})
+    await insertBlock({
+      id: 'F4', parent_id: 'P4', reference_target_id: FOREIGN_SEED,
+      is_field_form: 1, order_key: 'a1',
+    })
+
+    const rows = await h.db.getAll<{id: string}>(
+      // The seed set is bound for a workspace these rows do not belong to.
+      VISIBLE_CHILDREN_SQL, ['P4', '[]', JSON.stringify([FOREIGN_SEED]), 'some-other-ws'],
+    )
+    expect(rows.map(r => r.id)).toEqual(['C4', 'F4'])
+  })
+
+  it('leaves a marked row visible when the registry cannot parse its tagged target (#1202)', async () => {
+    // `block_types` tags DEF, but the registry reports the block unparseable:
+    // no definition, so the row is an honest unknown-field row (§9).
+    await insertBlock({id: 'P5', parent_id: null, order_key: 'd0'})
+    await insertBlock({id: 'C5', parent_id: 'P5', order_key: 'a0'})
+    await insertBlock({id: 'F5', parent_id: 'P5', reference_target_id: DEF, is_field_form: 1, order_key: 'a1'})
+    await insertBlock({id: 'V5', parent_id: 'F5', order_key: 'a0'})
+    const ids = async (sql: string, params: readonly unknown[]) =>
+      (await h.db.getAll<{id: string}>(sql, [...params])).map(r => r.id)
+    const vetoed = [JSON.stringify([DEF]), '[]', WS]
+
+    expect(await ids(VISIBLE_CHILDREN_SQL, ['P5', ...vetoed])).toEqual(['C5', 'F5'])
+    expect(await ids(VISIBLE_SUBTREE_SQL, ['P5', ...vetoed])).toEqual(['P5', 'C5', 'F5', 'V5'])
+    // Precondition: the tag alone recognizes the row.
+    expect(await ids(VISIBLE_CHILDREN_SQL, ['P5', ...NO_REGISTRY_RECOGNITION_PARAMS])).toEqual(['C5'])
+  })
+
+  it('VISIBLE_SUBTREE_SQL prunes AT each marked row, keeps unmarked stamped rows, and never prunes the root', async () => {
+    await insertBlock({id: 'X2', parent_id: 'Y2'})
+    await insertBlock({id: 'Y2', parent_id: 'X2'})
+    await insertBlock({id: 'P2', parent_id: 'X2'})
+    // Marked field row (prunes with its whole subtree) + its value child.
+    await insertBlock({id: 'F2', parent_id: 'P2', reference_target_id: DEF, is_field_form: 1, order_key: 'a1'})
+    await insertBlock({id: 'V2', parent_id: 'F2', order_key: 'a0'})
+    // Unmarked stamped row (the old look-alike) descends normally.
+    await insertBlock({id: 'L2', parent_id: 'P2', reference_target_id: DEF, order_key: 'a0'})
+
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2', ...NO_REGISTRY_RECOGNITION_PARAMS])
+    expect(rows.map(r => r.id)).toEqual(['P2', 'L2'])
+
+    // The ROOT itself is never pruned — opening a field row shows its
+    // subtree (its value child), minus nothing here (V2 is unmarked).
+    const fromField = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['F2', ...NO_REGISTRY_RECOGNITION_PARAMS])
+    expect(fromField.map(r => r.id)).toEqual(['F2', 'V2'])
   })
 })

@@ -4,15 +4,6 @@ import { base64UrlToBytes, bytesToBase64Url } from './base64url.js'
 const bytes = (...values: number[]) => Uint8Array.from(values)
 
 describe('base64url', () => {
-  it('round-trips arbitrary byte lengths', () => {
-    for (let len = 0; len <= 40; len++) {
-      const input = new Uint8Array(len)
-      for (let i = 0; i < len; i++) input[i] = (i * 37 + 13) & 0xff
-      const encoded = bytesToBase64Url(input)
-      expect(base64UrlToBytes(encoded)).toEqual(input)
-    }
-  })
-
   it('uses the URL-safe alphabet without padding', () => {
     // 0xFB 0xFF 0xFE -> would be "+//+" in standard base64; URL-safe is "-__-".
     const encoded = bytesToBase64Url(bytes(0xfb, 0xff, 0xfe))

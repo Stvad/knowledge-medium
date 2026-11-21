@@ -26,6 +26,9 @@
  * would re-derive a brand-new dangling ref from the inlined text, the exact
  * failure mode this feature exists to prevent. Reference cycles among
  * deleted blocks fall back to raw content (bounded, no fixpoint).
+ *
+ * One row shape is exempt: a property VALUE child keeps its dangling
+ * `((deletedId))` rather than being inlined — see `isPropertyValueRow`.
  */
 
 import {
@@ -35,14 +38,20 @@ import {
   type BlockData,
   type BlockReference,
   type CoreBlockDeletedEvent,
-  type Tx,
+  type SameTxCtx,
 } from '@/data/api'
+import {
+  deriveReferenceColumns,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
+import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
 import { inlineBlockRefs } from './referenceParser.ts'
+import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
   'references.inlineDeletedBlockReferences'
 
-const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
+export const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
   SELECT DISTINCT br.source_id AS id
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
@@ -89,27 +98,66 @@ const resolveInlineContent = (
   return resolved
 }
 
+// `isPropertyValueRow` (shared, `@/data/propertyChildren`): such a row's
+// `((targetId))` content IS the property's value, so inlining would rewrite
+// it to prose, clear the derived column the projection reads, and drop the
+// key from the owner's cell at the next projection — with the id gone,
+// irreversibly. The cell era did the opposite: a deleted target left a
+// dangling reference and the property RETAINED. Since delete is soft,
+// `((deletedId))` stays restorable, so keeping it dangling is both the old
+// semantics and the recoverable choice (#404 item 4). Inlining's principle
+// still holds, it just resolves differently here: prose wants readable TEXT
+// preserved, a typed value wants IDENTITY preserved.
+
 const inlineSource = async (
-  tx: Tx,
+  ctx: SameTxCtx,
   sourceId: string,
   deletedId: string,
   inlineContent: string,
 ): Promise<void> => {
+  const tx = ctx.tx
   // Re-read staged state: the source may itself have been deleted earlier
   // in this same tx (subtree delete). It's then excluded by the SQL's
   // `source.deleted = 0` filter too, but a referrer queued from an earlier
   // event could have been deleted by a later write in the same fn — re-read
   // and skip, there's nothing to inline into a block that's going away.
   const current = await tx.get(sourceId)
-  if (current === null || current.deleted) return
+  if (!takesTextEdit(current)) return
+  // Property machinery keeps its dangling ref rather than being inlined —
+  // restorable, and still carrying the property. Both levels qualify, for the
+  // same identity-preserving reason: a VALUE row's `((deletedId))` is the
+  // property's value, and a FIELD row's `((deletedId))` is the property's
+  // identity on its owner (that one bites when the deleted block is the
+  // DEFINITION — every field row keyed to it is an ordinary referrer).
+  if (await isPropertyValueRow(tx, current)) return
+  if (await isPropertyFieldRow(tx, current)) return
 
   const nextContent = inlineBlockRefs(current.content, deletedId, inlineContent)
   const nextReferences = normalizeReferences(
     current.references.filter(ref => !isContentBlockRefTo(ref, deletedId)),
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'references'>> = {}
-  if (nextContent !== current.content) patch.content = nextContent
+  const patch: Partial<Pick<BlockData, 'content' | 'references' | 'referenceTargetId' | 'isFieldForm'>> = {}
+  if (nextContent !== current.content) {
+    patch.content = nextContent
+    // `core.deriveReferenceTarget` already ran earlier in this same tx pass
+    // and stamped both local columns from the PRE-inline content. A
+    // whole-block `((deletedId))` row would otherwise keep
+    // `referenceTargetId: deletedId` even though content is now plain
+    // inlined text (or, rarely, itself an exact reference) — recompute from
+    // the rewritten content so the columns and content never disagree.
+    const lookups = sameTxReferenceTargetLookups(tx)
+    const derived = await deriveReferenceColumns(nextContent, current.workspaceId, lookups)
+    // Always an update of an existing row (never a create): an
+    // unresolvable alias (`undefined`) clears the column.
+    const nextTargetId = derived.targetId ?? null
+    if ((current.referenceTargetId ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+    if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
+      patch.isFieldForm = derived.isFieldForm
+    }
+  }
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
   }
@@ -131,6 +179,9 @@ export const inlineDeletedBlockRefsProcessor = defineSameTxProcessor({
     for (const emitted of event.emittedEvents) {
       const {blockId, workspaceId} = emitted.payload as CoreBlockDeletedEvent
       const block = await ctx.tx.get(blockId)
+      // Its citations stay dangling and restorable: spliced into prose, source
+      // would be parsed as prose.
+      if (block !== null && hasSourceContent(block)) continue
       deletedContent.set(blockId, block?.content ?? '')
       workspaceById.set(blockId, workspaceId)
     }
@@ -146,7 +197,7 @@ export const inlineDeletedBlockRefsProcessor = defineSameTxProcessor({
         blockId, deletedContent, memo, new Set(),
       )
       for (const {id} of sourceRows) {
-        await inlineSource(ctx.tx, id, blockId, inlineContent)
+        await inlineSource(ctx, id, blockId, inlineContent)
       }
     }
   },

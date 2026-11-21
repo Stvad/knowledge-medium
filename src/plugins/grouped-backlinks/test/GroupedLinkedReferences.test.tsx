@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -11,10 +11,11 @@ import {
 import { GroupedLinkedReferences } from '../GroupedLinkedReferences.tsx'
 
 const state = vi.hoisted(() => {
-  const makeGrouped = (groups: GroupedBacklinksResult['groups']): GroupedBacklinksResult => {
+  type TestGroup = Omit<GroupedBacklinksResult['groups'][number], 'blockId'>
+  const makeGrouped = (groups: TestGroup[]): GroupedBacklinksResult => {
     const sourceIds = Array.from(new Set(groups.flatMap(group => group.sourceIds)))
     return {
-      groups,
+      groups: groups.map(group => ({...group, blockId: group.fallback ? null : group.groupId})),
       total: sourceIds.length,
       unfilteredSourceIds: sourceIds,
       sourceParents: sourceIds.map(sourceId => ({sourceId, parentIds: []})),
@@ -89,10 +90,10 @@ vi.mock('../useGroupedBacklinksConfig.ts', () => ({
   useGroupedBacklinksConfig: () => state.groupingConfig,
 }))
 
-vi.mock('@/plugins/backlinks/BacklinkEntry.tsx', async () => {
+vi.mock('@/plugins/backlinks/BlockEntry.tsx', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
   return {
-    LazyBacklinkItem: ({block}: {block: {id: string}}) => {
+    LazyBlockEntry: ({block}: {block: {id: string}}) => {
       const [mountId] = React.useState(() => ++state.backlinkMounts)
       return React.createElement(
         'div',

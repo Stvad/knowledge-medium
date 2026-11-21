@@ -27,7 +27,10 @@ describe('defineBlocksAction', () => {
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
-    expect(flow).toHaveBeenCalledWith([block])
+    expect(flow).toHaveBeenCalledWith(
+      [block],
+      {uiStateBlock: block, scopeRootId: undefined},
+    )
   })
 
   it('emits a MULTI_SELECT_MODE variant under a multi_select-prefixed id', async () => {
@@ -55,7 +58,14 @@ describe('defineBlocksAction', () => {
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
-    expect(flow).toHaveBeenCalledWith(selectedBlocks)
+    // `uiStateBlock` is what lets a relocating flow take its blocks out
+    // of the ui-state selection — multi-select mode stays active off a
+    // non-empty `selectedBlockIds` alone, so leaving a moved id in there
+    // points later shortcuts at rows the pane no longer shows.
+    expect(flow).toHaveBeenCalledWith(
+      selectedBlocks,
+      {uiStateBlock, scopeRootId: undefined},
+    )
   })
 
   it('omits isVisible on NORMAL_MODE when no per-block predicate is supplied', () => {

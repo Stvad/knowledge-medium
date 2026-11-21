@@ -39,10 +39,11 @@ Then in the Tailscale **admin console** (login.tailscale.com/admin/dns) enable *
 **1. Secure-context tunnel.** The app needs WebCrypto + service worker + OPFS → a **secure context**. `https://` and `http://localhost` qualify; `http://<LAN-IP>` does **not** (the app boots then breaks). A real device can't use `localhost`, so tunnel HTTPS in:
 
 ```bash
-tailscale serve --bg http://localhost:5173
+tailscale serve --bg http://localhost:<port>   # the port `pnpm dev` printed
 ```
-- Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `[::1]:5173` (IPv6-only); serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` resolves to `::1` and works.
-- Run the dev server with **`VITE_TUNNEL=1 yarn dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `yarn dev` is unaffected.
+- Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `localhost` to one family only, often `[::1]:<port>`; then serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` reaches whichever family vite bound.
+- `tailscale serve` has one target for the whole machine. Check `tailscale serve status` first: re-pointing it moves another session's tunnel to your server without telling that session.
+- Run the dev server with **`VITE_TUNNEL=1 pnpm dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `pnpm dev` is unaffected.
 - Sanity-check from the Mac (Homebrew `tailscaled` doesn't wire MagicDNS into the macOS resolver, so force-resolve):
   ```bash
   curl -s --resolve <your-machine>.<tailnet>.ts.net:443:$(tailscale ip -4 | head -1) \
@@ -69,7 +70,41 @@ Override the tab match (default `ts.net`) with `MATCH=<substr>`.
 
 ---
 
+## Boot-time profiling on the real device (verified 2026-09-10, iPhone / iOS 26)
+
+The **deployed** app needs no tunnel: open it in Safari, or just launch the
+**home-screen app** — iwdp lists it as its own `PID:` with a page target plus
+two `ServiceWorker` targets, and `ios.mjs` skips the SW ones. Use
+`MATCH=github` (the hosted origin). The home-screen app has its OWN storage
+(a separate client id from the Safari tab), so profile the one the user
+actually uses.
+
+- `MATCH=github node ios.mjs eval "$(rg -v '^//' boot-probe.js)"` — read-only
+  boot snapshot: startup-timeline marks, storage estimate, table counts,
+  `sqlite_stat1`, one-shot markers, subtree plan+timing. Same expression works
+  on the Mac via `pnpm agent eval --profile <p> "return $(…)"` for a baseline.
+  The DB handle without the bridge is `getPowerSyncDb(getActiveUserId())` from
+  `@/data/repoProvider.js`; `@/` resolves through the prod importmap.
+- `MATCH=github node boot-trace.mjs [waitSecs]` (protocol shared via `inspector.mjs`) — injects a hook with
+  `Page.setBootstrapScript` (runs before any page script, survives a same-
+  origin reload), reloads, and dumps every DB-worker round trip (comlink
+  messages over the transferred `MessagePort`s, SQL text included) plus the
+  marks. `node analyze-trace.js <json> [lo hi] [v]` summarizes a window: idle
+  gaps, per-path totals, slowest calls. `PRELUDE='<js>'` runs extra code before
+  the hook — the way the `requestIdleCallback` polyfill was A/B-tested on the
+  real build before it shipped.
+- The historical per-device record is already in the workspace: the
+  startup-metrics plugin writes one block per boot under
+  `ui-state → Startup metrics → <device group>`; query `startupRecord` via
+  `json_extract(properties_json, '$.startupRecord.…')` on the Mac.
+
 ## Gotchas that will waste your time if you don't know them
+
+- **WebKit has NO `requestIdleCallback`.** Anything with a `setTimeout(0)`
+  fallback for it runs *immediately* on iOS — deep-idle maintenance ran inside
+  bootstrap and held the SQLite worker for ~1–1.9 s per boot until
+  `src/utils/idleCallbackPolyfill.ts` (installed from main.tsx). Also no Long
+  Tasks API, so the startup-metrics `interactive` mark equals first paint there.
 
 - **ios-webkit-debug-proxy sees REAL DEVICES ONLY, never the Simulator.** Device list at `:9221/json`, per-device tab list at `:9222/json`.
 - **Only the FOREGROUND, AWAKE tab is inspectable.** Lock the device or background Safari and the tab vanishes (`pages` → 0, target never announces). Auto-Lock → Never is not optional for a real session.
@@ -88,7 +123,7 @@ Override the tab match (default `ts.net`) with `MATCH=<substr>`.
 - **Capture the event sequence.** Install capture-phase listeners for `keydown`/`beforeinput`/`input` into a `window.__ev` buffer, have the user do the gesture once, then read the buffer. Reveals double-fires and which `inputType` actually drives the change.
 - **A/B guard experiment on-device.** To isolate which path inserts/mutates, install a listener that `preventDefault()`s a *candidate* cause, have the user reproduce, and measure the delta. (We proved a native `insertLineBreak` was the *sole* inserter by suppressing it and seeing zero change.)
 - **Measure structurally, not visually.** e.g. count `.cm-line` elements in the focused `.cm-editor` to count newlines; read `.cm-content` text; inspect app state via the data layer.
-- **Validate the fix live.** Edit code → `node ios.mjs eval '(() => { setTimeout(() => location.reload(), 50); return "reloading" })()'` (vite serves fresh modules) → user does the physical gesture once → re-measure. Then `yarn run check` and commit. Keep the unit test as the regression guard (native-only bugs won't be caught by jsdom/Playwright, but the *handler* behavior is testable — dispatch a synthetic `beforeinput` at the CM `contentDOM`; mark the file `// @vitest-environment jsdom`).
+- **Validate the fix live.** Edit code → `node ios.mjs eval '(() => { setTimeout(() => location.reload(), 50); return "reloading" })()'` (vite serves fresh modules) → user does the physical gesture once → re-measure. Then `pnpm run check` and commit. Keep the unit test as the regression guard (native-only bugs won't be caught by jsdom/Playwright, but the *handler* behavior is testable — dispatch a synthetic `beforeinput` at the CM `contentDOM`; mark the file `// @vitest-environment jsdom`).
 
 ## Teardown
 ```bash
@@ -106,7 +141,7 @@ Real iOS WebKit with a working soft keyboard / `visualViewport`, served over sec
 ```bash
 xcodebuild -downloadPlatform iOS            # one-time, ~7 GB; needs free disk
 xcrun simctl boot 'iPhone 16'; open -a Simulator
-xcrun simctl openurl booted http://localhost:5173      # localhost = secure context, works
+xcrun simctl openurl booted http://localhost:<port>    # localhost = secure context, works
 xcrun simctl io booted screenshot /tmp/sim.png         # readable screenshot
 ```
 - **Software keyboard:** Simulator menu **I/O → Keyboard → Connect Hardware Keyboard OFF** (⇧⌘K) so it auto-appears on focus; ⌘K toggles it. A field must be focused.

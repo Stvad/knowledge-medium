@@ -1,25 +1,34 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, codecs, definePresetCore, seedProperty } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
+  addBlockTypeToProperties,
   blockTypeColorProp,
   blockTypeDescriptionProp,
   blockTypeHideFromBlockDisplayProp,
+  blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  blockTypeTypeIdProp,
+  aliasesProp,
+  propertyNameProp,
+  seedKeyProp,
 } from '@/data/properties'
-import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { materializePropertySeeds, propertyDefinitionBlockId, typeDefinitionBlockId } from '@/data/definitionSeeds'
+import { definitionSeedsFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
 import { Repo } from '@/data/repo'
 import { UserTypesService } from '@/data/userTypesService'
+import { waitFor } from '@/test/waitFor'
 
 const WS = 'ws-user-types'
-const SUBSCRIPTION_TIMEOUT_MS = 3_000
+const SUBSCRIPTION_SETTLES = {timeout: 3_000}
 
 interface Harness {
   h: TestDb
@@ -42,14 +51,8 @@ const setup = async (): Promise<Harness> => {
   repo.setActiveWorkspaceId(WS)
   await getOrCreatePropertiesPage(repo, WS)
   await getOrCreateTypesPage(repo, WS)
-  const userSchemas = repo.userSchemas
-  const disposeUserSchemas = userSchemas.start()
   const service = repo.userTypes
-  const disposeService = service.start()
-  const dispose = (): void => {
-    disposeService()
-    disposeUserSchemas()
-  }
+  const dispose = (): void => repo.setActiveWorkspaceId(null)
   return {h, repo, service, dispose}
 }
 
@@ -67,9 +70,9 @@ const waitForTypeRegistration = async (
   typeId: string,
   label: string,
 ): Promise<void> => {
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(repo.types.get(typeId)?.label).toBe(label)
-  }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+  }, SUBSCRIPTION_SETTLES)
 }
 
 const createBlockTypeBlock = async (
@@ -79,6 +82,7 @@ const createBlockTypeBlock = async (
     description?: string
     properties?: readonly string[]
     hideFromBlockDisplay?: boolean
+    hideFromCompletion?: boolean
     color?: string
   },
 ): Promise<string> => {
@@ -94,6 +98,9 @@ const createBlockTypeBlock = async (
     }
     if (args.hideFromBlockDisplay !== undefined) {
       await tx.setProperty(id, blockTypeHideFromBlockDisplayProp, args.hideFromBlockDisplay)
+    }
+    if (args.hideFromCompletion !== undefined) {
+      await tx.setProperty(id, blockTypeHideFromCompletionProp, args.hideFromCompletion)
     }
     if (args.color !== undefined) {
       await tx.setProperty(id, blockTypeColorProp, args.color)
@@ -114,6 +121,79 @@ describe('UserTypesService subscription', () => {
     expect(env.service.getTypeBlockId(id)).toBe(id)
   })
 
+  it('does not let a seed-valid /type/ row shadow a LIVE declaration via a colliding claim', async () => {
+    env = await setup()
+    // Simulate a synced/imported block-type row that is a VALID seeded
+    // definition: it sits at the deterministic id for a /type/ seed key and
+    // claims an existing id ('page'). parseTypeDefinitionMetadata honors that
+    // claim (it passes the id equation), but its `/type/` key is a FORGED foreign
+    // owner — NOT a current code declaration (the real kernel `page` seed is
+    // `system:kernel-data/type/page`, a different key). Because the kernel `page`
+    // seed IS a live declaration, it OUTRANKS the forged claim (§7 winner
+    // resolution): 'page' stays the kernel Page, and the forged row is retained
+    // for provenance only — published NOWHERE. (A retired row whose claimed id is
+    // UNDECLARED would instead persist under that id; here 'page' is declared, so
+    // the declaration wins.) Created at Automation scope so the seed-write
+    // backstop (BlockDefault-only) doesn't reject the mint.
+    const seedKey = 'plugin:imposter/type/page'
+    const blockId = typeDefinitionBlockId(WS, seedKey)
+    // Mint the whole bag through tx.create (like the property materializer):
+    // per-prop setProperty would reject a BlockDefault prop under an Automation
+    // tx, and a BlockDefault tx would trip the seed-write backstop. Pre-populate
+    // the row so it's already a completed type (block-type + PAGE_TYPE
+    // membership, label, matching alias) — that keeps the same-tx typeify
+    // processor a no-op (it would otherwise write alias at BlockDefault scope
+    // and clash with this Automation tx), matching how a synced row arrives
+    // already-completed.
+    const properties = addBlockTypeToProperties(
+      addBlockTypeToProperties({
+        [seedKeyProp.name]: seedKeyProp.codec.encode(seedKey),
+        [blockTypeLabelProp.name]: blockTypeLabelProp.codec.encode('Imported Page'),
+        [blockTypeTypeIdProp.name]: blockTypeTypeIdProp.codec.encode('page'),
+        [aliasesProp.name]: aliasesProp.codec.encode(['Imported Page']),
+      }, BLOCK_TYPE_TYPE),
+      PAGE_TYPE,
+    )
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WS,
+        parentId: env.repo.typesPageId!,
+        orderKey: 'a0',
+        content: 'Imported Page',
+        properties,
+      }, {systemMint: true})
+    }, {scope: ChangeScope.Automation, description: 'simulate synced seed-valid type row'})
+
+    // Control fence: a plain user type minted AFTER the forged row (its helper
+    // waits for its own registration). In-order projection then guarantees the
+    // forged row was already processed, so the ABSENCE assertions below are real,
+    // not a not-yet-projected race.
+    await createBlockTypeBlock(env.repo, {label: 'Control Type'})
+
+    // 'page' is not hijacked: the kernel Page wins and the registry never binds
+    // the 'page' membership id to the forged block.
+    expect(env.repo.types.get('page')?.label).toBe('Page')
+    expect(env.service.getTypeBlockId('page')).not.toBe(blockId)
+    // The forged row surfaces nowhere — not under 'page', not under its block id.
+    expect(env.repo.types.has(blockId)).toBe(false)
+  })
+
+  it('lifts hide-from-completion onto the contribution and republishes on change', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {label: 'Auto', hideFromCompletion: true})
+    expect(env.repo.types.get(id)).toMatchObject({hideFromCompletion: true})
+    // Flipping the flag must clear it on the contribution — pins the
+    // hideFromCompletion arm of the projectedDefinitionsEqual dedup (else the republish
+    // would be suppressed and the type would stay hidden from completion).
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeHideFromCompletionProp, false)
+    }, {scope: ChangeScope.BlockDefault})
+    await waitFor(() => {
+      expect(env.repo.types.get(id)?.hideFromCompletion).toBeUndefined()
+    }, SUBSCRIPTION_SETTLES)
+  })
+
   it('lifts hide-from-block-display and color onto the contribution, and republishes on change', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {
@@ -125,23 +205,23 @@ describe('UserTypesService subscription', () => {
     expect(contribution).toMatchObject({hideFromBlockDisplay: true, color: '#e11d48'})
 
     // Display config is live-editable, ONE FIELD AT A TIME — each step
-    // pins its own field in the contributionsEqual dedup (a combined
+    // pins its own field in the projectedDefinitionsEqual dedup (a combined
     // write would let either comparison vanish behind the other).
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeColorProp, 'tomato')
     }, {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(env.repo.types.get(id)?.color).toBe('tomato')
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    }, SUBSCRIPTION_SETTLES)
 
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeHideFromBlockDisplayProp, false)
     }, {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const updated = env.repo.types.get(id)
       expect(updated?.color).toBe('tomato')
       expect(updated?.hideFromBlockDisplay).toBeUndefined()
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    }, SUBSCRIPTION_SETTLES)
   })
 
   it('a malformed display-config value degrades to defaults without unregistering the type', async () => {
@@ -158,11 +238,11 @@ describe('UserTypesService subscription', () => {
           properties: {...row!.properties, [blockTypeHideFromBlockDisplayProp.name]: 'true'},
         })
       }, {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const contribution = env.repo.types.get(bad)
         expect(contribution?.label).toBe('Bad')
         expect(contribution?.hideFromBlockDisplay).toBeUndefined()
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
     } finally {
       warn.mockRestore()
     }
@@ -184,10 +264,10 @@ describe('UserTypesService subscription', () => {
       await env.repo.tx(async tx => {
         await tx.setProperty(good, blockTypeLabelProp, 'Good v2')
       }, {scope: ChangeScope.BlockDefault})
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(env.repo.types.get(good)?.label).toBe('Good v2')
         expect(env.repo.types.get(bad)).toBeUndefined()
-      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      }, SUBSCRIPTION_SETTLES)
     } finally {
       warn.mockRestore()
     }
@@ -218,7 +298,192 @@ describe('UserTypesService subscription', () => {
     })
     const contribution = env.repo.types.get(id)
     expect(contribution).toBeDefined()
-    expect(contribution!.properties).toEqual([schema])
+    expect(contribution!.properties).toEqual([
+      expect.objectContaining({
+        fieldId: schemaBlockId,
+        workspaceId: WS,
+        name: schema.name,
+        codec: schema.codec,
+        defaultValue: schema.defaultValue,
+        changeScope: schema.changeScope,
+      }),
+    ])
+  })
+
+  it('fills in a metadata-only seeded property when its declaration arrives later', async () => {
+    env = await setup()
+    const unregisteredPreset = definePresetCore<string>({
+      id: 'test-late-metadata-only-seed',
+      build: () => codecs.string,
+      defaultValue: '',
+    })
+    const seed = seedProperty({
+      seedKey: 'system:test/property/late-metadata-only',
+      revision: 1,
+      name: 'late-metadata-only',
+      preset: unregisteredPreset,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const fieldId = propertyDefinitionBlockId(WS, seed.seedKey)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await materializePropertySeeds(env.repo, WS, [seed])
+      await waitFor(() => {
+        const definitions = env.repo.propertyDefinitions
+        expect(definitions?.definitionsByFieldId.get(fieldId)?.seedKey).toBe(seed.seedKey)
+        expect(definitions?.schemasByFieldId.has(fieldId)).toBe(false)
+        expect(definitions?.seedsByKey.has(seed.seedKey)).toBe(false)
+      }, SUBSCRIPTION_SETTLES)
+
+      const typeId = await createBlockTypeBlock(env.repo, {
+        label: 'Late seeded type',
+        properties: [fieldId],
+      })
+      expect(env.repo.types.get(typeId)?.properties).toEqual([])
+
+      env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-metadata-only-seed', [seed])
+      await waitFor(() => {
+        expect(env.repo.types.get(typeId)?.properties).toEqual([
+          expect.objectContaining({
+            fieldId,
+            workspaceId: WS,
+            name: seed.name,
+            codec: seed.codec,
+            defaultValue: seed.defaultValue,
+            changeScope: seed.changeScope,
+          }),
+        ])
+      }, SUBSCRIPTION_SETTLES)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('keeps a seed the name winner over an earlier same-name user definition (no shadowing)', async () => {
+    env = await setup()
+    const userSchema = await env.repo.userSchemas.addSchema({
+      name: 'shadowed-metadata-only',
+      presetId: 'string',
+    })
+    const userFieldId = env.repo.userSchemas.getSchemaBlockId(userSchema.name)!
+    const unregisteredPreset = definePresetCore<string>({
+      id: 'test-shadowed-metadata-only-seed',
+      build: () => codecs.string,
+      defaultValue: '',
+    })
+    const seed = seedProperty({
+      seedKey: 'system:test/property/shadowed-metadata-only',
+      revision: 1,
+      name: userSchema.name,
+      preset: unregisteredPreset,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const seedFieldId = propertyDefinitionBlockId(WS, seed.seedKey)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      env.repo.setRuntimeContributions(
+        definitionSeedsFacet,
+        'test-shadowed-metadata-only-seed',
+        [seed],
+      )
+      await materializePropertySeeds(env.repo, WS, [seed])
+      await waitFor(() => {
+        const definitions = env.repo.propertyDefinitions
+        // v1 no-shadowing: the seed wins its name; the earlier same-name user
+        // schema is excluded from name selection.
+        const winnerFieldId = definitions?.definitionsByName.get(seed.name)?.[0]?.fieldId
+        expect(winnerFieldId).toBe(seedFieldId)
+        expect(winnerFieldId).not.toBe(userFieldId)
+        expect(definitions?.definitionsByFieldId.get(seedFieldId)?.seedKey).toBe(seed.seedKey)
+        expect(definitions?.schemasByFieldId.has(seedFieldId)).toBe(false)
+      }, SUBSCRIPTION_SETTLES)
+
+      const typeId = await createBlockTypeBlock(env.repo, {
+        label: 'Seeded type over a same-name user schema',
+        properties: [seedFieldId],
+      })
+      // The seed wins its name, so the type's ref to the seed's field resolves
+      // through the seed declaration's behavior and the property is included.
+      const typeProps = env.repo.types.get(typeId)?.properties
+      expect(typeProps).toHaveLength(1)
+      expect(typeProps?.[0]?.name).toBe(seed.name)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('pins a renamed metadata-only seed definition to its declared name', async () => {
+    env = await setup()
+    const unregisteredPreset = definePresetCore<string>({
+      id: 'test-renamed-metadata-only-seed',
+      build: () => codecs.string,
+      defaultValue: '',
+    })
+    const seed = seedProperty({
+      seedKey: 'system:test/property/renamed-metadata-only',
+      revision: 1,
+      name: 'metadata-only-before-rename',
+      preset: unregisteredPreset,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const fieldId = propertyDefinitionBlockId(WS, seed.seedKey)
+    // A raw name write to the seed's own row, as an older client or a sync from
+    // one could persist. Seeds are non-renamable (rename deferred to #288), so
+    // resolution must ignore the divergence and keep the declared name.
+    const storedDivergence = 'metadata-only-after-rename'
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-renamed-metadata-only-seed', [seed])
+      await materializePropertySeeds(env.repo, WS, [seed])
+      // The divergence originates from an older client / a sync, not a user edit
+      // (the tx guard blocks user-scope seed-bag writes). Model that with an
+      // Automation-scope whole-bag update — the same shape a synced row lands as
+      // — which also avoids setProperty's per-property BlockDefault scope check.
+      const current = await env.repo.db.get<{properties_json: string}>(
+        'SELECT properties_json FROM blocks WHERE id = ?', [fieldId],
+      )
+      await env.repo.tx(async tx => {
+        await tx.update(fieldId, {
+          properties: {
+            ...JSON.parse(current.properties_json),
+            [propertyNameProp.name]: propertyNameProp.codec.encode(storedDivergence),
+          },
+        })
+      }, {scope: ChangeScope.Automation})
+      await waitFor(() => {
+        const definitions = env.repo.propertyDefinitions
+        expect(definitions?.definitionsByFieldId.get(fieldId)?.name).toBe(seed.name)
+        expect(definitions?.schemasByFieldId.has(fieldId)).toBe(false)
+      }, SUBSCRIPTION_SETTLES)
+
+      const typeId = await createBlockTypeBlock(env.repo, {
+        label: 'Renamed seeded type',
+        properties: [fieldId],
+      })
+      await waitFor(() => {
+        expect(env.repo.types.get(typeId)?.properties).toEqual([
+          expect.objectContaining({
+            fieldId,
+            workspaceId: WS,
+            name: seed.name,
+            codec: seed.codec,
+            defaultValue: seed.defaultValue,
+            changeScope: seed.changeScope,
+          }),
+        ])
+      }, SUBSCRIPTION_SETTLES)
+
+      const targetId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+      await env.repo.addType(targetId, typeId, {[seed.name]: 'canonical value'})
+      const properties = env.repo.block(targetId).peek()!.properties
+      expect(properties[seed.name]).toBe('canonical value')
+      expect(properties[storedDivergence]).toBeUndefined()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('drops unresolved property refs at publish time and fills them in when the schema lands', async () => {
@@ -237,18 +502,25 @@ describe('UserTypesService subscription', () => {
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypePropertiesProp, [schemaBlockId])
     }, {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => {
-      expect(env.repo.types.get(id)?.properties).toEqual([schema])
-    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
-
-    expect(env.repo.types.get(id)?.properties).toEqual([schema])
+    await waitFor(() => {
+      expect(env.repo.types.get(id)?.properties).toEqual([
+        expect.objectContaining({
+          fieldId: schemaBlockId,
+          workspaceId: WS,
+          name: schema.name,
+          codec: schema.codec,
+          defaultValue: schema.defaultValue,
+          changeScope: schema.changeScope,
+        }),
+      ])
+    }, SUBSCRIPTION_SETTLES)
   })
 
-  it('disposes cleanly: dispose clears the bucket and later block edits do not republish', async () => {
+  it('stops cleanly at a null Repo pin: clears the bucket and later edits do not republish', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.get(id)).toBeDefined()
-    env.service.dispose()
+    env.repo.setActiveWorkspaceId(null)
     // Dispose now clears the user-data bucket — the type is gone, not
     // simply frozen at its pre-dispose value (see workspace-switch race
     // fix below).
@@ -256,14 +528,13 @@ describe('UserTypesService subscription', () => {
     // A subsequent block edit MUST NOT trigger a republish from this
     // disposed instance (no leaking subscription).
     await env.repo.tx(async tx => {
-      await tx.setProperty(id, blockTypeLabelProp, 'Renamed')
-    }, {scope: ChangeScope.BlockDefault})
+      const row = await tx.get(id)
+      if (!row) throw new Error('expected type row')
+      await tx.update(id, {
+        properties: {...row.properties, [blockTypeLabelProp.name]: 'Renamed'},
+      })
+    }, {scope: ChangeScope.BlockDefault, allowUnloadedWorkspace: true})
     expect(env.repo.types.get(id)).toBeUndefined()
-  })
-
-  it('double-start throws to surface lifecycle bugs', async () => {
-    env = await setup()
-    expect(() => env.service.start()).toThrow(/already started/)
   })
 
   it('does not feedback-loop with the propertySchemas rebuild step', async () => {
@@ -285,11 +556,36 @@ describe('UserTypesService subscription', () => {
     await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
       .resolves.toBeDefined()
   })
+
+  it('terminates the feedback loop for a type WITH a resolved ref-typed property', async () => {
+    // The zero-property case above never reaches projectedDefinitionsEqual's
+    // property-array arm. A refList property is the churn case: its preset's
+    // build() mints a fresh codec (and a fresh [] default) on EVERY schema-
+    // projector rebuild, and that projector has no dedup, so an unrelated
+    // property edit re-resolves the type's property to a reference-fresh-but-
+    // equal schema. The field-wise dedup must still let the cascade settle
+    // (a bounded extra rebuild), not recurse into a stack overflow.
+    env = await setup()
+    const tags = await env.repo.userSchemas.addSchema({name: 'tags', presetId: 'refList'})
+    const tagsBlockId = env.repo.userSchemas.getSchemaBlockId(tags.name)!
+    const typeId = await createBlockTypeBlock(env.repo, {
+      label: 'Task',
+      properties: [tagsBlockId],
+    })
+    expect(env.repo.types.get(typeId)?.properties).toHaveLength(1)
+
+    // Editing an UNRELATED property-schema block fires onPropertySchemasChange
+    // and republishes ALL schemas with fresh codecs.
+    await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
+      .resolves.toBeDefined()
+    // The type survives with its property intact.
+    expect(env.repo.types.get(typeId)?.properties).toHaveLength(1)
+  })
 })
 
 describe('UserTypesService workspace switch', () => {
-  // Regression for reviewer feedback: AppRuntimeProvider starts
-  // userSchemas before userTypes; on workspace switch the new
+  // Regression for reviewer feedback: Repo pinning starts userSchemas before
+  // userTypes; on workspace switch the new
   // userSchemas service can publish before the new userTypes
   // subscription has loaded, firing onPropertySchemasChange. Before
   // the fix, UserTypesService would rebuild against the PREVIOUS
@@ -299,23 +595,16 @@ describe('UserTypesService workspace switch', () => {
   // listener rebuild is gated on the workspace-pinned subscription's
   // first tick.
 
-  it('does not leak previous-workspace types after dispose+restart on a new workspace', async () => {
+  it('does not leak previous-workspace types after a Repo-pin switch', async () => {
     env = await setup()
     // Create a type block in workspace W1.
     const w1TypeBlockId = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.get(w1TypeBlockId)?.label).toBe('Person')
 
-    // Workspace switch: dispose the service, set a new active workspace,
-    // bootstrap its pages, and start again. The user-data type bucket
-    // should be clear AFTER dispose — no leakage into W2.
-    env.service.dispose()
-    expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
-
     const W2 = 'ws-user-types-2'
     env.repo.setActiveWorkspaceId(W2)
     await getOrCreatePropertiesPage(env.repo, W2)
     await getOrCreateTypesPage(env.repo, W2)
-    env.service.start()
 
     // Mimics the React-effect remount sequence on workspace switch:
     // the new workspace's userSchemas publishes first, firing
@@ -328,11 +617,11 @@ describe('UserTypesService workspace switch', () => {
     expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
   })
 
-  it('clears the user-data type bucket on dispose()', async () => {
+  it('clears the user-data type bucket on a null Repo pin', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.has(id)).toBe(true)
-    env.service.dispose()
+    env.repo.setActiveWorkspaceId(null)
     expect(env.repo.types.has(id)).toBe(false)
   })
 })

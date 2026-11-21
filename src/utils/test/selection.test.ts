@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { isCollapsedProp } from '@/data/properties'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -9,7 +10,11 @@ import {
   blockIdsInOrderedSelectionRange,
   findBestSelectionAnchorIndex,
   getLastVisibleDescendant,
+  insertInDocumentOrder,
 } from '@/utils/selection.js'
+
+const surface = (scopeRootId: string, scopeRootForcesOpen = true) =>
+  outlineSurfaceOf({scopeRootId, scopeRootForcesOpen})!
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -93,6 +98,25 @@ describe('ordered selection ranges', () => {
       selectedBlockIds: ['X', 'B'],
     })).toBe(3)
   })
+
+  it("takes the cursor's copy of the anchor only when the cursor is on the anchor block", () => {
+    // The cursor sits on C, in the same entry as the first X — which says
+    // nothing about which X the selection was anchored on.
+    const entryLocations = [
+      {blockId: 'A', renderScopeId: 'outline'},
+      {blockId: 'X', renderScopeId: 'entry:1'},
+      {blockId: 'C', renderScopeId: 'entry:1'},
+      {blockId: 'X', renderScopeId: 'entry:2'},
+      {blockId: 'B', renderScopeId: 'outline'},
+    ]
+
+    expect(findBestSelectionAnchorIndex(entryLocations, {
+      anchorBlockId: 'X',
+      targetIndex: 4,
+      selectedBlockIds: ['X', 'B'],
+      currentLocation: {blockId: 'C', renderScopeId: 'entry:1'},
+    })).toBe(3)
+  })
 })
 
 describe('blockAfterSubtreeRemoval', () => {
@@ -104,7 +128,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
       {id: 'c', parentId: 'top', orderKey: 'd'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), surface('top'))
     expect(result?.id).toBe('c')
   })
 
@@ -115,7 +139,19 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'a', parentId: 'top', orderKey: 'b'},
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('b'), surface('top'))
+    expect(result?.id).toBe('a')
+  })
+
+  it('passes over the siblings leaving with it', async () => {
+    // top > [a, b, c]; remove b and c together → not c, not b: a
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'b', parentId: 'top', orderKey: 'c'},
+      {id: 'c', parentId: 'top', orderKey: 'd'},
+    ])
+    const result = await blockAfterSubtreeRemoval(env.repo.block('c'), surface('top'), new Set(['b', 'c']))
     expect(result?.id).toBe('a')
   })
 
@@ -126,7 +162,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'parent', parentId: 'top', orderKey: 'b'},
       {id: 'only', parentId: 'parent', orderKey: 'c'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('only'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('only'), surface('top'))
     expect(result?.id).toBe('parent')
   })
 
@@ -142,7 +178,7 @@ describe('blockAfterSubtreeRemoval', () => {
       {id: 'c2', parentId: 'parent', orderKey: 'e'},
       {id: 'below', parentId: 'top', orderKey: 'f'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('parent'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('parent'), surface('top'))
     expect(result?.id).toBe('below')
   })
 
@@ -150,7 +186,7 @@ describe('blockAfterSubtreeRemoval', () => {
     await seedOutline(env.repo, [
       {id: 'top', parentId: null, orderKey: 'a'},
     ])
-    const result = await blockAfterSubtreeRemoval(env.repo.block('top'), 'top')
+    const result = await blockAfterSubtreeRemoval(env.repo.block('top'), surface('top'))
     expect(result).toBeNull()
   })
 })
@@ -165,7 +201,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'd'},
       {id: 'b2', parentId: 'b', orderKey: 'e'},
     ])
-    const result = await getLastVisibleDescendant(env.repo.block('top'))
+    const result = await getLastVisibleDescendant(env.repo.block('top'), surface('no-scope-root'))
     expect(result.id).toBe('b2')
   })
 
@@ -178,7 +214,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('b'))
+    const result = await getLastVisibleDescendant(env.repo.block('b'), surface('no-scope-root'))
     expect(result.id).toBe('b')
   })
 
@@ -194,7 +230,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top')
+    const result = await getLastVisibleDescendant(env.repo.block('top'), surface('top'))
     expect(result.id).toBe('b')
   })
 
@@ -208,7 +244,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top', false)
+    const result = await getLastVisibleDescendant(env.repo.block('top'), surface('top', false))
     expect(result.id).toBe('top')
   })
 
@@ -221,7 +257,39 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
+    const result = await getLastVisibleDescendant(env.repo.block('b'), surface('top'))
     expect(result.id).toBe('b')
+  })
+})
+
+describe('insertInDocumentOrder', () => {
+  beforeEach(async () => {
+    await seedOutline(env.repo, [
+      {id: 'root', parentId: null, orderKey: 'a0'},
+      {id: 'p', parentId: 'root', orderKey: 'a0'},
+      {id: 'p1', parentId: 'p', orderKey: 'a0'},
+      {id: 'q', parentId: 'root', orderKey: 'b0'},
+      // Two siblings sharing an order key, which every children query breaks by id.
+      {id: 'tb', parentId: 'root', orderKey: 'c0'},
+      {id: 'ta', parentId: 'root', orderKey: 'c0'},
+      {id: 'other', parentId: null, orderKey: 'b0'},
+      {id: 'o1', parentId: 'other', orderKey: 'a0'},
+    ])
+  })
+
+  it('puts an ancestor before its descendant', async () => {
+    expect(await insertInDocumentOrder(['p1'], 'p', env.repo)).toEqual(['p', 'p1'])
+  })
+
+  it('breaks an order-key tie by id, as the children queries do', async () => {
+    expect(await insertInDocumentOrder(['tb'], 'ta', env.repo)).toEqual(['ta', 'tb'])
+  })
+
+  it('appends a block from another tree, which has no order against this one', async () => {
+    expect(await insertInDocumentOrder(['q'], 'o1', env.repo)).toEqual(['q', 'o1'])
+  })
+
+  it('steps over a selected id that no longer resolves', async () => {
+    expect(await insertInDocumentOrder(['gone', 'q'], 'p', env.repo)).toEqual(['gone', 'p', 'q'])
   })
 })

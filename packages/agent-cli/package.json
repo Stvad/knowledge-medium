@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-medium/agent-cli",
-  "version": "0.3.1",
+  "version": "0.14.1",
   "description": "CLI, local HTTP bridge, and graph MCP server for driving the Knowledge Medium app from local agents.",
   "keywords": [
     "cli",
@@ -54,15 +54,15 @@
   "scripts": {
     "build": "tsc -b && node scripts/build-kernel-types.mjs && chmod +x ./dist/cli.js ./dist/server.js ./dist/mcp.js",
     "build:clean": "tsc -b --clean",
-    "prepublishOnly": "yarn run build:clean && yarn run build"
+    "prepublishOnly": "npm run build:clean && npm run build"
   },
   "devDependencies": {
-    "@types/node": "^25.0.0",
-    "typescript": "^6.0.0"
+    "@types/node": "^26.6.6",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "cac": "^7.0.0",
-    "zod": "^4.0.0"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "cac": "^7.1.0",
+    "zod": "^4.6.7"
   }
 }

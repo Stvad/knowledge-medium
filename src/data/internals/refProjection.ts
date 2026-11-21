@@ -1,11 +1,10 @@
 /**
- * Shared property-schema projection helpers — the ref-codec classification,
- * the type→schema lift/merge, and the ref-change diff. Used by two engines
- * that were both carved out of `Repo`:
+ * Shared property-schema projection helpers — the ref-codec classification
+ * and the ref-change diff. Used by two engines that were both carved out of
+ * `Repo`:
  *
- *   - `facetBridge.ts` rebuild steps: `mergeLiftedSchemas` (build the merged
- *     registry) + `changedRefSchemaNames` (decide whether a swap needs a
- *     reprojection pass).
+ *   - `facetBridge.ts` rebuild steps: `changedRefSchemaNames` (decide whether
+ *     a swap needs a reprojection pass).
  *   - `repo.ts` reprojection: `projectedRefsForField` / `latestRefProjection-
  *     Schema` (recompute a block's derived references from its ref-typed
  *     property values).
@@ -18,43 +17,8 @@ import type {
   AnyPropertySchema,
   BlockData,
   BlockReference,
-  TypeContribution,
 } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api'
-
-/** Build the merged property-schema registry: type-lifted schemas first
- *  (each `TypeContribution.properties`), then direct `propertySchemasFacet`
- *  registrations, last-wins per facet convention with a warning on a
- *  genuine conflict (different schema object for the same name). */
-export const mergeLiftedSchemas = (
-  directSchemas: ReadonlyMap<string, AnyPropertySchema>,
-  types: ReadonlyMap<string, TypeContribution>,
-): ReadonlyMap<string, AnyPropertySchema> => {
-  const merged = new Map<string, AnyPropertySchema>()
-  for (const type of types.values()) {
-    for (const schema of type.properties ?? []) {
-      const existing = merged.get(schema.name)
-      if (existing !== undefined && existing !== schema) {
-        console.warn(
-          `[schema-lift] type "${type.id}" registers schema "${schema.name}" ` +
-          'that conflicts with an earlier type-lifted registration; last-wins per facet convention',
-        )
-      }
-      merged.set(schema.name, schema)
-    }
-  }
-  for (const [name, schema] of directSchemas) {
-    const existing = merged.get(name)
-    if (existing !== undefined && existing !== schema) {
-      console.warn(
-        `[schema-lift] direct propertySchemasFacet registration "${name}" ` +
-        'replaces an earlier type-lifted registration; last-wins per facet convention',
-      )
-    }
-    merged.set(name, schema)
-  }
-  return merged
-}
 
 export type RefCodecKind = 'ref' | 'refList' | undefined
 
@@ -75,6 +39,21 @@ export const changedRefSchemaNames = (
   return Array.from(names)
     .filter(name => refCodecKind(before.get(name)) !== refCodecKind(after.get(name)))
     .sort()
+}
+
+/** Every ref-typed name in a registry. A workspace pin schedules a
+ *  marker-gated scan over these so a newly-activated workspace backfills its
+ *  own rows' derived refs even when a ref-typed name (e.g. a shared static
+ *  seed like `next-review-date`) is unchanged from the previously-active
+ *  workspace and thus absent from `changedRefSchemaNames`. */
+export const refTypedSchemaNames = (
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): string[] => {
+  const names: string[] = []
+  for (const [name, schema] of schemas) {
+    if (refCodecKind(schema) !== undefined) names.push(name)
+  }
+  return names.sort()
 }
 
 const appendRefProjection = (
@@ -127,8 +106,7 @@ export const projectedRefsForField = (
  *     Properties`); this guards the narrower race where a name was ref-typed at
  *     schedule time but vanished from the live registry by run time (a plugin
  *     toggled off, ?safeMode, or an async user/import schema mid-republish).
- *     Stripping that field is exactly the silent-deletion vector that wiped
- *     ~10k `next-review-date` backlinks on SRS toggle-off.
+ *     Stripping that field silently deletes backlinks.
  *
  *  The caller passes a *workspace-correct* `currentSchemas`: the live registry
  *  only while still on the scan's workspace, else the scheduled snapshot (see

@@ -14,7 +14,7 @@ intentional open integration surface.
 
 1. Open an issue describing the change before doing significant work, so we can align on direction.
 2. Fork, branch, and open a PR against `master`.
-3. Run `yarn run check` locally before pushing — it bundles type-check, lint, tests, and schema/sync validation.
+3. Run `pnpm run check` locally before pushing — it bundles type-check, lint, tests, and schema/sync validation.
 4. Keep PRs focused. Smaller, single-purpose PRs are easier to review and land faster.
 
 ## Contributor license grant

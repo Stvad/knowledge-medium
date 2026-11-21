@@ -31,21 +31,20 @@ import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
-import { usePropertyEditingActivation } from './usePropertyEditingActivation'
+import { dismissOnFieldEscape, usePropertyEditingActivation } from './usePropertyEditingActivation'
 import type { Block } from '@/data/block'
+import {
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
+import {isPropertyPickerName} from './visibility'
 
 export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
 const MAX_SUGGESTIONS = 8
 
-export interface AddPropertyArgs {
-  /** Existing registered schema the user picked from autocomplete (if any). */
-  adopted?: AnyPropertySchema
-  /** Property name. If `adopted` is set, this equals `adopted.name`. */
-  name: string
-  /** Preset id. If `adopted` is set, this equals `adopted.codec.type`. */
-  presetId: string
-}
+export type {PropertySchemaChoice as AddPropertyArgs} from '@/data/propertySchemaCreation'
+import type {PropertySchemaChoice as AddPropertyArgs} from '@/data/propertySchemaCreation'
 
 export interface ConfigureNewSchemaArgs {
   name: string
@@ -64,13 +63,13 @@ const filterSuggestions = (
   presets: ReadonlyMap<string, AnyJoinedValuePreset>,
   excludedNames: ReadonlySet<string>,
   filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
 ): readonly NameSuggestion[] => {
   const q = query.trim().toLowerCase()
   const out: NameSuggestion[] = []
   for (const schema of schemas.values()) {
     if (excludedNames.has(schema.name)) continue
-    const ui = uis.get(schema.name)
-    if (ui?.hidden) continue
+    if (!isPropertyPickerName(schema.name, schemas, uis, definitions)) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
@@ -131,6 +130,7 @@ export function PropertyPicker({
   const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const schemas = usePropertySchemas()
+  const propertyDefinitions = block.repo.propertyDefinitions
 
   const presetEntries = useMemo(() => selectablePresets(presets), [presets])
   const initialPresetId = useMemo(() => {
@@ -171,8 +171,16 @@ export function PropertyPicker({
   }, [autoFocus, focusNameInput])
 
   const suggestions = useMemo(
-    () => filterSuggestions(propertyName, schemas, uis, presets, excludedNamesSet, filterSchema),
-    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema],
+    () => filterSuggestions(
+      propertyName,
+      schemas,
+      uis,
+      presets,
+      excludedNamesSet,
+      filterSchema,
+      propertyDefinitions,
+    ),
+    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions],
   )
 
   const reset = useCallback(() => {
@@ -189,6 +197,7 @@ export function PropertyPicker({
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
     const name = (adopted?.name ?? propertyName).trim()
     if (!name || submitting) return
+    if (!isPropertyPickerName(name, schemas, uis, propertyDefinitions)) return
     setSubmitting(true)
     try {
       await onAdd(adopted
@@ -199,7 +208,7 @@ export function PropertyPicker({
     } finally {
       setSubmitting(false)
     }
-  }, [onAdd, presetId, propertyName, reset, submitting])
+  }, [onAdd, presetId, propertyDefinitions, propertyName, reset, schemas, submitting, uis])
 
   const handleGlyphClick = useCallback(async () => {
     const name = propertyName.trim()
@@ -208,10 +217,21 @@ export function PropertyPicker({
       return
     }
     if (submitting) return
+    if (!isPropertyPickerName(name, schemas, uis, propertyDefinitions)) return
     const schema = await onConfigureNewSchema({name, presetId})
     if (!schema) return
     void submit(schema)
-  }, [focusNameInput, onConfigureNewSchema, presetId, propertyName, submit, submitting])
+  }, [
+    focusNameInput,
+    onConfigureNewSchema,
+    presetId,
+    propertyDefinitions,
+    propertyName,
+    schemas,
+    submit,
+    submitting,
+    uis,
+  ])
 
   const showSuggestions = suggestionsOpen && suggestions.length > 0
 
@@ -270,9 +290,16 @@ export function PropertyPicker({
           className={inputClassName ?? 'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:border-transparent focus-visible:ring-0'}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
-              event.preventDefault()
-              if (suggestionsOpen) { setSuggestionsOpen(false); return }
-              onEscape?.()
+              // Dismiss the innermost thing that's actually up, and claim the
+              // key only then — with nothing to dismiss the event falls
+              // through to `exit_property_editing`, which blurs the field.
+              // Keyed on `showSuggestions`, not `suggestionsOpen`: focus opens
+              // the list eagerly, so a zero-suggestion `suggestionsOpen` would
+              // swallow the first Escape on an invisible dismiss.
+              dismissOnFieldEscape(
+                event,
+                showSuggestions ? () => setSuggestionsOpen(false) : onEscape,
+              )
               return
             }
             onKeyDown(event)
@@ -295,7 +322,7 @@ export function PropertyPicker({
             >
               <PropertyShapeGlyph
                 shape={s.schema.codec.type}
-                Glyph={uis.get(s.schema.name)?.Glyph ?? s.preset?.Glyph}
+                Glyph={resolveEditorOverride(s.schema.name, propertyDefinitions, uis, s.schema)?.Glyph ?? s.preset?.Glyph}
                 className="text-muted-foreground"
               />
               <span className="flex-1 truncate">{s.schema.name}</span>

@@ -1,0 +1,933 @@
+# Fuzzing
+
+> **Status:** current — last verified against code 2026-09-01
+
+Randomized testing for the parsing and data layers, in the Dan Luu
+spirit: cheap random inputs + invariant oracles find bugs that
+example-based tests structurally cannot, so generate relentlessly and
+run continuously. All suites use [fast-check] (generators + shrinking +
+seed replay) and live next to the code they test as `*.fuzz.test.ts`.
+
+[fast-check]: https://fast-check.dev/
+
+## Tiers
+
+The same property code runs at three intensities (mechanics in
+`src/test/fuzz.ts`):
+
+| Tier | Trigger | Seeds | Budget |
+|---|---|---|---|
+| smoke | part of the normal `pnpm test` / `pnpm run check` gate | fixed | small run counts, ~1s/file |
+| local deep | `pnpm fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
+| nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite and a 15-minute one on the props-as-blocks dual-write suite |
+
+The smoke tier is deliberately deterministic: the gate re-explores the
+same cases every run, so a pre-existing bug can only surface in the
+nightly run — never as a flake blocking an unrelated PR. New territory
+is the nightly tier's job; on failure it uploads both passes' vitest
+logs as an artifact and files (or appends to) an issue labeled
+`fuzz-failure`. The failing seed is always in the uploaded artifact;
+the issue body itself carries a best-effort excerpt of the failure
+(only from the pass(es) that actually failed), not a guarantee. The
+workflow then fires the fuzz-triage cloud routine over its API trigger
+(repo secrets `FUZZ_TRIAGE_FIRE_URL` / `FUZZ_TRIAGE_FIRE_TOKEN`), which
+reproduces the failure and opens a fix PR against the issue.
+
+## Reproducing a failure
+
+fast-check's failure report includes `seed`, `path`, and the shrunk
+counterexample. Replay it:
+
+```sh
+FUZZ_SEED=<seed> FUZZ_PATH="<path>" pnpm vitest run --testTimeout=600000 <failing file> -t '<failing test name>'
+```
+
+The `-t` filter matters: the env vars apply to every property in the
+file, and a path only fits the property that produced it — other tests
+in the file may fail with "Unable to replay", or may silently replay an
+unrelated case instead — always pass `-t`. `FUZZ_PATH` jumps straight to
+the counterexample; omit it to re-run the whole sequence from the seed.
+`FUZZ_RUNS=<n>` forces a run count instead of a time budget. The
+stateful suite pins its only other nondeterminism (order-key jitter)
+through a seeded PRNG, so replays are exact.
+
+Triage note: fast-check reports "Property interrupted after 0 tests" as
+a FAILURE when the time budget expires before even the first case
+finishes. That's a budget/perf signal, not a property failure — rerun
+with a larger `FUZZ_RUNS` or `FUZZ_TIME_MS`. It comes with a seed but no
+counterexample, so there's nothing to shrink or replay.
+
+### When the counterexample passes on replay
+
+If the `FUZZ_PATH` replay above *passes*, the shrunk counterexample is
+unsound — do not conclude "not reproducible / flake" and move on.
+Shrinking assumes the property is deterministic in its input; when it
+isn't, fast-check minimizes toward a value that doesn't actually fail.
+Two causes, in order of likelihood:
+
+1. **A hidden nondeterministic input** the property forgot to pin
+   (`Date.now`, `Math.random`, iteration order, shared mutable state).
+   Pin it (see the stateful-suite guarantees below) — that's a real
+   test bug and the usual case.
+2. **Engine-level nondeterminism** — rare, but real. A property can
+   depend on V8 execution state (JIT tier, string representation) that
+   the seed doesn't capture, so it reproduces in CI/vitest but not in a
+   fresh `node`, or vice-versa.
+
+Playbook when a replay won't reproduce:
+
+- **Regenerate from the seed instead of replaying the path.** Drop
+  `FUZZ_PATH` and run enough cases to reach the failure — the nightly
+  issue now prints this command directly
+  (`FUZZ_SEED=<seed> FUZZ_RUNS=<pathIndex+1> …`; `pathIndex` is the
+  path's first segment). This re-explores the real sequence rather than
+  the bogus minimized value.
+- **Dump raw code points, not the pretty-printed value** — fast-check's
+  stringify can render distinct characters identically. `[...k].map(c =>
+  c.codePointAt(0).toString(16))` on the differing key/value is decisive.
+- **Try `node --jitless` / a standalone `node` repro** to tell an engine
+  miscompile (behaviour changes with execution mode) from a logic bug
+  (stable across modes).
+
+Worked example: the `blockData.fuzz.test.ts`
+`blockToRowParams → parseBlockRow` round-trip went red nightly (seed
+`-915705129`, ~run 20420) with a `"` property key decoding to `\`. The
+functions are a pure `JSON.stringify`/`JSON.parse` round-trip — correct
+by construction; the reported counterexample passes in isolation. Root
+cause was a V8 `JSON.parse` miscompile for one specific ~486-char input,
+triggered only after the deep tier's heavy fast-check loop warms the
+engine (a same-shape hand-built string parses fine). Not a product bug.
+
+## The suites
+
+A curated tour, NOT an inventory — `git ls-files '*.fuzz.test.ts'` is
+the authoritative list and currently runs well ahead of what's written
+up below. Each suite's own docblock states its oracles and cites the
+lines they're grounded in; that's the thing to read before extending
+one.
+
+- `src/plugins/references/test/referenceParser.fuzz.test.ts` — span
+  soundness on bracket salads; render→parse round-trips; rewriters vs a
+  fragment-level reference model.
+- `src/utils/test/markdownParser.fuzz.test.ts` — paste/import parser:
+  never-throws + valid forest on line soup; bullet-outline round-trip;
+  fenced-code isolation.
+- `src/data/mergeProperties.fuzz.test.ts`,
+  `src/data/internals/jsonCanonical.fuzz.test.ts` — algebraic laws
+  (identities, scoped associativity, equivalence relation, idempotence,
+  union reference model).
+- `src/data/api/codecs.fuzz.test.ts`,
+  `src/data/api/blockData.fuzz.test.ts` — codec round-trips,
+  strict-decode totality (only `CodecError`), lenient-path
+  never-throws, `normalizeReferences` laws, row-parser round-trip.
+- `src/data/test/repoMutators.fuzz.test.ts` — the stateful one: random
+  `repo.mutate.*` sequences (incl. alias/type property writes and raw
+  `references` writes) against a real test repo with per-op invariant
+  sweeps (cycles, live orphans, order-key collisions, `SUBTREE_SQL` vs
+  a JS reference walk, workspace uniformity, and
+  incremental-vs-recompute mirrors for every trigger-maintained derived
+  index: `block_aliases`, `block_types`, `block_references`,
+  `blocks_fts` + rowid map), a consistency audit, undo-all/redo-all
+  round-trip oracles, and a non-vacuity canary pinning each derived
+  index populated by the op set.
+- `src/sync/crypto/cryptoCodecs.fuzz.test.ts` — round-trips + decode
+  totality for base64url/base32/hex, the `enc:v1:`/`encb:v1:`
+  envelopes, workspace-key format (incl. whitespace/case tolerance),
+  content-hash digests; AAD length-prefix injectivity and cross-builder
+  disjointness.
+- `src/data/internals/syncObserver/test/reconcile.fuzz.test.ts` — the
+  LWW reconcile gate: case analysis + an independent I1/I2 reference
+  model as an exact differential, and a sequence model against a fake
+  server implementing the monotonic clamp (convergence, idempotent
+  redelivery, zero-stamp exemption).
+- `src/services/powersync.fuzz.test.ts` — upload queue:
+  `compactBlockCrudEntries` differential replay over
+  contiguous-transaction batches, same-tx PATCH fusion, DELETE
+  cancellation, order-anchor re-derivation; `orderedBlockUpserts`
+  permutation + parents-first + exactly-one-reversed-edge-per-cycle.
+- `src/paste/test/operations.fuzz.test.ts` — paste planners: selection
+  clamping, branch-exact prefix/suffix reconstruction, parsed-content
+  conservation, fenced-code body preservation, chord-intent totality.
+- `src/data/orderKeyPlacement.fuzz.test.ts` — tie-breaking placement
+  via a fake-Tx harness: strictly-ascending keys, minimal re-key with
+  no id dropped/duplicated, new ids contiguously adjacent to the anchor
+  under `(order_key, id)` sort — the #198/#182/#188 tie-collision
+  class.
+- `src/plugins/references/test/referencesRecompute.fuzz.test.ts` — the
+  references pipeline, stateful: content edits with
+  `[[alias]]`/`((uuid))` marks, ref-typed property writes, alias
+  renames, deletes/restores, and merges against a repo with the REAL
+  references + daily-notes extensions; oracle = the FULL consistency
+  audit (`content_link_recompute`, `property_ref_projection`, index
+  mirror) reports zero anomalies after each drained op. Orphan-alias
+  cleanup driven deterministically via fake timers.
+- `src/data/test/splitMerge.fuzz.test.ts` — split/merge content
+  conservation: split-then-merge identity, whole-tree pre-order text
+  conservation, sibling placement + child adoption, exact-snapshot
+  undo/redo round-trips.
+- `src/data/test/undoInterleaving.fuzz.test.ts` — undo/redo under
+  interleaving (#227): random plans of edits (some sharing an undo
+  group), undo/redo gestures (double-pressed, or with a replay that
+  fails), with ordinary edits committing AHEAD of a replay (queued on
+  the write lock), the moment a replay's transaction settles, or
+  behind it — and gestures run in the window between an edit's commit
+  and its caller resuming. Oracle = a sequential model driven by the
+  database's OWN commit order (`command_events` rowid order; a replay's
+  row names its entry): every replay must name the entry on top of its
+  stack at that point and find each row at the entry's far side; DB
+  content, depths and stack tops must match the model after every step;
+  redo-all / undo-all / redo-all must reach the newest state, the seed,
+  and the newest state again.
+- `src/sync/crypto/aead.fuzz.test.ts` — AEAD seal/open (text + bytes):
+  round-trips, single-byte ciphertext‖tag tamper rejection, one-field
+  AAD-mismatch rejection, wrong-key rejection, `validateCanary`
+  false-never-throws totality.
+- `src/utils/selection.fuzz.test.ts` — pure multi-select helpers:
+  contiguous endpoint-order-independent ranges, anchor-index contract,
+  `validateSelectionHierarchy` vs an independent ancestor walk +
+  idempotence.
+- `src/data/test/queryHandles.fuzz.test.ts` — query-handle soundness:
+  a pool of subscribed `repo.query.*` handles (subtree, children,
+  childIds, ancestors, byType, aliasLookup, searchByContent) must
+  converge, after random mutator sequences, to an INDEPENDENT fresh
+  read taken through a throwaway Repo over the same db (a same-handle
+  `load()` would be tautological — it short-circuits to the peeked
+  value). `searchByContent` compares id-sets only: its
+  `declareRowDeps:false` under-invalidation is a documented, tested
+  tradeoff.
+- `src/shortcuts/test/defaultActions.fuzz.test.ts` — the interaction
+  layer (jsdom): random default-action dispatches (normal-mode
+  structural actions, edit-mode CM actions over a headless fake editor
+  view, multi-select wrappers, undo/redo) through `invokeAction` with
+  UI-shaped deps; oracles = structural invariants + scope-root
+  boundary protection.
+- `src/shortcuts/test/activeContextsOwnership.fuzz.test.tsx` — shortcut
+  context ownership across the React lifecycle (happy-dom, real
+  commits): random mount / unmount / suspend / unsuspend / retarget /
+  deps-churn batches over several surfaces claiming overlapping context
+  types, including the same-commit "one lane goes dark as a sibling
+  comes live" swap and StrictMode double-invoke. Oracles = the
+  settled-state invariant (every type a LIVE surface claims has an
+  entry, owned by a live claimant; no entry for an unclaimed type),
+  key order = activation recency, and an exact differential against a
+  reference model of the pre-existing semantics for the non-overlapping
+  case.
+- `src/data/propertyDefinitionRegistry.fuzz.test.ts` — the
+  schema-unification registry + resolver (PR #364): random universes of
+  seed declarations and projected definition rows; oracles =
+  first-wins name-collision drop (reference-model differential),
+  name-winner uniqueness, three-path resolution agreement
+  (resolve/resolveField/resolveName round-trips), the kept-seed
+  unshadowability case model, insertion-order independence, boundary
+  fail-closed on forged identities, strict-codec recovery at the write
+  seam. `legacySchemas` stays empty — the transitional dual-path dies
+  in the B′ deletion slice and the suite must survive that unchanged.
+- `src/data/propertySeeds.fuzz.test.ts` — the seed-declaration layer:
+  `seedProperty` totality → `isPropertySeedDeclaration`
+  self-validation across every kernel preset; canonical bag →
+  `parsePropertyDefinitionMetadata` round-trip with provenance demotion
+  when either half of the deterministic-id equation is wrong;
+  encode-fixpoint + strict-decode totality for all kernel preset cores
+  and both config codecs; per-conjunct mutation rejection.
+- `src/data/definitionSeeds.fuzz.test.ts` — stateful: random
+  interleavings of `materializePropertySeeds`, user-scope tamper
+  attempts, Automation lifecycle writes, and deterministic-id
+  poisoning; oracles = materialization idempotence, batch-abort
+  atomicity under poisoning, bag code-ownership through every tx
+  primitive, restore-preserves-bag, and a registry-resolution tie-in
+  after each sequence.
+- `src/data/internals/propertyDualWrite.fuzz.test.ts` — stateful, the
+  properties-as-blocks dual representation (cell + field/value child
+  rows, roadmap #430's "eager dual-write oracle"): sequences mixing every
+  writer — eager `setProperty`/`unsetProperty`/`setProperties`, raw
+  `tx.update({properties})`, direct field/value-row edits (content,
+  delete, move, reorder, stray and `::`-marked children), owner
+  delete/restore, undo/redo, and sync-shaped raw `db.writeTransaction`
+  arrivals (a peer's duplicate field row, a value edit without its cell,
+  a live child under a tombstone) — often several per tx. Oracles after
+  every tx: the cell equals what the live children project to; re-running
+  PROJECT, and MATERIALIZE on pairs a cell write just converged, writes
+  nothing; no duplicate field rows or orphans except where a tree edit or
+  an arrival could have minted one and no cell write has collapsed it
+  since; a cell-writes-only pair ends at the LAST write; a rejected tx
+  leaves no trace; each undo and redo lands exactly on the state
+  recorded on that side of its tx (a mirror of the undo stack, which
+  also restores the waivers that state was checked under), and so do
+  undo-all and redo-all. Arrivals deliberately leave the touched pairs
+  incoherent (the arrival path never re-projects), so the suite waives
+  exactly those pairs until a local write re-settles them — read the
+  docblock before tightening it. A case aims most ops at one "hot"
+  (owner, property) pair, and a multi-op tx crowds onto it; blind
+  targets over 3 owners × 5 properties seldom met. The property asserts
+  over its own sample that every writer and oracle was reached: on the
+  fixed smoke sample, or on any random one of 200+ cases (so a short
+  `FUZZ_RUNS` triage run reports only property failures). Three composite
+  shapes are asserted only from 5,000 cases, which the nightly's dedicated
+  pass for this suite reaches: the order-blind carve-out, a field row
+  already live at its owner's revival, and a restore checked against a
+  key that held a value.
+- `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
+  `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
+  differential against an independent group-then-fold reference over
+  generated async source fixtures (no DB) — exact id/order/payload
+  equality, no dup ids, `limit<=0` short-circuits without invoking any
+  source, a mix of throwing/succeeding sources merges only the
+  survivors, and total failure rethrows the FIRST contribution's error
+  by registration order regardless of randomized settle order.
+- `src/data/internals/kernelQueries.fuzz.test.ts` — two independent
+  LIKE-pattern properties: (1) `buildFuzzyAliasMatchesSql`'s exact/prefix
+  match survives the alias-autocomplete pre-filter `LIMIT` regardless of
+  same-trigram decoy count/alphabetical/creation order (ground truth by
+  construction — decoy vs. true-match suffixes are structurally
+  disjoint); (2) `escapeLikePattern` differential vs real SQLite —
+  every call site's actual LIKE/ESCAPE fragment, run against a live
+  connection, matches a case-folded JS containment check for arbitrary
+  needle/haystack pairs biased toward `%`/`_`/`\`/case-invariant unicode.
+- `src/data/test/visibleChildren.fuzz.test.ts` — the outline's
+  visible-children view (the §9 field-row hiding), stateful: random tx,
+  peer-sync (staged into `blocks_synced`, materialized by the observer)
+  and undo/redo ops over trees with field rows at every depth, unknown
+  and foreign field ids, seed ids, unmarked look-alikes and churning
+  definitions. Both views read the same stamped columns and split only
+  on "does the target name a definition", so the oracles are: the stamped
+  `is_field_form`/`reference_target_id` equal a fresh derive (the shared
+  input, which no SQL-vs-JS differential can see), `VISIBLE_CHILDREN_SQL`
+  equals `visibleChildrenOf` for every live block, and
+  `VISIBLE_SUBTREE_SQL` equals a walk over those lists. Nothing is
+  excused: the generator's unbuildable and unparseable definitions are
+  where #1202 (below) was found, and its canary reaches the veto that
+  fixed it.
+- `src/data/propertyDefinitionRename.fuzz.test.ts` — N-way definition
+  renames through `core.migratePropertyDefinition`: swaps and longer
+  cycles across codecs, renames onto fresh names, a seed's name and a
+  tombstoned definition's old name, mixed with deletes and revivals in
+  the same batch; delivered as one tx, split across consecutive txs, or
+  as the initiator's rows arriving through `blocks_synced`. Consumers
+  come from every write route (`setProperty`, a raw cell write, hand-built
+  field rows) on plain, nested and definition-block hosts, beside
+  cell-only keys, sync-shaped duplicate field rows and a tombstoned
+  consumer. Oracles = an independent refusal model; conservation (only
+  the edited definition rows and consumers' cells change — old keys
+  dropped, each new key the projection of its field rows, every other
+  key untouched); a value model across steps; sole name ownership in the
+  rebuilt registry; exact undo/redo; a reference route moving one
+  definition per tx through temporary names; re-running the processor
+  writes nothing; and sync convergence. Two fixed canaries (a 3-cycle, a
+  sync-delivered swap) run in every tier, because a planted
+  non-swap-safe re-key slipped past the first smoke sample.
+- `src/data/internals/typedBlockQuery.fuzz.test.ts` — the typed-block
+  query compiler, #430's flagship: random block forests written raw (the
+  sync-applied shape) and random `TypedBlockQuery` specs; every SQL path
+  (the compiler's rows / ids / count projections and the Repo resolvers,
+  incl. the single-type fast path and the ancestor-dep walk) diffed in
+  order against a JS interpreter written from the documented semantics,
+  never from the SQL builder. Generators lean on NULL ≠ FALSE: absent vs
+  JSON null vs `''`/`0`/`false`/`[]`, comparators and excludes over unset
+  properties, `target` through dangling / deleted / cross-workspace refs,
+  multi-type blocks, deleted parents, `created_at` ties, the ancestor-walk
+  gate. Every property kind also draws cells of a foreign JSON shape (what
+  a re-type leaves behind), and the date pool runs past years 0000–9999:
+  extended-year cells, and rarely an out-of-range operand whose refusal the
+  model predicts on every path. A model-only canary pins each of those as
+  reached.
+
+## Found so far
+
+All found within the first hours of running, each fixed with a pinned
+regression test in the same PR (#371):
+
+- `renderWikilink` corrupted surrounding text for aliases with a
+  trailing `]` or an unclosed `[[`.
+- Undoing a merge of a block with children aborted with
+  `ParentDeletedError` (replay applied snapshots in first-touch order;
+  now topologically ordered in `_replay` via `replayApplicationOrder`).
+- Merging an already-tombstoned block aborted with
+  `WorkspaceNotPinnedError` (now a retry-safe no-op).
+- `mergeProperties` silently dropped source-only keys shadowing
+  `Object.prototype` members (`key in out` walked the prototype chain).
+- `parseBlockRefs` made empty-label aliased refs (`[](((id)))`)
+  indistinguishable from plain refs, so `rewriteBlockRefs` silently
+  degraded the aliased form (id-fallback display) to a plain ref
+  (target-content display). Caught by the nightly-style random-seed
+  sweep — the fixed smoke seed had missed it.
+
+The references-pipeline fuzzer found four more within its first hours
+(each fixed with a pinned example test in the same PR):
+
+- A block whose content/properties were edited while soft-deleted came
+  back live with marks but no derived refs — restores never re-fired
+  `parseReferences` (it now watches the `deleted` field).
+- Typing `[[2026-01-05]]` when a live non-seat block already owned that
+  date-shaped alias made `ensureDailyNoteTarget` trip the
+  alias-uniqueness trigger, rolling back the whole processor tx —
+  permanently stripped refs (the daily branch now resolves lookup-first,
+  like the non-date branch).
+- Merge retargeted property-derived reference entries without rewriting
+  the property VALUE they project from — a projection anomaly the next
+  re-parse silently reverted (merge now rewrites value + entry together
+  when the schema is loaded, and leaves both alone when it isn't).
+- `parseReferences` applied plans built from pre-write state without
+  checking the source had moved — the rename rewriter's concurrent
+  update could be clobbered by the stale plan (marks `[[new]]`, stored
+  ref `old`). It now carries the rename processor's stale-plan guard.
+
+The interaction fuzzer found one more:
+
+- `delete_block` was the only structural handler with no scope-root
+  guard: Delete with the zoomed page focused tombstoned the entire
+  rendered surface out from under the panel. The boundary rule now
+  lives in `StructuralEditPolicy.canDelete` (scope-less callers like
+  the agent bridge remain free to delete).
+
+The shortcut-context ownership fuzzer went red on its FIRST fixed smoke
+seed, which was its whole point: the hazard had been read out of the code
+(`docs/activeContexts-ownership-bug.md`) and a first fix attempt had been
+reverted, but four hand-run observations of the swap had all behaved, so
+nobody knew it was reachable.
+
+- Two surfaces legitimately claiming one context type, then either one
+  going away, left the type owned by NOBODY — `deactivate(type)` deleted
+  the whole entry and the survivor's effect deps never moved, so nothing
+  re-registered it. Keyboard dead, silently. Notably the counterexample
+  needs NO violation of React's destroy-before-create ordering — the
+  ordering hazard the suite was written to hunt turned out not to be the
+  reachable one. Fixed by claim/release with a per-type stack keyed on
+  activation-token identity, with the visible map re-sorted by a
+  monotonic activation counter so key order (which `resolve.ts` reads for
+  modal recency) stays what it was.
+
+The seed-materialization fuzzer (schema-unification surface, PR #364)
+found two more within its first minutes, both in the tx-layer
+seed-definition write guard:
+
+- `tx.create` had no guard at all: the deterministic seed id is
+  publicly computable (uuidv5 of `workspaceId:seedKey`), so a
+  user-scope create carrying a provenance-valid bag forged a
+  code-owned definition BEFORE materialization ran — and the
+  materialization probe then trusted it forever (live row → skipped,
+  payloads never repaired).
+- `tx.restore` applied a `properties` patch unguarded — the one
+  remaining bag-write primitive: tombstone a seed row via
+  Automation/sync, resurrect it with a forged bag.
+
+Codex review on the fuzz suites themselves then surfaced two product
+bugs the suites' oracles were positioned to catch but their generators
+hadn't reached (both confirmed red-first and fixed):
+
+- `delete_empty_block_cm`'s empty-block path deleted before consulting
+  the scope-root boundary (reachable: split the zoomed page at cursor
+  0, then Backspace in the emptied root) — now gated on
+  `StructuralEditPolicy.canDelete`.
+- `parseReferences`' stale-plan guard checked only content/properties,
+  so a references-ONLY writer (ref-backfill reprojection on schema
+  load) landing between plan build and apply was clobbered with
+  nothing left to re-derive the lost entry. The plan now carries a
+  references basis and the processor watches `references`; retention
+  keeps entries a re-parse can't derive.
+
+Teaching the references fuzzer to land several ops before a flush
+(mid-plan interleaving — the region every prior race bug lived in)
+found one more within its first minute:
+
+- A live block claiming an alias between `parseReferences`' plan build
+  and apply made the write phase mint the predicted seat anyway,
+  tripping the alias-uniqueness trigger and rolling back the whole
+  processor tx — permanently stripped refs, because the interfering
+  write touched the CLAIMANT row and no watched field on the source
+  ever re-fires (the stale-plan guard can't see this race). Both
+  `ensureAliasTarget` and `ensureDailyNoteTarget` now lookup-first
+  INSIDE the write tx and `applySourcePlan` retargets the planned
+  entries to the claimant — converging to what a fresh re-parse would
+  produce.
+- A third rollback variant, minutes later: a tombstoned seat's stored
+  bag can carry a STALE alias claim (overwrite the seat's alias, then
+  merge the seat away — merge hands the alias to the target and
+  tombstones the seat with its bag intact). Re-referencing the date
+  restored that bag as-is, resurrecting the stale claim and tripping
+  the uniqueness trigger against the merge target — same
+  whole-tx-rollback strip. `createOrRestoreTargetBlock` now strips the
+  aliases key in the same restore UPDATE; the domain callback re-writes
+  the correct one.
+
+Batch 3 (PR #384: two-repo convergence + observer materialization +
+binding oracle + an 11-suite discovery sweep) found six more:
+
+- The two-repo convergence fuzzer's FIRST deep run found a server-side
+  protocol bug (issue #381): `blocks_clamp_updated_at`'s +1 bump only
+  clears the OLD row's stamp, not the patch AUTHOR's proposed stamp, so
+  a merge onto a drifted base can land server-content ≠ author-content
+  at the author's own stamp — the author's echo equal-stamp-skips
+  (reconcile I1) and that device permanently misses the merged-under
+  edit. The property was left strict rather than relaxed to green, so
+  the convergence deep tier stayed KNOWN RED until the fix shipped
+  (base row-version on PATCH, PR #525). That fix narrowed the door
+  rather than closing it — issue #1163: the same I1 skip still stranded a
+  peer's CONTENT, because the UN-drifted path future-clamps an author's
+  proposal *below* the stamp that author keeps locally, and a later
+  drifted bump can then land on it. Needed no clock skew and survived
+  reload. Closed on the client rather than the server: equal stamps were
+  never proof of an equal row (the server merges each column on its
+  own), so the drain now skips only a row identical in every synced
+  column (`localHoldsStagedRow`). The suite's oracle compares all 13
+  columns again, and the #1162 / #1163 counterexamples are pinned as
+  non-fuzz cases beside the property.
+- The binding-oracle sweep found that a long-form date literal bound to
+  its resolved target was never CLAIMED by it — any later block could
+  legitimately claim the spelling and existing bindings stayed silently
+  pointing at the old target forever (nothing watches "an unclaimed
+  literal was just claimed"). `claimLiteralDateAliases` now claims each
+  literal on the resolved target. The same sweep surfaced the
+  release-reclaim residual as a design gap (issue #383): bindings whose
+  bound target is a tombstone are deliberately unpoliced.
+- `isInsideUnclosedWikilink` pair-counted `[[`/`]]` while the
+  autocomplete it guards uses an anchored regex — `']] [[ #tag'`
+  divergence; rewritten to mirror the regex.
+- `applyKeybindingOverrides`' collision-strip map compared raw chord
+  strings, so an override spelled `Cmd+K` failed to strip a default
+  spelled `$mod+k`; now keyed by `canonicalizeChord`, which (follow-up
+  finds, one from review + one from Codex) also folds final-key case
+  for `event.key`-dispatched tokens but preserves it for
+  `event.code`-only tokens (`Digit1`, `Period`, …), which tinykeys
+  matches exact-case. Layer-disagreement residual: issue #388.
+- SRS scheduling ×2: `addDays`' local calendar math could land a
+  reschedule up to an hour BEFORE `now` in a DST fall-back hour (the
+  review round then caught that the pure-ms replacement shifted stored
+  DATES across DST — final shape is calendar math + a monotonicity
+  clamp, with the fuzz suite pinned to a DST-observing TZ so the
+  property isn't vacuous on UTC runners); and a corrupted/imported
+  negative interval survived every grade except AGAIN, scheduling into
+  the past — floored at 0, with the multiplicative base rescued so 0
+  isn't an absorbing state.
+
+The adversarial-review round over Batch 3 also found one product bug
+outside any fuzzer's reach (fixed + pinned): the new literal claim
+re-inserts ALL of the target's aliases through the uniqueness trigger,
+so a LATENT cross-client duplicate on a pre-existing alias (sync-apply
+skips the trigger; V1 leaves those merges latent) aborted the WHOLE
+parse batch, permanently — `claimLiteralDateAliases` now swallows
+exactly the typed alias-collision abort and degrades to the pre-claim
+first-writer behavior for that target.
+
+Round 2 (roadmap #430, sub-issues #431–#435 + #378) picked its targets
+by mining the repo's OWN history — past fixes, incident postmortems and
+the regression tests they left behind — rather than by reading the code
+for likely-fragile functions. Product bugs it found:
+
+- `applyKeybindingOverrides` still disagreed with itself across layers
+  (issue #388, the residual Batch 3 left open): rule 1 installed the
+  override author's raw `keys` verbatim, while rule 2's collision-strip
+  index bucketed claims through `canonicalizeChord`. An override spelled
+  `ctrl+x` is dispatch-dead — tinykeys knows `Control`, not `ctrl` — yet
+  its canonical claim still stripped another action's live `Control+x`
+  default, so the chord fired NOTHING. Overrides now install through
+  `normalizeChordSequence`, and claim/install agreement is structural:
+  `canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)`.
+  Review then caught the fix's own edge — a naive `+` split turns the
+  settings-capture spelling of the `+` key (`Shift++`) into bare
+  `Shift`, rebinding the action to every shifted keystroke. The splitter
+  reuses tinykeys' own `(?<=\w|\])\+` lookbehind so the two tokenizers
+  cannot drift apart again.
+- `isLocalDbCorruptionError` / `toLocalDbOpenError` — the classifiers
+  deciding whether a bootstrap failure routes to the DESTRUCTIVE
+  Export + Reset recovery UI — threw on hostile error values. The
+  totality property hit `String(error)` on a null-prototype object; the
+  review round over the fix then found every other `[[Get]]` on the
+  error equally unguarded (`.message`, `.cause`, the `instanceof`
+  prototype walk). A throw here is worse than a misclassification: the
+  recovery UI never renders at all. Reads now go through
+  `safeGet`/`safeString`/`safeInstanceOf`.
+- `renderSubtreeOutline`'s anti-spoofing invariant (id-first, one line
+  per block) had been broken twice by a missed vertical-motion character
+  class, so the suite was written against it — and found it intact. The
+  review round over that suite found the actual hole: only CONTENT was
+  neutralized, the `[id]` token passed through raw, and `]` — the
+  grammar's own delimiter — was never escaped. Ids are now
+  percent-encoded categorically (`\p{C}` plus U+2028/U+2029, which
+  `\p{C}` does NOT cover, plus `%` and `]`, with a `%uXXXX` fallback for
+  the lone surrogates `encodeURIComponent` refuses), closing the
+  Trojan-Source gap that a hand-copied range list kept reopening.
+  Content deliberately keeps a NARROWER rule — `\p{Bidi_Control}`, not a
+  hand-enumerated list (which had missed U+061C) — so ZWJ/ZWNJ survive
+  and emoji, Persian and Hindi text still render.
+- `RecentsPageBlockRenderer` carried a private `formatRelative` guarding
+  only `now === 0`, where the shared `formatRelativeTime` guards
+  `!ts || !now`. A block with no `userUpdatedAt` yet (`ts = 0`) drew a
+  bogus multi-decade "ago" label instead of hiding the line. The copy is
+  deleted rather than fixed.
+- The `searchSourcesFacet` merge resolved a duplicated block id
+  PAIRWISE — "newest, else higher score" is non-associative, so which
+  contribution's payload survived depended on fold order (issue #450).
+  Fold order here is source REGISTRATION order, not settle order:
+  `Promise.all` preserves its input array, so `candidateLists.flat()`
+  is deterministic however the sources' promises resolve. Not run to
+  run, then — the same data merged differently depending on which
+  plugins had contributed a source and in what order. Both the rule and
+  its docblock are now stated over the whole group.
+  A follow-up: the fix gated the whole-group rule on `typeof ===
+  'number'`, which `NaN` passes and then loses every comparison to,
+  including `NaN !== NaN` — so `reduce` returned whatever it was
+  holding and fold-order dependence came straight back. `Number.isFinite`
+  now, and the generator emits `NaN`/`±Infinity` so the differential can
+  reach the branch at all. Caught by review, not by running: the arbitrary
+  drew only integers and `undefined`, AND the oracle carried the same
+  `typeof` gate, so the property agreed with the bug.
+- A raw `tx.restore` re-applies the tombstone's STORED alias bag, which
+  can hold a claim some other live block took while the page was dead;
+  the re-insert trips the uniqueness trigger and rolls back the caller's
+  entire transaction — the same shape Batch 3 fixed inside
+  `createOrRestoreTargetBlock`, still live at the kernel-page and
+  daily-note restore sites (issue #378). The restore's own property
+  patch now strips the aliases key and the caller re-claims the set it
+  means.
+
+The undo interleaving suite (#227) was written against a race already on
+file, and went red on the unfixed code in every interleaving it models:
+
+- The gesture popped its entry at press time, awaited the replay, and
+  moved it to the other stack in a continuation after the lock's
+  release; `repo.tx` recorded in a continuation too. So a commit queued
+  ahead of the replay was written over with the popped entry's stale
+  snapshot, a commit landing after the replay let the push resurrect a
+  redo branch it had ended (or put a redone entry ABOVE it on undo),
+  and a failed replay's pushback landed above a commit made while it
+  unwound. Every stack motion now runs inside the write lock — the pop
+  in the replay's transaction, the record and the opposite-stack push
+  in `runTx`'s `beforeCommit` hook, the failure pushback in `aborted` —
+  so the stacks change in commit order by construction.
+- Moving `repo.tx`'s OWN record into the lock failed nothing at first:
+  the next lock holder needs a database round trip before it touches a
+  stack, which the old continuation always beat. Comments had called
+  that window unschedulable. It is not — interposing on the raw
+  database's `writeTransaction` holds a caller between its commit and
+  its resume for as long as the test likes, and running a whole gesture
+  there pins the clause (item 9 below).
+
+Two more findings were about the SUITES, and both are the same defect:
+a test that could not fail.
+
+- fast-check 4.9's `fc.string()` defaults to `unit: 'grapheme-ascii'` —
+  printable ASCII. Several docblocks claimed "arbitrary unicode" over
+  the unqualified call, including the codec round-trips, which is
+  exactly where normalization and surrogate edges bite (issue #458).
+  Before trusting a green property, confirm its generator actually
+  reaches the domain its docblock names.
+- The same defect, one layer in (issue #760): `fc.string({unit:
+  'binary'})` — the fix for the above — emits whole code POINTS, so its
+  surrogates are always correctly PAIRED. Three suites claimed "incl.
+  unpaired surrogates" over it and generated none (measured: 0 lone
+  surrogates in 20,000 samples). Fixing the obvious version of a
+  coverage claim is not the same as checking it.
+- A flake filed as a product ordering bug (#455) was neither: the
+  prescribed fix was already implemented months earlier, and the real
+  mechanism was `awaitSeedMaterialization()` not meaning "done" —
+  `PendingIdleJobs.drain()` awaits only jobs ALREADY in `pending`, and a
+  fire-and-forget job enters `pending` only once its deferred callback
+  fires, so `drain()` can resolve before the job it should wait for
+  exists. A second issue (#459) claimed missing coverage that turned out
+  to exist. Both were settled by MUTATION — reintroduce the bug, run
+  only the pre-existing suites — not by reading. Do that before writing
+  a test whose value rests on a coverage gap being real.
+
+The stable-wrong-binding sweep's nightly deep run then found the
+restore half of the release-reclaim residual (issue #706, seed
+`1264869285`):
+
+- The rename ladder skips tombstones (`row.after.deleted`), deliberately
+  — a deleted page claims nothing, its inbound `[[α]]` edges are the
+  residual the add-only contract retains ON PURPOSE so restoring it
+  rebinds cleanly, and rewriting live referrers' text off a deleted
+  page's rename is the call §11 group 2 / #383 defers. But restore the
+  target under a DIFFERENT alias set and that premise is false: the
+  referrer's `[[Inbox]]` is now bound to a LIVE block claiming only
+  "ax", while a fresh seat owns "Inbox". Two live blocks disagreeing,
+  and stable — the referrer only re-parses on its own row, and the
+  audit's `content_link_recompute` diffs alias SETS, never the bound id.
+  `collectRestorePlans` invalidates those edges at the restore (never
+  rewriting content, so the deferred decision stays deferred); the drop
+  is itself the write that schedules the referrer's rebind.
+
+The properties-as-blocks dual-write suite (roadmap #430) found one within
+its first deep minutes:
+
+- Restoring an owner revives its tombstoned field row and value row
+  (#787), but under §9 flat recognition a value row can own properties
+  of its own — and it came back with its bag while ITS field rows stayed
+  tombstoned: a cell claiming a property no child backed, the #778 shape
+  one level down. MATERIALIZE performs those restores itself, and the
+  commit pipeline never re-runs a processor over its own writes, so the
+  revival rule never saw the value row. The revival now re-materializes
+  every row it restores with the untouched-names policy.
+- The cell→children half of the same revival had a mirror gap, raised in
+  review and then made reachable by the suite. Sync-apply skips the
+  parent-liveness trigger, so a peer's field row can sit LIVE under a
+  tombstone. The revival policy says the children win, but PROJECT only
+  re-projected owners whose child rows changed in the tx, so the revived
+  owner kept its pre-delete cell. PROJECT now re-projects a revived row's
+  own live field rows.
+- Two more in the same revival, both raised in review and pinned by
+  deterministic tests:
+  - Adding values from the cell for keys the tx never wrote resurrected
+    a peer's delete. A field row already live and empty (or a list
+    missing a member) got the stale cell value back. The revival now
+    takes no value from the cell into an already-live field row; the
+    suite asserts that it mints nothing there.
+  - A value row brought back by its owner's revival treated its whole
+    bag as untouched, so a key the same tx had written on it could be
+    unset. Every revived row now goes through one rule
+    (`materializeRevivedRow`), which splits written keys from untouched
+    ones by the row's tx baseline: its tx-start state, with what a
+    settled processor wrote last read as current.
+- Folding a repeated list member into its survivor moved the folded
+  row's own `::` field rows over wholesale. When the member carried
+  properties of its own, the survivor ended up with two field rows for
+  one property. The value-row fold now folds field rows the way the
+  field-row fold already did, through one shared lookup.
+- Two more the suite found, fixed after it landed, with their carve-outs
+  removed. Both come from MATERIALIZE reading the tx's net change, so the
+  fix reads the tx's write log instead:
+  - #1211: deleting and restoring a block in ONE tx is no revival to a
+    net diff (live → live), while PROJECT saw its field rows die, so
+    every property was silently unset. MATERIALIZE now asks the write
+    log whether a row passed through a tombstone, and finds such an
+    owner through the dying field rows the event does carry.
+  - #1210: the revival picked field rows by the `is_field_form` bit
+    before DERIVE re-stamped it. So a restore in the same tx as an edit
+    that un-marks a row under the restored owner left a cell key with no
+    field row. The re-run pass now re-runs a revived owner's revival when
+    a row under it changed after MATERIALIZE first read it.
+  The suite's revival oracle now covers an owner deleted and restored
+  inside one tx as well.
+- A third, found while fixing those two and pinned by a deterministic
+  test: on the re-run pass, the revival diffed a row's bag against its
+  raw tx-start state, so PROJECT's settled unset of an unparseable key
+  read as the tx removing it, and the field row and value §9 keeps for
+  repair were tombstoned. The baseline now reads settled-last paths as
+  current, the same mask the re-run pass's `before` already applies.
+- Still open, raised in review and filed, though the suite cannot see it
+  (cell and children agree afterwards): #1212. A peer's property delete
+  whose owner-cell update lost last-writer-wins leaves a stale cell. A
+  later local delete and restore then revives the peer's tombstones, or
+  mints from the stale cell.
+
+The visible-children differential found one on its first smoke run
+(#1202, fixed + pinned): the outline SQL counted any `property-schema`-tagged
+block as a definition, while the tx layer's checker needed the registry to
+have parsed its metadata and, for a name winner, built its schema. So a
+definition whose preset does not load (synced from a peer with the plugin,
+or the plugin uninstalled), or whose change scope is invalid, hid its field
+rows on screen while gestures resolved against them. The registry now
+decides for both views. A definition it parsed but cannot build classifies
+(`behavior-unavailable` counts in `isResolvableFieldDefinition`). A tagged
+block it cannot parse is reported in `unparseableDefinitionIds`, which the
+SQL binds as a veto on its `block_types` leg, so its field row is a visible
+unknown-field row in both views. The suite kept generating those shapes
+while the bug was open, excusing exactly that divergence; a first version
+stopped generating them instead (review caught it), which loses every OTHER
+check in states holding a broken definition.
+
+The definition-rename fuzzer (roadmap #430's N-way same-tx renames)
+found one product bug in its first minute (fixed + pinned):
+
+- Renaming an UNUSED definition onto a name a used one holds committed:
+  the contested refusal fired only when the renamed definition had
+  consumers of its own. The registry ranks one name's claimants oldest
+  first, so an older definition arriving that way took over every
+  consumer of the incumbent — their cells read through its codec (a
+  string value under a number codec throws), and the next write by name
+  grew a field row for the newcomer beside the incumbent's. Restoring a
+  definition under a name a used one had taken since did the same with
+  no rename at all. Both now refuse as
+  `property.definition-change.shared-name` while either side has
+  consumers; two unused definitions may still share a name.
+
+Its second deep run found one more, in the dual-write path rather than
+the rename (#1209, fixed separately): `setProperty` writing the value a
+deleted definition's stale cell already holds under that name was
+short-circuited as a no-op, so the definition now answering to the name
+never got a field row and its value did not follow a later rename. The
+eager writers now converge the children before their no-op check, which
+only spares the bag write. A RAW bag write that leaves the cell as it was
+still writes nothing — MATERIALIZE sees net diffs — so the value model
+credits no value to one; what the cell keeps there is the departing
+definition's leftover, which is #1031's question.
+
+Its harness carries one lesson for any suite that builds a Repo per
+case: every case runs inside ONE test, so the per-test Repo release
+never fires between them. The previous case's sync observer drained the
+next case's `blocks_synced` rows into handles nobody read, and the
+registry never saw the delivery — release each case's Repo yourself
+(`releaseTestRepos`, rule 11 under "Adding a suite").
+
+The typed-block query differential found two compiler bugs on its first
+deep runs (each fixed with pinned tests in the same PR):
+
+- `target` joined the referenced row on id and liveness only, so a ref
+  naming a live block in ANOTHER workspace satisfied `target: {}` and had
+  its inner where-map read against that workspace's properties — while
+  the deps that wake the handle are keyed by the query's workspace, so the
+  match could never be invalidated. The traversal now requires the source
+  row's workspace.
+- A refList cell that is not a JSON array — what a `ref` → `refList`
+  re-type leaves behind in a workspace with no field rows — made
+  `json_each` throw `malformed JSON`, failing every `target` query on the
+  property; the ancestor-dep walk's hand-copied fan-out failed the same
+  way. Both now go through one helper that reads only array cells.
+
+Its probe of the rest of that malformed-cell class filed #1204:
+comparators matched cells of the wrong JSON type, because SQLite orders
+`json_extract` results across storage classes (`{gt: 3}` matched a stale
+`'abc'`, `true` a stored `1`, a date `{lt}` the empty string, and a
+`+010000-…` date sorted before every four-digit year). Fixed in a
+follow-up: each where-capable codec declares a `WhereStorage`, and the
+compiler ANDs that shape's test onto every comparator. Dates compare only
+in canonical `toISOString()` form with a four-digit year; outside years
+0000–9999 a cell matches nothing and an operand is refused. The generator
+then lost its carve-out, so the model's existing "a cell the codec could
+not have written matches no comparator" is the regression test. Its fixed
+smoke sample catches deleting any one storage test; deleting the guard on
+the `between` branch alone surfaces only in deep runs (within seconds),
+and the example tests pin it.
+
+And one finding about the suite itself: its first coverage
+canary showed that across 300 sampled worlds no ancestor-scoped predicate
+ever matched through a PROPER ancestor, and only 24 of ~750 queries
+returned anything at all — stacked single-row filters, and parents picked
+without regard to workspace. The property was green over that. The canary
+stays.
+
+The clipboard-HTML converter's tag-soup suite
+(`src/plugins/rich-paste/test/htmlToOutline.fuzz.test.ts`, oracle: no
+block that renders nothing) found two classes in deep runs, both fixed
+with pinned tests:
+
+- Code spans markdown cannot spell: an empty `<code>` writes as two
+  literal backticks, so two in a row opened a code fence that swallowed
+  the rest of the block. Empty spans are dropped and touching ones joined.
+- Blocks left inside phrasing: the converter reads a `<summary>` as a
+  paragraph and leaves a list inside `<b>`/`<i>`, so an empty one took
+  the escape off a leading `-`, which read back as an empty list item.
+  The same shape glued text (`<b><p>x</p><p>y</p></b>` pasted as
+  `**xy**`) and, through the converter's split of a link around a list,
+  dropped it — losses this oracle cannot see. One pass now lifts every
+  block out of phrasing.
+
+A second oracle there — a paste shows every letter and digit of the
+HTML's content, in order — would have caught those losses (reverting
+either fix fails it within seconds), and found more, each fixed with a
+pinned test:
+
+- Text in a list but outside its items (`<ul>text<li>…`, or a list with
+  no items at all): the converter puts it in an item as bare phrasing,
+  which the outline walk skipped. Its smoke tier found this on the first
+  run; the fix (the pass that lifts blocks out of phrasing also wraps
+  such phrasing in a paragraph) landed in #1222's last commit.
+- Text left touching by what the converter drops (a `data:` image, an
+  empty `<b>`, an unwrapped link): the serializer escapes each text node
+  on its own, so `1` and `. Install` read back as a list item, its number
+  no longer text. Touching text is joined, as touching code spans were.
+- A code span holding `]:` inside a link: `` [`a]: b`](url) `` reads
+  back as a link definition, because a label ends at its first `]`, code
+  or not, so the block showed nothing. Such a code span is written as
+  link text, which the serializer can escape.
+- A backslash before a letter beside emphasis that opens or closes on
+  punctuation (`\A<i>!</i>`): the serializer writes that letter as a
+  character reference after escaping the text, so the backslash escaped
+  the reference's `&` and the block showed `&#x41;`. An upstream bug,
+  still in mdast-util-to-markdown 2.2.0; the converter escapes such a
+  backslash itself. Probing the same step by hand turned up its astral
+  twin, which the arbitrary's ASCII-only strings could not generate: an
+  emoji beside that emphasis lost half its surrogate pair to the
+  reference. Fixed upstream in 2.1.3; the dependency is now on 2.2.0.
+  The arbitrary now draws a non-ASCII and an astral letter as well, and
+  finds it on 2.1.2 within a second. The nightly later found the same
+  loss beside strikethrough (`\A<del>!</del>`, issue #1454): the
+  serializer encodes beside every attention marker, GFM's `~` included,
+  and the escape listed only `*` and `_`.
+
+The oracle reads each block's markdown back rather than matching the raw
+string, because the serializer spells a letter beside such emphasis as a
+character reference (`&#x41;**!**`) so the emphasis can still form; its
+first draft took that for a loss. The converter's own `keepsAllText`
+check could see none of these: it compares the html→mdast step only, and
+only when there is plain text to fall back to.
+
+A long deep run of this suite exhausted the heap (60,000 runs did):
+happy-dom's query caches hold `WeakRef`s, which keep each parsed
+document alive until the current task ends, and a synchronous property
+never ends it. Its properties now let a task end every few hundred
+cases. A suite that parses a document per case in a DOM environment
+needs the same.
+
+## Adding a suite
+
+1. Create `<target>.fuzz.test.ts` next to the existing tests, line 1
+   `// @vitest-environment node`.
+2. Pass `fuzzParams(N)` from `@/test/fuzz` as the second argument of
+   every `fc.assert`; pick N so the whole file stays around ~1s in
+   smoke mode (it runs in the PR gate).
+3. Write oracles, not examples: never-throws totality, round-trips,
+   algebraic laws, differential against a reference model, invariant
+   sweeps. Justify each oracle from the target's code in the docblock —
+   cite lines.
+4. Oracle discipline: when a property fails, diagnose before touching
+   anything. Wrong oracle → fix it with a code citation. Real bug → fix
+   the product code (or file an issue and mark the carve-out with a
+   `// KNOWN ISSUE (fuzz):` comment + counterexample). Never silently
+   weaken a property to go green.
+5. If the target has nondeterminism (randomness, clocks), pin it inside
+   the property (seeded PRNG over `Math.random`, injected `now`) or
+   shrinking and seed replay stop being sound.
+6. Shared mutable state (e.g. one `createTestDb` per file) + a deep-tier
+   time budget don't compose for free: fast-check's
+   `interruptAfterTimeLimit` resolves `fc.assert` WITHOUT awaiting the
+   case that's currently executing, so the abandoned case keeps running
+   — and writing — after the property "finishes". Use
+   `statefulFuzzGuard` from `@/test/fuzz`, built at module or
+   `describe` scope, and wrap each case body in
+   `guard.run(seedOrNull, body)`: it owns the barrier-before-pin
+   ordering for `Math.random` pins, and registers an `afterEach` that
+   waits out the abandoned case before the test ends, so the case
+   finishes before the test's Repos are released and before the next
+   test touches the shared state. Symptom if you skip this:
+   deep-tier-only, order-dependent flakes in whatever runs after the
+   property (phantom rows, duplicate-id errors, an unhandled
+   `WorkspaceRegistryUnavailableError` from a released Repo).
+7. Choose the string `unit` deliberately — the default and the usual
+   correction are both narrower than "any string". `fc.string()` is
+   `unit: 'grapheme-ascii'` (printable ASCII); `{unit: codePointUnitArb}`
+   (from `@/test/arbitraries/utf16`) is the full code-point range but never
+   a LONE surrogate — the same values, seed for seed, as fast-check's
+   `{unit: 'binary'}`, which lint bans in tests for its ~0.85s per-file
+   build cost. For ill-formed UTF-16, draw from `utf16UnitArb` (single code
+   units), alongside `codePointUnitArb` when astral coverage matters too. A suite may legitimately want well-formed input only —
+   `aead`/`cryptoCodecs` exclude lone surrogates because `TextEncoder`
+   folds them to U+FFFD, which would fail their oracles for a reason
+   unrelated to the property — but say so, rather than leaving a claim
+   the generator doesn't meet.
+8. A generated "mode" flag that turns out to toggle nothing costs you
+   half your cases and looks fully covered — add a **non-vacuity canary**
+   asserting the flag actually changes observable behaviour. Concretely
+   for React suites: `<StrictMode>` only double-invokes effects when it
+   is at the RENDER ROOT (React 19 gates it on the root's strict flag),
+   so returning it from inside a component renders the subtree normally
+   — measured here as nested 1 effect run vs root 2. Wrap the element
+   you hand to `render`/`rerender`, not the tree inside your harness
+   component, and pin it (`activeContextsOwnership.fuzz.test.tsx`).
+9. To land work inside a transaction's ordering windows — while it waits
+   for the write lock, or between its commit and its caller resuming —
+   don't sleep: hold one transaction on the lock to queue the others
+   behind it, and wrap the raw db's `writeTransaction` (which the Repo's
+   metrics proxy calls through) to run an arbitrary action once a
+   transaction settles and before its caller resumes. For an oracle,
+   read `command_events` in rowid order: it is the order the database
+   committed in, and a rolled-back transaction leaves no row
+   (`undoInterleaving.fuzz.test.ts`).
+10. Before writing a differential, list what the two sides SHARE. Two
+    implementations reading one stamped column agree on every corruption
+    of that column, so the differential is silent about it — give the
+    shared input an oracle of its own (`visibleChildren.fuzz`).
+11. A property that builds a Repo per CASE (one test, many Repos on one
+    db) must release each with `releaseTestRepos` from
+    `@/data/test/testRepoScope`; the automatic release runs only when the
+    test ends, so until then every earlier case's Repo keeps its sync
+    observer and projectors subscribed to the shared db.

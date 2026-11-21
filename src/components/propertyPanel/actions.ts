@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 import {
   ChangeScope,
   type AnyPropertyEditorOverride,
@@ -5,15 +6,25 @@ import {
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
+import {declarationOnlyDefinitionForName} from './declarationOnly'
 
 export const writeProperty = (
   block: Block,
   schema: AnyPropertySchema,
   decodedValue: unknown,
-): Promise<void> =>
-  block.set(schema, decodedValue)
+): Promise<void> => {
+  if (isPropertyPanelReadOnlyProperty(schema.name)) return Promise.resolve()
+  if (declarationOnlyDefinitionForName(
+    schema.name,
+    block.repo.propertyDefinitions,
+  )) return Promise.resolve()
+  return block.set(schema, decodedValue)
+}
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a
@@ -28,58 +39,23 @@ export const addProperty = async (
 ): Promise<AnyPropertySchema | undefined> => {
   const name = args.name.trim()
   if (!name) return undefined
-  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return undefined
-
-  if (args.adopted) {
-    return args.adopted
+  if (isPropertyPanelHiddenProperty(name, schemas, uis, block.repo.propertyDefinitions)) {
+    return undefined
   }
-
-  // Existing registered schema with the same name → adopt it instead
-  // of creating a duplicate (the form should have offered it as a
-  // suggestion; this is the fallback for non-autocomplete submits).
-  const existing = schemas.get(name)
-  if (existing) {
-    return existing
+  if (declarationOnlyDefinitionForName(name, block.repo.propertyDefinitions)) {
+    return undefined
   }
 
   try {
-    return await block.repo.userSchemas.addSchema({
+    return (await adoptOrCreatePropertySchema(block.repo, {
+      ...args,
+      adopted: args.adopted ?? schemas.get(name),
       name,
-      presetId: args.presetId,
-    })
+    })).schema
   } catch (err) {
     console.error(`[addProperty] failed to register schema for "${name}":`, err)
     return undefined
   }
-}
-
-export const renameProperty = async (args: {
-  block: Block
-  properties: Record<string, unknown>
-  schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  oldName: string
-  newName: string
-}) => {
-  const nextName = args.newName.trim()
-  if (!nextName || nextName === args.oldName) return
-  if (args.oldName === typesProp.name || nextName === typesProp.name) return
-  if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
-  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis)) return
-  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis)) return
-
-  const value = args.properties[args.oldName]
-  if (value === undefined || !Object.hasOwn(args.properties, args.oldName)) return
-
-  await args.block.repo.tx(async tx => {
-    const next = {...args.properties}
-    delete next[args.oldName]
-    next[nextName] = value
-    await tx.update(args.block.id, {properties: next})
-  }, {
-    scope: ChangeScope.BlockDefault,
-    description: `rename property ${args.oldName} to ${nextName}`,
-  })
 }
 
 export const deleteProperty = async (args: {
@@ -90,15 +66,43 @@ export const deleteProperty = async (args: {
   name: string
 }) => {
   if (args.name === typesProp.name) return
-  if (isPropertyPanelHiddenProperty(args.name, args.schemas, args.uis)) return
+  if (isPropertyPanelReadOnlyProperty(args.name)) return
+  if (declarationOnlyDefinitionForName(
+    args.name,
+    args.block.repo.propertyDefinitions,
+  )) return
+  if (isPropertyPanelHiddenProperty(
+    args.name,
+    args.schemas,
+    args.uis,
+    args.block.repo.propertyDefinitions,
+  )) return
   if (!Object.hasOwn(args.properties, args.name)) return
 
-  const next = {...args.properties}
-  delete next[args.name]
   const schema = args.schemas.get(args.name)
 
   await args.block.repo.tx(async tx => {
-    await tx.update(args.block.id, {properties: next})
+    if (schema) {
+      // Typed path: unsetProperty resolves identity, runs the same
+      // scope-consistency guard (resolved scope vs the scope this tx was
+      // admitted under, = schema.changeScope), removes just this key — no
+      // whole-bag replace — and, in a child-backed workspace, eagerly
+      // soft-deletes the field-row children (symmetric with setProperty's
+      // inline dual-write).
+      await tx.unsetProperty(args.block.id, schema)
+    } else {
+      // Schema-less transitional key (no registered definition): unsetProperty
+      // would throw on the unresolvable schema, so drop the bare cell key
+      // directly. Such a key has no children to reconcile (no schema → never
+      // materialized); the migration backfill is what gives it a definition.
+      // Re-read fresh inside the tx (not the panel's stale snapshot) so the
+      // whole-bag write can't clobber a concurrently-changed sibling key.
+      const current = await tx.get(args.block.id)
+      if (!current || !Object.hasOwn(current.properties, args.name)) return
+      const next = {...current.properties}
+      delete next[args.name]
+      await tx.update(args.block.id, {properties: next})
+    }
   }, {
     scope: schema?.changeScope ?? ChangeScope.BlockDefault,
     description: `delete property ${args.name}`,

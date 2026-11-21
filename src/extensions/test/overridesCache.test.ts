@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * Cache round-trip tests. Verify per-workspace scoping, empty-map
  * handling, decode tolerance to malformed input, and that the keying

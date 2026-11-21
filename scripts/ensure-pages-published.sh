@@ -18,7 +18,10 @@
 # our sha there means our content is served. This is precise and immune to
 # concurrent deploys: no build-id/timestamp correlation (the Pages "build"
 # object has no id field, and timestamps race), just "is my content live yet?".
-# On stall it re-requests a build via POST /pages/builds (the "try again later").
+# On stall it re-requests a build via POST /pages/builds (the "try again later"),
+# but not while a build has been queued or building for under STALL_SECS: every
+# new build cancels the one in flight, so with several jobs waiting at once their
+# rebuild requests would keep cancelling the build they are all waiting for.
 #
 # Requires: GITHUB_REPOSITORY, APP_BASE_PATH, and a token with `pages: write` in
 # GH_TOKEN. `dist/version.json` (produced by the build) must still be present.
@@ -41,6 +44,25 @@ echo "waiting for ${url} to serve sha=${want}"
 builds="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages/builds"
 auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
+# Well past a normal build's duration: a build in flight longer than this has stalled.
+# Kept under one round of polls, so the next round can replace a stalled build.
+STALL_SECS="${PAGES_BUILD_STALL_SECS:-360}"
+
+# Prints e.g. "building for 95s" while the latest Pages build is in flight and
+# younger than STALL_SECS. Prints nothing when it finished, stalled, or can't be read.
+build_in_flight() {
+  curl -fsS "${auth[@]}" "${builds}/latest" 2>/dev/null \
+    | STALL_SECS="$STALL_SECS" python3 -c '
+import json, os, sys
+from datetime import datetime, timezone
+b = json.load(sys.stdin)
+age = (datetime.now(timezone.utc) - datetime.fromisoformat(b["created_at"].replace("Z", "+00:00"))).total_seconds()
+if b.get("status") in ("queued", "building") and age < int(os.environ["STALL_SECS"]):
+    print(b["status"] + " for " + str(int(age)) + "s")
+' 2>/dev/null \
+    || true
+}
+
 # Prints the sha the live site currently serves at our path, or empty (404 /
 # stale-before-publish / transient error all collapse to empty -> keep waiting).
 served() {
@@ -55,10 +77,18 @@ POLLS="${PAGES_PUBLISH_POLLS:-40}"    # status polls per round (~10s each)
 for round in $(seq 1 "$ROUNDS"); do
   # Round 1 rides the auto-build our push already triggered. Later rounds are the
   # actual retry: explicitly request a fresh Pages build of the current branch.
+  # A build that is already in flight started after our push, so it includes it.
+  # If it stalls during the final round it is not replaced, the same as a build that
+  # round requested; the job fails and the next push or retry publishes the tip.
   if [ "$round" -gt 1 ]; then
-    echo "== not live yet; requesting a Pages rebuild (round ${round}/${ROUNDS}) =="
-    curl -fsS -X POST "${auth[@]}" "$builds" >/dev/null || true
-    sleep 10
+    in_flight="$(build_in_flight)"
+    if [ -n "$in_flight" ]; then
+      echo "== not live yet; a Pages build is ${in_flight}, waiting on it (round ${round}/${ROUNDS}) =="
+    else
+      echo "== not live yet; requesting a Pages rebuild (round ${round}/${ROUNDS}) =="
+      curl -fsS -X POST "${auth[@]}" "$builds" >/dev/null || true
+      sleep 10
+    fi
   fi
   for _ in $(seq 1 "$POLLS"); do
     got="$(served)"

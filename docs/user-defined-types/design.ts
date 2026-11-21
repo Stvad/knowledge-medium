@@ -8,7 +8,7 @@
 // real codebase paths so renames in src/ break this file too.
 //
 // Typecheck (along with every other docs/**/*.ts sketch) with:
-//   yarn tsc --noEmit --project docs/tsconfig.json
+//   pnpm tsc --noEmit --project docs/tsconfig.json
 
 import type {Block} from '@/data/block'
 import type {Repo} from '@/data/repo'

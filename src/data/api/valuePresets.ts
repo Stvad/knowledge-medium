@@ -10,7 +10,10 @@ export interface ValuePresetConfigEditorProps<TConfig> {
   onChange: (next: TConfig) => void
 }
 
-interface ValuePresetPresentationBase<TConfig = void> {
+interface ValuePresetPresentationBase<TValue = unknown, TConfig = void> {
+  /** Optional control for a scalar value block in the outline. Receives the
+   *  value block itself; changes edit that row, not the owner's whole property. */
+  readonly InlineEditor?: PropertyEditor<TValue>
   /** Stable join key; must match the corresponding codec core id. */
   readonly id: string
   /** Human label for the picker. */
@@ -28,29 +31,15 @@ interface ValuePresetPresentationBase<TConfig = void> {
 /** A picker-visible presentation must provide an editor. Hidden codec-only
  *  presets may omit it when their values have no generic editing UI. */
 export type ValuePresetPresentation<TValue = unknown, TConfig = void> =
-  ValuePresetPresentationBase<TConfig> & (
+  ValuePresetPresentationBase<TValue, TConfig> & (
     | {readonly Editor: PropertyEditor<TValue>; readonly hideFromPicker?: boolean}
     | {readonly Editor?: never; readonly hideFromPicker: true}
   )
 
-/** Legacy full-preset authoring contract. Kept as an interface so existing
- *  plugin declarations remain extendable and editorful presets may compute
- *  `hideFromPicker` dynamically. */
-export interface ValuePreset<TValue = unknown, TConfig = void>
-  extends ValuePresetCore<TValue, TConfig>, ValuePresetPresentationBase<TConfig> {
-  readonly Editor: PropertyEditor<TValue>
-  readonly hideFromPicker?: boolean
-}
-
 export type JoinedValuePreset<TValue = unknown, TConfig = void> =
   ValuePresetCore<TValue, TConfig> & ValuePresetPresentation<TValue, TConfig>
 
-/** Variance-erased preset type for storage in heterogeneous
- *  legacy `valuePresetsFacet` contributions. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyValuePreset = ValuePreset<any, any>
-
-/** Variance-erased canonical preset assembled from either split or legacy
+/** Variance-erased canonical preset assembled from split core + presentation
  * contributions. Hidden codec-only entries may intentionally lack an editor. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyJoinedValuePreset = JoinedValuePreset<any, any>
@@ -96,9 +85,3 @@ export const defineSplitPreset = <TValue, TConfig = void>(
   presentation,
   preset: joinValuePreset(core, presentation),
 })
-
-/** Helper for plugin authors to define a preset with full type
- *  inference on the value/config slots. */
-export const definePreset = <TValue = unknown, TConfig = void>(
-  preset: ValuePreset<TValue, TConfig>,
-): ValuePreset<TValue, TConfig> => preset

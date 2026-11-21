@@ -1,0 +1,193 @@
+// @vitest-environment node
+/**
+ * Fuzz suite for `matchCharTrigger` (src/editor/triggerMatch.ts). See
+ * `src/test/fuzz.ts` for smoke/deep tier mechanics and `docs/fuzzing.md`
+ * for conventions.
+ *
+ * ──── Contract, grounded at the call sites ────
+ *
+ * `matchCharTrigger` is the ONE shared backward-walk implementation
+ * behind the production wrappers listed in `PRODUCTION_SOURCES` below:
+ * the `@` family (src/editor/atTrigger.ts) and `matchHashTrigger` (`#`,
+ * src/plugins/supertags/typeAutocomplete.ts). All feed it a single line's
+ * text plus an in-line cursor position, exactly as generated below (no
+ * `\n` in the generated text, so `text`/`pos` here stand in for a
+ * completion source's `lineText`/`linePos`).
+ *
+ * The module's own docblock states the ownership invariant this suite
+ * differentials against (triggerMatch.ts): "spans owned by other
+ * autocompletes — unclosed `[[` wikilinks and `((` blockrefs — never
+ * fire a char trigger." The `TRIGGER_CHARS` comment (triggerMatch.ts)
+ * is the sibling half of the same ownership story (trigger-vs-trigger,
+ * not trigger-vs-bracket-span) and isn't independently re-tested here —
+ * `triggerMatch.test.ts` already pins the "nearest trigger wins" example
+ * cases; this suite's differential is the bracket-span half.
+ *
+ * `matchCharTrigger` claims to implement that wikilink half via
+ * `isInsideUnclosedWikilink` (triggerMatch.ts) and the blockref
+ * half via a same-shape regex the docblock says "mirrors
+ * blockrefAutocomplete's own matcher exactly"
+ * (triggerMatch.ts). Property B below checks that claim against
+ * the ACTUAL sibling regexes rather than trusting the docblock:
+ *   - `backlinkCompletionSource`'s open-bracket match,
+ *     src/utils/backlinkAutocomplete.ts:56: `/\[\[([^\]]*?)$/` against
+ *     `beforeCursor = lineText.slice(0, linePos)`.
+ *   - `blockrefCompletionSource`'s open-paren match,
+ *     src/utils/blockrefAutocomplete.ts:38: `/\(\(([^)]*?)$/`, same
+ *     shape.
+ * Both regexes are anchored at `$` (end of `beforeCursor`), so when they
+ * match, the span they claim is `[match.index, pos)` — the sibling
+ * source considers every position in that span part of an unclosed
+ * bracket sequence it owns.
+ *
+ * ──── FIXED: found by this suite, hand-confirmed against the real
+ * module before writing this file (see scratch notes) ────
+ *
+ * `text = ']] [[ #tag'`, `pos = 10`, `trigger = '#'`:
+ * `matchCharTrigger` used to return `{from: 6, query: 'tag'}`, but
+ * `beforeCursor.match(/\[\[([^\]]*?)$/)` matches at index 3 (the second
+ * `[[`), claiming span `[3, 10)` — which contains `from = 6`. Root
+ * cause: `isInsideUnclosedWikilink` (triggerMatch.ts, pre-fix)
+ * counted `[[` and `]]` occurrences as a flat pair-count (`opens >
+ * closes`) rather than tracking whether the LAST bracket pair before
+ * `triggerPos` is an unmatched open. The leading, unmatched `]]` there
+ * incremented `closes` and cancelled out the LATER, also-unmatched
+ * `[[` in the count, so `opens (1) > closes (1)` was false even though
+ * position 6 sits inside a genuinely-unclosed `[[` span. This was a
+ * real product bug (the module's own stated invariant,
+ * triggerMatch.ts, disagreed with the code). Fixed in
+ * `triggerMatch.ts` by rewriting `isInsideUnclosedWikilink` to the
+ * anchored regex `/\[\[[^\]]*$/` (mirroring the sibling wikilink
+ * matcher exactly, instead of pair-counting). The counterexample above
+ * is mixed into the generator below (`knownLeadCaseArb`) with nonzero
+ * weight, so the fixed smoke seed deterministically re-runs it on every
+ * invocation — this suite now doubles as the regression pin for that
+ * bug, not just the suite that found it.
+ *
+ * ──── Generators ────
+ *
+ * Text is drawn from a small alphabet biased toward the exact
+ * structural characters both `matchCharTrigger` and the sibling regexes
+ * key off (`[`, `]`, `(`, `)`, `#`, `@`, space, tab, plus a couple of
+ * plain letters) so bracket-salad shapes like the KNOWN LEAD case are
+ * common, not needles in a haystack of prose. The known counterexample
+ * itself is mixed in directly (small weight) so the fixed smoke seed
+ * reliably explores it without relying on a random draw to land on it.
+ */
+import { describe, expect, it } from 'vitest'
+import fc from 'fast-check'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import type { TriggerMatch } from '../triggerMatch'
+import { matchBareAt, matchMentionTrigger, matchPlaceTrigger } from '../atTrigger'
+import { matchHashTrigger } from '@/plugins/supertags/typeAutocomplete'
+
+const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', '/', ' ', '\t', 'a', 'b'] as const
+
+const randomTextArb: fc.Arbitrary<string> = fc
+  .array(fc.constantFrom(...STRUCTURAL_CHARS), {minLength: 0, maxLength: 30})
+  .map(chars => chars.join(''))
+
+interface Case {
+  text: string
+  pos: number
+}
+
+const randomCaseArb: fc.Arbitrary<Case> = randomTextArb.chain(text =>
+  fc.record({text: fc.constant(text), pos: fc.integer({min: 0, max: text.length})}),
+)
+
+/** The hand-confirmed KNOWN LEAD counterexample (see docblock above),
+ *  mixed into the generator with nonzero weight so the fixed smoke seed
+ *  reliably reaches it rather than depending on a random draw. */
+const knownLeadCaseArb: fc.Arbitrary<Case> = fc.constant({text: ']] [[ #tag', pos: 10})
+
+const caseArb: fc.Arbitrary<Case> = fc.oneof(
+  {weight: 2, arbitrary: knownLeadCaseArb},
+  {weight: 8, arbitrary: randomCaseArb},
+)
+
+/** The real wrappers, each with the trigger prefix its span starts with. */
+const PRODUCTION_SOURCES: ReadonlyArray<{name: string, prefix: string, match: (text: string, pos: number) => TriggerMatch | null}> = [
+  {name: 'mention @query', prefix: '@', match: matchMentionTrigger},
+  {name: 'bare @', prefix: '@', match: matchBareAt},
+  {name: 'place @@', prefix: '@@', match: matchPlaceTrigger},
+  {name: 'type #', prefix: '#', match: matchHashTrigger},
+]
+
+const sourceArb = fc.constantFrom(...PRODUCTION_SOURCES)
+
+describe('matchCharTrigger', () => {
+  it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts)', () => {
+    fc.assert(
+      fc.property(caseArb, sourceArb, ({text, pos}, {prefix, match}) => {
+        const result = match(text, pos)
+        if (result === null) return
+        // `from` is the (first) trigger char's own position, strictly
+        // before `pos`, and the replaced span is exactly the trigger
+        // prefix followed by the query.
+        expect(result.from).toBeGreaterThanOrEqual(0)
+        expect(result.from).toBeLessThan(pos)
+        expect(text.slice(result.from, pos)).toBe(prefix + result.query)
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('a match never falls inside a span backlinkAutocomplete or blockrefAutocomplete claims as an unclosed bracket sequence (triggerMatch.ts ownership invariant, differentialed against backlinkAutocomplete.ts:56 and blockrefAutocomplete.ts:38)', () => {
+    fc.assert(
+      fc.property(caseArb, sourceArb, ({text, pos}, {match}) => {
+        const result = match(text, pos)
+        if (result === null) return
+
+        // Both completion sources compute this exact slice from their
+        // CodeMirror line/pos before matching
+        // (backlinkAutocomplete.ts:52, blockrefAutocomplete.ts:32).
+        const beforeCursor = text.slice(0, pos)
+
+        // backlinkAutocomplete.ts:56 — matches iff `beforeCursor` ends
+        // in an unclosed `[[...`; when it does, span `[index, pos)` is
+        // wikilink-owned.
+        const backlinkMatch = beforeCursor.match(/\[\[([^\]]*?)$/)
+        if (backlinkMatch) {
+          const spanStart = backlinkMatch.index!
+          const insideBacklinkSpan = result.from >= spanStart && result.from < pos
+          expect(insideBacklinkSpan).toBe(false)
+        }
+
+        // blockrefAutocomplete.ts:38 — matches iff `beforeCursor` ends
+        // in an unclosed `((...`; when it does, span `[index, pos)` is
+        // blockref-owned.
+        const blockrefMatch = beforeCursor.match(/\(\(([^)]*?)$/)
+        if (blockrefMatch) {
+          const spanStart = blockrefMatch.index!
+          const insideBlockrefSpan = result.from >= spanStart && result.from < pos
+          expect(insideBlockrefSpan).toBe(false)
+        }
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('no two production wrappers fire at one cursor position, except the bare @ the hand-off and mentions share by design (sibling ownership — no merged double-fire dropdown)', () => {
+    // `autocompletion()` is installed once with no `override`
+    // (src/editor/autocomplete.ts), so if two sources returned a match
+    // at the same cursor they'd merge into one dropdown and each fire a
+    // query for the other's text. The sibling-ownership walk (between
+    // `@` and `#`) and the `@` family split (src/editor/atTrigger.ts)
+    // exist to make at most one source own any position. The one
+    // deliberate exception is a bare `@`, where geo's unfiltered hand-off
+    // ranks above the filtered contributor list (atTrigger.ts). This
+    // catches DOUBLE-fires only; dead zones (every source null, e.g.
+    // `@a/b#c`) are pinned by the example tests in triggerMatch.test.ts.
+    fc.assert(
+      fc.property(caseArb, ({text, pos}) => {
+        const firing = PRODUCTION_SOURCES
+          .filter(({match}) => match(text, pos) !== null)
+          .map(s => s.name)
+        if (firing.includes('bare @')) expect(firing).toEqual(['mention @query', 'bare @'])
+        else expect(firing.length).toBeLessThanOrEqual(1)
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+})

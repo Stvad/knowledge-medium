@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { EditorState } from '@codemirror/state'
-import { CompletionContext } from '@codemirror/autocomplete'
+import { EditorState, EditorSelection } from '@codemirror/state'
+import { CompletionContext, insertBracket } from '@codemirror/autocomplete'
 import { blockrefCompletionSource } from '../blockrefAutocomplete'
 
 const makeContext = (text: string, pos: number, explicit = false) => {
@@ -26,7 +26,7 @@ describe('blockrefCompletionSource', () => {
 
     // "((foo" — cursor at position 5
     const result = await source(makeContext('((foo', 5))
-    expect(searchBlocks).toHaveBeenCalledWith('foo')
+    expect(searchBlocks.mock.calls[0][0]).toBe('foo')
     expect(result).toMatchObject({from: 2, to: 5})
     expect(result?.options.map(o => o.label)).toEqual(['first hit', 'second hit'])
   })
@@ -43,7 +43,7 @@ describe('blockrefCompletionSource', () => {
     const searchBlocks = vi.fn().mockResolvedValue([{id: 'b1', content: 'hi'}])
     const source = blockrefCompletionSource({searchBlocks})
     const result = await source(makeContext('((', 2, true))
-    expect(searchBlocks).toHaveBeenCalledWith('')
+    expect(searchBlocks.mock.calls[0][0]).toBe('')
     expect(result?.options).toHaveLength(1)
   })
 
@@ -52,6 +52,22 @@ describe('blockrefCompletionSource', () => {
     const source = blockrefCompletionSource({searchBlocks})
     const result = await source(makeContext('((x', 3))
     expect(result?.options[0].label).toBe('block-only')
+  })
+
+  // Same shape as the `[[` case: `closeBrackets` wrapping a selection leaves
+  // the text selected, and CodeMirror anchors the context at the range's
+  // `from` — just after the `((`. Read there, the filter is empty and the
+  // source bails, so wrapping a selection in `((` offered nothing at all.
+  it('searches on text wrapped by typing (( over a selection', async () => {
+    let state = EditorState.create({doc: 'hello world', selection: EditorSelection.range(6, 11)})
+    for (const bracket of '((') state = insertBracket(state, bracket)!.state
+    expect(state.doc.toString()).toBe('hello ((world))')
+
+    const searchBlocks = vi.fn().mockResolvedValue([{id: 'b1', content: 'a world block'}])
+    const source = blockrefCompletionSource({searchBlocks})
+    const result = await source(new CompletionContext(state, state.selection.main.from, false))
+    expect(searchBlocks.mock.calls[0][0]).toBe('world')
+    expect(result).toMatchObject({from: 8, to: 13})
   })
 
   it('does not span across an earlier closed (())', async () => {

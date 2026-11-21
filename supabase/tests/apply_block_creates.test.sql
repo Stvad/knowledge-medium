@@ -1,6 +1,6 @@
 -- Behavioral tests for the `apply_block_creates` RPC. Run with:
 --
---   yarn check:db
+--   pnpm check:db
 --
 -- This file is pgTAP so `supabase test db` reports named TAP failures.
 -- It also wraps itself in BEGIN/ROLLBACK, so manual psql runs leave no

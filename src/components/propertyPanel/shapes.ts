@@ -5,7 +5,7 @@
 
 const KERNEL_TYPE_LABELS: Record<string, string> = {
   string: 'Plain',
-  list: 'Options',
+  list: 'List',
   date: 'Date',
   number: 'Number',
   boolean: 'Checkbox',

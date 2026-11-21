@@ -27,6 +27,9 @@ import {
 } from '@/extensions/extensionApprovalStatus.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { toastExtensionLoadError } from '@/extensions/extensionLoadErrorToast.js'
+import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
+
+const SAFELIST_WAIT_MS = 1500
 
 export function AppRuntimeProvider({
   children,
@@ -168,6 +171,19 @@ export function AppRuntimeProvider({
           }),
         ], {overrides, safeMode, context: runtimeContext})
 
+        // Dynamic extensions render with the deferred Tailwind safelist
+        // (`extension-utilities.css`), which their compile kicked off; wait
+        // for it so their first paint is styled. Bounded: a stalled
+        // stylesheet must not hold the runtime hostage. A workspace with no
+        // dynamic extensions starts the load here instead and waits once;
+        // the apply changes nothing visible there.
+        let waitTimer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          ensureExtensionUtilitiesCss(),
+          new Promise(resolve => { waitTimer = setTimeout(resolve, SAFELIST_WAIT_MS) }),
+        ])
+        clearTimeout(waitTimer)
+
         if (!cancelled) {
           // Publish both maps atomically now that the resolve is complete.
           errorStore.commitBatch()
@@ -224,23 +240,6 @@ export function AppRuntimeProvider({
   // reconcile effect above so a deps change re-runs reconciliation
   // (the diff) rather than tearing every effect down.
   useEffect(() => () => effectReconciler.dispose(), [effectReconciler])
-
-  // Start every definition-block projector (issue #90) for the active
-  // workspace: user-defined property-schema blocks → propertySchemasFacet
-  // and block-type blocks → typesFacet, each mirrored into a 'user-data'
-  // bucket by the shared ProjectorRuntime. `startAll` reads the
-  // descriptors from `definitionBlockProjectorFacet` and starts them in
-  // dependency order (schemas before types, since the type build path
-  // resolves block-type:properties refs through the schema projector);
-  // the returned disposer tears them down in reverse. The same singleton
-  // facades (repo.userSchemas / repo.userTypes) that imperative call
-  // sites use — e.g. addSchema on AddPropertyForm submit — read the
-  // resulting in-memory state through this runtime.
-  useEffect(() => {
-    if (!workspaceId) return
-    const dispose = repo.projectors.startAll()
-    return () => dispose()
-  }, [repo, workspaceId])
 
   return (
     <AppRuntimeContextProvider value={runtime}>

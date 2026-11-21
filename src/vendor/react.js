@@ -1,0 +1,57 @@
+// The page importmap's `react`: extensions import React by bare specifier and
+// get THIS module (a build entry like every src/ file), which re-exports the
+// copy the app itself bundles, so an extension's hooks run against the host's
+// React. React ships CommonJS only and the bundler emits named exports only
+// when they are listed, so every export is spelled out; vendorEntries.test.ts
+// fails when React's set changes.
+// `act` and `captureOwnerStack` exist only in the development build; production
+// leaves them `undefined` rather than failing the importing module's link.
+export {
+  default,
+  Activity,
+  Children,
+  Component,
+  Fragment,
+  Profiler,
+  PureComponent,
+  StrictMode,
+  Suspense,
+  ViewTransition,
+  __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE,
+  __COMPILER_RUNTIME,
+  act,
+  addTransitionType,
+  cache,
+  cacheSignal,
+  captureOwnerStack,
+  cloneElement,
+  createContext,
+  createElement,
+  createRef,
+  forwardRef,
+  isValidElement,
+  lazy,
+  memo,
+  startTransition,
+  unstable_useCacheRefresh,
+  use,
+  useActionState,
+  useCallback,
+  useContext,
+  useDebugValue,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useImperativeHandle,
+  useInsertionEffect,
+  useLayoutEffect,
+  useMemo,
+  useOptimistic,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+  version,
+} from 'react'

@@ -19,8 +19,8 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties'
-import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'
 
@@ -79,6 +79,14 @@ const readAliases = async (id: string): Promise<string[]> => {
   return (JSON.parse(row.properties_json).alias ?? []) as string[]
 }
 
+/** The LOCAL derived column — not exposed by `env.read`. */
+const readReferenceTargetId = async (id: string): Promise<string | null> => {
+  const row = await sharedDb.db.get<{reference_target_id: string | null}>(
+    'SELECT reference_target_id FROM blocks WHERE id = ?', [id],
+  )
+  return row.reference_target_id
+}
+
 const createTarget = async (
   id: string,
   content: string,
@@ -99,6 +107,38 @@ describe('alias.sync — Case A1 (content edit, old value is an alias)', () => {
 
     expect((await env.read('t'))!.content).toBe('New name')
     expect(await readAliases('t')).toEqual(['New name'])
+  })
+})
+
+describe('alias.sync — source content is not a name', () => {
+  const typedPage = async (type: string) => {
+    await createTarget('t', 'Report', ['Report'])
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'citer', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'see [[Report]] today'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    await env.repo.tx(tx => tx.setProperty('t', typesProp, [type]), {scope: ChangeScope.BlockDefault})
+    await flush()
+  }
+
+  it.each(['extension', 'html-document'])('editing a page typed %s keeps its name and its citations', async type => {
+    await typedPage(type)
+    await env.repo.mutate.setContent({id: 't', content: '<p>the document</p>'})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('<p>the document</p>')
+    expect(await readAliases('t')).toEqual(['Report'])
+    expect((await env.read('citer'))!.content).toBe('see [[Report]] today')
+  })
+
+  it.each(['extension', 'html-document'])('renaming a page typed %s leaves its source alone', async type => {
+    await typedPage(type)
+    await env.repo.mutate.setContent({id: 't', content: '<p>the document</p>'})
+    await flush()
+    await env.repo.tx(tx => tx.setProperty('t', aliasesProp, ['Renamed']), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('<p>the document</p>')
   })
 })
 
@@ -124,6 +164,24 @@ describe('alias.sync — Case A3 (drift heal)', () => {
   })
 })
 
+describe('alias.sync — rule 1 needs an entry that is still there', () => {
+  // Rule 1 REPLACES an entry, so it must be in both bags. Dropping the old
+  // name in the same tx that renames the content is A3's shape, not A1's — the
+  // heal below adds the new content rather than the rename silently doing
+  // nothing. (Keyed on the tx-start bag alone, this case wrote nothing.)
+  it('heals additively when the tx itself removed the old entry', async () => {
+    await createTarget('t', 'Old', ['Old', 'Other'])
+    await env.repo.tx(async tx => {
+      await tx.update('t', {content: 'New'})
+      await tx.setProperty('t', aliasesProp, ['Other'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('New')
+    expect(await readAliases('t')).toEqual(['Other', 'New'])
+  })
+})
+
 describe('alias.sync — Case AR1 (alias rename, content matches removed alias)', () => {
   it('rewrites content to the added alias', async () => {
     await createTarget('t', 'Foo', ['Foo'])
@@ -135,6 +193,34 @@ describe('alias.sync — Case AR1 (alias rename, content matches removed alias)'
 
     expect((await env.read('t'))!.content).toBe('Bar')
     expect(await readAliases('t')).toEqual(['Bar'])
+  })
+
+  // AR1 rewrites `content` from a PLUGIN same-tx processor, i.e. after the
+  // kernel's `core.deriveReferenceTarget` already ran — and AR1's own
+  // precondition is that content did NOT change in this tx, so derive never
+  // fired for the row at all. Without an inline recompute the derived column
+  // is left describing pre-rewrite content. Reachable when the aliases being
+  // swapped are themselves spelled as references.
+  it('re-derives reference_target_id for the content it rewrites', async () => {
+    await createTarget('page-foo', 'Foo page', ['Foo'])
+    await createTarget('page-bar', 'Bar page', ['Bar'])
+    // `t` is an exact `[[Foo]]` reference whose ALIAS is the literal
+    // string `[[Foo]]` — that string equality is what arms AR1.
+    await createTarget('t', '[[Foo]]', ['[[Foo]]'])
+    expect(await readReferenceTargetId('t')).toBe('page-foo')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['[[Bar]]']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // AR1 fired: content now names Bar...
+    expect((await env.read('t'))!.content).toBe('[[Bar]]')
+    // ...so the column must follow it, not keep pointing at Foo. A stale
+    // stamp here is what makes a row keep classifying as the WRONG property
+    // definition's field row in a child-backed workspace.
+    expect(await readReferenceTargetId('t')).toBe('page-bar')
   })
 })
 

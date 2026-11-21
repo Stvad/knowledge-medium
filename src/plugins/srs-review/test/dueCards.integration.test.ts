@@ -7,11 +7,11 @@
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, type BlockReference } from '@/data/api'
+import { ChangeScope, seedType, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { typesProp } from '@/data/properties'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { typeSeedsFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { dailyNoteDateProp, dailyNoteType, DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
 import {
@@ -20,7 +20,7 @@ import {
   srsNextReviewDateProp,
   srsArchivedProp,
 } from '@/plugins/srs-rescheduling/schema.ts'
-import { buildDueCardsQuery } from '../dueQuery.ts'
+import { buildDueCardsQuery, buildTaggedCandidatesQuery, selectNewCards } from '../dueQuery.ts'
 
 const WS = 'ws-1'
 const NOW = new Date('2026-06-02T12:00:00')
@@ -33,20 +33,21 @@ const setup = async (): Promise<Harness> => {
   const { repo } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    newId: () => `gen-${++idCursor}`,
     // No live sync observer (the sanctioned deterministic-timing pattern).
     // This suite does explicit local writes + queries and never needs
-    // materialization. With it on, a prior test's async observer write — whose
-    // tx_id comes from the per-test `newId` counter (reset to gen-1 each test)
-    // — could land after this test's resetTestDb cleared command_events and
-    // collide on the UNIQUE command_events.tx_id under full-suite load.
+    // materialization, and an observer left running would keep writing into
+    // the next test's database.
     startSyncObserver: false,
     extensions: [
-      typesFacet.of(dailyNoteType, {source: 'test'}),
-      typesFacet.of(srsSm25Type, {source: 'test'}),
-      propertySchemasFacet.of(dailyNoteDateProp, {source: 'test'}),
-      propertySchemasFacet.of(srsNextReviewDateProp, {source: 'test'}),
-      propertySchemasFacet.of(srsArchivedProp, {source: 'test'}),
+      typeSeedsFacet.of(dailyNoteType, {source: 'test'}),
+      typeSeedsFacet.of(srsSm25Type, {source: 'test'}),
+      typeSeedsFacet.of(seedType({
+        seedKey: 'test/type/test-due-cards-props',
+        revision: 1,
+        id: 'test:due-cards-props',
+        label: 'Test Due Cards Props',
+        properties: [dailyNoteDateProp, srsNextReviewDateProp, srsArchivedProp],
+      }), {source: 'test'}),
     ],
   })
   repo.setActiveWorkspaceId(WS)
@@ -55,15 +56,6 @@ const setup = async (): Promise<Harness> => {
 
 let sharedDb: TestDb
 let env: Harness
-// Monotonic across the whole file (NOT reset per test). The suite shares one
-// PowerSync DB; tx_id comes from this counter, and an awaited write's
-// command_events insert can land just after the next test's resetTestDb (PS
-// write-behind). A per-test reset to gen-1 made those late ids collide with
-// the next test's own ids on the UNIQUE command_events.tx_id; keeping it
-// monotonic means a leaked id is always lower than the live test's, so it
-// can never collide. Nothing here asserts on generated ids (blocks use
-// explicit ids), so the values themselves don't matter.
-let idCursor = 0
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
@@ -148,5 +140,65 @@ describe('SRS due cards (end-to-end)', () => {
     await card('off-roam', 'dn-past')
 
     expect(await runIds({workspaceId: WS, tagBlockId: 'roam-page', now: NOW})).toEqual(['on-roam'])
+  })
+})
+
+describe('SRS new cards — tagged but not enrolled (end-to-end)', () => {
+  const tagged = (id: string, opts: {parentId?: string | null; types?: readonly string[]} = {}) =>
+    create({
+      id,
+      parentId: opts.parentId ?? null,
+      types: opts.types,
+      references: [{id: 'tag-flash', alias: 'Flashcards', sourceField: ''}],
+    })
+
+  const newIds = async (tagBlockId: string | null) =>
+    selectNewCards(
+      await env.repo.queryBlocks(buildTaggedCandidatesQuery({workspaceId: WS, tagBlockId})),
+    ).map(b => b.id)
+
+  beforeEach(async () => {
+    await create({id: 'tag-flash', properties: {alias: ['Flashcards']}})
+  })
+
+  it('collects a tagged block that carries no SRS metadata', async () => {
+    await tagged('fresh')
+
+    expect(await newIds('tag-flash')).toEqual(['fresh'])
+  })
+
+  it('leaves an already-enrolled card out, even when it is not due', async () => {
+    await dailyNote('dn-future', '2026-07-01')
+    await tagged('enrolled', {types: [SRS_SM25_TYPE]})
+    await env.repo.tx(tx => tx.update('enrolled', {
+      properties: {
+        [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode('dn-future'),
+      },
+    }), {scope: ChangeScope.BlockDefault})
+
+    // Not due (July) and not new — otherwise the next grade would reset it
+    // to the SM-2.5 defaults.
+    expect(await runIds({workspaceId: WS, tagBlockId: 'tag-flash', now: NOW})).toEqual([])
+    expect(await newIds('tag-flash')).toEqual([])
+  })
+
+  it('does NOT sweep in untagged descendants of a tagged block', async () => {
+    // The load-bearing scope decision: a card's answer usually lives as a
+    // child of the tagged question. Ancestor scope would enroll it as its
+    // own card.
+    await tagged('question')
+    await create({id: 'answer', parentId: 'question'})
+
+    expect(await newIds('tag-flash')).toEqual(['question'])
+  })
+
+  it('collects nothing for the untagged all-due deck', async () => {
+    // No tag means no "tagged for SRS" set — the query must not degrade
+    // into every block in the workspace.
+    await tagged('fresh')
+    await create({id: 'unrelated'})
+
+    expect(await newIds(null)).toEqual([])
   })
 })

@@ -7,7 +7,7 @@
  *
  * Coverage:
  *   - dailyNoteBlockId: stable per (workspaceId, iso); namespace
- *     pinned to the documented DAILY_NOTE_NS constant
+ *     pinned in src/data/derivedIds.test.ts
  *   - isDateAlias: matches strict YYYY-MM-DD, rejects close-but-no
  *   - ensureDailyNoteTarget: inserts daily-note row with the
  *     deterministic id + iso alias + DAILY_NOTE_TYPE on the row's
@@ -22,14 +22,13 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
-  DAILY_NOTE_NS,
-  DAILY_NOTE_TYPE,
   dailyNoteBlockId,
-  dailyNotesDataExtension,
   ensureDailyNoteTarget,
   isDateAlias,
   isValidDateAlias,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 
 const WS = 'ws-1'
 
@@ -64,10 +63,6 @@ describe('dailyNoteBlockId', () => {
   it('differs across workspaces for the same iso', () => {
     expect(dailyNoteBlockId('ws-a', '2026-04-28'))
       .not.toBe(dailyNoteBlockId('ws-b', '2026-04-28'))
-  })
-
-  it('uses the documented daily-note namespace constant', () => {
-    expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
   })
 })
 

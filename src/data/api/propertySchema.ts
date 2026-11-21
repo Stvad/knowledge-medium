@@ -6,9 +6,10 @@ import type { ChangeScope } from './changeScope'
  *  CLI, headless tests, future non-React UIs). React presentation lives
  *  separately: most properties pick up an editor from a future
  *  ValuePreset (codec-type → editor) and never need anything more.
- *  Per-name *outlier* overrides — type-aware autocompletes, singleton
+ *  Per-definition *outlier* overrides — type-aware autocompletes, singleton
  *  config editors, hidden kernel-internal state — go on
- *  `PropertyEditorOverride<T>` (joined to schemas by `name`). See spec §5.6. */
+ *  `PropertyEditorOverride<T>` (joined to definitions by seed identity).
+ *  See spec §5.6, §8. */
 export interface PropertySchemaEntry<T> {
   readonly name: string
   /** Storage codec; runs at the four boundary call sites only. */
@@ -21,9 +22,8 @@ export interface PropertySchemaEntry<T> {
  * The stable seed key can be resolved to a definition id only for a concrete
  * workspace; handles therefore never carry `fieldId` or `workspaceId`.
  *
- * Slice A introduces this type before `seedProperty` starts returning it in
- * slice B. Existing `defineProperty` declarations remain behavioral entries
- * until that cutover. */
+ * `seedProperty` returns this type. Existing `defineProperty` declarations
+ * remain behavioral entries until their Slice-B conversion. */
 export interface PropertyHandle<T> extends PropertySchemaEntry<T> {
   readonly seedKey: string
 }
@@ -43,15 +43,38 @@ export interface ResolvedPropertySchema<T> extends PropertySchemaEntry<T> {
   readonly [resolvedPropertySchemaBrand]: true
 }
 
+/** `behavior-unavailable`: the winning definition exists and is readable, but
+ *  this device cannot build its codec (its preset is not loaded here, or its
+ *  stored config does not decode). Distinct from `definition-unavailable` —
+ *  no definition at all — because §9 recognition classifies the first and not
+ *  the second. */
 export type PropertySchemaIdentityUnavailableReason =
   | 'registry-not-workspace-keyed'
   | 'definition-unavailable'
+  | 'behavior-unavailable'
+  | 'shadowed'
+  | 'ambiguous'
 
-/** Slice-A resolver result. Projected user rows already have block ids, but
- * today's registry cannot prove which workspace its id map is pinned to; code
- * schemas have no backing identity at all. Resolution therefore stays
- * unavailable until slice B installs workspace-keyed buckets and deterministic
- * seeded ids. No synthetic or ambient id fallback is permitted. */
+/** Why a WRITE/READ boundary refused the schema object a caller passed —
+ *  `PropertySchemaIdentityUnavailableReason` plus the one failure only the
+ *  boundary can have, since only it is handed an object rather than a name or
+ *  a field id.
+ *
+ *  `stale-schema`: the plain schema passed is not the entry this workspace
+ *  publishes under that name, and nothing else claims that name. A block-built
+ *  entry is a fresh object per projection, so a legitimately-obtained copy
+ *  stops being it at the next rebuild; a lookalike that never was it lands
+ *  here too, because a plain schema carries no identity to tell the two apart.
+ *  A contested name keeps reporting `shadowed` — that one says a duplicate
+ *  definition is there to resolve, and sending a reader after one that does
+ *  not exist is what this reason exists to stop. */
+export type PropertyBoundaryIdentityUnavailableReason =
+  | PropertySchemaIdentityUnavailableReason
+  | 'stale-schema'
+
+/** Result of the workspace-bound identity resolver. Unbound/stage-0 callers
+ * and definitions without locally-buildable behavior report identity as
+ * unavailable; no synthetic ambient-workspace fallback is permitted. */
 export type PropertySchemaResolution<T> =
   | {readonly status: 'resolved'; readonly schema: ResolvedPropertySchema<T>}
   | {
@@ -78,20 +101,25 @@ export interface PropertySchema<T> extends PropertySchemaEntry<T> {}
  *  Most properties don't need an override — leave them alone and the
  *  codec/preset chain renders them. See spec §5.6 + §6. */
 export interface PropertyEditorOverride<T = unknown> {
-  /** Must match a registered `PropertySchema.name`. Multiple overrides
-   *  for the same name log a warning and last-wins (facet convention). */
-  readonly name: string
-  /** Display name (defaults to `name` when absent). */
+  /** The `seedKey` of the definition this override presents. The join
+   *  resolves seedKey → the workspace's winning definition at render time,
+   *  so it is immune to display-name changes. Multiple overrides for the same
+   *  seedKey log a warning and last-wins (facet convention). B′ replaced the
+   *  former name key with this. */
+  readonly seedKey: string
+  /** Display name (defaults to the definition name when absent). */
   readonly label?: string
   /** Hide from the normal property panel. Hidden rows can still be
    *  revealed in the debug/metadata section; this affects placement and
    *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
-  /** Optional per-name glyph override. Defaults to the matching
-   *  `ValuePreset.Glyph` when absent. Use sparingly — most properties
-   *  pick up the codec-type-keyed glyph from the preset and don't
-   *  need a per-name shape. See user-defined-properties §1-ui. */
+  /** Opt-in control for the scalar value block itself in the outline. */
+  readonly InlineEditor?: PropertyEditor<T>
+  /** Optional glyph override. Defaults to the matching `ValuePreset.Glyph`
+   *  when absent. Use sparingly — most properties pick up the codec-type-keyed
+   *  glyph from the preset and don't need a per-definition shape.
+   *  See user-defined-properties §1-ui. */
   readonly Glyph?: ComponentType<{className?: string}>
 }
 
@@ -102,7 +130,8 @@ export interface PropertyEditorProps<T> {
    *  renderers; optional so older UI contributions that only need
    *  value/onChange/block keep their existing shape. */
   schema?: PropertySchema<T>
-  /** The block being edited. Type kept loose here so the data-layer api
+  /** The owner in a property panel, or the value row for an InlineEditor.
+   *  Type kept loose here so the data-layer api
    *  module doesn't need to import the `Block` facade (defined in
    *  `src/data/block.ts`). UI consumers narrow at the call site. */
   block: unknown
@@ -121,9 +150,8 @@ export type PropertyEditor<T> = (props: PropertyEditorProps<T>) => JSX.Element
 
 /** Plugin-augmentable type registry for property schemas — mirrors
  *  `MutatorRegistry` and `QueryRegistry`. Static plugins augment via
- *  `declare module '@/data/api'`; dynamic plugins use string-keyed access. */
-/** Plugin-augmentable type registry. Empty body is intentional —
- *  declaration merging requires interface. */
+ *  `declare module '@/data/api'`; dynamic plugins use string-keyed access.
+ *  Empty body is intentional — declaration merging requires interface. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PropertySchemaRegistry { /* augmented per plugin */ }
 
@@ -137,20 +165,75 @@ export const defineProperty = <T>(
   schema: Omit<PropertySchema<T>, 'name'>,
 ): PropertySchema<T> => ({ name, ...schema })
 
-/** Helper for the rare property that needs a per-name editor override.
- *  Most plugins should NOT reach for this — registering an override is
- *  the outlier path. The common path is a codec-type-based ValuePreset. */
+/** One `(schema, value)` pair for `tx.setProperties`. Build these with
+ *  `propertyValue` so `value` is type-checked against `schema` at the call
+ *  site; the batch list itself is variance-erased (`AnyPropertyAssignment`),
+ *  the same escape `AnyPropertySchema` uses for heterogeneous storage. */
+export interface PropertyAssignment<T> {
+  readonly schema: PropertySchema<T>
+  readonly value: T
+}
+
+/** Pair a schema with a value for a `tx.setProperties` batch, enforcing
+ *  `value: T` matches `schema: PropertySchema<T>` at the call site. */
+export const propertyValue = <T>(
+  schema: PropertySchema<T>,
+  value: T,
+): PropertyAssignment<T> => ({ schema, value })
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPropertyAssignment = PropertyAssignment<any>
+
+/** Helper for the rare property that needs a per-definition editor override.
+ *  Pass the seed handle the override presents; its `seedKey` is the join key
+ *  (name-independent, immune to renames). Most plugins should NOT reach for
+ *  this — registering an override is the outlier path. The common path is a
+ *  codec-type-based ValuePreset. */
 export const definePropertyEditorOverride = <T>(
-  override: PropertyEditorOverride<T>,
-): PropertyEditorOverride<T> => override
+  handle: PropertyHandle<T>,
+  override: Omit<PropertyEditorOverride<T>, 'seedKey'>,
+): PropertyEditorOverride<T> => {
+  // Fail loud on a stale caller passing the pre-B′ `{name, …}` object shape:
+  // without a seed handle there is no identity to join on.
+  if (typeof handle?.seedKey !== 'string') {
+    throw new Error(
+      '[definePropertyEditorOverride] first argument must be a seed handle ' +
+      '(from seedProperty); the name-keyed override shape was removed in B′',
+    )
+  }
+  // The handle's seedKey is authoritative: spread the body first so a stray
+  // `seedKey` from a types-stripped dynamic extension can't clobber it.
+  return {...override, seedKey: handle.seedKey}
+}
+
+/** Runtime guard for dynamic-extension override contributions (the loader
+ *  binds their seedKey to the owning block before registration). Rejects a
+ *  seed declaration mis-contributed to the override facet — it also carries a
+ *  string `seedKey`, but only seeds carry `revision`/`presetId`. */
+export const isPropertyEditorOverride = (
+  value: unknown,
+): value is AnyPropertyEditorOverride => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as {seedKey?: unknown; revision?: unknown; presetId?: unknown}
+  return typeof v.seedKey === 'string' && v.seedKey.length > 0 &&
+    v.revision === undefined && v.presetId === undefined
+}
 
 /** Variance-erased schema type for storage in heterogeneous collections
- *  (`propertySchemasFacet`'s contributions, etc.). `PropertySchema<T>`
- *  is invariant in `T` through `defaultValue` and `codec`, so typed
- *  plugin schemas can't widen to `PropertySchema<unknown>`. The `any`
- *  escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
+ *  (the merged registry, type-lifted `TypeContribution.properties`, etc.).
+ *  `PropertySchema<T>` is invariant in `T` through `defaultValue` and
+ *  `codec`, so typed plugin schemas can't widen to `PropertySchema<unknown>`.
+ *  The `any` escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertySchema = PropertySchema<any>
+
+/** Variance-erased resolved schema, for the same reason and with the same
+ *  `any` escape as `AnyPropertySchema`. A return type of this rather than
+ *  `AnyPropertySchema` is a promise that the value carries durable identity:
+ *  it keeps resolving by field id across registry rebuilds, where a plain
+ *  schema object stops being the entry its name publishes. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyResolvedPropertySchema = ResolvedPropertySchema<any>
 
 /** Variance-erased editor-override type for storage in
  *  `propertyEditorOverridesFacet`'s contributions. `PropertyEditor<T>` is

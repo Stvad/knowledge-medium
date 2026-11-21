@@ -1,9 +1,13 @@
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { PropertyDisplayScope } from '@/components/propertyDisplay/PropertyDisplayScope'
 import { Button } from '@/components/ui/button.js'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
+  focusedBlockLocationProp,
+  isPanelRowMaximized,
+  panelViewModeProp,
   peekFocusedBlockLocation,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -12,19 +16,28 @@ import { useIsActivePanel, useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { usePropertyValue } from '@/hooks/block.js'
+import { useCallback, useContext, useEffect, useMemo, useRef } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { panelMountsFacet } from '@/extensions/core.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { FocusedRowLazyMount } from '@/components/util/FocusedRowLazyMount.js'
 import {
   goBackInPanel,
   goForwardInPanel,
   panelHistory,
   usePanelHistory,
+  type VisitState,
 } from '@/utils/panelHistory.js'
-import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
-import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { alignScrollportToRow } from '@/utils/panelScrollAnchor.js'
+import { isMobileViewport } from '@/utils/viewport.js'
+import {
+  activatePanelRow,
+  deletePanelRow,
+  togglePanelMaximized,
+} from '@/utils/panelLayoutProjection.js'
+import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
 
 const SCROLL_WRITE_DELAY_MS = 200
@@ -36,6 +49,7 @@ const PANEL_HISTORY_BUTTON_CLASS =
 function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
   const [selectionState] = useSelectionState()
   const repo = useRepo()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
 
   const multiSelectDeps = useMemo(() => {
     if (!selectionState.selectedBlockIds.length) return null
@@ -47,8 +61,9 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
       // root is the panel's zoom root. Forwarded to per-block structural
       // actions (indent/outdent/delete) via applyToAllBlocksInSelection.
       scopeRootId,
+      propertyDisplay,
     }
-  }, [selectionState, repo, scopeRootId])
+  }, [selectionState, repo, scopeRootId, propertyDisplay])
 
   useActionContext(
     ActionContextTypes.MULTI_SELECT_MODE,
@@ -59,12 +74,24 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
   return null
 }
 
+/** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
+ *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. */
+const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
+
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
+  const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
+  // A narrow selector rather than `usePropertyValue`, which decodes STRICTLY:
+  // a malformed value from sync or a raw bridge write would throw this pane
+  // into its error boundary, while `LayoutRenderer` degrades the same value to
+  // `false` and renders on. Losing an invalid flag must not cost the pane.
+  const panelMaximized = useHandle(block, {
+    selector: doc => (doc ? isPanelRowMaximized(doc) : false),
+  })
   const blockContext = useBlockContext()
   const canClosePanel = Boolean(blockContext.canClosePanel)
+  const canMaximizePanel = Boolean(blockContext.canMaximizePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
-  const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
   const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
     ? blockContext.layoutSessionBlockId
     : undefined
@@ -81,6 +108,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const pendingScrollTopRef = useRef<number | undefined>(undefined)
   const scrollWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingActivationRef = useRef(false)
+  // The restore this pane already drained, kept so StrictMode's effect replay
+  // sees the same answer the first setup did. `consumeRestore` is destructive,
+  // and the replay would otherwise find nothing, peek the cursor
+  // `writePanelContent` MANUFACTURES for a cursorless visit, and anchor to the
+  // top — undoing the offset the first pass had just restored. Keyed by
+  // (pane, content) so a real navigation drains a fresh one; only ever one
+  // slot, so A → B → A re-consumes correctly.
+  const consumedRestoreRef = useRef<{key: string; state: VisitState | undefined} | null>(null)
 
   const activatePanel = useCallback(() => {
     if (!layoutSessionBlockId) return
@@ -117,14 +152,34 @@ export function PanelRenderer({block}: BlockRendererProps) {
     scrollWriteTimerRef.current = setTimeout(flushScrollTop, SCROLL_WRITE_DELAY_MS)
   }, [flushScrollTop])
 
+  // DELETABLE SHIM (2026-07): legacy outline:-scope migration; remove after
+  // deploys settle. Pre-deploy panel rows persisted focus locations under the
+  // pane's old `outline:<topLevelBlockId>` scope; renders now use
+  // `panel:<panelId>:<topLevelBlockId>`, and the strict scope compare (focus
+  // highlight, NORMAL_MODE surface activation) would leave keyboard nav dead
+  // until the first click. Rewrite the stored location once on mount.
+  useEffect(() => {
+    if (!topLevelBlockId) return
+    const location = peekFocusedBlockLocation(block)
+    if (!location) return
+    const isLegacyScope = location.renderScopeId === outlineRenderScopeId(topLevelBlockId) ||
+      location.renderScopeId === outlineRenderScopeId(location.blockId)
+    if (!isLegacyScope) return
+    void block.set(focusedBlockLocationProp, {
+      ...location,
+      renderScopeId: panelRenderScopeId(block.id, topLevelBlockId),
+    })
+  }, [block, topLevelBlockId])
+
   // Register a snapshotter so panelHistory can capture (focused block,
-  // scroll) before any navigation away from the current top-level. The
-  // panel block holds focusedBlockLocationProp; scroll lives in the DOM and
-  // we read it from the ref.
+  // scroll, view mode) before any navigation away from the current
+  // top-level. The panel block holds focusedBlockLocationProp and
+  // panelViewModeProp; scroll lives in the DOM and we read it from the ref.
   useEffect(() => {
     return panelHistory.registerSnapshotter(block.id, () => ({
       focusedLocation: peekFocusedBlockLocation(block),
       scrollTop: scrollRef.current?.scrollTop,
+      viewMode: block.peekProperty(panelViewModeProp),
     }))
   }, [block])
 
@@ -133,13 +188,43 @@ export function PanelRenderer({block}: BlockRendererProps) {
   // synchronously by the helper (so the new render starts with the
   // right cursor); scroll restoration has to wait for the new content
   // to lay out, which is exactly what this post-effect window gives us.
+  //
+  // The cursor is the anchor, not the stored pixel offset: rows mount lazily
+  // and their measured heights die with the page, so the same `scrollTop`
+  // means a different place after a reload (see `panelScrollAnchor`). The
+  // offset is still the fallback for a pane with no cursor at all — a page
+  // opened and scrolled but never clicked or navigated in.
   useEffect(() => {
     if (!topLevelBlockId) return
-    const restore = panelHistory.consumeRestore(block.id)
-    const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
-    if (scrollTop != null && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollTop
+    const restoreKey = `${block.id}:${topLevelBlockId}`
+    let restore: VisitState | undefined
+    if (consumedRestoreRef.current?.key === restoreKey) {
+      restore = consumedRestoreRef.current.state
+    } else {
+      restore = panelHistory.consumeRestore(block.id)
+      consumedRestoreRef.current = {key: restoreKey, state: restore}
     }
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    // A history snapshot answers for itself. A visit that was scrolled but never
+    // focused captured a `scrollTop` and no cursor — and `writePanelContent`
+    // then MANUFACTURES a cursor on the destination's top-level block, so
+    // peeking at the pane here would read that invention and anchor to the top,
+    // throwing away the offset the snapshot exists to replay. That case is the
+    // norm for anyone who scrolls without clicking, since scrolling alone never
+    // creates a cursor.
+    const location = restore ? restore.focusedLocation : peekFocusedBlockLocation(block)
+    const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
+    if (location) {
+      // The offset rides along as the floor, not as the alternative: a cursor
+      // whose row can never be re-resolved (see `fallbackScrollTop`) would
+      // otherwise strand the pane at the top, which is worse than the pixel
+      // restore this replaced.
+      return alignScrollportToRow(scrollEl, location, {
+        ...(scrollTop != null ? {fallbackScrollTop: scrollTop} : {}),
+      })
+    }
+    if (scrollTop != null) scrollEl.scrollTop = scrollTop
   }, [topLevelBlockId, block])
 
   useEffect(() => flushScrollTop, [flushScrollTop])
@@ -201,6 +286,26 @@ export function PanelRenderer({block}: BlockRendererProps) {
       >
         <ChevronRight className="h-4 w-4" />
       </Button>
+      {/* `|| panelMaximized`: a flag must never be unclearable from the pane
+          that carries it. `canMaximizePanel` goes false whenever maximizing
+          would be pointless — mobile, or the siblings closed down to one —
+          and a pane that got flagged BEFORE that would otherwise keep its
+          state with no way to drop it. */}
+      {(canMaximizePanel || panelMaximized) && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={PANEL_ACTION_BUTTON_CLASS}
+          onFocus={trackPanelFocus ? activatePanel : undefined}
+          onClick={() => {
+            void togglePanelMaximized(repo, block.id, {canRenderSplit: !isMobileViewport()})
+          }}
+          aria-label={panelMaximized ? 'Restore panel' : 'Maximize panel'}
+          title={panelMaximized ? 'Restore panel' : 'Maximize panel'}
+        >
+          {panelMaximized ? <Minimize2 className="h-4 w-4"/> : <Maximize2 className="h-4 w-4"/>}
+        </Button>
+      )}
       {canClosePanel && (
         <Button
           variant="ghost"
@@ -217,11 +322,17 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 
   const panelBody = (
+    // panelViewMode rides the context so renderer resolution (useRenderer /
+    // canRender) can pick a mode-specific renderer for the top-level block.
+    // NOTE: NestedBlockContextProvider children INHERIT context, so nested
+    // BlockComponents see the field too unless a renderer clears it —
+    // VideoNotesLayout does exactly that around its notes region.
     <NestedBlockContextProvider
       overrides={{
         layoutBoundary: false,
-        renderScopeId: outlineRenderScopeId(topLevelBlockId),
+        renderScopeId: panelRenderScopeId(block.id, topLevelBlockId),
         scopeRootId: topLevelBlockId,
+        panelViewMode,
       }}
     >
       <BlockComponent blockId={topLevelBlockId}/>
@@ -236,42 +347,48 @@ export function PanelRenderer({block}: BlockRendererProps) {
       className={`panel min-w-0 max-w-full flex flex-col relative ${
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
-      {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
-      {wideScrollSurface ? (
-        <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
-          <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">
-            {actionButtons}
-          </div>
-        </div>
-      ) : (
-        <div className="pointer-events-none absolute top-1 right-0.5 z-10 flex gap-0.5">
+      {/* Around the whole panel, not only the outline: the multi-select
+          context and the panel mounts dispatch gestures over that outline. */}
+      <PropertyDisplayScope>
+        {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
+        {/* Keeps this panel's focused row mounted even when it's still a lazy
+            placeholder — see the component. Renders null. */}
+        <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
+        {/* `.panel-actions` ends the buttons where the content ends (`index.css`). */}
+        <div className="panel-actions pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-end gap-0.5">
           {actionButtons}
         </div>
-      )}
-      <div
-        ref={scrollRef}
-        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
-        onPointerDownCapture={activatePanel}
-        onFocusCapture={trackPanelFocus ? activatePanel : undefined}
-        onScroll={scheduleScrollTopWrite}
-      >
-        {wideScrollSurface ? (
+        <div
+          ref={scrollRef}
+          // Stable handle for the pane's scrollport. Callers inside it find it by
+          // walking ancestors for a scrolling overflow (nearestScrollableAncestor),
+          // which is robust to wrappers; this handle is for tests, and for panel
+          // mounts, which sit beside the scrollport rather than inside it.
+          data-panel-scrollport=""
+          // Bottom clearance: below md the bottom nav's; from md up, whatever
+          // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
+          // (`@/utils/panelClearance`), named literally here for Tailwind.
+          className={`${FRAME_RIGHT_CLEARANCE_CLASS} ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
+          onPointerDownCapture={activatePanel}
+          onFocusCapture={trackPanelFocus ? activatePanel : undefined}
+          onScroll={scheduleScrollTopWrite}
+        >
           <div className="mx-auto w-full max-w-3xl">
             {panelBody}
           </div>
-        ) : panelBody}
-      </div>
-      {/* Per-panel mount points — chrome contributed via
-          `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
-          inside `.panel` so position:fixed/absolute children sit in the
-          panel's positioning context, and isolated under render
-          boundaries so a loading or misbehaving plugin can't tear down
-          the panel. */}
-      {panelMounts.map(({id, component: Component}) => (
-        <ExtensionRenderBoundary key={id}>
-          <Component block={block}/>
-        </ExtensionRenderBoundary>
-      ))}
+        </div>
+        {/* Per-panel mount points — chrome contributed via
+            `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
+            inside `.panel` so position:fixed/absolute children sit in the
+            panel's positioning context, and isolated under render
+            boundaries so a loading or misbehaving plugin can't tear down
+            the panel. */}
+        {panelMounts.map(({id, component: Component}) => (
+          <ExtensionRenderBoundary key={id}>
+            <Component block={block}/>
+          </ExtensionRenderBoundary>
+        ))}
+      </PropertyDisplayScope>
     </div>
   )
 }

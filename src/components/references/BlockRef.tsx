@@ -2,7 +2,7 @@ import { ReactNode } from 'react'
 import { BlockComponent } from '@/components/BlockComponent'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { useRepo } from '@/context/repo'
-import { useBlockExists } from '@/hooks/block'
+import { useHandle } from '@/hooks/block'
 import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
@@ -41,12 +41,17 @@ export function BlockRef({
   const blockContext = useBlockContext()
   const ancestors = useBlockRefAncestors()
   const target = repo.block(blockId)
-  const targetExists = useBlockExists(target)
+  // null once the target is confirmed missing; undefined while it loads.
+  const targetState = useHandle(target, {selector: doc => doc === null ? 'missing' : doc ? 'exists' : 'loading'})
   const display = hasDisplayChildren(children) ? children : null
 
-  if (!targetExists) {
+  if (targetState !== 'exists') {
+    const missing = targetState === 'missing'
     return (
-      <span className="blockref blockref--unresolved">
+      <span
+        className={`blockref blockref--unresolved${missing ? ' blockref--missing' : ''}`}
+        title={missing ? `No block has the id ${blockId}` : undefined}
+      >
         {display ?? shortBlockRef(blockId)}
       </span>
     )

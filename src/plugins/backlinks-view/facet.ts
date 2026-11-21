@@ -10,7 +10,7 @@ export interface BacklinksViewRendererProps extends BlockRendererProps {
 export type BacklinksViewRenderer = ComponentType<BacklinksViewRendererProps>
 
 /**
- * Variant facet for the "Linked References" footer section. The
+ * Variant facet for the "Linked References" section. The
  * `backlinks-view` coordinator plugin reads this, picks one variant
  * per the block's optional `backlinks:viewId` override or derived
  * default, and renders that variant's component above a small picker

@@ -1,12 +1,13 @@
 import { Block } from '../data/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.js'
+import { PropertyRowListingContext } from '@/context/propertyDisplay.js'
 import { useRepo } from '@/context/repo.js'
 import { Suspense } from 'react'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { FallbackComponent } from '@/components/util/error.js'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useChildIds } from '@/hooks/block.js'
+import { useRetainedFieldRows } from '@/hooks/useRetainedFieldRows.js'
 import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
@@ -49,12 +50,23 @@ export const BlockChildren = ({block}: { block: Block }) => {
   // about to enter the viewport, then mounts the real BlockComponent.
   // For trees of thousands of blocks this drops initial-mount cost from
   // O(N) to O(visible-window) without flattening the tree.
-  return <>
-    {useChildIds(block).map((childId) => (
+  //
+  // The scope is read ONCE here and passed down rather than each child reading
+  // context for itself: a deferred row publishes it (see `LazyViewportMount`),
+  // and a `useContext` per placeholder would make every context change re-render
+  // thousands of them — the per-block subscription fan-out the spatial-nav
+  // shell decorator documents as the pitfall to avoid. Children render in this
+  // context, so its scope is the one they will have.
+  const {renderScopeId} = useBlockContext()
+  const {childIds, hasUnlistedChild, mode} = useRetainedFieldRows(block, renderScopeId)
+
+  return <PropertyRowListingContext value={mode !== 'none' || hasUnlistedChild ? block.id : null}>
+    {childIds.map((childId) => (
       <LazyBlockComponent
         key={childId}
         blockId={childId}
+        renderScopeId={renderScopeId}
       />
     ))}
-  </>
+  </PropertyRowListingContext>
 }

@@ -18,21 +18,9 @@ Fix shape: keep the trust decision outside synced block properties so a collabor
 
 ## P1
 
-### React identity contract for extensions
-
-Extensions that render into the app's React tree need to share the host app's React module identity. Today that is partly enforced by externalizing `react` / `react-dom` through the page import map, and partly accidental: Babel's current extension JSX transform emits `React.createElement(...)`, so extension blocks rely on `window.React` unless they import React explicitly.
-
-Fix shape: document React and ReactDOM as host-provided peer dependencies for extension authors and bundled extensions. Bundled extensions must externalize `react`, `react-dom`, `react/jsx-runtime`, and `react/jsx-dev-runtime`, then resolve those from the host environment. Tighten the in-browser compiler so JSX uses an explicit host import (`react/jsx-runtime` or an injected `import React from 'react'`) instead of the global. Keep import-map entries exact where possible, and integrity-pin any CDN-hosted host React modules.
-
-### Tx-bound read guards for reference processors
-
-`core.parseReferences` and `core.cleanupOrphanAliases` now do their expensive reads before opening a write transaction to avoid the PowerSync queue deadlock shape documented in `tasks/processor-tx-deadlock.md`. That leaves two narrow TOCTOU windows: alias ownership can change between "alias missing" and deterministic target creation, and a newly inserted alias target can gain a reference between the orphan precheck and cleanup delete.
-
-Fix shape: add narrow tx-bound read helpers for the final guards, e.g. alias lookup by `(workspaceId, alias)` and "does any block reference this id?", implemented on the `Tx`/`TxImpl` path using the active write-transaction lock context. Keep the broad prefilter reads outside the tx, but re-check inside the tx immediately before creating the fallback alias target or deleting a cleanup candidate. Do not call the bare `ctx.db` from inside `repo.tx`; that reintroduces the queue deadlock.
-
 ### CI guard on Postgres ↔ TS schema drift
 
-`scripts/gen-sync-config.ts` keeps the local-SQLite raw-table mapping and the PowerSync sync-stream SELECT in lockstep (both projected from the same `BLOCK_STORAGE_COLUMNS` / `WORKSPACE_*` arrays), but **Postgres is still drift-prone** — someone can edit `BLOCK_STORAGE_COLUMNS` without writing the matching `supabase/migrations/<…>.sql`, and nothing fails until `db push` (or worse, a runtime PATCH that references a missing column). Fix shape: a CI step that calls `npx supabase db query --linked "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('blocks','workspaces','workspace_members')"` and asserts the returned set is a superset of every name in the TS column lists. Costs: needs a Supabase-reachable env in CI (or a checked-in `supabase/schema-snapshot.json` you regenerate via a `yarn snapshot:schema` script and diff against). Lower-effort variant: parse the migration files as text and grep for `add column.*<name>` per TS column — no DB connection needed but misses migrations that drop a column.
+`scripts/gen-sync-config.ts` keeps the local-SQLite raw-table mapping and the PowerSync sync-stream SELECT in lockstep (both projected from the same `BLOCK_STORAGE_COLUMNS` / `WORKSPACE_*` arrays), but **Postgres is still drift-prone** — someone can edit `BLOCK_STORAGE_COLUMNS` without writing the matching `supabase/migrations/<…>.sql`, and nothing fails until `db push` (or worse, a runtime PATCH that references a missing column). Fix shape: a CI step that calls `npx supabase db query --linked "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('blocks','workspaces','workspace_members')"` and asserts the returned set is a superset of every name in the TS column lists. Costs: needs a Supabase-reachable env in CI (or a checked-in `supabase/schema-snapshot.json` you regenerate via a `pnpm snapshot:schema` script and diff against). Lower-effort variant: parse the migration files as text and grep for `add column.*<name>` per TS column — no DB connection needed but misses migrations that drop a column.
 
 ### Move agent-runtime tokens from localStorage to user-page blocks
 
@@ -91,7 +79,7 @@ The "don't enqueue" path also helps the `row_events` problem above — an `'impo
 
 ### Strict-mode-with-checked-overrides for name-keyed facets
 
-Every name-keyed facet in the codebase (`propertySchemasFacet`, `propertyUiFacet`, `postCommitProcessorsFacet`, `queriesFacet`, `mutatorsFacet`, `typesFacet`, `blockLayoutFacet`, etc.) follows the same convention: warn on duplicate name, last-wins. That's the existing override mechanism — plugins replace kernel registrations by registering after them. It works, but the warn is easy to miss in practice and accidental name collisions silently overwrite intended behavior.
+Every name-keyed facet in the codebase (`postCommitProcessorsFacet`, `queriesFacet`, `mutatorsFacet`, `valuePresetCoresFacet`, `blockLayoutFacet`, etc.) follows the same convention: warn on duplicate name, last-wins. That's the existing override mechanism — plugins replace kernel registrations by registering after them. It works, but the warn is easy to miss in practice and accidental name collisions silently overwrite intended behavior.
 
 A stricter scheme: registrations may opt into a checked override target — `propertySchemasFacet.of(statusPropV2, {source: 'my-plugin', overrides: 'status'})`. Combine asserts that an entry under `overrides` exists; if absent, throw (catches typos). If present, replace silently (intent declared, no warn). Without `overrides`, any duplicate-name collision throws (catches accidents). That gives strict mode + intentional override + typo catch in one shape.
 
@@ -143,6 +131,10 @@ Two viable fixes:
 The user is currently leaning toward **block-id keying as the destination** (per the user-defined-types design review session) because it composes with the same "id-stable handle" decision already made for types and resolves the rename problem cleanly for every consumer at once. Cascade-rename remains a viable interim step that doesn't paint into a corner.
 
 ## P3 — Deferred until trigger fires
+
+### Trim schema-unification.html's forward-looking #288 traceability (trigger: #288 work begins)
+
+The schema-unification project shipped in full (slices A–D). `docs/schema-unification.html` still carries the forward-looking requirements-traceability it wrote for the properties-as-blocks migration (#288): the reserved-but-unread `property-schema:child-backed` field (§3 table), and the `childBacked`/fleet-classifiability discussion threaded through §5.1, §6.1–§6.2, §11.1, §12 (all explicitly "#288's field end to end, not scope of this project", §11.1). Now that this project is done, that material is a hand-off note, not live design. **Trigger to trim:** the first #288 slice that actually consumes `childBacked` lands — at that point move the traceability into #288's own doc (or delete it here and let #288 own the field's home + flip mechanism), and drop the "reserved" pill. Until then it stays as the record of why the field exists. (Filed at schema-unification slice D per §11.1.)
 
 ### Consider DB/query revisioning if dirty-load handle semantics become hard to reason about
 
@@ -232,13 +224,13 @@ Acceptance for landing this:
 
 ### Investigate `referencesProcessor.test.ts` schema-swap flake
 
-`src/plugins/references/test/referencesProcessor.test.ts > parseReferences — schema-swap reprojection > removes stale field refs when a property stops being ref-typed` fails intermittently in the full suite but passes in isolation (`yarn test --run src/plugins/references/test/referencesProcessor.test.ts` is green). Observed once during the navigation refactor on master @ cf397f0; my edits don't import any backlinks code, and the failing assertion checks `references_json` for a stale `target-a` ref that should have been removed when the `reviewer` property was retyped away from `block-ref`.
+`src/plugins/references/test/referencesProcessor.test.ts > parseReferences — schema-swap reprojection > removes stale field refs when a property stops being ref-typed` fails intermittently in the full suite but passes in isolation (`pnpm test --run src/plugins/references/test/referencesProcessor.test.ts` is green). Observed once during the navigation refactor on master @ cf397f0; my edits don't import any backlinks code, and the failing assertion checks `references_json` for a stale `target-a` ref that should have been removed when the `reviewer` property was retyped away from `block-ref`.
 
 The shape suggests an ordering race: when run alongside the rest of the suite, the property-type cleanup fires before/after the assertion's `vi.waitFor` window in a way that the in-isolation run doesn't trigger. Likely candidates: a shared trigger-flush queue across tests in the same vitest worker, or a `repo.tx` that races with the schema-swap delete. Worth instrumenting next time it fails: dump `references_json` history for `src` plus the `row_events` trail across the swap window. If the pattern matches `cycle-detection-test-flake.md`, the fix may be the same shape (await processor quiescence before asserting).
 
 ### Legacy alias-seat cleanup tombstones — leave in place
 
-Audited 2026-05-26 on `ff-vlad-dev` (workspace `4bb3ac62-0487-4586-bee4-6a5f28003899`): 424 tombstoned alias seats match the exact restorability predicate the probe now uses (pristine seed shape, `content === alias[0]`, no live children, no inbound `block_references`). Worst-offender prefix: `browser em` at 20 tombstones — accumulated en route to typing `[[browser emacs]]`. The full table:
+Audited 2026-05-26 on a live client: 424 tombstoned alias seats match the exact restorability predicate the probe now uses (pristine seed shape, `content === alias[0]`, no live children, no inbound `block_references`). Worst-offender prefix: `browser em` at 20 tombstones — accumulated en route to typing `[[browser emacs]]`. The full table:
 
 | prefix | tombstones |
 |---|---:|
@@ -288,7 +280,7 @@ The current plugin-extensibility plan has plugins write into namespaced subtrees
 
 ## Data-defined `type-definition` blocks (deferred from type-system v1)
 
-Type-system v1 ([docs/type-system.md](docs/type-system.md)) ships types as facet contributions only — end users who want a new type write a small `extension` block that calls `typesFacet.of({...})`. The dedicated declarative `type-definition` block + property-panel UI for non-coding authors is deferred until there's user demand to remove the "write a tiny extension" friction. Design sketch survives in §9 of the type-system doc: a kernel query `findTypeDefinitionBlocksQuery` mirroring `findExtensionBlocksQuery`, a resolver `userDefinedTypesExtension` symmetric to `dynamicExtensionsExtension`, and a small `appEffect` watching `block_types WHERE type='type-definition'` that calls `refreshAppRuntime()` on change. Explicitly **not** a mutable `FacetRuntime` contribution sink — the immutable-then-rebuild shape is load-bearing (atomic switchover for mutators+processors+schemas, upfront validation, deterministic `combine`, order-independent visibility). **Trigger to build:** real users hit the "to add a new type I have to author code" wall and ask for a UI. Until then, code-extension types are sufficient.
+Type-system v1 ([docs/type-system.md](docs/type-system.md)) ships types as facet contributions only — end users who want a new type write a small `extension` block that contributes a `seedType({...})` to `typeSeedsFacet` (with a block-scoped `seedKey` from `extensionTypeSeedKey`; the static `typesFacet.of` registration path was removed in the schema-unification slice D). The dedicated declarative `type-definition` block + property-panel UI for non-coding authors is deferred until there's user demand to remove the "write a tiny extension" friction. Design sketch survives in §9 of the type-system doc: a kernel query `findTypeDefinitionBlocksQuery` mirroring `findExtensionBlocksQuery`, a resolver `userDefinedTypesExtension` symmetric to `dynamicExtensionsExtension`, and a small `appEffect` watching `block_types WHERE type='type-definition'` that calls `refreshAppRuntime()` on change. Explicitly **not** a mutable `FacetRuntime` contribution sink — the immutable-then-rebuild shape is load-bearing (atomic switchover for mutators+processors+schemas, upfront validation, deterministic `combine`, order-independent visibility). **Trigger to build:** real users hit the "to add a new type I have to author code" wall and ask for a UI. Until then, code-extension types are sufficient.
 
 ## Data-defined contributions over facets — projector-shim pattern
 

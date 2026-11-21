@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 //
 // Boot-composition smoke test. The full provider+plugin tree is never mounted
 // by the unit suite (App.tsx is bound to the live PowerSync boot), so a plugin
@@ -7,18 +7,37 @@
 // runtime. This composes the REAL production plugin set
 // (`staticAppExtensions`) through the same resolver `AppRuntimeProvider` uses
 // and asserts it both succeeds and actually produces contributions.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { definitionSeedsFacet, localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { AGENT_PROPS } from '@/plugins/agent-dispatch-companion/chipState'
+import {
+  resolveAnalyzeTables,
+  resolveLocalSchemaContributions,
+} from '@/data/localSchema.js'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { referencesLocalSchema } from '@/plugins/references/localSchema.js'
 import { actionsFacet, appMountsFacet } from '@/extensions/core.js'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.js'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
+import { findKeybindingConflicts } from '@/shortcuts/keybindingConflicts.js'
+import * as platform from '@/utils/platform.js'
+import { ALIAS_SYNC_PROCESSOR } from '@/plugins/alias'
+import { RENAME_BACKLINKS_PROCESSOR } from '@/plugins/references/renameProcessor.js'
 
 let shared: TestDb
 beforeAll(async () => { shared = await createTestDb() })
 afterAll(async () => { await shared.cleanup() })
 
 describe('app boot composition', () => {
+  it('keeps every dispatch property seed registered after the app runtime replaces bootstrap data facets', () => {
+    const { repo } = createTestRepo({ db: shared.db })
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+    const names = runtime.read(definitionSeedsFacet).map(seed => seed.name)
+    expect(names).toEqual(expect.arrayContaining(Object.values(AGENT_PROPS)))
+  })
+
   it('composes the full production plugin set into a runtime that has contributions', () => {
     const { repo } = createTestRepo({ db: shared.db })
     const extensions = staticAppExtensions({ repo })
@@ -36,12 +55,83 @@ describe('app boot composition', () => {
     expect(runtime.read(appMountsFacet).length).toBeGreaterThan(8)
   })
 
-  it('still composes in safe mode (degraded-boot path)', () => {
+  // `$mod` is Cmd on a Mac and Control elsewhere, so two defaults can collide
+  // on one platform only.
+  describe('default keybindings', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it.each([true, false])('overlap only for ordered property-display fallbacks (mac: %s)', mac => {
+      vi.spyOn(platform, 'isMacPlatform').mockReturnValue(mac)
+      const { repo } = createTestRepo({ db: shared.db })
+      const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+      const actions = runtime.read(actionsFacet)
+      const conflicts = findKeybindingConflicts(actions)
+      const alternatives = ['property-rows.block.cycle', 'toggle_properties']
+      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([['t', alternatives]])
+      // The cycle must precede the panel toggle in both contexts; a declined
+      // cycle leaves the panel as the first dispatchable candidate.
+      for (const prefix of ['', 'multi_select.']) {
+        const ids = alternatives.map(id => `${prefix}${id}`)
+        const candidates = actions.filter(action => ids.includes(action.id))
+        expect(candidates.map(action => action.id)).toEqual(ids)
+        for (const childBacked of [true, false]) {
+          const first = candidates.find(action => !action.canDispatch || action.canDispatch({
+            uiStateBlock: repo.block('panel'),
+            propertyDisplay: {childBacked, workspace: 'inherit', panel: 'inherit'},
+          }))
+          expect(first?.id).toBe(childBacked ? ids[0] : ids[1])
+        }
+      }
+    })
+  })
+
+  // Same-tx processors run in facet INSERTION order, so a plugin-list
+  // reorder is a semantic change, not cosmetic. `references.renameBacklinks`
+  // reacts to the alias diff that `alias.sync` writes when a page title is
+  // edited (the ordinary rename gesture): ahead of sync there is no diff
+  // yet and the rename silently never fires — no error, no failing
+  // processor, just backlinks that stop following renames. Nothing else in
+  // the app would notice, which is why this is pinned here against the
+  // REAL production list rather than left to the processors' own tests.
+  // See the ORDERING note in `plugins/references/renameProcessor.ts`.
+  it('orders alias.sync before references.renameBacklinks', () => {
     const { repo } = createTestRepo({ db: shared.db })
     const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
-      overrides: new Map(),
-      safeMode: true,
+      overrides: new Map(), safeMode: false,
     })
-    expect(runtime).toBeTruthy()
+    const order = [...runtime.read(sameTxProcessorsFacet).keys()]
+    expect(order).toContain(ALIAS_SYNC_PROCESSOR)
+    expect(order).toContain(RENAME_BACKLINKS_PROCESSOR)
+    expect(order.indexOf(ALIAS_SYNC_PROCESSOR))
+      .toBeLessThan(order.indexOf(RENAME_BACKLINKS_PROCESSOR))
+  })
+
+  // The app runtime is TOGGLE-FILTERED and the installed local schema is NOT,
+  // so the two disagree about which tables exist — and the ANALYZE paths must
+  // follow the schema, never the runtime. `staticDataExtensions` lists
+  // `referencesDataExtension` directly, so `block_references` and its triggers
+  // are installed and maintained whether or not the References plugin is
+  // enabled; a caller that resolved probes from the runtime would stop arming a
+  // table the database is still growing, with no error to show for it.
+  //
+  // Pinned as the asymmetry itself, both directions, because the failure is
+  // invisible from either side alone: the runtime read looks like a perfectly
+  // reasonable way to reach plugin contributions.
+  it('prunes plugin facets when toggled off, while the installed schema keeps them', () => {
+    const { repo } = createTestRepo({ db: shared.db })
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), {
+      // Both, because srs-review contributes the same data extension.
+      overrides: new Map([['system:references', false], ['system:srs-review', false]]),
+      safeMode: false,
+    })
+    const contributed = (referencesLocalSchema.analyzeTables ?? []).map(t => t.probe)
+    expect(contributed).not.toHaveLength(0)
+
+    const probesOf = (contributions: Parameters<typeof resolveAnalyzeTables>[0]) =>
+      resolveAnalyzeTables(contributions).map(table => table.probe)
+    expect(probesOf(runtime.read(localSchemaFacet)))
+      .not.toEqual(expect.arrayContaining(contributed))
+    expect(probesOf(resolveLocalSchemaContributions(staticDataExtensions)))
+      .toEqual(expect.arrayContaining(contributed))
   })
 })

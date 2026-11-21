@@ -7,6 +7,8 @@
  */
 import {describe, expect, it} from 'vitest'
 import {
+  BRIDGE_DEFAULT_MAX_BODY_BYTES,
+  MEDIA_BRIDGE_MAX_BYTES,
   commandPayloadSchema,
   commandStatusResponseSchema,
   knownAgentCommandSchema,
@@ -15,6 +17,12 @@ import {
   registerTokenSpecSchema,
   whoamiInfoSchema,
 } from '../src/protocol'
+
+describe('MEDIA_BRIDGE_MAX_BYTES', () => {
+  it('fits the bridge body limit once base64-encoded, with room for the envelope', () => {
+    expect(Math.ceil(MEDIA_BRIDGE_MAX_BYTES / 3) * 4 + 64 * 1024).toBeLessThanOrEqual(BRIDGE_DEFAULT_MAX_BODY_BYTES)
+  })
+})
 
 describe('commandPayloadSchema', () => {
   it('requires a string `type` discriminator', () => {
@@ -53,6 +61,17 @@ describe('known command unions (strict per-verb validation)', () => {
     // loose commandPayloadSchema, which would forward it to the kernel).
     expect(knownAgentCommandSchema.safeParse({type: 'sql'}).success).toBe(false)
     expect(knownAgentCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1'}).success).toBe(true)
+  })
+
+  // The CLI refuses a non-positive `--limit`, but the bridge is a second
+  // entry point: 0 survives `typeof command.limit === 'number'` downstream,
+  // bypasses the per-command default and runs LIMIT 0 — a confident empty
+  // answer rather than an error.
+  it.each(['page', 'search'] as const)('rejects a non-positive limit on %s', type => {
+    const base = type === 'page' ? {type, name: 'x'} : {type, query: 'x'}
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 0}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 1.5}).success).toBe(false)
+    expect(knownAgentCommandSchema.safeParse({...base, limit: 20}).success).toBe(true)
   })
 
   it('rejects duplicate watcher names in one watch-events registration', () => {

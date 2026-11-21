@@ -10,6 +10,8 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import { backlinkSourceIds } from '@/plugins/backlinks/sourceBatch.js'
+import { filteredBacklinkSourceIds } from '@/plugins/backlinks/sources.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -21,7 +23,6 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { typesFacet } from '@/data/facets.js'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -36,6 +37,14 @@ import {
 
 export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
+/** A source and its ancestry, root-first.
+ *
+ *  Two readers, neither of them the grouping: `parentIds` is the chain
+ *  each entry PAINTS for as long as that source is the block it shows —
+ *  captured here, so a paused panel keeps the ancestry its grouping was
+ *  built from — and `sourceId` is what the sticky-claim pass reads as the
+ *  current source set. Grouping itself reads the context chain from its
+ *  own candidates SQL and never looks here. */
 export interface GroupedBacklinkSourceParents {
   sourceId: string
   parentIds: string[]
@@ -110,20 +119,6 @@ const dependOnGroupLabel = (
   })
 }
 
-const resolveBacklinkSourceIds = async (
-  ctx: QueryCtx,
-  workspaceId: string,
-  id: string,
-  filter?: Required<BacklinksFilter>,
-): Promise<string[]> =>
-  (await ctx.run('core.typedBlockIds', {
-    workspaceId,
-    referencedBy: {id},
-    match: filter?.include,
-    exclude: filter?.exclude,
-    order: 'created-desc',
-  })).filter(sourceId => sourceId !== id)
-
 const resolveSourceParents = async (
   ctx: QueryCtx,
   workspaceId: string,
@@ -134,7 +129,8 @@ const resolveSourceParents = async (
   // core.manyAncestors returns one entry per input id (input order), each
   // with the leaf-to-root chain (depth-asc, excluding self) as hydrated
   // BlockData — the same ordering manyAncestorsSql produced. deps:'none'
-  // because the context-node deps are declared explicitly below.
+  // because the context-node deps declared below are the point of the walk;
+  // grouping itself reads the context chain from its own candidates SQL.
   const entries = await ctx.run('core.manyAncestors', {ids: sourceIds}, {deps: 'none'})
   for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
   for (const entry of entries) {
@@ -157,7 +153,7 @@ const SOURCE_IDS_CTE = `source_ids(id) AS (SELECT value FROM json_each(?))`
 
 /** Hydrate the member (source/backlink) rows by id. Grouping consumes the
  *  members' *references* (via `block_references`) and their parent edges, but
- *  never the members' own rows — `resolveBacklinkSourceIds` returns ids only.
+ *  never the members' own rows — `filteredBacklinkSourceIds` returns ids only.
  *  Group-header actions (e.g. daily-notes "spread") gate visibility on each
  *  member's content through the action's `isVisible` (`block.peek()`), so this
  *  primes those rows into the cache. One JSON-array bind (same trick as
@@ -180,8 +176,8 @@ export const SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
 export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   WITH RECURSIVE
     ${SOURCE_IDS_CTE},
-    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path) AS (
-      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
+    ancestor_chain(source_id, anc_id, anc_parent_id, depth, path, ws) AS (
+      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/', b.workspace_id
       FROM source_ids s
       JOIN blocks b ON b.id = s.id
       WHERE b.deleted = 0
@@ -191,10 +187,14 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         parent.id,
         parent.parent_id,
         ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
+        ancestor_chain.path || '!' || hex(parent.id) || '/',
+        ancestor_chain.ws
       FROM ancestor_chain
       JOIN blocks parent ON parent.id = ancestor_chain.anc_parent_id
       WHERE parent.deleted = 0
+        -- A sync-applied parent edge can leave the source's workspace; the
+        -- context walk stops there, so nothing past it becomes a group.
+        AND parent.workspace_id = ancestor_chain.ws
         AND ancestor_chain.depth < 100
         AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
     ),
@@ -204,7 +204,16 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
         refs.target_id AS context_id,
         'ref' AS context_kind
       FROM ancestor_chain
-      JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
+      -- CROSS JOIN pins the join ORDER (results are identical either way).
+      -- Here refs is constrained only by workspace_id -- no target_id, unlike
+      -- the sibling statements -- so idx_block_references_ws_alias looks usable
+      -- on its leading column, and a recursive CTE carries no cardinality
+      -- estimate for the planner to weigh against it. It therefore drove from
+      -- every edge in the workspace and built a throwaway index on the chain,
+      -- instead of probing the (source_id, ...) primary key once per chain row.
+      -- ANALYZE does not fix this: the table stats are already right, it is the
+      -- CTE's size that is unknown.
+      CROSS JOIN block_references refs ON refs.source_id = ancestor_chain.anc_id
       WHERE refs.workspace_id = ?
         AND (refs.source_field = '' OR refs.target_id != ?)
       UNION
@@ -220,8 +229,16 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
     cr.context_kind AS context_kind,
     ${buildQualifiedBlockColumnsSql('group_block')}
   FROM group_context_refs cr
-  JOIN blocks group_block ON group_block.id = cr.context_id
+  -- CROSS JOIN for the same reason as refs above: left free, SQLite drives
+  -- from every live block in the workspace and builds an automatic index on
+  -- the context rows instead of looking up each group block by id.
+  CROSS JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
+    -- A sync-applied edge (a parent or a reference) can reach another
+    -- workspace's block; it is not a group of this one. The requested
+    -- workspace is bound, not read off the source: sync rewrites a row's
+    -- workspace_id in place, so the source may have moved since it was listed.
+    AND group_block.workspace_id = ?
   ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -231,7 +248,10 @@ export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
     refs.source_id AS source_id,
     refs.source_field AS source_field
   FROM source_ids s
-  JOIN block_references refs ON refs.source_id = s.id
+  -- CROSS JOIN keeps the id list outer, probing the (source_id, ...) primary
+  -- key per source. Left free, the planner drives from the target's edges and
+  -- rescans the whole list per edge: quadratic in a hub's backlink count.
+  CROSS JOIN block_references refs ON refs.source_id = s.id
   WHERE refs.workspace_id = ?
     AND refs.target_id = ?
     AND refs.source_field != ''
@@ -258,6 +278,10 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
+    -- The main statement's workspace rule, here as defence in depth: no
+    -- test reaches a groupWith target that its source's direct context
+    -- does not already outrank.
+    AND group_block.workspace_id = refs.workspace_id
   ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
@@ -346,9 +370,9 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
     // execute correctly but leave the grouped handle without the
     // invalidation triggers that wake the backlinks handle.
-    const unfilteredSourceIds = await resolveBacklinkSourceIds(ctx, workspaceId, id)
+    const unfilteredSourceIds = await backlinkSourceIds(ctx, workspaceId, id)
     const sourceIds = hasBacklinksFilter(normalizedFilter)
-      ? await resolveBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
+      ? await filteredBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
       : unfilteredSourceIds
     if (sourceIds.length === 0) {
       return {groups: [], total: 0, unfilteredSourceIds, sourceParents: []}
@@ -372,7 +396,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
-      [sourceIdsJson, workspaceId, id],
+      [sourceIdsJson, workspaceId, id, workspaceId],
     )
     const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
       SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,
@@ -418,10 +442,10 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     // User-defined types store the block-type block's id in `types[]`
     // (not its label string), so a raw `type_name` is a UUID we have
-    // to dereference for display. Use the in-memory `typesFacet`
-    // registry — it carries both kernel-contributed types and
-    // user-defined types materialized at runtime by
-    // `UserTypesService`. O(1) Map lookup, no DB roundtrip.
+    // to dereference for display. Use the in-memory merged `repo.types`
+    // registry — it carries both kernel/plugin code types and the
+    // block-built user types (materialized at runtime by `UserTypesService`
+    // through the type-definition registry). O(1) Map lookup, no DB roundtrip.
     //
     // A SQL-driven label lookup against `blocks` measured 4 seconds
     // for 4 ids in practice on a real-world DB (the planner couldn't
@@ -429,15 +453,13 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // left or the right). The in-memory path sidesteps that entirely.
     //
     // Eventual consistency: renaming a type block republishes the
-    // facet contribution but does not invalidate this query handle,
-    // so the panel keeps the previous label until any other dep
-    // wakes the resolver. Accepted in exchange for the perf win.
-    const typesRegistry = ctx.repo.facetRuntime?.read(typesFacet)
+    // registry but does not invalidate this query handle, so the panel
+    // keeps the previous label until any other dep wakes the resolver.
+    // Accepted in exchange for the perf win.
+    const typesRegistry = ctx.repo.types
     const typeLabelById = new Map<string, string>()
-    if (typesRegistry) {
-      for (const contribution of typesRegistry.values()) {
-        typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
-      }
+    for (const contribution of typesRegistry.values()) {
+      typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
     }
 
     const groupRowsById = new Map<string, BlockRow>()

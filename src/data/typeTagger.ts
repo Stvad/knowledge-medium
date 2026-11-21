@@ -20,11 +20,14 @@ import type {
   AnyPropertySchema,
   RepoTxOptions,
   Tx,
+  TxWriteOpts,
   TypeContribution,
   TypeRegistrySnapshot,
 } from '@/data/api'
 import { BlockNotFoundForTypeError, ChangeScope } from '@/data/api'
-import { getBlockTypes, typesProp } from './properties'
+import { typesProp } from './properties'
+import { decodeRowProperty } from './rowProperty'
+import { withAbsentPropertyValues } from './typeInitialValues'
 
 /** The slice of `Repo` the tagger needs: a tx primitive, the live type +
  *  schema registries, and a snapshot accessor for the own-tx entry
@@ -36,76 +39,96 @@ export interface TypeTaggerHost {
   readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
-export class TypeTagger {
-  constructor(private readonly host: TypeTaggerHost) {}
+const requireTypeContribution = (
+  types: ReadonlyMap<string, TypeContribution>,
+  typeId: string,
+): TypeContribution => {
+  const contribution = types.get(typeId)
+  if (contribution !== undefined) return contribution
+  throw new Error(
+    `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
+    'Register a type seed (seedType) through typeSeedsFacet before calling addType.',
+  )
+}
 
-  private async _addTypeInTx(
-    tx: Tx,
-    types: ReadonlyMap<string, TypeContribution>,
-    propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-    blockId: string,
-    typeId: string,
-    initialValues: Readonly<Record<string, unknown>>,
-    /** When true (the default, used by `addType` / `addTypeInTx`), throw
-     *  `BlockNotFoundForTypeError` if the target block is missing or
-     *  tombstoned. Lenient callers (`addTypeInTxLenient`) pass `false`
-     *  to preserve the legacy silent-no-op behavior for sync-apply /
-     *  processor paths that may legitimately race a concurrent delete. */
-    strict: boolean,
-  ): Promise<void> {
-    const contribution = types.get(typeId)
-    if (contribution === undefined) {
+// Each type operation makes one net bag change per key. Initial values resolve
+// through the same identity boundary as setProperty and fill only what the bag
+// lacks (`withAbsentPropertyValues`); MATERIALIZE projects the cells into field
+// children in children-backed workspaces.
+/** Apply a type using captured registries inside an existing transaction. */
+export const applyTypeTagInTx = async (
+  tx: Tx,
+  snapshot: TypeRegistrySnapshot,
+  {
+    blockId,
+    typeId,
+    initialValues = {},
+    /** Strict callers throw if the target is missing or tombstoned. */
+    strict = true,
+    writeOpts,
+  }: {
+    blockId: string
+    typeId: string
+    initialValues?: Readonly<Record<string, unknown>>
+    strict?: boolean
+    writeOpts?: TxWriteOpts
+  },
+): Promise<void> => {
+  const {types, propertySchemas} = snapshot
+  const contribution = requireTypeContribution(types, typeId)
+  const block = await tx.get(blockId)
+  if (!block) {
+    if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'missing')
+    return
+  }
+  if (block.deleted) {
+    if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'tombstoned')
+    return
+  }
+
+  // Resolve before decoding: a shadowing winner may use an incompatible
+  // codec, and this write path must reject through the identity boundary
+  // rather than attempting to interpret the winner's cell as membership.
+  const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+  const current = decodeRowProperty(block, resolvedTypes)
+  const wasNew = !current.includes(typeId)
+  const next = wasNew
+    ? {...block.properties, [resolvedTypes.name]: resolvedTypes.codec.encode([...current, typeId])}
+    : block.properties
+
+  const entries = Object.entries(initialValues)
+  const declaredSchemas = entries.length === 0
+    ? null
+    : new Map((contribution.properties ?? []).map(schema => [schema.name, schema] as const))
+  const assignments = entries.map(([name, value]) => {
+    const schema = declaredSchemas?.get(name) ?? propertySchemas.get(name)
+    if (schema === undefined) {
       throw new Error(
-        `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
-        'Register a TypeContribution through typesFacet before calling addType.',
+        `[addType] initialValues[${JSON.stringify(name)}] has no registered PropertySchema ` +
+        'in the merged registry.',
       )
     }
-    const block = await tx.get(blockId)
-    if (!block) {
-      if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'missing')
-      return
-    }
-    if (block.deleted) {
-      if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'tombstoned')
-      return
-    }
+    return {schema, value}
+  })
+  const filled = await withAbsentPropertyValues(tx, blockId, next, assignments)
 
-    const current = getBlockTypes(block)
-    const wasNew = !current.includes(typeId)
-    const next: Record<string, unknown> = {...block.properties}
-    let propsChanged = false
-
-    if (wasNew) {
-      next[typesProp.name] = typesProp.codec.encode([...current, typeId])
-      propsChanged = true
-    }
-
-    for (const [name, value] of Object.entries(initialValues)) {
-      if (next[name] !== undefined) continue
-      const schema = propertySchemas.get(name)
-      if (schema === undefined) {
-        throw new Error(
-          `[addType] initialValues[${JSON.stringify(name)}] has no registered PropertySchema ` +
-          'in the merged registry.',
-        )
-      }
-      next[name] = schema.codec.encode(value)
-      propsChanged = true
-    }
-
-    if (propsChanged) {
-      await tx.update(blockId, {properties: next})
-    }
+  if (wasNew || filled) {
+    await tx.update(blockId, {properties: filled ?? next}, writeOpts)
   }
+}
+
+export class TypeTagger {
+  constructor(private readonly host: TypeTaggerHost) {}
 
   private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
     const block = await tx.get(blockId)
     if (!block) return
-    const current = getBlockTypes(block)
+    const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+    const current = decodeRowProperty(block, resolvedTypes)
     if (!current.includes(typeId)) return
     const next = {
       ...block.properties,
-      [typesProp.name]: typesProp.codec.encode(current.filter(t => t !== typeId)),
+      [resolvedTypes.name]: resolvedTypes.codec.encode(current.filter(t => t !== typeId)),
     }
     await tx.update(blockId, {properties: next})
   }
@@ -121,9 +144,9 @@ export class TypeTagger {
     typeId: string,
     initialValues: Readonly<Record<string, unknown>> = {},
   ): Promise<void> {
-    const {types, propertySchemas} = this.host.snapshotTypeRegistries()
+    const snapshot = this.host.snapshotTypeRegistries()
     await this.host.tx(async tx => {
-      await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, true)
+      await applyTypeTagInTx(tx, snapshot, {blockId, typeId, initialValues})
     }, {scope: ChangeScope.BlockDefault, description: `addType ${typeId}`})
   }
 
@@ -138,9 +161,11 @@ export class TypeTagger {
     initialValues: Readonly<Record<string, unknown>> = {},
     snapshot?: TypeRegistrySnapshot,
   ): Promise<void> {
-    const types = snapshot?.types ?? this.host.types
-    const propertySchemas = snapshot?.propertySchemas ?? this.host.propertySchemas
-    await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, true)
+    const registries = snapshot ?? {
+      types: this.host.types,
+      propertySchemas: this.host.propertySchemas,
+    }
+    await applyTypeTagInTx(tx, registries, {blockId, typeId, initialValues})
   }
 
   /** Lenient in-tx variant — silently no-ops if the target block is
@@ -148,7 +173,7 @@ export class TypeTagger {
    *  that may legitimately observe a concurrent delete between
    *  pre-tx state and tx-start. New orchestration code should prefer
    *  `addTypeInTx` (strict) so a footgun like the Roam-isa adoption
-   *  bug (PR #47) can't be expressed. */
+   *  bug can't be expressed. */
   async addTypeInTxLenient(
     tx: Tx,
     blockId: string,
@@ -156,9 +181,11 @@ export class TypeTagger {
     initialValues: Readonly<Record<string, unknown>> = {},
     snapshot?: TypeRegistrySnapshot,
   ): Promise<void> {
-    const types = snapshot?.types ?? this.host.types
-    const propertySchemas = snapshot?.propertySchemas ?? this.host.propertySchemas
-    await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues, false)
+    const registries = snapshot ?? {
+      types: this.host.types,
+      propertySchemas: this.host.propertySchemas,
+    }
+    await applyTypeTagInTx(tx, registries, {blockId, typeId, initialValues, strict: false})
   }
 
   async removeType(blockId: string, typeId: string): Promise<void> {
@@ -172,26 +199,27 @@ export class TypeTagger {
   }
 
   async toggleType(blockId: string, typeId: string): Promise<void> {
-    const {types, propertySchemas} = this.host.snapshotTypeRegistries()
+    const snapshot = this.host.snapshotTypeRegistries()
     await this.host.tx(async tx => {
       const block = await tx.get(blockId)
       // toggleType pre-checks the block existence itself; if it's
       // missing or tombstoned here, the no-op is intentional (this is a
       // UI/UX entry point, not orchestration). Pass strict=false to
-      // `_addTypeInTx` so the pre-check stays the single source of
+      // `addTypeInTx` so the pre-check stays the single source of
       // truth for the missing-block branch.
       if (!block || block.deleted) return
-      if (getBlockTypes(block).includes(typeId)) {
+      const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+      if (decodeRowProperty(block, resolvedTypes).includes(typeId)) {
         await this._removeTypeInTx(tx, blockId, typeId)
       } else {
-        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
+        await applyTypeTagInTx(tx, snapshot, {blockId, typeId, strict: false})
       }
     }, {scope: ChangeScope.BlockDefault, description: `toggleType ${typeId}`})
   }
 
   async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
     const desiredOrder = Array.from(new Set(typeIds))
-    const {types, propertySchemas} = this.host.snapshotTypeRegistries()
+    const {types} = this.host.snapshotTypeRegistries()
     await this.host.tx(async tx => {
       const block = await tx.get(blockId)
       // Pre-check matches toggleType's contract — silently no-op on a
@@ -199,29 +227,21 @@ export class TypeTagger {
       // to the inner add so the pre-check remains authoritative.
       if (!block || block.deleted) return
 
-      const current = getBlockTypes(block)
-      const want = new Set(desiredOrder)
-      for (const typeId of current) {
-        if (!want.has(typeId)) await this._removeTypeInTx(tx, blockId, typeId)
-      }
-
+      const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+      const current = decodeRowProperty(block, resolvedTypes)
       const currentSet = new Set(current)
       for (const typeId of desiredOrder) {
         if (currentSet.has(typeId)) continue
-        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
+        requireTypeContribution(types, typeId)
       }
-
-      const after = await tx.get(blockId)
-      if (!after) return
-      const stored = getBlockTypes(after)
       const alreadyOrdered =
-        stored.length === desiredOrder.length &&
-        stored.every((typeId, index) => typeId === desiredOrder[index])
+        current.length === desiredOrder.length &&
+        current.every((typeId, index) => typeId === desiredOrder[index])
       if (alreadyOrdered) return
       await tx.update(blockId, {
         properties: {
-          ...after.properties,
-          [typesProp.name]: typesProp.codec.encode(desiredOrder),
+          ...block.properties,
+          [resolvedTypes.name]: resolvedTypes.codec.encode(desiredOrder),
         },
       })
     }, {scope: ChangeScope.BlockDefault, description: 'setBlockTypes'})

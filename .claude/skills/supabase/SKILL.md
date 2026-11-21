@@ -41,7 +41,7 @@ Deploying the sync rules (`powersync/sync-config.yaml`) to PowerSync Cloud is th
 2. **Local SQLite + raw-table mapping** — add to `BLOCK_STORAGE_COLUMNS` (or `WORKSPACE_COLUMNS` / `WORKSPACE_MEMBER_COLUMNS`) in `src/data/blockSchema.ts` / `workspaceSchema.ts`, plus parse helpers and the `BlockRow`/`WorkspaceRow`/etc. types.
 3. **`BlockData` / `Workspace` / `WorkspaceMembership`** in `src/types.ts`.
 
-Then run `yarn gen:sync-config` — it regenerates `powersync/sync-config.yaml` from the TS column lists, so the sync-stream SELECT can't drift from the local-SQLite shape. **Don't hand-edit the YAML** — `yarn check` runs `check:sync-config` and will fail CI on hand-edits.
+Then run `pnpm gen:sync-config` — it regenerates `powersync/sync-config.yaml` from the TS column lists, so the sync-stream SELECT can't drift from the local-SQLite shape. **Don't hand-edit the YAML** — `pnpm run check` runs `check:sync-config` and will fail CI on hand-edits.
 
 For dev databases that already exist, also add an `ALTER TABLE … ADD COLUMN` block in `repoInstance.ts` after `CREATE_BLOCKS_TABLE_SQL` (use `PRAGMA table_info(blocks)` to no-op when the column is already present).
 

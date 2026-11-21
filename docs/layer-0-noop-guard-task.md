@@ -80,7 +80,7 @@ Plus the inverse for each: a real change still produces the expected `ps_crud` a
 
 ## Verification
 
-- `yarn run check` must pass. It runs compile + lint + Vitest + sync-config check + no-service-role check.
+- `pnpm run check` must pass. It runs compile + lint + Vitest + sync-config check + no-service-role check.
 - No new lint errors, no new failing tests.
 - If you're working on a remote sandbox without Node 24, the binary is at `/tmp/node24/node-v24.10.0-linux-x64/bin/node` (the existing `check:db` and Vitest workflows expect Node ≥24).
 

@@ -8,12 +8,13 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { typesProp } from '@/data/properties.js'
-import { typesFacet } from '@/data/facets.js'
+import { seedType } from '@/data/api'
 import {
+  definitionSeedsFacet,
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
+  typeSeedsFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
 import {readValuePresets} from '@/data/valuePresetRegistry'
@@ -99,26 +100,28 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(queries.get(GROUPED_BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
   })
 
-  it('contributes grouped backlinks property schemas', () => {
+  it('contributes grouped backlinks property seeds', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksDataExtension)
-    const schemas = runtime.read(propertySchemasFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(schemas.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsProp)
-    expect(schemas.get(groupedBacklinksOverridesProp.name)).toBe(groupedBacklinksOverridesProp)
+    expect(seeds).toEqual(expect.arrayContaining([
+      groupedBacklinksDefaultsProp,
+      groupedBacklinksOverridesProp,
+    ]))
     expect(groupedBacklinksDefaultsProp.defaultValue).toEqual(INITIAL_GROUPED_BACKLINKS_CONFIG)
   })
 
   it('contributes a custom property UI for grouped backlinks defaults', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const schemas = new Map([[groupedBacklinksDefaultsProp.name, groupedBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
-    expect(uis.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsUi)
+    expect(uis.get(groupedBacklinksDefaultsProp.seedKey)).toBe(groupedBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({
       name: groupedBacklinksDefaultsProp.name,
       encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
       schemas,
-      uis,
+      override: uis.get(groupedBacklinksDefaultsProp.seedKey),
       presets: readValuePresets(runtime),
     }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
   })
@@ -262,6 +265,7 @@ describe('groupedBacklinksDataExtension query', () => {
       label: 'reviewer',
       sourceIds: ['src'],
       fallback: false,
+      blockId: null,
     }])
   })
 
@@ -292,7 +296,29 @@ describe('groupedBacklinksDataExtension query', () => {
       label: 'reviewer',
       sourceIds: ['src-field'],
       fallback: false,
+      blockId: null,
     })
+    expect(out.groups.find(group => group.label === 'Project')?.blockId).toBe('project')
+  })
+
+  it('does not offer a block whose id spells a synthetic group id as a group', async () => {
+    await create({id: 'target', content: 'Target'})
+    // Sync can deliver a block with any id.
+    await create({id: 'field:reviewer', content: 'Planted'})
+    for (const id of ['src-ref-1', 'src-ref-2']) {
+      await create({id, references: [{id: 'target', alias: 'T'}, {id: 'field:reviewer', alias: 'Planted'}]})
+    }
+    await create({id: 'src-field', references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}]})
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.groups.find(group => group.label === 'reviewer')).toMatchObject({blockId: null, sourceIds: ['src-field']})
+    expect(out.groups.some(group => group.blockId === 'field:reviewer')).toBe(false)
+    const groupIds = out.groups.map(group => group.groupId)
+    expect(new Set(groupIds).size).toBe(groupIds.length)
   })
 
   it('keeps two source fields from the same source to the same target distinct', async () => {
@@ -340,12 +366,14 @@ describe('groupedBacklinksDataExtension query', () => {
         label: 'reviewer',
         sourceIds: ['parent'],
         fallback: false,
+        blockId: null,
       },
       {
         groupId: '__grouped_backlinks_other__',
         label: 'Other',
         sourceIds: ['child'],
         fallback: true,
+        blockId: null,
       },
     ])
   })
@@ -795,6 +823,7 @@ describe('groupedBacklinksDataExtension query', () => {
 
       const financeGroup = out.groups.find(group => group.label === 'Finance')
       expect(financeGroup).toBeDefined()
+      expect(financeGroup!.blockId).toBe('finance')
       expect(sorted(financeGroup!.sourceIds))
         .toEqual(['src-banking', 'src-investments', 'src-taxes'])
     })
@@ -943,6 +972,7 @@ describe('groupedBacklinksDataExtension query', () => {
       const projectGroup = out.groups.find(group => group.label === 'project')
       expect(projectGroup).toBeDefined()
       expect(projectGroup!.groupId).toBe('type:project')
+      expect(projectGroup!.blockId).toBeNull()
       expect(sorted(projectGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
     })
 
@@ -1076,9 +1106,9 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(out.groups.map(group => group.label)).not.toContain('person')
     })
 
-    it('resolves user-defined type ids via typesFacet to a label', async () => {
+    it('resolves user-defined type ids via typeSeedsFacet to a label', async () => {
       // User-defined types store the block-type block's id in `types`,
-      // not its label. In production the label comes from `typesFacet`
+      // not its label. In production the label comes from `typeSeedsFacet`
       // — kernel-contributed types ride in at extension build, and
       // user-defined types are materialized into the facet by
       // `UserTypesService`. The resolver reads the facet at resolve
@@ -1088,8 +1118,8 @@ describe('groupedBacklinksDataExtension query', () => {
         kernelDataExtension,
         backlinksQueryInvalidationExtension,
         groupedBacklinksDataExtension,
-        typesFacet.of(
-          {id: 'person-type-block', label: 'Person'},
+        typeSeedsFacet.of(
+          seedType({seedKey: 'test/type/person-type-block', revision: 1, id: 'person-type-block', label: 'Person'}),
           {source: 'test'},
         ),
       ]))
@@ -1143,6 +1173,65 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(noteGroup).toBeDefined()
       expect(noteGroup!.groupId).toBe('type:note')
       expect(sorted(noteGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
+    })
+  })
+
+  describe('property value backlinks', () => {
+    const seedDefinitionAndFieldRow = async () => {
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'defn', content: 'status'})
+      await env.h.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+         VALUES ('defn', ?, 'property-schema')`,
+        [WS],
+      )
+      await create({id: 'owner', content: 'Owner'})
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: 'field', workspaceId: WS, parentId: 'owner', orderKey: 'a0',
+          content: '::((defn))', referenceTargetId: 'defn',
+        })
+        await tx.create({
+          id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
+          content: '[[Target]]', references: [{id: 'target', alias: 'Target'}],
+        })
+        await tx.create({
+          id: 'nested-note', workspaceId: WS, parentId: 'value', orderKey: 'a0',
+          content: 'A note linking to [[Target]]', references: [{id: 'target', alias: 'Target'}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await create({id: 'ordinary', references: [{id: 'target', alias: 'Target'}]})
+    }
+
+    const setFlip = (state: string) =>
+      env.h.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, ?)`,
+        [WS, state],
+      )
+
+    it('includes property value and nested sources in the grouped results', async () => {
+      await seedDefinitionAndFieldRow()
+      await setFlip('children')
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['nested-note', 'ordinary', 'value'])
+    })
+
+    it('includes property value and nested sources in an un-flipped workspace', async () => {
+      await seedDefinitionAndFieldRow()
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['nested-note', 'ordinary', 'value'])
     })
   })
 })

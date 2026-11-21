@@ -1,9 +1,11 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { EditorSelection, EditorState, type Extension, type StateCommand, type Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { autocompletion, completionKeymap, completionStatus, startCompletion } from '@codemirror/autocomplete'
 import { describe, expect, it, vi } from 'vitest'
+import { basicSetup } from '@uiw/codemirror-extensions-basic-setup'
 import {
+  BLOCK_EDITOR_BASIC_SETUP,
   acceptCompletionOnEnterCapture,
   clampSelectionToLength,
   createMinimalMarkdownConfig,
@@ -153,6 +155,32 @@ describe('minimal markdown CodeMirror config', () => {
     expect(collectThemeRules(createMinimalMarkdownConfig())).toContainEqual(
       expect.stringMatching(/^\.\S+\.cm-focused \{outline: none;\}$/),
     )
+  })
+
+  // The block editor's own extension stack: @uiw's basicSetup (which brings
+  // CodeMirror's `defaultHighlightStyle` as a FALLBACK) under the config, the
+  // way `useCodeMirror` assembles them for `CodeMirrorContentRenderer`.
+  const mountMarkdown = (doc: string) =>
+    new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc,
+        extensions: [basicSetup(BLOCK_EDITOR_BASIC_SETUP), createMinimalMarkdownConfig()],
+      }),
+    })
+
+  const textsWithClass = (view: EditorView, cls: string) =>
+    [...view.contentDOM.querySelectorAll(`.${cls}`)].map(el => el.textContent)
+
+  it('marks markdown syntax with static classes, not generated highlight classes', () => {
+    const view = mountMarkdown('see https://example.com/x and **bold** here')
+    expect(textsWithClass(view, 'km-md-url')).toEqual(['https://example.com/x'])
+    expect(textsWithClass(view, 'km-md-strong').join('')).toBe('**bold**')
+    expect(textsWithClass(view, 'km-md-mark')).toEqual(['**', '**'])
+    // basicSetup's fallback `defaultHighlightStyle` would paint these through
+    // generated `ͼ…` classes instead.
+    expect(view.contentDOM.querySelector('[class*="ͼ"]')).toBeNull()
+    view.destroy()
   })
 })
 

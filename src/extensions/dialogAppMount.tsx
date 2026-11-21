@@ -19,6 +19,7 @@ import {
   getDialogQueue,
   subscribeDialogs,
 } from '@/utils/dialogs.js'
+import { useModalShadowing } from '@/shortcuts/useActionContext.js'
 
 export const DialogHost = () => {
   const queue = useSyncExternalStore(
@@ -26,6 +27,13 @@ export const DialogHost = () => {
     getDialogQueue,
     getDialogQueue,
   )
+
+  // Modal while anything is open, so the surface underneath stops claiming
+  // keys meant for the dialog. One activation here rather than per dialog:
+  // every `openDialog` caller has the same exposure and none of them should
+  // have to know it. A modal rendered OUTSIDE this host does have to — hence
+  // the shared hook rather than an inline activation.
+  useModalShadowing(queue.length > 0)
 
   return (
     <>

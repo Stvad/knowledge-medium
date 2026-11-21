@@ -1,54 +1,58 @@
-import {
-  ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
-} from '@/extensions/api.js'
+import {ChangeScope, seedType, seedProperty} from '@/data/api/index.js'
+import {extensionPropertySeedKey, extensionTypeSeedKey} from '@/extensions/dynamicExtensionSeeds.js'
 
 import type {TargetPlatform} from './types'
 
-export const blueskyHandleProp = defineProperty<string>('socialPublisher:blueskyHandle', {
-  codec: codecs.string,
+export const blueskyHandleProp = seedProperty({
+  seedKey: extensionPropertySeedKey('bluesky-handle'),
+  revision: 1,
+  name: 'socialPublisher:blueskyHandle',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.UserPrefs,
 })
 
-export const corsProxyUrlProp = defineProperty<string>('socialPublisher:corsProxyUrl', {
-  codec: codecs.string,
+export const corsProxyUrlProp = seedProperty({
+  seedKey: extensionPropertySeedKey('cors-proxy-url'),
+  revision: 1,
+  name: 'socialPublisher:corsProxyUrl',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.UserPrefs,
 })
 
 // Schema-only settings rows. Their editors derive device-local credential
 // status directly and never persist these values to synced user preferences.
-export const twitterConnectedHintProp = defineProperty<boolean>(
-  'socialPublisher:twitterConfigured',
-  {
-    codec: codecs.boolean,
-    defaultValue: false,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const twitterConnectedHintProp = seedProperty({
+  seedKey: extensionPropertySeedKey('twitter-configured'),
+  revision: 1,
+  name: 'socialPublisher:twitterConfigured',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
 
-export const blueskyConnectedHintProp = defineProperty<boolean>(
-  'socialPublisher:blueskyConfigured',
-  {
-    codec: codecs.boolean,
-    defaultValue: false,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const blueskyConnectedHintProp = seedProperty({
+  seedKey: extensionPropertySeedKey('bluesky-configured'),
+  revision: 1,
+  name: 'socialPublisher:blueskyConfigured',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
 
-export const lesswrongConnectedHintProp = defineProperty<boolean>(
-  'socialPublisher:lesswrongConfigured',
-  {
-    codec: codecs.boolean,
-    defaultValue: false,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const lesswrongConnectedHintProp = seedProperty({
+  seedKey: extensionPropertySeedKey('lesswrong-configured'),
+  revision: 1,
+  name: 'socialPublisher:lesswrongConfigured',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
 
-export const publisherPrefsType = defineBlockType({
+export const publisherPrefsType = seedType({
+  seedKey: extensionTypeSeedKey('prefs'),
+  revision: 1,
   id: 'social-publisher-prefs',
   label: 'Social Publisher',
   hideFromCompletion: true,
@@ -61,25 +65,33 @@ export const publisherPrefsType = defineBlockType({
   ],
 })
 
-const publishAllType = defineBlockType({
+const publishAllType = seedType({
+  seedKey: extensionTypeSeedKey('publish'),
+  revision: 1,
   id: 'social-publisher-publish',
   label: 'Publish',
   description: 'Command block: publish child blocks to configured social platforms.',
 })
 
-const publishTwitterType = defineBlockType({
+const publishTwitterType = seedType({
+  seedKey: extensionTypeSeedKey('twitter'),
+  revision: 1,
   id: 'social-publisher-twitter',
   label: 'Tweet',
   description: 'Command block: publish child blocks to X / Twitter via Buffer.',
 })
 
-const publishBlueskyType = defineBlockType({
+const publishBlueskyType = seedType({
+  seedKey: extensionTypeSeedKey('bluesky'),
+  revision: 1,
   id: 'social-publisher-bluesky',
   label: 'Bsky',
   description: 'Command block: publish child blocks to Bluesky.',
 })
 
-const publishLessWrongType = defineBlockType({
+const publishLessWrongType = seedType({
+  seedKey: extensionTypeSeedKey('lesswrong'),
+  revision: 1,
   id: 'social-publisher-lesswrong',
   label: 'LW',
   description: 'Command block: publish child blocks to LessWrong shortform.',

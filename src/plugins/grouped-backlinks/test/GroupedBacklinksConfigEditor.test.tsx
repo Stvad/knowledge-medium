@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { Block } from '@/data/block'
@@ -127,5 +127,31 @@ describe('GroupedBacklinksConfigEditor / ConfigTagInput submit guard', () => {
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({highPriorityTags: ['ab-tag']}),
     )
+  })
+})
+
+// Escape has two jobs in a tag field and they must not both run on one
+// press: dismiss the typed tag (its own dismissable state), or — with
+// nothing to dismiss — fall through to `exit_property_editing`, which blurs
+// the field and listens on `window`. A window listener stands in for that
+// coordinator here, mirroring PropertyPicker's "Escape ownership" tests.
+describe('GroupedBacklinksConfigEditor / ConfigTagInput Escape ownership', () => {
+  it('dismisses a typed tag first, then lets Escape exit the field', () => {
+    const reachedShortcuts = vi.fn()
+    window.addEventListener('keydown', reachedShortcuts)
+    try {
+      const {input} = renderEditor()
+      fireEvent.focus(input)
+      fireEvent.change(input, {target: {value: 'ab'}})
+
+      fireEvent.keyDown(input, {key: 'Escape'})
+      expect((input as HTMLInputElement).value).toBe('')
+      expect(reachedShortcuts).not.toHaveBeenCalled()
+
+      fireEvent.keyDown(input, {key: 'Escape'})
+      expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('keydown', reachedShortcuts)
+    }
   })
 })

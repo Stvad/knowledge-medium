@@ -23,10 +23,11 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { waitFor } from '@/test/waitFor'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { Repo } from '../repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
@@ -47,12 +48,14 @@ const setup = async (
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   const cache = new BlockCache()
-  const repo = new Repo({
+  const repo = trackTestRepo(new Repo({
     db: h.db,
     cache,
     user: {id: 'u1'},
     startSyncObserver: opts.startTail ?? false, // off by default for determinism
-  })
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
+  }))
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     ...(opts.extraExtensions ?? []),
@@ -138,6 +141,62 @@ describe('snapshotsToChangeNotification', () => {
     ])
     const note = snapshotsToChangeNotification(map)
     expect(Array.from(note.parentIds!)).toEqual(['p'])
+  })
+
+  it('field-row flip (referenceTargetId change): adds the parent AND the row itself', () => {
+    // Two handles must re-resolve: the PARENT's visible children (the row
+    // appears/disappears as a field row) and `children(row)` itself (the row's
+    // own children flip between property-subtree interior and visible) — §9.
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', workspaceId: 'w', referenceTargetId: null},
+        after: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1'},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
+  })
+
+  // The `::` marker is the OTHER half of §9 recognition, and it is the half
+  // that moves on its own: adding or deleting the marker leaves
+  // `referenceTargetId` identical on both sides, so a comparison keyed only
+  // on the target emits no parent edge and the outline goes stale — the row
+  // stays hidden after the user un-marks it, or stays visible after they
+  // mark it, until some unrelated structural edit. Both directions, since
+  // the bit moves both ways.
+  it.each([
+    ['gaining the marker', false, true],
+    ['losing the marker', true, false],
+  ])('field-row flip by %s alone (target unchanged): adds the parent AND the row', (
+    _case, beforeBit, afterBit,
+  ) => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1', isFieldForm: beforeBit},
+        after: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1', isFieldForm: afterBit},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
+  })
+
+  it('move + field-row flip in ONE tx: adds old/new parents AND the row itself', () => {
+    // `mergeBlocksInTx` clears a value row's referenceTargetId and relocates
+    // it in the same commit, so the collapsed snapshot carries both a
+    // parent change and a referenceTargetId change. The self-edge (`children
+    // (id)` must re-resolve, §9) has to survive alongside the parent move —
+    // the field-flip check is deliberately NOT chained onto the mutually
+    // exclusive membership `else if` (which the "Moved" arm would otherwise
+    // win, dropping `id`). Removing the standalone `parentIds.add(id)` makes
+    // this fail with ['p1','p2'].
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p1', workspaceId: 'w', referenceTargetId: 'def-1'},
+        after: {parentId: 'p2', workspaceId: 'w', referenceTargetId: null},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p1', 'p2'])
   })
 
   it('pure content edit: row dep only, no parent-edge', () => {
@@ -252,10 +311,10 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const h = env.repo.query.children({id: 'p'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
-    await vi.waitFor(() => expect(fired).toEqual([0]))
+    await waitFor(() => expect(fired).toEqual([0]))
 
     await create('c1', {parentId: 'p', orderKey: 'a0'})
-    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
+    await waitFor(() => expect(fired).toEqual([0, 1]))
     expect(h.peek()?.map(b => b.id)).toEqual(['c1'])
   })
 
@@ -269,12 +328,12 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const f2: number[] = []
     h1.subscribe(v => f1.push(v.length))
     h2.subscribe(v => f2.push(v.length))
-    await vi.waitFor(() => expect(f1).toEqual([1]))
-    await vi.waitFor(() => expect(f2).toEqual([0]))
+    await waitFor(() => expect(f1).toEqual([1]))
+    await waitFor(() => expect(f2).toEqual([0]))
 
     await env.repo.mutate.move({id: 'c', parentId: 'p2', position: {kind: 'last'}})
-    await vi.waitFor(() => expect(f1).toEqual([1, 0]))
-    await vi.waitFor(() => expect(f2).toEqual([0, 1]))
+    await waitFor(() => expect(f1).toEqual([1, 0]))
+    await waitFor(() => expect(f2).toEqual([0, 1]))
   })
 
   it('children and childIds handles re-resolve across child soft-delete and restore', async () => {
@@ -286,18 +345,18 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const childIdsFired: string[][] = []
     children.subscribe(v => childrenFired.push(v.map(b => b.id)))
     childIds.subscribe(v => childIdsFired.push(v))
-    await vi.waitFor(() => expect(childrenFired).toEqual([['c']]))
-    await vi.waitFor(() => expect(childIdsFired).toEqual([['c']]))
+    await waitFor(() => expect(childrenFired).toEqual([['c']]))
+    await waitFor(() => expect(childIdsFired).toEqual([['c']]))
 
     await env.repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => expect(childrenFired).toEqual([['c'], []]))
-    await vi.waitFor(() => expect(childIdsFired).toEqual([['c'], []]))
+    await waitFor(() => expect(childrenFired).toEqual([['c'], []]))
+    await waitFor(() => expect(childIdsFired).toEqual([['c'], []]))
     expect(env.repo.block('c').peek()).toBeNull()
     expect(env.repo.block('c').peekRaw()?.deleted).toBe(true)
 
     await env.repo.tx(tx => tx.restore('c'), {scope: ChangeScope.BlockDefault})
-    await vi.waitFor(() => expect(childrenFired).toEqual([['c'], [], ['c']]))
-    await vi.waitFor(() => expect(childIdsFired).toEqual([['c'], [], ['c']]))
+    await waitFor(() => expect(childrenFired).toEqual([['c'], [], ['c']]))
+    await waitFor(() => expect(childIdsFired).toEqual([['c'], [], ['c']]))
     expect(env.repo.block('c').peek()).toMatchObject({id: 'c', deleted: false})
   })
 
@@ -312,14 +371,14 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const h = env.repo.query.childIds(args)
     const fired: string[][] = []
     h.subscribe(v => fired.push(v))
-    await vi.waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
+    await waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
 
     await env.repo.mutate.move({
       id: 'c2',
       parentId: 'p',
       position: {kind: 'before', siblingId: 'c1'},
     })
-    await vi.waitFor(() => expect(fired).toEqual([
+    await waitFor(() => expect(fired).toEqual([
       ['c1', 'c2'],
       ['c2', 'c1'],
     ]))
@@ -331,10 +390,10 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const h = env.repo.query.subtree({id: 'r'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
-    await vi.waitFor(() => expect(fired).toEqual([2])) // r + a
+    await waitFor(() => expect(fired).toEqual([2])) // r + a
 
     await create('b', {parentId: 'a', orderKey: 'b0'})
-    await vi.waitFor(() => expect(fired).toEqual([2, 3])) // r + a + b
+    await waitFor(() => expect(fired).toEqual([2, 3])) // r + a + b
   })
 
   it('row dep: pure content edit fires handle even without parent-edge change', async () => {
@@ -343,11 +402,11 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const h = env.repo.query.children({id: 'p'})
     const fired: BlockData[][] = []
     h.subscribe(v => fired.push(v))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
     expect(fired[0][0].content).toBe('first')
 
     await env.repo.mutate.setContent({id: 'c1', content: 'updated'})
-    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await waitFor(() => expect(fired.length).toBe(2))
     expect(fired[1][0].content).toBe('updated')
   })
 
@@ -366,7 +425,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     )
     const fired: number[] = []
     h.subscribe(v => fired.push(v))
-    await vi.waitFor(() => expect(fired).toEqual([1]))
+    await waitFor(() => expect(fired).toEqual([1]))
 
     env.repo.handleStore.invalidate({
       plugin: new Map([['test.channel', new Set(['miss'])]]),
@@ -378,7 +437,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     env.repo.handleStore.invalidate({
       plugin: new Map([['test.channel', new Set(['hit'])]]),
     })
-    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+    await waitFor(() => expect(fired).toEqual([1, 2]))
   })
 
   it('handles outside the change scope are not re-resolved', async () => {
@@ -388,7 +447,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     const h2 = env.repo.query.children({id: 'p2'})
     const fired: number[] = []
     h2.subscribe(v => fired.push(v.length))
-    await vi.waitFor(() => expect(fired).toEqual([0]))
+    await waitFor(() => expect(fired).toEqual([0]))
 
     // Mutate p1's child only — h2 (over p2) must not fire.
     await env.repo.mutate.setContent({id: 'a', content: 'x'})
@@ -417,7 +476,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     )
     const fired: number[] = []
     handle.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     await create('table-fast-row')
     // Settle — assert no second fire arrives.
@@ -455,7 +514,7 @@ describe('sync observer: sync-applied invalidation', () => {
     updatedAt?: number
     deleted?: boolean
   }): Promise<unknown> =>
-    env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: o.id,
       workspaceId: o.workspaceId ?? 'ws-1',
       parentId: o.parentId ?? null,
@@ -484,14 +543,14 @@ describe('sync observer: sync-applied invalidation', () => {
     const h = env.repo.query.children({id: 'p'})
     const fired: BlockData[][] = []
     h.subscribe(v => fired.push(v))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     env.repo.startSyncObserver({throttleMs: 0})
     // A sync-applied insert: a brand-new child of p arrives from the server.
     await syncApply({id: 'c2', parentId: 'p', orderKey: 'a1', content: 'remote'})
     await env.repo.flushSyncObserver()
 
-    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await waitFor(() => expect(fired.length).toBe(2))
     expect(fired[1].map(b => b.id)).toEqual(['c1', 'c2'])
     expect(env.cache.getSnapshot('c2')?.content).toBe('remote')
   })
@@ -527,7 +586,7 @@ describe('sync observer: sync-applied invalidation', () => {
     const h = env.repo.query.children({id: 'p'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
-    await vi.waitFor(() => expect(fired).toEqual([0]))
+    await waitFor(() => expect(fired).toEqual([0]))
 
     env.repo.startSyncObserver({throttleMs: 0})
     await env.repo.flushSyncObserver() // settle the start-up drain (queue empty)
@@ -536,7 +595,7 @@ describe('sync observer: sync-applied invalidation', () => {
     // engine fast path exactly once; the observer (which watches only
     // `blocks_synced_changes`) never sees it.
     await create('c1', {parentId: 'p', orderKey: 'a0'})
-    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
+    await waitFor(() => expect(fired).toEqual([0, 1]))
     // Flush the observer explicitly — a redundant invalidation would show a
     // third fire. None comes: local writes don't touch the staging queue.
     await env.repo.flushSyncObserver()
@@ -572,14 +631,14 @@ describe('sync observer: sync-applied invalidation', () => {
     const h = env.repo.query.childIds({id: 'p', hydrate: true})
     const fired: string[][] = []
     h.subscribe(v => fired.push(v))
-    await vi.waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
+    await waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
 
     // Server re-orders c2 ahead of c1. NEWER updated_at wins the LWW gate
     // (real server-applied writes always carry a newer updated_at).
     await syncApply({id: 'c2', parentId: 'p', orderKey: '0', updatedAt: NEWER})
     await env.repo.flushSyncObserver()
 
-    await vi.waitFor(() => expect(fired).toEqual([
+    await waitFor(() => expect(fired).toEqual([
       ['c1', 'c2'],
       ['c2', 'c1'],
     ]))
@@ -632,7 +691,7 @@ describe('sync observer: sync-applied invalidation', () => {
     // The handle declares a per-row dep on each child, so the content
     // edit DOES invalidate the BlockData[] handle (row content is part
     // of its value). It should NOT, however, change the membership.
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const v = h.peek()
       expect(v?.map(b => b.id)).toEqual(['c1'])
     })
@@ -660,7 +719,7 @@ describe('sync observer: sync-applied invalidation', () => {
     )
     const fired: number[] = []
     handle.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired.length).toBe(1))
+    await waitFor(() => expect(fired.length).toBe(1))
 
     env.repo.startSyncObserver({throttleMs: 0})
     await syncApply({id: 'table-dep-row', parentId: null, orderKey: 'a0'})
@@ -704,7 +763,7 @@ describe('sync observer: sync-applied invalidation', () => {
     )
     const fired: number[] = []
     handle.subscribe((x) => fired.push(x))
-    await vi.waitFor(() => expect(fired).toEqual([1]))
+    await waitFor(() => expect(fired).toEqual([1]))
 
     env.repo.startSyncObserver({throttleMs: 0})
     await env.repo.flushSyncObserver()
@@ -758,14 +817,14 @@ describe('sync observer: sync-applied invalidation', () => {
     const h = env.repo.query.children({id: 'p'})
     const fired: string[][] = []
     h.subscribe(v => fired.push(v.map(b => b.id)))
-    await vi.waitFor(() => expect(fired).toEqual([[]]))
+    await waitFor(() => expect(fired).toEqual([[]]))
 
     env.repo.startSyncObserver({throttleMs: 0})
     await syncApply({id: 'c-remote', parentId: 'p', orderKey: 'a0', content: 'remote'})
     await env.repo.flushSyncObserver()
 
     // The handle re-resolved despite the throwing rule — not permanently stale.
-    await vi.waitFor(() => expect(fired).toEqual([[], ['c-remote']]))
+    await waitFor(() => expect(fired).toEqual([[], ['c-remote']]))
     expect(warn).toHaveBeenCalled() // the rule's failure was logged, not silent
     warn.mockRestore()
   })
@@ -773,3 +832,4 @@ describe('sync observer: sync-applied invalidation', () => {
 })
 
 import type { BlockData, BlockReference } from '@/data/api'
+import { trackTestRepo } from '@/data/test/testRepoScope'

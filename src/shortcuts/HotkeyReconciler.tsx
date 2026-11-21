@@ -51,7 +51,7 @@ import {
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
-import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
+import { hasEditableTarget, isImeKeyEvent, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 import { registerArmedHold } from '@/shortcuts/holdRegistry.js'
 
 /**
@@ -92,22 +92,38 @@ const getInstallableContextDeps = (
 }
 
 /**
- * Run the same event-filter cascade tinykeys' default `ignore` would do,
- * but extended with per-context eventFilter overrides. An active context's
- * filter returning true means "I want this event even though it'd
- * normally be ignored" (e.g. property-editing needs Escape from inside
- * an <input>). Otherwise we apply the editable-target heuristic.
+ * Does this candidate's OWN context accept the event? Runs the same
+ * editable-target heuristic tinykeys' default `ignore` would, unless the
+ * context declares an `eventFilter` — which means "I want events like this
+ * even though they'd normally be ignored" (property-editing needs Escape
+ * from inside an <input>; edit-mode-cm wants keys inside `.cm-editor`).
+ *
+ * Per candidate, NOT once per event: an opt-in is a claim about the
+ * claiming context's own bindings, so it must not become permission for
+ * everyone else's. Judging the whole dispatch off any one active context's
+ * filter meant a context could hand keys to a context that never opted in —
+ * modal shadowing made that concrete (a shadowed property field's vote let
+ * Escape run `clear_selection` and Delete run the multi-select delete, which
+ * takes no confirmation), and it also let GLOBAL's bare-key bindings fire
+ * from inside a field whenever a neighbouring context had opted in. GLOBAL
+ * declares no filter, so its candidates now face the editable-target
+ * heuristic like anywhere else, and a user rebinding a global onto a bare
+ * named key can't turn typing into a command.
  */
-const shouldHandleEvent = (
+const contextAdmitsEvent = (
   event: KeyboardEvent,
-  active: ActiveContextsMap,
+  contextType: ActionContextType,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): boolean => {
-  for (const type of active.keys()) {
-    const config = contextConfigsByType.get(type)
-    if (config?.eventFilter?.(event)) return true
-  }
-  return defaultEventFilter(event)
+  const filter = contextConfigsByType.get(contextType)?.eventFilter
+  // Additive, never a veto: a filter says "also admit these", so a `false`
+  // from it still falls through to the editable-target heuristic. Treating
+  // it as a veto killed deliberate modifier chords — property-editing's
+  // filter declines single-character keys, which would have made a rebind of
+  // the exit key onto Ctrl+J dead even though `defaultEventFilter` admits
+  // every modifier chord. Matches the contract declared on
+  // `ActionContextConfig.eventFilter`.
+  return filter?.(event) === true || defaultEventFilter(event)
 }
 
 /**
@@ -471,6 +487,13 @@ export function HotkeyReconciler(): null {
   useEffect(() => {
     const dispatchPhase = (phase: 'keydown' | 'keyup', rawEvent: Event): void => {
       const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+      // An in-flight IME composition owns the keyboard: its keydowns are the
+      // user talking to the input method, not to the app. Bail before the
+      // matchers so no sequence state advances either — a composing `g`
+      // must not become the first half of `g g`. Declining per action was
+      // not enough: a decline means "not handled, try the next candidate",
+      // which handed the chord to whatever ranked below.
+      if (isImeKeyEvent(event)) return
       const completed = completedRef.current
       completed.length = 0
       // Feed every candidate of this phase so each advances its own sequence
@@ -482,9 +505,14 @@ export function HotkeyReconciler(): null {
 
       const active = activeRef.current
       const contextConfigsByType = contextConfigsByTypeRef.current
-      // The filter cascade gates dispatch, not matching — sequence state has
-      // already advanced above, matching tinykeys' per-listener behaviour.
-      if (!shouldHandleEvent(event, active, contextConfigsByType)) return
+      // The filter gates dispatch, not matching — sequence state has already
+      // advanced above, matching tinykeys' per-listener behaviour. Each
+      // candidate is judged by its own context, so one context's opt-in
+      // can't speak for another's bindings.
+      const admissible = completed.filter(
+        candidate => contextAdmitsEvent(event, candidate.action.context, contextConfigsByType),
+      )
+      if (admissible.length === 0) return
 
       // Order + filter through the shared resolver (modal shadowing + the
       // precedence comparator), so the keyboard path can't diverge from the
@@ -495,7 +523,7 @@ export function HotkeyReconciler(): null {
       // fall-through conditions: deps don't resolve, canDispatch returns false,
       // or the handler synchronously returns the not-handled sentinel (`false`).
       const bindings = new Map<ActionConfig, ShortcutBindingDefaults>(
-        completed.map(c => [c.action, c.binding]),
+        admissible.map(c => [c.action, c.binding]),
       )
       const ordered = resolve([...bindings.keys()], {active, contextConfigsByType}, {kind: 'keyboard'})
       runOrderedCandidates(
@@ -638,6 +666,8 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
   const onKeydown = (rawEvent: Event): void => {
     const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+    // Same rule as the keydown coordinator: don't arm off an IME's keys.
+    if (isImeKeyEvent(event)) return
     if (event.repeat) {
       if (pending) applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
       return
@@ -652,7 +682,9 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     const active = activeRef.current
     const contextConfigsByType = contextConfigsByTypeRef.current
     if (!getInstallableContextDeps(action, active, contextConfigsByType)) return
-    if (!shouldHandleEvent(event, active, contextConfigsByType)) return
+    // This arm is one action's, so it asks only its own context — same rule
+    // the keydown path applies per candidate.
+    if (!contextAdmitsEvent(event, action.context, contextConfigsByType)) return
 
     applyEventOptions(event, action, binding, contextConfigsByType)
 
@@ -853,7 +885,7 @@ const applyEventOptions = (
  * compose setups corrupt for letter chords; the wrapper restores the logical
  * letter from event.keyCode, and works on Colemak/Dvorak where event.code
  * lies about layout. The matcher carries no editable-target filter — the
- * coordinator runs the context-aware cascade (`shouldHandleEvent`) itself, so
+ * coordinator applies it per completed candidate (`contextAdmitsEvent`), so
  * contexts like property-editing can opt into events tinykeys would drop.
  */
 const makeMatcher = (

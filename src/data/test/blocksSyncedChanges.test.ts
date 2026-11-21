@@ -23,7 +23,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
@@ -40,7 +40,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 // Reuse one DB across the file; reset (not reopen) per test.
 beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
-const put = (d: BlockData) => env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(d))
+const put = (d: BlockData) => env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(d))
 const del = (id: string) => env.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [id])
 /** Effective state the observer drains: highest-seq op per id. */
 const latestOps = () =>

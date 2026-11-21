@@ -13,7 +13,19 @@ const distDir = path.resolve(packageDir, 'dist')
 const kernelTypesOutDir = path.resolve(distDir, 'kernel-types')
 const tsBuildInfoPath = path.resolve(packageDir, 'node_modules/.tmp/kernel-types.tsbuildinfo')
 
-const tscBin = require.resolve('typescript/bin/tsc')
+// Prefer TypeScript 7's native compiler (installed as `typescript-native`;
+// `typescript` stays on 6 for the JS API typescript-eslint needs) and fall
+// back to TS 6's tsc when it isn't installed. Its exports map hides the bin,
+// so resolve the package root via the exported package.json.
+const resolveCompilerBin = () => {
+  try {
+    const pkgRoot = path.dirname(require.resolve('typescript-native/package.json'))
+    return path.join(pkgRoot, 'bin', 'tsc')
+  } catch {
+    return require.resolve('typescript/bin/tsc')
+  }
+}
+const tscBin = resolveCompilerBin()
 
 const run = (command, args, options) =>
   new Promise((resolve, reject) => {

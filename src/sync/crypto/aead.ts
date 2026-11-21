@@ -13,7 +13,14 @@
 import { decodeEnvelope, encodeEnvelope, NONCE_BYTES } from './envelope.js'
 
 const utf8Encode = new TextEncoder()
-const utf8Decode = new TextDecoder()
+// `ignoreBOM: true` is REQUIRED for the round-trip, not a tuning knob: the
+// default decoder treats a leading U+FEFF as a byte-order mark and silently
+// eats it, so `open(seal(x))` returned `x` minus its first character for any
+// plaintext starting with a zero-width no-break space (found by
+// aead.fuzz.test.ts, issue #534). `seal` never writes a BOM of its own —
+// `TextEncoder` emits the code point verbatim — so every U+FEFF in the
+// decrypted bytes is real content and must survive the decode.
+const utf8Decode = new TextDecoder('utf-8', {ignoreBOM: true})
 
 /** Seal a UTF-8 string into an `enc:v1:` envelope under `key` + `aad`. */
 export const seal = async (

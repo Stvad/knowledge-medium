@@ -1,31 +1,37 @@
 /**
  * Data-layer facets — the bridge between the kernel + plugin
  * contributions and the `Repo` lifecycle (spec §6, §8).
- *
- * Stage 1.4 ships `mutatorsFacet` only. The remaining four facets
- * (`queriesFacet`, `propertySchemasFacet`, `propertyEditorOverridesFacet`,
- * `postCommitProcessorsFacet`) land in stages 1.5+ as the matching
- * machinery comes online.
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
+import type { ResolvedPropertySchema } from '@/data/api/propertySchema'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySeedDeclaration,
   AnyPropertyEditorOverride,
-  AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
   AnyValuePresetCore,
   AnyValuePresetPresentation,
-  AnyValuePreset,
-  ChangeScope,
+  BlockData,
+  BlockReference,
   Tx,
-  TypeContribution,
 } from '@/data/api'
+import {
+  combineProjectedPropertyDefinitions,
+  type ProjectedPropertyDefinition,
+} from '@/data/propertyDefinitionRegistry'
+import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
+import type { KernelPageSpec } from './kernelPage.ts'
 import type { Repo } from './repo.ts'
+import type { BlockSearchFilter } from './searchFilter.ts'
+
+export { isActiveSearchFilter, matchesTypeFilter, type BlockSearchFilter } from './searchFilter.ts'
+import {isPropertySeedDeclaration} from './propertySeeds.ts'
+import {isTypeSeedDeclaration, type TypeSeedDeclaration} from './typeSeeds.ts'
 
 export interface LocalSchemaDb {
   execute: (sql: string) => Promise<unknown>
@@ -37,11 +43,37 @@ export interface LocalSchemaBackfill {
   run: (db: LocalSchemaDb) => Promise<void>
 }
 
+/** One table a contribution owns that the ANALYZE paths have to reach.
+ *
+ *  Both pieces, because the two paths need different things and asking for them
+ *  separately is what lets them drift apart. `runAnalyzeInstalledTables` wants a
+ *  NAME, to `ANALYZE` it. The arming probes want SQL, and a name cannot
+ *  be turned into one: measured on the shipped wa-sqlite build against
+ *  degenerate stats, every generic name-only shape (`SELECT 1 FROM t`,
+ *  `… LIMIT 1`, a covering scan, `WHERE rowid = 0`, `ORDER BY <indexed col>`)
+ *  plans to `SCAN`, and a `SCAN` does not arm. */
+export interface LocalSchemaAnalyzeTable {
+  name: string
+  /** An `EXPLAIN QUERY PLAN`-able SELECT that must plan to `SEARCH <name> USING
+   *  INDEX`. The predicate has to match a real index — including a partial
+   *  index's own `WHERE` — or the probe is silently inert: no error, just a
+   *  table that quietly stops being re-analyzed on the drift axis. Reads only,
+   *  and param-free ({@link LocalSchemaDb} declares the params-less shape, so a
+   *  bound `?` would bind NULL). All of that is pinned by tests over the
+   *  resolved set, including that the plan searches the table `name` claims. */
+  probe: string
+}
+
 export interface LocalSchemaContribution {
   id: string
   statements?: readonly string[]
   triggerNames?: readonly string[]
   backfills?: readonly LocalSchemaBackfill[]
+  /** Tables this contribution owns that core's ANALYZE paths must reach, so
+   *  core never has to name a plugin's table. Read through
+   *  `resolveAnalyzeTables` (`src/data/localSchema.ts`): the probes arm the
+   *  staleness check, the names are what `runAnalyzeInstalledTables` analyzes. */
+  analyzeTables?: readonly LocalSchemaAnalyzeTable[]
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -49,6 +81,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string')
+
+const isLocalSchemaAnalyzeTable = (value: unknown): value is LocalSchemaAnalyzeTable =>
+  isRecord(value) &&
+  typeof value.name === 'string' &&
+  typeof value.probe === 'string'
 
 const isLocalSchemaBackfill = (value: unknown): value is LocalSchemaBackfill =>
   isRecord(value) &&
@@ -61,9 +98,96 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
   (value.statements === undefined || isStringArray(value.statements)) &&
   (value.triggerNames === undefined || isStringArray(value.triggerNames)) &&
   (
+    value.analyzeTables === undefined ||
+    (Array.isArray(value.analyzeTables) && value.analyzeTables.every(isLocalSchemaAnalyzeTable))
+  ) &&
+  (
     value.backfills === undefined ||
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
   )
+
+/** What `tryClaim` did — and in particular whether THIS call wrote the claim
+ *  row, which is the only thing that makes its caller the owner.
+ *
+ *  `inherited` is the trap. A live claim already named this claimant, so the
+ *  call succeeds having written nothing. Claimant ids identify a browser
+ *  PROFILE, not a tab, so that claim may belong to another TAB running the
+ *  same pass right now — indistinguishable from this device's own claim left
+ *  behind by an earlier run. A caller may RUN on an inherited claim (these
+ *  passes are idempotent per row, which is what makes the overlap tolerable)
+ *  but must never RELEASE one: deleting a live sibling's claim frees a third
+ *  device to start the same source-of-truth pass while the sibling writes. */
+export type ClaimAttempt = 'minted' | 'inherited' | 'declined'
+
+/** Decides which device runs a migration, and records that it finished — in
+ *  SYNCED data, so a repair that uploads happens once per GRAPH.
+ *
+ *  Every pass on this seam writes source-of-truth rows and uploads them, so N
+ *  devices each running it independently is N chances to build a write from a
+ *  stale local row and overwrite concurrent edits (`apply_block_patches`
+ *  assigns `properties_json` wholesale). A local marker in
+ *  `client_schema_state` cannot express "already done for everyone".
+ *
+ *  ACQUIRE, don't check-then-mark. An `isDone()` read followed by a later
+ *  `markDone()` is a race with no winner: two devices opening the graph before
+ *  the completion row has propagated both read "not done", both run the
+ *  uploading pass, and both record it afterwards. `tryClaim` exists so the
+ *  decision and the record are one step, and so an implementer has to confront
+ *  the three questions this seam cannot answer for them:
+ *
+ *   1. how atomic can a claim be over a last-write-wins sync layer? Perfect
+ *      mutual exclusion may not be reachable — in which case say so, and rely
+ *      on passes being idempotent per row.
+ *   2. what happens to a claim whose device crashed mid-run? Without an expiry
+ *      or lease, one dead device blocks the migration for the whole graph.
+ *   3. is a duplicate run tolerable if 1 fails? For an idempotent repair,
+ *      usually yes; the cost is the stale-bag exposure, not corruption. */
+export interface BackfillCompletionClaim {
+  /** Claim the right to run this pass for this workspace. `declined` means
+   *  someone else has it or it is already complete — skip, don't run. The
+   *  other two both mean "run", and differ only in whether you may hand the
+   *  claim back afterwards; see {@link ClaimAttempt}.
+   *
+   *  `reclaimCompleted` overrides only the second of those, and only the
+   *  `operator` trigger passes it: a human asking for a pass that has already
+   *  been recorded as done is asking on purpose, usually because something was
+   *  missed or repaired since. Passes on this seam are idempotent per row, so
+   *  the redundant run is a scan. Mutual exclusion is NOT overridable — a
+   *  claim someone else holds still refuses. */
+  tryClaim(
+    workspaceId: string,
+    backfillId: string,
+    opts?: {reclaimCompleted?: boolean},
+  ): Promise<ClaimAttempt>
+  /** Read the live claim through the writing transaction so a sync drain
+   *  cannot replace it between this check and the guarded batch. Never creates,
+   *  restores, or reclaims a missing or completed claim. */
+  stillOwned(tx: Pick<Tx, 'get'>, workspaceId: string, backfillId: string): Promise<boolean>
+  /** The claimed run finished. Record completion where every device sees it. */
+  markComplete(workspaceId: string, backfillId: string): Promise<void>
+  /** The claimed run aborted without finishing (a transient precondition, a
+   *  thrown backfill). Give the claim back, or the pass never runs again — and
+   *  a claim taken over a COMPLETED one back to that completion, so a failed
+   *  re-run does not erase the record that an earlier run finished. */
+  releaseClaim(workspaceId: string, backfillId: string): Promise<void>
+}
+
+/** When a backfill is allowed to start.
+ *
+ *  - `workspace-open`: scheduled automatically, deferred to idle, once per
+ *    open. Right for a small repair that any device may safely attempt.
+ *  - `operator`: never scheduled automatically. A human runs it, on one
+ *    device, deliberately — which is the ONLY thing that makes a
+ *    once-per-graph pass actually once. The completion claim RECORDS that
+ *    run so other devices skip it; it cannot arbitrate a race, because
+ *    exactly-once across N devices over a last-write-wins layer with no
+ *    server arbitration is not reachable (see `graphBackfillClaim.ts`).
+ *
+ *  Required, with no default, for the same reason `completion` was: a pass
+ *  that uploads source-of-truth rows and quietly ran itself on every device
+ *  is the failure mode this seam exists to prevent, and the wrong answer is
+ *  invisible at the call site. */
+export type WorkspaceBackfillTrigger = 'workspace-open' | 'operator'
 
 /**
  * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
@@ -72,23 +196,35 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
  * A LocalSchema backfill writes via a raw `db.execute`, which leaves
  * `tx_context.source = NULL`: fine for local derived-index tables, but a write
  * to a *synced* table (blocks/workspaces/workspace_members) never fires the
- * upload trigger and silently never syncs (the daily-note:date bug; guarded by
- * `syncedTableWriteGuard`). A `WorkspaceBackfill` instead writes through
- * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
- * server, and every other client, converge.
+ * upload trigger and silently never syncs — guarded by `syncedTableWriteGuard`.
+ * A `WorkspaceBackfill` instead writes through `repo.tx`, so its rows carry
+ * `source = 'user'` and actually upload — the server, and every other client,
+ * converge.
  *
- * The repo runs each registered backfill at most once per (workspace, id),
- * deferred off the workspace-open critical path — see
+ * Completion is once per GRAPH, recorded through `BackfillCompletionClaim` —
+ * not once per device. Deferred off the workspace-open critical path; see
  * `Repo.scheduleWorkspaceBackfills`.
  */
 export interface WorkspaceBackfill {
   /** Stable id; doubles as the per-workspace completion-marker suffix. Change
    *  it to force a re-run on every workspace. */
   readonly id: string
+  readonly trigger: WorkspaceBackfillTrigger
   run: (ctx: WorkspaceBackfillContext) => Promise<void>
 }
 
 export interface WorkspaceBackfillContext {
+  /** Sync activity this run waited for or saw. A scan spanning a change in
+   *  this count must revisit its candidates before declaring convergence. */
+  readonly syncWaitCount: number
+  /** Ask the full view-gap check — downloads in flight included — and throw
+   *  why the view is incomplete. An `operator` pass waits for it to clear; a
+   *  `workspace-open` pass is refused at once. An `operator` batch checks only
+   *  rows already on this device, so a pass that re-reads from the top asks
+   *  here first. It does not wait for this device's own upload queue: until
+   *  their checkpoint arrives, queued uploads read as settled, and the sweep
+   *  that sees them land counts it through `syncWaitCount`. */
+  awaitCaughtUp: () => Promise<void>
   /** The single workspace this run is scoped to. Every read and write MUST be
    *  filtered to it — a backfill never touches another workspace (that was the
    *  cross-workspace cold-start hazard the original raw backfill had). */
@@ -96,15 +232,37 @@ export interface WorkspaceBackfillContext {
   /** Raw read against the local DB — use to find candidate rows. */
   getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>
   /** Run a writing transaction. Routes through `repo.tx`, so writes carry
-   *  source='user' and upload (the whole point — a raw write would not). */
+   *  source='user' and upload (the whole point — a raw write would not).
+   *
+   *  Scope and undo-recording are fixed by the runner and deliberately not
+   *  parameters. The scope stays `BlockDefault` — a backfill amends ordinary
+   *  document properties, so it must keep the read-only gate and the
+   *  seed-definition guard, which both key off it — but the undo entry is
+   *  suppressed (`skipUndo`): the pass runs unattended seconds after workspace
+   *  open, so on the undo stack it means a cmd-Z aimed at the user's own edit
+   *  reverts the whole pass, permanently (the completion marker is already
+   *  recorded by then). */
   tx: <R>(
     fn: (tx: Tx) => Promise<R>,
-    opts: {scope: ChangeScope; description?: string},
+    opts: {description?: string},
   ) => Promise<R>
+  /** Resolve a property NAME to its winning schema for this workspace.
+   *
+   *  On the context rather than on `Tx` because the pass this seam exists for
+   *  reads cell KEYS, which are names, while `Tx` resolves by fieldId. Bound
+   *  to this run's workspace for the same reason every other member is: a
+   *  backfill must not be able to reach another workspace's registry.
+   *
+   *  `undefined` for a name no definition claims. That is not an error and
+   *  must not abort the pass — an unregistered key is data property migration
+   *  deliberately leaves in the cell (`pnpm agent audit-properties` reports
+   *  the set). */
+  resolveNameSchema: (name: string) => ResolvedPropertySchema<unknown> | undefined
 }
 
 const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function'
+  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function' &&
+  (value.trigger === 'workspace-open' || value.trigger === 'operator')
 
 const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   isRecord(value) &&
@@ -131,27 +289,64 @@ const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlock
  *  recovers precise types via the `MutatorRegistry` augmentation. */
 export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
 
-/** Future facets — declared empty for now so plugin authors can
- *  reference them at compile time without runtime breakage when no
- *  contributions exist. Wired up in stages 1.5+. */
-
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
-export const propertySchemasFacet = keyedMapFacet<AnyPropertySchema>('data.propertySchemas', s => s.name)
+/** Code-owned property definitions. The declaration object is also the typed
+ * PropertyHandle returned by seedProperty. This is deliberately a list facet,
+ * not a last-wins map: duplicate seed identities are an authoring error the
+ * materializer must observe and reject before any write. */
+export const definitionSeedsFacet = defineFacet<
+  AnyPropertySeedDeclaration,
+  readonly AnyPropertySeedDeclaration[]
+>({
+  id: 'data.definition-seeds',
+  validate: isPropertySeedDeclaration,
+})
 
-export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
+/** Block-built property definitions keyed by durable field id: parsed
+ * metadata with optional locally-buildable behavior, or the marker for a
+ * `property-schema` block whose metadata does not parse. */
+export const projectedPropertyDefinitionsFacet = defineFacet<
+  ProjectedPropertyDefinition,
+  ReadonlyMap<string, ProjectedPropertyDefinition>
+>({
+  id: 'data.projected-property-definitions',
+  combine: combineProjectedPropertyDefinitions,
+  empty: () => new Map(),
+})
 
-export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.name)
+/** Block-built type definitions keyed by durable block id — the type-side
+ * twin of `projectedPropertyDefinitionsFacet`. The `userTypesProjector`
+ * publishes one `ProjectedTypeDefinition` (codec-less identity/display metadata
+ * + resolved `block-type:properties` schemas) per `'block-type'` block; the
+ * facet bridge derives the merged, §9-resolved `repo.types` from this bucket +
+ * `typeSeedsFacet` via `buildTypeDefinitionRegistry`. Keyed by block id (not the
+ * `block-type:type-id` claim) so the declaration-authoritative registry — not a
+ * last-wins facet fold — decides membership ids. */
+export const projectedTypeDefinitionsFacet = keyedMapFacet<ProjectedTypeDefinition>(
+  'data.projected-type-definitions',
+  definition => definition.metadata.blockId,
+)
+
+/** Code-owned block-type definitions. The declaration object is also the
+ * `TypeContribution` returned by `seedType`. A list facet (not a last-wins map)
+ * for the same reason as `definitionSeedsFacet`: a duplicate seed id/key is an
+ * authoring error the materializer must observe and reject before any write. */
+export const typeSeedsFacet = defineFacet<
+  TypeSeedDeclaration,
+  readonly TypeSeedDeclaration[]
+>({
+  id: 'data.type-seeds',
+  validate: isTypeSeedDeclaration,
+})
+
+export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.seedKey)
 
 /** Data-only codec factories available to projectors and headless surfaces. */
 export const valuePresetCoresFacet = keyedMapFacet<AnyValuePresetCore>('data.value-preset-cores', p => p.id)
 
 /** React presentation contributions, joined live to cores by id. */
 export const valuePresetPresentationsFacet = keyedMapFacet<AnyValuePresetPresentation>('data.value-preset-presentations', p => p.id)
-
-/** Pre-split compatibility facet for full ValuePreset contributions.
- * New code contributes a core + presentation separately. */
-export const valuePresetsFacet = keyedMapFacet<AnyValuePreset>('data.valuePresets', p => p.id)
 
 export const postCommitProcessorsFacet = keyedMapFacet<AnyPostCommitProcessor>('data.postCommitProcessors', p => p.name)
 
@@ -179,34 +374,72 @@ export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly W
 })
 
 /**
- * A per-workspace singleton page that must exist EARLY — before the workspace's
- * landing/first-run seed runs. Owners (kernel + plugins) declare theirs; the
- * bootstrap materialises them all via `Repo.ensureSystemPages` before any
- * landing resolver runs.
+ * What a block's WHOLE content already says about its `references`, for rows
+ * core mints with content it authored itself.
  *
- * Why eager: `[[Name]]` is auto-create (Roam-style) — the references processor
- * mints a page at an alias-"seat" id when no page with that alias exists yet.
- * Singleton pages (Journal/Properties/Types/Locations) are created elsewhere at
- * their OWN deterministic ids and claim a reserved alias, so a wiki-link that
- * resolves first auto-creates a rival claimant → two blocks, one alias →
- * `alias.collision`. Creating the canonical page first means `aliasLookup` hits
- * and no rival is minted.
+ * Core owns the column — `core.normalizeReferences` canonicalizes every write
+ * of it — but not the reading of content that fills it: that is the References
+ * plugin's parser, and the parser is behind a `systemToggle`. So a contributor
+ * here is answering one question only, "what would YOUR parse of this content
+ * produce", and the contract is agreement with that parse: a prefill the parser
+ * would not reproduce is a reference it retracts on the next write, which costs
+ * the write, the upload and the retraction this exists to avoid. `undefined` —
+ * the safe answer, and the right one for anything needing an alias lookup or a
+ * seat probe — leaves the content to the parser.
  *
- * `ensure` MUST be idempotent and write at a deterministic, workspace-derived
- * id (see `getOrCreateKernelPage`) so repeated bootstraps and offline-
- * converging clients all land on the same row.
+ * Declared in core so core can fill the column at `tx.create` instead of paying
+ * a second write per row, and contributed from the plugin so it lives beside
+ * the parse it predicts and leaves with it when References is off.
+ */
+export interface ContentReferencePrefill {
+  id: string
+  derive: (content: string) => BlockReference[] | undefined
+}
+
+const isContentReferencePrefill = (value: unknown): value is ContentReferencePrefill =>
+  isRecord(value) && typeof value.id === 'string' && typeof value.derive === 'function'
+
+export const contentReferencePrefillsFacet = defineFacet<
+  ContentReferencePrefill, readonly ContentReferencePrefill[]
+>({
+  id: 'data.contentReferencePrefills',
+  validate: isContentReferencePrefill,
+})
+
+/** First contributor with an answer wins; no contributor means no prefill, and
+ *  every row is left to whatever parses content in that configuration. */
+export const contentReferencePrefillFor = (
+  prefills: readonly ContentReferencePrefill[],
+) => (content: string): BlockReference[] | undefined => {
+  for (const prefill of prefills) {
+    const derived = prefill.derive(content)
+    if (derived !== undefined) return derived
+  }
+  return undefined
+}
+
+/**
+ * An owner-installed kernel page. The shared spec defines its deterministic
+ * identity, bootstrap creation and UI deletion refusal. Register lazy pages too:
+ * protection follows the owner even before the page's first use.
+ *
+ * Eager pages are created by `Repo.ensureSystemPages` before landing/first-run
+ * seeds, so wiki-links to reserved aliases find the canonical page instead of
+ * auto-creating a rival. Lazy pages are created only at their point of use.
+ *
+ * Bootstrap logs and skips a failed eager page so the workspace can still open.
+ * Consumers should get-or-create at point of use to retry a failed bootstrap.
  */
 export interface SystemPage {
-  /** Stable id, for facet dedup. */
-  readonly id: string
-  /** Returns `Promise<unknown>` so the existing get-or-create helpers
-   *  (which resolve to the created `Block`) assign directly; the result is
-   *  ignored by `ensureSystemPages`. */
-  ensure: (repo: Repo, workspaceId: string) => Promise<unknown>
+  readonly spec: KernelPageSpec
+  readonly eager: boolean
 }
 
 const isSystemPage = (value: unknown): value is SystemPage =>
-  isRecord(value) && typeof value.id === 'string' && typeof value.ensure === 'function'
+  isRecord(value) && isRecord(value.spec) &&
+  typeof value.spec.namespace === 'string' && typeof value.spec.alias === 'string' &&
+  (value.spec.markerType === null || typeof value.spec.markerType === 'string') &&
+  typeof value.eager === 'boolean'
 
 export const systemPagesFacet = defineFacet<SystemPage, readonly SystemPage[]>({
   id: 'data.systemPages',
@@ -253,3 +486,124 @@ export const definitionBlockProjectorFacet = defineFacet<
   id: 'data.definitionBlockProjectors',
   validate: isDefinitionBlockProjector,
 })
+
+/** One block-search hit contributed by a `searchSourcesFacet` source.
+ *
+ *  `score` is on the SAME scale core uses for its own text relevance —
+ *  `blockSearchTextScore` + `blockSearchRecencyBoost` in
+ *  `src/utils/linkTargetAutocomplete.ts` (roughly 0-300, plus a small
+ *  recency bonus) — because the merge point ranks candidates from every
+ *  source together by `score` desc with no per-source normalization. A
+ *  source with a fundamentally different relevance model (e.g. cosine
+ *  similarity from a vector index) should map its confidence onto this
+ *  same rough magnitude so its hits interleave sensibly with core's
+ *  instead of always sorting to the top or the bottom. Pre-scoring (vs.
+ *  returning raw fields for a shared scorer to rank) is the deliberate
+ *  choice here: it lets a source own a relevance signal core's text
+ *  scorer can't compute (e.g. embedding distance) while still letting
+ *  core's own contribution be a thin wrapper — see
+ *  `coreContentSearchSource`, which just tags `searchByContent` rows
+ *  with the pre-existing text score. */
+export interface SearchSourceCandidate {
+  readonly block: BlockData
+  readonly score: number
+}
+
+export interface SearchSourceArgs {
+  readonly workspaceId: string
+  readonly query: string
+  /** Desired result count AFTER merge + rank across all sources. A
+   *  source may over-fetch internally for its own reranking headroom
+   *  (core's does — see `coreContentSearchSource`) but shouldn't return
+   *  drastically more than this, since every candidate it returns
+   *  participates in the cross-source sort at the merge point. */
+  readonly limit: number
+  readonly recentBlockIds?: ReadonlyArray<string>
+  /** Applied by the source itself when it declares `supportsFilter`;
+   *  otherwise see that flag. */
+  readonly filter?: BlockSearchFilter
+}
+
+/** A pluggable block-search backend. `search` is called alongside every
+ *  other contributed source at the shared merge point
+ *  (`searchBlocksAcrossSources`, `src/utils/linkTargetAutocomplete.ts`) —
+ *  one call per source per search, its candidates merged with everyone
+ *  else's, ranked by `score` desc, and deduped by block id: the
+ *  surviving score is the MAX across duplicates, but the surviving
+ *  `block` payload is whichever duplicate's `userUpdatedAt` is newest,
+ *  so a stale index copy can't shadow live data just because it scored
+ *  higher.
+ *
+ *  Which duplicate's `block` payload survives is decided by
+ *  `freshestCandidatePayload` (`src/utils/linkTargetAutocomplete.ts`) — see
+ *  its doc for the rule and why it must see the whole group.
+ *
+ *  A source that throws is logged and dropped so it can't take
+ *  down another source's results — UNLESS every contributed source
+ *  throws, in which case the merge point rethrows the first error
+ *  rather than resolving to an empty result. */
+export interface SearchSourceContribution {
+  readonly id: string
+  /** Applies `SearchSourceArgs.filter` in its own query, before its limit.
+   *  For a source without it the merge point drops candidates the filter's
+   *  type clauses exclude, and the source sits out a filter with `underId`.
+   *  Its share of a filtered result is therefore best effort (it limits
+   *  before the filter) — kept over sitting it out, so contributed sources
+   *  still take part in the agent's default, extension-excluding search. */
+  readonly supportsFilter?: boolean
+  search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
+}
+
+export const searchSourcesFacet = keyedMapFacet<SearchSourceContribution>('data.searchSources', s => s.id)
+
+/** What the merge point observed about one source on one search.
+ *
+ *  `'ok'` matters as much as the failures: without it a health surface
+ *  latches on the first transient error and never clears. */
+export interface SearchSourceOutcome {
+  readonly sourceId: string
+  readonly kind: 'ok' | 'threw' | 'malformed-candidate'
+  /** Present on `'threw'` — whatever the source rejected with. */
+  readonly error?: unknown
+  /** Present on `'malformed-candidate'` — one line naming what was wrong,
+   *  suitable for showing a plugin author. */
+  readonly detail?: string
+}
+
+/** Every active source's outcome for ONE search, reported together.
+ *
+ *  A whole-set report rather than per-source events, because a consumer's
+ *  state is the SET, not a running accumulation of individual signals. Two
+ *  things fall out of that which a stream cannot express: a source that has
+ *  left the runtime is simply absent from the next report (it can never emit
+ *  an `'ok'` to retract an earlier failure, so a stream would name a dead
+ *  source forever), and `generation` orders the reports, so an older search
+ *  settling after a newer one cannot overwrite fresher state. A consumer
+ *  replaces its state from `outcomes` and ignores any report whose
+ *  `generation` is not the highest it has seen. */
+export interface SearchSourceHealthReport {
+  /** Monotonic per merge-point call, within one runtime. */
+  readonly generation: number
+  readonly outcomes: readonly SearchSourceOutcome[]
+}
+
+/** An observer of search-source health, called by `searchBlocksAcrossSources`
+ *  once every search.
+ *
+ *  This exists because the interesting failure is INVISIBLE: when one source
+ *  throws and another succeeds, search quietly returns fewer results and the
+ *  user is told nothing (only a total failure reaches them, via the rethrow).
+ *  Core cannot surface that itself — an indicator is a plugin concern and core
+ *  may not depend on the plugin layer — so core emits and whoever cares
+ *  listens. `report` MUST NOT throw and MUST be cheap: it runs on every
+ *  keystroke's search. The merge point isolates throws anyway, so a broken
+ *  reporter degrades itself rather than search. */
+export interface SearchSourceHealthReporter {
+  readonly id: string
+  report: (report: SearchSourceHealthReport) => void
+}
+
+export const searchSourceHealthFacet = keyedMapFacet<SearchSourceHealthReporter>(
+  'data.searchSourceHealthReporters',
+  r => r.id,
+)

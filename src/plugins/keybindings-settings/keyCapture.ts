@@ -13,8 +13,13 @@
  * `Shift`) so the same physical chord always serialises identically.
  */
 
-export const isMacPlatform = (): boolean =>
-  typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+// `isMacPlatform` now lives in the shared platform module (`src/utils/platform.ts`)
+// so every $mod/Mac-glyph check agrees. Imported (this file uses it below) AND
+// re-exported, so `useKeyInspector.ts` (which imports it from here) keeps a
+// single import surface — same pattern as the `normalizeChord` re-export below.
+import { isMacPlatform } from '@/utils/platform.js'
+import { splitPressTokens } from '@/shortcuts/canonicalizeChord.js'
+export { isMacPlatform }
 
 /** Map raw `KeyboardEvent.key` values to tinykeys' canonical names. */
 const KEY_ALIASES: Record<string, string> = {
@@ -223,7 +228,9 @@ export const formatChord = (chord: string): string => {
   // Sequence chords are space-separated; format each press independently
   // and rejoin with the same separator so "g g" displays as "G G".
   return chord.split(' ').map(press =>
-    press.split('+')
+    // The tokenizer storage uses: a plain split('+') eats the key of
+    // `Shift++` and shows the bare modifier.
+    splitPressTokens(press)
       .map(part => {
         if (part === '$mod') return platformModGlyph()
         const lower = part.toLowerCase()

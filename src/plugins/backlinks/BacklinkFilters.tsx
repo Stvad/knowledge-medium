@@ -29,6 +29,7 @@ import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { cn } from '@/lib/utils.js'
 import {
   labelForBlockData,
+  linkTargetCandidateDetail,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
@@ -36,6 +37,7 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from './query.ts'
+import { dismissOnFieldEscape } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
@@ -286,8 +288,15 @@ const RefPredicateInput = ({
         onBlur={() => setFocused(false)}
         onKeyDown={event => {
           if (event.key === 'Escape') {
-            setQuery('')
-            resetResults()
+            // Dismiss-first: clearing the typed filter (and its results) is a
+            // real dismiss, so claim the key and keep the caret here. Already
+            // empty → nothing to dismiss, and the press falls through to
+            // `exit_property_editing`, which blurs the field. Without the
+            // claim a single Escape would do both at once.
+            dismissOnFieldEscape(event, query !== '' && (() => {
+              setQuery('')
+              resetResults()
+            }))
             return
           }
           // Mid-debounce the visible results still belong to the previous text;
@@ -339,14 +348,20 @@ const RefPredicateInput = ({
             )}
           >
             <span className="truncate font-medium">{result.label}</span>
-            {result.detail && result.detail !== result.label && (
-              <span className="truncate text-muted-foreground">{truncate(result.detail, 72)}</span>
-            )}
+            {renderDetail(result)}
           </button>
         ))}
       </FloatingListbox>
     </form>
   )
+}
+
+/** The muted second line of a result row, or nothing when it would only
+ *  repeat the label. */
+const renderDetail = (result: LinkTargetIdCandidate) => {
+  const detail = linkTargetCandidateDetail(result)
+  if (!detail || detail === result.label) return null
+  return <span className="truncate text-muted-foreground">{truncate(detail, 72)}</span>
 }
 
 const htmlInputType = (kind: PropertyFilterInputKind): 'date' | 'number' | 'text' =>

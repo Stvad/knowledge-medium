@@ -15,7 +15,6 @@ import {
 } from '@/data/properties.js'
 import {
   extensionName,
-  userExtensionShellToggle,
   userExtensionToggle,
 } from '@/extensions/extensionToggles.js'
 
@@ -47,16 +46,6 @@ describe('userExtensionToggle', () => {
     const block = makeBlockData({id: 'abcdef1234567890', workspaceId: 'ws'})
     const handle = userExtensionToggle(block)
     expect(handle.name).toBe('Extension abcdef12')
-  })
-})
-
-describe('userExtensionShellToggle', () => {
-  it('is the same shape as userExtensionToggle without compiling code', () => {
-    const block = makeBlockData({id: 'block-shell', workspaceId: 'ws'})
-    const shell = userExtensionShellToggle(block)
-    expect(shell.id).toBe('block-shell')
-    expect(shell.defaultEnabled).toBe(false)
-    expect(shell.name).toBe('Extension block-sh')
   })
 })
 

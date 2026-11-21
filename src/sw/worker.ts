@@ -10,7 +10,9 @@
  *
  * The versioning model this implements is documented in the sw.ts header.
  */
-import {isCacheableAsset} from './assets'
+import {contentDigest, isCacheableAsset, type PrecacheManifest} from './assets'
+// Relative, not `@/`: the SW is built by vite.sw.config.ts, which has no alias.
+import {SQLITE_JOURNAL_SUFFIXES, WRITE_AHEAD_SIDECAR_SUFFIXES} from '../data/dbFileSiblings'
 import {
   computeExpiredIds,
   computeKeepIds,
@@ -19,6 +21,7 @@ import {
   normalizeLedger,
   type ScopeLedger,
 } from './ledger'
+import { bootKey, bootKeyPrefix, type BootEntry, type BootStore } from './bootStore'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
 import {
   SERVICE_WORKER_META_CACHE,
@@ -27,28 +30,12 @@ import {
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
-const SQLITE_DB_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
-
 interface PreviewDatabaseRecord {
   scopeUrl: string
   recordUrl: string
   name: string
   updatedAt: number | undefined
 }
-
-// The HTML shell + icons the app boots from — a static set (not build-injected),
-// resolved against the SW scope. Served network-first (HTML) / cache-first
-// (icons) from the shell cache.
-const SHELL_PATHS = [
-  './',
-  './index.html',
-  './manifest.webmanifest',
-  './icon.svg',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable.png',
-  './apple-touch-icon.png',
-]
 
 export interface SwConfig {
   /** Per-deploy id namespacing this generation's caches (injected at build). */
@@ -69,19 +56,12 @@ export interface SwConfig {
    * staleScopeMs. Ignored for production (never reaped).
    */
   touchIntervalMs: number
-  /** First-paint asset URLs (build-injected), base-prefixed or scope-relative. */
-  precacheAssets: string[]
+  /** The HTML shell + icons (build-injected), fetched into the shell cache. */
+  precacheShell: PrecacheManifest
+  /** First-paint assets (build-injected), the offline-boot-critical set. */
+  precacheAssets: PrecacheManifest
   /** The rest of the emitted graph (build-injected) — everything minus first-paint. */
-  precacheRestAssets: string[]
-  /**
-   * Cross-origin vendor module URLs (esm.sh React set) to precache at install so
-   * the app boots OFFLINE. These are ABSOLUTE https URLs (not scope-resolved) and
-   * immutable (version- + SRI-pinned), so they live in the shared, un-namespaced
-   * vendor cache. Build-injected from the import map's integrity keys — the exact
-   * set the app can import — because they're excluded from the same-origin
-   * precache (which only walks dist/), leaving an offline hole this closes.
-   */
-  precacheVendor: string[]
+  precacheRestAssets: PrecacheManifest
 }
 
 export interface SwEnv {
@@ -97,6 +77,11 @@ export interface SwEnv {
       removeEntry: (name: string) => Promise<void>
     }>
   }
+  /** Boot-timeline probe (sw.ts BOOT_MARKS): stamps a named point once. */
+  mark?: (name: string) => void
+  /** IndexedDB copy of the boot set, answered before Cache Storage is touched
+   *  (see bootStore.ts). Absent → every request goes cache-first as before. */
+  bootStore?: BootStore
   /** indexedDB, injected so legacy IndexedDB-backed database cleanup is testable. */
   indexedDB?: {
     databases?: () => Promise<Array<{name?: string | null}>>
@@ -114,11 +99,28 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const META_CACHE = SERVICE_WORKER_META_CACHE
 
   const toScopeUrl = (p: string) => new URL(p, scopeURL).toString()
-  const SHELL_URLS = SHELL_PATHS.map(toScopeUrl)
-  const PRECACHE_ASSETS = config.precacheAssets.map(toScopeUrl)
-  const PRECACHE_REST_ASSETS = config.precacheRestAssets.map(toScopeUrl)
-  // Vendor URLs are absolute + cross-origin — used verbatim, NOT scope-resolved.
-  const PRECACHE_VENDOR = config.precacheVendor
+  const resolveManifest = (manifest: PrecacheManifest): Array<readonly [url: string, digest: string]> =>
+    Object.entries(manifest).map(([path, digest]) => [toScopeUrl(path), digest] as const)
+  const SHELL_ENTRIES = resolveManifest(config.precacheShell)
+  const PRECACHE_ENTRIES = resolveManifest(config.precacheAssets)
+  const PRECACHE_REST_ENTRIES = resolveManifest(config.precacheRestAssets)
+  const PRECACHE_ASSETS = PRECACHE_ENTRIES.map(([url]) => url)
+  const SHELL_URL = toScopeUrl('./index.html')
+  // What a cold launch needs before first paint, by the cache install fills:
+  // the shell and the first-paint assets. Served from the boot store when
+  // present.
+  const BOOT_SET: ReadonlyArray<readonly [cacheName: string, urls: readonly string[]]> = [
+    [SHELL_CACHE, [SHELL_URL]],
+    [ASSET_CACHE, PRECACHE_ASSETS],
+  ]
+  const BOOT_URLS = new Set<string>(BOOT_SET.flatMap(([, urls]) => urls))
+
+  // Everything a generation occupies: its two caches and its boot-store entries.
+  const deleteGeneration = (id: string) => [
+    caches.delete(`${CACHE_PREFIX}shell-${id}`),
+    caches.delete(`${CACHE_PREFIX}assets-${id}`),
+    env.bootStore?.deletePrefix(bootKeyPrefix(id)).catch(() => undefined),
+  ]
 
   // A production/root SW's scope (…/knowledge-medium/) is a PREFIX of every
   // PR-preview path; see src/sw/preview.ts for why a SW refuses to serve/cache
@@ -178,6 +180,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     })
   }
 
+  const forgetGeneration = async (id: string): Promise<void> => {
+    await mutateLedgerEntry((entry) => ({...entry, ids: entry.ids.filter((x) => x !== id)}))
+  }
+
   const writeLedger = async (ids: string[]): Promise<void> => {
     await mutateLedgerEntry((entry) => ({...entry, ids}))
   }
@@ -226,6 +232,24 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   }
 
   const install = async (): Promise<void> => {
+    try {
+      await precache()
+    } catch (err) {
+      // Throwing fails the install, so the browser discards this worker and the
+      // previous generation keeps serving; the next update check installs
+      // whichever build is live then (on a first visit there is no previous
+      // one: the registration goes too, and the next page load registers
+      // again). Our half-filled caches and the ledger slot precache() recorded
+      // go too, so no later activate keeps them in place of a generation an
+      // open tab still reads. The build id is content-derived, so this is never
+      // a generation an earlier install filled.
+      await Promise.allSettled(deleteGeneration(buildId))
+      await forgetGeneration(buildId).catch(() => {})
+      throw err
+    }
+  }
+
+  const precache = async (): Promise<void> => {
     // Record this generation up front so its cache stays ledger-tracked (and
     // therefore GC-eligible) even if the heavy precache below is interrupted.
     // An interrupted install then leaves at worst a PHANTOM id that ages out of
@@ -235,12 +259,11 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // phantom is bounded and self-clearing; a cleaner fix (provisional ledger
     // entries that don't consume a keep slot) is a possible follow-up.
     await recordGeneration(buildId)
-    const [shell, assets, vendor] = await Promise.all([
+    const [shell, assets] = await Promise.all([
       caches.open(SHELL_CACHE),
       caches.open(ASSET_CACHE),
-      caches.open(VENDOR_CACHE),
     ])
-    // Cache mode: SHELL_URLS → 'reload' (always fresh HTML/icons). Both asset
+    // Cache mode: the shell → 'reload' (always fresh HTML/icons). Both asset
     // lists → 'no-cache', a CONDITIONAL revalidate against the origin. The
     // unhashed URLs are served by Pages with max-age=600 + a content ETag, so
     // the browser HTTP cache can hold a PRIOR generation's bytes within that
@@ -250,50 +273,102 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // deploy. 'no-cache' revalidates — a stale entry's ETag mismatches → 200
     // with current bytes; an unchanged asset → 304 → warm HTTP-cache bytes are
     // reused (so a redeploy doesn't re-download unchanged files).
-    // Per-URL failures are swallowed so one 404 / a `cache.put` quota rejection
-    // can't strand install. Caveat: the cache is self-contained only if the
-    // precache SUCCEEDS — a swallowed failure leaves a hole, and
-    // `assetCacheFirst`'s network fallback then grafts the newest deploy's
-    // bytes on that miss (self-healing only while this IS the newest deploy; a
-    // per-generation guard to refuse cross-gen bytes is a follow-up). The
-    // persistent IndexedDB compile cache still covers warm extension compiles.
-    const fetchInto = (cache: Cache, url: string, mode: RequestCache) =>
-      fetch(new Request(url, {cache: mode}))
-        .then((res) => (res && res.ok ? cache.put(url, res) : null))
-        .catch(() => null)
-    // Both lists are large (the minified build first-paints ~200 <script> tags;
-    // the rest is the full module graph), so fan every fetch through a bounded
-    // pool instead of opening hundreds/thousands of connections at once.
+    // Per-URL failures (network error, 404, a body that breaks off, a
+    // `cache.put` quota rejection) are swallowed so one can't strand install.
+    // Caveat: the cache is self-contained only if the precache SUCCEEDS — a
+    // swallowed failure leaves a hole, and `assetCacheFirst`'s network fallback
+    // then grafts the newest deploy's bytes on that miss (self-healing only
+    // while this IS the newest deploy; a per-generation guard to refuse
+    // cross-gen bytes is a follow-up). The one failure NOT swallowed is bytes
+    // that aren't this build's (see the sw.ts header).
+    const fetchInto = async (cache: Cache, url: string, digest: string, mode: RequestCache): Promise<void> => {
+      const res = await fetch(new Request(url, {cache: mode})).catch(() => null)
+      if (!res || !res.ok) return
+      const body = await res.clone().arrayBuffer().catch(() => null)
+      if (!body) return
+      if (await contentDigest(body) !== digest) {
+        throw new Error(`[sw] ${url} differs from build ${buildId}'s copy; another deploy is being served`)
+      }
+      await cache.put(url, res).catch(() => {})
+    }
+    // The rest list is the full module graph, so fan every fetch through a
+    // bounded pool instead of opening that many connections at once. A failure
+    // stops the pool taking new URLs; Promise.all still waits for the ones in
+    // flight, so nothing is put after install's cleanup.
     const runPooled = async (
-      items: string[],
+      entries: ReadonlyArray<readonly [url: string, digest: string]>,
       limit: number,
-      task: (url: string) => Promise<unknown>,
+      task: (url: string, digest: string) => Promise<void>,
     ) => {
       let next = 0
+      let failure: {err: unknown} | undefined
       const worker = async () => {
-        while (next < items.length) await task(items[next++])
+        while (!failure && next < entries.length) {
+          const [url, digest] = entries[next++]
+          try {
+            await task(url, digest)
+          } catch (err) {
+            failure ??= {err}
+          }
+        }
       }
-      await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker))
+      await Promise.all(Array.from({length: Math.min(limit, entries.length)}, worker))
+      if (failure) throw failure.err
     }
     // ALWAYS precache the whole graph so the current generation is fully
     // offline-capable — we never skip it for storage (footprint is bounded by
     // keepGenerations and reclaimed by the activate GC, not by dropping offline
     // coverage). First-paint first: it's the offline-boot-critical set, so it
-    // lands before the lazy tail. Vendor (esm.sh React) is equally boot-critical
-    // — the app imports React through the import map, and those cross-origin URLs
-    // are excluded from the same-origin precache (which only walks dist/), so
-    // without this pass a controlled offline first load can't resolve React. It's
-    // fetched with 'default' (not 'no-cache'): the URLs are immutable
-    // (version- + SRI-pinned), so a warm HTTP-cache copy from the page's own
-    // import is always valid and reused with no extra round-trip. The vendor cache
-    // is shared + un-namespaced, so re-running install across deploys just re-puts
-    // identical bytes.
-    await Promise.all(SHELL_URLS.map((u) => fetchInto(shell, u, 'reload')))
-    await Promise.all([
-      runPooled(PRECACHE_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache')),
-      runPooled(PRECACHE_VENDOR, 16, (u) => fetchInto(vendor, u, 'default')),
-    ])
-    await runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
+    // lands before the lazy tail.
+    await runPooled(SHELL_ENTRIES, SHELL_ENTRIES.length, (u, d) => fetchInto(shell, u, d, 'reload'))
+    await runPooled(PRECACHE_ENTRIES, 16, (u, d) => fetchInto(assets, u, d, 'no-cache'))
+    // Seed before the rest pass: the boot set is ~7 MB of bodies held in
+    // memory for one write, and install's memory peaks after the full graph.
+    await seedBootStore()
+    await runPooled(PRECACHE_REST_ENTRIES, 16, (u, d) => fetchInto(assets, u, d, 'no-cache'))
+  }
+
+  // Copy the boot set out of the just-filled caches, one transaction per
+  // source cache so no more than one cache's bodies are in memory at once.
+  // Best effort: a hole here means that URL boots cache-first, exactly as
+  // before the store existed.
+  const seedBootStore = async (): Promise<void> => {
+    const store = env.bootStore
+    if (!store) return
+    try {
+      for (const [cacheName, urls] of BOOT_SET) {
+        const cache = await caches.open(cacheName)
+        const entries: Array<readonly [string, BootEntry]> = []
+        for (const url of urls) {
+          const cached = await cache.match(url)
+          if (!cached) continue
+          entries.push([bootKey(buildId, url), {
+            status: cached.status,
+            contentType: cached.headers.get('content-type') ?? 'application/octet-stream',
+            body: await cached.arrayBuffer(),
+          }])
+        }
+        await store.putAll(entries)
+      }
+    } catch {
+      // Cache-first still serves every URL; the store is only the fast path.
+    }
+  }
+
+  const bootStoreFirst = async (url: string, fallback: () => Promise<Response>): Promise<Response> => {
+    const store = env.bootStore
+    if (store && BOOT_URLS.has(url)) {
+      try {
+        const entry = await store.get(bootKey(buildId, url))
+        if (entry) {
+          env.mark?.('bootStoreHitAt')
+          return new Response(entry.body, {status: entry.status, headers: {'content-type': entry.contentType}})
+        }
+      } catch {
+        // fall through to the caches
+      }
+    }
+    return fallback()
   }
 
   const activate = async (): Promise<void> => {
@@ -306,7 +381,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // (production + previews are served from the same origin). Blanket-deleting
     // km-* not in a keep-set would wipe THEIR caches. We instead map only OUR
     // expired ledger ids to cache names. That targets exactly our own — never a
-    // sibling's — because a build id is the built commit's sha, and a preview's
+    // sibling's — because a build id starts with the built commit's sha, and a preview's
     // HEAD carries the PR's own commits, so no two live scopes ever build the
     // same commit (the one case they'd match, a fast-forward merge, tears the
     // preview down). If build-id derivation ever changed to allow collisions,
@@ -323,12 +398,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // no space was ever reclaimed. Deletes don't depend on the trimmed ledger
     // (expiredIds comes from the original), and a failed ledger trim is benign
     // (a few stale ids that the next activate re-trims), so guard it.
-    await Promise.all(
-      expiredIds.flatMap((id) => [
-        caches.delete(`${CACHE_PREFIX}shell-${id}`),
-        caches.delete(`${CACHE_PREFIX}assets-${id}`),
-      ]),
-    )
+    await Promise.all(expiredIds.flatMap(deleteGeneration))
     if (ledger.length > keepIds.size) {
       try {
         await trimLedger()
@@ -396,7 +466,6 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       ledgers,
       now: sweepNow,
       staleMs: config.staleScopeMs,
-      cachePrefix: CACHE_PREFIX,
       selfScopeUrl: LEDGER_KEY,
     })
     await Promise.all([
@@ -407,7 +476,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         sweepNow,
         staleMs: config.staleScopeMs,
       }),
-      ...plan.cacheNames.map((name) => caches.delete(name)),
+      // Caches and boot-store entries alike: the store is one per-origin
+      // database shared by every scope, and a merged preview's worker never
+      // runs again to reap its own.
+      ...plan.reapIds.flatMap(deleteGeneration),
       ...plan.ledgerScopeUrls.map((url) => meta.delete(url)),
     ])
   }
@@ -501,14 +573,22 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   ): Promise<void> => {
     if (typeof env.storage?.getDirectory !== 'function') return
     const root = await env.storage.getDirectory()
-    const siblingResults = await Promise.allSettled(
-      SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+    // Same ordering as `deleteLocalSqliteDb`: SQLite's journals before the main
+    // file, because beside a fresh database of this name they get replayed onto
+    // it — and the write-ahead pair after it, because deleting a log while its
+    // `.db` survives strips committed frames from a database this sweep may
+    // then fail to remove.
+    const journalResults = await Promise.allSettled(
+      SQLITE_JOURNAL_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
     )
-    const siblingFailure = siblingResults.find(
+    const journalFailure = journalResults.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     )
-    if (siblingFailure) throw siblingFailure.reason
+    if (journalFailure) throw journalFailure.reason
     await removeOpfsEntryIfExists(root, databaseName)
+    await Promise.allSettled(
+      WRITE_AHEAD_SIDECAR_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+    )
   }
 
   const removeOpfsEntryIfExists = async (
@@ -569,7 +649,9 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // 30-min update poll surface that a new build exists so the user can reload.
   const shellCacheFirst = async (request: Request, shellURL: string): Promise<Response> => {
     const cache = await caches.open(SHELL_CACHE)
+    env.mark?.('shellCacheOpenedAt')
     const cached = await cache.match(shellURL)
+    env.mark?.('shellCacheMatchedAt')
     if (cached) return cached
     // Cold miss (install's shell precache didn't land): fetch and seed this
     // generation's shell for next time. Offline with nothing cached rejects —
@@ -641,10 +723,16 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (isForeignPreviewRequest(OWN_SCOPE_IS_PREVIEW, url.pathname)) return undefined
 
     if (isNavigationRequest(request) && isSameOrigin(url)) {
-      return shellCacheFirst(request, toScopeUrl('./index.html'))
+      // A synthesised Response carries no URL, so only the shell's own path
+      // (the app's start URL) takes the store; a deeper path keeps the cached
+      // response, whose URL is the shell's, for relative resolution.
+      if (url.pathname === scopeURL.pathname || url.href.split(/[?#]/)[0] === SHELL_URL) {
+        return bootStoreFirst(SHELL_URL, () => shellCacheFirst(request, SHELL_URL))
+      }
+      return shellCacheFirst(request, SHELL_URL)
     }
     if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) {
-      return assetCacheFirst(request)
+      return bootStoreFirst(request.url, () => assetCacheFirst(request))
     }
     if (isVendor(url)) return cacheFirst(request, VENDOR_CACHE)
     return undefined

@@ -4,11 +4,11 @@
  * module graph into each generation's cache — not just the first-paint set.
  *
  * Why full precache: the prod build ships modules at UNHASHED, stable URLs
- * (`preserveModules` + `[name].js`), so cross-build consistency rests entirely
+ * (every module is an entry, `[name].js`), so cross-build consistency rests entirely
  * on the SW pinning each deploy to its own generation cache and never grafting
  * foreign-generation bytes onto a page. That invariant only holds for assets
  * that are actually IN the generation cache. Anything lazy — e.g. the extension
- * surface `src/extensions/api.js`, imported only at runtime by user-extension
+ * surface `src/extensions/blockInteraction.js`, imported only at runtime by user-extension
  * blocks and therefore never first-painted — was NOT precached, so on a cache
  * miss the SW's network fallback served the NEWEST generation's copy, grafting
  * new bytes onto an old page. When the new copy's exports drifted from the old
@@ -32,7 +32,7 @@
  * Pure + dependency-injected (`allFiles` / `toBaseUrl`) so it unit-tests
  * without touching a real dist tree.
  */
-import {ASSET_EXTENSION} from '../src/sw/assets'
+import {ASSET_EXTENSION, contentDigest, type PrecacheManifest} from '../src/sw/assets'
 
 export {ASSET_EXTENSION}
 
@@ -47,6 +47,27 @@ const EXCLUDE_PATHS = new Set(['sw.js'])
 /** True for a dist-relative path the SW would serve from the generation cache. */
 export const isPrecacheableAsset = (relPath: string): boolean =>
   ASSET_EXTENSION.test(relPath) && !EXCLUDE_PATHS.has(relPath)
+
+/** The local-database worker's graph, which a cold launch needs before first
+ *  paint but which no HTML tag names: PowerSync's worker (database and sync in
+ *  one script) and the VFS-probe worker, the VFS variants the app can select
+ *  (`src/data/localDbVfs.ts`), and the matching wa-sqlite builds with their
+ *  wasm. The `mc-` (cipher) builds are never selected (no `encryptionKey` is
+ *  passed) and stay in the rest list. Dist-relative POSIX paths in, the
+ *  matching subset out. Name-pinned, so a rename in `@powersync/web` fails the
+ *  build here instead of silently moving the DB worker back behind Cache
+ *  Storage. PowerSync's stem is the generic `worker`, so a module of ours
+ *  named `worker` would also satisfy the pin; there is none. */
+const BOOT_WORKER_ASSET = /^assets\/(?:(?:worker|writeAheadVfsProbe\.worker)-[^/]+\.js|(?:OPFSCoopSyncVFS|OPFSWriteAheadVFS|FacadeVFS)-[^/]+\.js|wa-sqlite(?:-async)?-[^/]+\.(?:js|wasm))$/
+const BOOT_WORKER_REQUIRED = [/^assets\/worker-/, /writeAheadVfsProbe\.worker-/, /OPFSCoopSyncVFS-/, /\.wasm$/]
+export const bootWorkerAssets = (allFiles: readonly string[]): string[] => {
+  const selected = allFiles.filter(rel => BOOT_WORKER_ASSET.test(rel)).sort()
+  const missing = BOOT_WORKER_REQUIRED.filter(required => !selected.some(rel => required.test(rel)))
+  if (missing.length > 0) {
+    throw new Error(`boot worker set is missing ${missing.map(String).join(', ')}; PowerSync's emitted names changed?`)
+  }
+  return selected
+}
 
 /**
  * Partition the emitted graph into the "rest" precache list — every
@@ -81,4 +102,40 @@ export const collectRestAssets = ({
     rest.add(url)
   }
   return [...rest].sort()
+}
+
+// The HTML shell + icons the app boots from, dist-relative; '' is the scope
+// root, which the host answers with index.html.
+export const SHELL_FILES = [
+  '',
+  'index.html',
+  'manifest.webmanifest',
+  'icon.svg',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable.png',
+  'apple-touch-icon.png',
+]
+
+/**
+ * The URL → `contentDigest` manifest install checks each fetched body against,
+ * in the given order. The base itself (the scope root) is served as index.html.
+ */
+export const collectPrecacheManifest = async ({
+  urls,
+  base,
+  read,
+}: {
+  urls: readonly string[]
+  /** the configured base, with leading and trailing slash */
+  base: string
+  /** dist-relative POSIX path → file bytes */
+  read: (rel: string) => Uint8Array<ArrayBuffer>
+}): Promise<PrecacheManifest> => {
+  const digests: Record<string, string> = {}
+  for (const url of urls) {
+    if (!url.startsWith(base)) throw new Error(`precache URL ${url} is outside base ${base}`)
+    digests[url] = await contentDigest(read(url.slice(base.length) || 'index.html'))
+  }
+  return digests
 }

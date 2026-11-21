@@ -72,15 +72,19 @@ describe('sniffImageMime', () => {
     expect(sniffImageMime(png())).toBe('image/png')
     expect(sniffImageMime(jpeg())).toBe('image/jpeg')
     expect(sniffImageMime(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))).toBe('image/gif')
-    expect(sniffImageMime(new Uint8Array([0x42, 0x4d, 0, 0]))).toBe('image/bmp')
+    expect(sniffImageMime(new Uint8Array([0x42, 0x4d, 9, 9, 9, 9, 0, 0, 0, 0]))).toBe('image/bmp')
     expect(sniffImageMime(new Uint8Array([0x25, 0x50, 0x44, 0x46]))).toBeNull() // %PDF
     expect(sniffImageMime(new Uint8Array([0x89]))).toBeNull() // too short
+    const encoded = (text: string) => new TextEncoder().encode(text)
+    expect(sniffImageMime(encoded('BMW service history'))).toBeNull()
+    expect(sniffImageMime(encoded('GIF8 is what I call it'))).toBeNull()
+    expect(sniffImageMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]))).toBeNull() // PNG's first 4 only
   })
 })
 
 describe('resolveCaptureMime', () => {
   it('derives image MIME from bytes when File.type is missing or generic (the dedup fix)', () => {
-    // The core Codex P2 case: a typeless/octet-stream image must still store image/* so
+    // The core case: a typeless/octet-stream image must still store image/* so
     // it renders inline AND every dedup'd embed of the same bytes agrees.
     expect(resolveCaptureMime(undefined, png())).toBe('image/png')
     expect(resolveCaptureMime('', png())).toBe('image/png')

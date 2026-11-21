@@ -8,8 +8,10 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, normalizeReferences, type BlockData } from '@/data/api'
+import { deleteBlock } from '@/data/mutators'
 import { Repo } from '@/data/repo'
+import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -74,6 +76,72 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read(D)!.deleted).toBe(true)
     expect(env.read('s')!.content).toBe('before deleted body after')
     expect(env.read('s')!.references).toEqual([])
+  })
+
+  // Tagging only clears a block's edges at the next parse, so the edge query can
+  // still reach it; the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never inlines into a block newly typed %s', async type => {
+    const source = `const id = "((${D}))"`
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'deleted body'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: source,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.tx(async tx => {
+      await tx.update('s', {properties: {types: [type]}})
+      await tx.run(deleteBlock, {id: D})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('s')!.content).toBe(source)
+  })
+
+  it.each(['extension', 'html-document'])('leaves a citation of a deleted %s block dangling', async type => {
+    const citation = `see ((${D})) today`
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x = y[[0]]', properties: {types: [type]}})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: citation,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('s')!.content).toBe(citation)
+    expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
+  })
+
+  // Regression: `core.deriveReferenceTarget` runs earlier
+  // in the same-tx processor pass and stamps `referenceTargetId` from the
+  // PRE-inline content. Without recomputing it here, a whole-block
+  // `((deletedId))` row would keep `referenceTargetId: deletedId` even
+  // though its content is now plain inlined text.
+  it('recomputes referenceTargetId when inlining rewrites a whole-block reference', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'deleted body'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    expect(env.read('s')!.referenceTargetId).toBe(D)
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe('deleted body')
+    expect(env.read('s')!.referenceTargetId).toBeNull()
   })
 
   it('inlines plain and embed marks as content but keeps an aliased mark\'s label', async () => {
@@ -246,5 +314,193 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read(D)!.deleted).toBe(false)
     expect(env.read('s')!.content).toBe(`pre ((${D})) post`)
     expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
+  })
+})
+
+/**
+ * #404 item 4 / docs/properties-as-blocks-migration.html §9: a ref-typed
+ * property VALUE is `((targetId))`.
+ * Inlining it would rewrite the value into prose, clear its derived column,
+ * and silently drop the property key at the next projection — irreversibly,
+ * since the id is gone. Cell-era semantics were the opposite: a deleted
+ * target left a dangling reference with the property RETAINED. Soft-delete
+ * makes dangling recoverable (restore the target and the property snaps
+ * back), so the value keeps identity and inlining skips it.
+ */
+describe('property value children keep a dangling ref instead of inlining (#404)', () => {
+  const DEF = '44444444-4444-4444-8444-444444444444'
+
+  const relatedSchema = defineProperty('related', {
+    codec: codecs.ref(),
+    defaultValue: null,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** Recognition has two halves: the tx-layer registry (`resolveField`) and
+   *  the SQL `block_types` probe. Seed both — the definition block carries
+   *  the type, the runtime contribution makes the fieldId resolvable. */
+  const registerDefinition = (): void => {
+    env.repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-related-definition',
+      [{
+        metadata: {
+          fieldId: DEF,
+          workspaceId: WS,
+          createdAt: 1,
+          name: relatedSchema.name,
+          changeScope: relatedSchema.changeScope,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: relatedSchema,
+      }],
+      {workspaceId: WS},
+    )
+  }
+
+  const seedFlippedWorkspaceWithRefValue = async (): Promise<void> => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS],
+    )
+    registerDefinition()
+    await env.repo.tx(async tx => {
+      // Definition block — `block_types` (written by typeify) is what the
+      // recognition predicate binds definition-ness to.
+      await tx.create({
+        id: DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'related', properties: {types: ['property-schema']},
+      })
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target body'})
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
+      await tx.create({
+        id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1',
+        content: `::((${DEF}))`,
+      })
+      await tx.create({
+        id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
+        content: `((${D}))`, references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+  }
+
+  it('leaves the value row pointing at the tombstone, column intact', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    expect(env.read('value')!.referenceTargetId).toBe(D)
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('value')!.content).toBe(`((${D}))`)
+    expect(env.read('value')!.referenceTargetId).toBe(D)
+    expect(env.read('value')!.references).toEqual([{id: D, alias: D}])
+  })
+
+
+  // Deleting the DEFINITION block, not the ref target: every field row keyed
+  // to it is an ordinary reference source, so without an exemption they get
+  // inlined — content replaced by the definition's text, stamp cleared — and
+  // each owner loses its property identity irreversibly. Same argument as the
+  // value case: a dangling `::((fieldId))` is restorable (restore the definition
+  // and the property comes back), inlined prose is not. §9 already has a home
+  // for the interim state: a field row whose definition doesn't resolve
+  // degrades to a visible "unknown field" row.
+  it('leaves field rows dangling when their definition block is deleted', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+
+    await env.repo.mutate.delete({id: DEF})
+
+    expect(env.read(DEF)!.deleted).toBe(true)
+    expect(env.read('field')!.content).toBe(`::((${DEF}))`)
+    expect(env.read('field')!.referenceTargetId).toBe(DEF)
+  })
+
+  // A refList's members are N sibling value rows (km-h1hy), so the exemption
+  // has to hold at EVERY position rather than for a first primary value.
+  // Nothing in it is positional — it asks whether the row's parent is a field
+  // row — and this is what proves that rather than assuming it: the target
+  // deleted here belongs to the SECOND member.
+  it('leaves a LATER refList member dangling too', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    const second = '55555555-5555-4555-8555-555555555555'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: second, workspaceId: WS, parentId: null, orderKey: 'a3',
+        content: 'second target body',
+      })
+      await tx.create({
+        id: 'member2', workspaceId: WS, parentId: 'field', orderKey: 'a2',
+        content: `((${second}))`, references: [{id: second, alias: second}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: second})
+
+    expect(env.read('member2')!.content).toBe(`((${second}))`)
+    expect(env.read('member2')!.referenceTargetId).toBe(second)
+  })
+
+  // The exemption is for VALUES, not for everything under a property: a
+  // comment beneath a value row is ordinary prose and still inlines, exactly
+  // as it would anywhere else in the outline.
+  it('still inlines ordinary content nested under a value row', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'comment', workspaceId: WS, parentId: 'value', orderKey: 'a1',
+        content: `see ((${D})) for why`, references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('comment')!.content).toBe('see target body for why')
+    expect(env.read('comment')!.references).toEqual([])
+  })
+
+  // The exemption is NOT flip-gated: the cell->children backfill mints real
+  // field and value rows while the workspace still reads cells, and inlining
+  // one detaches the property from its owner irreversibly. The fixture below
+  // is a REAL field row (marked `::`), which is what the bit keys on — the
+  // earlier version used an unmarked `((DEF))` and so proved nothing about
+  // the gate it claimed to exercise.
+  it('protects a backfilled field row in an un-flipped workspace', async () => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'cell')`,
+      [WS],
+    )
+    registerDefinition()
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'related', properties: {types: ['property-schema']},
+      })
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target body'})
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
+      await tx.create({id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: `::((${DEF}))`})
+      await tx.create({
+        id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
+        content: `((${D}))`, references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    // The value row keeps its reference rather than being inlined to text.
+    expect(env.read('value')!.content).toBe(`((${D}))`)
+
+    // And deleting the DEFINITION must not rewrite the field row, which would
+    // strip the `::` marker and detach the property from its owner entirely.
+    await env.repo.mutate.delete({id: DEF})
+    expect(env.read('field')!.content).toBe(`::((${DEF}))`)
   })
 })

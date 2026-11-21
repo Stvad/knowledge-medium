@@ -18,21 +18,24 @@ import {
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
 } from '@/utils/panelLayoutProjection'
-import { type User } from '@/data/api'
-import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
+import { WorkspaceRegistryUnavailableError, type User } from '@/data/api'
+import { activePanelIdProp, panelMaximizedProp, topLevelBlockIdProp } from '@/data/properties'
+import { waitFor } from '@/test/waitFor'
+
+/** Panel writes land through the layout projector; under a loaded gate they
+ *  can take past `waitFor`'s 1s default, so each wait gets 3s, under the 5s
+ *  test timeout. */
+const settled = (check: () => unknown) => waitFor(check, {timeout: 3_000})
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -70,10 +73,10 @@ afterEach(() => {
 
 const layoutSessionBlock = async () => {
   const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-  return getLayoutSessionBlock(uiState, getLayoutSessionId())
+  return getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
 }
 
-const currentPanelRows = async () => (await layoutSessionBlock()).children.load()
+const currentPanelRows = async () => childrenOf(env.repo, (await layoutSessionBlock()).id)
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
 const currentActivePanelId = async () => {
@@ -102,7 +105,7 @@ describe('navigate', () => {
   it("target 'main' creates the main panel when the layout is empty", async () => {
     navigate(env.repo, {blockId: 'b-main', target: 'main'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main'])
     })
   })
@@ -113,7 +116,7 @@ describe('navigate', () => {
 
     navigate(env.repo, {blockId: 'b-next', target: 'panel', panelId})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-next'])
       expect(await currentActivePanelId()).toBe(panelId)
     })
@@ -127,7 +130,7 @@ describe('navigate', () => {
 
     navigate(env.repo, {blockId: 'b-new-main', target: 'main'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-new-main', 'b-side'])
     })
   })
@@ -139,7 +142,7 @@ describe('navigate', () => {
 
     navigate(env.repo, {blockId: 'b-active-next', target: 'active'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-active-next'])
       expect(await currentActivePanelId()).toBe(activePanel)
     })
@@ -156,7 +159,7 @@ describe('navigate', () => {
       sourcePanelId: firstPanelId,
     })
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-a', 'b-b', 'b-c'])
       const rows = await currentPanelRows()
       expect(await currentActivePanelId()).toBe(rows[1].id)
@@ -175,7 +178,7 @@ describe('navigate', () => {
       sourcePanelId: firstPanelId,
     })
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentLayoutBlockIds()).toEqual(['b-a', 'b-x', 'b-b', 'b-c'])
     })
     expect(layoutSlotsFromRows(layoutSession.id, await currentLayoutRows())).toEqual([
@@ -183,7 +186,9 @@ describe('navigate', () => {
       {
         kind: 'stack',
         children: [
-          {kind: 'leaf', blockId: 'b-x'},
+          // The freshly stacked panel is activated by the navigation, so
+          // the slot projection surfaces it as the active leaf.
+          {kind: 'leaf', blockId: 'b-x', active: true},
           {kind: 'leaf', blockId: 'b-b'},
         ],
       },
@@ -191,6 +196,26 @@ describe('navigate', () => {
     ])
     const rightPanel = await env.repo.block(rightPanelId).load()
     expect(rightPanel?.parentId).not.toBe(layoutSession.id)
+  })
+
+  // The active pane is neither the last row nor the source here, so landing
+  // on either of those instead fails.
+  it("'new-panel' and 'sidebar-stack' land in the active pane when the viewport cannot render a split", async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    const sourcePanel = await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+    await insertPanelRow(env.repo, layoutSession, 'b-last')
+    await layoutSession.set(activePanelIdProp, activePanel)
+
+    const stacked = await navigate(env.repo, {blockId: 'b-stacked', target: 'sidebar-stack', sourcePanelId: sourcePanel})
+    const split = await navigate(env.repo, {blockId: 'b-split', target: 'new-panel', sourcePanelId: sourcePanel})
+
+    expect(stacked?.panelId).toBe(activePanel)
+    expect(split?.panelId).toBe(activePanel)
+    expect(await currentLayoutBlockIds()).toEqual(['b-main', 'b-split', 'b-last'])
+    expect(await currentActivePanelId()).toBe(activePanel)
+    expect(panelHistory.getSnapshot(activePanel).back.map(entry => entry.blockId)).toEqual(['b-side', 'b-stacked'])
   })
 
   it('a navigation commits its active-panel write before resolving (no deferred write clobbers a later nav)', async () => {
@@ -205,6 +230,100 @@ describe('navigate', () => {
     const dest = await navigate(env.repo, {target: 'new-panel', blockId: 'b-new', sourcePanelId: mainPanel})
 
     expect(await currentActivePanelId()).toBe(dest?.panelId)
+  })
+
+  // A maximized pane renders ALONE, so the raw row order stops being a proxy
+  // for "which pane the user can see". Landing in `panels[0]` when pane 2 is
+  // maximized means the user picks a page and nothing visibly happens.
+  it("target 'main' lands in the maximized pane, not the hidden first row", async () => {
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-first')
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-second')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+
+    const dest = await navigate(env.repo, {target: 'main', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(maximizedPanelId)
+    expect(await currentPanelBlockIds()).toEqual(['b-first', 'b-landed'])
+  })
+
+  // The same resolution feeds `resolveGlobalCommandTarget`, so this is a READ
+  // bug too: prev/next daily note anchors on it and CREATES a note from
+  // whatever page the invisible pane happened to show.
+  it('resolveGlobalCommandTarget reads the maximized pane, not the hidden first row', async () => {
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-first')
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-second')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+
+    expect(await resolveGlobalCommandTarget(env.repo, WS)).toMatchObject({blockId: 'b-second'})
+  })
+
+  // The last place "which pane is visible" had two answers: mobile renders the
+  // ACTIVE pane, but `'main'` indexed raw row order. Same class as the
+  // maximize bugs, just never reported — a navigator gesture that reaches
+  // `'main'` on a tablet lands in a pane that isn't on screen.
+  it("target 'main' on mobile lands in the pane mobile actually renders", async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-first')
+    const visibleOnMobile = await insertPanelRow(env.repo, layoutSession, 'b-last')
+    expect(await currentActivePanelId()).toBe(visibleOnMobile)
+
+    const dest = await navigate(env.repo, {target: 'main', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(visibleOnMobile)
+    expect(await currentPanelBlockIds()).toEqual(['b-first', 'b-landed'])
+  })
+
+  // Mobile renders by ACTIVE pane and ignores the flag, so narrowing to the
+  // flagged row there lands in a pane the user is not looking at — the desktop
+  // bug, mirrored. Reachable with no desktop and no sync: `#ws/a;max/b` on a
+  // phone reconciles the flag onto `a` while the pointer seeds to `b`.
+  it('does NOT narrow to the maximized pane on mobile, which renders by active pane', async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-first')
+    const visibleOnMobile = await insertPanelRow(env.repo, layoutSession, 'b-last')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+    // Mobile shows the ACTIVE pane; `insertPanelRow` left that on the last one.
+    expect(await currentActivePanelId()).toBe(visibleOnMobile)
+
+    const dest = await navigate(env.repo, {target: 'active', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(visibleOnMobile)
+    expect(await resolveGlobalCommandTarget(env.repo, WS)).toMatchObject({blockId: 'b-landed'})
+  })
+
+  // An inbound `;max` link sets the flag and leaves the pointer unset — the
+  // repair is a render effect, so there is a real window where `at(-1)` would
+  // otherwise pick a pane that isn't on screen.
+  it("target 'active' with no active pointer falls back to the maximized pane", async () => {
+    const layoutSession = await layoutSessionBlock()
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-first')
+    await insertPanelRow(env.repo, layoutSession, 'b-last')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+    await layoutSession.set(activePanelIdProp, undefined)
+
+    const dest = await navigate(env.repo, {target: 'active', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(maximizedPanelId)
+  })
+
+  // The case `visiblePanelRows`'s docstring calls load-bearing: the pointer
+  // legitimately names a hidden pane for a window after a `;max` arrival,
+  // because the coercion that repairs it is a render effect.
+  it("target 'active' with the pointer on a HIDDEN pane still lands in the visible one", async () => {
+    stubViewport(false)
+    const layoutSession = await layoutSessionBlock()
+    const hidden = await insertPanelRow(env.repo, layoutSession, 'b-hidden')
+    const maximizedPanelId = await insertPanelRow(env.repo, layoutSession, 'b-shown')
+    await env.repo.block(maximizedPanelId).set(panelMaximizedProp, true)
+    await layoutSession.set(activePanelIdProp, hidden)
+
+    const dest = await navigate(env.repo, {target: 'active', blockId: 'b-landed'})
+
+    expect(dest?.panelId).toBe(maximizedPanelId)
   })
 
   it("target 'panel' with an unknown panelId is a no-op (no ghost write)", async () => {
@@ -238,7 +357,7 @@ describe('navigateFromGlobalCommand', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
     })
     expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-global')
@@ -252,7 +371,7 @@ describe('navigateFromGlobalCommand', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
     })
     expect((await resolveGlobalCommandTarget(env.repo, WS))?.blockId).toBe('b-global')
@@ -328,7 +447,7 @@ describe('navigationVerb (intent seam)', () => {
 
     expect(result?.blockId).toBe('b1')
     expect(typeof result?.panelId).toBe('string')
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b1'])
     })
   })
@@ -364,7 +483,7 @@ describe('navigationVerb (intent seam)', () => {
 
     await navigate(env.repo, {blockId: 'b1', target: 'main'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['rewritten'])
     })
   })
@@ -383,7 +502,7 @@ describe('navigationVerb (intent seam)', () => {
 
     await navigate(env.repo, {blockId: 'b1', target: 'main'})
 
-    await vi.waitFor(() => {
+    await settled(() => {
       expect(calls).toContain('after:b1:b1')
     })
     expect(calls).toContain('before:b1')
@@ -423,30 +542,27 @@ describe('navigationVerb (intent seam)', () => {
 
     await navigate(env.repo, {blockId: 'b-zoomed', target: 'main', origin: 'zoom'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       // Redirected from main to the active (last) panel by the origin rule.
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-zoomed'])
       expect(await currentActivePanelId()).toBe(activePanel)
     })
   })
 
-  it('lands in the workspace captured at call time even if the active workspace changes mid-flight', async () => {
-    // A before-observer flips the active workspace (simulating the user
-    // switching workspaces while an async observer/confirmation runs). The
-    // navigation must still land in the workspace that originated it (captured
-    // up front in navigate()), not the newly-active one.
+  it('refuses a navigation whose captured workspace closes before its write starts', async () => {
     env.repo.setRuntimeContributions(navigationVerb.beforeFacet, 'test-nav', [
       () => { env.repo.setActiveWorkspaceId('ws-other') },
     ])
-
-    // No workspaceId on the input → captured from repo.activeWorkspaceId (WS).
-    await navigate(env.repo, {blockId: 'b-captured', target: 'main'})
-
-    // currentPanelBlockIds resolves WS's layout session — so this passing proves
-    // the nav landed in WS, not the flipped 'ws-other'.
-    await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-captured'])
-    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await navigate(env.repo, {blockId: 'b-captured', target: 'main'})).toBeNull()
+      expect(error).toHaveBeenCalledWith('[navigation] navigate failed',
+        expect.any(WorkspaceRegistryUnavailableError))
+    } finally {
+      error.mockRestore()
+    }
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE workspace_id = ?', [WS]))
+      .toEqual([])
   })
 })
 
@@ -459,7 +575,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
     })
   })
@@ -494,34 +610,33 @@ describe('navigationIntentVerb (intent policy seam)', () => {
       .toEqual(goTo({blockId: 'b-cmd', target: 'main'}))
   })
 
-  it('carries the gesture workspace into a navigate decision that omitted one (sync active switch)', async () => {
+  it('keeps the gesture workspace and refuses its write after a sync active switch', async () => {
     stubViewport(false)
-    // A policy impl that flips the active workspace synchronously during
-    // resolution and returns a navigate WITHOUT a workspaceId. The navigation
-    // must still land in the workspace the gesture captured (WS), not the
-    // flipped one — `resolveNavigationIntent` carries it.
     env.repo.setRuntimeContributions(navigationIntentVerb.implFacet, 'test-policy', [
       gesture => {
         env.repo.setActiveWorkspaceId('ws-other')
         return goTo({blockId: gesture.blockId, target: 'main'})
       },
     ])
-
-    await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})
-
-    // currentPanelBlockIds resolves WS's layout session — passing proves the nav
-    // landed in WS despite the active flip and the omitted workspaceId.
-    await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-ws'])
-    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await navigateFromGlobalCommand(env.repo, {blockId: 'b-ws'})).toBeNull()
+      expect(error).toHaveBeenCalledWith('[navigation] navigate failed',
+        expect.any(WorkspaceRegistryUnavailableError))
+    } finally {
+      error.mockRestore()
+    }
+    expect(await env.h.db.getAll('SELECT id FROM blocks WHERE workspace_id = ?', [WS]))
+      .toEqual([])
   })
-
   it('the read probe honors a policy-retargeted workspace (read/write aligned)', async () => {
     stubViewport(false)
     // Seed a main panel in each workspace via navigate (creates each layout
     // session properly). WS shows b-ws1; ws-2 shows b-ws2.
     await navigate(env.repo, {target: 'main', blockId: 'b-ws1', workspaceId: WS})
+    env.repo.setActiveWorkspaceId('ws-2')
     await navigate(env.repo, {target: 'main', blockId: 'b-ws2', workspaceId: 'ws-2'})
+    env.repo.setActiveWorkspaceId(WS)
 
     // Policy retargets navigator gestures to ws-2; the read-side probe must
     // anchor on that retargeted workspace, matching where the write would land
@@ -534,7 +649,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     // Reads from ws-2 (the retargeted workspace), not WS's b-ws1 — and returns
     // the resolved workspace so callers validate/create against ws-2, not WS.
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await resolveGlobalCommandTarget(env.repo, WS)).toEqual({blockId: 'b-ws2', workspaceId: 'ws-2'})
     })
   })
@@ -560,7 +675,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
       expect(await currentActivePanelId()).toBe(activePanel)
     })
@@ -577,7 +692,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
 
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
     })
   })
@@ -605,7 +720,7 @@ describe('navigationIntentVerb (intent policy seam)', () => {
     // navigator command to the (empty-layout) main panel.
     navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
 
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-global'])
     })
     expect(consoleError).toHaveBeenCalled()
@@ -641,7 +756,7 @@ describe('applyNavigationDecision (DOM routing)', () => {
     applyNavigationDecision(env.repo, e as unknown as ClickArg, goTo({blockId: 'b-go', target: 'main', workspaceId: WS}))
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-go'])
     })
   })
@@ -666,7 +781,7 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-open', workspaceId: WS})
     expect(e.preventDefault).toHaveBeenCalled()
     expect(e.stopPropagation).toHaveBeenCalled()
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-open'])
     })
   })
@@ -701,7 +816,7 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     const e = fakeMouseEvent({metaKey: true})
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-cmd-nav', workspaceId: WS})
     expect(e.preventDefault).toHaveBeenCalled()
-    await vi.waitFor(async () => {
+    await settled(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-cmd-nav'])
     })
   })

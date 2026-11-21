@@ -23,7 +23,7 @@
 // table (typically JOIN columns). Trailing "?" in an extra is allowed and
 // stripped — optional fields on the TS side still count as projected.
 //
-// Run via `yarn check:rpc-projections`. Wired into `yarn check`.
+// Run via `pnpm check:rpc-projections`. Wired into `pnpm check`.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'

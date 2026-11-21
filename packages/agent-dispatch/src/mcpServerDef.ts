@@ -7,7 +7,7 @@ import { BLOCKED_WIKILINKS_ENV, encodeBlockedWikilinks } from './blockedWikilink
  *  --mcp-config JSON file and codex's `-c mcp_servers.*` overrides —
  *  one source of truth for command/args/env so the two executors can
  *  never drift apart. */
-export const buildMcpServerDef = (config: DaemonConfig) => {
+export const buildMcpServerDef = (config: DaemonConfig, contributorId: string | null) => {
   const mcpServerScript = fileURLToPath(new URL('./mcp.js', import.meta.url))
   const blockedTargets = config.watchers
     .filter(watcher => watcher.kind === 'backlinks')
@@ -19,6 +19,8 @@ export const buildMcpServerDef = (config: DaemonConfig) => {
     args: [mcpServerScript],
     env: {
       AGENT_RUNTIME_PROFILE: config.profile,
+      AGENT_RUNTIME_WORKSPACE: config.workspaceId,
+      AGENT_RUNTIME_CONTRIBUTOR_ID: contributorId ?? 'none',
       ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
     },
   }

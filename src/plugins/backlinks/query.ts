@@ -11,6 +11,8 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
+import { backlinkSourceIds } from './sourceBatch.ts'
+import { filteredBacklinkSourceIds } from './sources.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -77,23 +79,20 @@ export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean
   return n.include.length > 0 || n.exclude.length > 0
 }
 
-/** Backlinks: blocks whose references point at `id`. Thin wrapper
- *  around `resolveTypedBlocks` — the typed-query compiler drives from
- *  the indexed `block_references` lookup when `referencedBy` is set,
- *  preserving the perf shape of the previous dedicated SQL.
- *
- *  Self-reference (the target block referencing itself) is filtered
- *  out post-fetch — it's a one-line check, not worth a special SQL
- *  predicate. */
+/** Backlinks: blocks whose references point at `id`, self-reference excluded.
+ *  Unfiltered, it is answered by the inline badge's batched statement
+ *  (`sourceBatch.ts`), so the list on expand and the count on the badge are two
+ *  projections of one query. Filtered (or `rawSources`), it goes through
+ *  `sources.ts`, the same owner grouped backlinks uses. */
 // Explicit const type so `typeof backlinksForBlockQuery` (it augments
 // QueryRegistry below) is knowable without inferring this initializer —
 // otherwise the `ctx.run` call here resolves QueryRegistry, which loops
 // back through this query's own type.
 export const backlinksForBlockQuery: Query<
-  {workspaceId: string; id: string; filter?: BacklinksFilter},
+  {workspaceId: string; id: string; filter?: BacklinksFilter; rawSources?: boolean},
   string[]
 > = defineQuery<
-  {workspaceId: string; id: string; filter?: BacklinksFilter},
+  {workspaceId: string; id: string; filter?: BacklinksFilter; rawSources?: boolean},
   string[]
 >({
   name: BACKLINKS_FOR_BLOCK_QUERY,
@@ -101,9 +100,15 @@ export const backlinksForBlockQuery: Query<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema.optional(),
+    // Default (false): exclude edges another surface owns (`edgeExclusions.ts`)
+    // and canonical property-value copies already represented by their owner.
+    // `true` returns EVERY source in `block_references`, for inspection / debugging.
+    // Reference maintenance never goes through this query — it reads
+    // `block_references` directly.
+    rawSources: z.boolean().optional(),
   }),
   resultSchema: stringArraySchema,
-  resolve: async ({workspaceId, id, filter}, ctx) => {
+  resolve: async ({workspaceId, id, filter, rawSources}, ctx) => {
     if (!workspaceId || !id) return []
     // Target structural dep — re-resolve when the target itself is
     // deleted/restored without making target content part of the
@@ -114,14 +119,10 @@ export const backlinksForBlockQuery: Query<
       key: typedBlocksStructureKey(workspaceId, id),
     })
     const normalized = normalizeBacklinksFilter(filter)
-    const ids = await ctx.run('core.typedBlockIds', {
-      workspaceId,
-      referencedBy: {id},
-      match: normalized.include,
-      exclude: normalized.exclude,
-      order: 'created-desc',
-    })
-    return ids.filter(sourceId => sourceId !== id)
+    if (!rawSources && normalized.include.length === 0 && normalized.exclude.length === 0) {
+      return backlinkSourceIds(ctx, workspaceId, id)
+    }
+    return filteredBacklinkSourceIds(ctx, workspaceId, id, normalized, {raw: rawSources})
   },
 })
 

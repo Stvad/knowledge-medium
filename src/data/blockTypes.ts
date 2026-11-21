@@ -1,9 +1,11 @@
-import { defineBlockType, INFRASTRUCTURE_TYPE_DISPLAY, type TypeContribution } from '@/data/api'
+import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type BlockData, type TypeSeedDeclaration } from '@/data/api'
+import { propertyDisplayPrefsType } from '@/data/propertyDisplayMode'
 import {
   aliasesProp,
   blockTypeColorProp,
   blockTypeDescriptionProp,
   blockTypeHideFromBlockDisplayProp,
+  blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   extensionDescriptionProp,
@@ -11,10 +13,14 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
+  typesProp,
   userIdProp,
 } from '@/data/properties'
 
 export const EXTENSION_TYPE = 'extension'
+/** Owned by the html-document plugin, named here because {@link hasSourceContent}
+ *  has to hold with that plugin off. */
+export const HTML_DOCUMENT_TYPE = 'html-document'
 export const PAGE_TYPE = 'page'
 export const PANEL_TYPE = 'panel'
 export const PANEL_STACK_TYPE = 'panel-stack'
@@ -35,25 +41,148 @@ export const TYPES_PAGE_TYPE = 'panel:types'
 /** Marker type for the singleton Recents page — a Tana-style view of
  *  recently-edited blocks in the workspace. */
 export const RECENTS_PAGE_TYPE = 'panel:recents'
+/** Marker type for the singleton Migrations page — workspace-scoped
+ *  bookkeeping for one-shot data migrations, above all the `per-graph`
+ *  backfill claims. Workspace-scoped rather than per-user on purpose: a
+ *  workspace can be SHARED, and a claim anchored to one user's page would
+ *  let a second user's devices run the same upload-carrying pass again,
+ *  which is the hazard `per-graph` exists to prevent. */
+export const MIGRATIONS_PAGE_TYPE = 'panel:migrations'
+/** Marker for a single migration's completion claim — app bookkeeping, not
+ *  content. Needed SEPARATELY from the page's marker because the Recents
+ *  exclusion tests system types on each RESULT ROW (`bt.block_id =
+ *  blocks.id`); it only walks down from the user-state roots, so tagging the
+ *  parent page does nothing for the rows beneath it. */
+export const MIGRATION_CLAIM_TYPE = 'system:migration-claim'
 /** Per-user "user page" type. Tagged alongside `PAGE_TYPE` (so the page
  *  stays navigable) and carries the user's opaque id as a property,
  *  letting `block_types`-indexed lookups enumerate users and attribution
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
 
-export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
-  defineBlockType({
+/** A raw-array read rather than `hasBlockType`, which decodes through the
+ *  `string-list` codec and THROWS a `CodecError` on a malformed `types` value. A
+ *  local write can store one (the kernel's same-tx processors let it through), and
+ *  a throw here lands after the user's write committed, freezing references for
+ *  every row in the event. A wrong-shaped value reading as having no types is the
+ *  right answer: the block gets parsed like ordinary content. */
+const declaredTypes = (row: Pick<BlockData, 'properties'>): readonly unknown[] => {
+  const types = row.properties[typesProp.name]
+  return Array.isArray(types) ? types : []
+}
+
+/** Does the row's own `types` say extension? `block_types` is not enough to run
+ *  one: SQLite's `json_each` and `JSON.parse` disagree on a duplicated key, so a
+ *  crafted row can be listed as an extension while every reader of its properties
+ *  sees another type, and shows a reviewer something other than its source. */
+export const declaresExtensionType = (row: Pick<BlockData, 'properties'>): boolean =>
+  declaredTypes(row).includes(EXTENSION_TYPE)
+
+const SOURCE_CONTENT_TYPES: readonly string[] = [EXTENSION_TYPE, HTML_DOCUMENT_TYPE]
+
+/** Is this row's `content` source code rather than markdown? Then it is not text:
+ *  the content grammars don't parse it, nothing rewrites spans in it, it isn't a
+ *  name, and it doesn't join with a neighbour.
+ *
+ *  Every writer asks this of the row it is about to write, not of how it found
+ *  the row. A block's edges outlive the type arriving (they clear at the next
+ *  parse, and a block typed before this rule keeps them until its next write), so
+ *  finding one through `block_references` proves nothing.
+ *
+ *  A plain list rather than a facet: it is a fact about the stored row and has to
+ *  hold with the owning plugin off, or the next write mints pages from the source. */
+export const hasSourceContent = (row: Pick<BlockData, 'properties'>): boolean => {
+  const types = declaredTypes(row)
+  return SOURCE_CONTENT_TYPES.some(type => types.includes(type))
+}
+
+/** {@link hasSourceContent} for a handle. One not loaded yet reads as not source, so
+ *  a gesture that may hold such a block loads it first. */
+export const holdsSource = (block: {peek: () => BlockData | null | undefined}): boolean => {
+  const data = block.peek()
+  return data != null && hasSourceContent(data)
+}
+
+/** Whether a write that treats content as text may change this row, as read in the
+ *  writing tx: it exists, it isn't deleted (`tx.get` returns tombstones), and it
+ *  isn't source. */
+export const takesTextEdit = (row: BlockData | null | undefined): row is BlockData =>
+  row != null && !row.deleted && !hasSourceContent(row)
+
+/** Types whose blocks are the app's own bookkeeping rather than anything
+ *  the user authored — the rows the activity surface
+ *  (`core.recentActivity`) must not report as an edit.
+ *
+ *  Deliberately narrow, because it is the least precise of the three
+ *  tests that surface applies. Per-user state (panels, layout sessions,
+ *  per-plugin prefs and ui-state, records filed under them) is excluded
+ *  STRUCTURALLY, by descent from a user's state roots; code-owned
+ *  definition blocks are excluded by their `seed:key` property. What is
+ *  left for this list is the app-owned rows that match neither: layout
+ *  rows and the singleton kernel pages.
+ *
+ *  Types an authoring flow can produce therefore stay OFF this list even
+ *  when the kernel also mints them — `block-type` (the `#type` gesture),
+ *  `property-schema` (the Properties page), `extension` (extension source
+ *  is edited in the app). Their seeded twins carry `seed:key`; the ones a
+ *  user made do not, and those edits belong in the feed. */
+export const SYSTEM_BLOCK_TYPES: readonly string[] = [
+  PANEL_TYPE,
+  PANEL_STACK_TYPE,
+  USER_TYPE,
+  PROPERTIES_PAGE_TYPE,
+  TYPES_PAGE_TYPE,
+  RECENTS_PAGE_TYPE,
+  MIGRATIONS_PAGE_TYPE,
+  MIGRATION_CLAIM_TYPE,
+]
+
+/** Kernel-owned block types, declared as code seeds (`seedType`) so the
+ * schema-unification materializer mints one deterministic backing block per type
+ * per workspace (`src/data/definitionSeeds.ts`) — the type-side twin of
+ * `KERNEL_PROPERTY_SEEDS`. Contributed through `typeSeedsFacet` (not the static
+ * `typesFacet`) by `kernelDataExtension`. `seedKey` (`system:kernel-data/type/<id>`)
+ * is the permanent identity that fixes the backing block id; `revision: 1` is the
+ * initial payload version. The declaration doubles as the `TypeContribution` the
+ * registry synthesizes into `repo.types`, so these stay authoritative before any
+ * row materializes (and via the `KERNEL_TYPES` fallback before a workspace pin). */
+export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
+  propertyDisplayPrefsType,
+  seedType({
+    seedKey: 'system:kernel-data/type/extension',
+    revision: 1,
     id: EXTENSION_TYPE,
     label: 'Extension',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [extensionNameProp, extensionDescriptionProp],
   }),
-  defineBlockType({id: PAGE_TYPE, label: 'Page', ...INFRASTRUCTURE_TYPE_DISPLAY, properties: [aliasesProp]}),
+  seedType({
+    seedKey: 'system:kernel-data/type/page',
+    revision: 1,
+    id: PAGE_TYPE,
+    label: 'Page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
+    properties: [aliasesProp],
+  }),
   // Panels/user pages ARE plumbing for the # dropdown, but their chips
   // are informative when the block itself is on screen — keep those.
-  defineBlockType({id: PANEL_TYPE, label: 'Panel', hideFromCompletion: true}),
-  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack', hideFromCompletion: true}),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel',
+    revision: 1,
+    id: PANEL_TYPE,
+    label: 'Panel',
+    hideFromCompletion: true,
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/panel-stack',
+    revision: 1,
+    id: PANEL_STACK_TYPE,
+    label: 'Panel stack',
+    hideFromCompletion: true,
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/property-schema',
+    revision: 1,
     id: PROPERTY_SCHEMA_TYPE,
     label: 'Property schema',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
@@ -61,13 +190,17 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
     // and the panel surfaces them through the type-section path.
     properties: [propertyNameProp, presetIdProp, presetConfigProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:properties',
+    revision: 1,
     id: PROPERTIES_PAGE_TYPE,
     label: 'Properties page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/block-type',
+    revision: 1,
     id: BLOCK_TYPE_TYPE,
     label: 'Type',
     // Offered in the `#` menu (Tana-style): `book #type` turns the block
@@ -85,22 +218,44 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
       blockTypeDescriptionProp,
       blockTypePropertiesProp,
       blockTypeHideFromBlockDisplayProp,
+      blockTypeHideFromCompletionProp,
       blockTypeColorProp,
     ],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:types',
+    revision: 1,
     id: TYPES_PAGE_TYPE,
     label: 'Types page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:recents',
+    revision: 1,
     id: RECENTS_PAGE_TYPE,
     label: 'Recents page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:migrations',
+    revision: 1,
+    id: MIGRATIONS_PAGE_TYPE,
+    label: 'Migrations page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
+    properties: [aliasesProp],
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/system:migration-claim',
+    revision: 1,
+    id: MIGRATION_CLAIM_TYPE,
+    label: 'Migration claim',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/user',
+    revision: 1,
     id: USER_TYPE,
     label: 'User',
     // Never offered by the # dropdown, but the chip is informative on

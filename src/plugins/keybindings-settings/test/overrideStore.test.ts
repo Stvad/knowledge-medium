@@ -94,12 +94,22 @@ describe('previewOverrideConflicts', () => {
   })
 
   it('does not report a Super+K rebind as conflicting with a Ctrl+K binding off-Mac', () => {
-    // The node test env is non-Mac, where $mod is Ctrl and Meta is the Super
-    // key — distinct chords in tinykeys. Rebinding one action to Meta+k must
-    // NOT warn about another action's $mod+k (that was the over-warning the
-    // unconditional Meta→$mod fold produced).
-    const base = [action('palette', '$mod+k'), action('other', 'g')]
-    const conflicts = previewOverrideConflicts(base, [], stored('other', 'Meta+k'))
-    expect(conflicts).toEqual([])
+    // Off-Mac, $mod is Ctrl and Meta is the Super key — distinct chords in
+    // tinykeys. Rebinding one action to Meta+k must NOT warn about another
+    // action's $mod+k (that was the over-warning the unconditional Meta→$mod
+    // fold produced). Pin a non-Mac platform: the fold reads navigator.platform
+    // (canonicalizeChord.ts), and Node exposes 'MacIntel' on macOS hosts, so
+    // the ambient value would flip this to Mac and fold Meta into $mod. Restore
+    // afterwards so the stub can't leak into other test files.
+    const original = Object.getOwnPropertyDescriptor(navigator, 'platform')
+    Object.defineProperty(navigator, 'platform', {configurable: true, get: () => 'Win32'})
+    try {
+      const base = [action('palette', '$mod+k'), action('other', 'g')]
+      const conflicts = previewOverrideConflicts(base, [], stored('other', 'Meta+k'))
+      expect(conflicts).toEqual([])
+    } finally {
+      if (original) Object.defineProperty(navigator, 'platform', original)
+      else Reflect.deleteProperty(navigator, 'platform')
+    }
   })
 })

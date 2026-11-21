@@ -4,7 +4,7 @@
  * plugin's run/publish/cadence wiring (schedule.ts) and that the engine's checks
  * actually catch injected inconsistencies. The engine lives in ./audit.ts.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -16,7 +16,8 @@ import {
   type DecryptSpotCheckResult,
 } from '../audit'
 import {
-  consistencyAuditEffect,
+  AUDIT_QUIET_MS,
+  createConsistencyAuditEffect,
   drainConsistencyAudits,
   isAuditDue,
   resetConsistencyAuditCadence,
@@ -27,15 +28,18 @@ import {
   resetConsistencyAuditStore,
 } from '../store'
 import {
-  BLOCKS_SYNCED_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
+  BLOCKS_SYNCED_RAW_TABLE,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
+  blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { encodeForWire, type Materializability } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet'
 import { Repo } from '@/data/repo'
+import { createUserActivity } from '@/utils/userActivity'
 
 interface Harness {
   repo: Repo
@@ -83,6 +87,38 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     expect(mirror.orphanSourceRows).toBe(1)
   })
 
+  // `json_valid('null')` is TRUE, so the malformed count cannot see this, and
+  // `json_each` yields nothing for it so every mirror direction reads as
+  // consistent. Workspace-wide, and deliberately on a block with NO reference
+  // syntax — the content-link recompute never selects such a row, so this is
+  // the only place the damage is visible.
+  it('flags reference storage that is valid JSON but not an array', async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                           properties_json, references_json, created_at, updated_at,
+                           user_updated_at, created_by, updated_by, deleted)
+       VALUES ('shape-1', 'ws-5', NULL, 'a0', 'plain prose, no marks',
+               '{}', 'null', 1, 1, 1, 'u', 'u', 0)`,
+    )
+
+    // A synced twin keeps the row from reading as stranded, which would send
+    // the runner through the divergence recheck delay.
+    const storageColumns = BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')
+    await sharedDb.db.execute(
+      `INSERT INTO blocks_synced (${storageColumns}) SELECT ${storageColumns} FROM blocks WHERE id = 'shape-1'`,
+    )
+
+    const result = await runConsistencyAuditNow(env.repo, 'ws-5')
+
+    expect(result.checks.local_server_divergence.rechecked).toBe(false)
+    const mirror = result.checks.references_index_mirror
+    expect(mirror.status).toBe('anomaly')
+    expect(mirror.malformedRefsShape).toBe(1)
+    // NOT counted as unparseable — that number keeps its own meaning.
+    expect(mirror.malformedJson).toBe(0)
+    expect(mirror.samples).toContain('shape-1')
+  })
+
   it('cadence gate: a workspace is not due right after a run, due again after reset', async () => {
     expect(isAuditDue('ws-3', Date.now())).toBe(true) // never run this session
     await runConsistencyAuditNow(env.repo, 'ws-3')
@@ -98,6 +134,8 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     runtime: {} as FacetRuntime, // the effect ignores runtime/safeMode
     safeMode: false,
   })
+  // No input ever arrives on a bare target, so the user always reads as quiet.
+  const consistencyAuditEffect = createConsistencyAuditEffect(() => createUserActivity(new EventTarget()))
   // Let the deferred idle job fire (setTimeout(0) under node), then drain it.
   const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -123,6 +161,131 @@ describe('data-integrity audit runner + cadence (schedule.ts)', () => {
     consistencyAuditEffect.start(ctx('ws-eff3')) // not due → schedules nothing
     await settle()
     expect(getConsistencyAuditSnapshotFor('ws-eff3')).toBeNull()
+  })
+
+  it('tearing down a parked audit cancels its quiet timer immediately', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
+    try {
+      const input = new EventTarget()
+      const effect = createConsistencyAuditEffect(() => createUserActivity(input))
+      const cleanup = effect.start(ctx('ws-left'))
+      input.dispatchEvent(new Event('keydown'))
+      await vi.advanceTimersByTimeAsync(1) // the idle job starts and parks
+      expect(getAll).not.toHaveBeenCalled()
+
+      if (typeof cleanup === 'function') cleanup() // e.g. a workspace switch
+      expect(vi.getTimerCount()).toBe(0)
+      await drainConsistencyAudits()
+
+      expect(getAll).not.toHaveBeenCalled()
+      expect(getConsistencyAuditSnapshotFor('ws-left')).toBeNull()
+      expect(isAuditDue('ws-left', Date.now())).toBe(true)
+    } finally {
+      getAll.mockRestore()
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the on-demand result when an older paused audit finishes later', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const input = new EventTarget()
+    const activity = createUserActivity(input)
+    const waitForQuiet = vi.spyOn(activity, 'whenQuiet')
+    const effect = createConsistencyAuditEffect(() => activity)
+    const workspaceId = 'ws-manual'
+    try {
+      effect.start(ctx(workspaceId))
+      input.dispatchEvent(new Event('keydown'))
+      await vi.advanceTimersByTimeAsync(1)
+      expect(waitForQuiet).toHaveBeenCalledTimes(1)
+
+      const manual = await runConsistencyAuditNow(env.repo, workspaceId)
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+
+      expect(getConsistencyAuditSnapshotFor(workspaceId)).toBe(manual)
+    } finally {
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+      vi.useRealTimers()
+    }
+  })
+
+  it('the scheduled audit waits until the user has been quiet, then runs', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const getAll = vi.spyOn(sharedDb.db, 'getAll')
+    try {
+      const input = new EventTarget()
+      const activity = createUserActivity(input)
+      const waitForQuiet = vi.spyOn(activity, 'whenQuiet')
+      const effect = createConsistencyAuditEffect(() => activity)
+      effect.start(ctx('ws-busy'))
+      // Before the idle job runs: the tracker listens from the workspace open.
+      input.dispatchEvent(new Event('keydown'))
+
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS - 1)
+      expect(waitForQuiet).toHaveBeenCalledExactlyOnceWith(AUDIT_QUIET_MS, expect.any(AbortSignal))
+      expect(getAll).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      await drainConsistencyAudits()
+      expect(getConsistencyAuditSnapshotFor('ws-busy')?.workspaceId).toBe('ws-busy')
+    } finally {
+      getAll.mockRestore()
+      await vi.advanceTimersByTimeAsync(AUDIT_QUIET_MS)
+      await drainConsistencyAudits()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('runConsistencyAudit — yieldWhenBusy', () => {
+  /** Counts the statements the audit issues, so a hook can see where it ran. */
+  const countingDb = () => {
+    const db = {
+      statements: 0,
+      getAll: <T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]> => {
+        db.statements += 1
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+    return db
+  }
+
+  it('awaits the hook before every statement it issues', async () => {
+    const db = countingDb()
+    const statementsAtYield: number[] = []
+
+    await runConsistencyAudit(db, 'ws-1', 0, {
+      yieldWhenBusy: async () => { statementsAtYield.push(db.statements) },
+    })
+
+    expect(db.statements).toBeGreaterThan(1)
+    expect(statementsAtYield).toEqual([...Array(db.statements).keys()])
+  })
+
+  it('issues no statement while the hook holds it', async () => {
+    const db = countingDb()
+    let yields = 0
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+
+    const audit = runConsistencyAudit(db, 'ws-1', 0, {
+      // Lets the first statement through and holds the second.
+      yieldWhenBusy: () => ++yields === 2 ? held : Promise.resolve(),
+    })
+    await vi.waitFor(() => expect(yields).toBe(2))
+    const statementsWhileHeld = db.statements
+    expect(statementsWhileHeld).toBe(1)
+    // Still nothing a turn of the event loop later.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(db.statements).toBe(statementsWhileHeld)
+
+    release()
+    expect((await audit).checks.references_index_mirror.status).toBe('ok')
+    expect(db.statements).toBeGreaterThan(statementsWhileHeld)
   })
 })
 
@@ -169,49 +332,214 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
     expect(check.samples).toEqual(['blk-a', 'blk-b'])
     expect(sampleQueries).toBe(1) // ran once, because the count was > 0
   })
+})
 
-  it('debounces transient divergence — a dirty pass that clears on recheck reports ok', async () => {
-    let strandedCountCalls = 0
-    let slept = 0
-    // The stranded COUNT query is dirty (5) on the first measure, clean (0) on
-    // the recheck; every other count is 0. Sample queries (SELECT b.id) only run
-    // for the settled state, which is clean → none.
-    const db: AuditDb = {
-      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
-        // The stranded query is the only one with a `NOT EXISTS (… blocks_synced)`
-        // subquery (the others JOIN blocks_synced); its count is dirty then clean.
-        if (sql.includes('count(*)') && sql.includes('NOT EXISTS (SELECT 1 FROM blocks_synced')) {
-          strandedCountCalls += 1
-          return [{ n: strandedCountCalls === 1 ? 5 : 0 }] as unknown as T[]
-        }
-        return [{ n: 0 }] as unknown as T[]
-      },
-    }
-    const result = await runConsistencyAudit(db, 'ws', 0, {
-      divergenceRecheckMs: 1,
-      sleep: async () => { slept += 1 },
-    })
-    const div = result.checks.local_server_divergence
-    expect(div.status).toBe('ok') // transient cleared on recheck
-    expect(div.rechecked).toBe(true)
-    expect(div.strandedLocalOnly).toBe(0)
-    expect(slept).toBe(1)
-    expect(strandedCountCalls).toBe(2) // measured twice
-    expect(result.anomalies).toBe(0)
+describe('runConsistencyAudit — pending-upload divergence', () => {
+  const WS = 'ws-pending-divergence'
+  const STAMP = 1700000000000
+  const INSERT_BLOCK_SQL =
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
+
+  const block = (id: string, overrides: Partial<BlockData> = {}): BlockData => ({
+    id,
+    workspaceId: WS,
+    parentId: null,
+    orderKey: 'a0',
+    content: `local ${id}`,
+    properties: {},
+    references: [],
+    createdAt: STAMP,
+    updatedAt: STAMP + 10,
+    userUpdatedAt: STAMP + 10,
+    createdBy: 'user-1',
+    updatedBy: 'user-1',
+    deleted: false,
+    ...overrides,
   })
 
-  it('does not run sample queries when a check is clean', async () => {
-    let sampleQueries = 0
+  const seedLocal = (row: BlockData) =>
+    sharedDb.db.execute(INSERT_BLOCK_SQL, blockToRowParams(row))
+
+  const seedSynced = (row: BlockData) =>
+    sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(row))
+
+  const queue = (type: string, id: string | null) =>
+    sharedDb.db.execute(
+      `INSERT INTO ps_crud (tx_id, data)
+       VALUES (1, json_object('op', 'PATCH', 'type', ?, 'id', ?, 'data', json_object()))`,
+      [type, id],
+    )
+
+  const seedScenario = async (): Promise<void> => {
+    // Raw writes deliberately bypass post-commit repair processors: these are
+    // the divergent rows the audit must classify, not rows already normalized
+    // by the repo's local write pipeline.
+    await seedLocal(block('stranded-pending'))
+    await seedLocal(block('stranded-clear'))
+
+    await seedLocal(block('richer-pending', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer-pending', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+    await seedLocal(block('richer-clear', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer-clear', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+
+    await seedLocal(block('server-pending', { updatedAt: STAMP + 10, userUpdatedAt: STAMP + 10 }))
+    await seedSynced(block('server-pending', { content: 'server server-pending', updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+    await seedLocal(block('server-clear', { updatedAt: STAMP + 10, userUpdatedAt: STAMP + 10 }))
+    await seedSynced(block('server-clear', { content: 'server server-clear', updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+
+    // Multiple pending ops for one block should not alter counts; the NULL-id
+    // blocks op and another table reusing a block id exercise queue filtering.
+    await queue('blocks', 'stranded-pending')
+    await queue('blocks', 'stranded-pending')
+    await queue('blocks', 'richer-pending')
+    await queue('blocks', 'server-pending')
+    await queue('blocks', null)
+    await queue('attachments', 'stranded-clear')
+
+    const localRows = await sharedDb.db.getAll<{ id: string }>(
+      `SELECT id FROM blocks WHERE workspace_id=? ORDER BY id`, [WS],
+    )
+    const syncedRows = await sharedDb.db.getAll<{ id: string }>(
+      `SELECT id FROM blocks_synced WHERE id IN ('richer-pending','richer-clear','server-pending','server-clear') ORDER BY id`,
+    )
+    const queueRows = await sharedDb.db.getAll<{ id: string | null; type: string }>(
+      `SELECT json_extract(data,'$.id') AS id, json_extract(data,'$.type') AS type
+         FROM ps_crud ORDER BY id`,
+    )
+    expect(localRows.map(row => row.id)).toEqual([
+      'richer-clear', 'richer-pending', 'server-clear', 'server-pending',
+      'stranded-clear', 'stranded-pending',
+    ])
+    expect(syncedRows.map(row => row.id)).toEqual([
+      'richer-clear', 'richer-pending', 'server-clear', 'server-pending',
+    ])
+    expect(queueRows).toHaveLength(6)
+    expect(queueRows.filter(row => row.type === 'blocks' && row.id === null)).toHaveLength(1)
+  }
+
+  const captureAuditQueries = () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = []
     const db: AuditDb = {
-      getAll: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
-        // A sample query never selects count(*); flag any non-count SELECT as one.
-        if (!sql.includes('count(*)')) sampleQueries += 1
-        return [{ n: 0 }] as unknown as T[]
+      getAll: async <T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]> => {
+        queries.push({ sql, params })
+        return sharedDb.db.getAll<T>(sql, params)
       },
     }
-    const result = await runConsistencyAudit(db, 'ws', 0)
-    expect(result.anomalies).toBe(0)
-    expect(sampleQueries).toBe(0) // clean path runs zero sample queries
+    return { db, queries }
+  }
+
+  it.each([
+    ['stranded local-only rows', 'strandedLocalOnly', 'stranded-clear'],
+    ['local-richer rows', 'localRicherNoPending', 'richer-clear'],
+    ['server-ahead divergent rows', 'serverAheadUndrained', 'server-clear'],
+  ])('excludes pending uploads from %s while retaining clear rows', async (_label, resultKey, sample) => {
+    await seedScenario()
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0)
+    const divergence = result.checks.local_server_divergence
+
+    expect(divergence[resultKey]).toBe(1)
+    if (resultKey !== 'serverAheadUndrained') expect(divergence.samples).toContain(sample)
+  })
+
+  it('judges upload-path rows only when stamped before the last applied checkpoint', async () => {
+    await seedLocal(block('stranded-due', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedLocal(block('stranded-in-flight', { updatedAt: STAMP + 50, userUpdatedAt: STAMP + 50 }))
+    await seedLocal(block('richer-due', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer-due', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+    await seedLocal(block('richer-in-flight', { updatedAt: STAMP + 50, userUpdatedAt: STAMP + 50 }))
+    await seedSynced(block('richer-in-flight', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      syncedThroughMs: () => STAMP + 40,
+    })
+    const divergence = result.checks.local_server_divergence
+
+    expect(divergence.strandedLocalOnly).toBe(1)
+    expect(divergence.localRicherNoPending).toBe(1)
+    expect([...(divergence.samples as string[])].sort()).toEqual(['richer-due', 'stranded-due'])
+  })
+
+  it('judges no upload-path row before any checkpoint has applied', async () => {
+    await seedLocal(block('stranded'))
+    await seedLocal(block('richer', { updatedAt: STAMP + 30, userUpdatedAt: STAMP + 30 }))
+    await seedSynced(block('richer', { updatedAt: STAMP + 20, userUpdatedAt: STAMP + 20 }))
+
+    const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      syncedThroughMs: () => undefined,
+    })
+    const divergence = result.checks.local_server_divergence
+
+    expect(divergence.status).toBe('ok')
+    expect(divergence.strandedLocalOnly).toBe(0)
+    expect(divergence.localRicherNoPending).toBe(0)
+  })
+
+  it('rechecks a dirty pass against the updated mirror and drops its earlier samples', async () => {
+    const row = block('echo-in-flight')
+    await seedLocal(row)
+    const sleep = vi.fn(async () => { await seedSynced(row) })
+    const { checks } = await runConsistencyAudit(sharedDb.db, WS, 0, { divergenceRecheckMs: 1, sleep })
+    expect(sleep).toHaveBeenCalledTimes(1)
+    expect(checks.local_server_divergence).toMatchObject({
+      status: 'ok', rechecked: true, strandedLocalOnly: 0, samples: [],
+    })
+  })
+
+  it('refreshes pending exclusions on recheck and counts equal-stamp conflicts even while queued', async () => {
+    await seedLocal(block('needs-upload'))
+    await seedLocal(block('conflict'))
+    await seedSynced(block('conflict', { content: 'another value at the same stamp' }))
+    await queue('blocks', 'conflict')
+    const { checks } = await runConsistencyAudit(sharedDb.db, WS, 0, {
+      divergenceRecheckMs: 1, sleep: async () => { await queue('blocks', 'needs-upload') },
+    })
+    expect(checks.local_server_divergence).toMatchObject({
+      status: 'anomaly', rechecked: true, strandedLocalOnly: 0, equalStampStandoff: 1, samples: ['conflict'],
+    })
+  })
+
+  it('finds discrepancies across sparse rowid ranges while yielding between them', async () => {
+    await seedLocal(block('early'))
+    await seedLocal(block('late'))
+    await sharedDb.db.execute("UPDATE blocks SET rowid=1000000 WHERE id='late'")
+    let pages = 0
+    let yielded = false
+    const db: AuditDb = {
+      async getAll<T>(sql: string, params?: unknown[]) {
+        if (sql.includes('LEFT JOIN blocks_synced')) {
+          expect(yielded).toBe(true)
+          pages++
+        }
+        yielded = false
+        return sharedDb.db.getAll<T>(sql, params)
+      },
+    }
+    const { checks } = await runConsistencyAudit(db, WS, 0, {
+      yieldWhenBusy: async () => { yielded = true },
+    })
+    expect(checks.local_server_divergence).toMatchObject({
+      strandedLocalOnly: 2, samples: ['early', 'late'],
+    })
+    expect(pages).toBe(2)
+  })
+
+  it('range-seeks blocks, probes each synced twin, and reads pending uploads once across dirty pages', async () => {
+    await seedScenario()
+    await sharedDb.db.execute("UPDATE blocks SET rowid=1000000 WHERE id='stranded-pending'")
+    const { db, queries } = captureAuditQueries()
+    await runConsistencyAudit(db, WS, 0)
+    const captured = queries.find(query => query.sql.includes('LEFT JOIN blocks_synced'))
+    if (!captured) throw new Error('No divergence page was read')
+    const plan = await sharedDb.db.getAll<{ id: number; parent: number; detail: string }>(
+      `EXPLAIN QUERY PLAN ${captured.sql}`,
+      captured.params,
+    )
+    const details = plan.map(row => `${row.id}/${row.parent} ${row.detail}`)
+    expect(details.join('\n')).toMatch(/SEARCH b USING INTEGER PRIMARY KEY \(rowid>\? AND rowid<\?\)/)
+    expect(details.join('\n')).toMatch(/SEARCH bs USING INDEX .* \(id=\?\) LEFT-JOIN/)
+    expect(queries.filter(query => query.sql.includes('LEFT JOIN blocks_synced'))).toHaveLength(2)
+    expect(queries.filter(query => query.sql.includes('FROM ps_crud'))).toHaveLength(1)
   })
 })
 
@@ -223,9 +551,9 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
 describe('runConsistencyAudit — e2ee encryption-awareness', () => {
   const WS = 'ws-e2ee'
   const STAMP = 1700000000000
-  const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const INSERT_BLOCK_SQL =
-    `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 
   const block = (overrides: Partial<BlockData> = {}): BlockData => ({
     id: 'b1',
@@ -262,7 +590,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     meta: BlockData,
     wire: { content: string; properties_json: string; references_json: string },
   ): Promise<void> => {
-    const params = blockToRowParams(meta)
+    const params = blockToSyncedRowParams(meta)
     params[4] = wire.content
     params[5] = wire.properties_json
     params[6] = wire.references_json
@@ -319,7 +647,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     const server = block({ id: 'encp', content: 'enc:v1: DIFFERENT server text' })
     await seedLocal(local)
     // Plaintext staging row (NOT sealed) — content is prefix-shaped real text.
-    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(server))
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(server))
 
     const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
       decrypt: decryptDeps(key, 'copy'), // workspace confirmed plaintext
@@ -436,8 +764,9 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
 // These are the rich superset; the lean cadence run must NOT include them.
 describe('runConsistencyAudit — full (on-demand) deep checks', () => {
   const WS = 'ws-full'
-  const COLS = BLOCK_STORAGE_COLUMNS.map((c) => c.name)
-  const INSERT = `INSERT INTO blocks (${COLS.join(', ')}) VALUES (${COLS.map(() => '?').join(', ')})`
+  const INSERT =
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
   const mk = (o: Partial<BlockData> = {}): BlockData => ({
     id: 'b',
     workspaceId: WS,
@@ -492,6 +821,32 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
     const check = r.checks.content_link_recompute
     expect(check.status).toBe('anomaly')
+    expect(check.strippedBlocks).toBe(1)
+  })
+
+  // These types never get content refs, by design, so a mark in their source
+  // is not a stripped link.
+  it.each(['extension', 'html-document'])('content_link_recompute does not flag the source code in a %s block', async type => {
+    await ins({ id: 'src', content: 'const a = x[[0]]', properties: { types: [type] }, references: [] })
+    await ins({ id: 'prose', content: '[[Foo]]', references: [] })
+    const check = (await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })).checks.content_link_recompute
+    expect(check.strippedBlocks).toBe(1)
+  })
+
+  // `null` and `{}` parse fine, so a successful `JSON.parse` says nothing
+  // about the shape — both throw on the filter, aborting the check to
+  // `error` and hiding every row it had left.
+  it('content_link_recompute keeps scanning past a non-array references_json', async () => {
+    await ins({ id: 'bad', content: '[[Foo]]', references: [] })
+    await ins({ id: 'good', content: '[[Bar]]', references: [] })
+    await sharedDb.db.execute(
+      `UPDATE blocks SET references_json = 'null' WHERE id = 'bad'`,
+    )
+
+    const r = await runConsistencyAudit(sharedDb.db, WS, 0, { full: FULL })
+    const check = r.checks.content_link_recompute
+    expect(check.status).not.toBe('error')
+    // Scanning continued — the healthy row is still scored on its own axis.
     expect(check.strippedBlocks).toBe(1)
   })
 

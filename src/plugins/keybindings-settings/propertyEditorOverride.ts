@@ -9,8 +9,7 @@ import {KeybindingsEditor} from './KeybindingsEditor.tsx'
 const KeybindingsEditorEntry = (props: PropertyEditorProps<StoredKeybindingOverrides>) =>
   createElement(KeybindingsEditor, props)
 
-export const keybindingsOverridesUi = definePropertyEditorOverride<StoredKeybindingOverrides>({
-  name: keybindingOverridesProp.name,
+export const keybindingsOverridesUi = definePropertyEditorOverride(keybindingOverridesProp, {
   label: 'Keyboard shortcuts',
   Editor: KeybindingsEditorEntry,
 })

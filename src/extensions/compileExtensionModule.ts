@@ -4,8 +4,9 @@ import {
   type CompiledModuleCache,
   type CompiledRecord,
 } from '@/extensions/compiledModuleCache.js'
+import { ensureExtensionUtilitiesCss } from '@/extensions/extensionUtilitiesCss.js'
 
-// Bump when the Babel preset list / transform options change so older
+// Bump when the Babel major, preset list or transform options change so older
 // cache entries (in-memory OR persisted) don't deliver wrong-shaped
 // output. This is checked against the persisted record's
 // `compilerVersion`, NOT folded into the source hash — a compiler bump
@@ -13,7 +14,25 @@ import {
 // change (which Phase 2 / #67 would treat as needing re-approval).
 // '2': transpile now emits an inline source map + a stable `//# sourceURL`
 // (debuggable extensions). Bumping regenerates older map-less cached output.
-const COMPILER_VERSION = '2'
+// '3': JSX uses the automatic runtime (`react/jsx-runtime` via the page import
+// map) instead of the `React` global.
+// '4': Babel 8. Uninitialized class fields are kept, not deleted.
+export const COMPILER_VERSION = '4'
+
+/** Babel presets the extension loader transpiles with; tests that mirror the
+ *  loader import this rather than restate it. The AUTOMATIC JSX runtime keeps
+ *  an extension's JSX on the host's React: it imports its factory from
+ *  `react/jsx-runtime`, which the page import map resolves to the module the
+ *  app itself uses. The classic runtime would emit `React.createElement` and
+ *  depend on whichever `React` global happens to be in scope.
+ *
+ *  `onlyRemoveTypeImports: false` erases an import whose bindings are used
+ *  only as types even when it is not written `import type`. Stored extensions
+ *  rely on that, and a kept import of a type-only export fails to link. */
+export const EXTENSION_BABEL_PRESETS: Array<[string, object]> = [
+  ['react', {runtime: 'automatic'}],
+  ['typescript', {onlyRemoveTypeImports: false}],
+]
 
 export type ExtensionModule = Record<string, unknown>
 
@@ -30,35 +49,25 @@ export interface CompileResult {
  * for the lifetime of the page); tests construct their own instances to
  * avoid cross-test pollution from the module-level singleton.
  *
- * This sits ABOVE the persistent {@link CompiledModuleCache}: an L1/L2
+ * This sits ABOVE the persistent {@link CompiledModuleCache}: an in-memory
  * hit returns a live module reference with no IndexedDB round-trip; only
- * an L1 miss consults the persistent cache (and only a persistent miss
+ * an in-memory miss consults the persistent cache (and only a persistent miss
  * loads Babel).
  */
 export interface CompileCache {
-  // L1: contentHash -> in-flight or resolved compile.
-  // Same content from any block returns the same module instance.
-  // Also dedupes concurrent compiles of the same content.
-  byHash: Map<string, Promise<ExtensionModule>>
-
-  // L2: blockId -> { contentHash, modulePromise }.
-  // Lets unchanged blocks return the same module reference across
-  // multiple resolutions — critical for renderer modules so React
-  // doesn't unmount/remount on every refreshAppRuntime.
-  byBlock: Map<
-    string,
-    {contentHash: string, modulePromise: Promise<ExtensionModule>}
-  >
+  // blockId + contentHash -> in-flight or resolved compile.
+  // A live module belongs to one extension block: its declaration handles may
+  // be bound to that block's durable seed identities. This still dedupes
+  // concurrent compiles of the same block content.
+  byBlockAndHash: Map<string, Map<string, Promise<ExtensionModule>>>
 }
 
 export const createCompileCache = (): CompileCache => ({
-  byHash: new Map(),
-  byBlock: new Map(),
+  byBlockAndHash: new Map(),
 })
 
-// Process-wide singleton used by the loader in production. Bounded only
-// by the number of distinct block content versions that have ever been
-// compiled this session — eviction is a follow-up.
+// Process-wide singleton used by the loader in production. Content versions
+// remain cached until their owning block is evicted or the page tears down.
 const defaultCache = createCompileCache()
 
 // ──────────────────────────────────────────────────────────────────────
@@ -111,8 +120,7 @@ export function __setInstantiateImplForTest(impl: InstantiateImpl): () => void {
 }
 
 export function __resetCompileCacheForTest(): void {
-  defaultCache.byHash.clear()
-  defaultCache.byBlock.clear()
+  defaultCache.byBlockAndHash.clear()
 }
 
 /** Pure SHA-256 of the source. The compiler version is intentionally NOT
@@ -126,7 +134,7 @@ export async function hashExtensionSource(content: string): Promise<string> {
 }
 
 /** Transpile TS/JSX source to JS. Babel is loaded with a dynamic
- *  `import()` so `@babel/standalone` (~0.85 MB gz) leaves the eager
+ *  `import()` so the large `@babel/standalone` leaves the eager
  *  startup preload set (#167) — it's fetched/evaluated only here, on a
  *  genuine compile-cache miss.
  *
@@ -139,10 +147,8 @@ export async function hashExtensionSource(content: string): Promise<string> {
  *     revoked the instant the import resolves, so without this a throw shows
  *     `blob:<uuid>` with no name; the sourceURL survives revocation and, when
  *     `blockId` is known, identifies *which* extension a frame came from.
- *  Note: the L1 cache is keyed by content hash, so two blocks with identical
- *  source share one compiled string — the sourceURL then carries whichever
- *  block compiled first. Cosmetic only (identical-source extensions are rare;
- *  they already share one module instance). */
+ *  Note: live modules are cached per block as well as source hash so the
+ *  sourceURL consistently identifies the owning extension block. */
 async function defaultTranspileViaBabel(content: string, blockId?: string): Promise<string> {
   const Babel = await import('@babel/standalone')
   // SECURITY: block ids are NOT trusted input — `tx.create` accepts a
@@ -160,8 +166,8 @@ async function defaultTranspileViaBabel(content: string, blockId?: string): Prom
     filename: sourceName,
     sourceFileName: sourceName,
     sourceMaps: 'inline',
-    presets: ['react', 'typescript'],
-  }).code
+    presets: EXTENSION_BABEL_PRESETS,
+  })?.code
   if (!transpiled) throw new Error('Transpiled extension code is empty')
   return `${transpiled}\n//# sourceURL=km-extension://${sourceName}`
 }
@@ -182,15 +188,15 @@ async function defaultInstantiateViaBlob(compiled: string): Promise<ExtensionMod
 }
 
 /**
- * Resolve a module through the in-memory L1 (content-hash) / L2 (blockId)
+ * Resolve a module through the block-scoped in-memory cache
  * cache, building it via `factory` only on a miss. `hashKey` is the
- * content hash that keys L1 — for an approved load it's the APPROVED
- * source hash (the pin), so two blocks sharing the same approved source
- * share one module instance, and a re-resolve of an unchanged pin returns
- * the same reference (React doesn't remount).
+ * content hash that participates in the cache key — for an approved load it's
+ * the APPROVED source hash (the pin). A re-resolve of an unchanged pin returns
+ * the same reference (React doesn't remount), while a different block gets a
+ * separate live module even when its source is identical.
  *
- * A rejected build is dropped from BOTH layers so the next call retries
- * rather than caching the failure forever.
+ * A rejected build is dropped so the next call retries rather than caching
+ * the failure forever.
  */
 function resolveCachedModule(
   cache: CompileCache,
@@ -198,23 +204,32 @@ function resolveCachedModule(
   blockId: string,
   factory: () => Promise<ExtensionModule>,
 ): Promise<ExtensionModule> {
-  // L2 hit: same block + same hash → reuse the module reference.
-  const cachedForBlock = cache.byBlock.get(blockId)
-  if (cachedForBlock?.contentHash === hashKey) return cachedForBlock.modulePromise
+  // Start the Tailwind safelist load on every resolution, cache hit included;
+  // the runtime apply awaits it before extensions render.
+  void ensureExtensionUtilitiesCss()
 
-  // L1 hit: same content as something we've built before (possibly for a
-  // different block). Extensions are values; identity follows source.
-  let modulePromise = cache.byHash.get(hashKey)
+  let modulesForBlock = cache.byBlockAndHash.get(blockId)
+  if (!modulesForBlock) {
+    modulesForBlock = new Map()
+    cache.byBlockAndHash.set(blockId, modulesForBlock)
+  }
+  // Cache hit: same block and content as something we've built before.
+  let modulePromise = modulesForBlock.get(hashKey)
   if (!modulePromise) {
     modulePromise = factory()
-    cache.byHash.set(hashKey, modulePromise)
+    modulesForBlock.set(hashKey, modulePromise)
     modulePromise.catch(() => {
-      if (cache.byHash.get(hashKey) === modulePromise) cache.byHash.delete(hashKey)
-      const l2 = cache.byBlock.get(blockId)
-      if (l2?.modulePromise === modulePromise) cache.byBlock.delete(blockId)
+      if (modulesForBlock.get(hashKey) === modulePromise) {
+        modulesForBlock.delete(hashKey)
+        if (
+          modulesForBlock.size === 0 &&
+          cache.byBlockAndHash.get(blockId) === modulesForBlock
+        ) {
+          cache.byBlockAndHash.delete(blockId)
+        }
+      }
     })
   }
-  cache.byBlock.set(blockId, {contentHash: hashKey, modulePromise})
   return modulePromise
 }
 
@@ -392,6 +407,8 @@ export async function loadApprovedExtension(
       // compilerVersion change). Loading must never establish trust for a
       // new/changed source — that is exclusively `approveExtension`'s job.
       // Do not "optimize" by persisting live content here.
+      // Accepted: a blind write, so an approve or revoke landing mid-recompile
+      // is overwritten with this older pin. Costs a re-approval, never trust.
       await persistApproval(persistent, blockId, {...approval, compiled, compilerVersion: COMPILER_VERSION})
       return instantiateImpl(compiled)
     }
@@ -401,11 +418,29 @@ export async function loadApprovedExtension(
 }
 
 /**
+ * A source that could not be TRANSPILED, as opposed to one that transpiled and
+ * then failed to run.
+ *
+ * The difference is whether the source can be PINNED: `approveExtension` stores
+ * the transpiled output, so a transpile failure leaves the previous pin in
+ * place and the old code running, while anything later still pins and still
+ * takes effect at the next reload. A caller reasoning about what an install
+ * will change needs to tell those apart, and the thrown error otherwise cannot
+ * say which half it came from.
+ */
+export class ExtensionTranspileError extends Error {
+  constructor(blockId: string, override readonly cause: unknown) {
+    super(`Extension ${blockId} could not be transpiled: ${(cause as Error)?.message ?? cause}`)
+    this.name = 'ExtensionTranspileError'
+  }
+}
+
+/**
  * Compile LIVE source into a module WITHOUT persisting or requiring an
- * approval. Used only by the agent install `--verify` path, which resolves
- * a brand-new block's source in an isolated runtime to inspect its
- * contributions before any approval exists. Never used on the user-facing
- * load path — that one runs only approved, pinned output.
+ * approval. Used by the agent install path, which resolves a block's source in
+ * an isolated runtime to inspect its contributions before any approval exists.
+ * Never used on the user-facing load path — that one runs only approved,
+ * pinned output.
  */
 export async function compileForVerification(
   content: string,
@@ -414,14 +449,18 @@ export async function compileForVerification(
 ): Promise<CompileResult> {
   const contentHash = await hashExtensionSource(content)
   const module = await resolveCachedModule(cache, contentHash, blockId, () =>
-    compileImplOverride ? compileImplOverride(content) : transpileImpl(content, blockId).then(instantiateImpl),
+    compileImplOverride
+      ? compileImplOverride(content)
+      : transpileImpl(content, blockId)
+          .catch(error => { throw new ExtensionTranspileError(blockId, error) })
+          .then(instantiateImpl),
   )
   return {module, contentHash}
 }
 
 /**
  * Revoke a block's device-local approval: delete the persisted row and
- * drop the in-memory L2 entry, so the block stops running on the next
+ * drop its in-memory module entries, so the block stops running on the next
  * resolve. Best-effort (a failed delete must not break disable/uninstall);
  * the worst case is an orphaned row that a later re-approval overwrites (or
  * that a full "clear site data" wipe drops).
@@ -440,15 +479,14 @@ export async function revokeExtensionApproval(
 }
 
 /**
- * Drop a block's entry from the in-memory L2 cache. Use when a block is
- * deleted/revoked so its modulePromise is eligible for GC. (The L1 entry
- * under the old hash may survive — acceptable since other blocks could
- * share it.) Does not touch the persisted approval; use
+ * Drop every live module for a block from the in-memory caches. Use when a
+ * block is deleted/revoked so its top-level closures and bound declarations
+ * can be collected. Does not touch persisted approval; use
  * {@link revokeExtensionApproval} for that.
  */
 export function evictBlockFromCache(
   blockId: string,
   cache: CompileCache = defaultCache,
 ): void {
-  cache.byBlock.delete(blockId)
+  cache.byBlockAndHash.delete(blockId)
 }

@@ -2,18 +2,29 @@
  * Ask Agent — the explicit trigger. One gesture: make sure the block
  * carries the [[claude]] mention, clear any previous terminal
  * agent:* state (so a done/error block re-queues; the session id is
- * kept so the new run resumes the thread), mark the optimistic chip,
- * and fire the edit-settled signal so push detection skips the settle
- * window entirely — the daemon reacts in bridge-round-trip time.
+ * kept so the new run resumes the thread), stamp agent:asked-at, which
+ * tells the daemon not to wait for the block to leave its editor, and
+ * mark the optimistic chip.
  */
 import type { Block } from '@/data/block'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, propertyValue } from '@/data/api'
+import { holdsSource, takesTextEdit } from '@/data/blockTypes'
 import {
   ActionContextTypes,
   type ActionConfig,
 } from '@/shortcuts/types.js'
-import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { AGENT_PROPS } from './chipState.ts'
+import {
+  agentActivityProp,
+  agentActivityAtProp,
+  agentAskedAtProp,
+  agentAttemptsProp,
+  agentCancelProp,
+  agentErrorProp,
+  agentStatusProp,
+  agentUpdatedAtProp,
+  agentWatcherProp,
+} from './schema.ts'
 import { markAskedAgent } from './askedStore.ts'
 
 export const ASK_AGENT_ACTION_ID = 'agent-dispatch.ask'
@@ -26,18 +37,20 @@ const DEFAULT_AGENT_MENTION = '[[claude]]'
 
 /** Re-queueing clears the terminal lifecycle props but KEEPS
  *  agent:session — the retry resumes the thread — and agent:reply
- *  markers on children are untouched. */
+ *  markers on children are untouched. Schema handles (not bare names) so the
+ *  clear goes through the typed `unset` path and materializes correctly. */
 const REQUEUE_CLEARED_PROPS = [
-  AGENT_PROPS.status,
-  AGENT_PROPS.updatedAt,
-  AGENT_PROPS.attempts,
-  AGENT_PROPS.error,
-  AGENT_PROPS.activity,
+  agentStatusProp,
+  agentUpdatedAtProp,
+  agentAttemptsProp,
+  agentErrorProp,
+  agentActivityProp,
+  agentActivityAtProp,
   // A retry starts clean: never inherit a stale Stop request (the daemon
   // clears agent:cancel on every terminal write, but drop it here too so
   // a re-queue can't hand a leftover flag to the fresh run).
-  AGENT_PROPS.cancel,
-  AGENT_PROPS.watcher,
+  agentCancelProp,
+  agentWatcherProp,
 ] as const
 
 export const contentWithAgentMention = (content: string): string => {
@@ -62,29 +75,35 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
   // silently unable to queue exactly those blocks.
   await block.repo.tx(async tx => {
     const fresh = await tx.get(block.id)
-    if (!fresh) return
-    const properties: Record<string, unknown> = {...fresh.properties, [AGENT_PROPS.askedAt]: Date.now()}
-    // Clear lifecycle props only from TERMINAL states. An in-flight
-    // claim (queued/running) is the daemon already doing what this
-    // gesture asks for — deleting it would orphan the running task
-    // (tx.update replaces the whole properties map, so the claim that
-    // synced in between would be gone).
+    // The ask travels as a mention in the content, which source can't carry.
+    if (!takesTextEdit(fresh)) return
+    // Content and props are now two writes in the one tx (setProperties can't
+    // carry content). tx.update short-circuits an unchanged-content patch, and
+    // the always-a-real-write guarantee rides the setProperties asked-at bump
+    // below rather than the content patch. Tradeoff: when content DOES change
+    // (first ask / re-ask that adds the mention) this emits two row_events /
+    // two upload PATCHes instead of one — but both PATCHes share the tx's
+    // tx_seq so they upload as a single CrudTransaction, and undo/MATERIALIZE
+    // see the merged tx-net snapshot, so it's a minor cost, not a correctness
+    // change. Combining them would require a whole-bag replace for the clear,
+    // reintroducing the clobber setProperties exists to avoid.
+    await tx.update(block.id, {content: contentWithAgentMention(liveContent ?? fresh.content ?? '')})
+    // Clear lifecycle props only from TERMINAL states. An in-flight claim
+    // (queued/running) is the daemon already doing what this gesture asks for
+    // — clearing it would orphan the running task. setProperties applies a
+    // DELTA (set asked-at, unset the terminal props), never a whole-bag
+    // replace, so a claim the daemon synced in mid-gesture is preserved.
     const status = fresh.properties[AGENT_PROPS.status]
-    if (status !== 'queued' && status !== 'running') {
-      for (const key of REQUEUE_CLEARED_PROPS) delete properties[key]
-    }
-    await tx.update(block.id, {
-      content: contentWithAgentMention(liveContent ?? fresh.content ?? ''),
-      properties,
+    const terminal = status !== 'queued' && status !== 'running'
+    await tx.setProperties(block.id, {
+      set: [propertyValue(agentAskedAtProp, Date.now())],
+      unset: terminal ? REQUEUE_CLEARED_PROPS : [],
     })
     wrote = true
   }, {scope: ChangeScope.BlockDefault, description: 'ask agent'})
   if (!wrote) return
 
   markAskedAgent(block.id)
-  // Explicit ask = the user is done by construction: skip the settle
-  // window (the signal's delayed recheck catches this write's commit).
-  notifyBlockEditSettled(block.id)
 }
 
 const normalModeAsk: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
@@ -101,6 +120,7 @@ const editModeAsk: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
   description: 'Ask Agent about this block (Edit Mode)',
   context: ActionContextTypes.EDIT_MODE_CM,
   handler: async ({block, editorView}) => {
+    if (holdsSource(block)) return
     // The editor doc, not the persisted block, is the source of truth
     // here — the DB trails it by the BlockEditor's commit debounce, so
     // basing the write on `fresh.content` could drop just-typed text.

@@ -1,29 +1,82 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { listIsolatedTestFiles } from './scripts/vitest-isolation.ts'
+
+export const SUPABASE_STACK_TESTS = 'src/**/*.supabase.test.ts'
+export const BROWSER_TESTS = 'src/**/*.browser.test.ts'
+
+const TEST_FILES = '**/*.{test,spec}.{ts,tsx}'
+const isolatedTestFiles = listIsolatedTestFiles(TEST_FILES, import.meta.dirname)
 
 export default defineConfig({
   plugins: [react()],
   test: {
     // Default to the `node` environment: most test files here are pure logic
-    // (data/markdown/utils/sync/…) and a per-file jsdom instance was the bulk
+    // (data/markdown/utils/sync/…) and a per-file DOM instance was the bulk
     // of the suite's wall-clock (the `environment` phase). Files that need a
     // DOM (React component tests, anything touching document/window) opt in
-    // with a `// @vitest-environment jsdom` docblock on line 1 — the long-
-    // standing per-file convention here (145+ files already annotate). A new
-    // `.test.tsx` or DOM-touching test that forgets the docblock fails loudly
-    // in node rather than silently passing, which is the intended tripwire.
+    // with a `// @vitest-environment happy-dom` docblock on line 1 — the
+    // long-standing per-file convention here (140+ files annotate). happy-dom
+    // is the default DOM env (~3x cheaper per file than jsdom); a handful of
+    // files stay on jsdom where they need its stricter spec fidelity, each
+    // with a comment saying why. A new `.test.tsx` or DOM-touching test that
+    // forgets the docblock fails loudly in node rather than silently passing,
+    // which is the intended tripwire.
     environment: 'node',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    include: ['**/*.{test,spec}.{ts,tsx}'],
     maxWorkers: '100%',
-    // node_modules + dist are vitest defaults; .claude/worktrees holds
-    // full repo copies from agent runs whose tests we don't want to
-    // re-execute here. agent-extensions are standalone packages with their own
-    // dependency installs and Vitest configs, so root collection must not pick
-    // up their tests accidentally.
-    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', 'tmp/**', 'agent-extensions/**'],
+    // Sharing a worker between test files skips re-evaluating their common
+    // modules. `scripts/vitest-isolation.ts` decides which files cannot share.
+    // `shared` takes whatever that leaves, so a misfiled test can run slower or
+    // less isolated but can never drop out of the suite.
+    projects: [
+      {extends: true, test: {name: 'isolated', include: isolatedTestFiles}},
+      {extends: true, test: {name: 'shared', isolate: false, include: [TEST_FILES], exclude: isolatedTestFiles}},
+    ],
+    // Node ≥25 ships its own Web Storage: `localStorage`/`sessionStorage`
+    // become own keys of globalThis (returning undefined unless node runs with
+    // `--localstorage-file`). The jsdom environment skips window keys that
+    // already exist on the global, so jsdom's storage never gets installed and
+    // every DOM test touching localStorage explodes on `undefined` — and the
+    // real jsdom window is unreachable from a setup file (vitest rewires both
+    // `window` and `document.defaultView` to the node global). Disabling
+    // node's webstorage in the worker processes makes every node version
+    // behave like node 24, where jsdom's storage wins. Node ≥22 accepts the
+    // flag, so this is a no-op on versions without the new globals.
+    //
+    // `--expose-gc` is for `src/test/mutationObserverGc.test.ts`, which pins a
+    // happy-dom regression that a GC makes invisible; see its header. It also
+    // pins the pool: `worker_threads` rejects V8 flags in `execArgv`
+    // (ERR_WORKER_INVALID_EXEC_ARGV), so `pool: 'threads' | 'vmThreads'` would
+    // start zero test files. Forks is vitest 4's default and what we run.
+    execArgv: ['--no-experimental-webstorage', '--expose-gc'],
+    // node_modules + dist are vitest defaults; .claude/worktrees and
+    // .codex/worktrees hold full repo copies from agent runs whose tests
+    // we don't want to re-execute here.
+    // The agent-extensions SUBDIRECTORIES are standalone packages with their own
+    // dependency installs and Vitest configs (they alias `@` to the generated
+    // kernel-types stubs, which are .d.ts only — no runtime), so root collection
+    // must not pick up their tests. The FLAT extension files next to them
+    // (readwise.tsx, …) are different: they have no config of their own and
+    // resolve `@/…` through this config's alias to the real `src`, so their
+    // tests run here — the gate is the only place they'd ever get executed.
+    // That makes this a compile/import contract on the flat extensions against
+    // `src`; it is NOT the installed extension's importmap resolution, and a
+    // green run doesn't mean the copy installed in the user's DB was updated
+    // (see agent-extensions/AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
+    // next to an extension — gitignored, and skipped here so a leftover one
+    // can't redden an unrelated run.
+    // `*.supabase.test.ts` needs a running Supabase stack: `pnpm check:db`
+    // starts one and runs those through vitest.supabase.config.ts.
+    // `*.browser.test.ts` needs browser binaries: vitest.browser.config.ts.
+    exclude: [
+      '**/node_modules/**', '**/dist/**', '**/.git/**', '.claude/**', '.codex/**', 'tmp/**',
+      'agent-extensions/*/**', 'agent-extensions/*.probe.*',
+      SUPABASE_STACK_TESTS,
+      BROWSER_TESTS,
+    ],
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: ['node_modules/', 'src/test/setup.ts']
@@ -31,7 +84,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, './src')
+      '@': resolve(import.meta.dirname, './src'),
+      // Same as vite.config.ts: the app reads the wire protocol from the
+      // agent-cli SOURCE, not its last build in dist/.
+      '@knowledge-medium/agent-cli/protocol': resolve(import.meta.dirname, './packages/agent-cli/src/protocol.ts'),
     }
   }
 })

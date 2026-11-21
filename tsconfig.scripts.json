@@ -4,7 +4,9 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.scripts.tsbuildinfo",
     // scripts run under Node (vite-node / tsx), so they need the Node globals
     // and `node:*` modules that the browser-oriented app config omits.
-    "types": ["node"]
+    // Some scripts import app modules whose dependency graph reads
+    // import.meta.env; retain Vite's ambient ImportMeta typing alongside Node.
+    "types": ["node", "vite/client"]
   },
   "include": ["scripts"],
   // scripts/bench/* is quarantined dead code: it predates the Layout B sync
@@ -15,5 +17,8 @@
   // it's kept (not deleted) only as a base for a future harness resurrection
   // against `createTestDb`'s Layout B setup. Everything else under scripts/ is
   // part of the `tsc -b` gate.
-  "exclude": ["scripts/bench"]
+  "exclude": ["scripts/bench"],
+  // scripts/agent-eval imports the agent-cli and agent-dispatch sources, and
+  // agent-dispatch's own imports resolve through agent-cli's emitted `dist`.
+  "references": [{"path": "./packages/agent-cli"}, {"path": "./packages/agent-dispatch"}]
 }

@@ -115,6 +115,22 @@ describe('mergeProperties', () => {
     })
   })
 
+  it('copies a source-only key that shadows an Object.prototype member', () => {
+    // `key in out` walked the prototype chain ('constructor' in {} is
+    // true), silently dropping the source value. Found by
+    // mergeProperties.fuzz.
+    expect(mergeProperties({}, {constructor: 1})).toEqual({constructor: 1})
+    expect(mergeProperties({}, {toString: 'x'})).toEqual({toString: 'x'})
+  })
+
+  it('copies a source-only own __proto__ key without touching the prototype', () => {
+    const from = JSON.parse('{"__proto__": {"t": "dark"}}')
+    const out = mergeProperties({}, from)
+    expect(Object.hasOwn(out, '__proto__')).toBe(true)
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+    expect(JSON.stringify(out)).toBe('{"__proto__":{"t":"dark"}}')
+  })
+
   it('does not mutate input bags', () => {
     const into = {xs: ['a'], scalar: 1}
     const from = {xs: ['b'], other: 2}

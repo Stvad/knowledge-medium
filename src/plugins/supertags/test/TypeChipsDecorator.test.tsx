@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /** Component contract of the chip row: which chips link to a type
  *  definition (user-defined only — kernel/plugin types have no backing
  *  block), how a chip click routes through the navigation opener, and
@@ -10,8 +10,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { MouseEvent } from 'react'
-import { defineBlockType } from '@/data/api'
-import { typesFacet } from '@/data/facets'
+import { seedType } from '@/data/api'
+import { typeSeedsFacet } from '@/data/facets'
 import { getBlockTypes, typesProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
@@ -68,9 +68,9 @@ const setup = async (): Promise<Harness> => {
     db: sharedDb.db,
     user: {id: 'user-1'},
     extensions: [
-      typesFacet.of(defineBlockType({id: 'task', label: 'Task'}), {source: 'test'}),
-      typesFacet.of(
-        defineBlockType({id: 'plumbing', label: 'Plumbing', hideFromCompletion: true}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/task', revision: 1, id: 'task', label: 'Task'}), {source: 'test'}),
+      typeSeedsFacet.of(
+        seedType({seedKey: 'test/type/plumbing', revision: 1, id: 'plumbing', label: 'Plumbing', hideFromCompletion: true}),
         {source: 'test'},
       ),
     ],
@@ -79,9 +79,7 @@ const setup = async (): Promise<Harness> => {
   repoRef.current = repo
   await getOrCreatePropertiesPage(repo, WS)
   await getOrCreateTypesPage(repo, WS)
-  const disposeSchemas = repo.userSchemas.start()
-  const disposeTypes = repo.userTypes.start()
-  return {repo, dispose: () => { disposeTypes(); disposeSchemas() }}
+  return {repo, dispose: () => repo.setActiveWorkspaceId(null)}
 }
 
 let env: Harness

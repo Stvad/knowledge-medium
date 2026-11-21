@@ -15,16 +15,25 @@
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
+  blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
+  type BlocksSyncedObserverArgs,
 } from '../observer.js'
-import type { GetMaterializability } from '../materialize.js'
+import {
+  materializeStagingRows,
+  type GetMaterializability,
+  type MaterializeDeps,
+  type MaterializeOptions,
+  type MaterializeOutcome,
+} from '../materialize.js'
+import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import type { ChangeNotification } from '@/data/internals/handleStore'
 import type { InvalidationRule } from '@/data/invalidation'
@@ -36,22 +45,61 @@ export const noKey: GetCek = async () => null
 /** Constant materializability resolver ('copy' plaintext / 'decrypt' e2ee / 'defer'). */
 export const constMat = (m: Materializability): GetMaterializability => () => m
 
-const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
-const INSERT_BLOCK_SQL =
-  `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) ` +
-  `VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+export const INSERT_BLOCK_SQL =
+  `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+  `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 
 /** Positional staging-row params with the three content columns replaced by
- *  already-encoded (ciphertext) strings — for e2ee materialization tests. */
+ *  already-encoded (ciphertext) strings — for e2ee materialization tests.
+ *  Storage-only (13 params, `blockToSyncedRowParams`) — `blocks_synced` never
+ *  carries the local-only columns. */
 export const stagingCiphertextParams = (
   meta: BlockData,
   wire: { content: string; properties_json: string; references_json: string },
 ): unknown[] => {
-  const params = blockToRowParams(meta)
+  const params = blockToSyncedRowParams(meta)
   params[4] = wire.content
   params[5] = wire.properties_json
   params[6] = wire.references_json
   return params
+}
+
+/**
+ * Single-window queue drain — mirrors `drainQueueOnce`'s per-window core
+ * (`../observer.ts:186-220`): read the pending `blocks_synced_changes`
+ * queue ordered by seq, dedup to latest-op-per-id, run
+ * `materializeStagingRows` over the whole window, then
+ * `DELETE ... WHERE seq <= maxSeq` to consume it. Returns `null` when the
+ * queue was empty (nothing to drain) so callers can distinguish "flushed
+ * nothing" from "flushed and materialized nothing" — `materializeStateful`'s
+ * `doFlush` has a real empty-queue branch that depends on this.
+ *
+ * Unlike the real `drainQueueOnce` this does exactly ONE window, never a
+ * chunk-bounded loop over a larger backlog — multi-window backlog behavior
+ * is `observer.test.ts`'s job. Shared by `twoRepoConvergence.fuzz.test.ts`
+ * (which layers `applySyncInvalidation` on top, replicating the observer's
+ * `applyOutcome`) and `materializeStateful.fuzz.test.ts` (which layers its
+ * differential-model assertions on top and passes through `readChunkSize`).
+ */
+export const drainStagingWindowOnce = async (
+  db: PowerSyncDb,
+  deps: MaterializeDeps,
+  opts: MaterializeOptions = {},
+): Promise<MaterializeOutcome | null> => {
+  const rows = await db.getAll<{ seq: number; id: string; op: 'upsert' | 'delete' }>(
+    'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq',
+  )
+  if (rows.length === 0) return null
+  const maxSeq = rows.at(-1)!.seq
+  const opById = new Map<string, 'upsert' | 'delete'>()
+  for (const row of rows) opById.set(row.id, row.op)
+  const upserted: string[] = []
+  const removed: string[] = []
+  for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
+
+  const outcome = await materializeStagingRows(db, { upserted, removed }, deps, opts)
+  await db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
+  return outcome
 }
 
 export interface StartObserverOpts {
@@ -60,14 +108,24 @@ export interface StartObserverOpts {
   onCycleDetected?: (e: CycleDetectedEvent) => void
   drainChunkSize?: number
   onError?: (err: unknown) => void
+  onDrainStats?: BlocksSyncedObserverArgs['onDrainStats']
+  backlogInvalidationIntervalMs?: number
+  bulkDrainChunkSize?: number
   getInvalidationRules?: () => readonly InvalidationRule[]
   throttleMs?: number
+  /** Derive-at-arrival lookups. Omitted by default so
+   *  storage-focused tests skip derivation, mirroring the prod-optional dep. */
+  referenceTargetLookups?: MaterializeDeps['referenceTargetLookups']
+  /** §9 alias-repair hook passthrough (deferred executor lives on Repo). */
+  onAliasTargetsAdded?: MaterializeDeps['onAliasTargetsAdded']
 }
 
 export interface StartedObserver {
   observer: BlocksSyncedObserver
   cache: BlockCache
   notifications: ChangeNotification[]
+  /** One per window: what was marked stale ahead of its delivery. */
+  staleMarks: ChangeNotification[]
 }
 
 /**
@@ -94,19 +152,28 @@ export const setupObserverTestDb = () => {
   const start = (opts: StartObserverOpts): StartedObserver => {
     const cache = new BlockCache()
     const notifications: ChangeNotification[] = []
+    const staleMarks: ChangeNotification[] = []
     const observer = startBlocksSyncedObserver({
       db: env.db,
       cache,
-      handleStore: { invalidate: n => notifications.push(n) },
-      deps: { getMaterializability: opts.getMaterializability, getCek: opts.getCek ?? noKey },
+      handleStore: { invalidate: n => notifications.push(n), markStale: n => staleMarks.push(n) },
+      deps: {
+        getMaterializability: opts.getMaterializability,
+        getCek: opts.getCek ?? noKey,
+        referenceTargetLookups: opts.referenceTargetLookups,
+        onAliasTargetsAdded: opts.onAliasTargetsAdded,
+      },
       onCycleDetected: opts.onCycleDetected,
       throttleMs: opts.throttleMs ?? 5,
       drainChunkSize: opts.drainChunkSize,
       onError: opts.onError,
+      onDrainStats: opts.onDrainStats,
+      backlogInvalidationIntervalMs: opts.backlogInvalidationIntervalMs,
+      bulkDrainChunkSize: opts.bulkDrainChunkSize,
       getInvalidationRules: opts.getInvalidationRules,
     })
     observers.push(observer)
-    return { observer, cache, notifications }
+    return { observer, cache, notifications, staleMarks }
   }
 
   return {
@@ -115,7 +182,7 @@ export const setupObserverTestDb = () => {
     start,
     seedLocalBlock: (d: BlockData) => env.db.execute(INSERT_BLOCK_SQL, blockToRowParams(d)),
     stageRow: (d: BlockData, params?: unknown[]) =>
-      env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToRowParams(d)),
+      env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToSyncedRowParams(d)),
     deleteStagingRow: (id: string) =>
       env.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [id]),
     blocks: () =>

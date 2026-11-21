@@ -6,6 +6,7 @@ import {
   ActionIcon,
   BlockShortcutDependencies,
   MultiSelectModeDependencies,
+  PropertyEditingField,
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
@@ -20,6 +21,38 @@ export const hasEditableTarget = (event: KeyboardEvent) => {
     target.tagName === 'SELECT' ||
     target.tagName === 'TEXTAREA'
 }
+
+/**
+ * True when a keydown belongs to an in-flight IME composition, so the app
+ * must not treat it as a shortcut. `isComposing` is the standard signal;
+ * some IME/browser combinations only report the legacy `keyCode === 229`
+ * for the same keystroke, so both are checked. Accepts a native or React
+ * keyboard event (pass `event.nativeEvent` for the React one when you want
+ * the native flags).
+ */
+export const isImeKeyEvent = (event: {isComposing?: boolean; keyCode?: number}): boolean =>
+  event.isComposing === true || event.keyCode === 229
+
+/**
+ * A focusable field a property editor can put the caret in — what
+ * `PROPERTY_EDITING` carries as its dependency and what its actions blur.
+ * Shared by the context's dependency validator and the activation hook so
+ * "which elements count" is answered in one place.
+ *
+ * Deliberately NARROWER than `hasEditableTarget`, which also counts
+ * `contentEditable`. The row activates from the value cell, and that cell can
+ * contain a whole embedded block: a `ref` property renders `BlockEmbed`, which
+ * mounts a real CodeMirror editor when the user edits it. CodeMirror's surface
+ * is contenteditable, so accepting it here would activate this MODAL context
+ * for a block editor — shadowing `EDIT_MODE_CM` and handing Escape and the
+ * arrow keys to property editing while the user is typing in the embed. A
+ * contenteditable-based property editor would need activation scoped to
+ * itself, not this predicate widened.
+ */
+export const isPropertyEditingField = (value: unknown): value is PropertyEditingField =>
+  value instanceof HTMLInputElement ||
+  value instanceof HTMLSelectElement ||
+  value instanceof HTMLTextAreaElement
 
 /**
  * True for keyboard events shaped like "the user is typing into an editable
@@ -99,9 +132,13 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
  * Creates a multi-select version of an action that applies the original action to each selected block.
  * Uses makeModeAction under the hood with a specialized handler override.
  */
+export interface ApplyToAllOptions {
+  applyInReverseOrder?: boolean
+}
+
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
-  {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
+  {applyInReverseOrder}: ApplyToAllOptions = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block.
   // Wrap the whole batch in one view transition so users see a single
@@ -110,7 +147,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
+    const {selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
@@ -132,6 +169,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           block,
           uiStateBlock,
           scopeRootId,
+          propertyDisplay,
         } as ShortcutDependenciesMap[T]
 
         await (runtime
@@ -197,8 +235,23 @@ export interface DefineBlocksActionConfig {
    *  least one selected block matching. Omit to mean "always". */
   appliesTo?: (block: Block) => boolean
   /** The actual operation. Both variants forward to this with the
-   *  blocks they respectively hold (one or many). */
-  flow: (blocks: readonly Block[]) => Promise<void> | void
+   *  blocks they respectively hold (one or many), plus the dispatch
+   *  context. Implementations that don't need the context can declare
+   *  a one-parameter function. */
+  flow: (blocks: readonly Block[], context: BlocksActionContext) => Promise<void> | void
+}
+
+/** What a {@link defineBlocksAction} flow learns about its dispatch,
+ *  beyond the blocks themselves. */
+export interface BlocksActionContext {
+  /** Carries the ui-state selection. An operation that RELOCATES or
+   *  removes its blocks must take them out of it: multi-select mode
+   *  stays active off a non-empty `selectedBlockIds` alone, with no
+   *  check that those blocks are still in the panel, so a stale id
+   *  leaves later shortcuts acting on a row the pane no longer shows. */
+  uiStateBlock: Block
+  scopeRootId?: string
+  propertyDisplay?: BlockShortcutDependencies['propertyDisplay']
 }
 
 export interface BlocksActionPair {
@@ -251,7 +304,8 @@ export const defineBlocksAction = ({
     ...(appliesTo
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
-    handler: ({block}: BlockShortcutDependencies) => flow([block]),
+    handler: ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) =>
+      flow([block], {uiStateBlock, scopeRootId, propertyDisplay}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -263,7 +317,7 @@ export const defineBlocksAction = ({
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))
     },
-    handler: ({selectedBlocks}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks),
+    handler: ({selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks, {uiStateBlock, scopeRootId, propertyDisplay}),
   },
 })

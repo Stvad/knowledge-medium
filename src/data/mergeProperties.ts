@@ -1,4 +1,4 @@
-import { stableJsonValue } from './internals/jsonCanonical'
+import { persistedJsonKey } from './internals/jsonCanonical'
 
 /**
  * Merge two encoded property bags into one. Used by `core.merge` to fold
@@ -27,8 +27,19 @@ export const mergeProperties = (
   const out: Record<string, unknown> = {...intoProps}
   for (const key of Object.keys(fromProps)) {
     const fromVal = fromProps[key]
-    if (!(key in out)) {
-      out[key] = fromVal
+    // hasOwn, not `in`: `in` walks the prototype chain, so a source-only
+    // key shadowing an Object.prototype member ('constructor', an own
+    // '__proto__' from JSON.parse, …) looked "present" and was silently
+    // dropped (found by mergeProperties.fuzz). Define, don't assign: a
+    // plain `out[key] =` on a source-only '__proto__' key would invoke
+    // the prototype setter instead of creating the own data property.
+    if (!Object.hasOwn(out, key)) {
+      Object.defineProperty(out, key, {
+        value: fromVal,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
       continue
     }
     const intoVal = out[key]
@@ -46,7 +57,7 @@ const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   const seen = new Set<string>()
   const out: unknown[] = []
   for (const item of [...into, ...from]) {
-    const key = dedupeKey(item)
+    const key = persistedJsonKey(item)
     if (seen.has(key)) continue
     seen.add(key)
     out.push(item)
@@ -54,17 +65,4 @@ const unionArrays = (into: unknown[], from: unknown[]): unknown[] => {
   return out
 }
 
-/**
- * Dedupe key for a list item, aligned with how the merged result is persisted.
- *
- * Merged properties are stored via `JSON.stringify`, so the equivalence that
- * matters is the persisted-JSON one: object key order is irrelevant and
- * `NaN`/`undefined` collapse to `null`. `stableJsonValue` sorts object keys
- * (fixing the key-order-sensitivity that left reordered-equal objects as
- * duplicates), and wrapping the item in an array before `JSON.stringify`
- * normalizes `NaN`/`undefined` array elements to `null` exactly as the real
- * `properties_json` serialization does — so we never keep two items the
- * storage layer would persist as identical.
- */
-const dedupeKey = (item: unknown): string =>
-  JSON.stringify(stableJsonValue([item]))
+

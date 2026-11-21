@@ -36,93 +36,12 @@ const ERROR_BACKOFF_MS = 15_000
  *  either; retry slowly (a reload/re-pair may). */
 const UNSUPPORTED_BACKOFF_MS = 5 * 60_000
 
-/** Exemptions ride only FRESH events. A replayed/delayed event (error
- *  backoff + ring-buffer catch-up) may describe a quiet the user has
- *  since broken by re-entering the block — stale settledBlocks degrade
- *  to a plain (un-exempted) tick. Bridge and daemon share the machine
- *  clock, so receivedAt is directly comparable. */
-export const MAX_EXEMPTION_AGE_MS = 10_000
-
-/** Per-watcher quiet exemptions from one batch of events. Keyed by the
- *  EMITTING watcher: a query watcher's 1s settle must not vouch for a
- *  backlinks watcher's much longer quietMs on the same block. */
-export type QuietExemptions = ReadonlyMap<string, ReadonlySet<string>>
-
-/** Cap on pooled exemption ids — a settledBlocks flood degrades to
- *  un-exempted ticks (sweep-latency cost), never to unbounded memory. */
-export const MAX_PENDING_EXEMPT_IDS = 2_048
-/** Exemptions expire in the pool too: ticks drain the pool, but a sick
- *  bridge can stall a tick for minutes (each graph call may hang up to
- *  the client timeout) — by then "quiet, source-confirmed" may be
- *  false again, so drained exemptions older than this are dropped.
- *  Same freshness budget as the arrival check (one 10s window applied
- *  at both legs), deliberately derived so the two can't drift. */
-export const EXEMPTION_POOL_TTL_MS = MAX_EXEMPTION_AGE_MS
-
-/** Daemon-side pool between push events and the (coalesced) tick that
- *  consumes them: per-watcher, deduped, bounded, and freshness-checked
- *  AT DRAIN TIME — arrival-time freshness alone (see the event loop
- *  below) doesn't cover a delayed drain. */
-export const createExemptionPool = (now: () => number = Date.now) => {
-  const pools = new Map<string, Map<string, number>>() // watcher → id → pooledAt
-  let count = 0
-
-  /** Under a stalled tick, expired ids must not squat the cap and
-   *  starve fresh exemptions — evict them before refusing an add. */
-  const evictExpired = (): void => {
-    const cutoff = now() - EXEMPTION_POOL_TTL_MS
-    for (const [watcher, pool] of pools) {
-      for (const [id, pooledAt] of pool) {
-        if (pooledAt < cutoff) {
-          pool.delete(id)
-          count -= 1
-        }
-      }
-      if (pool.size === 0) pools.delete(watcher)
-    }
-  }
-
-  const add = (exemptions: QuietExemptions): void => {
-    for (const [watcher, ids] of exemptions) {
-      const pool = pools.get(watcher) ?? new Map<string, number>()
-      for (const id of ids) {
-        if (count >= MAX_PENDING_EXEMPT_IDS) evictExpired()
-        if (count >= MAX_PENDING_EXEMPT_IDS) break
-        if (!pool.has(id)) {
-          pool.set(id, now())
-          count += 1
-        }
-      }
-      if (pool.size > 0) pools.set(watcher, pool)
-    }
-  }
-
-  const drain = (): Map<string, ReadonlySet<string>> => {
-    const cutoff = now() - EXEMPTION_POOL_TTL_MS
-    const result = new Map<string, ReadonlySet<string>>()
-    for (const [watcher, pool] of pools) {
-      const fresh = new Set<string>()
-      for (const [id, pooledAt] of pool) {
-        if (pooledAt >= cutoff) fresh.add(id)
-      }
-      if (fresh.size > 0) result.set(watcher, fresh)
-    }
-    pools.clear()
-    count = 0
-    return result
-  }
-
-  return {add, drain}
-}
-
 export interface PushDeps {
   client: Pick<BridgeClient, 'runCommand' | 'nextEvents'>
   config: DaemonConfig
   graph: Pick<Graph, 'resolvePageId'>
-  /** Ask the main loop for an immediate tick (coalesced there).
-   *  `exemptions` are quiet-exempt block ids per emitting watcher:
-   *  their quiet period was confirmed at the source (blur / settle). */
-  requestTick: (exemptions?: QuietExemptions) => void
+  /** Ask the main loop for an immediate tick (coalesced there). */
+  requestTick: () => void
   log: (message: string) => void
   isStopping: () => boolean
   /** Interruptible sleep (resolves early on shutdown). */
@@ -149,9 +68,10 @@ export const buildRegistrationWatchers = async (
           kind: 'backlinks',
           name: watcher.name,
           targetId: await graph.resolvePageId(watcher.target),
-          // The tab measures the quiet period at the source, so by the
-          // time the event lands the engine's own quiet gate passes.
-          settleMs: watcher.quietMs,
+          // The tab measures the settle at the source, so by the time the
+          // event lands the engine's own settle gate passes. A device clock
+          // ahead by more than the settle misses it and waits for the sweep.
+          settleMs: watcher.settleMs,
         }
       : {
           kind: 'sql',
@@ -214,19 +134,7 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
       }
       const relevant = response.events.filter(entry =>
         entry.event['type'] === 'watcher-settled' && entry.event['consumer'] === PUSH_CONSUMER)
-      if (relevant.length > 0) {
-        const exemptions = new Map<string, Set<string>>()
-        for (const entry of relevant) {
-          const watcher = entry.event['watcher']
-          const blocks = entry.event['settledBlocks']
-          if (typeof watcher !== 'string' || !Array.isArray(blocks)) continue
-          if (now() - entry.receivedAt > MAX_EXEMPTION_AGE_MS) continue // stale: tick, but don't exempt
-          const ids = exemptions.get(watcher) ?? new Set<string>()
-          for (const id of blocks) if (typeof id === 'string') ids.add(id)
-          if (ids.size > 0) exemptions.set(watcher, ids)
-        }
-        requestTick(exemptions)
-      }
+      if (relevant.length > 0) requestTick()
     } catch (error) {
       if (isStopping()) return
       registeredAt = null // whatever broke, re-register once it heals

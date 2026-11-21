@@ -15,11 +15,17 @@ import { BlockEmbed } from '@/components/references/BlockEmbed.js'
 import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.js'
 import {
   labelForBlockData,
+  linkTargetCandidateDetail,
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import {
+  dismissOnFieldEscape,
+  usePropertyEditingActivation,
+} from '@/components/propertyPanel/usePropertyEditingActivation.js'
+import { collapseWhitespace } from '@/utils/string.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -36,14 +42,11 @@ const targetTypesForSchema = (schema?: PropertySchema<unknown>): readonly string
   return EMPTY_REFS
 }
 
-const compactDetail = (text: string): string =>
-  text.replace(/\s+/g, ' ').trim()
-
 const candidateLabel = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(candidate.label) || candidate.id
+  collapseWhitespace(candidate.label) || candidate.id
 
 const candidateDetail = (candidate: LinkTargetIdCandidate): string =>
-  compactDetail(candidate.detail)
+  collapseWhitespace(linkTargetCandidateDetail(candidate))
 
 const blockMatchesTargetTypes = async (
   repo: Repo,
@@ -97,13 +100,19 @@ const searchReferenceCandidates = async (
       excludeIds: excluded,
     })
   } else {
-    const [aliasRows, recentBlocks] = await Promise.all([
+    const [aliasRows, recentRows] = await Promise.all([
       repo.query.aliasMatches({
         workspaceId,
         filter: '',
         limit: SEARCH_LIMIT,
       }).load(),
-      repo.query.recentBlocks({
+      // USER-AUTHORED recents, not `recentBlocks`: the latter is every live
+      // non-empty row, and where properties are blocks that includes each
+      // property's generated field and VALUE rows — a value row's content is
+      // the serialized property, so telemetry payloads and the like would be
+      // offered as things to link to, and crowd out real candidates within the
+      // bounded limit. Same query the `((` picker uses.
+      repo.query.recentUserBlocks({
         workspaceId,
         limit: SEARCH_LIMIT,
       }).load(),
@@ -119,7 +128,7 @@ const searchReferenceCandidates = async (
         detail: row.content,
       })
     }
-    for (const block of recentBlocks ?? []) {
+    for (const block of recentRows ?? []) {
       if (seen.has(block.id)) continue
       seen.add(block.id)
       candidates.push({
@@ -191,6 +200,7 @@ export function ReferenceSearch({
   placeholder,
   selectionMode,
   onPick,
+  propertyField = false,
 }: {
   owner: Block
   excludeIds: readonly string[]
@@ -198,8 +208,16 @@ export function ReferenceSearch({
   placeholder: string
   selectionMode: 'single' | 'multiple'
   onPick: (blockId: string) => void
+  /** True when this search IS a property field (the ref / refList editors in
+   *  the property panel), as opposed to a picker embedded in some other
+   *  surface. Property fields activate the modal `PROPERTY_EDITING` context
+   *  while focused, so block-scoped chords stay shadowed and Escape exits
+   *  the field. Off by default — a picker inside a dialog has its own owner
+   *  for those keys. */
+  propertyField?: boolean
 }) {
   const listboxId = useId()
+  const propertyEditingFocus = usePropertyEditingActivation(propertyField ? owner : null)
   const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null)
   const workspaceId = useWorkspaceId(owner, owner.repo.activeWorkspaceId ?? '')
   const [query, setQuery] = useState('')
@@ -277,14 +295,23 @@ export function ReferenceSearch({
           aria-expanded={open}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          onFocus={() => setOpen(true)}
+          onFocus={event => {
+            propertyEditingFocus.onFocus(event)
+            setOpen(true)
+          }}
+          onBlur={propertyEditingFocus.onBlur}
           onChange={event => {
             setQuery(event.target.value)
             setOpen(true)
           }}
           onKeyDown={event => {
             if (event.key === 'Escape') {
-              setOpen(false)
+              // The dropdown always shows something while `open` (results, or
+              // a "no matching blocks" row), so closing it is a real dismiss:
+              // claim the key and keep the caret here. With it already closed
+              // the event falls through to `exit_property_editing`, which
+              // blurs the field (property fields only — see `propertyField`).
+              dismissOnFieldEscape(event, open && (() => setOpen(false)))
               return
             }
             onKeyDown(event)
@@ -364,6 +391,7 @@ function RefPropertyEditorInner({
       placeholder="Search blocks"
       selectionMode="single"
       onPick={onChange}
+      propertyField
     />
   )
 }
@@ -410,6 +438,7 @@ function RefListPropertyEditorInner({
           placeholder={blockIds.length > 0 ? 'Add block' : 'Search blocks'}
           selectionMode="multiple"
           onPick={add}
+          propertyField
         />
       )}
       {readOnly && blockIds.length === 0 && <EmptyReference />}

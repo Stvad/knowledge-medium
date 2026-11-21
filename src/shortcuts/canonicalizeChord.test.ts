@@ -3,6 +3,7 @@ import {
   canonicalizeChord,
   matchesMouseEvent,
   normalizeChord,
+  normalizeChordSequence,
   pointerBindingDescriptor,
   type MouseChordDescriptor,
   type MouseEventLike,
@@ -21,7 +22,16 @@ describe('canonicalizeChord', () => {
   it('canonicalises each press of a sequence instead of mangling on "+"', () => {
     // A naive '+' split would shatter 'Cmd+K Cmd+S' into ['Cmd', 'K Cmd',
     // 'S']; splitting on space first keeps each press intact.
-    expect(canonicalizeChord('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(canonicalizeChord('Cmd+K Cmd+S')).toBe('$mod+k $mod+s')
+  })
+
+  it('folds final-key case: $mod+K and $mod+k are one binding at dispatch', () => {
+    // tinykeys compares key.toUpperCase() on both sides, so case-variant
+    // spellings dispatch identically and must share a canonical bucket
+    // (strip map, conflict detection). normalizeChord deliberately keeps
+    // case — the settings UI round-trips the user's spelling.
+    expect(canonicalizeChord('$mod+K')).toBe(canonicalizeChord('$mod+k'))
+    expect(canonicalizeChord('Cmd+K')).toBe(canonicalizeChord('$mod+k'))
   })
 
   it('treats alias- and order-equivalent chords as the same key', () => {
@@ -40,9 +50,62 @@ describe('canonicalizeChord', () => {
     expect(canonicalizeChord('Meta+k')).not.toBe(canonicalizeChord('$mod+k'))
   })
 
+  it('folds Control into $mod off-Mac, where tinykeys binds $mod to Control', () => {
+    stubPlatform('Win32')
+    expect(canonicalizeChord('Control+k')).toBe(canonicalizeChord('$mod+k'))
+    expect(canonicalizeChord('ctrl+Shift+k')).toBe(canonicalizeChord('Shift+cmd+k'))
+    // The installed spelling keeps Control: it is stored and synced, and on a
+    // Mac `$mod` would mean Cmd.
+    expect(normalizeChordSequence('ctrl+k')).toBe('Control+k')
+  })
+
+  it('keeps Control distinct from $mod on macOS', () => {
+    stubPlatform('MacIntel')
+    expect(canonicalizeChord('Control+k')).not.toBe(canonicalizeChord('$mod+k'))
+  })
+
   it('distinguishes the same chord on different phases', () => {
     expect(canonicalizeChord('s', 'hold')).not.toBe(canonicalizeChord('s', 'keyup'))
     expect(canonicalizeChord('s')).toBe('s')
+  })
+
+  it('preserves case for event.code-only keys so mis-cased overrides do not forge a collision', () => {
+    // `Digit1`/`Period`/`Space`/`KeyA`/`Numpad3` dispatch ONLY through
+    // tinykeys' case-sensitive `event.code` comparison (their event.key is
+    // '1'/'.'/' '/'a'/'3'), so a lowercase spelling fires nothing. Folding
+    // them would (a) let a dead `Control+Shift+digit1` strip the working
+    // `Control+Shift+Digit1` default and (b) is meaningless — they must
+    // stay exact-cased and in their own bucket.
+    expect(canonicalizeChord('Alt+Shift+Digit1')).toBe('Alt+Shift+Digit1')
+    expect(canonicalizeChord('Control+Shift+Digit1'))
+      .not.toBe(canonicalizeChord('Control+Shift+digit1'))
+    expect(canonicalizeChord('$mod+Shift+Period')).toBe('$mod+Shift+Period')
+    expect(canonicalizeChord('Space')).toBe('Space')
+    expect(canonicalizeChord('KeyA')).toBe('KeyA')
+    expect(canonicalizeChord('Numpad3')).toBe('Numpad3')
+  })
+
+  it('keeps `+` as a key instead of eating it (tinykeys splits on `+` only after \\w or ])', () => {
+    // The settings capture path records pressing `+` as 'Shift++'
+    // (keyCapture.ts pushes event.key after the modifier parts), and
+    // tinykeys parses that as Shift plus the `+` key. A naive `+` split
+    // would leave the bare modifier — and since direct overrides are
+    // INSTALLED through normalizeChordSequence, the action would end up
+    // bound to Shift alone.
+    expect(canonicalizeChord('Shift++')).toBe('Shift++')
+    expect(canonicalizeChord('$mod+Shift++')).toBe('$mod+Shift++')
+    expect(canonicalizeChord('+')).toBe('+')
+  })
+
+  it('still folds case for logical keys that dispatch via event.key', () => {
+    // Named keys whose event.key equals the code (Enter/ArrowUp/F2/Escape…)
+    // match tinykeys' case-INSENSITIVE event.key path, so mis-cased
+    // spellings still fire and must share one bucket — fold them.
+    expect(canonicalizeChord('ArrowUp')).toBe(canonicalizeChord('arrowup'))
+    expect(canonicalizeChord('Shift+Enter')).toBe(canonicalizeChord('Shift+enter'))
+    expect(canonicalizeChord('F2')).toBe(canonicalizeChord('f2'))
+    // …and single-character keys as before.
+    expect(canonicalizeChord('$mod+K')).toBe(canonicalizeChord('$mod+k'))
   })
 })
 
@@ -112,6 +175,17 @@ describe('pointerBindingDescriptor', () => {
   })
 })
 
+describe('normalizeChordSequence', () => {
+  it('normalises each press of a sequence, preserving the key\'s case', () => {
+    // The install form for keybinding overrides (issue #388): modifier
+    // aliases fold to dispatch-live names, display case survives — unlike
+    // canonicalizeChord, which case-folds because it's a comparison key.
+    expect(normalizeChordSequence('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(normalizeChordSequence('ctrl+ArrowDown')).toBe('Control+ArrowDown')
+    expect(normalizeChordSequence('')).toBe('')
+  })
+})
+
 describe('normalizeChord (behaviour pinned across the lift)', () => {
   // keyCapture.test.ts covers the ordinary cases through the re-export;
   // these pin the adversarial edges of the "alias or key" rewrite. Only the
@@ -123,6 +197,8 @@ describe('normalizeChord (behaviour pinned across the lift)', () => {
     ['k+cmd', '$mod+k'],               // non-modifier before a modifier
     [' cmd + k ', '$mod+k'],           // surrounding whitespace trimmed
     ['', ''],                          // empty input stays empty
+    ['Shift++', 'Shift++'],            // `+` is the key, not a separator
+    ['cmd + +', '$mod++'],             // …even authored with spaces
   ])('normalizeChord(%j) === %j', (input, expected) => {
     expect(normalizeChord(input)).toBe(expected)
   })

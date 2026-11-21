@@ -2,6 +2,122 @@
   "enabledPlugins": {
     "security-guidance@claude-plugins-official": true
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-staged-pii.mjs\"",
+            "statusMessage": "Scanning staged changes for PII…",
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-env-read.mjs\"",
+            "statusMessage": "Checking for secret-file reads…",
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-stash-worktree.mjs\"",
+            "statusMessage": "Checking for stash/amend hazards…",
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/backup-before-restore.mjs\"",
+            "statusMessage": "Backing up files a checkout/restore would overwrite…",
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --hook-pre-pr",
+            "statusMessage": "Checking for publishable bead ids…",
+            "timeout": 180,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-publish-verify.mjs\"",
+            "statusMessage": "Verifying published references…",
+            "timeout": 120,
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
+            "statusMessage": "Scoping any git push against origin/master…",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-publish-verify.mjs\"",
+            "statusMessage": "Verifying published references…",
+            "timeout": 120,
+            "type": "command"
+          },
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/push-scope.mjs\"",
+            "statusMessage": "Scoping any git push against origin/master…",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-github-sync.mjs\" --quiet",
+            "timeout": 300,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/bd-prime-hook.mjs\"",
+            "statusMessage": "Loading beads memory index…",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/ensure-deps.mjs\"",
+            "statusMessage": "Checking node_modules against pnpm-lock.yaml…",
+            "timeout": 300,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume"
+      },
+      {
+        "hooks": [
+          {
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/compaction-handoff.mjs\"",
+            "statusMessage": "Restoring the compaction handoff…",
+            "type": "command"
+          }
+        ],
+        "matcher": "compact"
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(grep:*)",
@@ -20,48 +136,28 @@
       "Bash(gh pr diff:*)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(yarn run *)",
-      "Bash(yarn compile *)",
-      "Bash(yarn test *)",
-      "Bash(yarn vitest:*)",
+      "Bash(pnpm run *)",
+      "Bash(pnpm compile *)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm vitest:*)",
       "Bash(npx tsc *)",
       "Bash(npx vitest *)",
-      "Bash(yarn agent ping:*)",
-      "Bash(yarn agent status:*)",
-      "Bash(yarn agent profiles:*)",
-      "Bash(yarn agent runtime-summary:*)",
-      "Bash(yarn agent describe-runtime:*)",
-      "Bash(yarn agent health:*)",
-      "Bash(yarn agent get-block:*)",
-      "Bash(yarn agent subtree:*)",
-      "Bash(yarn agent types:*)",
-      "Bash(yarn agent sql all:*)",
-      "Bash(yarn agent sql get:*)",
-      "Bash(yarn agent sql optional:*)"
+      "Bash(pnpm agent ping:*)",
+      "Bash(pnpm agent status:*)",
+      "Bash(pnpm agent profiles:*)",
+      "Bash(pnpm agent runtime-summary:*)",
+      "Bash(pnpm agent describe-runtime:*)",
+      "Bash(pnpm agent health:*)",
+      "Bash(pnpm agent get-block:*)",
+      "Bash(pnpm agent subtree:*)",
+      "Bash(pnpm agent types:*)",
+      "Bash(pnpm agent sql all:*)",
+      "Bash(pnpm agent sql get:*)",
+      "Bash(pnpm agent sql optional:*)"
     ],
     "ask": [
       "Read(.env)",
       "Read(.env.*)"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-staged-pii.mjs\"",
-            "if": "Bash(git *)",
-            "statusMessage": "Scanning staged changes for PII…"
-          },
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-env-read.mjs\"",
-            "statusMessage": "Checking for secret-file reads…"
-          }
-        ]
-      }
     ]
   }
 }

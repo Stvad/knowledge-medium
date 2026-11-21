@@ -91,7 +91,7 @@ npx powersync@latest deploy
 8. Start the app:
 
 ```bash
-yarn dev
+pnpm dev
 ```
 
 ### Local Database Migration Tests
@@ -99,31 +99,55 @@ yarn dev
 Run the SQL migration test suite with:
 
 ```bash
-yarn check:db
+pnpm check:db
 ```
 
-This starts a local Supabase Postgres test container, applies
-`supabase/migrations/*.sql` as `supabase_admin`, runs every pgTAP test in
-`supabase/tests`, and then removes the test database container so the next run
-starts clean. It is not part of `yarn check`; the pre-commit gate stays JS-only
-and does not require a container runtime.
+This starts a local Supabase Postgres test container and the Storage API,
+applies `supabase/migrations/*.sql` as `supabase_admin`, and runs every pgTAP
+test in `supabase/tests`. Storage starts first, as on the hosted project, so the
+migrations' Storage blocks (the attachments bucket and its policies) run. It
+then starts GoTrue and PostgREST against that database and runs the vitest files
+named `*.supabase.test.ts` (through `vitest.supabase.config.ts`), which drive the
+app's own PostgREST and Storage code against it. Finally it removes the
+containers and their network so the next run starts clean. It is not part of
+`pnpm check`; the pre-commit gate stays JS-only and does not require a container
+runtime. `pnpm check:db --hold` brings the stack up, prints its `CHECK_DB_*`
+exports and keeps it running until Ctrl-C, so one stack test can run alone.
 
-For Apple Container, install `container` and `socktainer`. `yarn check:db`
+For Apple Container, install `container` and `socktainer`. `pnpm check:db`
 uses the shared runtime helper and starts the Apple container system plus a
 managed Socktainer process when `DOCKER_HOST` is unset:
 
 ```bash
-yarn check:db
+pnpm check:db
 ```
+
+Socktainer needs to be at least 1.0.0. Older releases set the hostname to
+`<container name>-<uuid>` without capping it at Linux's 64 characters. The test
+container's name is long enough to go over that limit, so its start fails with
+`vmexec error ... Invalid argument`. Each Socktainer release is built against
+one Apple Container version (Socktainer 1.5.x against container 1.5.0), so
+upgrade the two together:
+
+```bash
+container system stop && brew upgrade container socktainer && container system start
+```
+
+Socktainer now ships in homebrew-core. If you installed it from the old
+`socktainer/tap`, run `brew untap socktainer/tap` first, as upstream recommends.
+
+The managed Socktainer logs to
+`$TMPDIR/knowledge-medium-socktainer-<pid>.log`, and its startup version check
+reports a mismatch there.
 
 The runtime helper is also available directly:
 
 ```bash
-yarn db:runtime:apple
+pnpm db:runtime:apple
 ```
 
 That starts Apple Container/Socktainer and prints the Docker host it prepared.
-If `DOCKER_HOST` is already set, `yarn check:db` respects it. To force the
+If `DOCKER_HOST` is already set, `pnpm check:db` respects it. To force the
 default Docker runtime, set `CHECK_DB_CONTAINER_RUNTIME=docker`.
 
 ### Notes
@@ -144,39 +168,39 @@ The app exposes a first-class runtime bridge for coding agents. The browser app 
 Start the app:
 
 ```bash
-yarn dev
+pnpm dev
 ```
 
 Then use the CLI from another terminal. If the local relay is not running, the CLI starts it in the background before submitting the command:
 
 ```bash
-yarn agent connect
-yarn agent ping
-yarn agent sql all "SELECT id, content FROM blocks LIMIT 5"
-yarn agent create-block '{"parentId":"<block-id>","content":"Created by agent"}'
-yarn agent delete-block "<block-id>"
-yarn agent restore-block "<block-id>"
-yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }'
+pnpm agent connect
+pnpm agent ping
+pnpm agent sql all "SELECT id, content FROM blocks LIMIT 5"
+pnpm agent create-block '{"parentId":"<block-id>","content":"Created by agent"}'
+pnpm agent delete-block "<block-id>"
+pnpm agent restore-block "<block-id>"
+pnpm agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }'
 ```
 
-`yarn agent connect` prints an app URL, opens the token dialog when that URL is loaded, then waits for the copied token to be pasted back into the terminal. After that one-time pairing, normal `yarn agent ...` commands use the stored token automatically.
+`pnpm agent connect` prints an app URL, opens the token dialog when that URL is loaded, then waits for the copied token to be pasted back into the terminal. After that one-time pairing, normal `pnpm agent ...` commands use the stored token automatically.
 
 Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `deleteBlock`, `restoreBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
-For an agent-facing orientation to the data model, run `yarn agent data-model`.
+For an agent-facing orientation to the data model, run `pnpm agent data-model`.
 
-By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `yarn agent pair-url` or foreground the relay with `yarn agent:server` to get a bridge-only pairing URL. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
+By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `pnpm agent pair-url` or foreground the relay with `pnpm agent:server` to get a bridge-only pairing URL. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
 
-The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `yarn agent status`.
+The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `pnpm agent status`.
 
 ---
 
 ## Development
 
 ```bash
-yarn dev      # start the app (Vite)
-yarn check    # the verification gate: typecheck, lint, and tests
-yarn build    # production build
+pnpm dev      # start the app (Vite)
+pnpm check    # the verification gate: typecheck, lint, and tests
+pnpm build    # production build
 ```
 
 See [`AGENTS.md`](./AGENTS.md) for verification, testing, and contribution

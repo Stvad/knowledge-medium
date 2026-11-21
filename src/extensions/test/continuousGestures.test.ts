@@ -1,5 +1,5 @@
-// @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest'
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createBlockGestureController,
   unionTouchAction,
@@ -447,6 +447,290 @@ describe('enablement (isEnabled)', () => {
   })
 })
 
+describe('holds (hold.ms / hold.onHold)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const holdCommit = () => ({status: 'commit', gesture: 'hold', deps}) as const
+
+  it('runs onHold once the pointer has stayed down for holdMs, and dispatches its commit', () => {
+    vi.useFakeTimers()
+    const dispatch = makeDispatch()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
+      element,
+      dispatch,
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(499)
+    expect(onHold).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+
+    expect(onHold).toHaveBeenCalledTimes(1)
+    expect(dispatch.mock.calls[0]?.[0]).toBe('hold')
+  })
+
+  it('sees the latest position of the held pointer', () => {
+    vi.useFakeTimers()
+    let heldAt: number | undefined
+    const controller = createBlockGestureController({
+      recognizers: [{
+        id: 'hold',
+        hold: {
+          ms: 500,
+          onHold: (session: GestureSession) => {
+            heldAt = session.changed.x
+            return GESTURE_IDLE
+          },
+        },
+      }],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.handlePointerMove(sample(1, 4, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(heldAt).toBe(4)
+  })
+
+  it('never runs onHold for a press released before holdMs', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(200)
+    controller.handlePointerUp(sample(1, 0, 0))
+    vi.advanceTimersByTime(1000)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('never runs onHold while a rival owns the block', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerMove: () => GESTURE_ACTIVE},
+        {id: 'hold', hold: {ms: 500, onHold}},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.handlePointerMove(sample(1, 20, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('never runs onHold for a recognizer whose gate is off when the hold elapses', () => {
+    vi.useFakeTimers()
+    let enabled = true
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', isEnabled: () => enabled, hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    enabled = false
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('never runs onHold for a press its recognizer did not see go down', () => {
+    // Disabled at the pointerdown, its onPointerDown never ran, so whatever it
+    // holds is from an earlier press.
+    vi.useFakeTimers()
+    let enabled = false
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', isEnabled: () => enabled, hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    enabled = true
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('a handled commit consumes the session: later moves and the release are prevented and reach no recognizer', () => {
+    vi.useFakeTimers()
+    const rivalMove = vi.fn(() => GESTURE_ACTIVE)
+    const rivalUp = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerMove: rivalMove, onPointerUp: rivalUp},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    // The held press is spent: its moves don't become a swipe, and its
+    // release asks for preventDefault, which also swallows its click.
+    expect(controller.handlePointerMove(sample(1, 40, 0))).toBe(true)
+    expect(controller.handlePointerUp(sample(1, 40, 0))).toBe(true)
+    expect(rivalMove).not.toHaveBeenCalled()
+    expect(rivalUp).not.toHaveBeenCalled()
+
+    // The next press is a fresh session.
+    controller.handlePointerDown(sample(2, 0, 0))
+    expect(controller.handlePointerUp(sample(2, 0, 0))).toBe(false)
+    expect(rivalUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops pending holds when disposed: a detached surface never sees the release', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    controller.dispose()
+    vi.advanceTimersByTime(500)
+
+    expect(onHold).not.toHaveBeenCalled()
+  })
+
+  it('runs no further hold once one has consumed the session', () => {
+    vi.useFakeTimers()
+    const laterHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
+        {id: 'later-hold', hold: {ms: 500, onHold: laterHold}},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(laterHold).not.toHaveBeenCalled()
+  })
+
+  it('evicts the other recognizers when a commit consumes the session, so they drop what they tracked', () => {
+    vi.useFakeTimers()
+    const rivalCancel = vi.fn()
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerCancel: rivalCancel},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(rivalCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('times a hold from the latest pointerdown, and runs it once', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(300)
+    controller.handlePointerDown(sample(2, 50, 0))
+    vi.advanceTimersByTime(300)
+    expect(onHold).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(200)
+
+    expect(onHold).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a released press\'s hold, so a quick next press waits its own full hold', () => {
+    vi.useFakeTimers()
+    const onHold = vi.fn(holdCommit)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'hold', hold: {ms: 500, onHold}}],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(200)
+    controller.handlePointerUp(sample(1, 0, 0))
+    vi.advanceTimersByTime(100)
+    controller.handlePointerDown(sample(2, 0, 0))
+    vi.advanceTimersByTime(300)
+    expect(onHold).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(200)
+
+    expect(onHold).toHaveBeenCalledTimes(1)
+  })
+
+  it('a finger landing on a consumed session reaches no recognizer', () => {
+    vi.useFakeTimers()
+    const rivalDown = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'scrub', onPointerDown: rivalDown},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
+      ],
+      element,
+      dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+    controller.handlePointerDown(sample(2, 50, 0))
+
+    expect(rivalDown).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unhandled hold commit leaves the rest of the session to the other recognizers', () => {
+    vi.useFakeTimers()
+    const rivalMove = vi.fn(() => GESTURE_IDLE)
+    const controller = createBlockGestureController({
+      recognizers: [
+        {id: 'swipe', onPointerMove: rivalMove},
+        {id: 'hold', hold: {ms: 500, onHold: holdCommit}},
+      ],
+      element,
+      dispatch: vi.fn(() => false),
+    })
+
+    controller.handlePointerDown(sample(1, 0, 0))
+    vi.advanceTimersByTime(500)
+
+    expect(controller.handlePointerMove(sample(1, 40, 0))).toBe(false)
+    expect(rivalMove).toHaveBeenCalledTimes(1)
+    expect(controller.handlePointerUp(sample(1, 40, 0))).toBe(false)
+  })
+})
+
 describe('unionTouchAction', () => {
   it('collapses identical requirements and lets none dominate; differing requirements fall back to none', () => {
     expect(unionTouchAction(['pan-y', 'pan-y'])).toBe('pan-y')
@@ -463,5 +747,119 @@ describe('unionTouchAction', () => {
     expect(enabledTouchAction([on, off])).toBe('pan-y') // the disabling 'none' is excluded
     expect(enabledTouchAction([on, always])).toBe('pan-y')
     expect(enabledTouchAction([off])).toBeUndefined()
+  })
+})
+
+describe('nested gesture surfaces', () => {
+  // A block rendered inside ANOTHER block's content slot (the Readwise review
+  // backlog, a review deck) puts one `.block-content` inside another, and
+  // pointer events bubble — so the container's controller sees the nested
+  // block's swipe and, dispatching last, ran the gesture on itself.
+  const buildNested = () => {
+    const outer = document.createElement('div')
+    outer.className = 'block-content'
+    const shell = document.createElement('div')
+    // What a layout spreading `shellProps` produces — the shell half of the
+    // boundary. Not the default layout's class: a layout may style its own.
+    shell.setAttribute('data-block-shell', 'true')
+    // Shell chrome OUTSIDE the nested content slot: the bullet, a breadcrumb
+    // chain, the property panel. No `.block-content` above it but the
+    // container's, which is what made the content marker alone insufficient.
+    const bullet = document.createElement('button')
+    const inner = document.createElement('div')
+    inner.className = 'block-content'
+    const innerText = document.createElement('span')
+    inner.appendChild(innerText)
+    shell.append(bullet, inner)
+    outer.appendChild(shell)
+    document.body.appendChild(outer)
+    return {outer, inner, innerText, bullet}
+  }
+
+  const sampleOn = (target: EventTarget, pointerId: number, x: number): PointerSample => ({
+    ...sample(pointerId, x, 0),
+    target,
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  const commitOnUp: GestureRecognizer = {
+    id: 'swipe',
+    onPointerUp: () => ({status: 'commit', gesture: 'swipe-left', deps}),
+  }
+
+  it('ignores a gesture that started on a nested block surface', () => {
+    const {outer, innerText} = buildNested()
+    const dispatch = makeDispatch()
+    const controller = createBlockGestureController({
+      recognizers: [commitOnUp], element: outer, dispatch,
+    })
+
+    controller.handlePointerDown(sampleOn(innerText, 1, 0))
+    const prevented = controller.handlePointerUp(sampleOn(innerText, 1, -60))
+
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(prevented).toBe(false)
+  })
+
+  it('ignores a gesture on a nested block shell outside its content slot', () => {
+    const {outer, bullet} = buildNested()
+    const dispatch = makeDispatch()
+    const controller = createBlockGestureController({
+      recognizers: [commitOnUp], element: outer, dispatch,
+    })
+
+    controller.handlePointerDown(sampleOn(bullet, 1, 0))
+    controller.handlePointerUp(sampleOn(bullet, 1, -60))
+
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('still recognizes a gesture on its own surface', () => {
+    const {outer} = buildNested()
+    const dispatch = makeDispatch()
+    const controller = createBlockGestureController({
+      recognizers: [commitOnUp], element: outer, dispatch,
+    })
+
+    controller.handlePointerDown(sampleOn(outer, 1, 0))
+    controller.handlePointerUp(sampleOn(outer, 1, -60))
+
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not tear down its own in-flight gesture when a nested block cancels', () => {
+    // Two fingers, one on each surface. The nested one's cancel must not reach
+    // recognizers here, or a nested block scrolling out from under a finger
+    // would drop the container's half-built gesture.
+    const {outer, innerText} = buildNested()
+    const onPointerCancel = vi.fn()
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'r', onPointerCancel}], element: outer, dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sampleOn(outer, 1, 0))
+    controller.handlePointerDown(sampleOn(innerText, 2, 0))
+    controller.handlePointerCancel(sampleOn(innerText, 2, -60))
+
+    expect(onPointerCancel).not.toHaveBeenCalled()
+  })
+
+  it('drops the rest of a foreign pointer session, not just its down', () => {
+    // The move/up phases carry the same target, but the guard that matters is
+    // the session one: a recognizer must never see a move for a pointer the
+    // controller declined, whatever that move's target says.
+    const {outer, innerText} = buildNested()
+    const onPointerMove = vi.fn(() => GESTURE_ACTIVE)
+    const controller = createBlockGestureController({
+      recognizers: [{id: 'r', onPointerMove}], element: outer, dispatch: makeDispatch(),
+    })
+
+    controller.handlePointerDown(sampleOn(innerText, 1, 0))
+    controller.handlePointerMove(sampleOn(outer, 1, -60))
+
+    expect(onPointerMove).not.toHaveBeenCalled()
   })
 })

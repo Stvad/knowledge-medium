@@ -1,5 +1,7 @@
 # Properties model evolution — projection helpers & possible children migration
 
+> **Status:** partially superseded — last verified against code 2026-07-21. Thread 1 (ref-with-scalar projection) describes the ref-codec/projection model that shipped. Thread 2 (properties/types as block children) is superseded in part by the properties-as-blocks migration (#288 §6) and by the schema-unification project (`docs/schema-unification.html`), which landed through slice D: property **and** type definitions now live as blocks with code-owned `seedProperty`/`seedType` seed declarations, and the old static registration paths this doc's discussion assumed — `propertySchemasFacet`/`typesFacet` `.of(...)` plus the `mergeLiftedSchemas` type-lift — have been removed. Treat the storage-shape and registration claims here as a dated 2026-05-08 snapshot; CODE + `schema-unification.html` are authoritative.
+
 Captures two related threads of design discussion: a near-term "ref with scalar projection" feature (scoped, useful on its own), and a deferred move toward Tana-style "properties are block children" (larger, conceptually attractive, not blocked on the near-term work). Conceptual; not an implementation plan. Written 2026-05-08.
 
 ## Where we are today

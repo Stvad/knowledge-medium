@@ -9,7 +9,8 @@
  *     canary (→ `e2ee`) or a plaintext workspace is created/confirmed
  *     (→ `plaintext`), and locally immutable thereafter — a server that
  *     flips its `encryption_mode` flag can't silently downgrade a pinned
- *     workspace;
+ *     workspace. The single exception is {@link upgradeModePinToE2ee}, the
+ *     one-way plaintext → e2ee move of an in-place conversion;
  *   - stored in localStorage, which (unlike the per-user SQLite DB,
  *     kmp-v6-<user_id>.db) is shared across all of a profile's accounts,
  *     so pins are keyed by user id. A full platform "clear site data"
@@ -122,4 +123,54 @@ export const setModePin = (
     throw new Error('cannot set E2EE mode pin: localStorage unavailable')
   }
   localStorage.setItem(pinStorageKey(userId, workspaceId), mode)
+}
+
+/**
+ * The one transition a pin admits (docs/workspace-e2ee-conversion.md §5):
+ * plaintext or unpinned → e2ee, for a workspace converted in place. A no-op on
+ * an e2ee pin; nothing here can write plaintext, so a pin it touched stays e2ee
+ * and {@link setModePin} refuses to take it back.
+ *
+ * Only the upgrade flow (`upgradeWorkspacePin` and its resume) calls it, after
+ * a workspace key has opened the server's canary: a false e2ee claim can only stall this device, never make it
+ * decrypt less, which is why the upgrade needs no more proof than that.
+ */
+export const upgradeModePinToE2ee = (userId: string, workspaceId: string): void => {
+  if (getModePin(userId, workspaceId) === 'e2ee') return
+  if (!hasLocalStorage()) {
+    throw new Error('cannot upgrade E2EE mode pin: localStorage unavailable')
+  }
+  // A persisted pin outranks a session-only plaintext confirmation.
+  localStorage.setItem(pinStorageKey(userId, workspaceId), 'e2ee')
+}
+
+// The pin-upgrade marker: written right before the pin moves to e2ee, cleared
+// once the workspace's deferred rows have been drained under the new pin. It is
+// the only local record of that window, because an upgraded pin reads exactly
+// like any other e2ee pin while the rows deferred during the mismatch are still
+// staged — and only a full workspace drain re-reads them.
+const PIN_UPGRADE_MARKER_PREFIX = 'kmp-e2ee-pin-upgrade:'
+
+const pinUpgradeMarkerKey = (userId: string, workspaceId: string): string =>
+  `${PIN_UPGRADE_MARKER_PREFIX}${encodeURIComponent(userId)}:${encodeURIComponent(workspaceId)}`
+
+export const writePinUpgradeMarker = (userId: string, workspaceId: string): void => {
+  if (!hasLocalStorage()) {
+    throw new Error('cannot write pin-upgrade marker: localStorage unavailable')
+  }
+  localStorage.setItem(pinUpgradeMarkerKey(userId, workspaceId), '1')
+}
+
+export const hasPinUpgradeMarker = (userId: string, workspaceId: string): boolean => {
+  if (!hasLocalStorage()) return false
+  try {
+    return localStorage.getItem(pinUpgradeMarkerKey(userId, workspaceId)) !== null
+  } catch {
+    return false
+  }
+}
+
+export const clearPinUpgradeMarker = (userId: string, workspaceId: string): void => {
+  if (!hasLocalStorage()) return
+  localStorage.removeItem(pinUpgradeMarkerKey(userId, workspaceId))
 }

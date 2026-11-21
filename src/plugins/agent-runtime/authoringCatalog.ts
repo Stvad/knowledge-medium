@@ -1,5 +1,24 @@
+import { extensionApiCatalog } from '@/extensions/apiCatalog.js'
+
+// Worked examples are REAL SOURCE FILES under ./examples, inlined here as text
+// at build time. They used to be arrays of string literals, which nothing
+// compiled, so bugs could live inside them undetected. As files they sit in
+// the app tsconfig and the eslint scope, so `pnpm run check` fails on a
+// broken example instead of shipping it to extension authors as guidance.
+//
+// The whole file text is the example — no slicing, no markers. What the agent
+// reads is exactly what compiled.
+import userPrefsConfigSource from './examples/userPrefsConfig.ts?raw'
+import pluginRootSingletonSource from './examples/pluginRootSingleton.ts?raw'
+import settingsPropertyEditorSource from './examples/settingsPropertyEditor.tsx?raw'
+import importedRecordSyncSource from './examples/importedRecordSync.ts?raw'
+import localStorageCredentialsSource from './examples/localStorageCredentials.ts?raw'
+import settingsDialogSource from './examples/settingsDialog.tsx?raw'
+import openDialogPromptSource from './examples/openDialogPrompt.tsx?raw'
+import recordGrainSource from './examples/recordGrain.ts?raw'
+
 export type AuthoringCatalogSource =
-  | 'generated-api'
+  | 'curated-api'
   | 'generated-module-glob'
   | 'html-importmap'
   | 'html-preload'
@@ -10,6 +29,10 @@ export interface AuthoringModuleSummary {
   category: string
   description: string
   exports?: string[]
+  /** Type-only exports, for curated-API modules. Surfaced for discovery and
+   *  searched by the `--modules <term>` filter so a type-name lookup (e.g.
+   *  `PropertyEditorProps`) finds the module that owns it. */
+  types?: string[]
   source: AuthoringCatalogSource
   safeForExtensions?: boolean
 }
@@ -76,16 +99,20 @@ export interface AuthoringCatalogFilters {
   guides?: string[]
   modules?: string[]
   components?: string[]
-  /** When true, omit modules and components entirely. The
-   *  guide-only / `--brief` path uses this to keep the response
-   *  small — module/component glob dumps are 150KB of paths the
-   *  agent doesn't need while reading a guide. */
-  omitDiscoverableModules?: boolean
-}
-
-interface ApiSurfaceLike {
-  module: string
-  exports: string[]
+  /** Guide-only mode — inferred by the CLI from `--guide`; there is no
+   *  `--brief` flag, and cac rejects an unregistered one outright. Omits the
+   *  module + component glob dumps, ~150KB of internal paths an agent reading
+   *  a guide has no use for; the guide's `preferredModules` already names
+   *  what matters.
+   *
+   *  It deliberately does NOT touch the storage worked sources. Reducing
+   *  those to a "fetch it with …" pointer was tried and reverted: measured,
+   *  it saved ~10KB on a guide-filtered call while the follow-up the pointer
+   *  asked for cost ~45KB, so an agent that obeyed it paid nearly double. It
+   *  also elided the sources the guides steer you toward — `record-grain`
+   *  recommends `getOrCreateTypedChild` and the only two worked sources for
+   *  it were both pointered away. */
+  brief?: boolean
 }
 
 type RuntimeModule = Record<string, unknown>
@@ -100,18 +127,31 @@ const internalModuleIndex = import.meta.glob([
   '/src/shortcuts/**/*.{ts,tsx}',
   '/src/utils/**/*.{ts,tsx}',
   '!/src/**/*.test.{ts,tsx}',
+  '!/src/**/*.d.ts',
   '!/src/**/test/**/*.{ts,tsx}',
+  // The worked examples are guidance inlined above as text, not modules an
+  // extension should import. Both families, and any future one.
+  '!/src/**/examples/**',
 ])
 
-const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
-  eager: true,
-}) as Record<string, RuntimeModule>
+// The test exclusion is load-bearing, not tidiness: this glob is EAGER, so
+// a co-located test file gets evaluated wherever the catalog is imported —
+// in the app, on the vitest globals it calls at module scope.
+const eagerUiModules = import.meta.glob(
+  ['/src/components/ui/*.{ts,tsx}', '!/src/components/ui/*.{test,spec}.{ts,tsx}'],
+  {eager: true},
+) as Record<string, RuntimeModule>
+
+/** A worked example: the label the catalog shows, plus the verbatim text of
+ *  the compiled source file behind it. */
+const example = (label: string, source: string): AuthoringExample =>
+  ({label, code: source.trimEnd()})
 
 const storageGuide: AuthoringStorageGuide = {
   principles: [
     'Store plugin configuration and sync state in system blocks whenever possible.',
     'Use typed properties with ChangeScope.UserPrefs for per-user preferences and ChangeScope.BlockDefault for workspace/content data.',
-    'Use `pluginBlockId(workspaceId, NAMESPACE, key)` for plugin-owned singleton blocks so upserts are idempotent across reinstalls.',
+    'Let the platform own get-or-create for plugin-owned blocks — `getOrCreateKernelPage` for a root page, `getOrCreateTypedChild` for the records under it — so re-installs and second devices land on the existing block instead of duplicating it.',
     'Use deterministic external-id properties on imported records so sync plugins can upsert instead of duplicating data.',
     'Keep credentials in `window.localStorage`, scoped under a `knowledge-medium:<plugin>:...` key. Never echo token values through bridge output.',
   ],
@@ -119,410 +159,52 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'user-prefs-config',
       when: 'Per-user plugin settings, defaults, and lightweight sync checkpoints.',
-      use: 'Define a TypeContribution for the plugin via `defineBlockType({id, label, properties})` and register it through `typesFacet`. Then read/write the per-plugin sub-block via `getPluginPrefsBlock(repo, workspaceId, user, type)`. Each plugin gets its own row under user-prefs, so unrelated plugins\' settings can\'t clobber each other.',
-      modules: ['@/extensions/api.js'],
-      example: {
-        label: 'Define a prefs type and read/write a setting',
-        code: [
-          "import {",
-          "  ChangeScope, codecs, defineBlockType, defineProperty,",
-          "  getPluginPrefsBlock, typesFacet, propertySchemasFacet,",
-          "} from '@/extensions/api.js'",
-          "",
-          "const lastSyncProp = defineProperty('readwise:lastSyncedAt', {",
-          "  codec: codecs.optionalString,",
-          "  defaultValue: null,",
-          "  changeScope: ChangeScope.UserPrefs,",
-          "})",
-          "",
-          "const readwisePrefsType = defineBlockType({",
-          "  id: 'readwise-prefs',",
-          "  label: 'Readwise',",
-          "  // Prefs containers are plumbing for the # dropdown, but their",
-          "  // chip is informative when the container block itself is on",
-          "  // screen — hide completion only (matches the in-repo",
-          "  // pluginPrefsExtension stamp).",
-          "  hideFromCompletion: true,",
-          "  properties: [lastSyncProp],",
-          "})",
-          "",
-          "// In an action handler:",
-          "const prefs = await getPluginPrefsBlock(repo, repo.activeWorkspaceId, repo.user, readwisePrefsType)",
-          "const last = prefs.peekProperty(lastSyncProp)",
-          "await prefs.set(lastSyncProp, new Date().toISOString())",
-          "",
-          "// Top-level facet contributions:",
-          "export default [",
-          "  typesFacet.of(readwisePrefsType, {source: 'readwise'}),",
-          "  propertySchemasFacet.of(lastSyncProp, {source: 'readwise'}),",
-          "  // ... actions, mounts, etc.",
-          "]",
-        ].join('\n'),
-      },
+      use: 'Define a seeded block type for the plugin via `seedType({seedKey: extensionTypeSeedKey(\'prefs\'), revision: 1, id, label, properties})` and register it through `typeSeedsFacet`. Then read/write the per-plugin sub-block via `getPluginPrefsBlock(repo, workspaceId, user, type)`. Each plugin gets its own row under user-prefs, so unrelated plugins\' settings can\'t clobber each other.',
+      modules: ['@/data/api/index.js', '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js', '@/data/stateBlocks.js'],
+      example: example('Define a prefs type and read/write a setting', userPrefsConfigSource),
     },
     {
       id: 'plugin-root-singleton',
       when: 'The plugin needs a stable workspace-scoped root block — e.g. a "Readwise Library" page that all imported books/highlights live under.',
-      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)`. Same inputs always produce the same id, so re-running the install (or running on a fresh device) lands on the same block and your upserts stay idempotent. Use the same helper for per-record ids by passing a key like `book:${externalId}`.',
-      modules: ['@/extensions/api.js'],
-      example: {
-        label: 'Deterministic id for a plugin root block',
-        code: [
-          "import { ChangeScope, pluginBlockId } from '@/extensions/api.js'",
-          "",
-          "// Generate ONE namespace UUID for your plugin and never change it.",
-          "// (Run `crypto.randomUUID()` in any browser console.)",
-          "const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'",
-          "",
-          "// In a sync handler:",
-          "const rootId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, 'library-root')",
-          "const existing = await repo.load(rootId)",
-          "if (!existing) {",
-          "  await repo.tx(async tx => {",
-          "    await tx.create({",
-          "      id: rootId,                              // pin the id",
-          "      workspaceId: repo.activeWorkspaceId,",
-          "      parentId: null,",
-          "      content: 'Readwise Library',",
-          "      properties: { alias: ['Readwise Library'], types: ['page'] },",
-          "    })",
-          "  }, { scope: ChangeScope.BlockDefault, description: 'create readwise root' })",
-          "}",
-          "",
-          "// Per-record ids — same helper, different key:",
-          "const bookId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, `book:${userBookId}`)",
-        ].join('\n'),
-      },
+      use: 'Hardcode a UUID v4 once per block kind as a namespace constant. Export one `KernelPageSpec` constant, pass it to `getOrCreateKernelPage(repo, workspaceId, spec, {skipUndo: true})` whenever the feature is used, and register that same spec with `systemPagesFacet.of({spec, eager: false})` in the default extension export. Registration protects the root from UI deletion while the extension is installed; lazy registration leaves creation until the feature is used. Use `getOrCreateTypedChild` for records under it. Both helpers derive ids deterministically, so re-running the install, a fresh device, or two calls racing land on the same blocks. Do NOT derive ids and then `repo.load` + `tx.create` yourself: the load answers for the moment it ran, so both writers see nothing and the second `tx.create` throws instead of adopting. MIGRATING an existing plugin: a kernel page keys on the workspace id ALONE, while `pluginBlockId(ws, NS, key)` keys on `${ws}:${key}` — switching a live root page onto `getOrCreateKernelPage` with the same namespace lands on a DIFFERENT id. The next run creates an empty root beside the real one and the imported subtree looks lost. For NEW roots, use this pattern. For an existing root, either keep its current get-or-create, or move the data in the same release: clear the alias on the old root FIRST, then create the kernel page, re-parent the old root\'s children under it, then delete the old root, guarded so it runs once and is a no-op when the old root is already gone or empty.',
+      modules: ['@/data/api/index.js', '@/data/facets.js', '@/data/kernelPage.js', '@/data/typedRecords.js'],
+      example: example('A plugin root page, and idempotent records under it', pluginRootSingletonSource),
     },
     {
       id: 'workspace-config-block',
       when: 'Workspace-visible plugin configuration or shared sync state.',
       use: 'Use a deterministic id (see `plugin-root-singleton`) for a config block, then store config as properties and child blocks. Prefer this over user-prefs when the config should sync across all of the user\'s devices and be visible to other workspace members.',
-      modules: ['@/extensions/api.js'],
+      modules: ['@/data/api/index.js', '@/extensions/pluginIds.js'],
     },
     {
       id: 'settings-via-property-editor-override',
       when: 'Settings / configuration UI for a plugin — what a user sees when they want to change how the plugin behaves. Preferred over a modal dialog: configuration belongs *with* the block whose properties it edits, syncs naturally, and is browsable / scriptable like any other block.',
-      use: 'Define a custom property editor with `definePropertyEditorOverride({name, label, Editor})` and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
-      modules: ['@/extensions/api.js', '@/utils/navigation.js'],
-      example: {
-        label: 'Custom settings UI as a property-editor override on the prefs block',
-        code: [
-          "import {",
-          "  actionsFacet, ActionContextTypes, ChangeScope, codecs,",
-          "  defineBlockType, defineProperty, definePropertyEditorOverride,",
-          "  getPluginPrefsBlock, propertyEditorOverridesFacet,",
-          "  propertySchemasFacet, showPropertiesProp, typesFacet,",
-          "  type PropertyEditorProps,",
-          "} from '@/extensions/api.js'",
-          "import { navigate } from '@/utils/navigation.js'",
-          "",
-          "// 1. Each setting is its own typed property of the prefs block.",
-          "//    ChangeScope.UserPrefs keeps them per-user (sync across the",
-          "//    user's devices, not shared with other workspace members).",
-          "const autoSyncProp = defineProperty<boolean>('readwise:autoSync', {",
-          "  codec: codecs.boolean,",
-          "  defaultValue: false,",
-          "  changeScope: ChangeScope.UserPrefs,",
-          "})",
-          "const intervalMinutesProp = defineProperty<number>('readwise:intervalMinutes', {",
-          "  codec: codecs.number,",
-          "  defaultValue: 60,",
-          "  changeScope: ChangeScope.UserPrefs,",
-          "})",
-          "",
-          "const readwisePrefsType = defineBlockType({",
-          "  id: 'readwise-prefs',",
-          "  label: 'Readwise',",
-          "  hideFromCompletion: true, // dropdown plumbing; chip stays informative",
-          "  properties: [autoSyncProp, intervalMinutesProp],",
-          "})",
-          "",
-          "// 2. Property-editor overrides — register one per property, each",
-          "//    rendered inline in the property panel when the user opens",
-          "//    the prefs block. For multi-field settings, you can either",
-          "//    register multiple small editors (one per property) or have",
-          "//    one editor read `block.peekProperty(other)` to span fields.",
-          "const AutoSyncEditor = ({value, set}: PropertyEditorProps<boolean>) => (",
-          "  <label>",
-          "    <input",
-          "      type='checkbox'",
-          "      checked={value}",
-          "      onChange={event => void set(event.target.checked)}",
-          "    />",
-          "    Auto-sync",
-          "  </label>",
-          ")",
-          "",
-          "const autoSyncUi = definePropertyEditorOverride<boolean>({",
-          "  name: autoSyncProp.name,",
-          "  label: 'Auto-sync',",
-          "  Editor: AutoSyncEditor,",
-          "})",
-          "",
-          "// 3. The 'open settings' action navigates to the prefs block;",
-          "//    the property panel renders the Editor inline. No modal.",
-          "const openSettings = {",
-          "  id: 'readwise.configure',",
-          "  description: 'Configure Readwise sync',",
-          "  context: ActionContextTypes.GLOBAL,",
-          "  handler: async ({uiStateBlock}) => {",
-          "    const repo = uiStateBlock.repo",
-          "    const workspaceId = repo.activeWorkspaceId",
-          "    if (!workspaceId) return",
-          "    const prefsBlock = await getPluginPrefsBlock(",
-          "      repo, workspaceId, repo.user, readwisePrefsType,",
-          "    )",
-          "    // Force the property panel visible on arrival — the block's",
-          "    // own content is usually empty (everything is in properties).",
-          "    await prefsBlock.set(showPropertiesProp, true)",
-          "    navigate(repo, {target: 'new-panel', blockId: prefsBlock.id, workspaceId})",
-          "  },",
-          "}",
-          "",
-          "// 4. Wire the contributions.",
-          "export default [",
-          "  typesFacet.of(readwisePrefsType, {source: 'readwise'}),",
-          "  propertySchemasFacet.of(autoSyncProp, {source: 'readwise'}),",
-          "  propertySchemasFacet.of(intervalMinutesProp, {source: 'readwise'}),",
-          "  propertyEditorOverridesFacet.of(autoSyncUi, {source: 'readwise'}),",
-          "  actionsFacet.of(openSettings, {source: 'readwise'}),",
-          "]",
-        ].join('\n'),
-      },
+      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `onChange`, `block`, `schema`). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
+      modules: [
+        '@/extensions/core.js', '@/shortcuts/types.js', '@/data/api/index.js',
+        '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js',
+        '@/data/stateBlocks.js', '@/data/properties.js', '@/utils/navigation.js',
+      ],
+      example: example('Custom settings UI as a property-editor override on the prefs block', settingsPropertyEditorSource),
     },
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …) and either upsert by id-lookup or derive the block id from the external id with `pluginBlockId(workspaceId, NAMESPACE, `book:${id}`)`. Either way, the second sync of the same record must update the existing block, not create a duplicate.',
-      modules: ['@/extensions/api.js'],
-      example: {
-        label: 'Tx mutation primitives — create/read/update inside a transaction',
-        code: [
-          "import {",
-          "  ChangeScope, keyAtEnd, keysBetween, pluginBlockId,",
-          "} from '@/extensions/api.js'",
-          "",
-          "// Inside `await repo.tx(async tx => { ... }, {scope, description})`:",
-          "//",
-          "//   tx.get(id)                       → Promise<BlockData | null>",
-          "//   tx.peek(id)                      → BlockData | null (sync, snapshot read)",
-          "//   tx.create({...})                 → Promise<string> (new id, or pin via {id})",
-          "//   tx.update(id, patch)             → patch is {content?, properties?, references?}",
-          "//   tx.delete(id) / tx.restore(id)   → soft delete + recover",
-          "//   tx.move(id, {parentId, orderKey})",
-          "//   tx.childrenOf(parentId, wsId?)   → Promise<BlockData[]> (order_key ascending)",
-          "//   tx.parentOf(childId)             → Promise<BlockData | null>",
-          "",
-          "// Idempotent upsert by deterministic id:",
-          "const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'",
-          "",
-          "await repo.tx(async tx => {",
-          "  const rootId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, 'library-root')",
-          "  const existingRoot = await tx.get(rootId)",
-          "  if (!existingRoot) {",
-          "    await tx.create({",
-          "      id: rootId,                                  // pin",
-          "      workspaceId: repo.activeWorkspaceId,",
-          "      parentId: null,",
-          "      content: 'Readwise Library',",
-          "      properties: { alias: ['Readwise Library'], types: ['page'] },",
-          "    })",
-          "  }",
-          "",
-          "  // Insert N highlights as children, using order keys that sort",
-          "  // between the existing last child and the end-of-list.",
-          "  const children = await tx.childrenOf(rootId)",
-          "  const lastKey = children.at(-1)?.orderKey ?? null",
-          "  const newKeys = keysBetween(lastKey, null, highlights.length)",
-          "  for (const [i, hl] of highlights.entries()) {",
-          "    await tx.create({",
-          "      id: pluginBlockId(repo.activeWorkspaceId, READWISE_NS, `hl:${hl.id}`),",
-          "      workspaceId: repo.activeWorkspaceId,",
-          "      parentId: rootId,",
-          "      orderKey: newKeys[i],",
-          "      content: hl.text,",
-          "      properties: { 'readwise:highlight_id': String(hl.id) },",
-          "    })",
-          "  }",
-          "}, { scope: ChangeScope.BlockDefault, description: 'readwise sync' })",
-        ].join('\n'),
-      },
+      use: 'Define source-id properties (`readwise:userBookId`, `readwise:highlightId`, …), then let `getOrCreateTypedChild` own the write: give it a `{namespace, key}` built from the external id and it creates on the first sync and adopts on every one after, so re-syncing lands on the existing block instead of duplicating it. Adopt does NOT update it: content, properties and position are deliberately left alone so a user\'s own edits survive, so the fields your SOURCE owns are yours to write after the call — on the adopted one too, not just the created one. Not on `taken`: that wrote nothing and the id is not yours. Do NOT pin a derived id onto a bare `tx.create` — that throws `DuplicateIdError` the second time round and takes the whole transaction with it.',
+      modules: ['@/data/api/index.js', '@/data/kernelPage.js', '@/data/typedRecords.js'],
+      example: example('Idempotent record sync', importedRecordSyncSource),
     },
   ],
   credentials: {
     rule: 'Store credentials in `window.localStorage` under a `knowledge-medium:<plugin>:token:v1`-style key. Block-backed storage isn\'t appropriate for secrets because PowerSync ships block content to the server.',
     currentAffordance: 'Render a setup Dialog that links to the provider\'s token page, validate the token against the provider\'s auth endpoint before saving, then write it to localStorage. Never include token values in action return payloads or bridge eval output.',
-    example: {
-      label: 'localStorage credential read/write',
-      code: [
-        "const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'",
-        "",
-        "const loadToken = () => window.localStorage.getItem(TOKEN_KEY) || null",
-        "const saveToken = (t) => window.localStorage.setItem(TOKEN_KEY, t)",
-        "const clearToken = () => window.localStorage.removeItem(TOKEN_KEY)",
-        "",
-        "// Validate before saving so a typo doesn't get silently stored:",
-        "const ok = await fetch('https://readwise.io/api/v2/auth/', {",
-        "  headers: { Authorization: `Token ${candidate}` },",
-        "}).then(r => r.status === 204)",
-        "if (ok) saveToken(candidate)",
-      ].join('\n'),
-    },
+    example: example('localStorage credential read/write', localStorageCredentialsSource),
   },
 }
 
-const settingsDialogExample: AuthoringExample = {
-  label: 'Setup dialog mounted via appMountsFacet; visibility is a typed module store flipped by an action',
-  code: [
-    "import {",
-    "  actionsFacet, appMountsFacet, ActionContextTypes,",
-    "  useRepo, showError, showSuccess,",
-    "} from '@/extensions/api.js'",
-    "import {",
-    "  Dialog, DialogContent, DialogDescription, DialogFooter,",
-    "  DialogHeader, DialogTitle,",
-    "} from '@/components/ui/dialog.js'",
-    "import { Button } from '@/components/ui/button.js'",
-    "import { Input } from '@/components/ui/input.js'",
-    "import { Label } from '@/components/ui/label.js'",
-    "import { useState, useSyncExternalStore } from 'react'",
-    "",
-    "const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'",
-    "",
-    "// Visibility is a tiny typed module store — NOT a window CustomEvent.",
-    "// The configure action flips it directly; the mounted component reads",
-    "// it with useSyncExternalStore, the same mechanism the app's own",
-    "// DialogHost uses. (For a one-shot prompt that just returns a value,",
-    "// prefer the imperative `openDialog(Component)` shape below instead.)",
-    "let settingsOpen = false",
-    "const settingsListeners = new Set()",
-    "const setSettingsOpen = next => {",
-    "  settingsOpen = next",
-    "  settingsListeners.forEach(notify => notify())",
-    "}",
-    "const subscribeSettingsOpen = notify => {",
-    "  settingsListeners.add(notify)",
-    "  return () => settingsListeners.delete(notify)",
-    "}",
-    "",
-    "const ReadwiseSetupDialog = () => {",
-    "  const repo = useRepo()  // access Repo from inside an appMountsFacet component",
-    "  const open = useSyncExternalStore(subscribeSettingsOpen, () => settingsOpen)",
-    "  const [token, setToken] = useState('')",
-    "  const [saving, setSaving] = useState(false)",
-    "",
-    "  const save = async () => {",
-    "    setSaving(true)",
-    "    try {",
-    "      const ok = await fetch('https://readwise.io/api/v2/auth/', {",
-    "        headers: { Authorization: `Token ${token}` },",
-    "      }).then(r => r.status === 204).catch(() => false)",
-    "      if (!ok) {",
-    "        showError('Readwise rejected that token. Check it and try again.')",
-    "        return",
-    "      }",
-    "      window.localStorage.setItem(TOKEN_KEY, token)",
-    "      // repo is available here if you need to write workspace state too.",
-    "      void repo  // (silence unused — show the access pattern)",
-    "      showSuccess('Readwise connected.')",
-    "      setSettingsOpen(false)",
-    "    } finally {",
-    "      setSaving(false)",
-    "    }",
-    "  }",
-    "",
-    "  return (",
-    "    <Dialog open={open} onOpenChange={setSettingsOpen}>",
-    "      <DialogContent>",
-    "        <DialogHeader>",
-    "          <DialogTitle>Connect Readwise</DialogTitle>",
-    "          <DialogDescription>",
-    "            Get a token from readwise.io/access_token and paste it here.",
-    "          </DialogDescription>",
-    "        </DialogHeader>",
-    "        <Label htmlFor='rw-token'>Access token</Label>",
-    "        <Input",
-    "          id='rw-token'",
-    "          value={token}",
-    "          onChange={e => setToken(e.target.value)}",
-    "          disabled={saving}",
-    "        />",
-    "        <DialogFooter>",
-    "          <Button onClick={save} disabled={!token || saving}>",
-    "            {saving ? 'Validating…' : 'Save'}",
-    "          </Button>",
-    "        </DialogFooter>",
-    "      </DialogContent>",
-    "    </Dialog>",
-    "  )",
-    "}",
-    "",
-    "export default [",
-    "  appMountsFacet.of(",
-    "    { id: 'readwise.setup-dialog', component: ReadwiseSetupDialog },",
-    "    { source: 'readwise' },",
-    "  ),",
-    "  actionsFacet.of({",
-    "    id: 'user.readwise.configure',",
-    "    description: 'Configure Readwise',",
-    "    context: ActionContextTypes.GLOBAL,",
-    "    handler: () => setSettingsOpen(true),",
-    "  }, { source: 'readwise' }),",
-    "]",
-  ].join('\n'),
-}
+const settingsDialogExample: AuthoringExample = example('Setup dialog mounted via appMountsFacet; visibility is a typed module store flipped by an action', settingsDialogSource)
 
-const openDialogExample: AuthoringExample = {
-  label: 'Simpler alternative: imperative `openDialog` from an action handler',
-  code: [
-    "// When you just need a one-shot prompt (no persistent mount, no",
-    "// reactive subscription), `openDialog(Component, props)` returns",
-    "// a promise that resolves with the user's choice. The dialog",
-    "// component receives `resolve(value)` and `cancel()` as props.",
-    "import {",
-    "  actionsFacet, ActionContextTypes, openDialog,",
-    "  showError, showSuccess,",
-    "} from '@/extensions/api.js'",
-    "import {",
-    "  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,",
-    "} from '@/components/ui/dialog.js'",
-    "import { Button } from '@/components/ui/button.js'",
-    "import { Input } from '@/components/ui/input.js'",
-    "import { useState } from 'react'",
-    "",
-    "const ReadwiseTokenPrompt = ({ resolve, cancel }) => {",
-    "  const [token, setToken] = useState('')",
-    "  return (",
-    "    <Dialog open={true} onOpenChange={open => { if (!open) cancel() }}>",
-    "      <DialogContent>",
-    "        <DialogHeader><DialogTitle>Paste your Readwise token</DialogTitle></DialogHeader>",
-    "        <Input value={token} onChange={e => setToken(e.target.value)} />",
-    "        <DialogFooter>",
-    "          <Button onClick={() => resolve(token)} disabled={!token}>Save</Button>",
-    "        </DialogFooter>",
-    "      </DialogContent>",
-    "    </Dialog>",
-    "  )",
-    "}",
-    "",
-    "actionsFacet.of({",
-    "  id: 'user.readwise.configure',",
-    "  description: 'Configure Readwise',",
-    "  context: ActionContextTypes.GLOBAL,",
-    "  handler: async () => {",
-    "    const token = await openDialog(ReadwiseTokenPrompt)",
-    "    if (!token) return  // user cancelled",
-    "    const ok = await fetch('https://readwise.io/api/v2/auth/', {",
-    "      headers: { Authorization: `Token ${token}` },",
-    "    }).then(r => r.status === 204).catch(() => false)",
-    "    if (!ok) { showError('Readwise rejected that token.'); return }",
-    "    window.localStorage.setItem('knowledge-medium:readwise:token:v1', token)",
-    "    showSuccess('Readwise connected.')",
-    "  },",
-    "}, { source: 'readwise' })",
-  ].join('\n'),
-}
+const openDialogExample: AuthoringExample = example('Simpler alternative: imperative `openDialog` from an action handler', openDialogPromptSource)
 
 const guides: AuthoringGuide[] = [
   {
@@ -533,43 +215,59 @@ const guides: AuthoringGuide[] = [
       'Use block-backed config and sync checkpoints.',
       'Use a Dialog mounted through appMountsFacet for setup — never window.prompt/alert/confirm.',
       'Store credentials in window.localStorage; everything else (settings, checkpoints, imported data) lives in blocks.',
-      'Use stable external ids on imported records, or derive their block ids deterministically with uuidv5, so re-syncs upsert instead of duplicating.',
+      'Give imported records a stable external-id property AND a derived block id, via `getOrCreateTypedChild` with a `{namespace, key}` built from the external id, so a re-sync adopts instead of duplicating.',
     ],
     steps: [
-      'Define typed properties for external ids and source metadata via `defineProperty` + `propertySchemasFacet`. Persist sync checkpoints on a `getPluginPrefsBlock` sub-block, not localStorage.',
+      'Define typed properties for external ids and source metadata via `seedProperty` + `definitionSeedsFacet`. Persist sync checkpoints on a `getPluginPrefsBlock` sub-block, not localStorage.',
       'Render a Dialog component, mount it via `appMountsFacet`, and drive its open/closed state from a small typed module store the component reads with `useSyncExternalStore`. The configure action flips that store directly — never a `window` CustomEvent. Validate credentials against the provider\'s auth endpoint before saving. (For one-shot prompts, `openDialog(Component)` is the simpler imperative alternative — see the settings-dialog guide.)',
       'Add a manual sync action through `actionsFacet`. The handler reads the checkpoint from the prefs block, fetches incremental updates, and runs a single `repo.tx`. Wrap the body in `showProgress(...)` so the user sees per-page / per-book progress and a final summary.',
-      'Anchor imported content under a plugin-owned root block whose id is `pluginBlockId(workspaceId, NAMESPACE, "library-root")` — see the `plugin-root-singleton` storage pattern.',
-      'Upsert child records the same way: derive the block id from the external id, or look up by an external-id property. Never create a second block for the same external record.',
+      'Anchor imported content under a plugin-owned root page created with `getOrCreateKernelPage` — see the `plugin-root-singleton` storage pattern.',
+      'Write child records with `getOrCreateTypedChild`, keyed on the external id. Not a bare `tx.create` at a derived id — that throws `DuplicateIdError` on the second sync and takes the transaction with it — and not lookup-then-create, which duplicates under concurrent writers because the lookup answers for the moment it ran.',
       'For *background* sync (poll a webhook / poll on an interval) use `appEffectsFacet.of({id, start: ({repo}) => { ... return cleanup })`. Manual sync via an action is enough for most plugins — only reach for an effect when the data source itself pushes. The effect object must be a STABLE reference: define it once at module scope (not inline in a function-valued extension), and export your extension as an array, not a function — a fresh `{id, start}` every resolve reads as "code changed" and silently restarts the effect (dropping its connection / interval) on every unrelated extension toggle.',
     ],
     preferredModules: [
-      '@/extensions/api.js',
+      '@/extensions/core.js',
+      '@/shortcuts/types.js',
+      // Data primitives the steps require (seedProperty, definitionSeedsFacet,
+      // getPluginPrefsBlock, extensionPropertySeedKey, and the two
+      // get-or-creates the storage steps now name). In brief mode
+      // preferredModules is the ONLY module hint, so a step that recommends a
+      // helper whose module is missing here sends the agent off to invent one.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
+      '@/data/stateBlocks.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/extensions/pluginIds.js',
+      '@/context/repo.js',
+      '@/utils/dialogs.js',
+      '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
       '@/components/ui/button.js',
       '@/components/ui/label.js',
     ],
-    relatedFacets: ['core.actions', 'core.app-mounts', 'core.app-effects', 'data.propertySchemas', 'data.types'],
+    relatedFacets: ['core.actions', 'core.app-mounts', 'core.app-effects', 'data.definition-seeds', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --guide external-sync-plugin --storage',
-      'yarn agent describe-runtime --components dialog,input,button,label',
+      'pnpm agent describe-runtime --guide external-sync-plugin --storage',
+      'pnpm agent describe-runtime --components dialog,input,button,label',
       // Writes compiled declarations for the app's vendored `@/...`
       // modules, so TS-aware editors resolve extension imports with
       // the same signatures the app build checks.
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/extensions/api.js"',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/data/api/index.js"',
       // Convention: extension source files live under `agent-extensions/`
       // at the repo root. The matrix-chat-client + canvas-layout
       // extensions are there as references.
-      'yarn agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
-      'yarn agent enable-extension <label>',
-      'yarn agent uninstall-extension <label>',
+      'pnpm agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
+      'pnpm agent enable-extension <label>',
+      'pnpm agent uninstall-extension <label>',
     ],
     afterInstall: [
-      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `yarn agent enable-extension <label>` (or `<id>`) before its actions show up in `yarn agent run-action`.',
+      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `pnpm agent enable-extension <label>` (or `<id>`) before its actions show up in `pnpm agent run-action`.',
       'enable-extension does two things (issue #67): it sets the synced "enabled" intent AND grants THIS device a trust approval pinned to the current source hash. A block runs only with both — so enabling on the bridge runs it on the bridge.',
-      'After you EDIT an extension (install-extension onto the same block, or hand-edit the source), re-run `yarn agent enable-extension <label>` to re-pin the new source on this device. Until you do, the device keeps running the PREVIOUSLY approved version and the settings UI shows "Update available" — the live source is never auto-executed.',
+      'After you EDIT an extension (install-extension onto the same block, or hand-edit the source), re-run `pnpm agent enable-extension <label>` to re-pin the new source on this device. Until you do, the device keeps running the PREVIOUSLY approved version and the settings UI shows "Update available" — the live source is never auto-executed.',
       'disable-extension / a source change do NOT stop a running extension by themselves: disable only clears intent (the trust grant persists for a frictionless re-enable), and a drifted source keeps running the pinned version. uninstall-extension deletes the block and revokes the device trust.',
       'Do not retry `install-extension` if the action is "not found" — the install succeeded; the toggle/approval is just off. Run enable-extension.',
       'Pass `--verify` to `install-extension` to see the facets/actions the extension contributed without enabling/approving it (verify compiles the live source in isolation for diagnostics only).',
@@ -599,7 +297,21 @@ const guides: AuthoringGuide[] = [
       'Save non-secret values via `getPluginPrefsBlock`; save credentials to `localStorage`.',
     ],
     preferredModules: [
-      '@/extensions/api.js',
+      '@/extensions/core.js',
+      '@/shortcuts/types.js',
+      // The property-editor-override path + saving non-secret settings need
+      // these (definePropertyEditorOverride, propertyEditorOverridesFacet,
+      // getPluginPrefsBlock), and the storage steps name the two
+      // get-or-creates; brief mode surfaces only preferredModules, so a step
+      // whose helper has no module here sends the agent off to invent one.
+      '@/data/api/index.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
+      '@/data/facets.js',
+      '@/data/stateBlocks.js',
+      '@/context/repo.js',
+      '@/utils/dialogs.js',
+      '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
       '@/components/ui/button.js',
@@ -607,10 +319,10 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['core.app-mounts', 'core.actions'],
     commands: [
-      'yarn agent describe-runtime --components dialog,input,button,label',
-      'yarn agent describe-runtime --modules components/ui',
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/components/ui/dialog.js"',
+      'pnpm agent describe-runtime --components dialog,input,button,label',
+      'pnpm agent describe-runtime --modules components/ui',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/components/ui/dialog.js"',
     ],
     examples: [
       settingsDialogExample,
@@ -624,22 +336,88 @@ const guides: AuthoringGuide[] = [
     principles: storageGuide.principles,
     steps: [
       'Choose UserPrefs for per-user settings and BlockDefault for shared workspace/content data.',
-      'Define properties with explicit codecs.',
-      'For per-plugin sub-blocks under user-prefs, define a `TypeContribution` via `defineBlockType` and read/write via `getPluginPrefsBlock(repo, workspaceId, user, type)`.',
-      'For plugin-owned singleton blocks (e.g. import roots), derive the id deterministically via `pluginBlockId(workspaceId, NS, key)` so re-installs land on the same block.',
+      'Define properties with stable seed keys and value presets, then register them through `definitionSeedsFacet`.',
+      'For per-plugin sub-blocks under user-prefs, define a seeded block type via `seedType({seedKey: extensionTypeSeedKey(key), revision, id, label, properties})` and read/write via `getPluginPrefsBlock(repo, workspaceId, user, type)`.',
+      'For plugin-owned singleton blocks (e.g. import roots), reach for `getOrCreateKernelPage` — it derives the id from the workspace and handles the create, the repair and the restore, so re-installs land on the same block.',
       'Store large or user-visible imported data as child/content blocks.',
     ],
-    preferredModules: ['@/extensions/api.js'],
-    relatedFacets: ['data.propertySchemas', 'data.types'],
+    preferredModules: [
+      // Same rule as the settings-dialog list above, which is where it is
+      // written down: brief mode surfaces only these, so a step naming a helper
+      // whose module is absent sends the agent off to invent an import path.
+      // The singleton step names `getOrCreateKernelPage`; records filed under
+      // that root are `getOrCreateTypedChild`. Both modules belong here.
+      //
+      // `@/extensions/pluginIds.js` is deliberately gone: it returns an id and
+      // nothing else, which reads like a lookup and isn't, and no step here
+      // names it any more.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/data/stateBlocks.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
+    ],
+    relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --storage',
-      'yarn agent describe-runtime --facets data.propertySchemas',
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/extensions/api.js"',
+      'pnpm agent describe-runtime --guide block-backed-config --storage',
+      'pnpm agent describe-runtime --facets data.definition-seeds',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/data/api/index.js"',
     ],
     examples: [
       storageGuide.patterns.find(p => p.id === 'user-prefs-config')!.example!,
       storageGuide.patterns.find(p => p.id === 'plugin-root-singleton')!.example!,
+    ],
+  },
+  {
+    id: 'record-grain',
+    title: 'Record Grain — what becomes a block, what becomes a property',
+    when: [
+      'designs a data model',
+      'stores records, entries, logs, or history',
+      'points at another block',
+      'declares types or properties',
+      'wonders whether to reuse an existing type',
+    ],
+    principles: [
+      'A block is the unit of everything this app gives you for free: SQL queries, references and backlinks, undo, sync, hand-editing in the outline, rendering. Anything you would want to see, link to, undo, or edit on its own is its own block — not a row inside a JSON cell.',
+      'Properties hold the scalar facts ABOUT a block. A property whose value is a list of records is a cell nothing can see into: not queryable, not referenceable, and clobbered wholesale by a concurrent write.',
+      'Anything that points at another block is a `ref` / `optional-ref` / `refList` property with `config: {targetTypes: [...]}` — never a bare id string, never a name. Refs project into real references, so the target\'s backlinks answer "what points at me", and the link survives renaming or moving the target.',
+      'Identity is a block id; a name is a label the user will change. Never join records on a name.',
+      'Compose before inventing. If a concept already has a type (todo, page, daily note), add that type to your block alongside your own instead of re-declaring its fields.',
+      'Type ids and property names are global. Prefix both with your extension (`myext-set`, `myext:weight`); a bare noun collides with whatever else claims it, and the loser silently gets the other schema.',
+      'Type the blocks you READ too, not just the ones you write. A typed block in the user\'s own notes gets property editors, and lets your parser read a declaration instead of guessing at prose.',
+      'The test for a good record: uninstall the extension, and the data still reads as a sensible outline.',
+      'If a record has a natural identity, derive its block id from that identity (`getOrCreateTypedChild`) instead of minting a random one. "Query for it, then create if absent" cannot be made correct — the query answers for the moment it ran, so a UI gesture that fires before it resolves, a bootstrap that runs twice, or a second device all create a duplicate. Deriving the id makes the writers converge on one row instead of racing.',
+    ],
+    steps: [
+      'Sketch the tree first: which block is the parent, what is one record, what hangs off it. One record per block, ordered by `order_key` under its parent.',
+      'Declare a namespaced type per record kind (`seedType`) and namespaced properties (`seedProperty`), registered through `typeSeedsFacet` / `definitionSeedsFacet`.',
+      'Pick presets by meaning: scalars (`number`, `string`, `date`, `strict-enum`), pointers (`ref` / `optional-ref` / `refList` with `targetTypes`), scalar lists (`string-list`). Reach for `json` only for an opaque config object you will never query into.',
+      'Write records with `createTypedChild(repo, tx, {...})` — create, type-tag, and typed properties in one call inside your transaction. When the record has a natural identity and you do not control when the write fires, use `getOrCreateTypedChild` with a `{namespace, key}` identity instead, and it becomes idempotent: repeat it and it adopts what it finds rather than duplicating it.',
+      'Compose built-ins by listing them in `types`: `[MY_TYPE, TODO_TYPE]` plus the todo `statusProp` gives a real checkbox instead of a private done flag.',
+      'Read back with a typed block query over your type id, and let backlinks answer the reverse direction instead of maintaining your own index.',
+      'After installing, run `kmagent audit-extension <label>`: it reads the blocks you actually wrote and flags block ids parked in string properties, records buried in JSON, and properties written with no registered schema. (Inside the app repo the same CLI is `pnpm agent …`.)',
+    ],
+    preferredModules: [
+      '@/data/typedRecords.js',
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/plugins/todo/schema.js',
+      '@/data/orderKey.js',
+    ],
+    relatedFacets: ['data.definition-seeds', 'data.types'],
+    commands: [
+      'kmagent new-extension "<Name>"',
+      'kmagent data-model',
+      'kmagent describe-runtime --guide record-grain',
+      'kmagent audit-extension <label>',
+      'kmagent backlinks <ref>',
+    ],
+    examples: [
+      example('A record per block: typed, composed with todo, linked back to its definition', recordGrainSource),
     ],
   },
 ]
@@ -667,7 +445,7 @@ const matchesTerms = (
 }
 
 const sourcePriority = (source: AuthoringCatalogSource): number => {
-  if (source === 'generated-api') return 4
+  if (source === 'curated-api') return 4
   if (source === 'generated-module-glob') return 3
   if (source === 'html-entry') return 2
   if (source === 'html-preload') return 1
@@ -687,7 +465,6 @@ const basename = (path: string): string =>
   stripExtension(path).split('/').at(-1) ?? path
 
 const categoryForPath = (importPath: string): string => {
-  if (importPath === '@/extensions/api.js') return 'public-api'
   if (importPath.includes('/components/ui/')) return 'ui-component'
   if (importPath.includes('/components/')) return 'component'
   if (importPath.includes('/extensions/')) return 'extension-system'
@@ -697,10 +474,7 @@ const categoryForPath = (importPath: string): string => {
   return 'module'
 }
 
-const generatedDescription = (importPath: string, exports: string[] | undefined): string => {
-  if (importPath === '@/extensions/api.js') {
-    return 'Generated from the live public extension API barrel.'
-  }
+const generatedDescription = (exports: string[] | undefined): string => {
   if (exports && exports.length > 0) {
     return `Generated from the module graph; runtime exports: ${exports.slice(0, 8).join(', ')}.`
   }
@@ -719,45 +493,46 @@ const exportNames = (module: RuntimeModule | undefined): string[] | undefined =>
   return Object.keys(module).sort()
 }
 
-const generatedExportMap = (apiSurface: ApiSurfaceLike): Map<string, string[]> => {
-  const map = new Map<string, string[]>([
-    ['@/extensions/api.js', apiSurface.exports],
-  ])
-
+const eagerUiExportMap = (): Map<string, string[]> => {
+  const map = new Map<string, string[]>()
   for (const [path, module] of Object.entries(eagerUiModules)) {
     map.set(toImportPath(path), exportNames(module) ?? [])
   }
-
   return map
 }
 
-const generatedModules = (apiSurface: ApiSurfaceLike): AuthoringModuleSummary[] => {
-  const exportsByImportPath = generatedExportMap(apiSurface)
-  const modules = Object.keys(internalModuleIndex).map(path => {
+// The curated public extension API (`apiCatalog.ts`) surfaced as authoring
+// modules: real importPath, curated category + description, and the blessed
+// runtime export names. These outrank the raw module-glob entries (see
+// `sourcePriority`), so where both describe the same path the curated
+// description/category wins on merge; curated-only paths (`@/facets/*`,
+// `@/context/*`, `@/paste/*`, `@/types.js`) are added outright.
+const curatedApiModules = (): AuthoringModuleSummary[] =>
+  extensionApiCatalog.map(group => ({
+    importPath: group.importPath,
+    category: group.category,
+    description: group.description,
+    ...(group.exports.length > 0 ? {exports: group.exports} : {}),
+    ...(group.types.length > 0 ? {types: group.types} : {}),
+    source: 'curated-api',
+    safeForExtensions: true,
+  } satisfies AuthoringModuleSummary))
+
+const generatedModules = (): AuthoringModuleSummary[] => {
+  const eagerExports = eagerUiExportMap()
+  const globModules = Object.keys(internalModuleIndex).map(path => {
     const importPath = toImportPath(path)
-    const exports = exportsByImportPath.get(importPath)
+    const exports = eagerExports.get(importPath)
     return {
       importPath,
       category: categoryForPath(importPath),
-      description: generatedDescription(importPath, exports),
+      description: generatedDescription(exports),
       ...(exports ? {exports} : {}),
-      source: importPath === '@/extensions/api.js' ? 'generated-api' : 'generated-module-glob',
+      source: 'generated-module-glob',
       safeForExtensions: true,
     } satisfies AuthoringModuleSummary
   })
-
-  if (!modules.some(module => module.importPath === '@/extensions/api.js')) {
-    modules.push({
-      importPath: '@/extensions/api.js',
-      category: 'public-api',
-      description: generatedDescription('@/extensions/api.js', apiSurface.exports),
-      exports: apiSurface.exports,
-      source: 'generated-api',
-      safeForExtensions: true,
-    })
-  }
-
-  return modules
+  return [...globModules, ...curatedApiModules()]
 }
 
 const isComponentExport = (name: string): boolean =>
@@ -894,29 +669,30 @@ const mergeModules = (modules: AuthoringModuleSummary[]): AuthoringModuleSummary
 }
 
 export const describeAuthoringCatalog = (
-  apiSurface: ApiSurfaceLike,
   filters: AuthoringCatalogFilters = {},
   document?: Document,
 ): AuthoringCatalog => {
-  const modules = filters.omitDiscoverableModules
+  const modules = filters.brief
     ? []
     : mergeModules([
-      ...generatedModules(apiSurface),
+      ...generatedModules(),
       ...documentModules(document),
     ]).filter(module =>
-      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
+      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports, module.types),
     )
 
-  const components = filters.omitDiscoverableModules
+  const components = filters.brief
     ? []
     : generatedComponents().filter(component =>
       matchesTerms(filters.components, component.name, component.importPath, component.category, component.description, component.exports),
     )
 
+  const matchedGuides = guides.filter(guide =>
+    matchesTerms(filters.guides, guide.id, guide.title, guide.when, guide.relatedFacets),
+  )
+
   return {
-    guides: guides.filter(guide =>
-      matchesTerms(filters.guides, guide.id, guide.title, guide.when, guide.relatedFacets),
-    ),
+    guides: matchedGuides,
     storage: storageGuide,
     modules,
     components,

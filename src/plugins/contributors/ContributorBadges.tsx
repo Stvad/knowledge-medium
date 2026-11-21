@@ -1,0 +1,199 @@
+import {useMemo, useState} from 'react'
+import type {Block} from '@/data/block'
+import {decodeRowProperty, safeDecodeRowProperty} from '@/data/rowProperty'
+import {useHandle} from '@/hooks/block.js'
+import {useMinuteClock} from '@/hooks/useMinuteClock.js'
+import {useAppHashInContext} from '@/context/layoutWsContext.js'
+import {useUserPage} from '@/data/globalState.js'
+import {formatAbsoluteDateTime, formatRelativeTime} from '@/utils/relativeTime.js'
+import {useOpenBlock} from '@/utils/navigation.js'
+import {
+  cachedContentDecorator,
+  type BlockContentDecoratorContribution,
+  type BlockGutterItem,
+  type BlockGutterItemContribution,
+  type BlockResolveContext,
+} from '@/extensions/blockInteraction.js'
+import type {BlockRenderer} from '@/types.js'
+import {GUTTER_PILL_CLASS} from '@/components/GutterPill.js'
+import {GutterTextBelowHeader, useGutterHeader} from '@/components/renderer/BlockGutter.js'
+import {FilePlus2, PencilLine} from 'lucide-react'
+import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
+import {
+  attributionCreatorsProp,
+  attributionEditorsProp,
+  contributorKindOf,
+  contributorRoleProp,
+  type ContributorKind,
+} from './schema.js'
+import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from './queries.js'
+
+type Attribution = {creators: readonly string[]; editors: readonly string[]; workspaceId: string}
+type Profile = {id: string; name: string; kind: ContributorKind; role?: string}
+
+const useAttribution = (block: Block): Attribution | undefined => useHandle(block, {
+  selector: data => data ? {
+    creators: decodeRowProperty(data, attributionCreatorsProp),
+    editors: decodeRowProperty(data, attributionEditorsProp),
+    workspaceId: data.workspaceId,
+  } : undefined,
+})
+
+const ProfileLink = ({profile, workspaceId}: {profile: Profile; workspaceId: string}) => {
+  const open = useOpenBlock({blockId: profile.id, workspaceId})
+  const href = useAppHashInContext(workspaceId, profile.id)
+  return (
+    <DropdownMenuItem asChild className="h-auto cursor-pointer items-baseline justify-between gap-3 py-1.5">
+      <a href={href} onClick={open}>
+        <span className="font-medium">{profile.name}</span>
+        <span className="text-muted-foreground">{profile.kind}{profile.role ? ` · ${profile.role}` : ''}</span>
+      </a>
+    </DropdownMenuItem>
+  )
+}
+
+const useContributorProfiles = (block: Block): {attribution: Attribution | undefined; profiles: Map<string, Profile>} => {
+  const attribution = useAttribution(block)
+  const allIds = useMemo(() => [...new Set([...(attribution?.creators ?? []), ...(attribution?.editors ?? [])])], [attribution?.creators, attribution?.editors])
+  const profileRows = useHandle(
+    block.repo.query[CONTRIBUTOR_PROFILES_BY_IDS_QUERY]({
+      workspaceId: attribution?.workspaceId ?? '',
+      ids: allIds,
+    }),
+    {selector: rows => rows ?? []},
+  )
+  const profiles = useMemo(() => {
+    const byId = new Map<string, Profile>()
+    profileRows.forEach(row => {
+      const id = row.id
+      let kind: ContributorKind = 'agent'
+      try { kind = contributorKindOf(row) } catch { /* An unreadable profile still gets a useful linked fallback. */ }
+      const role = safeDecodeRowProperty(row, contributorRoleProp)
+      byId.set(id, {
+        id,
+        name: row.content.trim().split('\n')[0] || `${kind} contributor`,
+        kind,
+        role,
+      })
+    })
+    return byId
+  }, [profileRows])
+  return {attribution, profiles}
+}
+
+const ContributorBadgeItem: BlockRenderer = ({block}) => {
+  const {attribution, profiles} = useContributorProfiles(block)
+
+  const uniqueProfiles = (ids: readonly string[]): Profile[] =>
+    [...new Map(ids.map(id => profiles.get(id)).filter((p): p is Profile => Boolean(p)).map(profile => [profile.id, profile])).values()]
+  const creatorProfiles = uniqueProfiles(attribution?.creators ?? [])
+  const editorProfiles = uniqueProfiles(attribution?.editors ?? [])
+  const visible = [...creatorProfiles, ...editorProfiles].some(profile => profile.kind !== 'human')
+  const [open, setOpen] = useState(false)
+  if (!attribution || !visible) return null
+
+  const creatorIds = new Set(creatorProfiles.map(profile => profile.id))
+  const nonHumanCreators = creatorProfiles.filter(p => p.kind !== 'human')
+  const nonHumanEditors = editorProfiles.filter(p => p.kind !== 'human' && !creatorIds.has(p.id))
+  const summarize = (label: string, entries: Profile[]): string => {
+    if (entries.length === 0) return ''
+    return `${label} ${entries.map(profile => profile.name).join(', ')}`
+  }
+  const summary = [summarize('By', nonHumanCreators), summarize('Edited by', nonHumanEditors)].filter(Boolean).join(' · ')
+  const primary = nonHumanCreators[0] ?? nonHumanEditors[0]
+  const otherCount = nonHumanCreators.length + nonHumanEditors.length - 1
+  const PrimaryIcon = nonHumanCreators.length > 0 ? FilePlus2 : PencilLine
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Authorship details: ${summary}`}
+          title={summary}
+          onClick={event => event.stopPropagation()}
+          className={`${GUTTER_PILL_CLASS} max-w-28 gap-1 bg-muted px-1.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+        >
+          <PrimaryIcon aria-hidden="true" className="h-3 w-3 shrink-0"/>
+          <span className="min-w-0 truncate">{primary.name}</span>
+          {otherCount > 0 && <span className="shrink-0">+{otherCount}</span>}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-80 w-72 overflow-y-auto">
+        <DropdownMenuLabel>Created by</DropdownMenuLabel>
+        {creatorProfiles.length ? creatorProfiles.map(profile => (
+          <ProfileLink key={`creator:${profile.id}`} profile={profile} workspaceId={attribution.workspaceId}/>
+        )) : <div className="px-2 py-1.5 text-xs text-muted-foreground">No attribution</div>}
+        <DropdownMenuSeparator/>
+        <DropdownMenuLabel>Edited by</DropdownMenuLabel>
+        {editorProfiles.length ? editorProfiles.map(profile => (
+          <ProfileLink key={`editor:${profile.id}`} profile={profile} workspaceId={attribution.workspaceId}/>
+        )) : <div className="px-2 py-1.5 text-xs text-muted-foreground">No attribution</div>}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** A surface that wants every block's author shown, humans included (a comment
+ *  card), sets this to its scope root's id in its `NestedBlockContextProvider`
+ *  overrides. Card mode covers that root and the blocks under it, and stops at
+ *  any nested surface inside the card, which resets the scope root. */
+export const CONTRIBUTOR_CARD_MODE_KEY = 'contributors.cardMode'
+
+/** The id of the one block in a card that is its header, not a contribution,
+ *  and gets no author line. */
+export const CONTRIBUTOR_CARD_HEADER_KEY = 'contributors.cardHeader'
+
+/** The author line of a card, by the rule `authorIdOf` (./author.ts)
+ *  states. A user page that is not loaded, or not created, shows the user id,
+ *  unlinked. */
+const ContributorCardView = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const {attribution, profiles} = useContributorProfiles(block)
+  const meta = useHandle(block, {
+    selector: data => data ? {createdBy: data.createdBy, createdAt: data.createdAt, workspaceId: data.workspaceId} : undefined,
+  })
+  const userPage = useUserPage(meta?.createdBy ?? '', meta?.workspaceId)
+  const now = useMinuteClock()
+  // A recorded creator wins even before its profile row loads (or syncs), so
+  // an agent's comment never shows the tab's human as its author.
+  const creatorId = attribution?.creators[0]
+  const creator = creatorId ? profiles.get(creatorId) : undefined
+  const authorId = creatorId ?? userPage.blockId
+  const authorName = creatorId ? creator?.name ?? 'Contributor' : userPage.name
+  const open = useOpenBlock({blockId: authorId ?? '', workspaceId: meta?.workspaceId ?? ''})
+  const href = useAppHashInContext(meta?.workspaceId ?? '', authorId ?? '')
+  // The author line sits on the gutter's first line, beside a status chip,
+  // so the comment under it keeps its full width.
+  const gutterHeader = useGutterHeader(block)
+  if (!meta) return <Inner block={block}/>
+  return (
+    <div className="w-full">
+      <div {...gutterHeader} className="flex items-baseline gap-1 text-xs leading-5 text-muted-foreground">
+        {authorId
+          ? <a href={href} onClick={open} className="font-medium text-foreground hover:underline">{authorName}</a>
+          : <span className="font-medium text-foreground">{authorName}</span>}
+        {creator && creator.kind !== 'human' && <span>· {creator.kind}</span>}
+        <span title={formatAbsoluteDateTime(meta.createdAt)}>· {formatRelativeTime(meta.createdAt, now)}</span>
+      </div>
+      <GutterTextBelowHeader>
+        <Inner block={block}/>
+      </GutterTextBelowHeader>
+    </div>
+  )
+}
+
+const decorateCard = cachedContentDecorator(ContributorCardView, 'WithContributorCard')
+const badgeItem: BlockGutterItem = {corner: 'top-right', component: ContributorBadgeItem}
+
+const inCardBody = ({block, blockContext}: BlockResolveContext): boolean => {
+  const root = blockContext?.[CONTRIBUTOR_CARD_MODE_KEY]
+  return typeof root === 'string' && root === blockContext?.scopeRootId &&
+    block.id !== blockContext[CONTRIBUTOR_CARD_HEADER_KEY]
+}
+
+/** In a card body the author line replaces the badge. */
+export const contributorCardDecoratorContribution: BlockContentDecoratorContribution = ctx =>
+  inCardBody(ctx) ? decorateCard : null
+
+export const contributorBadgeItemContribution: BlockGutterItemContribution = ctx =>
+  inCardBody(ctx) ? null : badgeItem

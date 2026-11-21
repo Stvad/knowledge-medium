@@ -1,7 +1,8 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { ChangeScope, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -9,6 +10,11 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
+  panelMaximizedProp,
+  focusedBlockLocationProp,
+  panelViewModeProp,
+  peekFocusedBlockLocation,
+  scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
@@ -19,6 +25,7 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { panelHistory } from '@/utils/panelHistory'
+import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -71,17 +78,41 @@ vi.mock('@/shortcuts/useActionContext', () => ({
   useActionContext: vi.fn(),
 }))
 
-vi.mock('@/components/BlockComponent.tsx', () => ({
-  BlockComponent: vi.fn(({blockId}: {blockId: string}) => (
-    <div data-testid="panel-top-level-block" data-block-id={blockId}>
-      <button
-        type="button"
-        data-testid="panel-content-control"
-        onPointerDown={event => event.stopPropagation()}
-      />
-    </div>
-  )),
-}))
+// The aligner's own pixel math is pinned in `panelScrollAnchor.test.ts` (and
+// needs real layout, which happy-dom has none of). What belongs here is which
+// anchor the pane hands it — and whether it reaches for one at all.
+const alignScrollportToRow = vi.hoisted(() => vi.fn(() => () => {}))
+vi.mock('@/utils/panelScrollAnchor', async () => {
+  const actual = await vi.importActual<typeof import('@/utils/panelScrollAnchor')>(
+    '@/utils/panelScrollAnchor',
+  )
+  return {...actual, alignScrollportToRow}
+})
+
+vi.mock('@/components/BlockComponent.tsx', async () => {
+  const {useBlockContext} = await vi.importActual<typeof import('@/context/block')>('@/context/block')
+  return {
+    BlockComponent: vi.fn(({blockId}: {blockId: string}) => {
+      // Surface the context the top-level block render receives so tests can
+      // pin the per-pane render scope and the panelViewMode threading.
+      const context = useBlockContext()
+      return (
+        <div
+          data-testid="panel-top-level-block"
+          data-block-id={blockId}
+          data-context-render-scope-id={typeof context.renderScopeId === 'string' ? context.renderScopeId : ''}
+          data-context-view-mode={typeof context.panelViewMode === 'string' ? context.panelViewMode : ''}
+        >
+          <button
+            type="button"
+            data-testid="panel-content-control"
+            onPointerDown={event => event.stopPropagation()}
+          />
+        </div>
+      )
+    }),
+  }
+})
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -149,6 +180,7 @@ describe('PanelRenderer', () => {
     selectionStore.reset()
     vi.mocked(BlockComponent).mockClear()
     vi.mocked(useActionContext).mockClear()
+    alignScrollportToRow.mockClear()
     env = await setup()
   })
 
@@ -158,24 +190,25 @@ describe('PanelRenderer', () => {
     repoRef.current = undefined
   })
 
-  const renderPanel = (wideScrollSurface: boolean) =>
-    render(
+  const panelTree = (stackedPanel = false) => (
       <AppRuntimeContextProvider value={env.runtime}>
         <BlockContextProvider
           initialValue={{
             layoutBoundary: true,
             panelId: env.panel.id,
-            wideScrollSurface,
+            stackedPanel,
           }}
         >
           <PanelRenderer block={env.panel}/>
         </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
+      </AppRuntimeContextProvider>
+  )
+
+  const renderPanel = (stackedPanel = false) => render(panelTree(stackedPanel))
 
   const renderPanelInLayoutSession = async (
     activePanelId: string,
-    options: {canClosePanel?: boolean; trackPanelFocus?: boolean} = {},
+    options: {canClosePanel?: boolean; canMaximizePanel?: boolean; trackPanelFocus?: boolean} = {},
   ) => {
     await env.repo.block('layout-session').set(activePanelIdProp, activePanelId)
 
@@ -187,6 +220,7 @@ describe('PanelRenderer', () => {
             layoutSessionBlockId: 'layout-session',
             panelId: env.panel.id,
             canClosePanel: options.canClosePanel,
+            canMaximizePanel: options.canMaximizePanel,
             trackPanelFocus: options.trackPanelFocus,
           }}
         >
@@ -196,21 +230,23 @@ describe('PanelRenderer', () => {
     )
   }
 
-  it('constrains content inside a wide scroll surface', async () => {
-    renderPanel(true)
+  it('centers panel content inside a max-width frame', async () => {
+    renderPanel()
 
     const contentFrame = (await screen.findByTestId('panel-top-level-block')).parentElement
     expect(contentFrame?.className).toContain('mx-auto')
+    expect(contentFrame?.className).toContain('w-full')
     expect(contentFrame?.className).toContain('max-w-3xl')
   })
 
-  it('lets wide-surface chrome empty space pass clicks through to content', async () => {
-    renderPanel(true)
+  it('ends panel chrome where the content ends and lets its empty space pass clicks through', async () => {
+    renderPanel()
 
     const backButton = await screen.findByLabelText('Back')
     expect(backButton.className).toContain('pointer-events-auto')
+    // `.panel-actions` (index.css) places the bar's right edge.
+    expect(backButton.parentElement?.className).toContain('panel-actions')
     expect(backButton.parentElement?.className).toContain('pointer-events-none')
-    expect(backButton.parentElement?.parentElement?.className).toContain('pointer-events-none')
   })
 
   it('activates the panel from history chrome pointer events', async () => {
@@ -248,6 +284,26 @@ describe('PanelRenderer', () => {
     })
   })
 
+  // `canMaximizePanel` goes false the moment maximizing would be pointless —
+  // mobile, or the siblings closed down to one. A pane already carrying the
+  // flag must keep its restore affordance across that transition, or the state
+  // is unclearable from the pane that has it.
+  it('keeps the restore affordance on a flagged pane after maximizing stops being offered', async () => {
+    await env.panel.set(panelMaximizedProp, true)
+
+    await renderPanelInLayoutSession('panel-b', {canMaximizePanel: false})
+
+    expect(await screen.findByLabelText('Restore panel')).toBeTruthy()
+  })
+
+  it('offers no maximize affordance on an unflagged pane when maximizing is not available', async () => {
+    await renderPanelInLayoutSession('panel-b', {canMaximizePanel: false})
+
+    await screen.findByLabelText('Back') // chrome is mounted
+    expect(screen.queryByLabelText('Maximize panel')).toBeNull()
+    expect(screen.queryByLabelText('Restore panel')).toBeNull()
+  })
+
   it('does not activate the panel from close pointer events', async () => {
     await renderPanelInLayoutSession('panel-b', {canClosePanel: true})
     const txSpy = vi.spyOn(env.repo, 'tx')
@@ -266,11 +322,45 @@ describe('PanelRenderer', () => {
     expect(sessionBlock.peekProperty(activePanelIdProp)).toBe('panel-b')
   })
 
-  it('does not add a content-width frame for normal panel columns', async () => {
-    renderPanel(false)
+  it('keeps the content frame and chrome mounted when scroll ownership changes', async () => {
+    const view = renderPanel()
+    const body = await screen.findByTestId('panel-top-level-block')
+    const contentFrame = body.parentElement
+    const chromeFrame = (await screen.findByLabelText('Back')).parentElement
+    expect(contentFrame?.className).toContain('max-w-3xl')
+
+    view.rerender(panelTree(true))
+
+    expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+    expect(body.isConnected).toBe(true)
+    expect(body.parentElement).toBe(contentFrame)
+    expect((await screen.findByLabelText('Back')).parentElement).toBe(chromeFrame)
+    expect(contentFrame?.className).toContain('max-w-3xl')
+    expect(document.querySelector('[data-panel-scrollport]')?.className).toContain('overflow-visible')
+
+    view.rerender(panelTree(false))
+    expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+    expect(body.parentElement).toBe(contentFrame)
+    expect(document.querySelector('[data-panel-scrollport]')?.className).toContain('overflow-y-auto')
+  })
+
+  it('keeps stacked content centered while the outer stack owns scrolling', async () => {
+    renderPanel(true)
+
+    const body = await screen.findByTestId('panel-top-level-block')
+    expect(body.parentElement?.className).toContain('mx-auto')
+    expect(body.parentElement?.className).toContain('max-w-3xl')
+    const scrollport = document.querySelector('[data-panel-scrollport]')
+    expect(scrollport?.className).toContain('overflow-visible')
+    expect(scrollport?.className).not.toContain('overflow-y-auto')
+  })
+
+  it('keeps a centered content frame in an ordinary panel column', async () => {
+    renderPanel()
 
     const topLevelBlock = await screen.findByTestId('panel-top-level-block')
-    expect(topLevelBlock.parentElement?.className).not.toContain('max-w-3xl')
+    expect(topLevelBlock.parentElement?.className).toContain('mx-auto')
+    expect(topLevelBlock.parentElement?.className).toContain('max-w-3xl')
   })
 
   it('keeps selection-state updates out of the panel body render path', async () => {
@@ -316,5 +406,183 @@ describe('PanelRenderer', () => {
     await screen.findByTestId('panel-top-level-block')
 
     expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toBeUndefined()
+  })
+
+  it('renders the top-level block under a per-pane render scope', async () => {
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+    expect(el.getAttribute('data-context-render-scope-id'))
+      .toBe(panelRenderScopeId('panel-a', 'page-a'))
+  })
+
+  it('threads panelViewMode into the top-level block context when the prop is set', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.panel.id, panelViewModeProp, 'video-notes')
+    }, {scope: ChangeScope.UiState, description: 'seed panel view mode'})
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+    expect(el.getAttribute('data-context-view-mode')).toBe('video-notes')
+  })
+
+  it('panelViewMode is absent from the context when the prop is unset', async () => {
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+    expect(el.getAttribute('data-context-view-mode')).toBe('')
+  })
+
+  it('rewrites a legacy outline-scoped stored focus location to the per-pane scope (deletable shim)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, {
+        blockId: 'child-x',
+        renderScopeId: outlineRenderScopeId('page-a'), // pre-deploy pane scope
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed legacy focus scope'})
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(env.panel)).toEqual({
+        blockId: 'child-x', // preserved
+        renderScopeId: panelRenderScopeId('panel-a', 'page-a'),
+      })
+    })
+    // useInFocus-style strict compare now matches the rendered scope.
+    expect(el.getAttribute('data-context-render-scope-id'))
+      .toBe(peekFocusedBlockLocation(env.panel)?.renderScopeId)
+  })
+
+  it('leaves non-legacy stored focus locations alone', async () => {
+    const location = {blockId: 'child-x', renderScopeId: 'embed:parent:child-x:0'}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, location)
+    }, {scope: ChangeScope.UiState, description: 'seed embed focus scope'})
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    // Settle any mount effects, then confirm the shim did not touch it.
+    await act(async () => {})
+    expect(peekFocusedBlockLocation(env.panel)).toEqual(location)
+  })
+
+  // A stored pixel offset means a different place after a reload: rows mount
+  // lazily and their measured heights die with the page, so the document the
+  // offset was taken against no longer exists. The cursor is the anchor.
+  it('restores the pane by scrolling to its stored cursor row', async () => {
+    const location = {blockId: 'child-x', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, location)
+    }, {scope: ChangeScope.UiState, description: 'seed stored cursor'})
+
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), location, {})
+  })
+
+  // The offset rides along as the FLOOR, not the alternative: a cursor whose row
+  // can never be re-resolved (an embed target, a layout root with no shell)
+  // would otherwise strand the pane at the top — worse than the pixel restore.
+  it('hands the stored offset down as the fallback for an unreachable cursor', async () => {
+    const location = {blockId: 'child-x', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, location)
+      await tx.setProperty('panel-a', scrollTopProp, 480)
+    }, {scope: ChangeScope.UiState, description: 'seed cursor and offset'})
+
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow)
+      .toHaveBeenCalledWith(expect.anything(), location, {fallbackScrollTop: 480})
+  })
+
+  it('prefers a history restore cursor over the one still on the pane', async () => {
+    const stale = {blockId: 'child-x', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    const restored = {blockId: 'child-y', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, stale)
+    }, {scope: ChangeScope.UiState, description: 'seed stored cursor'})
+    panelHistory.enqueueRestore('panel-a', {focusedLocation: restored})
+
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), restored, {})
+  })
+
+  // `writePanelContent` MANUFACTURES a cursor on the destination's top-level
+  // block when the snapshot has none, so peeking at the pane would read that
+  // invention and anchor to the top — throwing away the offset the snapshot
+  // exists to replay. Scrolling alone never creates a cursor, so this is the
+  // norm for anyone who scrolls without clicking.
+  it('replays the offset for a history visit that was scrolled but never focused', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, {
+        blockId: 'page-a',
+        renderScopeId: panelRenderScopeId('panel-a', 'page-a'),
+      })
+    }, {scope: ChangeScope.UiState, description: 'manufactured cursor'})
+    panelHistory.enqueueRestore('panel-a', {scrollTop: 512})
+
+    renderPanel(false)
+    const topLevel = await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).not.toHaveBeenCalled()
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(512)
+  })
+
+  // Under `StrictMode` — which `main.tsx` enables — the effect runs setup,
+  // cleanup, setup. `consumeRestore` is destructive, so the replay used to find
+  // nothing, peek the cursor `writePanelContent` manufactures for a cursorless
+  // visit, and anchor to the top, undoing the offset the first pass restored.
+  it('keeps a cursorless restore across the StrictMode effect replay', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, {
+        blockId: 'page-a',
+        renderScopeId: panelRenderScopeId('panel-a', 'page-a'),
+      })
+    }, {scope: ChangeScope.UiState, description: 'manufactured cursor'})
+    panelHistory.enqueueRestore('panel-a', {scrollTop: 512})
+
+    render(
+      <StrictMode>
+        <AppRuntimeContextProvider value={env.runtime}>
+          <BlockContextProvider
+            initialValue={{layoutBoundary: true, panelId: env.panel.id}}
+          >
+            <PanelRenderer block={env.panel}/>
+          </BlockContextProvider>
+        </AppRuntimeContextProvider>
+      </StrictMode>,
+    )
+    const topLevel = await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).not.toHaveBeenCalled()
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(512)
+  })
+
+  // A pane can be scrolled without ever being clicked or navigated in, so it
+  // has no cursor to anchor to. The offset is still the best answer there.
+  it('falls back to the stored scroll offset when the pane has no cursor', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', scrollTopProp, 640)
+    }, {scope: ChangeScope.UiState, description: 'seed scroll offset'})
+
+    renderPanel(false)
+    const topLevel = await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).not.toHaveBeenCalled()
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(640)
+  })
+
+  it('captures the panel view mode in history snapshots', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.panel.id, topLevelBlockIdProp, 'page-a')
+      await tx.setProperty(env.panel.id, panelViewModeProp, 'video-notes')
+    }, {scope: ChangeScope.UiState, description: 'seed panel view mode'})
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(panelHistory.snapshot(env.panel.id)?.viewMode).toBe('video-notes')
   })
 })

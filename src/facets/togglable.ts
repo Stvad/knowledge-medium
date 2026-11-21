@@ -11,7 +11,7 @@
  * without a data↔facets cycle.
  *
  * The shipping shapes match docs/plugin-runtime-toggle/design.ts. The
- * design file is a typechecked sketch (`yarn tsc --noEmit -p
+ * design file is a typechecked sketch (`pnpm tsc --noEmit -p
  * docs/tsconfig.json`); this file is the real implementation. Anything
  * that drifts between the two — field names, factory signatures,
  * boundary semantics — is a correctness bug, not a stylistic one.

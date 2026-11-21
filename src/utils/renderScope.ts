@@ -6,6 +6,28 @@ const joinScope = (kind: string, parts: readonly string[]): string =>
 export const outlineRenderScopeId = (topLevelBlockId: string): string =>
   joinScope('outline', [topLevelBlockId])
 
+/** Scope of a PANEL's top-level outline. Includes the panel id so two panes
+ *  showing the SAME block render under distinct scopes — per-pane registries
+ *  (e.g. the video plugin's player handles, keyed by (renderScopeId,
+ *  blockId)) and focus locations resolve to the right pane. The top-level
+ *  block id is ALSO part of the scope so it changes on in-pane navigation:
+ *  focus locations minted for one page self-invalidate rather than matching
+ *  a same-id occurrence on the next. Every producer of a panel top-level
+ *  scope must use this; `outlineRenderScopeId` remains for non-panel
+ *  surfaces (`TopLevelRenderer`, embed fallbacks). */
+export const panelRenderScopeId = (panelId: string, topLevelBlockId: string): string =>
+  joinScope('panel', [panelId, topLevelBlockId])
+
+/** Is `renderScopeId` a panel's own outline (not an embed, backlink or other
+ *  nested surface inside it)? */
+export const isPanelRenderScopeId = (renderScopeId: string): boolean =>
+  renderScopeId.startsWith('panel:')
+
+/** The panel a panel scope (`panelRenderScopeId`) belongs to; undefined for
+ *  any other scope. */
+export const panelIdOfRenderScopeId = (renderScopeId: string): string | undefined =>
+  isPanelRenderScopeId(renderScopeId) ? decodeURIComponent(renderScopeId.split(':')[1]) : undefined
+
 export const embedRenderScopeId = (
   parentRenderScopeId: string,
   sourceBlockId: string,
@@ -28,3 +50,19 @@ export const breadcrumbRenderScopeId = (
   blockId: string,
   occurrenceId: string,
 ): string => joinScope('breadcrumb', [blockId, occurrenceId, parentRenderScopeId])
+
+/** Scope of a block a plugin renders as its own nested surface, such as a
+ *  comment card under its target. `surface` names the plugin's surface and
+ *  must be unique to it, so two surfaces never share a scope. */
+export const surfaceRenderScopeId = (
+  surface: string,
+  parentRenderScopeId: string,
+  occurrenceId: string,
+): string => joinScope(`surface.${surface}`, [occurrenceId, parentRenderScopeId])
+
+/** The surface a `surfaceRenderScopeId` scope was made for; undefined for any
+ *  other scope. */
+export const surfaceOfRenderScopeId = (renderScopeId: string): string | undefined => {
+  const kind = renderScopeId.slice(0, renderScopeId.indexOf(':'))
+  return kind.startsWith('surface.') ? kind.slice('surface.'.length) : undefined
+}

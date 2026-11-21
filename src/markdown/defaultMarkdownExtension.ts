@@ -1,5 +1,6 @@
 import type { MarkdownExtension } from '@/markdown/extensions.js'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
+import { rehypeTrimBlockSeparators } from '@/markdown/blockSeparators.js'
 import { createElement } from 'react'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -49,10 +50,60 @@ const MarkdownAnchor: AnchorComponent = ({href, children, rel, node: _node, ...p
   }, children)
 }
 
+/** Marks the lists MARKDOWN produced, so their styling can be written without
+ *  a descendant selector. A `components` override only ever sees elements from
+ *  the markdown AST, so the mark cannot reach a React component rendered
+ *  inside the same container — an embedded block's own chrome list, say, which
+ *  `.markdown-content ul` could not tell apart. Merges rather than replaces:
+ *  remark-gfm marks a task list on the same element. */
+const MARKDOWN_LIST_CLASS = 'markdown-list'
+
+const withMark = (className: string | undefined, mark: string) =>
+  [className, mark].filter(Boolean).join(' ')
+
+const MarkdownUnorderedList: NonNullable<Components['ul']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement('ul', {...props, className: withMark(className, MARKDOWN_LIST_CLASS)}, children)
+}
+
+const MarkdownOrderedList: NonNullable<Components['ol']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement('ol', {...props, className: withMark(className, MARKDOWN_LIST_CLASS)}, children)
+}
+
+/** The table's scroller, and the mark its styling keys on — stamped here for
+ *  the reason `MARKDOWN_LIST_CLASS` is. A block clips its overflow, so the
+ *  columns past its edge are only reachable by scrolling this wrapper. */
+const MarkdownTable: NonNullable<Components['table']> = (
+  {node: _node, className, children, ...props},
+) => {
+  void _node
+
+  return createElement(
+    'div',
+    {className: 'markdown-table-scroll'},
+    createElement(
+      'table',
+      {...props, className: withMark(className, 'markdown-table')},
+      children,
+    ),
+  )
+}
+
 export const gfmMarkdownExtension: MarkdownExtension = () => ({
   remarkPlugins: [remarkGfm],
+  rehypePlugins: [rehypeTrimBlockSeparators],
   components: {
     a: MarkdownAnchor,
     img: MarkdownImage,
+    ol: MarkdownOrderedList,
+    table: MarkdownTable,
+    ul: MarkdownUnorderedList,
   },
 })

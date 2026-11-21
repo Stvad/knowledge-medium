@@ -1,17 +1,10 @@
 import {describe, expect, it} from 'vitest'
 import {
-  kernelTypeAssetDeclarations,
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from '../src/kernelDts'
 
 describe('kernel type tree helpers', () => {
-  it('ships asset module declarations alongside the emitted tree', () => {
-    expect(kernelTypeAssetDeclarations).toContain("declare module '*.css'")
-    expect(kernelTypeAssetDeclarations).toContain("declare module '*.svg'")
-    expect(kernelTypeAssetDeclarations).toContain("declare module '*.png'")
-  })
-
   it('prints the tsconfig paths mapping for a materialized declaration tree', () => {
     const out = renderKernelTypesInstallSummary({
       outDir: '/tmp/project/agent-extensions/kernel-types',
@@ -34,9 +27,9 @@ describe('kernel type tree helpers', () => {
   })
 
   it('maps browser-style @/ module specifiers to declaration candidates', () => {
-    expect(kernelTypeDeclarationCandidates('@/extensions/api.js')).toEqual([
-      'src/extensions/api.d.ts',
-      'src/extensions/api/index.d.ts',
+    expect(kernelTypeDeclarationCandidates('@/extensions/core.js')).toEqual([
+      'src/extensions/core.d.ts',
+      'src/extensions/core/index.d.ts',
     ])
     expect(kernelTypeDeclarationCandidates('@/data/api')).toEqual([
       'src/data/api.d.ts',

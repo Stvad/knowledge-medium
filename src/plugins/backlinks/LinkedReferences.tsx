@@ -1,7 +1,7 @@
 import { useCallback, useState, type MouseEvent } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
-import { useManyParents, useWorkspaceId } from '@/hooks/block.js'
+import { useRetainParents, useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
@@ -13,7 +13,7 @@ import {
   type BacklinksFilter,
 } from './query.ts'
 import { useBacklinkFilterState } from './useStoredBacklinkFilter.ts'
-import { LazyBacklinkItem } from './BacklinkEntry.tsx'
+import { LazyBlockEntry } from './BlockEntry.tsx'
 
 export function LinkedReferences({block, controls}: BacklinksViewRendererProps) {
   const repo = useRepo()
@@ -54,12 +54,8 @@ function LinkedReferencesInner({
     filterActive ? effectiveFilter : undefined,
   )
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
-  // Prefetch ancestors for every visible backlink in one batched
-  // query, instead of N concurrent `useParents` calls. Each entry's
-  // breadcrumbs read from this map; the per-entry `core.ancestors`
-  // handle only fires when the user clicks a breadcrumb (changing
-  // shownBlock to one we didn't prefetch).
-  const initialParentsByBacklinkId = useManyParents(backlinks)
+  // Deliberately above the `open` branch below — see the hook.
+  useRetainParents(backlinks)
   const [open, setOpen] = useState(true)
   const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
   const filtersOpen = filtersOpenOverride ?? filterActive
@@ -128,11 +124,10 @@ function LinkedReferencesInner({
             ) : (
               <div className="mt-3 flex flex-col gap-3">
                 {backlinks.map(backlinkBlock => (
-                  <LazyBacklinkItem
+                  <LazyBlockEntry
                     key={backlinkBlock.id}
                     block={backlinkBlock}
                     scopeId={`flat:${backlinkBlock.id}`}
-                    initialParents={initialParentsByBacklinkId.get(backlinkBlock.id)}
                   />
                 ))}
               </div>

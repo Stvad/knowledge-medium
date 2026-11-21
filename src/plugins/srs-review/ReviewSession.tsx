@@ -10,26 +10,19 @@ import {
   ArchiveX,
   ArrowLeft,
   CalendarClock,
-  Check,
   ChevronLeft,
   ExternalLink,
-  Gauge,
   PartyPopper,
   RefreshCw,
-  RotateCcw,
   SkipForward,
-  Sparkles,
 } from 'lucide-react'
 import type { Block } from '@/data/block'
-import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
-import { useManyParents, useProperty } from '@/hooks/block.js'
+import { useHandle, useManyParents, useProperty } from '@/hooks/block.js'
 import { usePluginUIStateChildBlock } from '@/data/globalState.js'
-import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
-import { cn } from '@/lib/utils.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
@@ -37,47 +30,40 @@ import { PromotableBreadcrumbList, usePromotableBreadcrumb } from '@/plugins/bre
 import { ReschedulePicker } from '@/plugins/daily-notes'
 import { openDialog } from '@/utils/dialogs.js'
 import {
-  SRS_SM25_TYPE,
-  formatIntervalDays,
   formatRescheduleToastMessage,
   rescheduleBlock,
-  srsArchivedProp,
-  srsFactorProp,
-  srsIntervalProp,
-  srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
-import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
-import { useDueCards, useDueCardsReady } from './useDueCards.ts'
+import { SrsSignal } from '@/plugins/srs-rescheduling/scheduler.js'
+import { useReviewDeckCards } from './useDueCards.ts'
+import { decideGrade, showsEnrolledCardActions } from './gradeDecision.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
-import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
-import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
+import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
+import { useTodayKey } from '@/plugins/daily-notes/today.js'
+import {
+  SRS_REVEAL_ACTION_ID,
+  SRS_REVIEW_CONTEXT,
+  makeSrsReviewController,
+  type SrsReviewController,
+} from './actions.ts'
+import { GradeButtons, ShowAnswerButton } from './ReviewControls.tsx'
+import { useActionKeyHints } from './keyHints.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
  *  header renderer so the in-review chain renders identically. */
 const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 const EMPTY_PARENTS: readonly Block[] = []
-/** How many cards' ancestors to prefetch per chunk (two chunks are in
- *  flight at once). Bounds the `core.manyAncestors` id count so a large
- *  deck can't exceed SQLite's host-parameter limit. */
+/** How far ahead of the current card to keep ancestor chains warm, so a
+ *  card's breadcrumb line is there the moment it is shown rather than a
+ *  load later. Bounds the handles held open, not the SQL — the walks are
+ *  coalesced and chunked below the parameter limit by `ancestorWalk`. */
 const BREADCRUMB_PREFETCH = 24
+/** And how far BEHIND. Back is a first-class move here, and a card whose
+ *  handle was released is cold again once the store's GC window passes —
+ *  which a few seconds on the next card is enough to reach. */
+const BREADCRUMB_LOOKBACK = 8
 
-/** Today's local day key, advanced when the date rolls over. Polls once a
- *  minute (cheap; only re-renders the minute the day changes), mirroring
- *  `useDueCards`' midnight-aware cutoff so a deck left open overnight saves
- *  and restores under the correct day. */
-const useTodayKey = (): string => {
-  const [key, setKey] = useState(localDayKey)
-  useEffect(() => {
-    const id = setInterval(() => {
-      const next = localDayKey()
-      setKey(prev => (prev === next ? prev : next))
-    }, 60_000)
-    return () => clearInterval(id)
-  }, [])
-  return key
-}
 
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false
@@ -90,81 +76,60 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   return ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(el.tagName)
 }
 
-/** Whether a block is still a live, schedulable review card — mirrors
- *  the deck's membership conditions (`buildDueCardsQuery`): it must
- *  carry the SRS type AND a non-empty next-review date AND not be
- *  archived. A card can lose any of these in another panel after the
- *  session snapshotted its id; grading it then would re-add the type
- *  and/or write a fresh date via `rescheduleBlock`, resurrecting a card
- *  the user just removed from review. */
-const isLiveSrsCard = (data: BlockData): boolean => {
-  if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
-  try {
-    const archivedRaw = data.properties[srsArchivedProp.name]
-    if (archivedRaw !== undefined && srsArchivedProp.codec.decode(archivedRaw)) return false
-    const dateRaw = data.properties[srsNextReviewDateProp.name]
-    return dateRaw !== undefined && srsNextReviewDateProp.codec.decode(dateRaw).length > 0
-  } catch {
-    return false
-  }
-}
-
-interface GradeButton {
-  signal: SrsSignal
-  label: string
-  hint: string
-  icon: typeof Check
-  className: string
-}
-
-const GRADE_BUTTONS: readonly GradeButton[] = [
-  {signal: SrsSignal.AGAIN, label: 'Again', hint: '1', icon: RotateCcw, className: 'text-rose-600'},
-  {signal: SrsSignal.HARD, label: 'Hard', hint: '2', icon: Gauge, className: 'text-amber-600'},
-  {signal: SrsSignal.GOOD, label: 'Good', hint: '3', icon: Check, className: 'text-emerald-600'},
-  {signal: SrsSignal.EASY, label: 'Easy', hint: '4', icon: Sparkles, className: 'text-sky-600'},
-]
-
-/** The four grade buttons, each labelled with the interval the card would
- *  next be scheduled for if you picked it ("1d", "4d", "2mo", …). The
- *  estimate reads the card's live interval/factor so it tracks edits made
- *  elsewhere, and uses the same formatter as the post-grade toast so the
- *  two agree. Split into its own component so the `useProperty` reads only
- *  run for the card on screen. */
-const GradeButtons = ({card, busy, onGrade}: {
+/** Reschedule and Archive, shown only for a card that is actually ENROLLED.
+ *
+ *  Both fail confusingly otherwise: `archiveSrsCard` returns false for a block
+ *  with no SRS type (surfacing "Couldn't archive this card" and leaving the
+ *  card in place), and the SRS date adapter doesn't claim an unenrolled block,
+ *  so the picker either no-ops or edits an unrelated date without enrolling it.
+ *  Grading is how a card gets a schedule in the first place.
+ *
+ *  Reads enrollment off the BLOCK rather than inferring it from the deck's new
+ *  set. `!currentIsNew` was inference, and it missed a third state: a card that
+ *  was new and has since lost its deck tag stays on screen in the frozen queue,
+ *  leaves `newIds`, and still has no SRS type — so the inferred "enrolled" put
+ *  both broken controls back. Own component so the reactive read only runs for
+ *  the card on screen, and so enrollment gained elsewhere shows up live. */
+const EnrolledCardActions = ({card, busy, onReschedule, onArchive}: {
   card: Block
   busy: boolean
-  onGrade: (signal: SrsSignal) => void
+  onReschedule: () => void
+  onArchive: () => void
 }) => {
-  const [interval] = useProperty(card, srsIntervalProp)
-  const [factor] = useProperty(card, srsFactorProp)
+  const enrolled = useHandle(card, {
+    selector: data => showsEnrolledCardActions(data),
+  }) as boolean
+  if (!enrolled) return null
   return (
-    <div className="grid grid-cols-4 gap-2">
-      {GRADE_BUTTONS.map(btn => (
-        <Button
-          key={btn.label}
-          type="button"
-          variant="outline"
-          className="flex h-auto flex-col gap-1 py-2"
-          disabled={busy}
-          onClick={() => onGrade(btn.signal)}
-        >
-          <btn.icon className={cn('h-4 w-4', btn.className)} />
-          <span className="text-sm font-medium">{btn.label}</span>
-          <span className="text-[11px] font-medium tabular-nums text-muted-foreground">
-            {formatIntervalDays(estimateSrsIntervalDays({interval, factor}, btn.signal))}
-          </span>
-          <span className="text-[10px] opacity-50">{btn.hint}</span>
-        </Button>
-      ))}
-    </div>
+    <>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+        onClick={onReschedule}
+        disabled={busy}
+      >
+        <CalendarClock className="h-3.5 w-3.5" />
+        Reschedule
+      </button>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+        onClick={onArchive}
+        disabled={busy}
+      >
+        <ArchiveX className="h-3.5 w-3.5" />
+        Archive
+      </button>
+    </>
   )
 }
 
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-  const dueCards = useDueCards(workspaceId, tagName)
-  const dueLoaded = useDueCardsReady(workspaceId, tagName)
+  // Due cards followed by blocks tagged for review that aren't enrolled yet.
+  // `newIds` is live membership, not a snapshot — see `useReviewDeckCards`.
+  const {cards: dueCards, newIds, ready: dueLoaded} = useReviewDeckCards(workspaceId, tagName)
 
   // Persist the in-progress session (frozen queue + place) on a per-deck
   // child of the plugin's ui-state block so navigating away and back
@@ -200,7 +165,13 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // the live list would renumber the session under the user. We snapshot
   // ids once via the converge-during-render pattern, then read each card's
   // live state at grade time via `repo.block(id)`.
-  if (queue === null && dueCards.length > 0) {
+  //
+  // Gated on `dueLoaded` because the collection is now TWO independently
+  // resolving queries (due cards + tagged candidates). Freezing on the first
+  // non-empty list would capture whichever resolved first — typically the due
+  // cards alone — and strand that session's new cards until the queue ran out
+  // and the top-up path below picked them up as a second wave.
+  if (queue === null && dueLoaded && dueCards.length > 0) {
     setQueue(dueCards.map(c => c.id))
   }
 
@@ -284,19 +255,11 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     setProgress(null)
   }, [setProgress])
 
-  // Window the ancestor prefetch. Passing every queued id to one
-  // `core.manyAncestors` call (one SQL placeholder per id) would let a deck
-  // with a very large due queue exceed SQLite's host-parameter limit and
-  // fail the whole session. Anchor the window to a fixed-size chunk so the
-  // handle key — and thus the query — changes only every
-  // BREADCRUMB_PREFETCH cards rather than on every advance, and span two
-  // chunks so the next chunk is already warm before the user reaches it.
-  const prefetchStart = Math.floor(index / BREADCRUMB_PREFETCH) * BREADCRUMB_PREFETCH
   const queueBlocks = useMemo(
     () => (queue ?? [])
-      .slice(prefetchStart, prefetchStart + BREADCRUMB_PREFETCH * 2)
+      .slice(Math.max(0, index - BREADCRUMB_LOOKBACK), index + BREADCRUMB_PREFETCH)
       .map(id => repo.block(id)),
-    [queue, repo, prefetchStart],
+    [queue, repo, index],
   )
   const parentsByCardId = useManyParents(queueBlocks)
   const currentParents = currentId
@@ -330,8 +293,20 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         // `rescheduleBlock` would re-add the type and write a fresh date,
         // silently resurrecting a card the user just removed — so drop it
         // from the session instead of grading it.
+        // A new card (tagged for review, not enrolled yet) has no SRS state
+        // to resurrect — grading it IS the enrolment, and `rescheduleBlock`
+        // seeds the SM-2.5 defaults plus the type in one tx. Gate it on LIVE
+        // membership of the deck's new set, so a block that lost its tag
+        // since the queue was snapshotted is dropped rather than enrolled.
+        // `wait` covers the restored-before-ready window: a resumed session
+        // shows its card (revealed state included) on the first render, while
+        // `newIds` is still empty because the candidates query hasn't
+        // resolved. Doing nothing costs the user a second keypress; advancing
+        // would skip a valid new card and never enrol it.
         const data = block.peek() ?? (await block.load())
-        if (!data || !isLiveSrsCard(data)) {
+        const decision = decideGrade(data, {isNew: newIds.has(currentId), ready: dueLoaded})
+        if (decision === 'wait') return
+        if (decision === 'drop') {
           showInfo('Card is no longer in spaced repetition')
           advance()
           return
@@ -352,7 +327,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         setBusy(false)
       }
     },
-    [currentId, busy, repo, advance],
+    [currentId, busy, repo, advance, newIds, dueLoaded],
   )
 
   const archive = useCallback(async () => {
@@ -397,16 +372,20 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // (non-editor) chrome is focused, so a deck in a background panel — or
   // a second open deck — never grabs Space/1-4.
   //
-  // We can't rely on the dispatcher's default editable-target filter to
-  // keep grade keys out of the revealed answer's CodeMirror: EDIT_MODE_CM
-  // opts editor events back in via its own eventFilter (filters OR
-  // together), and this modal context would then shadow edit-mode and
-  // eat Enter / 1-4. So we deactivate the context whenever focus lands on
-  // an editable element instead.
+  // Belt-and-braces since two changes landed under it: an `eventFilter` now
+  // widens only its own context's candidates, and this modal context shadows
+  // EDIT_MODE_CM anyway. Both mean the dispatcher's default editable-target
+  // filter would keep grade keys out of the revealed answer's CodeMirror on
+  // its own. It was load-bearing when filters OR'd across contexts, so
+  // EDIT_MODE_CM's opt-in pulled editor events back in and this context ate
+  // Enter / 1-4. Deactivating on editable focus is cheap and keeps the
+  // guarantee local, so it stays.
   const [surfaceFocused, setSurfaceFocused] = useState(false)
-  const controller = useMemo<SrsReviewController>(() => ({
-    reveal: () => { if (!busy) setRevealed(true) },
-    grade: signal => { if (revealed && !busy) void grade(signal) },
+  const controller = useMemo<SrsReviewController>(() => makeSrsReviewController({
+    busy,
+    revealed,
+    reveal: () => setRevealed(true),
+    grade: signal => void grade(signal),
   }), [busy, revealed, grade])
   const shortcutActivations = useMemo(() => [{
     context: SRS_REVIEW_CONTEXT,
@@ -414,6 +393,9 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     enabled: surfaceFocused && currentId !== null,
   }], [controller, surfaceFocused, currentId])
   useActionContextActivations(shortcutActivations)
+
+  const keyHints = useActionKeyHints(SRS_REVIEW_CONTEXT)
+  const revealHint = keyHints.get(SRS_REVEAL_ACTION_ID)
 
   const handleSurfaceFocus = useCallback((e: ReactFocusEvent<HTMLDivElement>) => {
     // Active only when focus is on the session chrome itself, not the
@@ -449,6 +431,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }, [revealed])
 
   const deckLabel = tagName.trim() ? tagName.trim() : 'All due cards'
+  // Grading a new card enrolls it in spaced repetition (it has no history
+  // and no schedule yet), so say so rather than presenting an unfamiliar
+  // block as if it were an overdue card the user has seen before.
+  const currentIsNew = currentId !== null && newIds.has(currentId)
 
   const header = (
     <div className="mb-4 flex items-center justify-between gap-3">
@@ -456,7 +442,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         <ChevronLeft className="mr-1 h-3.5 w-3.5" />
         Decks
       </Button>
-      <span className="truncate text-sm font-medium text-muted-foreground">{deckLabel}</span>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-sm font-medium text-muted-foreground">{deckLabel}</span>
+        {currentIsNew && (
+          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+            New
+          </span>
+        )}
+      </span>
       <div className="flex items-center gap-1">
         <span className="text-xs tabular-nums text-muted-foreground">
           {total === 0 ? '' : `${Math.min(index + 1, total)} / ${total}`}
@@ -570,12 +563,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
       <div className="mt-4">
         {!revealed ? (
-          <Button type="button" className="w-full" onClick={() => setRevealed(true)} disabled={busy}>
-            Show answer
-            <span className="ml-2 text-xs opacity-70">space</span>
-          </Button>
+          <ShowAnswerButton hint={revealHint} busy={busy} onReveal={() => setRevealed(true)} />
         ) : currentBlock ? (
-          <GradeButtons card={currentBlock} busy={busy} onGrade={signal => void grade(signal)} />
+          <GradeButtons
+            card={currentBlock}
+            busy={busy || !dueLoaded}
+            keyHints={keyHints}
+            onGrade={signal => void grade(signal)}
+          />
         ) : null}
       </div>
 
@@ -607,24 +602,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           <ExternalLink className="h-3.5 w-3.5" />
           Open
         </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-          onClick={reschedule}
-          disabled={busy}
-        >
-          <CalendarClock className="h-3.5 w-3.5" />
-          Reschedule
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-          onClick={() => void archive()}
-          disabled={busy}
-        >
-          <ArchiveX className="h-3.5 w-3.5" />
-          Archive
-        </button>
+        {currentBlock && <EnrolledCardActions
+          card={currentBlock}
+          busy={busy}
+          onReschedule={reschedule}
+          onArchive={() => void archive()}
+        />}
       </div>
     </div>
   )

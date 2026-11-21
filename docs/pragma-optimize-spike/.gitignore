@@ -1,0 +1,5 @@
+# Generated fixtures and run logs — rebuild with `node build.mjs`.
+*.db
+*.db-wal
+*.db-shm
+run*.txt

@@ -2,22 +2,34 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { useIsMobile } from '@/utils/react.js'
-import { useHandle, usePropertyValue } from '@/hooks/block.js'
-import { useEffect, useMemo } from 'react'
-import type { BlockData } from '@/data/api'
+import { isMobileViewport } from '@/utils/viewport.js'
+import { useHandle } from '@/hooks/block.js'
+import { useEffect, useMemo, useState } from 'react'
+import { ChangeScope, type BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
-import { activePanelIdProp } from '@/data/properties.js'
-import { isPanelStackRow } from '@/utils/panelLayoutProjection.js'
+import { activePanelIdProp, isPanelRowMaximized, layoutColumnWeight, layoutColumnWeightProp } from '@/data/properties.js'
+import { columnWeightHolder } from '@/utils/layoutColumns.js'
+import { ColumnResizeHandles, MIN_COLUMN_REM, type ColumnWeights } from './ColumnResizeHandles.js'
+import {
+  allPanelRowsInLayoutOrder,
+  isPanelStackRow,
+  maximizeWouldHideSomething,
+  sessionActivePanelId,
+  soloPanelRow,
+} from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
-  | {kind: 'panel'; id: string}
-  | {kind: 'stack'; id: string; children: RenderSlot[]}
+  | {kind: 'panel'; id: string; maximized: boolean
+      /** The stored column weight; see `columnWeightHolder`. */
+      weight?: number}
+  | {kind: 'stack'; id: string; children: RenderSlot[]
+      /** Kept only to preserve the solo pane's React parent — see
+       *  `soloSlotPath`. Renders no box and defers to its single child. */
+      soloWrapper?: true}
 
 const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 
 const TOP_LEVEL_COLUMN_CLASS =
-  'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-md md:basis-0 md:grow md:shrink'
-const WIDE_SCROLL_COLUMN_CLASS =
   'h-full w-full min-w-0 shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0'
 const STACK_CHILD_CLASS =
   'w-full min-w-0 shrink-0 border-t border-border pt-2 first:border-t-0 first:pt-0'
@@ -39,7 +51,9 @@ const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlo
         children: (childrenByParent.get(row.id) ?? []).map(visit),
       }
     }
-    return {kind: 'panel', id: row.id}
+    // Stamped here, where `visit` already holds the row — the alternative is a
+    // second pass building an id→row Map the walk just threw away.
+    return {kind: 'panel', id: row.id, maximized: isPanelRowMaximized(row), weight: layoutColumnWeight(row)}
   }
 
   return (childrenByParent.get(rootId) ?? []).map(visit)
@@ -48,22 +62,51 @@ const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlo
 const flattenPanelSlots = (slots: readonly RenderSlot[]): Array<Extract<RenderSlot, {kind: 'panel'}>> =>
   slots.flatMap(slot => slot.kind === 'panel' ? [slot] : flattenPanelSlots(slot.children))
 
+/**
+ * The PATH down to `soloId` — the pane still wrapped in whatever stack it
+ * lives in — with every sibling branch dropped.
+ *
+ * Narrowing to one pane must not HOIST it. React identity is parent + key, so
+ * lifting a stacked pane to the top level unmounts and remounts it: local
+ * editor state is lost and a playing video restarts, which is a poor trade for
+ * a gesture whose whole point is to look at that pane. Keeping the wrapper
+ * keeps the component's position in the tree, and keyed reconciliation
+ * preserves it even though its stack now renders one child instead of several.
+ *
+ * Siblings are still dropped rather than hidden with CSS: an off-screen pane
+ * that stays mounted keeps running effects and playing audio.
+ *
+ * `soloId` comes from this same slot tree, so it always resolves — an empty
+ * result is unreachable, not a case to fall back from.
+ */
+const soloSlotPath = (slots: readonly RenderSlot[], soloId: string): RenderSlot[] => {
+  for (const slot of slots) {
+    if (slot.kind === 'panel') {
+      if (slot.id === soloId) return [slot]
+      continue
+    }
+    const inner = soloSlotPath(slot.children, soloId)
+    if (inner.length > 0) return [{...slot, children: inner, soloWrapper: true}]
+  }
+  return []
+}
+
 function PanelSlotView({
   slot,
   layoutSessionBlock,
   canClosePanel,
+  canMaximizePanel,
   className,
   stacked,
-  wideScrollSurface,
   trackFocus,
   columnId,
 }: {
   slot: Extract<RenderSlot, {kind: 'panel'}>
   layoutSessionBlock: Block
   canClosePanel: boolean
+  canMaximizePanel: boolean
   className: string
   stacked: boolean
-  wideScrollSurface: boolean
   trackFocus: boolean
   // `data-layout-column-id` only goes on the *outer* column wrapper.
   // When a panel sits at the top level, this slot IS the column and
@@ -78,8 +121,8 @@ function PanelSlotView({
         panelId: slot.id,
         layoutSessionBlockId: layoutSessionBlock.id,
         canClosePanel,
+        canMaximizePanel,
         stackedPanel: stacked,
-        wideScrollSurface,
         trackPanelFocus: trackFocus,
       }}
       key={slot.id}
@@ -98,15 +141,15 @@ function SlotView({
   slot,
   layoutSessionBlock,
   canClosePanel,
+  canMaximizePanel,
   topLevel,
-  wideScrollSurface,
   trackFocus,
 }: {
   slot: RenderSlot
   layoutSessionBlock: Block
   canClosePanel: boolean
+  canMaximizePanel: boolean
   topLevel: boolean
-  wideScrollSurface: boolean
   trackFocus: boolean
 }) {
   if (slot.kind === 'panel') {
@@ -114,19 +157,35 @@ function SlotView({
       slot={slot}
       layoutSessionBlock={layoutSessionBlock}
       canClosePanel={canClosePanel}
-      className={topLevel ? (wideScrollSurface ? WIDE_SCROLL_COLUMN_CLASS : TOP_LEVEL_COLUMN_CLASS) : STACK_CHILD_CLASS}
+      canMaximizePanel={canMaximizePanel}
+      className={topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS}
       stacked={!topLevel}
-      wideScrollSurface={wideScrollSurface}
       trackFocus={trackFocus}
       columnId={topLevel ? slot.id : undefined}
     />
   }
 
+  // A stack kept only to preserve the solo pane's React parent generates no box
+  // and hands its column role to that child, which then owns its scrollport.
+  //
+  // Keep the div mounted when its class changes to preserve the pane's React
+  // parent across maximize and restore.
+  const soloWrapper = slot.soloWrapper === true
   return (
     <div
       key={slot.id}
-      data-layout-column-id={topLevel ? slot.id : undefined}
-      className={`${topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto pr-1`}
+      // Handed to the child along with the column role, so spatial navigation
+      // still sees exactly one `[data-layout-column-id]` box for this column.
+      data-layout-column-id={topLevel && !soloWrapper ? slot.id : undefined}
+      className={soloWrapper
+        ? 'contents'
+        // A top-level stack scrolls its panes itself, so it reserves the
+        // bottom clearance a pane's own scrollport would (PANEL_BOTTOM_CLEARANCE).
+        // Its gutter is reserved too, so a pane's width doesn't depend on its
+        // own height: a panel mount that sizes the text from the pane's width
+        // (PANEL_RIGHT_CLEARANCE) would otherwise toggle the scrollbar it
+        // depends on.
+        : `${topLevel ? `${TOP_LEVEL_COLUMN_CLASS} md:pb-[var(--panel-bottom-clearance,0px)]` : STACK_CHILD_CLASS} flex flex-col gap-2 overflow-y-auto [scrollbar-gutter:stable] scrollbar-thin scrollbar-track-transparent scrollbar-thumb-muted-foreground/25 hover:scrollbar-thumb-muted-foreground/45`}
     >
       {slot.children.map(child => (
         <SlotView
@@ -134,8 +193,8 @@ function SlotView({
           slot={child}
           layoutSessionBlock={layoutSessionBlock}
           canClosePanel={canClosePanel}
-          topLevel={false}
-          wideScrollSurface={false}
+          canMaximizePanel={canMaximizePanel}
+          topLevel={soloWrapper ? topLevel : false}
           trackFocus={trackFocus}
         />
       ))}
@@ -144,38 +203,127 @@ function SlotView({
 }
 
 export function LayoutRenderer({block}: BlockRendererProps) {
-  const isMobile = useIsMobile()
-  const [activePanelId] = usePropertyValue(block, activePanelIdProp)
-  const rows = useHandle(block.repo.query.subtree({id: block.id}), {
+  // Subscribed for re-renders, but NOT used as the answer: react-use's
+  // `useMedia` returns the supplied default (`false`) on its first render and
+  // corrects in an effect, so a phone opening a `;max` link would spend one
+  // commit believing it is desktop — long enough for the coercion effect below
+  // to fire and make the flagged pane active, which is exactly what mobile
+  // must not do. The synchronous media read is right on every render.
+  useIsMobile()
+  const isMobile = isMobileViewport()
+  const rows = useHandle(block.repo.query.subtree({id: block.id, propertyChildren: 'none'}), {
     selector: data => data ?? EMPTY_ROWS,
   })
+  // From the ROWS snapshot, never a separate subscription — the effect below
+  // compares this pointer against the flags, and both must come from the same
+  // commit. See `sessionActivePanelId`.
+  const activePanelId = sessionActivePanelId(rows.find(row => row.id === block.id))
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])
   const panelSlots = useMemo(() => flattenPanelSlots(slots), [slots])
-  const activePanelSlot = activePanelId
-    ? panelSlots.find(slot => slot.id === activePanelId)
-    : undefined
-  const fallbackActivePanelSlot = isMobile
-    ? panelSlots.at(-1)
-    : panelSlots[0]
-  const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
-  const slotsToRender = isMobile
-    ? (mobilePanelSlot ? [mobilePanelSlot] : [])
-    : slots
+  // Does one pane take the whole layout over? The rule is `soloPanelRow` —
+  // shared with navigation, so "which pane the user sees" has exactly one
+  // answer. Both narrowing paths this used to spell out (mobile-by-active,
+  // desktop-by-flag) live there.
+  const soloPanelSlot = useMemo(() => {
+    const solo = soloPanelRow(allPanelRowsInLayoutOrder(block.id, rows), {
+      activePanelId,
+      canRenderSplit: !isMobile,
+    })
+    return solo ? panelSlots.find(slot => slot.id === solo.id) : undefined
+  }, [block.id, rows, panelSlots, activePanelId, isMobile])
+  // Only the desktop no-solo case renders the full tree; a solo pane renders
+  // alone — but IN PLACE (`soloSlotPath`), so a stacked pane keeps its parent.
+  const slotsToRender = useMemo(
+    () => soloPanelSlot ? soloSlotPath(slots, soloPanelSlot.id) : (isMobile ? [] : slots),
+    [slots, soloPanelSlot, isMobile],
+  )
   const canClosePanel = panelSlots.length > 1
-  const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
+  const canMaximizePanel = maximizeWouldHideSomething(panelSlots.length, !isMobile)
+  // ── The single writer of `activePanelIdProp` from this renderer ──
+  // Two rules, in priority order, deliberately resolved BEFORE the effect
+  // rather than in two effects:
+  //
+  //  1. A SOLO pane must be the active pane, or keyboard dispatch targets a
+  //     pane the user cannot see (design §4.4). `togglePanelMaximized` covers
+  //     the gesture; this covers arrivals with no gesture at all — Back/Forward,
+  //     a shared `;max` link, a snapshot apply — where `reconcilePanelRows`
+  //     sets the row flag and leaves the pointer alone. On mobile the solo pane
+  //     IS the active pane whenever the pointer is set, so this self-satisfies
+  //     and only seeds an unset pointer.
+  //  2. Otherwise, seed an unset pointer with the first pane.
+  //
+  // As two effects both fired in the same commit whenever the pointer was
+  // unset — which IS the shared-`;max`-link shape — and disagreed, so the
+  // pointer transiently named an unrendered pane (exactly what rule 1 exists
+  // to prevent) and took several synced writes, each projecting a replace, to
+  // settle.
+  //
+  // Rule 2 fires only on an ABSENT pointer, never on one that merely names a
+  // row this session doesn't have: that row may simply not be projected into
+  // this subtree yet, and seizing it would move the user's active pane — on
+  // mobile, visibly. Row deletion has its own repair
+  // (`activePanelIdAfterReconcile`), so nothing depends on this path to clean
+  // up a dangling pointer.
+  //
+  // Only a DESKTOP solo (a maximize flag) coerces an already-set pointer. The
+  // mobile solo is DERIVED from that pointer, so treating it as rule 1 would
+  // overwrite a pointer that merely names a row this snapshot doesn't carry
+  // yet — with the fallback pane, permanently — which is the opposite of the
+  // rule above.
+  const desiredActivePanelSlot = (isMobile ? undefined : soloPanelSlot)
+    ?? (activePanelId ? undefined : soloPanelSlot ?? panelSlots[0])
 
   useEffect(() => {
-    // A panel insert writes activePanelId and the new row in one tx, but
-    // React subscriptions can surface the property before this subtree
-    // query includes the row. Don't treat "active id not in current rows"
-    // as stale here or mobile can immediately hide the newly opened panel.
-    if (!fallbackActivePanelSlot || activePanelSlot || activePanelId) return
-    void block.set(activePanelIdProp, fallbackActivePanelSlot.id)
-  }, [block, activePanelId, activePanelSlot, fallbackActivePanelSlot])
+    if (!desiredActivePanelSlot || activePanelId === desiredActivePanelSlot.id) return
+    void block.set(activePanelIdProp, desiredActivePanelSlot.id)
+  }, [block, activePanelId, desiredActivePanelSlot])
+
+  // ── Column widths ──
+  // Each top-level column's `fr` weight, stored on one of its panel rows
+  // (`columnWeightHolder`), or a drag's until the rows carry it.
+  const [layoutEl, setLayoutEl] = useState<HTMLDivElement | null>(null)
+  const [dragWeights, setDragWeights] = useState<ColumnWeights | null>(null)
+  const columns = slotsToRender.map(slot => {
+    const holder = columnWeightHolder(slot)
+    const stored = holder?.weight ?? 1
+    return {id: slot.id, holderId: holder?.id, stored, weight: dragWeights?.get(slot.id) ?? stored}
+  })
+  const resizable = !isMobile && columns.length > 1
+  // Drop a drag's weights once the rows carry them, or once the columns they
+  // were for are not the columns shown. Adjusted while rendering, not in an
+  // effect, so no frame paints the stale widths.
+  if (dragWeights !== null && (
+    dragWeights.size !== columns.length ||
+    columns.every(column => dragWeights.get(column.id) === column.stored) ||
+    columns.some(column => !dragWeights.has(column.id))
+  )) setDragWeights(null)
+  const writeWeights = async (weights: ColumnWeights) => {
+    try {
+      await block.repo.tx(async tx => {
+        for (const column of columns) {
+          const weight = weights.get(column.id)
+          if (column.holderId && weight !== undefined && weight !== column.stored) {
+            await tx.setProperty(column.holderId, layoutColumnWeightProp, weight)
+          }
+        }
+      }, {scope: ChangeScope.UiState, description: 'resize layout columns'})
+    } catch (error) {
+      setDragWeights(null)
+      throw error
+    }
+  }
+  // Relative to their mean: weights written while other columns were open
+  // still fill the grid.
+  const meanWeight = columns.reduce((sum, column) => sum + column.weight, 0) / columns.length
 
   return <div
+    ref={setLayoutEl}
     data-layout-session-id={block.id}
-    className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full"
+    className="layout relative flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full md:grid md:grid-flow-col md:grid-rows-1 md:auto-cols-[minmax(24rem,1fr)]"
+    // The `md:` grid's tracks; ignored by the flex layout below md.
+    style={resizable
+      ? {gridTemplateColumns: columns.map(column => `minmax(${MIN_COLUMN_REM}rem, ${column.weight / meanWeight}fr)`).join(' ')}
+      : undefined}
   >
     {slotsToRender.map(slot => (
       <SlotView
@@ -183,11 +331,23 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         slot={slot}
         layoutSessionBlock={block}
         canClosePanel={canClosePanel}
+        canMaximizePanel={canMaximizePanel}
         topLevel
-        wideScrollSurface={hasOneVisiblePanel && slot.kind === 'panel'}
         trackFocus={!isMobile}
       />
     ))}
+    {/* After the columns: their `first:` styles need the first column first. */}
+    {resizable && layoutEl && (
+      <ColumnResizeHandles
+        container={layoutEl}
+        columns={columns}
+        onDrag={setDragWeights}
+        onCommit={weights => {
+          setDragWeights(weights)
+          void writeWeights(weights)
+        }}
+      />
+    )}
   </div>
 }
 

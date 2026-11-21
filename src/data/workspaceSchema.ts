@@ -1,5 +1,11 @@
 import type { PendingStatementParameter, RawTableType } from '@powersync/web'
-import type { Workspace, WorkspaceMembership, WorkspaceRole } from '@/types'
+import type {
+  PropertiesMigrationState,
+  Workspace,
+  WorkspaceMembership,
+  WorkspaceRole,
+} from '@/types'
+import { isChildBackedPropertiesWorkspace } from '@/types'
 
 // These tables are sync-only from the client's perspective: rows arrive via
 // PowerSync streams (powersync/sync-config.yaml) and outgoing changes go
@@ -43,6 +49,12 @@ export interface WorkspaceRow {
   // Synced down read-only; consumed by the paste flow (§8.2) in a later phase.
   encryption_mode: string
   wk_canary: string | null
+  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6). NULLABLE on the wire
+  // and locally: deployed sync rules predating the column deliver rows
+  // without it (the raw-table put binds an explicit NULL, so a NOT NULL
+  // DEFAULT would fail the insert — same trap as user_updated_at);
+  // `parseWorkspaceRow` falls back to 'cell'.
+  properties_migration: string | null
 }
 
 export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
@@ -56,6 +68,11 @@ export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
   // (§7). wk_canary stays nullable — NULL is correct for plaintext.
   {name: 'encryption_mode', definition: "encryption_mode TEXT NOT NULL DEFAULT 'none'"},
   {name: 'wk_canary', definition: 'wk_canary TEXT'},
+  // Nullable (no NOT NULL): an old deployed sync-rules window binds NULL
+  // here rather than failing the raw-table put; `parseWorkspaceRow` falls
+  // back to 'cell'. Mirrors the server column in
+  // supabase/migrations/*_add_workspaces_properties_migration.sql.
+  {name: 'properties_migration', definition: 'properties_migration TEXT'},
 ]
 
 export const CREATE_WORKSPACES_TABLE_SQL = buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)
@@ -83,6 +100,19 @@ export const ensureWorkspaceE2eeColumns = async (db: {
   }
 }
 
+/** Idempotent local-schema migration for the properties-as-blocks rollout
+ *  lever (docs/properties-as-blocks-migration.html §6) — same pattern as the E2EE columns above. Nullable;
+ *  absence reads as 'cell' via `parseWorkspaceRow`. */
+export const ensureWorkspacePropertiesMigrationColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{ name: string }>('PRAGMA table_info(workspaces)')
+  if (!columns.some((c) => c.name === 'properties_migration')) {
+    await db.execute('ALTER TABLE workspaces ADD COLUMN properties_migration TEXT')
+  }
+}
+
 export const WORKSPACES_RAW_TABLE = {
   put: {
     sql: buildPutSql('workspaces', WORKSPACE_COLUMNS),
@@ -94,6 +124,80 @@ export const WORKSPACES_RAW_TABLE = {
   },
 } satisfies RawTableType
 
+export const PROPERTIES_MIGRATION_STATES: readonly PropertiesMigrationState[] =
+  ['cell', 'children', 'cell-off']
+
+/** Absent (old sync rules / pre-migration rows) and unrecognized values
+ *  both read as 'cell' — fail-safe: an un-flipped reading is always
+ *  dormant behavior. */
+export const parsePropertiesMigration = (
+  value: string | null | undefined,
+): PropertiesMigrationState =>
+  PROPERTIES_MIGRATION_STATES.includes(value as PropertiesMigrationState)
+    ? value as PropertiesMigrationState
+    : 'cell'
+
+/** Shared flip-check (docs/properties-as-blocks-migration.html §6): reads `properties_migration` for
+ *  `workspaceId` and reports whether the workspace is at or past the
+ *  children-backed state. `db` is the minimal read surface both the tx
+ *  engine (`TxDb`) and `Repo` (`PowerSyncDb`) already satisfy — callers own
+ *  any per-tx / per-call caching (see `TxImpl.isPropertyChildBackedWorkspace`'s
+ *  `childBackedWorkspaceCache`). */
+export const readIsChildBackedWorkspace = async (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+): Promise<boolean> =>
+  isChildBackedPropertiesWorkspace(await readWorkspacePropertiesMigration(db, workspaceId))
+
+/** The workspace's `properties_migration`, parsed — `'cell'` when this device
+ *  has no local row for it (see {@link parsePropertiesMigration}). */
+export const readWorkspacePropertiesMigration = async (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+): Promise<PropertiesMigrationState> =>
+  parsePropertiesMigration(await readWorkspaceColumn(db, workspaceId, 'properties_migration'))
+
+/** The minimal read surface the tx engine (`TxDb`) and `Repo` (`PowerSyncDb`)
+ *  both already satisfy. */
+type WorkspaceColumnReader = {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}
+
+/** One column of one workspace row, or null when this device has no local row
+ *  for it yet. The column name is interpolated, so it must be a literal from
+ *  this module and never caller input. */
+const readWorkspaceColumn = async (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+  column: 'properties_migration' | 'encryption_mode' | 'owner_user_id',
+): Promise<string | null> => {
+  const row = await db.getOptional<Record<string, string | null>>(
+    `SELECT ${column} FROM workspaces WHERE id = ?`,
+    [workspaceId],
+  )
+  return row?.[column] ?? null
+}
+
+/** The workspace's `encryption_mode`, or null when this device has no local
+ *  `workspaces` row for it yet. The null is "unknown", not "not encrypted": a
+ *  device can be asked to act on a workspace whose row has not synced, and each
+ *  caller decides what unknown means for it (the §6 resolver, for one, reads it
+ *  as not-e2ee because the row rides the same checkpoint as the blocks). */
+export const readWorkspaceEncryptionMode = (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+): Promise<string | null> => readWorkspaceColumn(db, workspaceId, 'encryption_mode')
+
+/** The workspace's `owner_user_id`, or null when this device has no local row
+ *  for it. Only the OWNER may advance `properties_migration` — the server
+ *  trigger refuses everyone else — so a caller about to do work that only
+ *  matters if the flip lands should ask first. Null means unknown, which for
+ *  that question is the same answer as "not you". */
+export const readWorkspaceOwnerId = (
+  db: WorkspaceColumnReader,
+  workspaceId: string,
+): Promise<string | null> => readWorkspaceColumn(db, workspaceId, 'owner_user_id')
+
 export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   id: row.id,
   name: row.name,
@@ -102,6 +206,7 @@ export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   updateTime: row.update_time,
   encryptionMode: row.encryption_mode,
   wkCanary: row.wk_canary,
+  propertiesMigration: parsePropertiesMigration(row.properties_migration),
 })
 
 // ---------------------------------------------------------------------------

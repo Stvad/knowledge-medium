@@ -57,6 +57,14 @@ describe('resolveStructuralEditPolicy', () => {
         canMergeUp: false,
       })
     })
+
+    // Guards the regression this policy caused once: a `canDelete: !isScopeRoot`
+    // rule here made page deletion unreachable from every UI surface. Deletion
+    // removes a subtree rather than relocating one across the surface boundary,
+    // so it is not a scope-relative decision and must not reappear as one.
+    it('says nothing about deletability', () => {
+      expect(root()).not.toHaveProperty('canDelete')
+    })
   })
 
   it('treats nothing as a scope root when scopeRootId is undefined', () => {

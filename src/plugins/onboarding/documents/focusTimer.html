@@ -1,0 +1,73 @@
+<!doctype html>
+<title>Focus timer</title>
+<style>
+  body { margin: 12px 14px; line-height: 1.5; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .clock { font-size: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 4.2ch; }
+  button {
+    font: inherit; padding: 2px 10px; border-radius: calc(var(--radius) - 2px);
+    border: 1px solid hsl(var(--border)); background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground));
+    cursor: pointer;
+  }
+  button.primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); border-color: transparent; }
+  .presets { display: flex; gap: 6px; }
+  .track { height: 6px; margin-top: 10px; border-radius: 999px; background: hsl(var(--muted)); overflow: hidden; }
+  .fill { height: 100%; width: 0; background: hsl(var(--primary)); transition: width 250ms linear; }
+  p { margin: 8px 0 0; color: hsl(var(--muted-foreground)); font-size: .875rem; }
+</style>
+
+<div class="row">
+  <span class="clock" id="clock">25:00</span>
+  <button class="primary" id="toggle">Start</button>
+  <button id="reset">Reset</button>
+  <span class="presets">
+    <button data-minutes="5">5</button>
+    <button data-minutes="25">25</button>
+    <button data-minutes="50">50</button>
+  </span>
+</div>
+<div class="track"><div class="fill" id="fill"></div></div>
+<p id="status">A block that runs code. Pick a length, then Start.</p>
+
+<script>
+  const clock = document.getElementById('clock')
+  const toggle = document.getElementById('toggle')
+  const fill = document.getElementById('fill')
+  const status = document.getElementById('status')
+  let total = 25 * 60
+  let left = total
+  let timer = null
+
+  const render = () => {
+    const minutes = String(Math.floor(left / 60)).padStart(2, '0')
+    const seconds = String(left % 60).padStart(2, '0')
+    clock.textContent = `${minutes}:${seconds}`
+    fill.style.width = `${(1 - left / total) * 100}%`
+    toggle.textContent = timer ? 'Pause' : left === total ? 'Start' : 'Resume'
+  }
+  const stop = () => { clearInterval(timer); timer = null }
+  const tick = () => {
+    left -= 1
+    if (left <= 0) {
+      left = 0
+      stop()
+      status.textContent = 'Done. Take a break, then write down what you finished.'
+    }
+    render()
+  }
+
+  toggle.addEventListener('click', () => {
+    if (timer) stop()
+    else if (left > 0) { timer = setInterval(tick, 1000); status.textContent = 'Running. It stops if you edit this block or reload.' }
+    render()
+  })
+  document.getElementById('reset').addEventListener('click', () => { stop(); left = total; render() })
+  for (const preset of document.querySelectorAll('[data-minutes]')) {
+    preset.addEventListener('click', () => {
+      stop()
+      total = left = Number(preset.dataset.minutes) * 60
+      render()
+    })
+  }
+  render()
+</script>

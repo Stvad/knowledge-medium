@@ -13,6 +13,7 @@
     "src/test/**",
     "src/**/test/**",
     "src/**/*.test.ts",
-    "src/**/*.test.tsx"
+    "src/**/*.test.tsx",
+    "src/**/examples/**"
   ]
 }

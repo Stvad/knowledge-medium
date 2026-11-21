@@ -1,5 +1,5 @@
 /**
- * "Insert tutorial" command-palette action.
+ * "Open tutorial" command-palette action.
  *
  * The Tutorial is auto-seeded only on the user's first, freshly-created
  * workspace (see `landing.ts` — gated on `freshlyCreated`). Any later
@@ -9,9 +9,8 @@
  */
 import type { Repo } from '@/data/repo'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { parseAppHash } from '@/utils/routing.js'
-import { navigateFromGlobalCommand } from '@/utils/navigation.js'
-import { showProgress } from '@/utils/toast.js'
+import { activeWorkspaceIdPreferringHash, navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { showError, showProgress, type ProgressToast } from '@/utils/toast.js'
 import { GraduationCap } from 'lucide-react'
 import { seedTutorial } from './seed.ts'
 import { TUTORIAL_DEFAULT_TITLE } from './outline.ts'
@@ -26,18 +25,88 @@ export const INSERT_TUTORIAL_ACTION_ID = 'onboarding.insert_tutorial'
  * seed immediately. Returns the default Tutorial page id (the existing
  * one when present) plus whether it was already there, so the caller can
  * route to it either way.
+ *
+ * `onSeedStart` fires only on the branch that actually seeds, once the
+ * guard has cleared. From the outside a call is indistinguishable between
+ * a ~1.2s subtree write and a single alias lookup, and that is exactly the
+ * difference between owing the user progress feedback and owing them
+ * silence.
  */
 export const insertTutorialIntoWorkspace = async (
   repo: Repo,
   workspaceId: string,
+  onSeedStart?: () => void,
 ): Promise<{ tutorialId: string; alreadyExisted: boolean }> => {
   const existing = await repo.query
     .aliasLookup({ workspaceId, alias: TUTORIAL_DEFAULT_TITLE })
     .load()
   if (existing) return { tutorialId: existing.id, alreadyExisted: true }
 
+  onSeedStart?.()
   const tutorialId = await seedTutorial(repo, workspaceId)
   return { tutorialId, alreadyExisted: false }
+}
+
+/**
+ * Seed-or-find the Tutorial in the active workspace and navigate to it.
+ * Returns whether the user actually ended up on the tutorial.
+ *
+ * The boolean is the point, and it means NAVIGATED, not merely seeded — all
+ * three ways this can fall short (no active workspace, a throwing seed, a
+ * vetoed navigation) return false. Dispatching through the action system
+ * cannot tell you any of that: the handler reports failure to the user as a
+ * toast and then returns normally, so a dispatch resolves successfully
+ * whether the tutorial opened or nothing happened at all.
+ * Callers with something to undo on failure (the banner, which otherwise
+ * burns its one-shot localStorage dismissal) need the truth, so the work
+ * lives here and both entry points share it — the action stays the single
+ * implementation, it just no longer launders the outcome.
+ */
+export const openTutorialInActiveWorkspace = async (repo: Repo): Promise<boolean> => {
+  const workspaceId = activeWorkspaceIdPreferringHash(repo)
+  if (!workspaceId) {
+    showError('Open tutorial failed: no active workspace')
+    return false
+  }
+
+  // Success is silent: the tutorial landing on screen IS the confirmation,
+  // so a toast announcing it only adds something to read and dismiss. The
+  // progress toast is not that announcement — it exists to cover the seed's
+  // ~1.2s of tx work, which is why it starts from `onSeedStart` rather than
+  // up front: opening an already-present tutorial is a lookup plus a
+  // navigation and must not flash one.
+  let banner: ProgressToast | undefined
+  // Silence is only right when the tutorial actually arrives; a failure has
+  // nothing on screen to speak for it. Routes through whichever toast exists:
+  // the seed branch owns a progress toast to resolve, the already-present
+  // branch never opened one.
+  const reportFailure = (message: string): false => {
+    if (banner) banner.fail(message)
+    else showError(message)
+    return false
+  }
+
+  try {
+    const { tutorialId } = await insertTutorialIntoWorkspace(repo, workspaceId, () => {
+      banner = showProgress('Inserting tutorial…')
+    })
+    // `navigateFromGlobalCommand` resolves `NavigationResult | null` and never
+    // rejects — `null` is a vetoed/suppressed gesture OR a navigation that
+    // threw and was caught inside `navigate`. Under the default policy a plain
+    // navigator gesture always resolves to `navigate`, so `null` here means the
+    // tutorial did not open, and reporting success (or nothing) for it is the
+    // lie this function exists to stop telling.
+    const navigated = await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
+    if (navigated === null) return reportFailure('Open tutorial failed: could not open the tutorial')
+
+    banner?.done()
+    return true
+  } catch (err) {
+    console.error('[onboarding] open tutorial failed:', err)
+    return reportFailure(
+      `Open tutorial failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
 }
 
 export const insertTutorialAction = ({
@@ -46,27 +115,13 @@ export const insertTutorialAction = ({
   repo: Repo
 }): ActionConfig<typeof ActionContextTypes.GLOBAL> => ({
   id: INSERT_TUTORIAL_ACTION_ID,
-  description: 'Insert tutorial',
+  description: 'Open tutorial',
   context: ActionContextTypes.GLOBAL,
   icon: GraduationCap,
+  // Swallows the result deliberately: the palette has nothing to roll back,
+  // and rejecting here would surface as an unhandled rejection on every
+  // fire-and-forget dispatch path.
   handler: async () => {
-    // The URL hash is the source of truth for the viewed workspace;
-    // `repo.activeWorkspaceId` can lag a recent switch (see roam-import).
-    const workspaceId =
-      parseAppHash(window.location.hash).workspaceId ?? repo.activeWorkspaceId
-    if (!workspaceId) {
-      showProgress('Insert tutorial').fail('Insert tutorial failed: no active workspace')
-      return
-    }
-
-    const banner = showProgress('Inserting tutorial…')
-    try {
-      const { tutorialId, alreadyExisted } = await insertTutorialIntoWorkspace(repo, workspaceId)
-      banner.done(alreadyExisted ? 'Tutorial already present — opening it' : 'Tutorial inserted')
-      await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
-    } catch (err) {
-      console.error('[onboarding] insert tutorial failed:', err)
-      banner.fail(`Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    await openTutorialInActiveWorkspace(repo)
   },
 })

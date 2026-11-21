@@ -33,12 +33,13 @@
 import { EditorState } from '@codemirror/state'
 import type { CompletionSource } from '@codemirror/autocomplete'
 import type {
-  CodeMirrorExtensionContext,
+  BlockEditorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { getBlockTypes } from '@/data/properties'
 import { createTypeBlock } from '@/data/typeExtraction'
+import { UnwritableLabelError } from '@/data/referenceBlock'
 import { showError } from '@/utils/toast'
 import {
   buildTypeTagCandidates,
@@ -51,7 +52,7 @@ import {
 
 /** Exported for the integration test — production wiring goes through
  *  `supertagsCodeMirrorExtensions` below. */
-export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource => {
+export const buildTypeTagSource = ({repo, block}: BlockEditorExtensionContext): CompletionSource => {
   const getCandidates = (query: string): TypeTagCandidate[] => {
     // The block is being edited, so its row is in cache; peek instead
     // of get so a just-deleted block degrades to "no current types"
@@ -133,7 +134,12 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
       // definition block committed on a registration timeout — the type
       // may still appear moments later, re-picking reuses it) get the
       // generic toast.
-      if (!(err instanceof ProcessorRejection)) {
+      // A refused NAME is fixable by the user, and these errors already
+      // say how — the generic "couldn't tag" would bury that. Reachable
+      // via `#type` on a block whose content can't be a `[[name]]`.
+      if (err instanceof UnwritableLabelError) {
+        showError(err.message)
+      } else if (!(err instanceof ProcessorRejection)) {
         showError(candidate.kind === 'create'
           ? `Couldn't finish creating type "${candidate.label}"`
           : `Couldn't tag with "${candidate.label}"`)
@@ -157,7 +163,9 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
   return typeTagCompletionSource({getCandidates, pickType, restoreTrigger})
 }
 
-export const supertagsCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
-  const source = buildTypeTagSource(ctx)
+/** A `#tag` tags the edited block, so a draft has none to offer. */
+export const supertagsCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo, block}) => {
+  if (!block) return []
+  const source = buildTypeTagSource({repo, block})
   return [EditorState.languageData.of(() => [{autocomplete: source}])]
 }

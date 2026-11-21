@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * RescheduleToast is the one live reactive consumer of the UndoManager.
  * Undo is workspace-scoped (issue #186), so the toast's Undo button must

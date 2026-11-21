@@ -18,23 +18,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { todoDataExtension } from '@/plugins/todo/dataExtension'
-import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
-import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
-import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import { insertTutorialIntoWorkspace } from '../action'
 import { TUTORIAL_DEFAULT_TITLE } from '../outline'
+import { TUTORIAL_TYPE_EXTENSIONS } from './tutorialTypeExtensions'
 
 const WS = 'ws-1'
-
-// Same minimal demo-type set as seed.test.ts — enough for the typed demos
-// to tag themselves, without the references/alias post-commit processors.
-const TUTORIAL_TYPE_EXTENSIONS = [
-  todoDataExtension,
-  characterCounterDataExtension,
-  srsReschedulingDataExtension,
-  geoDataExtension,
-]
 
 interface Harness {
   h: TestDb
@@ -66,7 +54,10 @@ const countTutorialPages = async (): Promise<number> => {
   return rows[0]?.n ?? 0
 }
 
-describe('insertTutorialIntoWorkspace', () => {
+// Both tests seed the full tutorial outline into a real repo (see
+// ./seed.test.ts) — ~1.2s of genuine tx work each on an idle machine, which
+// the 5s default does not cover once the machine is oversubscribed.
+describe('insertTutorialIntoWorkspace', {timeout: 30_000}, () => {
   it('seeds the Tutorial when the workspace has none', async () => {
     const result = await insertTutorialIntoWorkspace(env.repo, WS)
 

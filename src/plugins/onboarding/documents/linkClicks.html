@@ -1,0 +1,47 @@
+<!doctype html>
+<title>Where a link opens</title>
+<style>
+  body { margin: 12px 14px; font-size: 14px; line-height: 1.4; }
+  h3 { margin: 0 0 10px; font-size: 1rem; }
+  .window { display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 1fr; gap: 6px; padding: 6px; border-radius: var(--radius); background: hsl(var(--muted) / .5); }
+  .panel { min-height: 92px; padding: 6px 8px; border-radius: calc(var(--radius) - 2px); border: 1px solid hsl(var(--border)); background: hsl(var(--background)); font-size: 12px; transition: box-shadow 120ms, background 120ms; }
+  .panel b { display: block; margin-bottom: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: hsl(var(--muted-foreground)); }
+  .ghost { border-style: dashed; background: transparent; }
+  .stack { display: grid; grid-template-rows: auto 1fr 1fr; gap: 4px; }
+  .stack > b { margin: 0; padding: 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: hsl(var(--muted-foreground)); }
+  .stack .panel { min-height: 0; }
+  .link { color: hsl(var(--wikilink)); text-decoration: underline; }
+  .line { height: 5px; margin: 5px 0; border-radius: 3px; background: hsl(var(--muted)); }
+  .line.short { width: 60%; }
+  ul { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+  li { display: grid; grid-template-columns: 11em 1fr; gap: 10px; padding: 4px 6px; border-radius: calc(var(--radius) - 2px); }
+  li:hover { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+  kbd { display: inline-block; padding: 0 5px; border: 1px solid hsl(var(--border)); border-bottom-width: 2px; border-radius: 4px; background: hsl(var(--card)); color: hsl(var(--card-foreground)); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  body:has(li[data-to="here"]:hover) [data-zone="here"],
+  body:has(li[data-to="main"]:hover) [data-zone="main"],
+  body:has(li[data-to="new"]:hover) [data-zone="new"],
+  body:has(li[data-to="stack"]:hover) [data-zone="stack"] { box-shadow: 0 0 0 2px hsl(var(--ring)); background: hsl(var(--accent)); }
+  @media (max-width: 480px) {
+    .window { grid-template-columns: 1fr 1fr; }
+    li { grid-template-columns: 1fr; gap: 0; }
+  }
+</style>
+
+<h3>Where a link opens</h3>
+<div class="window" aria-hidden="true">
+  <div class="panel" data-zone="main"><b>Main panel</b><div class="line"></div><div class="line short"></div><div class="line"></div></div>
+  <div class="panel" data-zone="here"><b>This panel</b><div class="line short"></div>A <span class="link">link</span> you click<div class="line"></div></div>
+  <div class="panel ghost" data-zone="new"><b>New panel</b>A column opens right of this panel</div>
+  <div class="stack"><b>Sidebar stack</b>
+    <div class="panel" data-zone="stack">Lands on top</div>
+    <div class="panel">Older pages below</div>
+  </div>
+</div>
+
+<ul>
+  <li data-to="here"><span>Click</span><span>Replaces what this panel shows. Back (<kbd>Cmd</kbd>+<kbd>[</kbd>) returns.</span></li>
+  <li data-to="main"><span><kbd>Alt</kbd> + click</span><span>Opens in the main panel, the leftmost one.</span></li>
+  <li data-to="new"><span><kbd>Shift</kbd>+<kbd>Alt</kbd> + click</span><span>Opens a new panel beside this one.</span></li>
+  <li data-to="stack"><span><kbd>Shift</kbd> + click</span><span>Puts it on top of the sidebar stack beside this panel, creating the stack if needed. A stack keeps several pages in one column.</span></li>
+  <li><span><kbd>Cmd</kbd> + click</span><span>Opens a new browser tab.</span></li>
+</ul>

@@ -1,5 +1,8 @@
 import { Block } from './block'
+import type { SurfaceCarrier } from './outlineSurface'
 import { isCollapsedProp } from './properties.js'
+import { displayScopeOf } from './propertyDisplayMode'
+import { visibleChildIds } from './visibleChildren'
 
 /**
  * Where a "new block below" gesture (vim `o`, Enter-at-end-of-line)
@@ -48,10 +51,15 @@ export interface StructuralEditPolicyInput {
  *  - indent / outdent / merge-into-previous are no-ops (they would
  *    restructure across the surface boundary).
  *
- * The main outline reaches the same answers it always did, because
- * there the scope root simply *is* `topLevelBlockId`. Nested surfaces
- * (backlinks, embeds) now get correct behaviour for free by declaring
- * their own scope root.
+ * Every rule here is about MOVING structure across the surface boundary
+ * — placing, reparenting, or merging a block somewhere the surface
+ * cannot render. That's what makes them scope-relative.
+ *
+ * Deletion is deliberately not in this set — removing a subtree relocates
+ * nothing across the boundary, and the inclusion criterion above is
+ * exactly "moves structure across the boundary". A `canDelete:
+ * !isScopeRoot` rule here once made page deletion unreachable from every
+ * UI; don't reintroduce it.
  */
 export interface StructuralEditPolicy {
   /** Is this block the root of its render scope? */
@@ -70,9 +78,12 @@ export interface StructuralEditPolicy {
    *  `core.outdent` mutator (it returns `false` and the caller falls
    *  back); this only gates the scope-root case the mutator can't see. */
   canOutdent: boolean
-  /** May Backspace-at-start merge this block into the previous visible
-   *  block? False at the scope root, where the previous visible block
-   *  is outside the surface. */
+  /** May Backspace-at-start consume this block — merging it into the
+   *  previous visible block, or (when empty) removing it and putting the
+   *  cursor there? False at the scope root, where there is no previous
+   *  visible block inside the surface for the gesture to land on. Note
+   *  this gates the *Backspace* gesture, not deletion in general: an
+   *  explicit Delete on the scope root is allowed (see above). */
   canMergeUp: boolean
 }
 
@@ -92,21 +103,22 @@ export const resolveStructuralEditPolicy = (
 }
 
 /**
- * Convenience resolver that reads the inputs `resolveStructuralEditPolicy`
- * needs from a live `Block`, centralizing the load idiom the structural
- * action handlers used to repeat (`load` + `childIds` + `isCollapsed`).
+ * {@link resolveStructuralEditPolicy} for a live `Block`. `carrier` is what
+ * the gesture knows of where it ran (its dependencies): "has children" means
+ * children that surface draws. It may name no scope root (imperative
+ * dispatch), and then no block is treated as one.
  */
 export const structuralEditPolicyForBlock = async (
   block: Block,
-  scopeRootId: string | undefined,
+  carrier: SurfaceCarrier,
 ): Promise<StructuralEditPolicy> => {
   const data = block.peek() ?? await block.load()
-  const childIds = await block.childIds.load()
+  const childIds = await visibleChildIds(block, displayScopeOf(carrier))
   const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
   return resolveStructuralEditPolicy({
     blockId: block.id,
     parentId: data?.parentId ?? null,
     hasUncollapsedChildren: childIds.length > 0 && !isCollapsed,
-    scopeRootId,
+    scopeRootId: carrier.scopeRootId,
   })
 }

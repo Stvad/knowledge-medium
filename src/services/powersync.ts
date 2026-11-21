@@ -1,14 +1,19 @@
 import {
-  AbstractPowerSyncDatabase,
+  CommonPowerSyncDatabase,
   CrudEntry,
   PowerSyncBackendConnector,
+  SyncStreamConnectionMethod,
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
 import { chunk } from 'lodash-es'
+import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
-import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
+import { withLock } from '@/utils/webLock.js'
+import { encryptUploadColumns, snapshotCekPerCall, type GetCek, type UploadMode } from '@/sync/transform.js'
+
+// `§` references in this file cite docs/e2ee-design.html.
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
@@ -39,6 +44,11 @@ export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
 
+/** Whether a session syncs: the build has the remote config and the user did
+ *  not choose local-only. The boot and App's layout cache key must derive this
+ *  the same way for App's first lookup to hit the prepared entry. */
+export const remoteSyncEnabled = (localOnly: boolean): boolean => hasRemoteSyncConfig && !localOnly
+
 type BlockUploadPayload = Record<string, unknown> & {id: string}
 
 export type CompactedBlockOperation =
@@ -66,33 +76,50 @@ export type CompactedBlockOperation =
  *  in `defaultUploadDeps` below. */
 export interface UploadDeps {
   applyOperations: (
-    database: AbstractPowerSyncDatabase,
+    database: CommonPowerSyncDatabase,
     operations: readonly CompactedBlockOperation[],
   ) => Promise<void>
   recordRejection: (
-    database: AbstractPowerSyncDatabase,
+    database: CommonPowerSyncDatabase,
     transaction: CrudTransaction,
     error: unknown,
   ) => Promise<void>
-  /** Encrypt-on-upload transform (§9.2), applied to the compacted ops before
-   *  they hit the wire. Optional so test deps can omit it; absent ⇒ identity. */
-  encryptOps?: (
-    operations: readonly CompactedBlockOperation[],
-  ) => Promise<readonly CompactedBlockOperation[]>
+  /** Validate, compact and encrypt the original queue entries before transport. */
+  prepareOperations?: (entries: readonly CrudEntry[]) => Promise<readonly CompactedBlockOperation[]>
 }
 
-/** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
- *  policy (mode pin, §6) is injected; today's default is uniformly 'none'
- *  (no e2ee workspace exists pre-rollout), so encryption is a no-op until the
- *  §8 flows wire a real resolver + key store. */
-export type GetWorkspaceMode = (workspaceId: string) => SyncMode | Promise<SyncMode>
+/** Resolve a workspace's upload mode for the encrypt-on-upload decision. Answered
+ *  for the ROW's own workspace, never the Repo's active one, so a write that
+ *  lands while the active-workspace pin is moving is still sealed under the
+ *  mode of the workspace it belongs to. The policy (mode pin, §6) is injected;
+ *  production binds it to the §6 resolver in `repoProvider`. */
+export type GetWorkspaceMode = (workspaceId: string) => UploadMode | Promise<UploadMode>
+
+/** Thrown for a write to a workspace whose upload mode is `hold`: the server
+ *  says e2ee and this device can't seal yet. It takes the same path as a missing
+ *  key — out of the upload pass, so the tx stays first in `ps_crud` and PowerSync
+ *  retries it — because a held write must be neither sent nor quarantined. While
+ *  it waits in `ps_crud`, the core publishes no checkpoint; that stall is
+ *  accepted. */
+export class UploadHeldError extends Error {
+  constructor(readonly workspaceId: string) {
+    super(`upload held for ${workspaceId}: the server says e2ee and this device's pin is not upgraded`)
+    this.name = 'UploadHeldError'
+  }
+}
+
+class MissingUploadWorkspace extends Error {
+  constructor() { super('Cannot upload block without workspace_id') }
+}
+
+const uploadWorkspaceId = (workspaceId: unknown): string => {
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) throw new MissingUploadWorkspace()
+  return workspaceId
+}
 
 /** Seal the content columns of each create/patch op whose workspace is e2ee,
  *  before they reach the wire (§9.2). Deletes and plaintext workspaces pass
- *  through untouched. `workspace_id` is read off the payload (always present
- *  per the upload trigger, D-3.1); an op missing it can't be e2ee-routed and
- *  passes through — a genuine e2ee plaintext write would be rejected by the
- *  server-side ciphertext trigger rather than silently stored. */
+ *  through untouched. */
 const encryptUploadOps = async (
   ops: readonly CompactedBlockOperation[],
   getMode: GetWorkspaceMode,
@@ -104,8 +131,8 @@ const encryptUploadOps = async (
   // means thousands of main-thread reads + awaits for one value per
   // workspace. Memoize per workspaceId (mirrors `materializabilityByWs` in
   // syncObserver/materialize.ts).
-  const modeByWs = new Map<string, SyncMode>()
-  const resolveMode = async (workspaceId: string): Promise<SyncMode> => {
+  const modeByWs = new Map<string, UploadMode>()
+  const resolveMode = async (workspaceId: string): Promise<UploadMode> => {
     const cached = modeByWs.get(workspaceId)
     if (cached !== undefined) return cached
     const resolved = await getMode(workspaceId)
@@ -113,23 +140,25 @@ const encryptUploadOps = async (
     return resolved
   }
 
+  // One key read per workspace per call; the next call reads the store again.
+  const batchCek = snapshotCekPerCall(getCek)
+
   const out: CompactedBlockOperation[] = []
   for (const op of ops) {
+    // Never held, because never queued: blocks have no DELETE upload trigger (a
+    // soft delete is a PATCH, which carries workspace_id and is held like any).
     if (op.kind === 'delete') {
       out.push(op)
       continue
     }
-    const workspaceId = op.payload.workspace_id
-    if (typeof workspaceId !== 'string') {
-      out.push(op)
-      continue
-    }
+    const workspaceId = uploadWorkspaceId(op.payload.workspace_id)
     const mode = await resolveMode(workspaceId)
+    if (mode === 'hold') throw new UploadHeldError(workspaceId)
     if (mode === 'none') {
       out.push(op)
       continue
     }
-    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, getCek)
+    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, batchCek)
     out.push(
       op.kind === 'create'
         ? { ...op, payload: payload as BlockUploadPayload }
@@ -138,12 +167,6 @@ const encryptUploadOps = async (
   }
   return out
 }
-
-// Pre-rollout defaults: every workspace is plaintext and no keys exist, so the
-// default encryptOps is identity. The §8 flows replace these with a mode-pin
-// resolver + IndexedDB key-store lookup when e2ee ships.
-const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
-const defaultUploadGetCek: GetCek = async () => null
 
 /** Per-row apply primitives that `applyCompactedBlockOperations` dispatches
  *  to. Factored out so tests can substitute a controllable sink and assert
@@ -186,7 +209,33 @@ const assertSupabase = () => {
   return supabase
 }
 
-/** Re-throw a Supabase/PostgREST error with the HTTP `status` attached.
+/** A failed PostgREST upload request, as a named `Error`.
+ *
+ *  postgrest-js returns its errors as plain objects (the PostgREST envelope, or
+ *  any other JSON error body as is). PowerSync's worker reports a thrown value
+ *  without a string `name` and `message` as "Non-Error rejection", dropping the
+ *  message, so the upload path never throws those objects raw. `toJSON` is the
+ *  envelope a quarantine record stores in `ps_crud_rejected.error_message`,
+ *  which the rejection dialog parses back into message, code, details and hint. */
+class PostgrestUploadError extends Error {
+  readonly code: unknown
+  readonly details: unknown
+  readonly hint: unknown
+
+  constructor(body: Record<string, unknown>, readonly status: number) {
+    super(typeof body.message === 'string' && body.message !== '' ? body.message : JSON.stringify(body))
+    this.name = 'PostgrestError'
+    this.code = body.code
+    this.details = body.details
+    this.hint = body.hint
+  }
+
+  toJSON() {
+    return {message: this.message, code: this.code, details: this.details, hint: this.hint, status: this.status}
+  }
+}
+
+/** Throw a Supabase/PostgREST error with the HTTP `status` attached.
  *
  *  PostgREST returns the HTTP status as a SIBLING of `{error}` in the
  *  response tuple — it is never a field on the `PostgrestError` object
@@ -200,13 +249,52 @@ const assertSupabase = () => {
  *  `ambiguous` (bounded retry, then quarantine) and keeps the retryable subset
  *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190. */
 const throwWithHttpStatus = (error: object, status: number): never => {
-  throw Object.assign(error, {status})
+  throw new PostgrestUploadError(error as Record<string, unknown>, status)
 }
 
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
   ...(entry.opData ?? {}),
   id: entry.id,
 })
+
+/** Wire-only PATCH key (issue #381): the row-version the edit was made
+ *  against, stamped by the upload trigger from `OLD.updated_at`. Not a
+ *  `blocks` column — see `blockUploadPatchJsonSql` in clientSchema.ts. */
+const BASE_VERSION_KEY = 'base_updated_at'
+
+/** Merge a later PATCH's columns over an earlier one, keeping the EARLIER
+ *  base version — including when the earlier one HAS no base.
+ *
+ *  Every other column is last-write-wins — the newest value is the one to
+ *  ship. The base is the exact opposite: it is a claim about the server
+ *  state the burst STARTED from, and only the first patch in the burst
+ *  knows that. Each subsequent local edit's trigger captured the previous
+ *  LOCAL stamp as its base (the row is already dirty), which the server has
+ *  never seen. Taking the last one would make an un-drifted burst look
+ *  drifted (harmless — one extra echo) and, worse, could make a genuinely
+ *  drifted burst look clean when the last local stamp happens to equal the
+ *  server's current version, silently reintroducing #381.
+ *
+ *  An ABSENT base on the earlier patch is not "no opinion", it is the
+ *  strongest opinion the protocol has: unknown base ⇒ assume drift. That
+ *  happens for real during a version upgrade — `ps_crud` is persistent, so a
+ *  PATCH queued offline by the previous bundle carries no base while a PATCH
+ *  queued after the reload does. Letting the spread inherit the later base
+ *  there would assert a starting point this burst never had, which is exactly
+ *  the "looks clean but isn't" case above. So absence wins too, and the merged
+ *  patch reaches the server with no base at all — which it reads as drifted. */
+const mergePatchPayloads = (
+  earlier: Record<string, unknown>,
+  later: Record<string, unknown>,
+): Record<string, unknown> => {
+  const merged = {...earlier, ...later}
+  if (BASE_VERSION_KEY in earlier) {
+    merged[BASE_VERSION_KEY] = earlier[BASE_VERSION_KEY]
+  } else {
+    delete merged[BASE_VERSION_KEY]
+  }
+  return merged
+}
 
 const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockOperation[] => {
   const byId = new Map<string, PerBlockState>()
@@ -248,9 +336,17 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
         && existing.createTxId !== undefined
         && existing.createTxId === entry.transactionId
       ) {
+        // Drop the wire-only base on the way into a CREATE payload: creates go
+        // to `apply_block_creates`, which has no drift concept (an INSERT has
+        // no prior version, and the ON CONFLICT branch is a no-op TOUCH that
+        // must NOT advance the stamp — see #244). Its closed column list would
+        // ignore the key anyway; stripping keeps the create payload to real
+        // columns so a future strict-payload check can't trip on it.
+        const createColumns = {...patchData}
+        delete createColumns[BASE_VERSION_KEY]
         byId.set(entry.id, {
           ...existing,
-          create: {...existing.create, ...patchData},
+          create: {...existing.create, ...createColumns},
         })
         continue
       }
@@ -260,7 +356,7 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
         order: existing?.order ?? order,
         create: existing?.create,
         createTxId: existing?.createTxId,
-        patch: existing?.patch ? {...existing.patch, ...patchData} : patchData,
+        patch: existing?.patch ? mergePatchPayloads(existing.patch, patchData) : patchData,
       })
       continue
     }
@@ -297,27 +393,102 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
   return operations.sort((left, right) => left.order - right.order)
 }
 
-const orderedBlockUpserts = (rows: readonly BlockUploadPayload[]): BlockUploadPayload[] => {
+/**
+ * The creates as RPC-sized chunks, each a separate server transaction.
+ *
+ * Two rules, both load-bearing:
+ *  - A parent is never in a LATER chunk than its child: the parent self-FK is
+ *    DEFERRABLE within one transaction, not across them.
+ *  - A row and the rows created under it share a chunk whenever that subtree
+ *    fits in one. The server keeps the first create of an id, so a block two
+ *    devices both create (at a deterministic id) must win or lose together
+ *    with its own rows; split across two RPCs, a peer's upload landing between
+ *    them would take the block from one device and its property machinery
+ *    from the other. A subtree bigger than `cap` is split at its root: the
+ *    root first, then its child subtrees, each kept whole where it fits.
+ */
+const chunkBlockUpserts = (
+  rows: readonly BlockUploadPayload[],
+  cap: number,
+): BlockUploadPayload[][] => {
   const byId = new Map(rows.map(row => [row.id, row]))
-  const state = new Map<string, 'visiting' | 'visited'>()
-  const ordered: BlockUploadPayload[] = []
-
-  const visit = (row: BlockUploadPayload) => {
-    const current = state.get(row.id)
-    if (current === 'visited') return
-    if (current === 'visiting') return
-
-    state.set(row.id, 'visiting')
-    const parentId = typeof row.parent_id === 'string' ? row.parent_id : null
-    const parent = parentId ? byId.get(parentId) : undefined
-    if (parent) visit(parent)
-    state.set(row.id, 'visited')
-    ordered.push(row)
+  const parentOf = (row: BlockUploadPayload): BlockUploadPayload | undefined =>
+    typeof row.parent_id === 'string' ? byId.get(row.parent_id) : undefined
+  const children = new Map<string, BlockUploadPayload[]>()
+  for (const row of rows) {
+    const parent = parentOf(row)
+    if (parent === undefined) continue
+    const siblings = children.get(parent.id)
+    if (siblings) siblings.push(row)
+    else children.set(parent.id, [row])
   }
 
-  for (const row of rows) visit(row)
-  return ordered
+  // Preorder, so every parent precedes its children.
+  const placed = new Set<string>()
+  const subtree = (root: BlockUploadPayload): BlockUploadPayload[] => {
+    const out: BlockUploadPayload[] = []
+    const stack = [root]
+    while (stack.length > 0) {
+      const row = stack.pop()!
+      if (placed.has(row.id)) continue
+      placed.add(row.id)
+      out.push(row)
+      stack.push(...[...(children.get(row.id) ?? [])].reverse())
+    }
+    return out
+  }
+
+  const chunks: BlockUploadPayload[][] = []
+  let current: BlockUploadPayload[] = []
+  const add = (unit: BlockUploadPayload[]) => {
+    if (current.length + unit.length > cap) {
+      if (current.length > 0) chunks.push(current)
+      current = []
+    }
+    current.push(...unit)
+  }
+  const place = (root: BlockUploadPayload) => {
+    const whole = subtree(root)
+    if (whole.length <= cap) {
+      add(whole)
+      return
+    }
+    // Too big for one transaction: un-place it and lay it out root first.
+    for (const row of whole) placed.delete(row.id)
+    placed.add(root.id)
+    add([root])
+    for (const child of children.get(root.id) ?? []) place(child)
+  }
+
+  for (const row of rows) {
+    if (parentOf(row) === undefined && !placed.has(row.id)) place(row)
+  }
+  // What no root reaches hangs off a parent cycle (a self-parented row is one):
+  // enter each cycle at the member found by walking up from the first unplaced
+  // row, so one of its edges is reversed and every row below it still follows
+  // its parent.
+  for (const row of rows) {
+    if (placed.has(row.id)) continue
+    const walked = new Set<string>()
+    let entry = row
+    while (!walked.has(entry.id)) {
+      walked.add(entry.id)
+      entry = parentOf(entry)!
+    }
+    place(entry)
+  }
+  if (current.length > 0) chunks.push(current)
+  return chunks
 }
+
+/** How long one upload request may run before it is aborted. A request that
+ *  never settles would hold the upload lock ({@link uploadLockName}) against
+ *  every later pass. Well above the server's statement timeout, so a request
+ *  still running at the deadline is one the server is no longer executing.
+ *  The abort surfaces as a codeless `status: 0` error, which classifies
+ *  transient: the pass throws and the queue is retried. */
+const UPLOAD_REQUEST_TIMEOUT_MS = 30_000
+const uploadRequestDeadline = (): AbortSignal => AbortSignal.timeout(UPLOAD_REQUEST_TIMEOUT_MS)
 
 /** Ships every PATCH in the compacted batch as a single
  *  `apply_block_patches` RPC call. The server-side function loops the
@@ -344,7 +515,9 @@ const applyBlockPatchesRpc = async (
   for (const batch of chunk(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] PATCH batch', batch.length)
     const payload = batch.map(patch => ({id: patch.id, ...patch.payload}))
-    const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
+    const {error, status} = await client
+      .rpc('apply_block_patches', {patches: payload})
+      .abortSignal(uploadRequestDeadline())
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -356,10 +529,12 @@ const applyBlockDelete = async (id: string) => {
   const client = assertSupabase()
 
   console.debug('[powersync] DELETE', id)
+  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: Supabase query builder, not a Block
   const {error, status} = await client
     .from('blocks')
     .delete()
     .eq('id', id)
+    .abortSignal(uploadRequestDeadline())
 
   if (error) {
     throwWithHttpStatus(error, status)
@@ -386,12 +561,12 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 
   // Chunk for the same reason apply_block_patches does (see
   // MAX_CREATES_PER_SUPABASE_RPC): keep each RPC's per-row INSERT count under the
-  // statement timeout. orderedBlockUpserts keeps a child out of an earlier chunk
-  // (separate RPC = separate tx) than its parent — the parent self-FK is
-  // DEFERRABLE within a tx but not across them.
-  for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
+  // statement timeout. How the chunks are cut is `chunkBlockUpserts`'s.
+  for (const batch of chunkBlockUpserts(rows, MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
-    const {error, status} = await client.rpc('apply_block_creates', {creates: batch})
+    const {error, status} = await client
+      .rpc('apply_block_creates', {creates: batch})
+      .abortSignal(uploadRequestDeadline())
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -400,7 +575,7 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 }
 
 const applyCompactedBlockOperations = async (
-  _database: AbstractPowerSyncDatabase,
+  _database: CommonPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
   sink: BlockUploadSink = defaultBlockUploadSink,
 ) => {
@@ -443,7 +618,7 @@ const defaultBlockUploadSink: BlockUploadSink = {
 
 
 const collectUploadBatch = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
 ): Promise<CrudTransaction[]> => {
   const transactions: CrudTransaction[] = []
   const iterator = database.getCrudTransactions()[Symbol.asyncIterator]()
@@ -468,7 +643,7 @@ const collectUploadBatch = async (
  *  code + message, wall-clock time) for a later UI surface or for
  *  manual inspection via `kmagent sql`. */
 const recordRejectionToTable = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   transaction: CrudTransaction,
   error: unknown,
 ): Promise<void> => {
@@ -519,6 +694,7 @@ const errorCodeOf = (error: unknown): string | null => {
 }
 
 const errorMessageOf = (error: unknown): string => {
+  if (error instanceof PostgrestUploadError) return JSON.stringify(error)
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
   try {
@@ -543,13 +719,22 @@ const crudEntryEnvelope = (entry: CrudEntry): Record<string, unknown> => {
     : {op: opName, type: entry.table, id: entry.id, data}
 }
 
+const prepareBlockUpload = async (entries: readonly CrudEntry[], mode: GetWorkspaceMode, cek: GetCek) => {
+  // Compaction merges payloads. A later patch must never supply a missing
+  // workspace ID for the earlier transaction that actually needs quarantine.
+  for (const entry of entries) {
+    if (entry.op !== UpdateType.DELETE) uploadWorkspaceId(entry.opData?.workspace_id)
+  }
+  return encryptUploadOps(compactBlockCrudEntries(entries), mode, cek)
+}
+
 const makeUploadDeps = (
   getWorkspaceMode: GetWorkspaceMode,
   getCek: GetCek,
 ): UploadDeps => ({
   applyOperations: applyCompactedBlockOperations,
   recordRejection: recordRejectionToTable,
-  encryptOps: ops => encryptUploadOps(ops, getWorkspaceMode, getCek),
+  prepareOperations: entries => prepareBlockUpload(entries, getWorkspaceMode, getCek),
 })
 
 /** How many upload passes an `ambiguous` tx (a suspected-permanent 4xx with no
@@ -613,31 +798,40 @@ const forgetAmbiguousAttempts = (
  *  in ps_crud_rejected for inspection.
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
- *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
- *  throw. The BATCH encryption is guarded so that failure DOESN'T abort the
- *  whole preflight — it falls through to the per-tx loop, which drains every
+ *  workspace whose key is momentarily missing/unreadable, or for a workspace
+ *  whose upload is held ({@link UploadHeldError}), makes upload preparation throw.
+ *  The BATCH encryption is guarded so that failure DOESN'T abort the whole
+ *  preflight — it falls through to the per-tx loop, which drains every
  *  earlier (encryptable) tx and then stops at the un-encryptable one (its
- *  per-tx `encryptOps` throws out of the loop). `complete()` is a checkpoint
+ *  per-tx preparation throws out of the loop). `complete()` is a checkpoint
  *  that drains all PRECEDING txs, so we can't skip the bad tx and complete a
  *  later one — instead PowerSync retries from it once the key is back. A
  *  missing key is treated as transient (retry), never a rejection (which would
  *  discard the edit). */
 const uploadTransactionsWithFallback = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number> = new Map(),
 ): Promise<void> => {
-  const encryptOps = deps.encryptOps ?? (async ops => ops)
+  const prepare = deps.prepareOperations ?? compactBlockCrudEntries
+  const quarantine = async (transaction: CrudTransaction, error: unknown) => {
+    console.warn(`[powersync] tx ${transaction.transactionId} rejected — quarantining`, error)
+    await deps.recordRejection(database, transaction, error)
+    await transaction.complete()
+    forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+  }
 
   // Guard the batch encryption: if a tx in the batch can't be encrypted (e2ee
   // key unavailable), fall through to the per-tx fallback rather than aborting
   // the whole batch before any of it can drain.
   let batchOps: readonly CompactedBlockOperation[] | null = null
   try {
-    batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
+    batchOps = await prepare(transactions.flatMap(t => t.crud))
   } catch (err) {
-    console.warn('[powersync] batch encryption failed — isolating per tx', err)
+    // A hold recurs on every retry until the pin is upgraded, so it is not news.
+    if (err instanceof UploadHeldError) console.debug('[powersync] batch holds a write —', err.message)
+    else console.warn('[powersync] batch encryption failed — isolating per tx', err)
   }
 
   if (batchOps) {
@@ -669,7 +863,15 @@ const uploadTransactionsWithFallback = async (
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
   for (const transaction of transactions) {
-    const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
+    let txOps: readonly CompactedBlockOperation[]
+    try {
+      txOps = await prepare(transaction.crud)
+    } catch (err) {
+      // A key or mode lookup may recover. Only a malformed envelope is permanent.
+      if (!(err instanceof MissingUploadWorkspace)) throw err
+      await quarantine(transaction, err)
+      continue
+    }
     try {
       await deps.applyOperations(database, txOps)
       await transaction.complete()
@@ -692,19 +894,13 @@ const uploadTransactionsWithFallback = async (
         )
         throw err
       }
-      console.warn(
-        `[powersync] tx ${transaction.transactionId} rejected — quarantining`,
-        err,
-      )
-      await deps.recordRejection(database, transaction, err)
-      await transaction.complete()
-      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+      await quarantine(transaction, err)
     }
   }
 }
 
 const runUploadLoop = async (
-  database: AbstractPowerSyncDatabase,
+  database: CommonPowerSyncDatabase,
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number>,
 ): Promise<void> => {
@@ -749,34 +945,82 @@ const fetchCredentials = async () => {
   }
 }
 
-/** §9.2 encrypt-on-upload wiring. The mode/key resolvers are injected so the
- *  app binds them to the signed-in user's mode pins + workspace-key store;
- *  omitted (e.g. in tests, or before e2ee is wired) they default to plaintext
- *  pass-through. */
-export interface PowerSyncConnectorOptions {
-  readonly getWorkspaceMode?: GetWorkspaceMode
-  readonly getCek?: GetCek
-}
+/** The Web Lock one upload pass holds, per database file. */
+export const uploadLockName = (dbFilename: string): string => `km-upload-${dbFilename}`
 
-export const createPowerSyncConnector = (
-  options: PowerSyncConnectorOptions = {},
-): PowerSyncBackendConnector => {
-  const deps = makeUploadDeps(
-    options.getWorkspaceMode ?? defaultGetWorkspaceMode,
-    options.getCek ?? defaultUploadGetCek,
-  )
+/** The connector's `uploadData`, one pass at a time per database.
+ *
+ *  The SDK's own upload lock does not cover this. Whenever its shared worker
+ *  reconnects, which every other tab connecting causes, it stops WAITING on the
+ *  tab's `uploadData` and releases that lock while the pass and its request
+ *  still run. Unserialized, the pass it starts next re-sends the same queue,
+ *  and the server keeps whichever request it applies last. Behind this lock
+ *  the next pass reads the queue only after the earlier one has settled.
+ *
+ *  A Web Lock, not an in-tab chain: the worker hands the next pass to the
+ *  newest tab. */
+const serializedUploadData = (
+  dbFilename: string,
+  deps: UploadDeps,
+): PowerSyncBackendConnector['uploadData'] => {
   // Per-connector so `ambiguous` retry counts persist across the repeated
   // `uploadData` invocations PowerSync makes while a tx stays queued.
   const ambiguousAttempts = new Map<number, number>()
-  return {
-    fetchCredentials,
-    uploadData: database => runUploadLoop(database, deps, ambiguousAttempts),
+  return database => withLock(
+    uploadLockName(dbFilename),
+    () => runUploadLoop(database, deps, ambiguousAttempts),
+  )
+}
+
+export interface PowerSyncConnectorOptions {
+  /** The local database file this connector uploads from. */
+  readonly dbFilename: string
+  /** Defence in depth: every connector resolves the workspace's upload mode before sending. */
+  readonly encryption: {
+    readonly getWorkspaceMode: GetWorkspaceMode
+    readonly getCek: GetCek
   }
 }
 
+export const createPowerSyncConnector = (
+  options: PowerSyncConnectorOptions,
+): PowerSyncBackendConnector => ({
+  fetchCredentials,
+  uploadData: serializedUploadData(options.dbFilename, makeUploadDeps(
+    options.encryption.getWorkspaceMode,
+    options.encryption.getCek,
+  )),
+})
+
+// The deployed service uses WebSockets. PowerSync 2 defaults to HTTP streaming.
+const workspaceTransport = {connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET}
+
+export const connectWorkspaceSync = (
+  db: CommonPowerSyncDatabase,
+  dbFilename: string,
+  resolver: SyncResolver,
+): Promise<void> => db.connect(createPowerSyncConnector({
+  dbFilename,
+  encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek},
+}), workspaceTransport)
+
+export const connectWorkspaceDownloads = (db: CommonPowerSyncDatabase): Promise<void> => {
+  if (!powerSyncUrl) throw new Error('Set VITE_POWERSYNC_URL to connect for downloads')
+  return db.connect({
+    ...workspaceTransport,
+    powerSyncEndpoint: powerSyncUrl,
+    authenticator: {async resolveCredentials() {
+      const credentials = await fetchCredentials()
+      if (!credentials) throw new Error('PowerSync session unavailable')
+      return credentials.token
+    }},
+  })
+}
+
+export const __prepareBlockUploadForTest = prepareBlockUpload
 export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
-export const __orderedBlockUpsertsForTest = orderedBlockUpserts
+export const __chunkBlockUpsertsForTest = chunkBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
 export const __runUploadLoopForTest = runUploadLoop
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations

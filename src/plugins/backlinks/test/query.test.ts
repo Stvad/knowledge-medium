@@ -3,15 +3,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import {
   invalidationRulesFacet,
+  definitionSeedsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
@@ -113,24 +113,25 @@ describe('backlinksDataExtension query', () => {
     expect(queries.get(BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
   })
 
-  it('contributes its backlink filter property schema', () => {
+  it('contributes its backlink filter property seeds', () => {
     const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
-    expect(runtime.read(propertySchemasFacet).get(backlinksFilterProp.name)).toBe(backlinksFilterProp)
-    expect(runtime.read(propertySchemasFacet).get(dailyNoteBacklinksDefaultsProp.name))
-      .toBe(dailyNoteBacklinksDefaultsProp)
+    expect(runtime.read(definitionSeedsFacet)).toEqual(expect.arrayContaining([
+      backlinksFilterProp,
+      dailyNoteBacklinksDefaultsProp,
+    ]))
   })
 
   it('contributes a custom property UI for daily note backlink defaults', () => {
     const runtime = resolveFacetRuntimeSync(backlinksPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const schemas = new Map([[dailyNoteBacklinksDefaultsProp.name, dailyNoteBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
-    expect(uis.get(dailyNoteBacklinksDefaultsProp.name)).toBe(dailyNoteBacklinksDefaultsUi)
+    expect(uis.get(dailyNoteBacklinksDefaultsProp.seedKey)).toBe(dailyNoteBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({
       name: dailyNoteBacklinksDefaultsProp.name,
       encodedValue: dailyNoteBacklinksDefaultsProp.defaultValue,
       schemas,
-      uis,
+      override: uis.get(dailyNoteBacklinksDefaultsProp.seedKey),
       presets: readValuePresets(runtime),
     }).Editor).toBe(dailyNoteBacklinksDefaultsUi.Editor)
   })
@@ -218,6 +219,46 @@ describe('backlinksDataExtension query', () => {
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
     expect(out).toEqual([])
+  })
+
+  it('shows property value links and ordinary notes nested below them', async () => {
+    const propertyWorkspace = 'ws-property-backlinks'
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'property ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [propertyWorkspace],
+    )
+    const createIn = (args: {
+      id: string; parentId?: string | null; content?: string; referenceTargetId?: string | null
+      references?: BlockReference[]
+    }) => env.repo.tx(tx => tx.create({
+      id: args.id, workspaceId: propertyWorkspace, parentId: args.parentId ?? null,
+      orderKey: `k-${args.id}`, content: args.content ?? '',
+      referenceTargetId: args.referenceTargetId,
+      references: args.references ?? [],
+    }), {scope: ChangeScope.BlockDefault})
+
+    await createIn({id: 'definition', content: 'status'})
+    await sharedDb.db.execute(
+      `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+       VALUES ('definition', ?, 'property-schema')`, [propertyWorkspace],
+    )
+    const targetId = '1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+    await createIn({id: targetId, content: 'Target'})
+    await createIn({id: 'owner', content: 'Owner'})
+    await createIn({
+      id: 'field', parentId: 'owner', content: '::((definition))', referenceTargetId: 'definition',
+    })
+    const targetReference = {id: targetId, alias: targetId}
+    await createIn({id: 'value', parentId: 'field', content: `[[${targetId}]]`, references: [targetReference]})
+    await createIn({id: 'nested-note', parentId: 'value', content: `A note linking to [[${targetId}]]`, references: [targetReference]})
+    await createIn({id: 'ordinary', content: `[[${targetId}]]`, references: [targetReference]})
+
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+      {workspaceId: propertyWorkspace, id: targetId},
+    ).load())
+    expect(out.sort()).toEqual(['nested-note', 'ordinary', 'value'])
   })
 
   it('scopes to workspaceId', async () => {
@@ -534,7 +575,7 @@ describe('backlinksDataExtension query', () => {
     // A concurrent client adds a reference src → target. It arrives via the
     // Layout B sync path: staged into blocks_synced, materialized by the
     // observer. A newer updated_at wins the LWW gate (real server writes do).
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: 'src', workspaceId: WS, parentId: null, orderKey: 'key-src',
       content: '', properties: {}, references: [{id: 'target', alias: 'T'}],
       createdAt: 0, updatedAt: 9_000_000_000_000, userUpdatedAt: 9_000_000_000_000, createdBy: 'remote', updatedBy: 'remote', deleted: false,

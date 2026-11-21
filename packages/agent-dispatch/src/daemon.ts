@@ -17,13 +17,18 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
-import { agentRuntimeConfigDir, bridgeUrl as resolveBridgeUrl, isLocalBridgeUrl } from '@knowledge-medium/agent-cli/config'
+import {
+  agentRuntimeConfigDir,
+  bridgeUrl as resolveBridgeUrl,
+  isLocalBridgeUrl,
+  loadContributorSelection,
+} from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
-import { createGraph } from './graph.js'
+import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
-import { clearPushRegistration, createExemptionPool, startPushLoop } from './push.js'
+import { clearPushRegistration, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
 import { reportBillingPosture } from './billing.js'
@@ -48,15 +53,19 @@ const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid
 
 /** Generated --mcp-config for spawned claude runs: the dispatch km
  *  server, bound to the daemon's own profile, with watcher targets
- *  blocked from write-back by the dispatch-owned MCP write guard. */
-const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
-  const serverDef = buildMcpServerDef(config)
+ *  blocked from write-back by the dispatch-owned MCP write guard.
+ *  `alwaysLoad` puts its tools in the first prompt instead of behind
+ *  claude's tool search: every run uses them, so deferring them only
+ *  costs each run a lookup turn. */
+const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null): Promise<string> => {
+  const serverDef = buildMcpServerDef(config, contributorId)
   const mcpConfig = {
     mcpServers: {
       [serverDef.name]: {
         command: serverDef.command,
         args: serverDef.args,
         env: serverDef.env,
+        alwaysLoad: true,
       },
     },
   }
@@ -72,10 +81,21 @@ const main = async () => {
 
   // Config problems exit CLEAN (0) — see exit discipline above.
   let config: DaemonConfig
+  let contributorId: string | null | undefined
   try {
     config = await loadConfig(args.config)
     if (config.configuredWatcherCount === 0) {
       throw new Error('No watchers configured — nothing to do. Add watchers to the config file.')
+    }
+    if (config.watchers.length > 0) {
+      const selection = await loadContributorSelection(config.profile, config.workspaceId)
+      if (selection === undefined) {
+        throw new Error(
+          `No contributor selection saved for profile "${config.profile}" and workspace "${config.workspaceId}". `
+          + `Choose one with: kmagent --profile ${config.profile} contributor use <id|none> --workspace ${config.workspaceId}`,
+        )
+      }
+      contributorId = selection
     }
   } catch (error) {
     process.stderr.write(`config error: ${errorMessage(error)}\nFix the config, then launchctl kickstart (or rerun) the daemon.\n`)
@@ -127,7 +147,12 @@ const main = async () => {
   const nap = (ms: number) => sleep(ms)
   const napOrTick = (ms: number) => sleep(ms, {wakeOnTick: true})
 
-  const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
+  const client = createBridgeClient({
+    profile: config.profile,
+    timeoutMs: 60_000,
+    workspaceId: config.workspaceId,
+    contributorId,
+  })
 
   if (config.watchers.length === 0) {
     log('no active watchers (all configured watchers are disabled) — clearing push registration and stopping')
@@ -140,6 +165,10 @@ const main = async () => {
     await releasePidfile({file: pidfilePath()})
     return
   }
+  // Defence in depth: active watcher attribution was checked before startup.
+  if (contributorId === undefined) {
+    throw new Error('Active dispatch watchers require an explicit contributor selection.')
+  }
 
   // Preflight: make the bridge exist, then wait for a paired tab. Never
   // exits — a reboot or closed tab is a wait, not a crash.
@@ -147,7 +176,7 @@ const main = async () => {
   while (!stopping) {
     try {
       const whoami = await client.whoami()
-      log(`paired as user=${whoami.audience?.userId ?? '?'} workspace=${whoami.audience?.workspaceId ?? '?'} tab-connected=${whoami.connected}`)
+      log(`paired as user=${whoami.audience?.userId ?? '?'} acting-on-workspace=${config.workspaceId} focused-tab-workspace=${whoami.audience?.workspaceId ?? '?'} tab-connected=${whoami.connected}`)
       if (!whoami.connected) log('WARNING: no app tab connected — watchers idle until one appears')
       break
     } catch (error) {
@@ -161,21 +190,21 @@ const main = async () => {
         log(`bridge not reachable (${errorMessage(error)}) — starting it`)
         // The daemon runs unattended (launchd, post-reboot), so it must
         // be able to start the bridge itself — otherwise a reboot leaves
-        // it waiting until the user happens to run `yarn agent`. Only for
+        // it waiting until the user happens to run `kmagent`. Only for
         // a LOCAL bridge — a configured AGENT_RUNTIME_URL is someone
         // else's process to manage.
         await startBridgeInBackground().catch(startError => log(`bridge start failed: ${errorMessage(startError)}`))
         await nap(1_000) // brief recheck right after starting it
         continue
       }
-      log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: yarn agent --profile ${config.profile} connect`)
+      log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: kmagent --profile ${config.profile} connect`)
       await nap(30_000)
     }
   }
 
-  const mcpConfigPath = await writeMcpConfig(config)
+  const mcpConfigPath = await writeMcpConfig(config, contributorId)
   log(`mcp config: ${mcpConfigPath}`)
-  const mcpServerDef = buildMcpServerDef(config)
+  const mcpServerDef = buildMcpServerDef(config, contributorId)
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
     ? await loadOrCreateChannelSecret()
@@ -186,6 +215,7 @@ const main = async () => {
   const engine = createEngine({
     config,
     graph,
+    replies: createReplyWriter(client),
     state: createStateStore(config.statePath ?? defaultStatePath()),
     runTask: options => options.executor === 'codex'
       ? runCodex({
@@ -226,12 +256,7 @@ const main = async () => {
 
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
-  // Exemptions are keyed by the EMITTING watcher — only that watcher's
-  // tick may skip its still-typing gate for these blocks. The pool is
-  // bounded and freshness-checked at drain (see createExemptionPool).
-  const exemptionPool = createExemptionPool()
-  const requestTick: Parameters<typeof startPushLoop>[0]['requestTick'] = exemptions => {
-    if (exemptions) exemptionPool.add(exemptions)
+  const requestTick = () => {
     tickRequested = true
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
@@ -251,9 +276,7 @@ const main = async () => {
 
   while (!stopping) {
     tickRequested = false
-    // Drain the exemptions INTO this tick — ids arriving mid-tick stay
-    // pending and re-tick immediately via tickRequested.
-    await engine.tick({quietExemptByWatcher: exemptionPool.drain()})
+    await engine.tick()
     if (args.once) break
     await napOrTick(config.pollIntervalMs)
   }

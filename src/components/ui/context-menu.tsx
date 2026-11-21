@@ -16,6 +16,13 @@ const ContextMenuSub = ContextMenuPrimitive.Sub
 
 const ContextMenuRadioGroup = ContextMenuPrimitive.RadioGroup
 
+/** Preserve focus an item moved outside the menu; otherwise restore the previous focus. */
+export const keepFocusAnItemMoved = (event: Event) => {
+  const active = document.activeElement
+  const menu = event.currentTarget
+  if (active && active !== document.body && menu instanceof Node && !menu.contains(active)) event.preventDefault()
+}
+
 const ContextMenuSubTrigger = ({
   className,
   inset,
@@ -54,6 +61,9 @@ ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName
 
 const ContextMenuContent = ({
   className,
+  onCloseAutoFocus = keepFocusAnItemMoved,
+  onKeyDown,
+  onKeyUp,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) => (
   <ContextMenuPrimitive.Portal>
@@ -63,6 +73,15 @@ const ContextMenuContent = ({
         className
       )}
       {...props}
+      onCloseAutoFocus={onCloseAutoFocus}
+      onKeyDown={event => {
+        onKeyDown?.(event)
+        event.stopPropagation()
+      }}
+      onKeyUp={event => {
+        onKeyUp?.(event)
+        event.stopPropagation()
+      }}
     />
   </ContextMenuPrimitive.Portal>
 )

@@ -1,31 +1,54 @@
 import { BlockRendererProps } from '@/types.js'
-import { useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
+import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
+import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
+import { useHandle } from '@/hooks/block'
+import { isFieldValueChild } from '@/data/propertyChildren'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { editorSelection, focusBlock } from '@/data/properties.js'
 import {
+  pasteArmedCut,
   pasteChordIntent,
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import type { PasteRequest } from '@/paste/decision.js'
+import { editorPasteRequest, readClipboardContent } from '@/paste/clipboard.js'
+import { flushEditorContent } from '@/editor/contentFlush.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
+import { useBlockTitleTextClass } from './blockTitleText.js'
+import { useGutterText } from './BlockGutter.js'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
+  const field = useContext(PropertyFieldRowContext)
+  const propertyValueSchema = useHandle(block, {selector: row =>
+    field && row && row.parentId === field.id && isFieldValueChild(row) ? field.schema : undefined})
+  // The editor draws the block's own text too, so it carries the same title
+  // typography as the read renderer — otherwise a page title would shrink to
+  // body size the moment you clicked into it. CodeMirror's theme sets
+  // `fontSize: 'inherit'`, so the class on the wrapper reaches the editor.
+  const titleClass = useBlockTitleTextClass(block)
   const editorRef = useRef<ReactCodeMirrorRef>(null)
+  // The editor's wrapper is the text element the gutter measures and keeps the
+  // first line of clear, as the read renderer's container is in read mode.
+  const gutterText = useGutterText(block)
+  const handleEditorRef = useCallback((value: ReactCodeMirrorRef | null) => {
+    editorRef.current = value
+    gutterText?.(value?.editor ?? null)
+  }, [gutterText])
   // The paste ClipboardEvent carries no modifier state, so we latch the
   // most recent paste chord's intent on keydown and read it back in
   // handlePaste. Cmd/Ctrl+Shift+V ('single-block') drops text into the
@@ -34,10 +57,12 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const pasteIntentRef = useRef<'split' | 'single-block'>('split')
 
   const extensions = useMemo(() => {
-    const fieldCreationExtension = createFieldCreationKeydownExtension(block, repo)
-    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block})
+    // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
+    const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema, childBacked: propertyDisplay.childBacked,
+      renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime])
+  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before
@@ -51,29 +76,24 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     e.stopPropagation()
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
-    if (repo.isReadOnly) return
-    // File(s) on the clipboard (a pasted image) carry no text/plain, so read
-    // them BEFORE the no-text early return below — otherwise an image paste
-    // would fall through to the browser.
-    const files = e.clipboardData?.files
-    const fileList = files && files.length > 0 ? Array.from(files) : []
-    const text = e.clipboardData?.getData('text/plain') ?? ''
-    if (!text && fileList.length === 0) return
-
     // Latch + reset the chord intent — the paste event can't see modifiers,
-    // so the keydown handler latched it. `preventDefault` MUST run
-    // synchronously or the browser's native paste fires first; the editor
-    // always takes over the paste.
+    // so the keydown handler latched it. Reset before any early return, or a
+    // stale ⌘⇧V intent would skip the cut check on the next paste.
     const intent = pasteIntentRef.current
     pasteIntentRef.current = 'split'
-    const html = e.clipboardData?.getData('text/html') || undefined
+    if (repo.isReadOnly) return
+    // Nothing to paste → leave it to the browser.
+    const content = readClipboardContent(e.clipboardData)
+    if (!content) return
+
+    // `preventDefault` MUST run synchronously or the browser's native paste
+    // fires first; the editor always takes over the paste.
     e.preventDefault()
 
-    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
-    // so it resolves before any `await` below and the caret it keys on can't
-    // move between this read and the dispatch. (When the decision was async this
-    // had to be split into a pre-decision caret snapshot + a post-decision
-    // re-read, because an override could await and move the caret mid-flight.)
+    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`)
+    // and keys on this snapshot. Anything that awaits before the insertion (the
+    // cut check, a media capture) is followed by a re-read of the live caret
+    // below, so text lands where the caret is when it is inserted.
     const editorView = editorRef.current?.view
     if (!editorView) return
     const selection = editorView.state.selection.main
@@ -83,6 +103,30 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       from: selection.from,
       to: selection.to,
     }
+    const renderScopeId = typeof blockContext.renderScopeId === 'string'
+      ? blockContext.renderScopeId
+      : undefined
+    const request = editorPasteRequest(content, block, intent, caret)
+
+    // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
+    // its target's content; ⌘⇧V still asks for its plain text.
+    if (intent === 'split') {
+      // The stored row lags the view by the content debounce. The move reads
+      // the stored row (a blank target is replaced), so persist the live text
+      // first: the flush takes the write lock ahead of the move's tx.
+      flushEditorContent(editorView)
+      const cutPaste = await pasteArmedCut(content.text, block, repo, {
+        scopeRootId: blockContext.scopeRootId,
+        propertyDisplay,
+      })
+      if (cutPaste) {
+        if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
+          void focusBlock(uiStateBlock, cutPaste.blocks[0].id, {renderScopeId})
+        }
+        return
+      }
+      if (!editorRef.current?.view) return
+    }
 
     // The paste verb decides how the clipboard lands; with no plugin
     // contributions this returns `defaultPasteDecision`, i.e. the previous
@@ -90,7 +134,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const request: PasteRequest = {text, html, files: fileList, intent, surface: 'editor', caret}
     // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
     // embed text is spliced into the paste below, so the attachment lands at the caret
     // per the text policy (NOT a forced child block). The capture verb is the
@@ -118,7 +161,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(pasteText, editorView.state.doc.toString(), {
+    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, editorView.state.doc.toString(), {
       from: insertAt.from,
       to: insertAt.to,
     })
@@ -131,10 +174,8 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
     const result = await pasteEditModeMultilineText(plan, block, repo, {
       scopeRootId: blockContext.scopeRootId,
+      propertyDisplay,
     })
-    const renderScopeId = typeof blockContext.renderScopeId === 'string'
-      ? blockContext.renderScopeId
-      : undefined
     if (!result) return
 
     await uiStateBlock.set(editorSelection, {
@@ -146,25 +187,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   return (
     <BlockEditor
-      ref={editorRef}
+      ref={handleEditorRef}
       block={block}
       extensions={extensions}
-      className="km-block-text-editor min-h-[1.7em]"
-      basicSetup={{
-        closeBrackets: true,
-        lineNumbers: false,
-        foldGutter: false,
-        dropCursor: false,
-        allowMultipleSelections: false,
-        indentOnInput: false,
-        highlightSelectionMatches: false,
-        searchKeymap: false,
-        defaultKeymap: false,
-        history: false,
-        historyKeymap: false,
-        highlightActiveLine: false,
-        completionKeymap: false,
-      }}
+      className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}
+      basicSetup={BLOCK_EDITOR_BASIC_SETUP}
       indentWithTab={false}
       onKeyDownCapture={handleKeyDownCapture}
       onPasteCapture={handlePaste}

@@ -5,9 +5,9 @@ import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope, type User } from '@/data/api'
 import { getUserBlock } from '@/data/stateBlocks.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { journalBlockId } from '@/plugins/daily-notes'
+import { journalBlockId } from '@/plugins/daily-notes/dailyNotes'
 import {
   getOrCreateShortcutsBlock,
   journalShortcutBlockId,
@@ -25,9 +25,9 @@ interface Harness {
 const createRepo = (h: TestDb): Repo => {
   // Reproduce Repo's own non-deterministic defaults (uuid ids, Date.now-seeded
   // tx-seqs) rather than the harness's deterministic-from-0 counters: the
-  // multi-Repo convergence tests construct two Repos on the same db, and the
-  // harness defaults would collide across instances on command_events.tx_id
-  // (derived from newId) and tx_seq.
+  // multi-Repo convergence tests construct two Repos on the same db, where
+  // both counters restart and collide — on the `blocks` primary key, and on
+  // the tx-seq that groups a tx's rows for upload.
   let seq = Date.now()
   const { repo } = createTestRepo({
     db: h.db,
@@ -46,7 +46,7 @@ const setup = async (): Promise<Harness> => {
 }
 
 const shortcutChildren = async (repo: Repo, shortcutsId: string) => {
-  const ids = await repo.block(shortcutsId).childIds.load()
+  const ids = await childIdsOf(repo, shortcutsId)
   return Promise.all(ids.map(id => repo.block(id).load()))
 }
 
@@ -118,7 +118,7 @@ describe('getOrCreateShortcutsBlock', () => {
 
     const shortcuts = await getOrCreateShortcutsBlock(userBlock)
     expect(shortcuts.id).toBe(id)
-    expect(await env.repo.block(shortcuts.id).childIds.load()).toEqual([])
+    expect(await childIdsOf(env.repo, shortcuts.id)).toEqual([])
   })
 
   it('two Repo instances on the same db converge to the same row', async () => {

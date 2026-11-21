@@ -6,6 +6,9 @@ import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { markdownExtensionsFacet, type MarkdownRenderData } from '@/markdown/extensions.js'
+import { MarkdownSourceContext, useMarkdownInput } from '@/markdown/context.js'
+import { useBlockTitleTextClass } from './blockTitleText.js'
+import { useGutterText } from './BlockGutter.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
 
@@ -44,7 +47,13 @@ export function MarkdownContentRenderer({
       : undefined,
   })
   const blockContext = useBlockContext()
+  const input = useMarkdownInput()
   const runtime = useAppRuntime()
+  // Title typography travels with the title text. A surface that wants a real
+  // page title renders this component (the recents page does) and gets one;
+  // one that doesn't, doesn't. Above the early return to keep hook order fixed.
+  const titleClass = useBlockTitleTextClass(block)
+  const gutterText = useGutterText(block)
 
   if (!renderData) return null
 
@@ -57,27 +66,45 @@ export function MarkdownContentRenderer({
   // preview) still wins.
   const inline = blockContext.isReference === true
   const Container = containerElement ?? (inline ? 'span' : 'div')
-  const className = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
+  const baseClassName = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
+  // Marks rendered markdown, and says which kind of surface it is: the list
+  // styling keyed on these classes is off by default and turned on per
+  // surface, so an inline one must ANNOUNCE itself rather than merely omit
+  // the marker — a reference's span sits inside a block surface, and a
+  // descendant selector would still match through that outer ancestor. The
+  // span container IS the inline contract (a `div` can't sit in inline flow),
+  // so it covers the reference path and a caller that asks for one outright.
+  const className = [
+    'markdown-content',
+    Container === 'span' ? 'markdown-content-inline' : '',
+    baseClassName,
+    titleClass,
+  ].filter(Boolean).join(' ')
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   // Pass the reactive `renderData` as `data` so the (React-Compiler-memoized)
   // resolver recomputes when the snapshot changes. Reading mutable state via
   // `block.peek()` inside an extension would be captured once and never
   // refreshed — see the `data` doc on MarkdownRenderContext.
-  const markdownConfig = resolveMarkdownConfig({block, blockContext, data: renderData})
+  const markdownConfig = resolveMarkdownConfig({block, blockContext, input, data: renderData})
   const components = inline
     ? {...markdownConfig.components, ...inlineComponents}
     : markdownConfig.components
   const content = contentTransform ? contentTransform(renderData.content) : renderData.content
 
   return (
-    <Container className={className}>
-      <Markdown
-        remarkPlugins={markdownConfig.remarkPlugins}
-        components={components}
-      >
-        {content}
-      </Markdown>
+    // The span container is the inline contract (a reference, a breadcrumb):
+    // a citation, which never takes the block's gutter corner.
+    <Container ref={Container === 'div' ? gutterText : undefined} className={className}>
+      <MarkdownSourceContext value={{block, workspaceId: renderData.workspaceId}}>
+        <Markdown
+          remarkPlugins={markdownConfig.remarkPlugins}
+          rehypePlugins={markdownConfig.rehypePlugins}
+          components={components}
+        >
+          {content}
+        </Markdown>
+      </MarkdownSourceContext>
     </Container>
   )
 }

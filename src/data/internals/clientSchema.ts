@@ -17,6 +17,14 @@ import {
   PARENT_DELETED_RAISE_PREFIX,
   RAISE_FIELD_SEP_SQL,
 } from './raiseProtocol'
+import {
+  BLOCK_LOCAL_COLUMN_NAMES,
+  BLOCKS_TABLE_COLUMN_NAMES,
+  STAGING_LOCAL_COLUMNS,
+  buildBlockSnapshotJsonSql,
+} from '@/data/blockSchema.js'
+import { SEED_STAGING_NEEDS_APPLY_SQL } from './syncObserver/reconcile.js'
+import type { LocalSchemaAnalyzeTable } from '../facets.ts'
 
 // ============================================================================
 // Tables
@@ -25,7 +33,7 @@ import {
 /** Single-row table. Triggers read it via
  *  `(SELECT … FROM tx_context WHERE id = 1)`. Why not a TEMP table:
  *  triggers in `main` schema cannot reference `temp.X` tables. The
- *  TxEngine sets all five fields at the start of `writeTransaction`
+ *  TxEngine sets all fields at the start of `writeTransaction`
  *  and clears them (back to NULL) at the end.
  *
  *  `tx_seq` is the integer tx-grouping key the upload-routing triggers
@@ -52,17 +60,18 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
-/** Per-row audit / change-history log. Trigger-written on every write to
+/** Per-row audit / change-history log. Trigger-written on every change to
  *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
- *  — capturing the full before/after row state of each change. `tx_id` = NULL
+ *  — capturing the full before/after row state; an update that moves only the
+ *  row version (`updated_at`) is not a change. `tx_id` = NULL
  *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
  *  below); `source` distinguishes 'user' from 'sync'.
  *
  *  This is the substrate for local change history / time-travel, and the ONLY
  *  place an INCOMING sync change is durably recorded — `command_events` covers
  *  local `repo.tx` operations only (mutator-grain), never sync apply. Nothing
- *  reads `row_events` at runtime: the Layout B observer owns invalidation, so
- *  this is a write-only history log.
+ *  reads `row_events` for invalidation (the Layout B observer owns that); its
+ *  readers are the agent-runtime history views and db-mirror's change marker.
  *
  *  Intentionally unbounded — full history is kept and never auto-trimmed. Any
  *  retention policy is a future opt-in, never a silent drop (preserving user
@@ -125,13 +134,6 @@ export const CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL = `
 /** Trigger-maintained side index of `(workspace_id, alias) → block_id`,
  *  derived from the `alias` entry in each live block's `properties_json`.
  *
- *  The previous shape walked `json_each(properties_json, '$.alias')` per
- *  query, which scans the full workspace partition every time. With
- *  150-MB-class workspaces this is the dominant cost in alias-heavy
- *  paths (Roam import, parseReferences, autocomplete). The
- *  index gives O(log n) `(workspace_id, alias_lower?)` lookup at the
- *  cost of three triggers and one extra row per (block, alias) pair.
- *
  *  Local-only: the table is fully derivable from `blocks.properties_json`
  *  so it is not synced — PowerSync's CRUD-apply path writes through
  *  `BLOCKS_RAW_TABLE.put` (an `INSERT … ON CONFLICT DO UPDATE`) which
@@ -168,23 +170,52 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL = `
   ON block_aliases (workspace_id, alias)
 `
 
-/** Tiny key/value table for one-shot schema-bootstrapping markers
- *  (currently only the alias backfill). Local-only — the markers
- *  describe the state of a derived index on this device, not anything
- *  the server cares about.
+/** Tiny key/value table for local, per-device schema state. Most rows are
+ *  one-shot bootstrapping MARKERS whose presence is the whole payload and whose
+ *  `value` is NULL; a few carry a `value` blob. Local-only either way — these
+ *  describe derived state on THIS device, not anything the server cares about.
  *
  *  Why a dedicated table instead of "is block_aliases empty?": a
  *  legitimately empty workspace, or a workspace whose user removed
  *  every alias, would otherwise re-trigger the full backfill scan on
  *  every launch — which is exactly what the LIMIT 1 short-circuit was
  *  meant to avoid. The marker captures "we ran the backfill once for
- *  this schema version" directly. */
+ *  this schema version" directly.
+ *
+ *  Every marker INSERT names its columns explicitly, so adding a column here
+ *  never has to touch them. */
 export const CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS client_schema_state (
     key           TEXT PRIMARY KEY,
-    completed_at  INTEGER NOT NULL
+    completed_at  INTEGER NOT NULL,
+    value         TEXT
   )
 `
+
+/** Idempotent local migration adding `client_schema_state.value` on a device
+ *  whose table predates it (CREATE TABLE IF NOT EXISTS above is a no-op there).
+ *  Same shape as `ensureBlockUserUpdatedAtColumn` — no backfill, because an
+ *  absent value reads as "no baseline recorded yet", which is the correct
+ *  starting state for every existing install. */
+export const ensureClientSchemaStateValueColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{name: string}>('PRAGMA table_info(client_schema_state)')
+  if (columns.some(column => column.name === 'value')) return
+  try {
+    await db.execute('ALTER TABLE client_schema_state ADD COLUMN value TEXT')
+  } catch (error) {
+    // PRAGMA-then-ALTER is a TOCTOU across tabs, and this DB is explicitly
+    // multi-tab: both can read "no column" before either alters, and the loser
+    // throws. Its boot is memoized on the rejection, so that tab stays broken
+    // until a reload. The winner's column is exactly what we wanted, so treat
+    // the duplicate as success — anything else still propagates.
+    if (!/duplicate column/i.test(error instanceof Error ? error.message : String(error))) {
+      throw error
+    }
+  }
+}
 
 /** Case-insensitive substring/prefix path for alias autocomplete. */
 export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
@@ -194,6 +225,19 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
 
 export const DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL = `
   DROP INDEX IF EXISTS idx_blocks_workspace_type
+`
+
+/** Litter from the marker-based ANALYZE trigger `PRAGMA optimize` replaced. Every
+ *  client that ran that build carries exactly one `analyze_index_set:<fnv1a>`
+ *  row; nothing reads it any more. Swept rather than left because a future
+ *  marker family reusing the prefix would otherwise inherit a stale row and read
+ *  it as current. `_` is a LIKE wildcard and the prefix has two, so the match is
+ *  escaped — unescaped it could reach a key like `analyzeXindexXset:…`.
+ *
+ *  A no-op DELETE over a table with a handful of rows, so it is cheaper to leave
+ *  in the boot statements than to build a one-shot marker for. */
+export const DROP_ANALYZE_INDEX_SET_MARKERS_SQL = String.raw`
+  DELETE FROM client_schema_state WHERE key LIKE 'analyze\_index\_set:%' ESCAPE '\'
 `
 
 /** Trigger-maintained membership index over `properties_json.$.types`.
@@ -279,6 +323,26 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
   ON ps_crud_rejected (tx_id)
 `
 
+/** Forget the last write checkpoint the sync stream showed, on every enqueue,
+ *  as PowerSync's own crud path does. A remembered id from before the write
+ *  could already meet the target the next upload sets, if the service's counter
+ *  restarted (its storage wiped, or a new instance), and release a checkpoint
+ *  cut before the upload landed. On the queue rather than its writers, so a
+ *  direct enqueue (the rejected-upload retry) forgets too.
+ *
+ *  The keys are the core's internal state: `writeCheckpointGate.test.ts` drives
+ *  the real core, so a rename fails there rather than silently disarming this.
+ *  Retire it once uploads enqueue through `powersync_crud`, which does this
+ *  itself. */
+export const CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS ps_crud_forget_seen_checkpoint
+  AFTER INSERT ON ps_crud
+  BEGIN
+    DELETE FROM ps_kv
+    WHERE key IN ('last_seen_checkpoint_request_id', 'last_applied_checkpoint_request_id');
+  END
+`
+
 // ============================================================================
 // blocks_synced change-capture queue (Layout B, design doc §9.2) — the
 // observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
@@ -290,17 +354,8 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
 // signal the observer drains to materialize each change into the live `blocks`
 // table (the production sync-invalidation path).
 //
-// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with a watermark
-// pattern: the observer reads rows up to MAX(seq),
-// processes them, then `DELETE … WHERE seq <= <that max>`. This is robust to
-// the two things a coalescing id-keyed table is NOT:
-//   - Drain race: a delivery that lands mid-drain gets a higher seq, so the
-//     watermark delete can't remove its signal (an id-keyed REPLACE would have
-//     overwritten the very row being processed and lost the newer change).
-//   - Partial failure: if processing throws, the delete is never reached, so
-//     the rows stay queued and retry on the next tick / next startup.
-// Coalescing still happens, in JS at drain time (latest op per id wins), so a
-// hot row is materialized once per batch, not once per delivery.
+// Append-only log keyed by `seq`; drained by the Layout B observer
+// (src/data/internals/syncObserver/observer.ts).
 //
 //   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, and
 //     PowerSync applies a *changed* synced row as this REPLACE (a DELETE then
@@ -333,18 +388,11 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
   )
 `
 
-/** Indexes the enqueue-collapse lookup in `blocks_synced_changes_insert`
- *  (`DELETE … WHERE id = NEW.id AND op = 'delete'`). The table is otherwise
- *  keyed only by the autoincrement `seq`, so without this index that per-insert
- *  delete would SCAN the entire pending queue on every staging insert — even a
- *  brand-new id with no matching 'delete'. During a bulk sync/backfill the queue
- *  grows (within one PowerSync apply tx) far faster than the observer drains, so
- *  an unindexed scan turns the apply into O(n²) — the exact large-download case
- *  this queue exists to keep cheap (the ~310K-row backfill that motivated the
- *  collapse). With the index the lookup is an O(log n) seek, including the common
- *  no-match insert. The drain still reads/deletes by `seq` (PK), so this index
- *  only serves the collapse delete; its maintenance cost on queue insert + the
- *  drain's `DELETE … WHERE seq <= ?` is O(log n) per row. */
+/** Serves the enqueue-collapse `DELETE` in `blocks_synced_changes_insert`.
+ *  Without it that per-insert delete scans the whole pending queue, and a
+ *  bulk sync fills the queue within one apply tx far faster than the observer
+ *  drains — turning the apply into O(n²). The drain reads and deletes by
+ *  `seq` (PK) and does not use this index. */
 export const CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_synced_changes_id_op
   ON blocks_synced_changes (id, op)
@@ -371,35 +419,16 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // row_events triggers (3) — the per-row audit / change-history log. Fire for
 // BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
 // `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
-// row_events at runtime — the Layout B observer owns invalidation — so this is
-// a write-only history substrate (local change-history / time-travel; the only
-// durable record of incoming sync changes).
+// row_events for invalidation — the Layout B observer owns that — so this is a
+// history substrate (local change-history / time-travel; the only durable
+// record of incoming sync changes), read by the agent-runtime history views and
+// db-mirror's change marker. The exceptions are a bulk load's creates and the
+// derived-column stamps on its rows (`syncBulkLoadScope`).
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
 // from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
 // ============================================================================
-
-/** Serializes a blocks row (NEW or OLD) to the JSON snapshot stored in
- *  `row_events.{before,after}_json`. NEW / OLD references resolve at
- *  trigger time. */
-const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
-      json_object(
-        'id', ${rowRef}.id,
-        'workspaceId', ${rowRef}.workspace_id,
-        'parentId', ${rowRef}.parent_id,
-        'orderKey', ${rowRef}.order_key,
-        'content', ${rowRef}.content,
-        'properties', json(${rowRef}.properties_json),
-        'references', json(${rowRef}.references_json),
-        'createdAt', ${rowRef}.created_at,
-        'updatedAt', ${rowRef}.updated_at,
-        'userUpdatedAt', coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at),
-        'createdBy', ${rowRef}.created_by,
-        'updatedBy', ${rowRef}.updated_by,
-        'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
-      )
-`.trim()
 
 /** Belt-and-suspenders source gate for tx_context projections: the column
  *  is the active local tx's value only when source IS NOT NULL. Sync-applied
@@ -424,9 +453,38 @@ const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1),
 /** Undo-group token (issue #306) — same source-gated projection as tx_id. */
 const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
+/** What the sync observer writes to `tx_context.scope`, beside a NULL
+ *  `source`, for a window of a bulk load: the workspaces a gate is holding
+ *  (`BlocksSyncedObserver.holdBulkLoad`).
+ *  `sync-bulk:<workspace id>:<workspace id>:` — every id is followed by a
+ *  colon, so a trigger finds its row's workspace as `:<id>:`; the ids are
+ *  uuids and hold no colon of their own. No local transaction can carry it,
+ *  since every `ChangeScope` comes with a non-NULL source. */
+const SYNC_BULK_LOAD_SCOPE_PREFIX = 'sync-bulk:'
+export const syncBulkLoadScope = (workspaceIds: readonly string[]): string | null =>
+  workspaceIds.length === 0 ? null : `${SYNC_BULK_LOAD_SCOPE_PREFIX}${workspaceIds.map(id => `${id}:`).join('')}`
+
+/** True for a row of a workspace the current transaction is bulk-loading.
+ *  EXISTS, so it is never NULL: a WHEN that is NULL skips its trigger.
+ *
+ *  The `source IS NULL` half is DEFENCE IN DEPTH: a local write must be logged
+ *  whatever scope string it was given. */
+const IN_BULK_LOAD_SQL = `EXISTS (
+    SELECT 1 FROM tx_context
+    WHERE id = 1
+      AND source IS NULL
+      AND instr(scope, '${SYNC_BULK_LOAD_SCOPE_PREFIX}') = 1
+      AND instr(scope, ':' || NEW.workspace_id || ':') > 0
+  )`
+
+/** A row a bulk load creates gets no 'create' event: it records that the row
+ *  arrived on this device, for every row of the workspace, and nothing a user
+ *  did. Its later changes are logged as any other row's, each with its before
+ *  state. */
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
+  WHEN NOT ${IN_BULK_LOAD_SQL}
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -435,7 +493,7 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       NEW.id,
       'create',
       NULL,
-      ${blockJsonObjectSql('NEW')},
+      ${buildBlockSnapshotJsonSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
       ${triggerGroupIdSql}
@@ -443,9 +501,34 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   END
 `
 
+const columnsChangedSql = (names: readonly string[]): string =>
+  names.map(name => `OLD.${name} IS NOT NEW.${name}`).join('\n    OR ')
+
+/** An update that moves only the row version is not logged (#1299): it would
+ *  store two full snapshots of a row whose data did not change — for every row,
+ *  on every device, when a workspace is re-sealed. Raw columns, not the
+ *  snapshot: the snapshot normalizes some stored changes away (`json()`, the
+ *  boolean CASEs, `userUpdatedAt`'s fallback to `updated_at`), and a column it
+ *  lacks would otherwise go unlogged. */
+const BLOCK_VERSIONLESS_COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES.filter(name => name !== 'updated_at')
+const blockSyncedColumnsChangedSql = columnsChangedSql(
+  BLOCK_VERSIONLESS_COLUMN_NAMES.filter(name => !BLOCK_LOCAL_COLUMN_NAMES.includes(name)),
+)
+/** The columns a device derives for itself. During a bulk load a change to
+ *  these alone is not logged: it is the stamp the load puts on the rows a
+ *  window wrote, later in the same transaction, and would cost two snapshots
+ *  where an insert cost one. A synced change is logged before the stamp that
+ *  follows it, so its event shows these columns as they were; no reader uses
+ *  them. */
+const blockLocalColumnsChangedSql = columnsChangedSql(
+  BLOCK_VERSIONLESS_COLUMN_NAMES.filter(name => BLOCK_LOCAL_COLUMN_NAMES.includes(name)),
+)
+
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
+  WHEN (${blockSyncedColumnsChangedSql})
+    OR ((${blockLocalColumnsChangedSql}) AND NOT ${IN_BULK_LOAD_SQL})
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
@@ -456,8 +539,8 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
         WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
         ELSE 'update'
       END,
-      ${blockJsonObjectSql('OLD')},
-      ${blockJsonObjectSql('NEW')},
+      ${buildBlockSnapshotJsonSql('OLD')},
+      ${buildBlockSnapshotJsonSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
       ${triggerGroupIdSql}
@@ -478,7 +561,7 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       ${triggerTxIdSql},
       OLD.id,
       'delete',
-      ${blockJsonObjectSql('OLD')},
+      ${buildBlockSnapshotJsonSql('OLD')},
       NULL,
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
@@ -501,10 +584,16 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // through tx.delete → UPDATE deleted = 1 → fires the UPDATE upload trigger
 // below, which forwards correctly. See §4.5.
 //
-// The upload SQL writes through PowerSync's standard powersync_crud queue:
+// The upload SQL writes PowerSync's upload queue directly:
 //   ps_crud (tx_id INTEGER, data TEXT)
 // where data is a JSON envelope { op, type, id, data }. PowerSync picks
 // rows out of ps_crud and uploads them via the configured connector.
+// Writing it directly bypasses PowerSync's own crud path. The part of that
+// path these writes need is the download hold, which the SDK raises itself
+// when an upload completes (`CrudTransaction.complete()` sets the core's
+// `target_checkpoint_request_id`), and which a non-empty queue keeps shut
+// before that. The path also forgets the last checkpoint id it saw; that part
+// is the queue's own trigger: {@link CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL}.
 // ============================================================================
 
 interface UploadColumnSpec {
@@ -549,11 +638,34 @@ const blockUploadDiffPredicateSql = BLOCK_UPLOAD_COLUMNS
 // otherwise change workspace_id and so would omit it. A self-write of the
 // unchanged workspace_id is a harmless no-op server-side. The remaining columns
 // stay change-gated to keep PATCHes column-narrow.
+//
+// `base_updated_at` (issue #381) is a WIRE-ONLY key — not a `blocks` column, so
+// it is deliberately not in BLOCK_UPLOAD_COLUMNS (which also drives the PUT
+// payload and the change-gate predicate). It carries the row-version this edit
+// was made AGAINST — `OLD.updated_at`, captured here inside the same SQLite
+// write tx as the edit itself, which is the only place the pre-edit version is
+// still available. `apply_block_patches` compares it to the server's current
+// `updated_at`: unequal ⇒ the server row drifted under this edit (someone
+// else's write landed in between) ⇒ the merged row is content the author has
+// never seen, so its stamp must clear the author's own proposed stamp or the
+// echo equal-stamp-skips and that device silently keeps stale content.
+//
+// Why not capture it at upload time instead: a foreign row delivered while this
+// edit sat in `ps_crud` is held un-materialized by the reconcile gate's
+// `hasPendingUpload` branch, so `blocks_synced` (and, once drained, `blocks`)
+// would hand back the FOREIGN stamp — the server would read "no drift" and
+// #381 reproduces exactly. Write time is the only correct capture point.
+//
+// Emitted unconditionally, like workspace_id: a drifted patch that happens to
+// change no upload column never reaches this trigger at all (the change-gate
+// vetoes it), but every patch that DOES reach it needs the base regardless of
+// which columns it carries.
 const blockUploadPatchJsonSql = () => `
       json_remove(
         json_set(
           '{}',
           '$.workspace_id', NEW.workspace_id,
+          '$.base_updated_at', OLD.updated_at,
 ${BLOCK_UPLOAD_COLUMNS.filter(column => column.name !== 'workspace_id').map(column =>
   `          CASE WHEN OLD.${column.name} IS NOT NEW.${column.name} THEN '$.${column.name}' ELSE '$.__noop' END, ${column.jsonValue('NEW')}`,
 ).join(',\n')}
@@ -685,10 +797,12 @@ export const CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL = `
 // tombstoned but the descendant's UPDATE has `NEW.deleted = 1`, which
 // the WHEN clause excludes.
 //
-// Undo of a subtree-delete is safe by snapshot ordering: `softDelete-
-// Subtree` records the root's snapshot first (DFS pop), so `_replay`
-// restores the root before its children — descendant UPDATEs see a
-// live parent.
+// Undo/redo replay does NOT rely on any mutator's first-touch snapshot
+// order: `_replay` applies rows via `replayApplicationOrder`
+// (txSnapshots.ts) — live targets parents-first, tombstones last — so
+// a descendant's restore always sees a live parent regardless of how
+// the original tx happened to touch rows (core.merge, for one, touches
+// rehomed children before the from-block's tombstone).
 // ============================================================================
 
 export const CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL = `
@@ -741,13 +855,6 @@ export const CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL = `
 // (numbers, nulls, nested objects) defensively — the codec only writes
 // strings, but stale data from earlier shapes shouldn't crash the
 // trigger.
-//
-// `json_each(NEW.properties_json, '$.alias')` returns 0 rows when the
-// `$.alias` path is missing — important because most blocks have no
-// aliases, and this is the hot path on every UPDATE OF content (which
-// fires the same trigger pattern via UPDATE OF properties_json … no
-// it doesn't; UPDATE OF columns gates the trigger on those columns
-// changing, so a content-only edit does NOT fire blocks_alias_update).
 // ============================================================================
 
 const aliasInsertSelectSql = (rowRef: 'NEW') => `
@@ -944,6 +1051,49 @@ export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
   END
 `
 
+// ============================================================================
+// One-shot markers
+// ============================================================================
+
+/** A SINGLETON one-shot marker: one fixed key in `client_schema_state`,
+ *  written once, read once per bootstrap pass.
+ *
+ *  Not `MarkerStore` (`./idleMarkerJobs.ts`), which is the extraction for the
+ *  OTHER marker family — prefixed SETS of per-workspace keys, enumerated with
+ *  `getAll` (absent from {@link ClientSchemaBootstrapDb}) and cached in memory.
+ *  A single global key read once per pass can use neither the enumeration nor
+ *  the cache. */
+export const markerDoneSql = (key: string): string => `
+  SELECT 1 FROM client_schema_state WHERE key = '${key}'
+`
+
+export const recordMarkerSql = (key: string): string => `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${key}', strftime('%s', 'now') * 1000)
+`
+
+/** A KEYED marker — the key is bound (`?`), so these three serve every family
+ *  whose keys are built at runtime (a prefix plus a workspace id or a name). */
+export const RECORD_KEYED_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+export const SELECT_KEYED_MARKER_SQL = `
+  SELECT key FROM client_schema_state WHERE key = ?
+`
+
+export const DELETE_KEYED_MARKER_SQL = `
+  DELETE FROM client_schema_state WHERE key = ?
+`
+
+/** Takes the SQL rather than the key so call sites keep naming their own
+ *  `SELECT_*_DONE_SQL` const, which is also what tests reach for. */
+export const isMarkerSet = async (
+  db: ClientSchemaBootstrapDb,
+  sql: string,
+): Promise<boolean> => (await db.getOptional<{1: number}>(sql)) !== null
+
 /** One-shot backfill from `blocks.properties_json`. Called after the
  *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
@@ -965,14 +1115,9 @@ export const CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL = `
  *  the user just paid for. */
 export const ALIAS_BACKFILL_MARKER_KEY = 'block_aliases_backfill_v1'
 
-export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${ALIAS_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = markerDoneSql(ALIAS_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${ALIAS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = recordMarkerSql(ALIAS_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCK_ALIASES_SQL = `
   INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
@@ -983,14 +1128,9 @@ export const BACKFILL_BLOCK_ALIASES_SQL = `
 
 export const BLOCK_TYPES_BACKFILL_MARKER_KEY = 'block_types_backfill_v1'
 
-export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_TYPES_BACKFILL_MARKER_KEY}'
-`
+export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = markerDoneSql(BLOCK_TYPES_BACKFILL_MARKER_KEY)
 
-export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_TYPES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = recordMarkerSql(BLOCK_TYPES_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCK_TYPES_SQL = `
   INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
@@ -1001,14 +1141,22 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
 
 export const BLOCKS_FTS_BACKFILL_MARKER_KEY = 'blocks_fts_backfill_v1'
 
-export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCKS_FTS_BACKFILL_MARKER_KEY}'
-`
+/** Marker for the one-shot `needs_apply` seed — see
+ *  {@link ensureStagingNeedsApplyColumn} for why it is not keyed on the ALTER.
+ *
+ *  VERSIONED, and the version is the re-run mechanism: a device that recorded
+ *  the old marker would never apply a widened seed rule. Bump this whenever
+ *  the seed learns to clear something it previously could not; the stale key
+ *  is left in `client_schema_state` and costs a row. */
+export const STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY = 'staging_needs_apply_seeded_v2'
 
-export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCKS_FTS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
+export const SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL = markerDoneSql(STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY)
+
+export const RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL = recordMarkerSql(STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY)
+
+export const SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL = markerDoneSql(BLOCKS_FTS_BACKFILL_MARKER_KEY)
+
+export const RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL = recordMarkerSql(BLOCKS_FTS_BACKFILL_MARKER_KEY)
 
 export const BACKFILL_BLOCKS_FTS_ROWIDS_SQL = `
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
@@ -1029,59 +1177,91 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-/** Planner-stats freshness, decided by *drift* rather than a clock.
- *  wa-sqlite ships without an automatic `sqlite_stat1`, so the planner
- *  falls back to row-count heuristics that consistently mis-rank join
- *  orders on `blocks` once the workspace is large — a 4-id `json_each`
- *  lookup with `(workspace_id, deleted)` filtering scans the workspace
- *  partial index (300k+ rows) instead of driving from the small set into
- *  the PK. Running `ANALYZE` populates `sqlite_stat1` and flips that
- *  decision.
+// ============================================================================
+// ANALYZE / planner stats. wa-sqlite has no automatic ANALYZE. The sharp edge
+// is a MISSING sqlite_stat1 row: SQLite then assumes ~10 rows for an equality
+// seek, and every hot index here leads with workspace_id (real selectivity ~1
+// on a client with one or two workspaces), which inverts join order. `PRAGMA
+// optimize` decides WHEN to re-analyze; one part of arming it is load-bearing
+// and pinned by tests, see {@link ANALYZE_ARMING_PROBES}. Measurements and the
+// alternatives considered: docs/pragma-optimize-spike/.
+// ============================================================================
+
+/** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
  *
- *  WHEN to re-run is the subtle part: `sqlite_stat1` already records the
- *  row count seen at the last ANALYZE, so we re-run whenever the live
- *  `blocks` count has diverged from that baseline by more than
- *  {@link ANALYZE_GROWTH_FACTOR}×. That one rule covers every case a timer
- *  can't: the empty-table-at-init race (no baseline → ANALYZE once data
- *  lands, never over the empty table), a large initial sync, a bulk
- *  import, and the legacy "0 0" stats bug (baseline ~0 over a huge table →
- *  force re-ANALYZE). A stable workspace stays within the factor and is
- *  left alone, so the multi-second scan doesn't repeat every boot. No
- *  marker row is needed — `sqlite_stat1` itself is the source of truth. */
+ *  Mask `0x03` is debug(`0x01`) + {@link ANALYZE_OPTIMIZE_SQL}'s `0x02` — so it
+ *  reports exactly the work the real call will perform, verified byte-identical
+ *  on the shipped build. `PRAGMA optimize(-1)` is the obvious-looking choice and
+ *  is WRONG for this: it also sets `0x10000` ("analyze all tables"), so it
+ *  reports work the real call declines to do. Keep the two masks in step. */
+export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
-/** Below this many `blocks` rows the planner's join-order choices don't
- *  cause the multi-second freezes (scanning a sub-thousand-row table is
- *  cheap either way), so ANALYZE buys nothing — and recording a tiny
- *  row-estimate mid-sync could itself mislead the planner into scanning a
- *  table that's actually still filling. Gates whether ANALYZE runs at
- *  all. */
-export const ANALYZE_MIN_BLOCKS = 1000
+/** `0x02` — "analyze what might benefit" — and NOT the default mask.
+ *
+ *  Bare `PRAGMA optimize` is the obvious simplification and it silently
+ *  re-samples: the default mask `0xfffe` carries a `0x10` bit imposing SQLite's
+ *  own `SQLITE_DEFAULT_OPTIMIZE_LIMIT` of 2000, which `analysis_limit=0` does
+ *  NOT clear — reinstating the fabricated selectivity of the module comment.
+ *  Behaviour is version-dependent (confirmed on wa-sqlite 3.53.0), and `0xfffe`
+ *  means "every bit we ever add", so naming `0x02` also opts out of bits SQLite
+ *  adds later: revisit the mask on a SQLite upgrade rather than assuming. */
+export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize(0x02)`
 
-/** Re-ANALYZE once the live `blocks` count diverges from the count baked
- *  into `sqlite_stat1` by this factor in either direction. 4× keeps the
- *  estimate within the same order of magnitude the planner cares about
- *  (join order turns on order-of-magnitude differences, not 4×), so a
- *  gradually-growing workspace re-analyzes rarely while an import or
- *  initial sync that multiplies the table triggers it promptly. */
-export const ANALYZE_GROWTH_FACTOR = 4
-
-/** Estimated `blocks` row count recorded at the last ANALYZE. `stat` is a
- *  space-separated string ("<rows> <avg-rows-per-key>…"); `CAST(... AS
- *  INTEGER)` parses its leading integer. MAX across the per-index rows is
- *  the table estimate (the partial workspace index reports live rows, the
- *  PK reports all rows; MAX takes the table total to match COUNT(*)).
- *  NULL when ANALYZE has never populated stats for `blocks`. */
-export const SELECT_BLOCKS_STAT_ESTIMATE_SQL = `
-  SELECT MAX(CAST(stat AS INTEGER)) AS rows FROM sqlite_stat1 WHERE tbl = 'blocks'
-`
-
-/** `sqlite_stat1` only exists once ANALYZE has run at least once; querying
- *  it before then throws "no such table". Probe `sqlite_master` first. */
-export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
-  SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1' LIMIT 1
-`
+/** ANALYZE here is UNBOUNDED, and that is load-bearing: every hot index leads
+ *  with `workspace_id` (real selectivity ~1 on a client with one or two
+ *  workspaces), so a SAMPLED pass records the sample size as the rows-per-value
+ *  estimate — inverting join order exactly as a missing `sqlite_stat1` row
+ *  does, at a magnitude that reads as plausible. No limit value avoids it: the
+ *  estimate IS the limit, so an honest one would have to exceed the
+ *  workspace's row count. See {@link ANALYZE_OPTIMIZE_SQL} for the other cap
+ *  that has to stay off.
+ *
+ *  `analysis_limit` is CONNECTION state, so an ANALYZE inherits whatever was set
+ *  last. Nothing in this tree sets it, so this asserts a precondition rather
+ *  than winning a race — every ANALYZE here is unbounded whatever the connection
+ *  carries. Paired with each statement in {@link analyzeUnbounded} for that
+ *  reason, not hoisted to once per pass.
+ *
+ *  It is NOT a race guard, and should not be mistaken for one: the agent bridge
+ *  executes arbitrary SQL on this connection outside {@link serializeAnalyze},
+ *  so a deliberate `analysis_limit=400` can land between the pair. Closing that
+ *  needs a lock across both statements, which {@link ClientSchemaBootstrapDb}'s
+ *  execute/getOptional shape cannot express without deadlocking bootstrap shims.
+ *
+ *  Tabs are not the hazard: with an OPFS VFS each opens a DEDICATED worker, so
+ *  they share the file, not a connection or its PRAGMA state. */
+export const RESET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
+
+/** The core hot tables: each `name` is what {@link runAnalyzeTables} analyzes,
+ *  each `probe` a planner-visible query that ARMS the staleness check.
+ *  The probes are load-bearing.
+ *
+ *  `PRAGMA optimize`'s stale-stats rule only considers tables the CONNECTION
+ *  has planned a query against, so each hot table must be announced with an
+ *  `EXPLAIN QUERY PLAN` that resolves to `SEARCH … USING INDEX` — a `SCAN`
+ *  does not arm, which is why the `blocks` probe carries `deleted = 0` to
+ *  match the partial index. Get that wrong and the probe is silently inert,
+ *  so these and every contributed probe are pinned by a plan-reading test
+ *  (`src/data/localSchema.test.ts`).
+ *
+ *  Param-free by design (a bound `?` would silently bind NULL through the
+ *  hand-rolled bootstrap shims), and reads-only so `guardSyncedTableWrites`
+ *  passes them through — a probe rewritten as a write would fail every
+ *  boot's ANALYZE.
+ *
+ *  CORE tables only. A plugin's table is declared by that plugin, through
+ *  `LocalSchemaContribution.analyzeTables` — see `resolveAnalyzeTables` in
+ *  `src/data/localSchema.ts`, whose probes are what callers should pass to
+ *  {@link runAnalyzeIfStale}. */
+export const CORE_ANALYZE_TABLES: readonly LocalSchemaAnalyzeTable[] = [
+  {name: 'blocks', probe: `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`},
+  {name: 'block_types', probe: `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`},
+  {name: 'block_aliases', probe: `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`},
+]
+
+export const ANALYZE_ARMING_PROBES: readonly string[] = CORE_ANALYZE_TABLES.map(table => table.probe)
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1101,30 +1281,12 @@ export const SELECT_REPROJECT_REF_MARKERS_SQL = `
   SELECT key FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'
 `
 
-export const RECORD_REPROJECT_REF_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
-export const CLEAR_REPROJECT_REF_MARKER_SQL = `
-  DELETE FROM client_schema_state WHERE key = ?
-`
-
 /** Completion markers for workspace-scoped repo.tx data backfills
  *  (`workspaceBackfillsFacet`). Keyed `workspace_backfill:<workspaceId>:<id>`;
  *  a row lands once a backfill has run for a workspace, so subsequent opens
  *  skip it. Local (never synced) — like the reproject markers, each device
  *  records its own completion. */
 export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
-
-export const SELECT_WORKSPACE_BACKFILL_MARKERS_SQL = `
-  SELECT key FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'
-`
-
-export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
 
 /** One-time post-upgrade marker: this client has re-scanned a workspace's
  *  staged `blocks_synced` rows under the relaxed reconcile gate, to heal
@@ -1134,13 +1296,28 @@ export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
  *  client. */
 export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
 
-export const SELECT_RECONCILE_RESCAN_MARKER_SQL = `
-  SELECT key FROM client_schema_state WHERE key = ?
-`
+/** Per-workspace: this device has caught up on the workspace's first sync, so
+ *  it opens without the sync gate (`workspaceFirstSync.ts`). Keyed
+ *  `workspace_first_sync_v1:<workspaceId>`. */
+export const WORKSPACE_FIRST_SYNC_MARKER_PREFIX = 'workspace_first_sync_v1:'
 
-export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
+/** One-shot: workspaces this device already holds blocks for were opened here
+ *  before the sync gate existed, so they are recorded as caught up rather than
+ *  gated — the gate's repair pass can write a staged row over an unechoed
+ *  local edit, which only a never-opened workspace is free of. A workspace
+ *  mid-first-sync at the upgrade is recorded too, as it would have opened
+ *  before. */
+export const WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY = 'workspace_first_sync_grandfathered_v1'
+
+const SELECT_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL = markerDoneSql(WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY)
+
+const RECORD_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL = recordMarkerSql(WORKSPACE_FIRST_SYNC_GRANDFATHERED_MARKER_KEY)
+
+const GRANDFATHER_WORKSPACE_FIRST_SYNC_SQL = `
+  INSERT OR IGNORE INTO client_schema_state (key, completed_at)
+  SELECT '${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}' || w.id, strftime('%s', 'now') * 1000
+    FROM workspaces w
+   WHERE EXISTS (SELECT 1 FROM blocks b WHERE b.workspace_id = w.id)
 `
 
 // ============================================================================
@@ -1151,18 +1328,16 @@ export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
 // A trigger created with `CREATE TRIGGER IF NOT EXISTS` is FROZEN on upgrade:
 // once a trigger of that name exists, SQLite keeps the old body and silently
 // ignores the new definition. So a client whose local DB was bootstrapped
-// before a trigger's body changed keeps running the stale one forever — which
-// is exactly how the pre-D-3.1 `blocks_upload_update` kept stripping
-// workspace_id from content-only PATCHes and stranding e2ee uploads behind the
-// server's ciphertext CHECK (SQLSTATE 23514).
+// before a trigger's body changed keeps running the stale one forever.
 //
-// Force every CREATE TRIGGER to re-apply from current source by prepending a
-// `DROP TRIGGER IF EXISTS <name>` before it. This is self-maintaining: any
-// future trigger body change auto-installs on next startup, with no per-change
-// migration to remember. Only triggers are force-recreated — tables and indexes
-// keep `IF NOT EXISTS` (dropping a table would destroy data). A dropped trigger
-// is free to rebuild, and the bootstrap runs before the repo serves any write,
-// so there is no window where a write misses its trigger.
+// So triggers are re-applied from current source: `CLIENT_SCHEMA_STATEMENTS`
+// prepends `DROP TRIGGER IF EXISTS <name>` to every CREATE TRIGGER (the
+// fresh-database and test path), and the boot path drops + recreates only the
+// triggers whose `sqlite_master` text differs (`triggerRecreateStatements`).
+// Either way a body change installs on next startup with no per-change
+// migration. Only triggers are recreated — tables and indexes keep
+// `IF NOT EXISTS` (dropping a table would destroy data). The bootstrap runs
+// before the repo serves any write, so no write misses its trigger.
 const CREATE_TRIGGER_NAME_RE = /^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/i
 
 const withTriggerRecreate = (statements: readonly string[]): string[] =>
@@ -1173,15 +1348,15 @@ const withTriggerRecreate = (statements: readonly string[]): string[] =>
 
 /** Run `fn` with `triggerName` temporarily dropped, then recreate it from
  *  `createSql` (its canonical definition) — even if `fn` throws. For a bulk
- *  maintenance write that must NOT fan out through an unconditional per-row
+ *  maintenance write that must NOT fan out through a per-row
  *  side-effect trigger (e.g. a column backfill that would otherwise write one
  *  `row_events` row per block — hundreds of thousands of them). SQLite has no
  *  `DISABLE TRIGGER`, so drop+recreate is the equivalent; pass the same
  *  `CREATE` constant the bootstrap installs so the recreated trigger can't
  *  drift. This is the client analog of the server backfill's `DISABLE TRIGGER`
- *  bracketing, and the same drop-then-recreate move {@link withTriggerRecreate}
- *  already does to every trigger on boot. Bootstrap-only: there is no
- *  write-serving window in which the trigger is absent. */
+ *  bracketing. Bootstrap-only: there is no write-serving window in which the
+ *  trigger is absent, and the boot path's drift check re-installs the
+ *  trigger if this bracket dies between the DROP and the CREATE. */
 const withTriggerSuspended = async (
   db: {execute: (sql: string) => Promise<unknown>},
   triggerName: string,
@@ -1196,7 +1371,7 @@ const withTriggerSuspended = async (
   }
 }
 
-export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
+const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
@@ -1221,13 +1396,16 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
+  // After CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL above, which it deletes from.
+  DROP_ANALYZE_INDEX_SET_MARKERS_SQL,
   // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
-  // 2 upload-routing triggers
+  // 2 upload-routing triggers, and the upload queue's checkpoint reset
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
+  CREATE_PS_CRUD_FORGET_SEEN_CHECKPOINT_TRIGGER_SQL,
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,
@@ -1250,35 +1428,62 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // 2 blocks_synced change-capture triggers (Layout B observer detection)
   CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
-])
+]
 
-export const CLIENT_SCHEMA_TRIGGER_NAMES = [
-  'blocks_row_event_insert',
-  'blocks_row_event_update',
-  'blocks_row_event_delete',
-  'blocks_upload_insert',
-  'blocks_upload_update',
-  'blocks_parent_workspace_check_insert',
-  'blocks_parent_workspace_check_update',
-  'blocks_parent_not_deleted_check_insert',
-  'blocks_parent_not_deleted_check_update',
-  'blocks_alias_insert',
-  'blocks_alias_update',
-  'blocks_alias_delete',
-  'block_aliases_workspace_alias_unique',
-  'blocks_type_insert',
-  'blocks_type_update',
-  'blocks_type_delete',
-  'blocks_fts_insert',
-  'blocks_fts_update',
-  'blocks_fts_delete',
-  'blocks_synced_changes_insert',
-  'blocks_synced_changes_delete',
-] as const
+export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate(CLIENT_SCHEMA_BASE_STATEMENTS)
+
+/** The same list split for the boot path: everything that is not a trigger,
+ *  and the trigger CREATE statements by name. */
+export const CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS: readonly string[] =
+  CLIENT_SCHEMA_BASE_STATEMENTS.filter(stmt => !CREATE_TRIGGER_NAME_RE.test(stmt))
+export const CLIENT_SCHEMA_TRIGGER_CREATE_SQL: ReadonlyMap<string, string> = new Map(
+  CLIENT_SCHEMA_BASE_STATEMENTS.flatMap(stmt => {
+    const name = stmt.match(CREATE_TRIGGER_NAME_RE)?.[1]
+    return name ? [[name, stmt] as const] : []
+  }),
+)
+
+/** SQLite stores a CREATE statement's text as written, except that it drops
+ *  `IF NOT EXISTS`; whitespace outside string literals is ours. Compare after
+ *  both normalizations. Whitespace inside a `'…'` literal is part of the
+ *  trigger's behaviour (a RAISE message) and is kept. */
+const normalizeTriggerSql = (sql: string): string =>
+  sql
+    .split(/('(?:[^']|'')*')/)
+    .map((part, index) => (index % 2 === 1 ? part : part.replace(/\s+/g, ' ')))
+    .join('')
+    .replace(/CREATE TRIGGER IF NOT EXISTS /i, 'CREATE TRIGGER ')
+    .trim()
+
+export const triggerSqlMatches = (stored: string | null | undefined, createSql: string): boolean =>
+  typeof stored === 'string' && normalizeTriggerSql(stored) === normalizeTriggerSql(createSql)
+
+/** Triggers an earlier build installed and this one does not. */
+const RETIRED_TRIGGER_NAMES: readonly string[] = [
+  // The download hold on `ps_crud`, from before the SDK raised its own. Its
+  // body writes `ps_buckets.target_op`, which core schema 14 drops, so while it
+  // exists every enqueue fails.
+  'ps_crud_hold_downloads',
+]
+
+/** A DROP for each retired trigger still installed, and DROP + CREATE pairs for
+ *  every client-schema trigger whose stored definition is missing or differs
+ *  from the code's. Read `stored` from `sqlite_master`, not from a version
+ *  marker: a marker cannot see a trigger a crashed `withTriggerSuspended` left
+ *  dropped. */
+export const triggerRecreateStatements = (stored: ReadonlyMap<string, string>): string[] => [
+  ...RETIRED_TRIGGER_NAMES.filter(name => stored.has(name)).map(name => `DROP TRIGGER IF EXISTS ${name}`),
+  ...[...CLIENT_SCHEMA_TRIGGER_CREATE_SQL].flatMap(([name, createSql]) =>
+    triggerSqlMatches(stored.get(name), createSql) ? [] : [`DROP TRIGGER IF EXISTS ${name}`, createSql]),
+]
+
+export const SELECT_CLIENT_SCHEMA_TRIGGERS_SQL = `SELECT name, sql FROM sqlite_master WHERE type = 'trigger'`
+
+export const CLIENT_SCHEMA_TRIGGER_NAMES: readonly string[] = [...CLIENT_SCHEMA_TRIGGER_CREATE_SQL.keys()]
 
 interface ClientSchemaBootstrapDb {
   execute: (sql: string, params?: unknown[]) => Promise<unknown>
-  getOptional: <T>(sql: string) => Promise<T | null>
+  getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
 }
 
 /** Run after CLIENT_SCHEMA_STATEMENTS to populate block_aliases from
@@ -1292,8 +1497,7 @@ interface ClientSchemaBootstrapDb {
 export const backfillBlockAliasesIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_ALIASES_SQL)
   // Record completion regardless of whether any rows were inserted —
   // an empty workspace is fully backfilled too, and we don't want to
@@ -1304,8 +1508,7 @@ export const backfillBlockAliasesIfEmpty = async (
 export const backfillBlockTypesIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCK_TYPES_SQL)
   await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
 }
@@ -1313,11 +1516,18 @@ export const backfillBlockTypesIfEmpty = async (
 export const backfillBlocksFtsIfEmpty = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)
-  if (done !== null) return
+  if (await isMarkerSet(db, SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL)) return
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
+}
+
+export const grandfatherWorkspaceFirstSync = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<void> => {
+  if (await isMarkerSet(db, SELECT_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL)) return
+  await db.execute(GRANDFATHER_WORKSPACE_FIRST_SYNC_SQL)
+  await db.execute(RECORD_WORKSPACE_FIRST_SYNC_GRANDFATHERED_SQL)
 }
 
 /**
@@ -1371,6 +1581,44 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
 }
 
 /**
+ * Idempotent local-schema migration for the staging `needs_apply` flag.
+ *
+ * The column arrives defaulting to "unapplied", which is right for every future
+ * delivery and wrong for every row already staged — so a device that upgrades
+ * mid-life would read its whole workspace as behind. {@link SEED_STAGING_NEEDS_APPLY_SQL}
+ * clears it once for the rows a drain demonstrably already handled; see its
+ * header for why a one-shot approximation is the right tool there and would not
+ * be anywhere else.
+ *
+ * Fresh installs skip both — `CREATE_BLOCKS_SYNCED_TABLE_SQL` carries the
+ * column, so there is nothing to ALTER and nothing staged to seed. They do NOT
+ * skip the marker read, which is why this runs with the other one-shot
+ * backfills rather than beside the CREATEs: `client_schema_state` is created by
+ * `CLIENT_SCHEMA_STATEMENTS`, and reading its marker before that exists throws
+ * and aborts the whole bootstrap — on a brand-new profile, which is the one
+ * case with nothing to migrate.
+ */
+export const ensureStagingNeedsApplyColumn = async (
+  db: ClientSchemaBootstrapDb & {getAll: <T>(sql: string) => Promise<T[]>},
+): Promise<void> => {
+  const columns = await db.getAll<{name: string}>('PRAGMA table_info(blocks_synced)')
+  if (columns.length === 0) return
+  for (const column of STAGING_LOCAL_COLUMNS) {
+    if (columns.some(existing => existing.name === column.name)) continue
+    await db.execute(`ALTER TABLE blocks_synced ADD COLUMN ${column.definition}`)
+  }
+  // Marker-gated, NOT gated on "did this invocation add the column" — those two
+  // are not the same claim, and the difference is the whole failure mode: a
+  // crash or a throw between the ALTER and the seed leaves the column present
+  // and every staged row flagged, and a run keyed on the ALTER never seeds
+  // again. That reads as a permanent gap in every workspace, so every one-way
+  // pass refuses for the life of the install. The marker retries instead.
+  if (await isMarkerSet(db, SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)) return
+  await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
+  await db.execute(RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL)
+}
+
+/**
  * Idempotent local-schema migration for undo grouping (issue #306): add
  * `group_id` to `tx_context` and `row_events` on upgrading devices.
  * Both tables are created with CREATE TABLE IF NOT EXISTS, so adding the
@@ -1406,21 +1654,10 @@ export const ensureUndoGroupIdColumns = async (db: {
   }
 }
 
-/** Row count `sqlite_stat1` recorded for `blocks` at the last ANALYZE, or
- *  `null` if ANALYZE has never run for it. See {@link SELECT_BLOCKS_STAT_ESTIMATE_SQL}. */
-export const getBlocksStatEstimate = async (
-  db: ClientSchemaBootstrapDb,
-): Promise<number | null> => {
-  // sqlite_stat1 doesn't exist until the first ANALYZE — probe to avoid a
-  // "no such table" throw on a fresh device.
-  const hasStatTable = await db.getOptional<{present: number}>(SELECT_SQLITE_STAT1_EXISTS_SQL)
-  if (hasStatTable === null) return null
-  const row = await db.getOptional<{rows: number | null}>(SELECT_BLOCKS_STAT_ESTIMATE_SQL)
-  return row?.rows ?? null
-}
-
-/** Live `blocks` row count — a covering index scan: cheap relative to
- *  ANALYZE, but not free on a large table, so callers run it at idle. */
+/** Live `blocks` row count. Only the manual command uses it, for its toast —
+ *  the automatic path no longer counts anything to decide (SQLite does), which
+ *  is most of why it got cheap. A covering index scan: fine for a user-initiated
+ *  command, not for every boot. */
 export const getBlocksCount = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<number> => {
@@ -1428,68 +1665,228 @@ export const getBlocksCount = async (
   return row?.count ?? 0
 }
 
-/** Pure drift predicate (no I/O) so the thresholds stay unit-testable
- *  without a database. Given the count baked into `sqlite_stat1`
- *  (`estimate`, `null` = never analyzed) and the live `count`, decide
- *  whether ANALYZE is worth running. See {@link ANALYZE_MIN_BLOCKS} /
- *  {@link ANALYZE_GROWTH_FACTOR} for the rationale behind each branch. */
-export const analyzeIsWarranted = (
-  estimate: number | null,
-  count: number,
-  minBlocks: number = ANALYZE_MIN_BLOCKS,
-  growthFactor: number = ANALYZE_GROWTH_FACTOR,
-): boolean => {
-  // Too small for join order to matter — and a tiny recorded estimate
-  // could mislead the planner mid-sync. Leave the table's stats alone.
-  if (count < minBlocks) return false
-  // Real data but no baseline yet (fresh sync / first import).
-  if (estimate === null) return true
-  // Grew far past the baseline (import / initial sync / the "0 0" bug,
-  // where estimate≈0 makes any real count exceed estimate*factor).
-  if (count >= estimate * growthFactor) return true
-  // Shrank far below it (e.g. a large prune) — re-tighten the estimate.
-  if (estimate >= count * growthFactor) return true
-  return false
-}
-
 export interface AnalyzeResult {
-  /** Whether `ANALYZE` was run this call. */
-  analyzed: boolean
-  /** Live `blocks` count observed (drives the decision + any toast). */
-  count: number
-  /** Recorded estimate before this call (`null` = never analyzed). */
-  previousEstimate: number | null
+  /** What the dry run said `PRAGMA optimize` would do — one `ANALYZE "main"."x"`
+   *  per table it decided was stale, `[]` when nothing was. `null` means the db
+   *  surface returned no rows from `execute` (a bootstrap shim that discards
+   *  them), NOT that nothing happened: the optimize still ran, we just can't
+   *  report what it did. Observability only; nothing branches on it. */
+  proposed: string[] | null
+  /** Tables a bulk writer had recorded as owed ({@link recordAnalyzeOwed}),
+   *  analyzed unconditionally before the optimize. */
+  owed: readonly string[]
 }
 
-/** Run `ANALYZE` only if the live `blocks` count has drifted from the
- *  `sqlite_stat1` baseline (see {@link analyzeIsWarranted}). Callers MUST
- *  schedule this off the first-paint critical path (idle / post-sync):
- *  the count is a full index scan and ANALYZE itself is a multi-second
- *  pass on a large DB, both on the single SQLite worker. */
+/** Announce interest in the hot tables so the staleness check considers them.
+ *  See {@link ANALYZE_ARMING_PROBES} for why this is required.
+ *
+ *  Guarded per probe. A missing table must not abort the pass: the alternative
+ *  failure mode is "this session gets no stats at all", which is strictly worse
+ *  than one unarmed table, and is a mode this code has already been burned by.
+ *  A probe that silently fails still shows up as an unrepaired table, which is
+ *  what the tests assert on — so the guard doesn't blunt the pin. */
+const armAnalyzeProbes = async (
+  db: ClientSchemaBootstrapDb,
+  probes: readonly string[],
+): Promise<void> => {
+  for (const probe of probes) {
+    try {
+      await db.execute(`EXPLAIN QUERY PLAN ${probe}`)
+    } catch (error) {
+      console.warn('[clientSchema] ANALYZE arming probe failed:', probe, error)
+    }
+  }
+}
+
+/** PowerSync's `execute` resolves to a `QueryResult` whose rows live under
+ *  `rows._array`; the hand-rolled bootstrap shims resolve to nothing. Read it
+ *  defensively rather than widening {@link ClientSchemaBootstrapDb} — the
+ *  optimize does not depend on this, only the log line does. */
+const readOptimizeRows = (result: unknown): string[] | null => {
+  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
+  if (!Array.isArray(rows)) return null
+  return rows
+    .map(row => (row as {optimize?: unknown}).optimize)
+    .filter((sql): sql is string => typeof sql === 'string')
+}
+
+/** Serializes the ANALYZE entry points against each other and against
+ *  themselves.
+ *
+ *  Several schedulers point at them (repoProvider's boot and first-sync checks,
+ *  the bulk writers, the manual command) and the boot/first-sync pair has
+ *  overlapped before. Two concurrent passes are two multi-second parks of this
+ *  tab's SQLite connection to reach one settled `sqlite_stat1`.
+ *
+ *  Scope, stated because it is not total: this is a module-level chain, so it
+ *  coordinates one TAB. Tabs do not share a connection here (each opens a
+ *  dedicated worker — see {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL}), they share
+ *  the database file, and `navigator.locks` keeps their writes apart. So two
+ *  tabs can each run a pass: duplicated work, not a wrong result.
+ *
+ *  Corollary worth knowing before reasoning about staleness across connections:
+ *  writing `sqlite_stat1` does NOT bump `schema_version` on its own, so an
+ *  already-open connection would keep its old query plans for its lifetime.
+ *  `analyzeUnbounded` therefore bumps the cookie explicitly once the pass is
+ *  done — which is load-bearing now that a single tab has a reader pool, not
+ *  just other tabs, reading through connections it did not analyze on. */
+let analyzeChain: Promise<unknown> = Promise.resolve()
+const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
+  // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
+  // the queue for every later one. The rejection still reaches this call's own
+  // caller through `next` — only the chain swallows it.
+  const next = analyzeChain.then(run, run)
+  analyzeChain = next
+  return next
+}
+
+/** Re-ANALYZE whatever SQLite considers stale — a table whose index has no
+ *  `sqlite_stat1` row (a freshly created index, or one whose table was dropped
+ *  and rebuilt), or whose recorded row count has drifted ~10x from the live one.
+ *  Usually a no-op; measured at 0ms on a settled 347k-block client.
+ *
+ *  Still belongs off the first-paint critical path (deep idle / post-sync): when
+ *  it DOES fire it runs a real ANALYZE on the single SQLite worker, and on a
+ *  cold fresh device that can be every table at once.
+ *
+ *  Deliberately on the catch-up idle tier, which force-runs on a deadline. A
+ *  freshly created index has NO `sqlite_stat1` row, and SQLite then assumes ~10
+ *  rows for an equality seek on its leading column — the join-order inversion
+ *  this module exists to prevent. So between a release adding an index and this
+ *  pass running, plans are pathological. Bounding that at 30s is worth the
+ *  ~0.3-1.2s the pass costs; waiting for genuine idle would trade a bounded
+ *  pause for an unbounded stretch of bad plans.
+ *
+ *  `probes` defaults to the CORE tables. A caller that can reach the local-schema
+ *  contributions should pass `installedAnalyzeArmingProbes()` instead, so
+ *  plugin-owned tables are armed too; the default is what a bootstrap-time
+ *  caller with no runtime yet gets.
+ *
+ *  Deliberately not gated on "is the observer still materializing?" (tried and
+ *  reverted). A partial baseline is fine — join order turns on orders of
+ *  magnitude — and every cheap probe for it is wrong: `observer.materializeWorkspace`
+ *  reads `blocks_synced` directly and never touches `blocks_synced_changes`, and
+ *  "staged rows not yet in blocks" stays true forever for a permanently-
+ *  undecryptable workspace, wedging the gate shut. If revisited, thread the
+ *  observer's own in-flight state in and fall through to ANALYZE on exhaustion
+ *  rather than skipping. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
-  opts: {minBlocks?: number; growthFactor?: number} = {},
-): Promise<AnalyzeResult> => {
-  const minBlocks = opts.minBlocks ?? ANALYZE_MIN_BLOCKS
-  const growthFactor = opts.growthFactor ?? ANALYZE_GROWTH_FACTOR
-  const previousEstimate = await getBlocksStatEstimate(db)
-  const count = await getBlocksCount(db)
-  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor)) {
-    return {analyzed: false, count, previousEstimate}
+  probes: readonly string[] = ANALYZE_ARMING_PROBES,
+): Promise<AnalyzeResult> => serializeAnalyze(async () => {
+  // The optimize cannot see growth under ~10x, so what a writer owed goes first.
+  const owed = await readAnalyzeOwed(db)
+  if (owed.length > 0) await analyzeTablesUnbounded(db, owed)
+  await armAnalyzeProbes(db, probes)
+  // The dry run fixes `proposed` BEFORE anything analyzes, which is what makes
+  // it a report of the optimize's own decision rather than of leftover state.
+  const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
+  await analyzeUnbounded(db, ANALYZE_OPTIMIZE_SQL)
+  return {proposed, owed}
+})
+
+/** Every ANALYZE in this module goes through here, so the reset cannot be
+ *  forgotten at a fourth site. Paired, not hoisted to the top of a pass:
+ *  {@link RESET_ANALYZE_SAMPLE_LIMIT_SQL} is only sound adjacent to the
+ *  statement it protects. */
+const analyzeUnbounded = async (
+  db: ClientSchemaBootstrapDb,
+  ...statements: readonly string[]
+): Promise<void> => {
+  for (const sql of statements) {
+    await db.execute(RESET_ANALYZE_SAMPLE_LIMIT_SQL)
+    await db.execute(sql)
   }
-  await db.execute('ANALYZE')
-  return {analyzed: true, count, previousEstimate}
+
+  // Writing `sqlite_stat1` does not bump `schema_version` (see the note on
+  // `runAnalyzeIfStale`), so a connection that was already open keeps the old
+  // plans for its lifetime. That used to cost only other TABS; with a reader
+  // pool the reads of THIS tab go to a connection that would keep the
+  // pre-ANALYZE plans too — losing most of the benefit until reload, on exactly
+  // the queries ANALYZE was run for. A no-op DDL bumps the cookie, and every
+  // connection reloads `sqlite_stat1` on its next statement.
+  //
+  // Both statements are idempotent because two tabs can finish ANALYZE at the
+  // same time and interleave: `analyzeChain` serialises within a tab, not
+  // across them, so an unconditional DROP can find the table already gone and
+  // report a failure for a pass that actually succeeded. Any interleaving still
+  // moves the cookie at least once, which is all this needs.
+  await db.execute('CREATE TABLE IF NOT EXISTS __km_analyze_bump(x)')
+  await db.execute('DROP TABLE IF EXISTS __km_analyze_bump')
 }
 
-/** Unconditional `ANALYZE` for the manual command-palette command — runs
- *  regardless of drift (the user explicitly asked) and reports the table
- *  size so the caller can surface it. Still belongs off the render
- *  path. */
+/** A bulk writer's record that `sqlite_stat1` is behind for a table, one
+ *  `client_schema_state` row per table. `PRAGMA optimize` re-analyzes a table
+ *  only once its row count drifts ~10x, so one that tripled keeps its old count,
+ *  and an index that was EMPTY when last analyzed keeps its `0 0` row and reads
+ *  as empty however full it is.
+ *
+ *  Recorded BEFORE the write, so a reload, a tab that dies or a refresh that
+ *  fails all leave it for the next {@link runAnalyzeIfStale}; cleared only by an
+ *  ANALYZE of that table that succeeded. Local, like the stats it is about.
+ *
+ *  Accepted: another tab's boot check can repay a marker while the write is
+ *  still going. The writer's own refresh covers the rest unless it dies too. */
+export const ANALYZE_OWED_MARKER_PREFIX = 'analyze_owed:'
+
+/** One row, so it reads through `getOptional`: the bootstrap shims' `execute`
+ *  hands back no rows. */
+const SELECT_ANALYZE_OWED_SQL = String.raw`
+  SELECT group_concat(substr(key, ${ANALYZE_OWED_MARKER_PREFIX.length + 1}), char(31)) AS tables
+    FROM client_schema_state
+   WHERE key LIKE 'analyze\_owed:%' ESCAPE '\'
+`
+
+const analyzeOwedKey = (table: string): string => `${ANALYZE_OWED_MARKER_PREFIX}${table}`
+
+export const recordAnalyzeOwed = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => {
+  for (const table of tables) await db.execute(RECORD_KEYED_MARKER_SQL, [analyzeOwedKey(table)])
+}
+
+export const readAnalyzeOwed = async (db: ClientSchemaBootstrapDb): Promise<string[]> => {
+  const row = await db.getOptional<{tables: string | null}>(SELECT_ANALYZE_OWED_SQL)
+  return row?.tables ? row.tables.split('\x1f') : []
+}
+
+/** Inside {@link serializeAnalyze} only. Settles each table's owed marker once
+ *  its ANALYZE has succeeded. */
+const analyzeTablesUnbounded = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => {
+  await analyzeUnbounded(
+    db, ...tables.map(table => `ANALYZE "main"."${table.replaceAll('"', '""')}"`),
+  )
+  for (const table of tables) await db.execute(DELETE_KEYED_MARKER_SQL, [analyzeOwedKey(table)])
+}
+
+/** Unconditional ANALYZE of the named tables, for a bulk writer that KNOWS it
+ *  grew them — see {@link ANALYZE_OWED_MARKER_PREFIX} for why the drift check
+ *  cannot stand in, and for the marker a writer records first.
+ *
+ *  A full scan of each table on the writer (the only connection on CoopSync):
+ *  keep it off the render path. */
+export const runAnalyzeTables = async (
+  db: ClientSchemaBootstrapDb,
+  tables: readonly string[],
+): Promise<void> => serializeAnalyze(() => analyzeTablesUnbounded(db, tables))
+
+/** Unconditional `ANALYZE` for the manual command-palette command.
+ *
+ *  The escape hatch for the case the heuristic can't model: stats that are
+ *  present and schema-current but wrong for the current query mix — where the
+ *  automatic path, by design, walks away. Reports the table size so the caller
+ *  can surface it.
+ *
+ *  A multi-second scan holding the single SQLite worker, so it stays manual and
+ *  off the render path. */
 export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
-): Promise<{count: number}> => {
+): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
-  await db.execute('ANALYZE')
+  await analyzeUnbounded(db, 'ANALYZE')
   return {count}
-}
-
+})

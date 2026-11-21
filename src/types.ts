@@ -36,7 +36,27 @@ export interface Workspace {
   // local prime after create_workspace doesn't null them out before sync.
   encryptionMode: string
   wkCanary: string | null
+  // Properties-as-blocks rollout lever
+  // (docs/properties-as-blocks-migration.html §6): 'cell' →
+  // 'children' → 'cell-off', operator-written server-side (forward-only
+  // trigger), synced to every client. "Flipped" is ALWAYS the
+  // at-or-past-'children' test (`isChildBackedPropertiesWorkspace`),
+  // never equality.
+  propertiesMigration: PropertiesMigrationState
 }
+
+/** `workspaces.properties_migration` values, in rollout order. */
+export type PropertiesMigrationState = 'cell' | 'children' | 'cell-off'
+
+/** The one predicate every properties-as-blocks consumer shares
+ *  (recognition, dual-write, projection, reconcile): child-backed =
+ *  workspace flipped = at or past 'children'. Never an equality test —
+ *  an equality gate would un-recognize every field row the moment a
+ *  workspace advances to 'cell-off'
+ *  (docs/properties-as-blocks-migration.html §6). */
+export const isChildBackedPropertiesWorkspace = (
+  state: PropertiesMigrationState,
+): boolean => state === 'children' || state === 'cell-off'
 
 export interface WorkspaceMembership {
   id: string
@@ -98,6 +118,14 @@ export interface BlockContextType {
     }
     panelId?: string
     layoutSessionBlockId?: string
+    /** The pane's view mode (`panelViewModeProp` on the panel row), threaded
+     *  by `PanelRenderer` around the top-level block render so renderer
+     *  resolution (`canRender`) can select a mode-specific renderer. Children
+     *  inherit it like any context field; a mode renderer that embeds normal
+     *  block content clears it in its own `NestedBlockContextProvider`. */
+    panelViewMode?: string
+    /** Mount outside the editor when its surface clips tooltips. */
+    editorTooltipParent?: HTMLElement
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
      *  one rendered occurrence of that block, even when the same block is
@@ -114,16 +142,17 @@ export interface BlockContextType {
      *  layout boundary, before a panel sets it. See
      *  `resolveStructuralEditPolicy`. */
     scopeRootId?: string
-    /** Single visible panel mode: widen the panel's scroll target to the
-     *  whole layout surface while constraining its document content inside
-     *  the panel renderer. */
-    wideScrollSurface?: boolean
+    /** Whether maximizing this pane would do anything, declared by the layout
+     *  that owns the maximize rendering rule: false with a single pane
+     *  (nothing to hide) and on mobile (`LayoutRenderer` already renders one
+     *  pane at a time and ignores `panelMaximizedProp` there). */
+    canMaximizePanel?: boolean
     /** Whether focus entering the panel body should mark this panel active.
      *  Desktop tracks focus for keyboard ownership; mobile renders only the
      *  active panel, so pointer activation is enough there. */
     trackPanelFocus?: boolean
     /** Umbrella surface flag — set by every non-document mount
-     *  (`BlockEmbed`, `BacklinkEntry`, breadcrumb list). Consulted by
+     *  (`BlockEmbed`, `BlockEntry`, breadcrumb list). Consulted by
      *  `useIsFocalRender` / `isFocalRender` so a new surface only has
      *  to set the umbrella to be excluded from focal affordances. */
     isNestedSurface?: boolean

@@ -7,27 +7,39 @@ on:
     branches: [ master ]
   repository_dispatch:
 
+# A newer push to the same branch/PR supersedes the in-flight run — cancel it
+# instead of paying for both. Master pushes keep their own per-sha groups
+# (github.ref is refs/heads/master for all of them, so guard with run_id) so a
+# merge train never cancels the run that would have caught a bad merge.
+concurrency:
+  group: run-tests-${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.1.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '24.x'
-          cache: yarn
+          node-version: '26.x'
+          cache: pnpm
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Install Social Publisher extension dependencies
-        run: yarn --cwd agent-extensions/social-media-publisher install --frozen-lockfile
+        run: pnpm -C agent-extensions/social-media-publisher install --frozen-lockfile
 
-      # Persist the incremental build caches across runs: tsc -b writes
+      # Persist the incremental build caches across runs: tsc -b (TypeScript 7's
+      # native compiler for compile and compile:packages; TS 6 for compile:ts6) writes
       # node_modules/.tmp/*.tsbuildinfo, eslint --cache writes
       # node_modules/.cache/eslint. Both live under node_modules and are wiped
       # on a cold runner. The key hashes the tsconfig/eslint config + rules +
@@ -38,20 +50,64 @@ jobs:
       # for incremental reuse. tsc's content-hash invalidation keeps the
       # tsbuildinfo reuse sound.
       - name: Cache tsc + eslint build state
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             node_modules/.tmp
             node_modules/.cache/eslint
-          key: build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'yarn.lock') }}-${{ github.sha }}
+          key: build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: |
-            build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'yarn.lock') }}-
+            build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'pnpm-lock.yaml') }}-
 
       - name: Run checks
-        run: yarn run check
+        run: pnpm run check
+
+      # `pnpm run check` does not build, so nothing else in the PR gate would
+      # notice an export vanishing from the emitted bundle — that check lives in
+      # the build (scripts/check-dist-exports.ts). pr-preview.yml builds but
+      # skips forks, and deploy-pages.yml runs only after merge, so without this
+      # step a fork PR's first signal is a failed deploy on master.
+      - name: Build (also runs the emitted-export check)
+        run: pnpm run build
 
       - name: Generate agent extension type stubs
-        run: yarn agent types --force
+        run: pnpm agent types --force
 
       - name: Run Social Publisher extension checks
-        run: yarn --cwd agent-extensions/social-media-publisher run check
+        run: pnpm -C agent-extensions/social-media-publisher run check
+
+      # The root gate deliberately excludes agent-extensions (eslint-ignored,
+      # outside the app tsconfig), so an extension's own gate is the only thing
+      # that covers it — and until this step existed, nothing ran it. Needs no
+      # install of its own: the package declares no dependencies and shells out
+      # to the root node_modules/.bin.
+      - name: Run Strength Tracker extension checks
+        run: pnpm -C agent-extensions/strength-tracker run check
+
+  # Tests that drive real browsers (`*.browser.test.ts`). Their own job because
+  # the gate has no browser binaries, and this is the only place a sandbox
+  # boundary gets exercised on every engine.
+  browser-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '26.x'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium webkit firefox
+
+      - name: Run browser tests
+        run: pnpm run test:browser

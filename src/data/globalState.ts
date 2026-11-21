@@ -12,6 +12,7 @@
  * drives undo bucketing and schema validation, not the upload routing.
  */
 
+import { decodeRowProperty } from '@/data/rowProperty'
 import { use, useCallback } from 'react'
 import { useBlockContext } from '@/context/block.js'
 import { useUser } from '@/components/Login.js'
@@ -32,7 +33,6 @@ import {
   isEditingProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
-import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import {
   getLayoutSessionBlock,
   getPluginPrefsBlock,
@@ -64,11 +64,12 @@ export function useRootUIStateBlock(): Block {
   return use(getUIStateBlock(repo, workspaceId, user, {}))
 }
 
-export function useLayoutSessionBlock(layoutSessionId = getLayoutSessionId()): Block {
-  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId))
+export function useLayoutSessionBlock(layoutSessionId?: string): Block {
+  const repo = useRepo()
+  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId ?? repo.activeLayoutSessionId))
 }
 
-export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()): Block[] {
+export function usePanelsForLayoutSession(layoutSessionId?: string): Block[] {
   return useChildren(useLayoutSessionBlock(layoutSessionId))
 }
 
@@ -102,10 +103,13 @@ export function useUserBlock(): Block {
  *  yet) `name` falls back to the raw id and `blockId` is omitted — so
  *  attribution degrades to the prior plain-text behaviour rather than
  *  rendering a link to a block that doesn't exist. */
-export function useUserPage(userId: string): {name: string; blockId?: string} {
+export function useUserPage(userId: string, workspaceId?: string): {name: string; blockId?: string} {
   const repo = useRepo()
-  const workspaceId = requireWorkspaceId(repo, 'useUserPage')
-  const id = userPageBlockId(workspaceId, userId)
+  // Resolve against the caller-supplied workspace when given (attribution for
+  // a block whose workspace may not be the active one — e.g. a non-modal info
+  // dialog left open across a workspace switch), else the active workspace.
+  const resolvedWorkspaceId = workspaceId ?? requireWorkspaceId(repo, 'useUserPage')
+  const id = userPageBlockId(resolvedWorkspaceId, userId)
   const block = repo.block(id)
   const resolved = useHandle(block, {
     selector: doc => doc
@@ -235,12 +239,8 @@ export const useInFocus = (blockId: string, explicitRenderScopeId?: string): boo
 
 export const useIsSelected = (blockId: string): boolean =>
   useHandle(useUIStateBlock(), {
-    selector: doc => {
-      const stored = doc?.properties[selectionStateProp.name]
-      if (stored === undefined) return false
-      const sel = selectionStateProp.codec.decode(stored)
-      return sel.selectedBlockIds.includes(blockId)
-    },
+    selector: doc =>
+      !!doc && decodeRowProperty(doc, selectionStateProp).selectedBlockIds.includes(blockId),
   })
 
 export const useInEditMode = (blockId: string, explicitRenderScopeId?: string): boolean => {

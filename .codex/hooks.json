@@ -1,0 +1,136 @@
+{
+  "hooks": {
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-prime-hook.mjs\" --codex PostCompact",
+            "statusMessage": "Scheduling Beads context refresh",
+            "type": "command",
+            "timeout": 30
+          }
+        ],
+        "matcher": "manual|auto"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-prime-hook.mjs\" --codex PreCompact",
+            "statusMessage": "Checking Beads context",
+            "type": "command",
+            "timeout": 30
+          }
+        ],
+        "matcher": "manual|auto"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-prime-hook.mjs\" --codex SessionStart",
+            "statusMessage": "Loading Beads context",
+            "type": "command",
+            "timeout": 30,
+            "additionalContextLimit": 0
+          }
+        ],
+        "matcher": "startup|resume|clear"
+      },
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/ensure-deps.mjs\"",
+            "statusMessage": "Checking node_modules against pnpm-lock.yaml",
+            "type": "command",
+            "timeout": 300
+          }
+        ],
+        "matcher": "startup|resume"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-prime-hook.mjs\" --codex UserPromptSubmit",
+            "statusMessage": "Refreshing Beads context",
+            "type": "command",
+            "timeout": 30,
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/check-staged-pii.mjs\"",
+            "statusMessage": "Scanning staged changes for PII\u2026",
+            "type": "command",
+            "timeout": 30
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/check-env-read.mjs\"",
+            "statusMessage": "Checking for secret-file reads\u2026",
+            "type": "command",
+            "timeout": 30
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/check-stash-worktree.mjs\"",
+            "statusMessage": "Checking for stash/amend hazards\u2026",
+            "type": "command",
+            "timeout": 30
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/backup-before-restore.mjs\"",
+            "statusMessage": "Backing up files a checkout/restore would overwrite\u2026",
+            "type": "command",
+            "timeout": 30
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-github-sync.mjs\" --hook-pre-pr",
+            "statusMessage": "Checking for publishable bead ids\u2026",
+            "timeout": 180,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-publish-verify.mjs\"",
+            "statusMessage": "Verifying published references\u2026",
+            "timeout": 120,
+            "type": "command"
+          },
+          {
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/push-scope.mjs\"",
+            "statusMessage": "Scoping any git push against origin/master\u2026",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/bd-codex-session-end.mjs\"",
+            "timeout": 3,
+            "statusMessage": "Starting Beads GitHub sync"
+          }
+        ]
+      }
+    ]
+  }
+}

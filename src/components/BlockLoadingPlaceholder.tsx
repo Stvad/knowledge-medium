@@ -1,3 +1,4 @@
+import { BLOCK_SHELL_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import { BulletDot } from '@/components/renderer/DefaultBlockRenderer.js'
 import { useIsMobile } from '@/utils/react.js'
 
@@ -28,6 +29,11 @@ export function BlockLoadingPlaceholder({
   return (
     <div
       className="tm-block relative flex items-start gap-1"
+      // A deferred row's stand-in still occupies that row's space, so a pointer
+      // landing on it belongs to the row rather than to whatever surface is
+      // showing it. Without the boundary a container claims gestures aimed at
+      // rows it has not mounted yet.
+      {...{[BLOCK_SHELL_ATTRIBUTE]: 'true'}}
       style={{minHeight: reservedHeight}}
       aria-hidden
     >

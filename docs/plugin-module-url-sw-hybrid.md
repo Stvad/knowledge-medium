@@ -57,7 +57,7 @@ Plugin code lives in blocks of `type: 'extension'`. The loader walks them and, f
 compiles its source and reads `module.default` as an `AppExtension` (`src/extensions/dynamicExtensions.ts:220`).
 The compile is a deliberate **two-step** pipeline (`src/extensions/compileExtensionModule.ts`):
 
-1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`react` + `typescript` presets), dynamically
+1. **Transpile** TS/JSX → JS string via `@babel/standalone` (`EXTENSION_BABEL_PRESETS`), dynamically
    `import()`ed so the ~0.85 MB compiler stays out of the eager startup graph (`defaultTranspileViaBabel`,
    `compileExtensionModule.ts:148`). It now also emits an inline source map + a sanitized
    `//# sourceURL=km-extension://<blockId>.tsx` (the §6 change, shipped in PR #252).
@@ -75,8 +75,10 @@ So today: **dynamic `import()` of a Blob object URL**, no `eval`, no SW.
 **Inter-module imports resolve through the realm-global import map** in `index.html:37`
 (`"react"`/`"react-dom"` → esm.sh, `"@/"` → `"./src/"`), *not* relatively. An import map is keyed to the
 *document/realm*, not the importer's URL, and its relative address values (`./src/`) resolve against the
-**document** base — which is why a Blob module can `import {…} from '@/extensions/api.js'`
-(`src/extensions/exampleExtensions.ts:208`) and get **the same module instance the app uses**. In prod those land
+**document** base — which is why a Blob module can `import {…} from '@/extensions/core.js'`
+(`src/extensions/exampleExtensions.ts:83`) and get **the same module instance the app uses** (the
+extension-surface re-export barrel this example used to cite was retired — extensions now import each
+symbol from its real owning module directly). In prod those land
 on *stable* unhashed URLs because the Vite build uses `preserveModules:true` + `entryFileNames:'[name].js'`
 (`vite.config.ts:138-142`); `vite-plugins/unifySrcJsUrls.ts` makes dev match by rewriting `/src/foo.tsx`→`.js`
 (otherwise every `createContext`/store singleton duplicates — the `useRepo must be used within a RepoContext`

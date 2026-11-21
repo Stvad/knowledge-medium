@@ -13,14 +13,15 @@ import { debounce } from 'lodash-es'
 import { clampSelectionToLength, placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.js'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.js'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.js'
-import { EditorView } from '@codemirror/view'
+import { EditorView, tooltips } from '@codemirror/view'
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
-import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
+import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
+import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -40,6 +41,7 @@ export const BlockEditor = ({
   const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
+  const {editorTooltipParent} = blockContext
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -113,17 +115,16 @@ export const BlockEditor = ({
   // restore-vs-flush race can drop the user's text.
   useLayoutEffect(() => flushDebouncers, [flushDebouncers])
 
+  // Content only: flushed before the focus write, a pending selection would
+  // pass pushSelection's guard and overwrite the selection the navigation just
+  // wrote for its target block.
+  const flushContent = useCallback(() => { pushChange.flush() }, [pushChange])
+  useLayoutEffect(() => registerPendingContentFlush(flushContent), [flushContent])
+
   // Leaving this block's editor (unmount / block switch) is the "done
-  // editing" signal — consumers like watch-events short-circuit their
-  // settle window on it. The debounced content commit above may still
-  // be in flight when this fires; subscribers re-check after a beat.
-  useEffect(() => {
-    // Mounting means the user is editing (again): revoke whatever the
-    // last settled signal implied — e.g. a lingering blur exemption
-    // must not vouch for a block being retyped right now.
-    notifyBlockEditResumed(block.id)
-    return () => notifyBlockEditSettled(block.id)
-  }, [block.id])
+  // editing" signal. The debounced content commit above may still be in
+  // flight when this fires.
+  useEffect(() => () => notifyBlockEditSettled(block.id), [block.id])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return
@@ -187,58 +188,57 @@ export const BlockEditor = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockEditData, editorView, block.id])
 
-  useEffect(() => {
+  // Focus in place, in the task of the commit that swaps editors: that commit
+  // unmounts the editor edit mode is leaving, so until this runs nothing
+  // editable has focus and typed keys are dropped. A rAF here drops exactly
+  // the keys typed right after Enter or a navigation, since the browser
+  // dispatches input queued during the swap before the next frame.
+  // `editorView` arrives via commit-phase state updates, which React flushes
+  // within that task. A layout rather than passive effect is defence in
+  // depth: the swap renders on the sync lane, whose passive effects flush in
+  // that task too, but a layout effect does not depend on the lane.
+  useLayoutEffect(() => {
     if (!isEditing || !inEditMode || !editorView) return
 
-    let cancelled = false
-    const frameId = requestAnimationFrame(() => {
-      if (!editorView || cancelled) return
+    editorView.focus()
 
-      editorView.focus()
-
-      const selection = uiStateBlock.peekProperty(editorSelection)
-      if (!cancelled && selection?.blockId === block.id) {
-        if (selection.x !== undefined && selection.y !== undefined) {
-          placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
-        } else if (selection.x !== undefined) {
-          placeCursorAtX(editorView, selection.x, selection.line === 'last')
-        } else if (selection.start !== undefined) {
-          // The stored selection is debounce-persisted and can outlive
-          // a doc-shrinking dispatch (e.g. the supertags `#`
-          // autocomplete deleting its trigger text) — clamp it (see
-          // clampSelectionToLength, shared with the adoption path
-          // above).
-          editorView.dispatch({selection: clampSelectionToLength(
-            EditorSelection.single(selection.start, selection.end ?? selection.start),
-            editorView.state.doc.length,
-          )})
-        }
+    const selection = uiStateBlock.peekProperty(editorSelection)
+    if (selection?.blockId === block.id) {
+      if (selection.x !== undefined && selection.y !== undefined) {
+        placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
+      } else if (selection.x !== undefined) {
+        placeCursorAtX(editorView, selection.x, selection.line === 'last')
+      } else if (selection.start !== undefined) {
+        // The stored selection is debounce-persisted and can outlive
+        // a doc-shrinking dispatch (e.g. the supertags `#`
+        // autocomplete deleting its trigger text) — clamp it (see
+        // clampSelectionToLength, shared with the adoption path
+        // above).
+        editorView.dispatch({selection: clampSelectionToLength(
+          EditorSelection.single(selection.start, selection.end ?? selection.start),
+          editorView.state.doc.length,
+        )})
       }
-
-      if (cancelled) return
-      // Pull the caret into view on edit-entry. `view.focus()` uses
-      // preventScroll (CodeMirror's default), so nothing else scrolls
-      // here — and when the on-screen keyboard is already up (tapping a
-      // second block while editing) no visualViewport resize fires for
-      // keyboardAwareScroll's plugin to catch, making this the only
-      // chance to lift the caret above the keyboard. The scrollMargins
-      // contributed by keyboardAwareScroll keep that landing keyboard-
-      // aware; on desktop the margin is 0 and this is a cheap no-op for
-      // an already-visible caret.
-      editorView.dispatch({
-        effects: EditorView.scrollIntoView(editorView.state.selection.main.head),
-      })
-    })
-
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(frameId)
     }
+
+    // Pull the caret into view on edit-entry. `view.focus()` uses
+    // preventScroll (CodeMirror's default), so nothing else scrolls
+    // here — and when the on-screen keyboard is already up (tapping a
+    // second block while editing) no visualViewport resize fires for
+    // keyboardAwareScroll's plugin to catch, making this the only
+    // chance to lift the caret above the keyboard. The scrollMargins
+    // contributed by keyboardAwareScroll keep that landing keyboard-
+    // aware; on desktop the margin is 0 and this is a cheap no-op for
+    // an already-visible caret.
+    editorView.dispatch({
+      effects: EditorView.scrollIntoView(editorView.state.selection.main.head),
+    })
   }, [block.id, editorView, focusRequestId, inEditMode, isEditing, uiStateBlock])
 
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
-  // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
-  // mounted — for any consumer (markdown editor, extension editor, future).
+  // context (Escape, Tab, etc.) fire whenever this editor is mounted — for any
+  // consumer (markdown editor, extension editor, future). A consumer holding
+  // source opts out of the outline-edit keys: keepOutlineEditKeysInEditor.
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
 
@@ -259,8 +259,9 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
+      editorTooltipParent ? tooltips({parent: editorTooltipParent}) : [],
     ],
-    [providedExtensions, flushDebouncers],
+    [providedExtensions, flushDebouncers, editorTooltipParent],
   )
 
   if (!blockEditData) return null

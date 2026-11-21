@@ -120,12 +120,12 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: unverified</strong> &middot; design intent, not ground truth. Predates the doc-status convention and has not been re-checked against the code. Treat <em>code + tests</em> as authoritative (see <code>AGENTS.md</code> &rarr; &ldquo;design docs&rdquo;); verify any load-bearing claim against the code before relying on it. <strong>Last verified against code:</strong> not since this banner (2026-06-22).
+<strong>Status: partially current</strong> &middot; design intent, not ground truth. The processor-placement section at the top was re-checked and corrected for <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a> (rename moved post-commit &rarr; same-tx); the case-by-case ladder below it has NOT been re-verified since the banner convention landed. Treat <em>code + tests</em> as authoritative (see <code>AGENTS.md</code> &rarr; &ldquo;design docs&rdquo;); verify any load-bearing claim against the code before relying on it. <strong>Last verified against code:</strong> placement section 2026-07-30; rest not since 2026-06-22.
 </aside>
 
 <h1>Alias sync + rename — case-by-case</h1>
 <p class="lede">
-  Two post-commit processors in two plugins, both watching <code>{content, properties}</code> on
+  Two same-tx processors in two plugins, both watching <code>{content, properties}</code> on
   <code>blocks</code>:
 </p>
 <ul class="lede" style="margin-top: -0.6rem;">
@@ -134,7 +134,7 @@
     Runs <strong>same-tx</strong> — amends the user's transaction so content and aliases commit atomically; if an alias write collides, storage aborts and <code>repo.ts</code> surfaces <code>ProcessorRejection</code> so the whole tx rolls back cleanly.</li>
   <li><strong>Rename / backlink rewrite</strong> (references plugin): cross-block.
     When aliases are removed or swapped, rewrite source backlinks.
-    Runs <strong>follow-up</strong> (post-commit) — the cross-block writes can be many and shouldn't block the user's commit. Lives next to <code>parseReferences</code> because it needs the <code>block_references</code> projection to find sources.</li>
+    Runs <strong>same-tx</strong> as of <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a> &mdash; it used to be follow-up (post-commit) on the reasoning that cross-block writes are many and shouldn't block the user's commit, but the read-outside-the-tx / write-in-a-later-tx shape had a race gap that no amount of guarding closed, and a rename is a rare deliberate gesture whose latency nobody feels. Registered immediately <em>after</em> sync, because the ordinary rename gesture is a title edit whose alias diff sync writes. Lives next to <code>parseReferences</code> because it needs the <code>block_references</code> projection to find sources.</li>
 </ul>
 <p class="lede">
   Sync composes into rename: when a content edit produces an alias-array swap (committed atomically in the user's tx), the rename processor picks it up uniformly via the alias diff. No special path.
@@ -142,11 +142,15 @@
 <p class="lede" style="font-size: 0.85rem; color: var(--muted);">
   On the same-tx vs follow-up split: same-tx is reserved for cheap,
   correctness-critical, single-row work (sync, reference-array
-  normalization). Follow-up keeps expensive or cross-row work
-  (parseReferences, rename, cleanup) off the user-commit path. The
-  earlier decision to keep <code>parseReferences</code> follow-up
-  (data-layer redesign §7.1) stands — that was a typing-latency
-  call about that specific processor, not a category-wide stance.
+  normalization) plus rare correctness-critical domain events (merge
+  retargeting, deleted-ref inlining, and now rename). Follow-up keeps
+  work off the user-commit path when the GESTURE is hot &mdash;
+  parseReferences above all, which fires on every keystroke-driven
+  content change. The earlier decision to keep
+  <code>parseReferences</code> follow-up (data-layer redesign §7.1)
+  stands; that was a typing-latency call about that specific processor,
+  not a category-wide stance, which is why rename could move without
+  disturbing it. Cross-row-ness by itself was never the criterion.
 </p>
 
 <div class="legend">

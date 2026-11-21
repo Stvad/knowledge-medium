@@ -37,6 +37,16 @@ export const moveSrsState = async (
 
   const typeSnapshot = repo.snapshotTypeRegistries()
 
+  // Deliberate raw property-bag writes (not tx.setProperties): this MOVES the
+  // source's already-ENCODED SRS values verbatim onto the target. The typed
+  // primitives take DECODED values and re-encode internally, so routing this
+  // bulk transfer through them would force a decode→re-encode round-trip on
+  // live SRS scheduling state for zero correctness gain — every
+  // SRS_PROPERTY_NAMES entry is a registered schema, so in a flipped workspace
+  // MATERIALIZE reconciles the net cell diff (keys added on the target, removed
+  // from the source) into field children. The whole-bag spread is NOT a clobber:
+  // it deletes only the SRS names before re-adding the moved ones, so the
+  // target's unrelated properties are preserved.
   await repo.tx(async tx => {
     const source = await tx.get(sourceBlockId)
     if (!source) return

@@ -1,6 +1,18 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import { isEditorElement, shouldExitEditModeAfterBlur } from '@/utils/dom.js'
+import {
+  getElementScrollportBounds,
+  isEditorElement,
+  isElementProperlyVisible,
+  shouldExitEditModeAfterBlur,
+} from '@/utils/dom.js'
+
+const stubRect = (el: HTMLElement, top: number, height: number): void => {
+  el.getBoundingClientRect = () => ({
+    top, bottom: top + height, left: 0, right: 100, width: 100, height,
+    x: 0, y: top, toJSON: () => ({}),
+  }) as DOMRect
+}
 
 describe('dom editor focus helpers', () => {
   it('treats textareas as editor elements', () => {
@@ -26,5 +38,92 @@ describe('dom editor focus helpers', () => {
     expect(isEditorElement(button)).toBe(false)
     expect(shouldExitEditModeAfterBlur(button)).toBe(true)
     expect(shouldExitEditModeAfterBlur(null)).toBe(true)
+  })
+})
+
+describe('getElementScrollportBounds', () => {
+  const scrollport = (top: number, height: number): HTMLElement => {
+    const el = document.createElement('div')
+    el.style.overflowY = 'auto'
+    stubRect(el, top, height)
+    return el
+  }
+
+  it('clips to the nearest scrollport', () => {
+    const port = scrollport(100, 300)
+    const row = document.createElement('div')
+    port.appendChild(row)
+    document.body.appendChild(port)
+
+    expect(getElementScrollportBounds(row)).toEqual({top: 100, bottom: 400})
+  })
+
+  // Panes nest: a note row sits inside the video-notes aside, and the whole
+  // pane is clipped again by the scrollport a stacked slot wraps around it.
+  // Honouring only the nearest left a row scrolled out of sight behind the
+  // OUTER clip measuring as visible — so nothing scrolled it back into view and
+  // nothing moved the cursor off it.
+  it('clips through every scrollport between the element and the root', () => {
+    const outer = scrollport(200, 300)   // visible band 200–500
+    const inner = scrollport(100, 300)   // 100–400, but clipped by the outer
+    outer.appendChild(inner)
+    const row = document.createElement('div')
+    inner.appendChild(row)
+    document.body.appendChild(outer)
+
+    expect(getElementScrollportBounds(row)).toEqual({top: 200, bottom: 400})
+  })
+
+  // The comments margin sits outside the outline's scrollport and clips its
+  // cards (`overflow: clip`) to the scrollport's band: a card row above that
+  // band is hidden although no scrollport cuts it.
+  it.each(['clip', 'hidden'])('clips to an ancestor that clips its overflow without scrolling (%s)', overflowY => {
+    const port = scrollport(0, 700)
+    const column = document.createElement('div')
+    column.style.overflowY = overflowY
+    stubRect(column, 48, 600)
+    port.appendChild(column)
+    const row = document.createElement('div')
+    column.appendChild(row)
+    document.body.appendChild(port)
+
+    expect(getElementScrollportBounds(row)).toEqual({top: 48, bottom: 648})
+  })
+
+  it('ignores ancestors that do not scroll', () => {
+    const port = scrollport(100, 300)
+    const plain = document.createElement('div')
+    stubRect(plain, 0, 1000)
+    port.appendChild(plain)
+    const row = document.createElement('div')
+    plain.appendChild(row)
+    document.body.appendChild(port)
+
+    expect(getElementScrollportBounds(row)).toEqual({top: 100, bottom: 400})
+  })
+})
+
+describe('isElementProperlyVisible', () => {
+  const bounds = {top: 0, bottom: 500}
+  const rowAt = (top: number, height: number): HTMLElement => {
+    const el = document.createElement('div')
+    el.style.lineHeight = '24px'
+    document.body.appendChild(el)
+    stubRect(el, top, height)
+    return el
+  }
+
+  it('counts a row shorter than its line height as visible once all of it is in view', () => {
+    expect(isElementProperlyVisible(rowAt(100, 20), bounds)).toBe(true)
+    expect(isElementProperlyVisible(rowAt(490, 20), bounds)).toBe(false)
+  })
+
+  it('still asks a taller row for a whole line in view', () => {
+    expect(isElementProperlyVisible(rowAt(480, 60), bounds)).toBe(false)
+    expect(isElementProperlyVisible(rowAt(470, 60), bounds)).toBe(true)
+  })
+
+  it('never counts an element with no height', () => {
+    expect(isElementProperlyVisible(rowAt(100, 0), bounds)).toBe(false)
   })
 })

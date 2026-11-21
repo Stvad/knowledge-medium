@@ -1,0 +1,485 @@
+{
+  "n": 80,
+  "rows": [
+    {
+      "type": "table",
+      "name": "block_aliases",
+      "tbl_name": "block_aliases",
+      "sql": "CREATE TABLE block_aliases (\n    block_id     TEXT NOT NULL,\n    workspace_id TEXT NOT NULL,\n    alias        TEXT NOT NULL,\n    alias_lower  TEXT NOT NULL,\n    PRIMARY KEY (block_id, alias)\n  )"
+    },
+    {
+      "type": "table",
+      "name": "block_references",
+      "tbl_name": "block_references",
+      "sql": "CREATE TABLE block_references (\n    source_id    TEXT NOT NULL,\n    target_id    TEXT NOT NULL,\n    workspace_id TEXT NOT NULL,\n    alias        TEXT NOT NULL,\n    source_field TEXT NOT NULL DEFAULT '',\n    PRIMARY KEY (source_id, target_id, alias, source_field)\n  )"
+    },
+    {
+      "type": "table",
+      "name": "block_types",
+      "tbl_name": "block_types",
+      "sql": "CREATE TABLE block_types (\n    block_id     TEXT NOT NULL,\n    workspace_id TEXT NOT NULL,\n    type         TEXT NOT NULL,\n    PRIMARY KEY (block_id, type)\n  )"
+    },
+    {
+      "type": "table",
+      "name": "blocks",
+      "tbl_name": "blocks",
+      "sql": "CREATE TABLE blocks (\n      id TEXT PRIMARY KEY NOT NULL,\n      workspace_id TEXT NOT NULL,\n      parent_id TEXT,\n      order_key TEXT NOT NULL,\n      content TEXT NOT NULL DEFAULT '',\n      properties_json TEXT NOT NULL DEFAULT '{}',\n      references_json TEXT NOT NULL DEFAULT '[]',\n      created_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL,\n      user_updated_at INTEGER,\n      created_by TEXT NOT NULL,\n      updated_by TEXT NOT NULL,\n      deleted INTEGER NOT NULL DEFAULT 0\n  , reference_target_id TEXT, is_field_form INTEGER)"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts",
+      "tbl_name": "blocks_fts",
+      "sql": "CREATE VIRTUAL TABLE blocks_fts USING fts5(\n    content,\n    workspace_id UNINDEXED,\n    block_id UNINDEXED,\n    tokenize = 'trigram case_sensitive 0'\n  )"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts_config",
+      "tbl_name": "blocks_fts_config",
+      "sql": "CREATE TABLE 'blocks_fts_config'(k PRIMARY KEY, v) WITHOUT ROWID"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts_content",
+      "tbl_name": "blocks_fts_content",
+      "sql": "CREATE TABLE 'blocks_fts_content'(id INTEGER PRIMARY KEY, c0, c1, c2)"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts_data",
+      "tbl_name": "blocks_fts_data",
+      "sql": "CREATE TABLE 'blocks_fts_data'(id INTEGER PRIMARY KEY, block BLOB)"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts_docsize",
+      "tbl_name": "blocks_fts_docsize",
+      "sql": "CREATE TABLE 'blocks_fts_docsize'(id INTEGER PRIMARY KEY, sz BLOB)"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts_idx",
+      "tbl_name": "blocks_fts_idx",
+      "sql": "CREATE TABLE 'blocks_fts_idx'(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID"
+    },
+    {
+      "type": "table",
+      "name": "blocks_fts_rowids",
+      "tbl_name": "blocks_fts_rowids",
+      "sql": "CREATE TABLE blocks_fts_rowids (\n    fts_rowid  INTEGER PRIMARY KEY,\n    block_id   TEXT NOT NULL UNIQUE\n  )"
+    },
+    {
+      "type": "table",
+      "name": "blocks_synced",
+      "tbl_name": "blocks_synced",
+      "sql": "CREATE TABLE blocks_synced (\n      id TEXT PRIMARY KEY NOT NULL,\n      workspace_id TEXT NOT NULL,\n      parent_id TEXT,\n      order_key TEXT NOT NULL,\n      content TEXT NOT NULL DEFAULT '',\n      properties_json TEXT NOT NULL DEFAULT '{}',\n      references_json TEXT NOT NULL DEFAULT '[]',\n      created_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL,\n      user_updated_at INTEGER,\n      created_by TEXT NOT NULL,\n      updated_by TEXT NOT NULL,\n      deleted INTEGER NOT NULL DEFAULT 0\n  )"
+    },
+    {
+      "type": "table",
+      "name": "blocks_synced_changes",
+      "tbl_name": "blocks_synced_changes",
+      "sql": "CREATE TABLE blocks_synced_changes (\n    seq INTEGER PRIMARY KEY AUTOINCREMENT,\n    id  TEXT NOT NULL,\n    op  TEXT NOT NULL CHECK (op IN ('upsert', 'delete'))\n  )"
+    },
+    {
+      "type": "table",
+      "name": "client_schema_state",
+      "tbl_name": "client_schema_state",
+      "sql": "CREATE TABLE client_schema_state (\n    key           TEXT PRIMARY KEY,\n    completed_at  INTEGER NOT NULL\n  )"
+    },
+    {
+      "type": "table",
+      "name": "command_events",
+      "tbl_name": "command_events",
+      "sql": "CREATE TABLE command_events (\n    tx_id         TEXT PRIMARY KEY,\n    description   TEXT,\n    scope         TEXT NOT NULL,\n    user_id       TEXT NOT NULL,\n    workspace_id  TEXT,\n    mutator_calls TEXT NOT NULL,\n    source        TEXT NOT NULL,\n    created_at    INTEGER NOT NULL\n  )"
+    },
+    {
+      "type": "table",
+      "name": "ps_buckets",
+      "tbl_name": "ps_buckets",
+      "sql": "CREATE TABLE ps_buckets(\n  id INTEGER PRIMARY KEY,\n  name TEXT NOT NULL,\n  last_applied_op INTEGER NOT NULL DEFAULT 0,\n  last_op INTEGER NOT NULL DEFAULT 0,\n  target_op INTEGER NOT NULL DEFAULT 0,\n  add_checksum INTEGER NOT NULL DEFAULT 0,\n  op_checksum INTEGER NOT NULL DEFAULT 0,\n  pending_delete INTEGER NOT NULL DEFAULT 0\n, count_at_last INTEGER NOT NULL DEFAULT 0, count_since_last INTEGER NOT NULL DEFAULT 0, downloaded_size INTEGER NOT NULL DEFAULT 0) STRICT"
+    },
+    {
+      "type": "table",
+      "name": "ps_crud",
+      "tbl_name": "ps_crud",
+      "sql": "CREATE TABLE ps_crud (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, tx_id INTEGER)"
+    },
+    {
+      "type": "table",
+      "name": "ps_crud_rejected",
+      "tbl_name": "ps_crud_rejected",
+      "sql": "CREATE TABLE ps_crud_rejected (\n    id            INTEGER PRIMARY KEY AUTOINCREMENT,\n    original_id   INTEGER NOT NULL,\n    tx_id         INTEGER NOT NULL,\n    data          TEXT NOT NULL,\n    error_code    TEXT,\n    error_message TEXT,\n    rejected_at   INTEGER NOT NULL\n  )"
+    },
+    {
+      "type": "table",
+      "name": "ps_kv",
+      "tbl_name": "ps_kv",
+      "sql": "CREATE TABLE ps_kv(key TEXT PRIMARY KEY NOT NULL, value BLOB)"
+    },
+    {
+      "type": "table",
+      "name": "ps_migration",
+      "tbl_name": "ps_migration",
+      "sql": "CREATE TABLE ps_migration(id INTEGER PRIMARY KEY, down_migrations TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "ps_oplog",
+      "tbl_name": "ps_oplog",
+      "sql": "CREATE TABLE ps_oplog(\n  bucket INTEGER NOT NULL,\n  op_id INTEGER NOT NULL,\n  row_type TEXT,\n  row_id TEXT,\n  key TEXT,\n  data TEXT,\n  hash INTEGER NOT NULL) STRICT"
+    },
+    {
+      "type": "table",
+      "name": "ps_stream_subscriptions",
+      "tbl_name": "ps_stream_subscriptions",
+      "sql": "CREATE TABLE ps_stream_subscriptions (\n  id INTEGER NOT NULL PRIMARY KEY,\n  stream_name TEXT NOT NULL,\n  active INTEGER NOT NULL DEFAULT FALSE,\n  is_default INTEGER NOT NULL DEFAULT FALSE,\n  local_priority INTEGER,\n  local_params TEXT NOT NULL DEFAULT 'null',\n  ttl INTEGER,\n  expires_at INTEGER,\n  last_synced_at INTEGER,\n  UNIQUE (stream_name, local_params)\n) STRICT"
+    },
+    {
+      "type": "table",
+      "name": "ps_sync_state",
+      "tbl_name": "ps_sync_state",
+      "sql": "CREATE TABLE ps_sync_state (\n  priority INTEGER NOT NULL PRIMARY KEY,\n  last_synced_at TEXT NOT NULL\n) STRICT"
+    },
+    {
+      "type": "table",
+      "name": "ps_tx",
+      "tbl_name": "ps_tx",
+      "sql": "CREATE TABLE ps_tx(id INTEGER PRIMARY KEY NOT NULL, current_tx INTEGER, next_tx INTEGER)"
+    },
+    {
+      "type": "table",
+      "name": "ps_untyped",
+      "tbl_name": "ps_untyped",
+      "sql": "CREATE TABLE ps_untyped(type TEXT NOT NULL, id TEXT NOT NULL, data TEXT, PRIMARY KEY (type, id))"
+    },
+    {
+      "type": "table",
+      "name": "ps_updated_rows",
+      "tbl_name": "ps_updated_rows",
+      "sql": "CREATE TABLE ps_updated_rows(\n  row_type TEXT,\n  row_id TEXT,\n  PRIMARY KEY(row_type, row_id)) STRICT, WITHOUT ROWID"
+    },
+    {
+      "type": "table",
+      "name": "row_events",
+      "tbl_name": "row_events",
+      "sql": "CREATE TABLE row_events (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    tx_id       TEXT,\n    block_id    TEXT NOT NULL,\n    kind        TEXT NOT NULL,\n    before_json TEXT,\n    after_json  TEXT,\n    source      TEXT NOT NULL,\n    created_at  INTEGER NOT NULL\n  , group_id TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "sqlite_sequence",
+      "tbl_name": "sqlite_sequence",
+      "sql": "CREATE TABLE sqlite_sequence(name,seq)"
+    },
+    {
+      "type": "table",
+      "name": "sqlite_stat1",
+      "tbl_name": "sqlite_stat1",
+      "sql": "CREATE TABLE sqlite_stat1(tbl,idx,stat)"
+    },
+    {
+      "type": "table",
+      "name": "tx_context",
+      "tbl_name": "tx_context",
+      "sql": "CREATE TABLE tx_context (\n    id      INTEGER PRIMARY KEY CHECK (id = 1),\n    tx_id   TEXT,\n    tx_seq  INTEGER,\n    user_id TEXT,\n    scope   TEXT,\n    source  TEXT\n  , group_id TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "workspace_members",
+      "tbl_name": "workspace_members",
+      "sql": "CREATE TABLE workspace_members (\n    id TEXT PRIMARY KEY NOT NULL,\n    workspace_id TEXT NOT NULL,\n    user_id TEXT NOT NULL,\n    role TEXT NOT NULL,\n    create_time INTEGER NOT NULL\n  )"
+    },
+    {
+      "type": "table",
+      "name": "workspaces",
+      "tbl_name": "workspaces",
+      "sql": "CREATE TABLE workspaces (\n    id TEXT PRIMARY KEY NOT NULL,\n    name TEXT NOT NULL DEFAULT '',\n    owner_user_id TEXT NOT NULL,\n    create_time INTEGER NOT NULL,\n    update_time INTEGER NOT NULL,\n    encryption_mode TEXT NOT NULL DEFAULT 'none',\n    wk_canary TEXT\n  , properties_migration TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "idx_block_aliases_ws_alias",
+      "tbl_name": "block_aliases",
+      "sql": "CREATE INDEX idx_block_aliases_ws_alias\n  ON block_aliases (workspace_id, alias)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_block_aliases_ws_alias_lower",
+      "tbl_name": "block_aliases",
+      "sql": "CREATE INDEX idx_block_aliases_ws_alias_lower\n  ON block_aliases (workspace_id, alias_lower)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_block_references_target",
+      "tbl_name": "block_references",
+      "sql": "CREATE INDEX idx_block_references_target\n  ON block_references (target_id, workspace_id)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_block_references_ws_alias",
+      "tbl_name": "block_references",
+      "sql": "CREATE INDEX idx_block_references_ws_alias\n  ON block_references (workspace_id, alias)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_block_types_type_workspace",
+      "tbl_name": "block_types",
+      "sql": "CREATE INDEX idx_block_types_type_workspace\n  ON block_types (type, workspace_id)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_daily_note_date",
+      "tbl_name": "blocks",
+      "sql": "CREATE INDEX idx_blocks_daily_note_date\n  ON blocks (json_extract(properties_json, '$.\"daily-note:date\"'))\n  WHERE deleted = 0\n    AND json_extract(properties_json, '$.\"daily-note:date\"') IS NOT NULL\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_field_form",
+      "tbl_name": "blocks",
+      "sql": "CREATE INDEX idx_blocks_field_form\n  ON blocks (workspace_id, parent_id, reference_target_id)\n  WHERE deleted = 0 AND is_field_form = 1\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_parent_order",
+      "tbl_name": "blocks",
+      "sql": "CREATE INDEX idx_blocks_parent_order\n  ON blocks (parent_id, order_key, id)\n  WHERE deleted = 0\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_reference_target_parent",
+      "tbl_name": "blocks",
+      "sql": "CREATE INDEX idx_blocks_reference_target_parent\n  ON blocks (workspace_id, reference_target_id, parent_id)\n  WHERE deleted = 0 AND reference_target_id IS NOT NULL\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_synced_changes_id_op",
+      "tbl_name": "blocks_synced_changes",
+      "sql": "CREATE INDEX idx_blocks_synced_changes_id_op\n  ON blocks_synced_changes (id, op)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_workspace_active",
+      "tbl_name": "blocks",
+      "sql": "CREATE INDEX idx_blocks_workspace_active\n  ON blocks (workspace_id)\n  WHERE deleted = 0\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_blocks_workspace_with_references",
+      "tbl_name": "blocks",
+      "sql": "CREATE INDEX idx_blocks_workspace_with_references\n  ON blocks (workspace_id)\n  WHERE deleted = 0 AND references_json != '[]'\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_command_events_created",
+      "tbl_name": "command_events",
+      "sql": "CREATE INDEX idx_command_events_created\n  ON command_events (created_at DESC)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_command_events_workspace",
+      "tbl_name": "command_events",
+      "sql": "CREATE INDEX idx_command_events_workspace\n  ON command_events (workspace_id, created_at DESC)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_ps_crud_rejected_rejected_at",
+      "tbl_name": "ps_crud_rejected",
+      "sql": "CREATE INDEX idx_ps_crud_rejected_rejected_at\n  ON ps_crud_rejected (rejected_at DESC)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_ps_crud_rejected_tx_id",
+      "tbl_name": "ps_crud_rejected",
+      "sql": "CREATE INDEX idx_ps_crud_rejected_tx_id\n  ON ps_crud_rejected (tx_id)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_row_events_block",
+      "tbl_name": "row_events",
+      "sql": "CREATE INDEX idx_row_events_block\n  ON row_events (block_id, created_at DESC)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_row_events_created",
+      "tbl_name": "row_events",
+      "sql": "CREATE INDEX idx_row_events_created\n  ON row_events (created_at DESC)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_row_events_tx",
+      "tbl_name": "row_events",
+      "sql": "CREATE INDEX idx_row_events_tx\n  ON row_events (tx_id)\n"
+    },
+    {
+      "type": "index",
+      "name": "idx_workspace_members_user_id",
+      "tbl_name": "workspace_members",
+      "sql": "CREATE INDEX idx_workspace_members_user_id\n  ON workspace_members (user_id)\n"
+    },
+    {
+      "type": "index",
+      "name": "ps_buckets_name",
+      "tbl_name": "ps_buckets",
+      "sql": "CREATE UNIQUE INDEX ps_buckets_name ON ps_buckets (name)"
+    },
+    {
+      "type": "index",
+      "name": "ps_oplog_key",
+      "tbl_name": "ps_oplog",
+      "sql": "CREATE INDEX ps_oplog_key ON ps_oplog (bucket, key)"
+    },
+    {
+      "type": "index",
+      "name": "ps_oplog_opid",
+      "tbl_name": "ps_oplog",
+      "sql": "CREATE INDEX ps_oplog_opid ON ps_oplog (bucket, op_id)"
+    },
+    {
+      "type": "index",
+      "name": "ps_oplog_row",
+      "tbl_name": "ps_oplog",
+      "sql": "CREATE INDEX ps_oplog_row ON ps_oplog (row_type, row_id)"
+    },
+    {
+      "type": "trigger",
+      "name": "block_aliases_workspace_alias_unique",
+      "tbl_name": "block_aliases",
+      "sql": "CREATE TRIGGER block_aliases_workspace_alias_unique\n  BEFORE INSERT ON block_aliases\n  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n    AND NEW.alias != ''\n  BEGIN\n    SELECT RAISE(ABORT,\n      'alias_collision' || char(31) ||\n      hex(NEW.workspace_id) || char(31) ||\n      hex(NEW.alias) || char(31) ||\n      hex(NEW.block_id)\n    )\n    WHERE EXISTS (\n      SELECT 1 FROM block_aliases\n      WHERE workspace_id = NEW.workspace_id\n        AND alias = NEW.alias\n        AND block_id != NEW.block_id\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_alias_delete",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_alias_delete\n  AFTER DELETE ON blocks\n  BEGIN\n    DELETE FROM block_aliases WHERE block_id = OLD.id;\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_alias_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_alias_insert\n  AFTER INSERT ON blocks\n  WHEN NEW.deleted = 0\n  BEGIN\n    INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)\n      SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)\n      FROM json_each(NEW.properties_json, '$.alias') AS je\n      WHERE typeof(je.value) = 'text';\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_alias_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_alias_update\n  AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks\n  BEGIN\n    DELETE FROM block_aliases WHERE block_id = NEW.id;\n    INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)\n    SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)\n    FROM json_each(NEW.properties_json, '$.alias') AS je\n    WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_fts_delete",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_fts_delete\n  AFTER DELETE ON blocks\n  BEGIN\n    DELETE FROM blocks_fts\n    WHERE rowid = (\n      SELECT fts_rowid FROM blocks_fts_rowids WHERE block_id = OLD.id\n    );\n    DELETE FROM blocks_fts_rowids WHERE block_id = OLD.id;\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_fts_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_fts_insert\n  AFTER INSERT ON blocks\n  BEGIN\n    INSERT INTO blocks_fts_rowids (block_id)\n      SELECT NEW.id\n      WHERE NOT EXISTS (\n        SELECT 1 FROM blocks_fts_rowids WHERE block_id = NEW.id\n      );\n      INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)\n      SELECT fts_rowid, NEW.content, NEW.workspace_id, NEW.id\n      FROM blocks_fts_rowids\n      WHERE block_id = NEW.id\n        AND NEW.deleted = 0\n        AND NEW.content != '';\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_fts_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_fts_update\n  AFTER UPDATE OF content, deleted, workspace_id ON blocks\n  BEGIN\n    DELETE FROM blocks_fts\n    WHERE rowid = (\n      SELECT fts_rowid FROM blocks_fts_rowids WHERE block_id = OLD.id\n    );\n    INSERT INTO blocks_fts_rowids (block_id)\n      SELECT NEW.id\n      WHERE NOT EXISTS (\n        SELECT 1 FROM blocks_fts_rowids WHERE block_id = NEW.id\n      );\n      INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)\n      SELECT fts_rowid, NEW.content, NEW.workspace_id, NEW.id\n      FROM blocks_fts_rowids\n      WHERE block_id = NEW.id\n        AND NEW.deleted = 0\n        AND NEW.content != '';\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_parent_not_deleted_check_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_parent_not_deleted_check_insert\n  BEFORE INSERT ON blocks\n  WHEN NEW.parent_id IS NOT NULL\n    AND NEW.deleted = 0\n    AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n  BEGIN\n    SELECT RAISE(ABORT,\n      'parent_deleted' || char(31) || NEW.parent_id\n    )\n    WHERE EXISTS (\n      SELECT 1 FROM blocks\n      WHERE id = NEW.parent_id\n        AND deleted = 1\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_parent_not_deleted_check_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_parent_not_deleted_check_update\n  BEFORE UPDATE OF parent_id, deleted ON blocks\n  WHEN NEW.parent_id IS NOT NULL\n    AND NEW.deleted = 0\n    AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n  BEGIN\n    SELECT RAISE(ABORT,\n      'parent_deleted' || char(31) || NEW.parent_id\n    )\n    WHERE EXISTS (\n      SELECT 1 FROM blocks\n      WHERE id = NEW.parent_id\n        AND deleted = 1\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_parent_workspace_check_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_parent_workspace_check_insert\n  BEFORE INSERT ON blocks\n  WHEN NEW.parent_id IS NOT NULL\n    AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n  BEGIN\n    SELECT RAISE(ABORT, 'parent must exist and share workspace_id')\n    WHERE NOT EXISTS (\n      SELECT 1 FROM blocks\n      WHERE id = NEW.parent_id\n        AND workspace_id = NEW.workspace_id\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_parent_workspace_check_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_parent_workspace_check_update\n  BEFORE UPDATE OF parent_id, workspace_id ON blocks\n  WHEN NEW.parent_id IS NOT NULL\n    AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n  BEGIN\n    SELECT RAISE(ABORT, 'parent must exist and share workspace_id')\n    WHERE NOT EXISTS (\n      SELECT 1 FROM blocks\n      WHERE id = NEW.parent_id\n        AND workspace_id = NEW.workspace_id\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_references_delete",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_references_delete\n  AFTER DELETE ON blocks\n  BEGIN\n    DELETE FROM block_references WHERE source_id = OLD.id;\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_references_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_references_insert\n  AFTER INSERT ON blocks\n  WHEN NEW.deleted = 0\n  BEGIN\n    INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)\n      SELECT\n        NEW.id,\n        json_extract(je.value, '$.id'),\n        NEW.workspace_id,\n        json_extract(je.value, '$.alias'),\n        COALESCE(json_extract(je.value, '$.sourceField'), '')\n      FROM json_each(NEW.references_json) AS je\n      WHERE typeof(json_extract(je.value, '$.id')) = 'text'\n        AND typeof(json_extract(je.value, '$.alias')) = 'text'\n        AND (\n          json_type(je.value, '$.sourceField') IS NULL\n          OR typeof(json_extract(je.value, '$.sourceField')) = 'text'\n        );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_references_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_references_update\n  AFTER UPDATE OF references_json, deleted, workspace_id ON blocks\n  BEGIN\n    DELETE FROM block_references WHERE source_id = NEW.id;\n    INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)\n    SELECT\n      NEW.id,\n      json_extract(je.value, '$.id'),\n      NEW.workspace_id,\n      json_extract(je.value, '$.alias'),\n      COALESCE(json_extract(je.value, '$.sourceField'), '')\n    FROM json_each(NEW.references_json) AS je\n    WHERE NEW.deleted = 0\n      AND typeof(json_extract(je.value, '$.id')) = 'text'\n      AND typeof(json_extract(je.value, '$.alias')) = 'text'\n      AND (\n        json_type(je.value, '$.sourceField') IS NULL\n        OR typeof(json_extract(je.value, '$.sourceField')) = 'text'\n      );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_row_event_delete",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_row_event_delete\n  AFTER DELETE ON blocks\n  BEGIN\n    INSERT INTO row_events (\n      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id\n    ) VALUES (\n      CASE\n        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL\n          THEN NULL\n        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)\n      END,\n      OLD.id,\n      'delete',\n      json_object(\n        'id', OLD.id,\n        'workspaceId', OLD.workspace_id,\n        'parentId', OLD.parent_id,\n        'referenceTargetId', OLD.reference_target_id,\n        'isFieldForm', json(CASE WHEN OLD.is_field_form = 1 THEN 'true' ELSE 'false' END),\n        'orderKey', OLD.order_key,\n        'content', OLD.content,\n        'properties', json(OLD.properties_json),\n        'references', json(OLD.references_json),\n        'createdAt', OLD.created_at,\n        'updatedAt', OLD.updated_at,\n        'userUpdatedAt', coalesce(OLD.user_updated_at, OLD.updated_at),\n        'createdBy', OLD.created_by,\n        'updatedBy', OLD.updated_by,\n        'deleted', json(CASE WHEN OLD.deleted THEN 'true' ELSE 'false' END)\n      ),\n      NULL,\n      COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync'),\n      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),\n      CASE\n        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL\n          THEN NULL\n        ELSE (SELECT group_id FROM tx_context WHERE id = 1)\n      END\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_row_event_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_row_event_insert\n  AFTER INSERT ON blocks\n  BEGIN\n    INSERT INTO row_events (\n      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id\n    ) VALUES (\n      CASE\n        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL\n          THEN NULL\n        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)\n      END,\n      NEW.id,\n      'create',\n      NULL,\n      json_object(\n        'id', NEW.id,\n        'workspaceId', NEW.workspace_id,\n        'parentId', NEW.parent_id,\n        'referenceTargetId', NEW.reference_target_id,\n        'isFieldForm', json(CASE WHEN NEW.is_field_form = 1 THEN 'true' ELSE 'false' END),\n        'orderKey', NEW.order_key,\n        'content', NEW.content,\n        'properties', json(NEW.properties_json),\n        'references', json(NEW.references_json),\n        'createdAt', NEW.created_at,\n        'updatedAt', NEW.updated_at,\n        'userUpdatedAt', coalesce(NEW.user_updated_at, NEW.updated_at),\n        'createdBy', NEW.created_by,\n        'updatedBy', NEW.updated_by,\n        'deleted', json(CASE WHEN NEW.deleted THEN 'true' ELSE 'false' END)\n      ),\n      COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync'),\n      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),\n      CASE\n        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL\n          THEN NULL\n        ELSE (SELECT group_id FROM tx_context WHERE id = 1)\n      END\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_row_event_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_row_event_update\n  AFTER UPDATE ON blocks\n  BEGIN\n    INSERT INTO row_events (\n      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id\n    ) VALUES (\n      CASE\n        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL\n          THEN NULL\n        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)\n      END,\n      NEW.id,\n      CASE\n        WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'\n        ELSE 'update'\n      END,\n      json_object(\n        'id', OLD.id,\n        'workspaceId', OLD.workspace_id,\n        'parentId', OLD.parent_id,\n        'referenceTargetId', OLD.reference_target_id,\n        'isFieldForm', json(CASE WHEN OLD.is_field_form = 1 THEN 'true' ELSE 'false' END),\n        'orderKey', OLD.order_key,\n        'content', OLD.content,\n        'properties', json(OLD.properties_json),\n        'references', json(OLD.references_json),\n        'createdAt', OLD.created_at,\n        'updatedAt', OLD.updated_at,\n        'userUpdatedAt', coalesce(OLD.user_updated_at, OLD.updated_at),\n        'createdBy', OLD.created_by,\n        'updatedBy', OLD.updated_by,\n        'deleted', json(CASE WHEN OLD.deleted THEN 'true' ELSE 'false' END)\n      ),\n      json_object(\n        'id', NEW.id,\n        'workspaceId', NEW.workspace_id,\n        'parentId', NEW.parent_id,\n        'referenceTargetId', NEW.reference_target_id,\n        'isFieldForm', json(CASE WHEN NEW.is_field_form = 1 THEN 'true' ELSE 'false' END),\n        'orderKey', NEW.order_key,\n        'content', NEW.content,\n        'properties', json(NEW.properties_json),\n        'references', json(NEW.references_json),\n        'createdAt', NEW.created_at,\n        'updatedAt', NEW.updated_at,\n        'userUpdatedAt', coalesce(NEW.user_updated_at, NEW.updated_at),\n        'createdBy', NEW.created_by,\n        'updatedBy', NEW.updated_by,\n        'deleted', json(CASE WHEN NEW.deleted THEN 'true' ELSE 'false' END)\n      ),\n      COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync'),\n      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),\n      CASE\n        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL\n          THEN NULL\n        ELSE (SELECT group_id FROM tx_context WHERE id = 1)\n      END\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_synced_changes_delete",
+      "tbl_name": "blocks_synced",
+      "sql": "CREATE TRIGGER blocks_synced_changes_delete\n  AFTER DELETE ON blocks_synced\n  BEGIN\n    INSERT INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_synced_changes_insert",
+      "tbl_name": "blocks_synced",
+      "sql": "CREATE TRIGGER blocks_synced_changes_insert\n  AFTER INSERT ON blocks_synced\n  BEGIN\n    DELETE FROM blocks_synced_changes WHERE id = NEW.id AND op = 'delete';\n    INSERT INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_type_delete",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_type_delete\n  AFTER DELETE ON blocks\n  BEGIN\n    DELETE FROM block_types WHERE block_id = OLD.id;\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_type_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_type_insert\n  AFTER INSERT ON blocks\n  WHEN NEW.deleted = 0\n  BEGIN\n    INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)\n      SELECT NEW.id, NEW.workspace_id, je.value\n      FROM json_each(NEW.properties_json, '$.types') AS je\n      WHERE typeof(je.value) = 'text';\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_type_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_type_update\n  AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks\n  BEGIN\n    DELETE FROM block_types WHERE block_id = NEW.id;\n    INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)\n    SELECT NEW.id, NEW.workspace_id, je.value\n    FROM json_each(NEW.properties_json, '$.types') AS je\n    WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_upload_insert",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_upload_insert\n  AFTER INSERT ON blocks\n  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n  BEGIN\n    INSERT INTO ps_crud (tx_id, data) VALUES (\n      (SELECT tx_seq FROM tx_context WHERE id = 1),\n      json_object(\n        'op', 'PUT',\n        'type', 'blocks',\n        'id', NEW.id,\n        'data', json_object(\n        'workspace_id', NEW.workspace_id,\n        'parent_id', NEW.parent_id,\n        'order_key', NEW.order_key,\n        'content', NEW.content,\n        'properties_json', NEW.properties_json,\n        'references_json', NEW.references_json,\n        'created_at', NEW.created_at,\n        'updated_at', NEW.updated_at,\n        'user_updated_at', NEW.user_updated_at,\n        'created_by', NEW.created_by,\n        'updated_by', NEW.updated_by,\n        'deleted', json(CASE WHEN NEW.deleted THEN 'true' ELSE 'false' END)\n      )\n      )\n    );\n  END"
+    },
+    {
+      "type": "trigger",
+      "name": "blocks_upload_update",
+      "tbl_name": "blocks",
+      "sql": "CREATE TRIGGER blocks_upload_update\n  AFTER UPDATE ON blocks\n  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL\n    AND (\n    OLD.workspace_id IS NOT NEW.workspace_id\n    OR OLD.parent_id IS NOT NEW.parent_id\n    OR OLD.order_key IS NOT NEW.order_key\n    OR OLD.content IS NOT NEW.content\n    OR OLD.properties_json IS NOT NEW.properties_json\n    OR OLD.references_json IS NOT NEW.references_json\n    OR OLD.created_at IS NOT NEW.created_at\n    OR OLD.updated_at IS NOT NEW.updated_at\n    OR OLD.user_updated_at IS NOT NEW.user_updated_at\n    OR OLD.created_by IS NOT NEW.created_by\n    OR OLD.updated_by IS NOT NEW.updated_by\n    OR OLD.deleted IS NOT NEW.deleted\n    )\n  BEGIN\n    INSERT INTO ps_crud (tx_id, data) VALUES (\n      (SELECT tx_seq FROM tx_context WHERE id = 1),\n      json_object(\n        'op', 'PATCH',\n        'type', 'blocks',\n        'id', NEW.id,\n        'data', json_remove(\n        json_set(\n          '{}',\n          '$.workspace_id', NEW.workspace_id,\n          CASE WHEN OLD.parent_id IS NOT NEW.parent_id THEN '$.parent_id' ELSE '$.__noop' END, NEW.parent_id,\n          CASE WHEN OLD.order_key IS NOT NEW.order_key THEN '$.order_key' ELSE '$.__noop' END, NEW.order_key,\n          CASE WHEN OLD.content IS NOT NEW.content THEN '$.content' ELSE '$.__noop' END, NEW.content,\n          CASE WHEN OLD.properties_json IS NOT NEW.properties_json THEN '$.properties_json' ELSE '$.__noop' END, NEW.properties_json,\n          CASE WHEN OLD.references_json IS NOT NEW.references_json THEN '$.references_json' ELSE '$.__noop' END, NEW.references_json,\n          CASE WHEN OLD.created_at IS NOT NEW.created_at THEN '$.created_at' ELSE '$.__noop' END, NEW.created_at,\n          CASE WHEN OLD.updated_at IS NOT NEW.updated_at THEN '$.updated_at' ELSE '$.__noop' END, NEW.updated_at,\n          CASE WHEN OLD.user_updated_at IS NOT NEW.user_updated_at THEN '$.user_updated_at' ELSE '$.__noop' END, NEW.user_updated_at,\n          CASE WHEN OLD.created_by IS NOT NEW.created_by THEN '$.created_by' ELSE '$.__noop' END, NEW.created_by,\n          CASE WHEN OLD.updated_by IS NOT NEW.updated_by THEN '$.updated_by' ELSE '$.__noop' END, NEW.updated_by,\n          CASE WHEN OLD.deleted IS NOT NEW.deleted THEN '$.deleted' ELSE '$.__noop' END, json(CASE WHEN NEW.deleted THEN 'true' ELSE 'false' END)\n        ),\n        '$.__noop'\n      )\n      )\n    );\n  END"
+    }
+  ]
+}

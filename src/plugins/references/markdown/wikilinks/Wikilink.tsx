@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { buildAppHash } from '@/utils/routing'
+import { useAppHashInContext } from '@/context/layoutWsContext'
 import { useOpenBlock } from '@/utils/navigation'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
@@ -7,6 +7,7 @@ import {
   resolveWikilinkDisplay,
 } from './wikilinkDecorator.ts'
 import type { Block } from '@/data/block'
+import { BlockLink } from '@/components/references/BlockLink'
 
 export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDisplay = false, children}: {
   alias: string
@@ -24,6 +25,7 @@ export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDis
   // reference-resolution miss; the hook still binds to ('', workspaceId)
   // safely — it's never invoked in that branch since we render plain text.
   const onClick = useOpenBlock({blockId, workspaceId})
+  const href = useAppHashInContext(workspaceId, blockId)
   const runtime = useAppRuntime()
   const decorated = hasCustomDisplay
     ? null
@@ -44,9 +46,9 @@ export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDis
   return (
     <>
       {before}
-      <a href={buildAppHash(workspaceId, blockId)} className="wikilink" data-alias={alias} onClick={onClick}>
+      <BlockLink blockId={blockId} workspaceId={workspaceId} href={href} className="wikilink" data-alias={alias} onClick={onClick}>
         {display}
-      </a>
+      </BlockLink>
       {after}
     </>
   )

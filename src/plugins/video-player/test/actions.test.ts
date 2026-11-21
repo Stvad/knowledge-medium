@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment node
 
 import { describe, expect, it, vi } from 'vitest'
 import type { EditorView } from '@codemirror/view'
@@ -172,6 +172,31 @@ describe('video player actions', () => {
     })
   })
 
+  it.each([
+    ['appends to a note', {}, 1],
+    ['leaves a source note alone', {types: ['html-document']}, 0],
+  ])('with no editor open, %s', async (_name, properties, writes) => {
+    const setContent = vi.fn(async () => {})
+    const note = fakeBlock({
+      id: 'note',
+      peek: () => ({content: '<p>notes</p>', properties}),
+      setContent,
+    })
+    const scopedVideoBlock = fakeBlock({id: 'video'})
+    const action = requireVideoAction('video.insert_timestamp')
+    const deps: VideoPlayerShortcutDependencies = {
+      block: note,
+      videoBlock: scopedVideoBlock,
+      uiStateBlock: fakeBlock({id: 'ui-state'}),
+      renderScopeId: RENDER_SCOPE,
+    }
+    await withVideoPlayer('video', {getCurrentTime: () => 75}, async () => {
+      await action.handler(deps, new CustomEvent('test'))
+    })
+
+    expect(setContent).toHaveBeenCalledTimes(writes)
+  })
+
   it('requests player focus from the rendered video when notes have focus', async () => {
     const action = requireVideoAction('video.toggle_focus')
     const focusRequests: string[] = []
@@ -214,8 +239,7 @@ describe('video player actions', () => {
     })
     const scopedVideoBlock = fakeBlock({
       id: 'video',
-      childIds: {load: vi.fn(async () => ['note'])},
-      repo: {isReadOnly: false},
+      repo: {isReadOnly: false, query: {childIds: () => ({load: vi.fn(async () => ['note'])})}},
     })
     const deps: VideoPlayerShortcutDependencies = {
       block: fakeBlock({id: 'note'}),

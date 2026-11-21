@@ -33,6 +33,7 @@ const reviewerProp = defineProperty<string>('reviewer', {
 const legacyRefListCodec: RefListCodec = {
   type: 'refList',
   targetTypes: [],
+  member: codecs.ref(),
   encode: v => v.map(item => item),
   decode: j => {
     if (!Array.isArray(j)) throw new CodecError('array', j)
@@ -127,6 +128,15 @@ describe('isRetainableAbsentRef', () => {
       absentRef('related'),
       { properties: { related: ['t'] } },
       { properties: { related: ['t'] } },
+      schemas(),
+    )).toBe(true)
+  })
+
+  it('retains an opaque value’s backlink when a bag replacement only reorders object keys', () => {
+    expect(isRetainableAbsentRef(
+      absentRef('related'),
+      {properties: {related: {id: 't', version: 1}}},
+      {properties: {related: {version: 1, id: 't'}}},
       schemas(),
     )).toBe(true)
   })

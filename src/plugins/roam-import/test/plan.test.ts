@@ -6,8 +6,8 @@ import {
   parseRoamImportReferences,
   planImport,
 } from '../plan'
-import { roamBlockId } from '../ids'
-import { dailyNoteBlockId } from '@/plugins/daily-notes'
+import { roamBlockId } from '../blockIds'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import {
@@ -1292,6 +1292,26 @@ describe('planImport', () => {
     expect(byUid('u2')?.content).toBe('URL::https://www.lesswrong.com/x')
     expect(byUid('u3')?.content).toBe('URL::https://matrix.to/x')
     expect(byUid('u1')?.parentId).toBe(roamBlockId(WORKSPACE, 'parentUid'))
+  })
+
+  it('leaves a declined key\'s block completely untouched — not promoted, not bubbled', () => {
+    // A SUBTRACTIVE consumer (matrix ingest) drops a bullet once it has been
+    // bubbled. So declining has to happen before bubbling: if the key were
+    // hoisted and the property dropped later for lacking a definition, the
+    // bullet would already be gone and the user's text lost outright.
+    const promotion = computePromotedFromChildren([
+      {string: '[[Status]]::done', uid: 'u1'},
+      {string: 'author::[[stvad]]', uid: 'u2'},
+    ], new Set(), {
+      namespacePrefix: 'matrix',
+      transformKey: key => key.toLowerCase(),
+      acceptKey: name => !name.includes(']]'),
+    })
+
+    expect(promotion.promoted).toEqual({'matrix:author': '[[stvad]]'})
+    // The load-bearing half: unbubbled, so a subtractive caller keeps it.
+    expect(promotion.bubbled.has('u1')).toBe(false)
+    expect(promotion.bubbled.has('u2')).toBe(true)
   })
 
   it('promotes attributes with a custom namespace and key transform', () => {

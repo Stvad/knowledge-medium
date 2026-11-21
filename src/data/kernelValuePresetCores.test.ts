@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from './kernelDataExtension'
 import {stringValuePresetCore} from './kernelValuePresetCores'
-import { valuePresetCoresFacet, valuePresetsFacet } from './facets'
+import { valuePresetCoresFacet } from './facets'
 import {definePresetCore} from './api/valuePresetCore'
-import { definePreset, defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
+import { defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
 import {readValuePresets} from './valuePresetRegistry'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
+import {selectablePresets} from '@/components/propertyEditors/selectablePresets'
+import {ChangeScope} from './api/changeScope'
 
 describe('kernel value preset split', () => {
   it('registers codec cores in the data runtime without React presentation', () => {
@@ -23,7 +25,7 @@ describe('kernel value preset split', () => {
     const cores = runtime.read(valuePresetCoresFacet)
     expect([...cores.keys()]).toEqual(expect.arrayContaining([
       'optional-string', 'optional-number', 'string-list',
-      'optional-ref', 'json', 'optional-json',
+      'optional-ref', 'json', 'optional-json', 'raw-json', 'strict-enum',
     ]))
     expect(cores.get('optional-string')?.build(undefined).encode(undefined)).toBeNull()
     expect(cores.get('optional-number')?.build(undefined).decode(null)).toBeUndefined()
@@ -33,6 +35,13 @@ describe('kernel value preset split', () => {
     expect(optionalRef?.encode(undefined)).toBeNull()
     expect(cores.get('json')?.defaultValue).toBeNull()
     expect(cores.get('optional-json')?.build(undefined).decode(null)).toBeUndefined()
+    expect(cores.get('raw-json')?.defaultValue).toBeUndefined()
+    expect(cores.get('raw-json')?.build(undefined).decode(null)).toBeNull()
+    const strictEnum = cores.get('strict-enum')!
+    const strictConfig = strictEnum.configCodec!.decode({options: [
+      {value: ChangeScope.BlockDefault, label: 'Block default'},
+    ]})
+    expect(() => strictEnum.build(strictConfig).encode('' as ChangeScope)).toThrow()
 
     const enumCore = cores.get('enum')!
     const enumConfig = enumCore.configCodec!.decode({
@@ -54,14 +63,10 @@ describe('kernel value preset split', () => {
     ])
     const stringCore = runtime.read(valuePresetCoresFacet).get('string')
     const stringPreset = readValuePresets(runtime).get('string')
-    const legacyPresets = runtime.read(valuePresetsFacet)
 
     expect(stringPreset?.build).toBe(stringCore?.build)
     expect(stringPreset?.Editor).toBeTypeOf('function')
     expect(stringPreset?.label).toBe('Plain text')
-    expect(legacyPresets.has('json')).toBe(false)
-    expect(legacyPresets.has('optional-json')).toBe(false)
-    expect([...legacyPresets.values()].every(preset => typeof preset.Editor === 'function')).toBe(true)
 
     const replacement = definePresetCore<string>({
       id: 'string',
@@ -76,6 +81,52 @@ describe('kernel value preset split', () => {
     const replacedPreset = readValuePresets(runtime).get('string')
     expect(replacedPreset?.build(undefined).type).toBe('replacement-string')
     expect(replacedPreset?.Editor).toBe(stringPreset?.Editor)
+  })
+
+  it('joins the strict-enum presentation so code-union seeds render their options', () => {
+    // Regression: the strict-enum CORE shipped with no matching presentation, so
+    // materialized seeds using it (property-schema:change-scope, todo status,
+    // char scope) rendered as "strict-enum (unknown)" and lost the options UI.
+    // The presentation is hidden from the user's preset picker but must still
+    // join to its core for display.
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+    ])
+    const core = runtime.read(valuePresetCoresFacet).get('strict-enum')
+    const preset = readValuePresets(runtime).get('strict-enum')
+
+    expect(core).toBeDefined()
+    expect(preset?.build).toBe(core?.build)
+    expect(preset?.Editor).toBeTypeOf('function')
+    expect(preset?.ConfigEditor).toBeTypeOf('function')
+    expect(preset?.hideFromPicker).toBe(true)
+  })
+
+  it('offers the text list and retires the JSON one from the picker (#1101)', () => {
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+    ])
+    const presets = readValuePresets(runtime)
+
+    const offered = selectablePresets(presets).map(preset => preset.id)
+    expect(offered).toContain('string-list')
+    expect(offered).not.toContain('list')
+
+    // A definition already on the JSON list still offers its own entry, so
+    // the two need distinct labels to be pickable apart.
+    expect(selectablePresets(presets, 'list').map(preset => preset.id)).toContain('list')
+    expect(presets.get('list')!.label).not.toBe(presets.get('string-list')!.label)
+
+    // …and the JSON one's label is the one BOTH are displayed under, so it
+    // has to stay true of a text list. Every display resolves a presentation
+    // by codec TYPE against this id-keyed map, and both build a `list`
+    // (`PropertyPicker`, `BlockTypeBlockRenderer`, `resolvePropertyDisplay`),
+    // so a qualifier here would relabel every string-list schema (#1111).
+    const listCodecType = presets.get('string-list')!.build(undefined).type
+    expect(presets.get(listCodecType)).toBe(presets.get('list'))
+    expect(presets.get(listCodecType)!.label).toBe('List')
   })
 
   it('rejects a presentation joined to the wrong core id', () => {
@@ -102,22 +153,5 @@ describe('kernel value preset split', () => {
       defineSplitPreset(stringValuePresetCore, numberPresentation)
     }
     void assertMismatchRejected
-  })
-
-  it('preserves legacy whole-preset overrides until they migrate', () => {
-    const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelValuePresetsExtension])
-    const legacy = definePreset<string>({
-      id: 'string',
-      label: 'Legacy string',
-      build: () => ({type: 'legacy-string', encode: value => value, decode: value => String(value)}),
-      defaultValue: 'legacy',
-      Editor: () => { throw new Error('not rendered') },
-    })
-
-    runtime.setRuntimeContributions(valuePresetsFacet, 'legacy-plugin', [legacy])
-    expect(readValuePresets(runtime).get('string')?.build(undefined).type).toBe('legacy-string')
-
-    runtime.setRuntimeContributions(valuePresetsFacet, 'legacy-plugin', [])
-    expect(readValuePresets(runtime).get('string')?.build(undefined).type).toBe('string')
   })
 })

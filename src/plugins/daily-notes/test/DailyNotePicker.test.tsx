@@ -1,14 +1,10 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { DailyNotePicker, type DailyNotePickerProps } from '../DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from '../HeaderItem.tsx'
 import { openDialog } from '@/utils/dialogs.js'
-import {
-  OPEN_NEXT_DAILY_NOTE_ACTION_ID,
-  OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
-} from '../actions.ts'
 
 const mocks = vi.hoisted(() => ({
   getOrCreateDailyNote: vi.fn(async (_repo: unknown, _workspaceId: string, iso: string) => ({
@@ -17,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   openBlock: vi.fn(),
   repo: {activeWorkspaceId: 'ws-1'},
   resolveCurrentDailyNoteIso: vi.fn<(_repo: unknown, _workspaceId: string) => Promise<string | null>>(async () => null),
-  runAction: vi.fn(),
 }))
 
 vi.mock('@/utils/dialogs.js', () => ({ openDialog: vi.fn() }))
@@ -39,10 +34,6 @@ vi.mock('@/context/repo.tsx', () => ({
 
 vi.mock('@/utils/navigation.ts', () => ({
   useBlockOpener: () => mocks.openBlock,
-}))
-
-vi.mock('@/shortcuts/runAction.ts', () => ({
-  useRunAction: () => mocks.runAction,
 }))
 
 vi.mock('../dailyNotes.ts', async () => {
@@ -79,7 +70,6 @@ describe('DailyNotePicker', () => {
     cleanup()
     mocks.getOrCreateDailyNote.mockClear()
     mocks.openBlock.mockClear()
-    mocks.runAction.mockClear()
     openDialogMock.mockClear()
   })
 
@@ -175,7 +165,6 @@ describe('DailyNotePicker', () => {
 describe('DailyNotePickerHeaderItem', () => {
   afterEach(() => {
     cleanup()
-    mocks.runAction.mockClear()
     mocks.resolveCurrentDailyNoteIso.mockClear()
     mocks.resolveCurrentDailyNoteIso.mockImplementation(async () => null)
     openDialogMock.mockClear()
@@ -207,21 +196,12 @@ describe('DailyNotePickerHeaderItem', () => {
     expect(mocks.resolveCurrentDailyNoteIso).toHaveBeenCalledWith(mocks.repo, 'ws-1')
   })
 
-  it('runs the existing previous and next daily note actions', () => {
+  // Prev/next moved onto the note's title (DateNavDecorator) — the header
+  // must not keep a second, panel-guessing copy of them.
+  it('renders only the picker button', () => {
     render(<DailyNotePickerHeaderItem/>)
 
-    fireEvent.click(screen.getByRole('button', {name: 'Open previous daily note'}))
-    fireEvent.click(screen.getByRole('button', {name: 'Open next daily note'}))
-
-    expect(mocks.runAction).toHaveBeenNthCalledWith(
-      1,
-      OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
-      expect.objectContaining({type: 'daily-note-header-action'}),
-    )
-    expect(mocks.runAction).toHaveBeenNthCalledWith(
-      2,
-      OPEN_NEXT_DAILY_NOTE_ACTION_ID,
-      expect.objectContaining({type: 'daily-note-header-action'}),
-    )
+    expect(screen.getAllByRole('button').map(b => b.getAttribute('aria-label')))
+      .toEqual(['Open daily note picker'])
   })
 })
