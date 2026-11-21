@@ -263,4 +263,12 @@ describe('property write integrity in the active workspace', () => {
     }, opts)
     expect(JSON.parse((await row('target'))!.properties_json)).toEqual({[unknown.name]: 'value'})
   })
+
+  it('preserves raw cell values for buildable and unregistered properties', async () => {
+    const repo = await setup('cell')
+    const properties = {[status.name]: 42, [unknown.name]: ['opaque']}
+    await repo.tx(tx => tx.createOrGet({...blockData('target'), properties}), opts)
+    expect(JSON.parse((await row('target'))!.properties_json)).toEqual(properties)
+    expect(await values()).toEqual([])
+  })
 })
