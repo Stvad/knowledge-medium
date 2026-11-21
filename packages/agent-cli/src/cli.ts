@@ -1116,9 +1116,10 @@ cli
 cli
   .command('retry-rejected-upload <txId>', wireDescription('retry-rejected-upload'))
   .action(async (txId: string) => {
-    const parsed = Number(txId)
-    if (!Number.isSafeInteger(parsed)) throw new Error('retry-rejected-upload takes the integer txId that rejected-uploads lists.')
-    await runAndPrint({type: 'retry-rejected-upload', txId: parsed, contributorId: null})
+    if (!/^\d+$/.test(txId) || !Number.isSafeInteger(Number(txId))) {
+      throw new Error('retry-rejected-upload takes the integer txId that rejected-uploads lists.')
+    }
+    await runAndPrint({type: 'retry-rejected-upload', txId: Number(txId), contributorId: null})
   })
 
 // A `--scope all` pass re-judges every staged row of the workspace, which on a

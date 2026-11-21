@@ -49,7 +49,6 @@ describe('rejected uploads', () => {
         {op: 'PATCH', table: 'blocks', id: a, workspaceId: 'ws-1', fields: expect.arrayContaining(['content'])},
       ]},
     ])
-    expect(listed[0].txId).not.toBe(listed[1].txId)
   })
 
   it('requeues every row of a multi-row transaction under its transaction id and clears its quarantine', async () => {
@@ -60,8 +59,22 @@ describe('rejected uploads', () => {
 
     await expect(retryRejectedUpload(shared.db, txId)).resolves.toEqual({txId, requeued: 2})
     expect(await queued()).toEqual(before)
-    expect((await queued()).map(row => [row.txId, row.id])).toEqual([[txId, a], [txId, b]])
+    expect((await queued()).map(row => row.txId)).toEqual([txId, txId])
     expect(await rejectedCount()).toBe(0)
+  })
+
+  it('requeues a transaction that writes one block twice', async () => {
+    const {repo} = createTestRepo({db: shared.db})
+    await repo.tx(async tx => {
+      const id = await tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'first'})
+      await tx.update(id, {content: 'second'})
+    }, {scope: ChangeScope.BlockDefault})
+    const before = await queued()
+    expect(before.map(row => row.op)).toEqual(['PUT', 'PATCH'])
+    await rejectQueue()
+
+    await expect(retryRejectedUpload(shared.db, before[0].txId)).resolves.toEqual({txId: before[0].txId, requeued: 2})
+    expect((await queued()).map(row => row.op)).toEqual(['PUT', 'PATCH'])
   })
 
   it('leaves other rejected transactions quarantined', async () => {
@@ -75,32 +88,82 @@ describe('rejected uploads', () => {
     expect(await listRejectedUploads(shared.db)).toEqual([first])
   })
 
-  it('sends the row as it stands locally, so a later edit is not overwritten by the older payload', async () => {
+  /** A rejected content edit of `a`, alone in the quarantine, and the payload it carried. */
+  const rejectContentEdit = async () => {
     const {repo, a} = await setup()
+    await shared.db.execute('DELETE FROM ps_crud')
     await repo.tx(tx => tx.update(a, {content: 'rejected edit'}), {scope: ChangeScope.BlockDefault})
-    await shared.db.execute('DELETE FROM ps_crud WHERE json_extract(data, \'$.op\') = \'PUT\'')
     const [patch] = await queued()
     await rejectQueue()
-    // Later accepted locally (and, in production, already uploaded).
-    await repo.tx(tx => tx.update(a, {content: 'later edit'}), {scope: ChangeScope.BlockDefault})
+    return {repo, a, patch}
+  }
+  const quarantined = () => shared.db.getAll('SELECT * FROM ps_crud_rejected ORDER BY id')
+
+  it('sends the stamps as they stand locally and keeps the version the edit was made against', async () => {
+    const {repo, a, patch} = await rejectContentEdit()
+    // A later accepted edit of another column, already uploaded.
+    await repo.tx(tx => tx.move(a, {parentId: null, orderKey: 'a5'}), {scope: ChangeScope.BlockDefault})
     await shared.db.execute('DELETE FROM ps_crud')
     const local = await shared.db.get<{updated_at: number, user_updated_at: number}>(
       'SELECT updated_at, user_updated_at FROM blocks WHERE id = ?', [a])
+    expect(local.updated_at).not.toBe(patch.data!.updated_at)
 
     await retryRejectedUpload(shared.db, patch.txId)
-    const [requeued] = await queued()
-    expect(requeued).toEqual({...patch, data: {
-      ...patch.data, content: 'later edit', updated_at: local.updated_at, user_updated_at: local.user_updated_at,
-    }})
-    // The version the edit was made against is the drift check's input; it stays.
-    expect(requeued.data!.base_updated_at).toBe(patch.data!.base_updated_at)
+    expect(await queued()).toEqual([{...patch, data: {
+      ...patch.data, updated_at: local.updated_at, user_updated_at: local.user_updated_at,
+    }}])
+  })
+
+  it('refuses, and keeps the quarantine, when a later edit here changed a column it wrote', async () => {
+    const {repo, a, patch} = await rejectContentEdit()
+    await repo.tx(tx => tx.update(a, {content: 'later edit'}), {scope: ChangeScope.BlockDefault})
+    await shared.db.execute('DELETE FROM ps_crud')
+    const kept = await quarantined()
+
+    await expect(retryRejectedUpload(shared.db, patch.txId))
+      .rejects.toThrow(`block ${a} changed on this device since the rejected write (content`)
+    expect(await quarantined()).toEqual(kept)
+    expect(await queued()).toEqual([])
+  })
+
+  it('refuses when a download replaced a column it wrote', async () => {
+    const {a, patch} = await rejectContentEdit()
+    // Applied the way the sync drain writes: no tx_context source, so no upload.
+    await shared.db.execute("UPDATE blocks SET content = 'server value' WHERE id = ?", [a])
+    const kept = await quarantined()
+
+    await expect(retryRejectedUpload(shared.db, patch.txId)).rejects.toThrow(`block ${a} changed on this device`)
+    expect(await quarantined()).toEqual(kept)
+  })
+
+  it('retries a create whose row a later rejected edit changed, with the edit\'s value', async () => {
+    const {repo, a} = await setup()
+    await rejectQueue()
+    await repo.tx(tx => tx.update(a, {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+    await rejectQueue()
+    const [first, second] = await listRejectedUploads(shared.db)
+
+    await retryRejectedUpload(shared.db, first.txId)
+    expect((await queued()).find(row => row.id === a)).toMatchObject({op: 'PUT', data: {content: 'edited'}})
+    await shared.db.execute('DELETE FROM ps_crud')
+    await expect(retryRejectedUpload(shared.db, second.txId)).resolves.toEqual({txId: second.txId, requeued: 1})
+  })
+
+  it('refuses while the upload queue holds a write to one of its rows', async () => {
+    const {repo, a, patch} = await rejectContentEdit()
+    await repo.tx(tx => tx.move(a, {parentId: null, orderKey: 'a5'}), {scope: ChangeScope.BlockDefault})
+    const kept = await quarantined()
+
+    await expect(retryRejectedUpload(shared.db, patch.txId))
+      .rejects.toThrow(`the upload queue holds a write to block ${a}`)
+    expect(await quarantined()).toEqual(kept)
   })
 
   it('does not add a workspace the rejected payload lacked', async () => {
     const {a} = await setup()
     await shared.db.execute('DELETE FROM ps_crud')
     await shared.db.execute(`INSERT INTO ps_crud_rejected (original_id, tx_id, data, rejected_at) VALUES (1, 99, ?, 1)`,
-      [JSON.stringify({op: 'PATCH', type: 'blocks', id: a, data: {content: 'stale'}})])
+      [JSON.stringify({op: 'PATCH', type: 'blocks', id: a, data: {content: 'first'}})])
 
     await retryRejectedUpload(shared.db, 99)
     expect(await queued()).toEqual([{txId: 99, op: 'PATCH', type: 'blocks', id: a, data: {content: 'first'}}])

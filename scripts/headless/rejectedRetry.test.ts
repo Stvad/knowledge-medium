@@ -75,7 +75,7 @@ function start(config: HeadlessConfig, blocks: string[]) {
       await vi.waitFor(async () => {
         await connector.uploadData(db)
         expect(await db.getAll('SELECT 1 FROM ps_crud')).toEqual([])
-      }, {timeout: 10_000})
+      }, {timeout: 20_000})
       rpc.mockClear()
     },
     stop: () => { stop.abort(); return run },
@@ -87,7 +87,7 @@ const quarantine = () => fixture.db.getAll('SELECT * FROM ps_crud_rejected ORDER
 const setRole = (role: string) => fixture.db.execute('UPDATE workspace_members SET role = ? WHERE id = ?', [role, member.id])
 const sentIds = () => JSON.stringify(rpc.mock.calls)
 
-// Two bootstraps' worth of real gate and upload work; 3–9 s under load.
+// Each boots a writable host and drains its seed rows: 3–9 s under load, past 10 s at load 60.
 it('uploads a refused edit once after the role is restored, and refuses the retry while the role is viewer', async () => {
   const id = randomUUID()
   const host = start(writable, [id])
@@ -122,7 +122,7 @@ it('uploads a refused edit once after the role is restored, and refuses the retr
     expect(await queued()).toEqual([])
     expect(await host.health()).toMatchObject({rejectedUploads: 0})
   } finally { await host.stop() }
-}, 40_000)
+}, 60_000)
 
 it('retries a two-row transaction whole', async () => {
   const parent = randomUUID()
@@ -148,7 +148,7 @@ it('retries a two-row transaction whole', async () => {
     for (const {id} of rows) expect(sentIds()).toContain(id)
     expect(await host.health()).toMatchObject({rejectedUploads: 0})
   } finally { await host.stop() }
-}, 40_000)
+}, 60_000)
 
 const quarantineRecord = (id: string) => fixture.db.execute(
   'INSERT INTO ps_crud_rejected (original_id, tx_id, data, rejected_at) VALUES (1, 42, ?, 1)',
@@ -165,7 +165,7 @@ it('refuses a retry on a host configured writable: false', async () => {
     expect(await quarantine()).toEqual(kept)
     expect(await queued()).toEqual([])
   } finally { await host.stop() }
-}, 40_000)
+}, 60_000)
 
 it('refuses a retry while the stale-queue hold holds uploads', async () => {
   const id = randomUUID()
@@ -183,4 +183,4 @@ it('refuses a retry while the stale-queue hold holds uploads', async () => {
     expect(await quarantine()).toEqual(kept)
     expect(await queued()).toEqual(before)
   } finally { await host.stop() }
-}, 40_000)
+}, 60_000)
