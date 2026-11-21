@@ -48,7 +48,7 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   // the pre-existing behaviour, not data loss.
   panelMountsFacet.of(panelContentRecoveryMount, {source: 'spatial-navigation'}),
   // A plugin can contribute the name it sets on the block context as
-  // spatialNavigationSurface to exempt its blocks from the arrow-key walker.
+  // surfaceName to exempt its blocks from the arrow-key walker.
   spatialNavExclusionsFacet.of('breadcrumb', {source: 'spatial-navigation'}),
 ])
 

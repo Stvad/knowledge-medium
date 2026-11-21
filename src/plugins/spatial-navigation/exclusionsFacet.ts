@@ -1,7 +1,7 @@
 import { defineFacet, type FacetRuntime } from '@/facets/facet.js'
 import { DEFAULT_NON_NAVIGABLE_SURFACES } from './walker.ts'
 
-/** Contribute the `spatialNavigationSurface` name set in the block context.
+/** Contribute the `surfaceName` set in the block context.
  *  The shell decorator tags the block and the walker skips matching rows.
  *  Use {@link resolveSpatialNavExclusions} to read the effective exclusions. */
 export const spatialNavExclusionsFacet = defineFacet<string, ReadonlySet<string>>({

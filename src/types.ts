@@ -135,9 +135,9 @@ export interface BlockContextType {
      *  one rendered occurrence of that block, even when the same block is
      *  visible in the main outline and one or more embeds/backlink rows. */
     renderScopeId?: string
-    /** Name matched by spatial-navigation exclusions. Rows sharing a render
-     *  scope can choose different names, such as a grid row and its cells. */
-    spatialNavigationSurface?: string
+    /** Name written to the block shell's `data-block-surface`. Blocks in the
+     *  same render scope can have different names. */
+    surfaceName?: string
     /** Id of the block rendered as the root of this surface's visible
      *  subtree: the panel's zoom root for the main outline, the shown
      *  block for a backlink entry, the embedded block for an embed, a

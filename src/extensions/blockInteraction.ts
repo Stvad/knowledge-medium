@@ -813,9 +813,7 @@ export const BLOCK_BOUNDARY_SELECTOR = `.block-content, [${BLOCK_SHELL_ATTRIBUTE
  * affected — and why testing this needs one of them.
  */
 export const ownsGestureTarget = (element: HTMLElement, target: EventTarget | null): boolean => {
-  if (typeof Node === 'undefined' || !(target instanceof Node)) return true
-  const start = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement
-  const boundary = start?.closest(BLOCK_BOUNDARY_SELECTOR)
+  const boundary = elementOf(target)?.closest(BLOCK_BOUNDARY_SELECTOR)
   return !boundary || boundary === element
 }
 

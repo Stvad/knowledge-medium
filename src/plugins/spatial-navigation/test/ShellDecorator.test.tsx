@@ -33,8 +33,8 @@ it('uses the context surface to skip a cell without skipping its row in the same
   const {getByTestId} = render(
     <div data-testid="panel" data-panel-id="p1">
       {shell('row', {})}
-      {shell('cell', {spatialNavigationSurface: 'grid-cell'})}
-      {shell('crumb', {spatialNavigationSurface: 'grid-cell', isBreadcrumb: true})}
+      {shell('cell', {surfaceName: 'grid-cell'})}
+      {shell('crumb', {surfaceName: 'grid-cell', isBreadcrumb: true})}
     </div>,
   )
   const panel = getByTestId('panel')

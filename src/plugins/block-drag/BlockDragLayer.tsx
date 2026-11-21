@@ -28,8 +28,9 @@ html[${DRAG_ACTIVE_ATTRIBUTE}] [${BULLET_HOVER_CARD_ATTRIBUTE}] { display: none 
 
 /** On whenever a drag can start, not only during one: the browser reads
  *  `touch-action` when a touch starts, so a bullet must refuse to pan
- *  before the hold that may pick it up. Bullets on a surface that reserves
- *  its gestures keep native panning. */
+ *  before the hold that may pick it up. Nor does a hold on it select the
+ *  text beside it. Bullets on a surface that reserves its gestures keep
+ *  native panning. */
 const BULLET_STYLES = `
 [${BLOCK_BULLET_ATTRIBUTE}]:not([${NO_BLOCK_GESTURES_ATTRIBUTE}], [${NO_BLOCK_GESTURES_ATTRIBUTE}] *) {
   touch-action: none; -webkit-user-select: none; user-select: none;
