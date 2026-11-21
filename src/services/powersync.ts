@@ -75,6 +75,7 @@ export type CompactedBlockOperation =
  *  without spinning up a real DB or HTTP client. The default wiring lives
  *  in `defaultUploadDeps` below. */
 export interface UploadDeps {
+  beforeUploadBatch?: () => Promise<void>
   applyOperations: (
     database: CommonPowerSyncDatabase,
     operations: readonly CompactedBlockOperation[],
@@ -95,15 +96,11 @@ export interface UploadDeps {
  *  production binds it to the §6 resolver in `repoProvider`. */
 export type GetWorkspaceMode = (workspaceId: string) => UploadMode | Promise<UploadMode>
 
-/** Thrown for a write to a workspace whose upload mode is `hold`: the server
- *  says e2ee and this device can't seal yet. It takes the same path as a missing
- *  key — out of the upload pass, so the tx stays first in `ps_crud` and PowerSync
- *  retries it — because a held write must be neither sent nor quarantined. While
- *  it waits in `ps_crud`, the core publishes no checkpoint; that stall is
- *  accepted. */
+/** A recoverable hold leaves the operation in ps_crud for retry.
+ * Pending local writes prevent the core from applying downloaded checkpoints. */
 export class UploadHeldError extends Error {
-  constructor(readonly workspaceId: string) {
-    super(`upload held for ${workspaceId}: the server says e2ee and this device's pin is not upgraded`)
+  constructor(readonly workspaceId: string, reason = "the server says e2ee and this device's pin is not upgraded") {
+    super(`upload held for ${workspaceId}: ${reason}`)
     this.name = 'UploadHeldError'
   }
 }
@@ -593,9 +590,7 @@ const applyCompactedBlockOperations = async (
     }
   }
 
-  // Order matters: creates first so subsequent patches/deletes find their
-  // rows (when the row is genuinely new). Insert-or-skip semantics make
-  // this safe when the row already exists.
+  // Creates establish missing rows before patches and preserve existing rows on replay.
   await sink.createRows(creates)
 
   if (patches.length > 0) {
@@ -907,6 +902,9 @@ const runUploadLoop = async (
   while (true) {
     const transactions = await collectUploadBatch(database)
     if (transactions.length === 0) break
+    // Check the queue after collecting the exact batch, outside per-tx
+    // rejection handling. A later batch can contain writes queued during an RPC.
+    await deps.beforeUploadBatch?.()
     await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
   }
 }
@@ -973,6 +971,7 @@ const serializedUploadData = (
 }
 
 export interface PowerSyncConnectorOptions {
+  readonly beforeUploadBatch?: UploadDeps['beforeUploadBatch']
   /** The local database file this connector uploads from. */
   readonly dbFilename: string
   /** Defence in depth: every connector resolves the workspace's upload mode before sending. */
@@ -986,25 +985,22 @@ export const createPowerSyncConnector = (
   options: PowerSyncConnectorOptions,
 ): PowerSyncBackendConnector => ({
   fetchCredentials,
-  uploadData: serializedUploadData(options.dbFilename, makeUploadDeps(
-    options.encryption.getWorkspaceMode,
-    options.encryption.getCek,
-  )),
+  uploadData: serializedUploadData(options.dbFilename, {
+    ...makeUploadDeps(options.encryption.getWorkspaceMode, options.encryption.getCek),
+    beforeUploadBatch: options.beforeUploadBatch,
+  }),
 })
 
 // The deployed service uses WebSockets. PowerSync 2 defaults to HTTP streaming.
 const workspaceTransport = {connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET}
 
-export const connectWorkspaceSync = (
-  db: CommonPowerSyncDatabase,
-  dbFilename: string,
-  resolver: SyncResolver,
-): Promise<void> => db.connect(createPowerSyncConnector({
-  dbFilename,
-  encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek},
-}), workspaceTransport)
+export const createWorkspaceConnector = (
+  dbFilename: string, resolver: SyncResolver, beforeUploadBatch?: UploadDeps['beforeUploadBatch'],
+) =>
+  createPowerSyncConnector({dbFilename, beforeUploadBatch, encryption: {getWorkspaceMode: resolver.getUploadMode, getCek: resolver.getCek}})
 
-export const connectWorkspaceDownloads = (db: CommonPowerSyncDatabase): Promise<void> => {
+export const connectWorkspaceSync = (db: CommonPowerSyncDatabase, connector?: PowerSyncBackendConnector): Promise<void> => {
+  if (connector) return db.connect(connector, workspaceTransport)
   if (!powerSyncUrl) throw new Error('Set VITE_POWERSYNC_URL to connect for downloads')
   return db.connect({
     ...workspaceTransport,

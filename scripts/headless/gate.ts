@@ -1,40 +1,45 @@
 import type {CommonPowerSyncDatabase} from '@powersync/common'
-import type {Repo} from '@/data/repo'
-import {getLocalMemberRole} from '@/data/workspaces'
+import type {Repo, ViewGap} from '@/data/repo'
+import {viewGapReadsOver} from '@/data/internals/syncObserver/reconcile'
+import type {WorkspaceRole} from '@/types'
+
+type Admission = {role: WorkspaceRole} | ViewGap
 
 export const startReadGate = (
   db: CommonPowerSyncDatabase, repo: Repo, workspaceId: string, baseline: number | undefined,
   open: (signal: AbortSignal) => Promise<void>, visibility: (open: boolean) => void,
+  access = {writable: false, isUploadHeld: () => false},
 ) => {
   let reason: string | null = 'Checking workspace access'
+  let role: WorkspaceRole | null = null
+  let membershipId: string | null = null
+  let admitted = false
   let preparation: AbortController | 'ready' | undefined
   let pending: Promise<void> | undefined
   let dirty = false
   let stopped = false
 
-  function cancelPreparation() {
+  function applyWritability() {
+    repo.setReadOnly(!(access.writable && (role === 'editor' || role === 'owner') && !access.isUploadHeld()))
+  }
+
+  function resetPreparation(nextRole: WorkspaceRole | null) {
     if (preparation instanceof AbortController) preparation.abort()
     preparation = undefined
+    role = nextRole
+    applyWritability()
   }
 
-  async function membershipRefusal(): Promise<string | null> {
-    try {
-      if (await getLocalMemberRole(repo, workspaceId, repo.user.id) === null) {
-        cancelPreparation()
-        if (reason === null) visibility(false)
-        reason = 'Waiting for the local member row'
-        return reason
-      }
-      return null
-    } catch (error) {
-      console.error('Could not verify workspace membership', error)
-      return 'Could not verify workspace membership'
-    }
+  function close(message: string) {
+    resetPreparation(null)
+    if (admitted) visibility(false)
+    admitted = false
+    reason = message
   }
 
-  // The membership subscription must stay responsive even if a projector
-  // never primes. A completed preparation wakes the same entry checks again.
-  function startPreparation() {
+  // A stalled namespace read must not block demotion, removal or shutdown.
+  function startPreparation(nextRole: WorkspaceRole) {
+    resetPreparation(nextRole)
     const attempt = new AbortController()
     preparation = attempt
     reason = 'Opening workspace data'
@@ -44,42 +49,56 @@ export const startReadGate = (
       wake()
     }, error => {
       if (attempt.signal.aborted) return
-      preparation = undefined
-      reason = 'Could not open workspace data'
+      close('Could not open workspace data')
       console.error(reason, error)
     })
   }
 
+  async function readAdmission(): Promise<Admission> {
+    // A membership checkpoint can also stage its entire workspace. Sample
+    // permission and completeness from the same replica snapshot.
+    return db.readTransaction(async tx => {
+      const member = await tx.getOptional<{id: string, role: WorkspaceRole} | {id: null, role: null}>(
+        `SELECT m.id, m.role FROM workspaces w LEFT JOIN workspace_members m
+         ON m.workspace_id = w.id AND m.user_id = ? WHERE w.id = ?`, [repo.user.id, workspaceId])
+      if (!member) return {reason: 'Waiting for the local workspace row', transient: false}
+      if (member.id === null) return {reason: 'Waiting for the local member row', transient: false}
+      // A re-invitation mints a new member id. Both changes can arrive
+      // between refreshes, so the old admission and its watchers expire here.
+      if (member.id !== membershipId) {
+        close('Checking workspace access')
+        membershipId = member.id
+      }
+      if (!admitted) {
+        const stamp = db.currentStatus.lastSyncedAt?.getTime()
+        if (stamp === undefined || stamp === baseline) {
+          return {reason: 'Waiting for a checkpoint from this connection', transient: false}
+        }
+        const gap = await repo.workspaceViewGap(workspaceId, viewGapReadsOver(tx))
+        if (gap) return gap
+      }
+      return {role: member.role}
+    })
+  }
+
   async function refresh() {
-    const refusal = await membershipRefusal()
-    if (refusal) {
-      if (reason !== null) reason = refusal
-      return
-    }
-    // Entry checks run once per membership. Ordinary downloads must preserve
-    // watcher registrations and the already-open workspace data.
-    if (reason === null || preparation instanceof AbortController) return
-    const stamp = db.currentStatus.lastSyncedAt?.getTime()
-    if (stamp === undefined || stamp === baseline) {
-      reason = 'Waiting for a checkpoint from this connection'
-      return
-    }
-    let gap = await repo.workspaceViewGap(workspaceId)
-    if (gap?.transient) {
-      reason = gap.reason
+    let admission = await readAdmission()
+    if ('reason' in admission && admission.transient) {
+      close(admission.reason)
       await repo.flushSyncObserver()
-      gap = await repo.workspaceViewGap(workspaceId)
+      admission = await readAdmission()
     }
-    if (gap) {
-      reason = gap.reason
+    if ('reason' in admission) {
+      close(admission.reason)
       return
     }
     if (stopped) return
-    if (preparation === 'ready') {
+    if (role !== admission.role) {
+      startPreparation(admission.role)
+    } else if (preparation === 'ready') {
       reason = null
-      visibility(true)
-    } else {
-      startPreparation()
+      if (!admitted) visibility(true)
+      admitted = true
     }
   }
 
@@ -92,31 +111,34 @@ export const startReadGate = (
           await refresh()
         }
       } catch (error) {
-        reason = 'Could not check the workspace view'
+        close('Could not check the workspace view')
         console.error(reason, error)
       } finally {
         pending = undefined
       }
     })()
+    return pending
   }
   const offStatus = db.registerListener({statusChanged: wake})
-  const offTables = db.onChange({onChange: wake}, {tables: ['workspace_members', 'blocks_synced_changes', 'blocks_synced']})
+  const offTables = db.onChange({onChange: wake}, {tables: ['workspaces', 'workspace_members', 'blocks_synced_changes', 'blocks_synced']})
   wake()
   return {
     reason: () => reason,
+    uploadHoldChanged: applyWritability,
     async readReason() {
       if (reason !== null) {
         if (!pending) wake()
         return reason
       }
-      // A command may arrive before the membership table notification.
-      return await membershipRefusal() ?? reason
+      // A command can arrive before the role-change notification.
+      await wake()
+      return reason
     },
     async stop() {
       stopped = true
       offTables()
       offStatus()
-      cancelPreparation()
+      resetPreparation(null)
       await pending
     },
   }

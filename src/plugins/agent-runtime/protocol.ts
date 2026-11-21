@@ -297,7 +297,7 @@ export interface AuditPropertiesInput {
 }
 
 export interface AgentRuntimeContext {
-  hostHealth?: () => Readonly<Record<string, unknown>>
+  hostHealth?: () => Readonly<Record<string, unknown>> | Promise<Readonly<Record<string, unknown>>>
   repo: Repo
   db: Repo['db']
   runtime: FacetRuntime

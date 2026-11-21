@@ -56,7 +56,7 @@ export const runHealthCommand = async (repo: Repo, hostHealth?: AgentRuntimeCont
   // is the slowest single query, not their sum (the divergence probe scans
   // every staged row, and the upload-preview and materialize-backlog scans can
   // be slow on a mid-sync client).
-  const [blocks, blocksSynced, uploadQueueBlocks, materializeBacklog, syncDivergence, rejectedUploads] =
+  const [blocks, blocksSynced, uploadQueueBlocks, materializeBacklog, syncDivergence, rejectedUploads, host] =
     await Promise.all([
       countOf(repo, 'SELECT count(*) AS count FROM blocks WHERE deleted = 0'),
       countOf(repo, 'SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0'),
@@ -64,9 +64,10 @@ export const runHealthCommand = async (repo: Repo, hostHealth?: AgentRuntimeCont
       countOf(repo, MATERIALIZE_QUEUE_COUNT_SQL),
       repo.syncDivergence(),
       countOf(repo, rejectedCountSql),
+      hostHealth?.(),
     ])
   return {
-    ...(hostHealth && {host: hostHealth()}),
+    ...(host && {host}),
     rejectedUploads,
     activeWorkspaceId: repo.activeWorkspaceId,
     blocks,
