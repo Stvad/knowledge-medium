@@ -1,1 +1,0 @@
-export{SF as appUpdatePromptExtension}from"../../../chunks/app-BWjVG2Le.js";

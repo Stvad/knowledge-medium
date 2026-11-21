@@ -1,1 +1,0 @@
-export{yk as useMinuteClock}from"../../chunks/app-BWjVG2Le.js";

@@ -1,1 +1,0 @@
-export{Wg as lintExtensionSource}from"../../../chunks/app-BWjVG2Le.js";

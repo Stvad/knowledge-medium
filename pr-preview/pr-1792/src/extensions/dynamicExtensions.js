@@ -1,1 +1,0 @@
-export{sI as dynamicExtensionsExtension}from"../../chunks/app-BWjVG2Le.js";
