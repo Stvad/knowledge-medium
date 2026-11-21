@@ -33,12 +33,32 @@ describe('core.propertyCell', () => {
     await raw('nested-field', 'field-a', 'c', {field: true, target: 'definition'})
     await raw('deleted', 'field-a', 'd', {deleted: true})
     await raw('other', 'owner', 'c', {target: 'definition'})
+    await raw('other-definition', null, 'd', {properties: {types: ['property-schema']}})
+    await raw('other-field', 'owner', 'd', {field: true, target: 'other-definition'})
+    await raw('deleted-field', 'owner', 'd', {field: true, target: 'definition', deleted: true})
     await raw('foreign', 'owner', 'd', {workspace: 'other', field: true, target: 'definition'})
     const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
     const result = await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()
     expect(result.owner?.properties.sample).toBe('fallback')
     expect(result.fields.map(group => [group.field.id, group.values.map(value => value.id)]))
       .toEqual([['field-a', ['value-a', 'value-b']], ['field-b', []]])
+  })
+
+  it('keeps a foreign definition and its field outside the owner workspace', async () => {
+    await raw('owner', null, 'a')
+    await raw('definition', null, 'a', {workspace: 'other', properties: {types: ['property-schema']}})
+    await raw('field', 'owner', 'a', {workspace: 'other', field: true, target: 'definition'})
+    const {repo} = createTestRepo({db: db.db})
+    expect((await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()).fields).toEqual([])
+  })
+
+  it('returns no cell for a deleted owner even with live field rows', async () => {
+    await raw('definition', null, 'a', {properties: {types: ['property-schema']}})
+    await raw('owner', null, 'a', {deleted: true})
+    await raw('field', 'owner', 'a', {field: true, target: 'definition'})
+    const {repo} = createTestRepo({db: db.db})
+    expect(await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load())
+      .toEqual({owner: null, fields: []})
   })
 
   it('reacts to definition recognition and owner fallback changes', async () => {

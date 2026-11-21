@@ -387,9 +387,9 @@ describe('clearCell', () => {
     expect(await projection()).toEqual({[textProperty.name]: ''})
   })
 
-  it('removes exactly the blank row that finished editing', async () => {
+  it.each([true, false])('removes exactly the blank row that finished editing (projected: %s)', async projected => {
     const repo = await setup()
-    await seed({id: ownerId, properties: {[textProperty.name]: ''}}, field(), value('value-a', ''))
+    await seed({id: ownerId, properties: projected ? {[textProperty.name]: ''} : {}}, field(), value('value-a', ''))
 
     await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-a'}), options)
 
