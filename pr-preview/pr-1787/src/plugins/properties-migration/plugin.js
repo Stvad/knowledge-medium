@@ -1,0 +1,1 @@
+export{qo as propertiesMigrationPlugin}from"../../../chunks/app-4yNOVopP.js";

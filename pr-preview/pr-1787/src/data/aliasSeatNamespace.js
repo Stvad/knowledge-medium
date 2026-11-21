@@ -1,0 +1,1 @@
+export{Ist as aliasSeatNamespacesInTx,Lst as resolveAliasSeatNamespaces}from"../../chunks/app-4yNOVopP.js";

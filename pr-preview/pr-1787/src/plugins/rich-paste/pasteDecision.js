@@ -1,0 +1,1 @@
+export{Qx as richPasteDecisionContribution}from"../../../chunks/app-4yNOVopP.js";

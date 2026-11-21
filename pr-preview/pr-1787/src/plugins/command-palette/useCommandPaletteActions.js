@@ -1,0 +1,1 @@
+export{IM as useCommandPaletteActions}from"../../../chunks/app-4yNOVopP.js";

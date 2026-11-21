@@ -1,0 +1,1 @@
+export{SF as appUpdatePromptExtension}from"../../../chunks/app-4yNOVopP.js";

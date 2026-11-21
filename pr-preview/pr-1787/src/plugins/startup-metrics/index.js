@@ -1,0 +1,1 @@
+export{Ha as startupMetricsPlugin}from"../../../chunks/app-4yNOVopP.js";

@@ -1,0 +1,1 @@
+export{Sft as definePostCommitProcessor}from"../../../chunks/app-4yNOVopP.js";

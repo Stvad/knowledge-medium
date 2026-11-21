@@ -1,0 +1,1 @@
+export{JI as BlockLoadingPlaceholder}from"../../chunks/app-4yNOVopP.js";

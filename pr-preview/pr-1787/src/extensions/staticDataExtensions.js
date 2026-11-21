@@ -1,0 +1,1 @@
+export{bJ as staticDataExtensions}from"../../chunks/app-4yNOVopP.js";

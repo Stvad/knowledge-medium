@@ -1,0 +1,1 @@
+export{_k as BlockLink}from"../../../chunks/app-4yNOVopP.js";

@@ -1,0 +1,1 @@
+export{mp as moveCommentToOwnThread}from"../../../chunks/app-4yNOVopP.js";

@@ -1,0 +1,1 @@
+export{by as updateIndicatorPlugin}from"../../../chunks/app-4yNOVopP.js";

@@ -1,0 +1,1 @@
+export{ld as blockTagsConfigUi}from"../../../chunks/app-4yNOVopP.js";

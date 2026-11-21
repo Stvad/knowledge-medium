@@ -1,0 +1,1 @@
+export{x2 as agentDispatchCompanionDataExtension}from"../../../chunks/app-4yNOVopP.js";

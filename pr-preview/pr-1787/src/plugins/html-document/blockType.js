@@ -1,0 +1,1 @@
+export{jY as htmlDocumentTypeSeed}from"../../../chunks/app-4yNOVopP.js";

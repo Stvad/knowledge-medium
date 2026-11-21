@@ -1,0 +1,1 @@
+export{gY as preferredSpanReplacement}from"../../../chunks/app-4yNOVopP.js";

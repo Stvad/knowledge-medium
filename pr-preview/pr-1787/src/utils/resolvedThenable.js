@@ -1,0 +1,1 @@
+export{g0 as resolvedThenable,_0 as stampFulfilled}from"../../chunks/app-4yNOVopP.js";

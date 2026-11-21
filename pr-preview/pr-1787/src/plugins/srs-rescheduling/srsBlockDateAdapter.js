@@ -1,0 +1,1 @@
+export{Ru as srsBlockDateAdapter}from"../../../chunks/app-4yNOVopP.js";

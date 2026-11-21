@@ -1,0 +1,1 @@
+export{$C as videoPlayerPlugin}from"../../../chunks/app-4yNOVopP.js";

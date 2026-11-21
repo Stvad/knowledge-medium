@@ -1,0 +1,1 @@
+export{vN as SwipeActionMenu}from"../../../chunks/app-4yNOVopP.js";

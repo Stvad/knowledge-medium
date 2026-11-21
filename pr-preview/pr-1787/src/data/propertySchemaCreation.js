@@ -1,0 +1,1 @@
+export{RK as adoptOrCreatePropertySchema}from"../../chunks/app-4yNOVopP.js";

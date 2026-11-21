@@ -1,0 +1,1 @@
+export{c4 as instrumentAdapter}from"../../../chunks/app-4yNOVopP.js";

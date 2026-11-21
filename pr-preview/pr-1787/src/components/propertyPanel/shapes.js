@@ -1,0 +1,1 @@
+export{LK as propertyShapeLabel}from"../../../chunks/app-4yNOVopP.js";

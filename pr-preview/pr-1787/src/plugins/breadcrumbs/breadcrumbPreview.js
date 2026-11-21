@@ -1,0 +1,1 @@
+export{RE as getBreadcrumbContentPreview}from"../../../chunks/app-4yNOVopP.js";

@@ -1,0 +1,1 @@
+export{Fb as wikilinkMarkdownExtension}from"../../../../../chunks/app-4yNOVopP.js";

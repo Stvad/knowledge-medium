@@ -1,0 +1,1 @@
+export{uP as chipStyle}from"../../../chunks/app-4yNOVopP.js";

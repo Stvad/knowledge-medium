@@ -1,0 +1,1 @@
+export{_F as approveExtensionHere}from"../../chunks/app-4yNOVopP.js";

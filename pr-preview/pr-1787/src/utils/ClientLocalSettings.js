@@ -1,0 +1,1 @@
+export{rI as ClientLocalSettings,iI as clientLocalSettings}from"../../chunks/app-4yNOVopP.js";

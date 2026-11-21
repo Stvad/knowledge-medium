@@ -1,0 +1,1 @@
+export{Ib as Wikilink}from"../../../../../chunks/app-4yNOVopP.js";

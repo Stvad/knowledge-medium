@@ -1,0 +1,1 @@
+export{IB as ExtensionRenderBoundary}from"../../chunks/app-4yNOVopP.js";

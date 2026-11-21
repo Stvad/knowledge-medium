@@ -1,0 +1,1 @@
+export{AE as mobileBottomNavItemsFacet}from"../../../chunks/app-4yNOVopP.js";
