@@ -116,7 +116,8 @@ export const openCell = async (
     }
     const valueId = await appendValue(tx, field, schema, initialText ?? '')
     requestProjection(tx, cell)
-    return cell.fields.length ? {valueId, created: true} : {valueId, created: true, draftFieldId: field.id}
+    return cell.fields.length || stored !== undefined
+      ? {valueId, created: true} : {valueId, created: true, draftFieldId: field.id}
   }
 
   // Validate before even minting the field: callers can catch a refusal

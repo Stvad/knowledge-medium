@@ -967,6 +967,23 @@ describe('opening and finishing an edit against existing rows', () => {
     expect(await snapshot()).toEqual(before)
   })
 
+  it.each([
+    {schema: refListProperty, stored: [], rows: [field()]},
+    {schema: refListProperty, stored: [], rows: []},
+    {schema: textProperty, stored: '', rows: [field(), value('value-a', '')]},
+    {schema: textProperty, stored: '', rows: []},
+  ])('preserves explicit empty $schema.name through open and finish', async ({schema, stored, rows}) => {
+    const repo = await setup(schema)
+    await seed({id: ownerId, properties: {[schema.name]: stored, other: 'keep'}}, ...rows)
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, edit, ''), options)
+
+    expect(await projection()).toEqual({[schema.name]: stored, other: 'keep'})
+    const [fieldRow] = await children(ownerId)
+    expect(fieldRow!.id).toEqual(rows.length ? 'field-a' : expect.any(String))
+    expect(await children(fieldRow!.id)).toEqual(schema === refListProperty ? [] : [{id: edit.valueId, content: ''}])
+  })
+
   it('opens an explicitly empty reference list without adding a projected member', async () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId, properties: {[refListProperty.name]: []}})
