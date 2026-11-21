@@ -35,3 +35,29 @@ export const isCacheableAsset = (
   sameOrigin: boolean,
 ): boolean =>
   sameOrigin && (ASSET_DESTINATIONS.has(destination) || ASSET_EXTENSION.test(pathname))
+
+// The HTML shell + icons the app boots from — a static set (not build-injected),
+// resolved against the SW scope and fetched into the shell cache at install.
+// `./` is the scope root, which the host answers with index.html.
+export const SHELL_PATHS = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './icon.svg',
+  './icon-192.png',
+  './icon-512.png',
+  './icon-maskable.png',
+  './apple-touch-icon.png',
+] as const
+
+/**
+ * The fingerprint the build stamps for each precached file and the worker
+ * recomputes over the bytes it fetched: hex SHA-256, cut to 64 bits — enough to
+ * tell two builds' bytes apart, and it keeps ~1,200 of them small in sw.js.
+ * The one definition both sides use, so they can't disagree on the format.
+ */
+export const contentDigest = async (bytes: BufferSource | string): Promise<string> => {
+  const data = typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data))
+  return Array.from(hash.subarray(0, 8), b => b.toString(16).padStart(2, '0')).join('')
+}

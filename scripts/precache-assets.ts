@@ -32,7 +32,7 @@
  * Pure + dependency-injected (`allFiles` / `toBaseUrl`) so it unit-tests
  * without touching a real dist tree.
  */
-import {ASSET_EXTENSION} from '../src/sw/assets'
+import {ASSET_EXTENSION, contentDigest} from '../src/sw/assets'
 
 export {ASSET_EXTENSION}
 
@@ -102,4 +102,28 @@ export const collectRestAssets = ({
     rest.add(url)
   }
   return [...rest].sort()
+}
+
+/**
+ * `contentDigest` of each base-prefixed URL's dist file, for the worker to check
+ * what it fetches at install against. The base itself (the scope root `./`) is
+ * served as index.html.
+ */
+export const collectPrecacheDigests = async ({
+  urls,
+  base,
+  read,
+}: {
+  urls: readonly string[]
+  /** the configured base, with leading and trailing slash */
+  base: string
+  /** dist-relative POSIX path → file bytes */
+  read: (rel: string) => Uint8Array<ArrayBuffer>
+}): Promise<Record<string, string>> => {
+  const digests: Record<string, string> = {}
+  for (const url of urls) {
+    if (!url.startsWith(base)) throw new Error(`precache URL ${url} is outside base ${base}`)
+    digests[url] = await contentDigest(read(url.slice(base.length) || 'index.html'))
+  }
+  return digests
 }

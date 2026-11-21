@@ -25,6 +25,10 @@
  *     there still network-grafts. Fully closing the miss path (so the fallback
  *     refuses cross-generation bytes) needs a per-generation guard and is a
  *     follow-up, not done here.
+     Install also checks every fetched body against the digest the build
+     stamped for it, and fails (discarding its caches) on a mismatch: a deploy
+     landing mid-install otherwise fills the rest of this generation with the
+     NEXT build's bytes, a skew no later fetch repairs.
  *   - We deliberately do NOT call clients.claim(). A freshly installed
  *     worker self-skipWaiting()s so it becomes the ACTIVE worker (and thus
  *     controls the NEXT load — so one reload, the user's own or our update
@@ -99,6 +103,9 @@ const sw = createServiceWorker(
     // and the app offline-capable.
     precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as string[],
     precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as string[],
+    // What each of those (and the shell) hashed to at build time, so install
+    // can tell when a deploy swapped the bytes under it.
+    precacheDigests: JSON.parse('__PRECACHE_DIGESTS__') as Record<string, string>,
   },
   {
     caches,

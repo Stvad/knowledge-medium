@@ -10,7 +10,7 @@
  *
  * The versioning model this implements is documented in the sw.ts header.
  */
-import {isCacheableAsset} from './assets'
+import {contentDigest, isCacheableAsset, SHELL_PATHS} from './assets'
 // Relative, not `@/`: the SW is built by vite.sw.config.ts, which has no alias.
 import {SQLITE_JOURNAL_SUFFIXES, WRITE_AHEAD_SIDECAR_SUFFIXES} from '../data/dbFileSiblings'
 import {
@@ -37,20 +37,6 @@ interface PreviewDatabaseRecord {
   updatedAt: number | undefined
 }
 
-// The HTML shell + icons the app boots from — a static set (not build-injected),
-// resolved against the SW scope. Served network-first (HTML) / cache-first
-// (icons) from the shell cache.
-const SHELL_PATHS = [
-  './',
-  './index.html',
-  './manifest.webmanifest',
-  './icon.svg',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable.png',
-  './apple-touch-icon.png',
-]
-
 export interface SwConfig {
   /** Per-deploy id namespacing this generation's caches (injected at build). */
   buildId: string
@@ -74,6 +60,12 @@ export interface SwConfig {
   precacheAssets: string[]
   /** The rest of the emitted graph (build-injected) — everything minus first-paint. */
   precacheRestAssets: string[]
+  /**
+   * `contentDigest` of each file install fetches (both lists + the shell), keyed
+   * like the lists. The build guarantees every precached URL has one
+   * (stampSwSource); a URL without one is cached unverified.
+   */
+  precacheDigests: Readonly<Record<string, string>>
 }
 
 export interface SwEnv {
@@ -115,6 +107,9 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const PRECACHE_ASSETS = config.precacheAssets.map(toScopeUrl)
   const PRECACHE_REST_ASSETS = config.precacheRestAssets.map(toScopeUrl)
   const SHELL_URL = toScopeUrl('./index.html')
+  const EXPECTED_DIGESTS = new Map(
+    Object.entries(config.precacheDigests).map(([path, digest]) => [toScopeUrl(path), digest]),
+  )
   // What a cold launch needs before first paint, by the cache install fills:
   // the shell and the first-paint assets. Served from the boot store when
   // present.
@@ -189,6 +184,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     })
   }
 
+  const forgetGeneration = async (id: string): Promise<void> => {
+    await mutateLedgerEntry((entry) => ({...entry, ids: entry.ids.filter((x) => x !== id)}))
+  }
+
   const writeLedger = async (ids: string[]): Promise<void> => {
     await mutateLedgerEntry((entry) => ({...entry, ids}))
   }
@@ -237,6 +236,21 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   }
 
   const install = async (): Promise<void> => {
+    try {
+      await precache()
+    } catch (err) {
+      // Throwing fails the install, so the browser discards this worker and the
+      // previous generation keeps serving; the next update check installs
+      // whichever build is live then. Our half-filled caches and the ledger
+      // slot precache() recorded go too, so no later activate keeps them in place of
+      // a generation an open tab still reads.
+      await Promise.all(deleteGeneration(buildId))
+      await forgetGeneration(buildId).catch(() => {})
+      throw err
+    }
+  }
+
+  const precache = async (): Promise<void> => {
     // Record this generation up front so its cache stays ledger-tracked (and
     // therefore GC-eligible) even if the heavy precache below is interrupted.
     // An interrupted install then leaves at worst a PHANTOM id that ages out of
@@ -267,30 +281,52 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // bytes on that miss (self-healing only while this IS the newest deploy; a
     // per-generation guard to refuse cross-gen bytes is a follow-up). The
     // persistent IndexedDB compile cache still covers warm extension compiles.
-    const fetchInto = (cache: Cache, url: string, mode: RequestCache) =>
-      fetch(new Request(url, {cache: mode}))
-        .then((res) => (res && res.ok ? cache.put(url, res) : null))
-        .catch(() => null)
+    //
+    // A body whose digest isn't this build's is the one failure NOT swallowed:
+    // the URLs are unhashed, so a deploy that lands while this install runs
+    // serves the NEXT build's bytes for the rest of the list, and caching them
+    // would pin a generation that mixes two builds (two copies of React, among
+    // others) for every boot until it ages out.
+    const fetchInto = async (cache: Cache, url: string, mode: RequestCache): Promise<void> => {
+      const res = await fetch(new Request(url, {cache: mode})).catch(() => null)
+      if (!res || !res.ok) return
+      const expected = EXPECTED_DIGESTS.get(url)
+      if (expected !== undefined && await contentDigest(await res.clone().arrayBuffer()) !== expected) {
+        throw new Error(`[sw] ${url} is not build ${buildId}'s copy; a newer deploy landed during install`)
+      }
+      await cache.put(url, res).catch(() => {})
+    }
     // The rest list is the full module graph (~1,500 files), so fan every
     // fetch through a bounded pool instead of opening that many connections
-    // at once.
+    // at once. The first failure stops the pool taking new URLs, and the pool
+    // settles before rethrowing so no in-flight put lands after the cleanup.
     const runPooled = async (
-      items: string[],
+      items: readonly string[],
       limit: number,
       task: (url: string) => Promise<unknown>,
     ) => {
       let next = 0
+      let failed = false
       const worker = async () => {
-        while (next < items.length) await task(items[next++])
+        while (!failed && next < items.length) {
+          try {
+            await task(items[next++])
+          } catch (err) {
+            failed = true
+            throw err
+          }
+        }
       }
-      await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker))
+      const settled = await Promise.allSettled(Array.from({length: Math.min(limit, items.length)}, worker))
+      const failure = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+      if (failure) throw failure.reason
     }
     // ALWAYS precache the whole graph so the current generation is fully
     // offline-capable — we never skip it for storage (footprint is bounded by
     // keepGenerations and reclaimed by the activate GC, not by dropping offline
     // coverage). First-paint first: it's the offline-boot-critical set, so it
     // lands before the lazy tail.
-    await Promise.all(SHELL_URLS.map((u) => fetchInto(shell, u, 'reload')))
+    await runPooled(SHELL_URLS, SHELL_URLS.length, (u) => fetchInto(shell, u, 'reload'))
     await runPooled(PRECACHE_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
     // Seed before the rest pass: the boot set is ~7 MB of bodies held in
     // memory for one write, and install's memory peaks after the full graph.

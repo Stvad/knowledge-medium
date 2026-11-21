@@ -9,18 +9,27 @@ const swExpr = (quote: string): string =>
   `({` +
   `buildId:${quote}__BUILD_ID__${quote},` +
   `first:JSON.parse(${quote}__PRECACHE_ASSETS__${quote}),` +
-  `rest:JSON.parse(${quote}__PRECACHE_REST_ASSETS__${quote})` +
+  `rest:JSON.parse(${quote}__PRECACHE_REST_ASSETS__${quote}),` +
+  `digests:JSON.parse(${quote}__PRECACHE_DIGESTS__${quote})` +
   `})`
 
 // Eval the stamped first-party expression to read back its decoded runtime
 // values (what the worker's own JSON.parse would produce). Test-only, trusted input.
 const evalExpr = (src: string) =>
-  new Function(`return ${src}`)() as {buildId: string; first: string[]; rest: string[]}
+  new Function(`return ${src}`)() as {
+    buildId: string
+    first: string[]
+    rest: string[]
+    digests: Record<string, string>
+  }
 
 describe('stampSwSource', () => {
   const buildId = 'abc123def456'
   const firstPaintAssets = ['/knowledge-medium/src/main.js', '/knowledge-medium/assets/index.css']
   const restAssets = ['/knowledge-medium/src/extensions/blockInteraction.js', '/knowledge-medium/assets/x.woff2']
+  const digests = Object.fromEntries(
+    [...firstPaintAssets, ...restAssets, '/knowledge-medium/index.html'].map((url, i) => [url, `d${i}`]),
+  )
 
   // The load-bearing property: the stamp survives whatever quote style the
   // minifier chose. oxc rewrites string literals to backticks, so the backtick
@@ -30,14 +39,15 @@ describe('stampSwSource', () => {
     ['double quotes', '"'],
     ['backticks (minified form)', '`'],
   ])('stamps build id + precache lists wrapped in %s', (_label, quote) => {
-    const stamped = stampSwSource(swExpr(quote), {buildId, firstPaintAssets, restAssets})
-    for (const p of ['__BUILD_ID__', '__PRECACHE_ASSETS__', '__PRECACHE_REST_ASSETS__']) {
+    const stamped = stampSwSource(swExpr(quote), {buildId, firstPaintAssets, restAssets, digests})
+    for (const p of ['__BUILD_ID__', '__PRECACHE_ASSETS__', '__PRECACHE_REST_ASSETS__', '__PRECACHE_DIGESTS__']) {
       expect(stamped).not.toContain(p)
     }
     const decoded = evalExpr(stamped)
     expect(decoded.buildId).toBe(buildId)
     expect(decoded.first).toEqual(firstPaintAssets)
     expect(decoded.rest).toEqual(restAssets)
+    expect(decoded.digests).toEqual(digests)
   })
 
   // The escaping trap: a payload carrying the JS-string metacharacters ($, ", \)
@@ -45,15 +55,20 @@ describe('stampSwSource', () => {
   // uses a function replacer rather than pasting the raw JSON.
   it('round-trips URLs containing $, quotes, and backslashes', () => {
     const nasty = ['/a$b/c"d', "/e'f", '/g\\h', '/i$&j']
-    const stamped = stampSwSource(swExpr('`'), {buildId, firstPaintAssets: nasty, restAssets})
+    const stamped = stampSwSource(swExpr('`'), {
+      buildId,
+      firstPaintAssets: nasty,
+      restAssets,
+      digests: {...digests, ...Object.fromEntries(nasty.map(url => [url, 'x']))},
+    })
     expect(evalExpr(stamped).first).toEqual(nasty)
   })
 
   it('throws when the build-id placeholder is absent', () => {
     expect(() =>
       stampSwSource(
-        'JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`)',
-        {buildId, firstPaintAssets, restAssets},
+        'JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`);JSON.parse(`__PRECACHE_DIGESTS__`)',
+        {buildId, firstPaintAssets, restAssets, digests},
       ),
     ).toThrow(/__BUILD_ID__ not found/)
   })
@@ -64,6 +79,7 @@ describe('stampSwSource', () => {
         buildId,
         firstPaintAssets,
         restAssets,
+        digests,
       }),
     ).toThrow(/__PRECACHE_REST_ASSETS__/)
   })
@@ -73,9 +89,19 @@ describe('stampSwSource', () => {
     // so the guard must reject it rather than let a broken worker ship.
     expect(() =>
       stampSwSource(
-        '`__BUILD_ID__`;JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`);(',
-        {buildId, firstPaintAssets, restAssets},
+        '`__BUILD_ID__`;JSON.parse(`__PRECACHE_ASSETS__`);JSON.parse(`__PRECACHE_REST_ASSETS__`);JSON.parse(`__PRECACHE_DIGESTS__`);(',
+        {buildId, firstPaintAssets, restAssets, digests},
       ),
     ).toThrow(/not valid JS/)
+  })
+
+  // The worker only compares digests it was given; a precached URL without one
+  // would be cached unverified, so the stamp refuses to ship that worker.
+  it('throws when a precached URL has no digest', () => {
+    const partial = {...digests}
+    delete partial[restAssets[0]]
+    expect(() =>
+      stampSwSource(swExpr('`'), {buildId, firstPaintAssets, restAssets, digests: partial}),
+    ).toThrow(restAssets[0])
   })
 })

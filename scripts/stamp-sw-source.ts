@@ -23,6 +23,7 @@ const PLACEHOLDERS = [
   '__BUILD_ID__',
   '__PRECACHE_ASSETS__',
   '__PRECACHE_REST_ASSETS__',
+  '__PRECACHE_DIGESTS__',
 ] as const
 
 export interface SwStampInput {
@@ -32,16 +33,23 @@ export interface SwStampInput {
   firstPaintAssets: string[]
   /** The rest of the emitted graph, base-prefixed. */
   restAssets: string[]
+  /** contentDigest per precached URL (both lists + the shell), base-prefixed. */
+  digests: Record<string, string>
 }
 
 export const stampSwSource = (
   source: string,
-  {buildId, firstPaintAssets, restAssets}: SwStampInput,
+  {buildId, firstPaintAssets, restAssets, digests}: SwStampInput,
 ): string => {
+  // The worker caches a URL it has no digest for unverified, so completeness is
+  // enforced here, where the lists and the digests meet.
+  const undigested = [...firstPaintAssets, ...restAssets].filter(url => !(url in digests))
+  if (undigested.length > 0) throw new Error(`no digest for precached ${undigested.join(', ')}`)
+
   if (!source.includes('__BUILD_ID__')) throw new Error('placeholder __BUILD_ID__ not found in sw.js')
   let out = source.split('__BUILD_ID__').join(buildId)
 
-  const injectList = (placeholder: string, arr: string[]): void => {
+  const injectList = (placeholder: string, arr: unknown): void => {
     const lit = new RegExp(`(["'\`])${placeholder}\\1`)
     if (!lit.test(out)) throw new Error(`could not find placeholder string "${placeholder}" in sw.js`)
     // JSON.stringify twice: once to the JSON payload, once more to a correctly
@@ -53,6 +61,7 @@ export const stampSwSource = (
   }
   injectList('__PRECACHE_ASSETS__', firstPaintAssets)
   injectList('__PRECACHE_REST_ASSETS__', restAssets)
+  injectList('__PRECACHE_DIGESTS__', digests)
 
   for (const p of PLACEHOLDERS) {
     if (out.includes(p)) throw new Error(`placeholder ${p} survived injection`)

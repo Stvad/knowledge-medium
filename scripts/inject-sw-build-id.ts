@@ -1,5 +1,5 @@
 /**
- * Post-build step that stamps dist/sw.js with three things:
+ * Post-build step that stamps dist/sw.js with four things:
  *
  *   1. A per-build identifier (`__BUILD_ID__` placeholder) so each deploy
  *      lands in its own cache namespace and stale entries are dropped on
@@ -19,6 +19,10 @@
  *      old page — the `does not provide an export named …` skew). It also makes
  *      the app fully offline.
  *
+ *   4. A content digest per precached URL, shell included
+ *      (`__PRECACHE_DIGESTS__` placeholder), so install can refuse bytes from a
+ *      deploy that landed while it ran.
+ *
  *   The two lists are separate for install ORDERING, not cache mode — the SW
  *   fetches BOTH with `{ cache: 'no-cache' }` (a conditional revalidate that
  *   can't copy a stale prior-deploy entry), first-paint first because it's the
@@ -32,7 +36,8 @@ import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
 import {dirname, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {bootWorkerAssets, collectRestAssets} from './precache-assets'
+import {bootWorkerAssets, collectPrecacheDigests, collectRestAssets} from './precache-assets'
+import {SHELL_PATHS} from '../src/sw/assets'
 import {stampSwSource} from './stamp-sw-source'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
@@ -136,6 +141,13 @@ const restAssets = collectRestAssets({
   firstPaint: firstPaintAssets,
   toBaseUrl,
 })
+// Install compares each fetched body against these, which is what catches a
+// deploy that lands mid-install (see the worker's fetchInto).
+const digests = await collectPrecacheDigests({
+  urls: [...SHELL_PATHS.map(p => toBaseUrl(p.slice(2))), ...firstPaintAssets, ...restAssets],
+  base,
+  read: rel => readFileSync(resolve(distDir, rel)),
+})
 const fail = (msg: string): never => {
   console.error(`[inject-sw-build-id] ${msg}`)
   process.exit(1)
@@ -152,6 +164,7 @@ const source = (() => {
       buildId,
       firstPaintAssets,
       restAssets,
+      digests,
     })
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err))

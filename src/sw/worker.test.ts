@@ -2,6 +2,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {createServiceWorker, type SwConfig, type SwEnv} from './worker'
 import {previewDatabaseRecordUrl} from './previewDatabases'
 import {bootKey} from './bootStore'
+import {contentDigest} from './assets'
 
 // --- in-memory CacheStorage mock -------------------------------------------
 // Enough of the Cache / CacheStorage surface for the worker: open/keys/has/
@@ -145,6 +146,7 @@ const makeConfig = (o: Partial<SwConfig> = {}): SwConfig => ({
   touchIntervalMs: DAY,
   precacheAssets: ['/knowledge-medium/src/main.js'],
   precacheRestAssets: ['/knowledge-medium/src/lazy.js'],
+  precacheDigests: {},
   ...o,
 })
 
@@ -253,6 +255,61 @@ describe('install', () => {
     const assets = await caches.open('km-assets-gen1')
     expect(await assets.match(abs('/knowledge-medium/src/main.js'))).toBeDefined()
     expect(await assets.match(failUrl)).toBeUndefined() // the failed one left a hole, no throw
+  })
+
+  describe('content digests (a deploy landing mid-install)', () => {
+    const MAIN = '/knowledge-medium/src/main.js'
+    const LAZY = '/knowledge-medium/src/lazy.js'
+    const SHELL = '/knowledge-medium/index.html'
+    // The network serves `served[url]`; the build stamped digests of `built[url]`.
+    const install = async (built: Record<string, string>, served: Record<string, string>) => {
+      const precacheDigests: Record<string, string> = {}
+      for (const [url, body] of Object.entries(built)) precacheDigests[url] = await contentDigest(body)
+      const bootStore = new MockBootStore()
+      const built_ = build(
+        {buildId: 'gen2', precacheAssets: [MAIN], precacheRestAssets: [LAZY], precacheDigests},
+        async (req) => ok(served[new URL(req.url).pathname] ?? 'body'),
+        () => NOW,
+        {bootStore},
+      )
+      await built_.sw.writeLedger(['gen1'])
+      return {...built_, bootStore, result: built_.sw.install().then(() => 'ok', (e: unknown) => e)}
+    }
+
+    it('caches every asset whose bytes match the build', async () => {
+      const files = {[MAIN]: 'main v2', [LAZY]: 'lazy v2', [SHELL]: 'shell v2'}
+      const {result, caches, sw} = await install(files, files)
+      expect(await result).toBe('ok')
+      const assets = await caches.open('km-assets-gen2')
+      expect(await (await assets.match(abs(LAZY)))?.text()).toBe('lazy v2')
+      expect(await sw.readLedger()).toEqual(['gen1', 'gen2'])
+    })
+
+    it.each([
+      ['a rest asset', LAZY],
+      ['a first-paint asset', MAIN],
+      ['the shell', SHELL],
+    ])('fails the install and discards the generation when %s comes from another build', async (_label, torn) => {
+      const built = {[MAIN]: 'main v2', [LAZY]: 'lazy v2', [SHELL]: 'shell v2'}
+      const {result, caches, sw, bootStore} = await install(built, {...built, [torn]: 'v3 bytes'})
+      expect(await result).toBeInstanceOf(Error)
+      expect(await caches.has('km-assets-gen2')).toBe(false)
+      expect(await caches.has('km-shell-gen2')).toBe(false)
+      expect([...bootStore.entries.keys()].some(k => k.includes('gen2'))).toBe(false)
+      // The failed generation must not hold a keep slot that would evict a live one.
+      expect(await sw.readLedger()).toEqual(['gen1'])
+    })
+
+    it('stops fetching the rest of the graph once one file is torn', async () => {
+      const rest = Array.from({length: 100}, (_, i) => `/knowledge-medium/src/m${i}.js`)
+      const v2 = await contentDigest('v2')
+      const {sw, fetchMock} = build(
+        {precacheAssets: [], precacheRestAssets: rest, precacheDigests: Object.fromEntries(rest.map(url => [url, v2]))},
+        async (req) => ok(req.url === abs(rest[0]) ? 'v3' : 'v2'),
+      )
+      await expect(sw.install()).rejects.toThrow(rest[0])
+      expect(fetchMock.mock.calls.filter(([req]) => req.url.includes('/src/m')).length).toBeLessThan(rest.length)
+    })
   })
 
   it('does not cache a non-ok (e.g. 404) response', async () => {
