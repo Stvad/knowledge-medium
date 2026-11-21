@@ -102,7 +102,7 @@ Three core functions, each classifying **inside its transaction**. They live bes
 
 | Function | Does |
 |---|---|
-| open cell (owner, schema) → value row id | Field row exists: return its scalar value row, or append a member. No field row but a stored value: materialize the rows through the `setProperty` path (it creates them even when the value is unchanged: read). Neither: create both. Goes through `upsertFieldRow`, so duplicates collapse |
+| open cell (owner, schema, first text?) → {value row id, created} | Field row exists: return its scalar value row, or append a member. No field row but a stored value: materialize the rows through the `setProperty` path (it creates them even when the value is unchanged: read). Neither: create both. Goes through `upsertFieldRow`, so duplicates collapse. Takes the typed first character, so the common way in writes the value in the same transaction and never projects a blank. Reports whether it opened an existing value or a new draft, so the grid knows whether typing replaces or fills |
 | write cell text (owner, schema, text) | Text that decodes goes through `setProperty`. Text that doesn't is written as the value row's content, so it stays visible with ⚠, unless the text would stop the row being a value at all. Empty text means clear |
 | clear cell (owner, schema) | Never calls unset. For every field row: a value row with anything nested is blanked and kept, otherwise deleted; the field row is deleted once it has no children. The projection processor then unsets the key |
 
@@ -114,7 +114,8 @@ Why not the existing calls:
 Rules that follow:
 
 - **Typing** uses the editor's own cadence: the value row's content is written on its debounce, and each flush is its own undo entry, as in the outline. Core re-projects R's `properties_json` in the same transaction (measured: one undo reverted both).
-- **When a cell's edit ends**, if its value is blank text with nothing nested, it is cleared with the clear function. This runs after the editor's final flush and checks blankness inside the transaction, whoever created the row. A blank string row would otherwise project `''` and count as set (read).
+- **When a cell's edit ends**, a fourth function, finish cell edit (owner, schema, value row, final text), writes the editor's final text and decides blankness in the same transaction. Ordering against the editor's debounced flush is therefore not the caller's job: a separate cleanup call that ran before the flush deleted the draft, and the flush then wrote the typed text into the deleted row without error (measured in review of the first implementation). Finish removes only what open created, and only while it is still blank with nothing nested, so an explicitly empty stored value (`[]`, `''`) survives a click in and out. A blank string row would otherwise project `''` and count as set (read).
+- **Refusals are typed** (a refusal error with a reason: read-only, resolve in the outline, would change the stored value), and the editability decision is exported, so the grid can render read-only columns before any interaction and a range write catches refusals without swallowing real failures. Every refusal is raised before its call's first write; tests catch it inside the transaction and commit, so the rollback cannot hide a partial write.
 - **Paste, fill and clear are one transaction and one undo step each.** A column whose property is not block-scoped is read-only in the table, because a range write that includes it would throw (read).
 - **State "value without rows" is not only a migration leftover.** The offline gap in §2 can produce it. Materializing can also refuse (an off-menu enum, a ref that cannot render); the cell then shows the error and stays read-only.
 
@@ -233,7 +234,7 @@ Editable. In the Simulator: horizontal swipe scrolled the table, the frozen colu
 
 | Change | Where | Size |
 |---|---|---|
-| open cell, write cell text, clear cell | beside `propertyChildrenProcessor.ts` (they need `upsertFieldRow` and the private value-row mint) | medium; new code, not extraction |
+| open cell, write cell text, clear cell, finish cell edit | beside `propertyChildrenProcessor.ts` (they need `upsertFieldRow` and the private value-row mint) | medium; new code, not extraction |
 | Reactive lookup (owner, definition) → all field rows and value rows | kernel queries | small |
 | Parent predicate, `order`, `propertyChildren: 'none'`, `limit` on typed id queries | `typedBlockQuery.ts`, `kernelQueries.ts` | small to smallish each |
 | `anyOf` across predicates | `typedBlockQuery.ts` | medium |
