@@ -1,0 +1,1 @@
+export{sD as getOrCreateShortcutsBlock,cD as journalShortcutBlockId,lD as shortcutsBlockId}from"../../../chunks/app-Bh16sD7P.js";

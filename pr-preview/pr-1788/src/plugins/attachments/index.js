@@ -1,0 +1,1 @@
+export{tS as attachmentsPlugin}from"../../../chunks/app-Bh16sD7P.js";

@@ -1,0 +1,1 @@
+export{fx as blockDragPlugin}from"../../../chunks/app-Bh16sD7P.js";
