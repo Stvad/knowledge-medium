@@ -9,7 +9,7 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
-import type { Graph, ReplyWriter } from './graph.js'
+import type { Graph, MemoryScope, ReplyWriter } from './graph.js'
 import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
@@ -261,21 +261,25 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   /** The watcher's memory as the run starts: what its prompt shows, and the
-   *  entries the reply's account of memory changes is diffed against. */
-  const loadMemory = async (watcher: BacklinksWatcher) => {
+   *  entries the reply's account of memory changes is diffed against. The
+   *  shared notes are fixed here, so an embed the run adds or removes is
+   *  reported as that one note rather than as the notes it shows appearing
+   *  or going; an edit through an embed the run added goes unlisted. */
+  const loadMemory = async (watcher: BacklinksWatcher, mentionId: string) => {
     const blockId = await graph.ensureMemoryBlock(await targetPageId(watcher.target))
-    const [outline, entries] = await Promise.all([graph.memoryOutline(blockId), graph.memoryEntries(blockId)])
-    return {blockId, outline, entries}
+    const outline = await graph.memoryOutline(blockId)
+    const scope: MemoryScope = {memoryId: blockId, sharedRoots: outline.sharedRoots, mentionId}
+    return {blockId, outline: outline.text, scope, entries: await graph.memoryEntries(scope)}
   }
 
   /** What the run changed in its memory, for the reply; null when nothing. */
   const memoryChanges = async (
-    watcher: BacklinksWatcher, memory: {blockId: string, entries: MemoryEntry[] | null},
+    watcher: BacklinksWatcher, memory: {blockId: string, scope: MemoryScope, entries: MemoryEntry[] | null},
   ): Promise<string | null> => {
     try {
-      const after = await graph.memoryEntries(memory.blockId)
+      const after = await graph.memoryEntries(memory.scope)
       if (!memory.entries || !after) {
-        return `Memory has more than ${MEMORY_DIFF_LIMIT} blocks, so changes to it are not listed here.`
+        return `Memory and the shared notes it embeds have more than ${MEMORY_DIFF_LIMIT} blocks, so changes to them are not listed here.`
       }
       return renderMemoryChanges(diffMemory(memory.entries, after))
     } catch (error) {
@@ -429,7 +433,7 @@ export const createEngine = (deps: EngineDeps) => {
         return null
       })
       const memory = watcher.memory
-        ? await loadMemory(watcher).catch(error => {
+        ? await loadMemory(watcher, sourceId).catch(error => {
           log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)
           return null
         })
@@ -448,7 +452,7 @@ export const createEngine = (deps: EngineDeps) => {
         watcherName: watcher.name,
         target: watcher.target,
         thread: thread ?? undefined,
-        memory: memory ? {blockId: memory.blockId, outline: memory.outline} : undefined,
+        memory: memory ? {blockId: memory.blockId, outline: memory.outline, shared: memory.scope.sharedRoots.length > 0} : undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,

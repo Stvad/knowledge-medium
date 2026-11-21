@@ -42,10 +42,16 @@ describe('dispatch activity writes', () => {
 })
 
 describe('memory outline', () => {
-  it('leaves references unexpanded, since the change account only reads the memory block\'s own subtree', async () => {
+  it('reads the prompt\'s outline and its shared notes from one view\'s bounds, embeds expanded', async () => {
     const {graph, runCommand} = setup()
-    runCommand.mockResolvedValueOnce('Memory  ^mem' as never)
-    await graph.memoryOutline('mem')
-    expect(runCommand).toHaveBeenLastCalledWith(expect.objectContaining({type: 'view-outline', ref: 'mem', expandRefs: false}), undefined)
+    runCommand.mockImplementation(async (command: {format?: string}) => (command.format === 'json'
+      ? {rows: [{id: 'own'}, {id: 'shared', embedded: {parentId: 'elsewhere', breadcrumb: []}}]}
+      : 'Memory  ^mem') as never)
+
+    expect(await graph.memoryOutline('mem')).toEqual({text: 'Memory  ^mem', sharedRoots: ['shared']})
+    const views = runCommand.mock.calls.map(([command]) => command as Record<string, unknown>)
+    expect(views).toHaveLength(2)
+    expect(views[1]).toEqual({...views[0], format: 'json'})
+    expect(views[0]).not.toHaveProperty('expandRefs')
   })
 })

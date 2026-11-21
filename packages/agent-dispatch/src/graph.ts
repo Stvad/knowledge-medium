@@ -12,6 +12,23 @@ import { MEMORY_BLOCK_TITLE, type MemoryEntry } from './memory.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
+export interface MemoryOutline {
+  /** The outline the run's prompt shows. */
+  text: string
+  /** The blocks its embeds show, by id: the shared notes. */
+  sharedRoots: string[]
+}
+
+/** The blocks a run's account of memory changes compares, fixed when it starts. */
+export interface MemoryScope {
+  memoryId: string
+  /** The shared notes the run's outline shows: {@link MemoryOutline.sharedRoots}. */
+  sharedRoots: readonly string[]
+  /** The mention: under it go the daemon's reply and its progress note,
+   *  which can sit inside a shared note or the memory and are not memory. */
+  mentionId: string
+}
+
 interface TaskPropsWrite {
   status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
   resumeOptions?: AgentResumeOptions | null,
@@ -20,8 +37,12 @@ interface TaskPropsWrite {
 
 /** Blocks of memory a run's prompt shows (about 50 short lines). */
 const MEMORY_OUTLINE_LIMIT = 50
-/** Blocks of memory the reply's account of changes compares; past it the
- *  comparison is skipped, since a cut window would report false changes. */
+/** Levels of it: a note, the block it embeds, and that block's children. */
+const MEMORY_OUTLINE_DEPTH = 3
+/** Blocks of memory, shared notes included, the reply's account of changes
+ *  compares; past it the comparison is skipped, since a cut window would
+ *  report false changes. One limit for both: a large embedded page skips the
+ *  account of own notes too, which the reply then says. */
 export const MEMORY_DIFF_LIMIT = 1000
 /** The reconcile key the daemon creates the memory block under, which also
  *  finds it again after the person retitles it. */
@@ -118,29 +139,40 @@ export const createGraph = (bridgeClient: BridgeClient) => {
     return created
   }
 
-  /** The bounded outline the run's own `subtree` tool prints: shallow levels
-   *  first, long entries cut with a marker. Without expanding references: an
-   *  embedded row is a block outside the memory block, so a run's edit to it
-   *  would miss {@link memoryEntries}' account of what the run changed. */
-  const memoryOutline = async (memoryId: string): Promise<string> => {
-    const view = await client.runCommand({
-      type: 'view-outline', ref: memoryId, depth: 2, limit: MEMORY_OUTLINE_LIMIT, expandRefs: false,
-    })
-    if (typeof view !== 'string') throw new Error('view-outline returned no text')
-    return view
+  /** The bounded outline the run's own `subtree` tool prints (shallow levels
+   *  first, long entries cut with a marker, embeds expanded), and the shared
+   *  notes in it: the rows an embed brings in, which live outside the memory
+   *  block. Both from one view's bounds, so the shared notes are the ones the
+   *  run is shown. */
+  const memoryOutline = async (memoryId: string): Promise<MemoryOutline> => {
+    const params = {type: 'view-outline', ref: memoryId, depth: MEMORY_OUTLINE_DEPTH, limit: MEMORY_OUTLINE_LIMIT} as const
+    const [text, view] = await Promise.all([
+      client.runCommand(params),
+      client.runCommand({...params, format: 'json'}) as Promise<{rows?: Array<{id?: unknown, embedded?: unknown}>}>,
+    ])
+    if (typeof text !== 'string') throw new Error('view-outline returned no text')
+    if (!Array.isArray(view?.rows)) throw new Error('view-outline returned no rows')
+    const sharedRoots = view.rows.flatMap(row => row.embedded && typeof row.id === 'string' ? [row.id] : [])
+    return {text, sharedRoots}
   }
 
-  /** Every block below the memory block, field rows aside, for the reply's
-   *  account of what a run changed; null past {@link MEMORY_DIFF_LIMIT}. */
-  const memoryEntries = async (memoryId: string): Promise<MemoryEntry[] | null> => {
+  /** Every block below the memory block and every block of the shared notes,
+   *  field rows aside, in the memory block's workspace only and without the
+   *  mention's subtree, for the reply's account of what a run changed; null
+   *  past {@link MEMORY_DIFF_LIMIT}. */
+  const memoryEntries = async ({memoryId, sharedRoots, mentionId}: MemoryScope): Promise<MemoryEntry[] | null> => {
     const rows = await bridgeGraph.sqlAll(
-      `WITH RECURSIVE tree(id) AS (
-         SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 AND is_field_form IS NOT 1
-         UNION ALL
-         SELECT b.id FROM blocks b JOIN tree ON b.parent_id = tree.id WHERE b.deleted = 0 AND b.is_field_form IS NOT 1
+      `WITH RECURSIVE ws(workspace_id) AS (SELECT workspace_id FROM blocks WHERE id = ?),
+       tree(id) AS (
+         SELECT id FROM blocks
+          WHERE (parent_id = ? OR id IN (SELECT value FROM json_each(?)))
+            AND deleted = 0 AND is_field_form IS NOT 1 AND workspace_id = (SELECT workspace_id FROM ws) AND id != ?
+         UNION
+         SELECT b.id FROM blocks b JOIN tree ON b.parent_id = tree.id
+          WHERE b.deleted = 0 AND b.is_field_form IS NOT 1 AND b.workspace_id = (SELECT workspace_id FROM ws) AND b.id != ?
        )
        SELECT blocks.id, blocks.content FROM tree JOIN blocks ON blocks.id = tree.id LIMIT ?`,
-      [memoryId, MEMORY_DIFF_LIMIT + 1],
+      [memoryId, memoryId, JSON.stringify(sharedRoots), mentionId, mentionId, MEMORY_DIFF_LIMIT + 1],
     )
     if (rows.length > MEMORY_DIFF_LIMIT) return null
     return rows.flatMap(row => {

@@ -132,7 +132,7 @@ describe('renderMentionPrompt in a comment thread', () => {
 })
 
 describe('renderMentionPrompt with a memory', () => {
-  const memory = {blockId: 'm-1', outline: 'Memory  ^m-1  · 1 children\n- replies short, no preamble  ^n-1'}
+  const memory = {blockId: 'm-1', outline: 'Memory  ^m-1  · 1 children\n- replies short, no preamble  ^n-1', shared: false}
 
   it('places the memory, with how to keep it, before the instructions in both default templates', () => {
     for (const [template, next] of [[undefined, 'How to work:'], [DEFAULT_MENTION_CHANNEL_PROMPT, 'Handle it now']] as const) {
@@ -143,6 +143,15 @@ describe('renderMentionPrompt with a memory', () => {
       expect(prompt).toContain('append_markdown with target m-1')
       expect(prompt).not.toContain('{{memory}}')
     }
+  })
+
+  it('frames embedded rows as shared notes only when the outline shows some', () => {
+    const own = renderMentionPrompt(undefined, {...context, memory})
+    expect(own).not.toMatch(/shared/i)
+    const shared = renderMentionPrompt(undefined, {...context, memory: {...memory, shared: true}})
+    expect(shared).toContain('is a shared note')
+    expect(shared).toContain('append_markdown with target m-1, never under a shared note.')
+    expect(shared).toContain('A shared note, and the note that embeds it, stay as they are unless the user asks.')
   })
 
   it('appends the memory to a custom template that does not place it', () => {
