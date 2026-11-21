@@ -1,1 +1,1 @@
-export{q as BUNDLE_FORMAT,J as BUNDLE_FORMAT_VERSION,Y as BUNDLE_PARTS}from"../../../../chunks/app-BJtOJ-B8.js";
+export{q as BUNDLE_FORMAT,J as BUNDLE_FORMAT_VERSION,Y as BUNDLE_PARTS}from"../../../../chunks/app-BWjVG2Le.js";
