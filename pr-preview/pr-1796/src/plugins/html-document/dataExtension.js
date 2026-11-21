@@ -1,1 +1,1 @@
-export{MY as htmlDocumentDataExtension}from"../../../chunks/app-C52TGttp.js";
+export{MY as htmlDocumentDataExtension}from"../../../chunks/app-CLTWxLmb.js";

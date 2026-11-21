@@ -1,1 +1,1 @@
-export{wM as keybindingOverridesProp,TM as keybindingsPrefsType,Rr as keybindingsSettingsPlugin}from"../../../chunks/app-C52TGttp.js";
+export{wM as keybindingOverridesProp,TM as keybindingsPrefsType,Rr as keybindingsSettingsPlugin}from"../../../chunks/app-CLTWxLmb.js";

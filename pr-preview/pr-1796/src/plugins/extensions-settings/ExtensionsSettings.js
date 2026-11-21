@@ -1,1 +1,1 @@
-export{$r as ExtensionsSettings}from"../../../chunks/app-C52TGttp.js";
+export{$r as ExtensionsSettings}from"../../../chunks/app-CLTWxLmb.js";

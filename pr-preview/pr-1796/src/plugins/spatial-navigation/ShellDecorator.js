@@ -1,1 +1,1 @@
-export{gT as SpatialNavigationShellDecorator}from"../../../chunks/app-C52TGttp.js";
+export{gT as SpatialNavigationShellDecorator}from"../../../chunks/app-CLTWxLmb.js";

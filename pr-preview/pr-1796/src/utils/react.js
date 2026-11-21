@@ -1,1 +1,1 @@
-export{KR as useIsMobile,qR as usePointerCoarse}from"../../chunks/app-C52TGttp.js";
+export{KR as useIsMobile,qR as usePointerCoarse}from"../../chunks/app-CLTWxLmb.js";

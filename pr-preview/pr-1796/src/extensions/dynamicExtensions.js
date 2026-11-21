@@ -1,1 +1,1 @@
-export{sI as dynamicExtensionsExtension}from"../../chunks/app-C52TGttp.js";
+export{sI as dynamicExtensionsExtension}from"../../chunks/app-CLTWxLmb.js";

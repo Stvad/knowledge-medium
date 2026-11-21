@@ -1,1 +1,1 @@
-export{wft as SYSTEM_AUTHOR_PREFIX,Tft as isSystemAuthor,Eft as systemAuthor}from"../../../chunks/app-C52TGttp.js";
+export{wft as SYSTEM_AUTHOR_PREFIX,Tft as isSystemAuthor,Eft as systemAuthor}from"../../../chunks/app-CLTWxLmb.js";

@@ -1,1 +1,1 @@
-export{qo as propertiesMigrationPlugin}from"../../../chunks/app-C52TGttp.js";
+export{qo as propertiesMigrationPlugin}from"../../../chunks/app-CLTWxLmb.js";

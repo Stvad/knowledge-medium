@@ -1,1 +1,1 @@
-export{So as propertyRowsPlugin}from"../../../chunks/app-C52TGttp.js";
+export{So as propertyRowsPlugin}from"../../../chunks/app-CLTWxLmb.js";

@@ -1,1 +1,1 @@
-export{yh as contributorsPlugin}from"../../../chunks/app-C52TGttp.js";
+export{yh as contributorsPlugin}from"../../../chunks/app-CLTWxLmb.js";

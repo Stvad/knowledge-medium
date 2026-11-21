@@ -1,1 +1,1 @@
-export{alt as isChildBackedPropertiesWorkspace}from"../chunks/app-C52TGttp.js";
+export{alt as isChildBackedPropertiesWorkspace}from"../chunks/app-CLTWxLmb.js";
