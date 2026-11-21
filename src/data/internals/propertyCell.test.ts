@@ -5,7 +5,7 @@ import {ChangeScope, codecs, defineProperty, type AnyPropertySchema, type Tx} fr
 import {projectedPropertyDefinitionsFacet} from '@/data/facets'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {clearCell, openCell, writeCellText} from './propertyCell'
+import {clearCell, finishCellEdit, openCell, writeCellText} from './propertyCell'
 
 const workspaceId = 'ws-property-cell'
 const fieldId = 'definition'
@@ -102,7 +102,7 @@ describe('openCell', () => {
     const repo = await setup()
     await seed({id: ownerId}, ...(hasField ? [field()] : []))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     const fields = await children(ownerId)
     expect(fields).toEqual([{id: hasField ? 'field-a' : expect.any(String), content: '::((definition))'}])
@@ -118,7 +118,7 @@ describe('openCell', () => {
     const repo = await setup(schema)
     await seed({id: ownerId, properties: {[schema.name]: encoded}}, ...(hasField ? [field()] : []))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     const fields = await children(ownerId)
     expect(fields).toEqual([{id: hasField ? 'field-a' : expect.any(String), content: '::((definition))'}])
@@ -170,7 +170,7 @@ describe('openCell', () => {
     await seed({id: ownerId, properties: encoded === undefined ? {} : {[numberProperty.name]: encoded}}, field(), ...values)
     const before = await snapshot()
 
-    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe(expected)
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toMatchObject({valueId: expected, created: false})
     expect(await snapshot()).toEqual(before)
   })
 
@@ -178,7 +178,7 @@ describe('openCell', () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId}, field(), value('value-a', 'incomplete'), value('value-b', 'invalid'))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     expect(await children('field-a')).toEqual(expect.arrayContaining([
       {id: 'value-a', content: 'incomplete'}, {id: 'value-b', content: 'invalid'}, {id: valueId, content: ''},
@@ -191,7 +191,7 @@ describe('openCell', () => {
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(), field('field-b'),
       value('value-a', '5'), value('value-b', '9', 'field-b'), value('note', 'keep', 'value-b'))
 
-    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe('value-a')
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toMatchObject({valueId: 'value-a', created: false})
 
     expect(await children(ownerId)).toEqual([{id: 'field-a', content: '::((definition))'}])
     expect(await children('field-a')).toEqual([{id: 'value-a', content: '5'}, {id: 'value-b', content: '9'}])
@@ -387,11 +387,24 @@ describe('clearCell', () => {
     expect(await projection()).toEqual({[textProperty.name]: ''})
   })
 
+  it('keeps final text live through edit end and a late editor flush', async () => {
+    const repo = await setup()
+    await seed({id: ownerId})
+    const draft = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, draft, 'hello'), options)
+    expect(await projection()).toEqual({[textProperty.name]: 'hello'})
+    await repo.tx(tx => tx.update(draft.valueId, {content: 'hello'}), options)
+
+    expect(await db.db.get('SELECT deleted, content FROM blocks WHERE id = ?', [draft.valueId]))
+      .toEqual({deleted: 0, content: 'hello'})
+    expect(await projection()).toEqual({[textProperty.name]: 'hello'})
+  })
+
   it.each([true, false])('removes exactly the blank row that finished editing (projected: %s)', async projected => {
     const repo = await setup()
     await seed({id: ownerId, properties: projected ? {[textProperty.name]: ''} : {}}, field(), value('value-a', ''))
 
-    await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-a'}), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, {valueId: 'value-a', created: true, draftFieldId: 'field-a'}, ''), options)
 
     expect(await children(ownerId)).toEqual([])
     expect(await children('field-a')).toEqual([])
@@ -413,7 +426,7 @@ describe('clearCell', () => {
     await seed({id: ownerId, properties: {[textProperty.name]: content}}, field(), {...value(id, content), properties}, ...extra)
     const before = await snapshot()
 
-    await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-a'}), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, {valueId: 'value-a', created: true, draftFieldId: 'field-a'}, content), options)
 
     expect(await snapshot()).toEqual(before)
   })
@@ -423,7 +436,7 @@ describe('clearCell', () => {
     await seed({id: ownerId, properties: {[textProperty.name]: 'pending'}}, field(), value('value-a', ''))
     const before = await snapshot()
 
-    await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-a'}), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, {valueId: 'value-a', created: true, draftFieldId: 'field-a'}, ''), options)
 
     expect(await snapshot()).toEqual(before)
   })
@@ -433,7 +446,7 @@ describe('clearCell', () => {
     await seed({id: ownerId, properties: {[textProperty.name]: 'pending'}})
     const before = await snapshot()
 
-    await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-a'}), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, {valueId: 'value-a', created: true, draftFieldId: 'field-a'}, ''), options)
 
     expect(await snapshot()).toEqual(before)
   })
@@ -493,7 +506,7 @@ describe('list cells', () => {
       value('value-a', 'first'), value('value-b', 'last'))
     const before = await snapshot()
 
-    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe('value-b')
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toMatchObject({valueId: 'value-b', created: false})
     expect(await snapshot()).toEqual(before)
   })
 
@@ -502,7 +515,7 @@ describe('list cells', () => {
     const members = ['second', 'first', 'second']
     await seed({id: ownerId, properties: {[textListProperty.name]: members}}, ...(hasField ? [field()] : []))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     const [fieldRow] = await children(ownerId)
     const values = await children(fieldRow!.id)
@@ -526,7 +539,7 @@ describe('list cells', () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId}, ...(hasField ? [field()] : []))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     const [fieldRow] = await children(ownerId)
     expect(await children(fieldRow!.id)).toEqual([{id: valueId, content: ''}])
@@ -538,7 +551,7 @@ describe('list cells', () => {
     await seed({id: ownerId, properties: {[refListProperty.name]: ['target', 'target']}}, field(), field('field-b'),
       value('value-a', '((target))'), value('value-b', '((target))', 'field-b'))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     expect(await children(ownerId)).toEqual([{id: 'field-a', content: '::((definition))'}])
     expect(await children('field-a')).toEqual([
@@ -551,7 +564,7 @@ describe('list cells', () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId, properties: {[refListProperty.name]: ['target']}}, field(), value('value-a', '((target))'))
 
-    const valueId = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
 
     expect(await children('field-a')).toEqual([{id: 'value-a', content: '((target))'}, {id: valueId, content: ''}])
     expect(await projection()).toEqual({[refListProperty.name]: ['target']})
@@ -778,7 +791,7 @@ describe('several edits to the same cell in one transaction', () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}})
 
-    const valueId = await repo.tx(async tx => {
+    const {valueId} = await repo.tx(async tx => {
       await clearCell(tx, ownerId, fieldId)
       return openCell(tx, ownerId, fieldId)
     }, options)
@@ -841,9 +854,9 @@ describe('reference cell editing', () => {
     for (let i = 0; i < 2; i += 1) {
       const draft = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
       expect(await children('field-a')).toEqual([
-        {id: 'value-a', content: '((first))'}, {id: 'value-b', content: '((second))'}, {id: draft, content: ''},
+        {id: 'value-a', content: '((first))'}, {id: 'value-b', content: '((second))'}, {id: draft.valueId, content: ''},
       ])
-      await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: draft}), options)
+      await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, draft, ''), options)
       expect(await children('field-a')).toEqual([{id: 'value-a', content: '((first))'}, {id: 'value-b', content: '((second))'}])
       expect(await children('value-b')).toEqual([{id: 'note', content: 'keep'}])
       expect(await projection()).toEqual({[refListProperty.name]: ['first', 'second']})
@@ -888,14 +901,14 @@ describe('opening and finishing an edit against existing rows', () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 2}}, field(), value('value-a', '5'))
     const before = await snapshot()
-    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe('value-a')
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toMatchObject({valueId: 'value-a', created: false})
     expect(await snapshot()).toEqual(before)
   })
 
   it('opens an explicitly empty reference list without adding a projected member', async () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId, properties: {[refListProperty.name]: []}})
-    const id = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const {valueId: id} = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
     expect(await children((await children(ownerId))[0]!.id)).toEqual([{id, content: ''}])
     expect(await projection()).toEqual({[refListProperty.name]: []})
   })
@@ -904,7 +917,7 @@ describe('opening and finishing an edit against existing rows', () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId, properties: {[refListProperty.name]: []}}, field(), value('value-a', ''))
     const before = await snapshot()
-    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe('value-a')
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toMatchObject({valueId: 'value-a', created: false})
     expect(await snapshot()).toEqual(before)
   })
 
@@ -916,7 +929,7 @@ describe('opening and finishing an edit against existing rows', () => {
     await seed({id: ownerId, properties: {[schema.name]: stored}}, field(),
       value('value-a', content), value('value-b', ''), ...extra)
     const before = await snapshot()
-    await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-b'}), options)
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, 'value-b', ''), options)
     expect(await snapshot()).toEqual(before)
   })
 })

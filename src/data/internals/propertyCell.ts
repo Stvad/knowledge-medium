@@ -64,9 +64,16 @@ const writableContents = (schema: AnyPropertySchema, encoded: unknown) => {
   return contents
 }
 
+export interface OpenedCell {
+  valueId: string
+  created: boolean
+  /** The field created for this draft, if finishing may also remove it. */
+  draftFieldId?: string
+}
+
 /** Open in the caller's editing transaction. A list appends an unprojected
  * blank when its member codec permits one. Otherwise edit its last member. */
-export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promise<string> => {
+export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promise<OpenedCell> => {
   const cell = await readCell(tx, ownerId, fieldId)
   const {schema, stored, values} = cell
   const list = memberCodecOf(schema.codec) !== undefined
@@ -75,6 +82,12 @@ export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promis
     if (!list) return scalarValueRow(schema, rows)
     const last = rows.at(-1)
     return blankCounts || last?.content === '' ? last : undefined
+  }
+
+  const openValue = async (field: Field, existing?: BlockData): Promise<OpenedCell> => {
+    if (existing) return {valueId: existing.id, created: false}
+    const valueId = await appendValue(tx, field, schema, '')
+    return cell.fields.length ? {valueId, created: true} : {valueId, created: true, draftFieldId: field.id}
   }
 
   // Validate before even minting the field: callers can catch a refusal
@@ -92,7 +105,7 @@ export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promis
     const field = await foldFields(tx, cell)
     await tx.setProperty(ownerId, schema, decoded)
     const materialized = await fieldValueChildren(tx, field.id)
-    return target(materialized)?.id ?? await appendValue(tx, field, schema, '')
+    return openValue(field, target(materialized))
   }
 
   const existing = target(values)
@@ -101,8 +114,7 @@ export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promis
     if (!jsonValuesEqual(after, stored)) throw new Error('Opening this cell would change its stored value.')
   }
   const field = await foldFields(tx, cell)
-  if (existing) return existing.id
-  return appendValue(tx, field, schema, '')
+  return openValue(field, existing)
 }
 
 const carriesData = async (tx: Tx, row: BlockData) =>
@@ -158,29 +170,40 @@ export const writeCellText = async (tx: Tx, ownerId: string, fieldId: string, te
   await tx.setProperty(ownerId, schema, decoded)
 }
 
-/** Pass ifBlankValueId only after the editor's final flush. The identity,
- * peers, content and descendants are all checked under the write lock. */
-export const clearCell = async (
-  tx: Tx, ownerId: string, fieldId: string, options?: {ifBlankValueId: string},
+// Only the open result grants cleanup ownership. A bare id can save text on an existing row.
+export const finishCellEdit = async (
+  tx: Tx, ownerId: string, fieldId: string, edit: OpenedCell | string, finalText: string,
 ): Promise<void> => {
   const cell = await readCell(tx, ownerId, fieldId)
-  if (options) {
-    if (cell.fields.length !== 1) return
-    const value = cell.values.find(row => row.id === options.ifBlankValueId)
-    if (!value || value.content !== '' || await carriesData(tx, value)) return
-    const projected = childContentsToEncodedPropertyValue(cell.schema, cell.values)
-    if (cell.stored !== undefined && !jsonValuesEqual(cell.stored, projected)) return
-    if (cell.values.length > 1) {
-      // An appended draft in a populated list may be discarded only when
-      // removing that member leaves the entire projected list unchanged.
-      if (!memberCodecOf(cell.schema.codec)) return
-      const peers = cell.values.filter(row => row.id !== value.id)
-      if (!jsonValuesEqual(projected, childContentsToEncodedPropertyValue(cell.schema, peers))) return
-      await deleteSubtreeAnnouncedInTx(tx, value.id)
-      requestProjection(tx, cell)
-      return
-    }
+  const id = typeof edit === 'string' ? edit : edit.valueId
+  const row = cell.values.find(value => value.id === id)
+  if (!row) {
+    if (finalText !== '') throw new Error('The edited row no longer belongs to this cell.')
+    return
   }
+  if (parseExactReferenceBlockContent(finalText)?.fieldForm || hasLoneSurrogate(finalText)) {
+    throw new Error('This text cannot be stored verbatim as a value block.')
+  }
+  if (row.content !== finalText) {
+    await tx.update(id, {content: finalText})
+    requestProjection(tx, cell)
+  }
+  if (finalText !== '' || typeof edit === 'string' || !edit.created || cell.fields.length !== 1) return
+  if (await carriesData(tx, row)) return
+  const projected = childContentsToEncodedPropertyValue(cell.schema, cell.values)
+  if (cell.stored !== undefined && !jsonValuesEqual(cell.stored, projected)) return
+  const peers = cell.values.filter(value => value.id !== id)
+  if (peers.length && (!memberCodecOf(cell.schema.codec) ||
+    !jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, [...peers, '']),
+      childContentsToEncodedPropertyValue(cell.schema, peers)))) return
+  await deleteSubtreeAnnouncedInTx(tx, id)
+  const {field} = cell.fields[0]!
+  if (edit.draftFieldId === field.id && !await carriesData(tx, field)) await deleteSubtreeAnnouncedInTx(tx, field.id)
+  requestProjection(tx, cell)
+}
+
+export const clearCell = async (tx: Tx, ownerId: string, fieldId: string): Promise<void> => {
+  const cell = await readCell(tx, ownerId, fieldId)
   for (const {field, children} of cell.fields) {
     for (const value of children.filter(isFieldValueChild)) {
       if (await carriesData(tx, value)) await tx.update(value.id, {content: ''})
