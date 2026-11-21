@@ -1,1 +1,0 @@
-export{LG as withMoveTransition}from"../../chunks/app-DKPcdE6N.js";

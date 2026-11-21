@@ -1,1 +1,0 @@
-export{n5 as kernelDataExtension}from"../../chunks/app-DKPcdE6N.js";

@@ -1,1 +1,0 @@
-export{Ug as lintExtensionSource}from"../../../chunks/app-DKPcdE6N.js";

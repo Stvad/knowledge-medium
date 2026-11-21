@@ -1,1 +1,0 @@
-export{cP as chipStyle}from"../../../chunks/app-BDv7LkfI.js";

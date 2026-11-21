@@ -1,1 +1,0 @@
-export{sP as TypeChip}from"../../../chunks/app-BDv7LkfI.js";

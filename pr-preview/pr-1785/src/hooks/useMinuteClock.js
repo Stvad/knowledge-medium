@@ -1,1 +1,0 @@
-export{_k as useMinuteClock}from"../../chunks/app-DKPcdE6N.js";

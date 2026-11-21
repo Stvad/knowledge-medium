@@ -1,1 +1,0 @@
-export{qr as extensionsOverridesUi}from"../../../chunks/app-DKPcdE6N.js";

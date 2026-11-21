@@ -1,1 +1,0 @@
-export{Pb as Wikilink}from"../../../../../chunks/app-DKPcdE6N.js";

@@ -1,1 +1,0 @@
-export{gy as blockInfoPlugin}from"../../../chunks/app-DKPcdE6N.js";
