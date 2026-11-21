@@ -7,13 +7,15 @@ import type { BlockRenderer } from '@/types'
 import type { Block } from '@/data/block'
 import { FIELD_FORM_MARKER } from '@/data/referenceBlock'
 import { encodedPropertyValueToChildContents, valueChildCodec, valueChildContentToEncoded } from '@/data/propertyChildren'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
+import { propertyEditorOverridesFacet } from '@/data/facets'
+import { readValuePresets } from '@/data/valuePresetRegistry'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { cachedContentDecorator, type BlockContentDecoratorContribution } from '@/extensions/blockInteraction'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer'
 import { useHandle } from '@/hooks/block'
 import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation'
 import { drawsPropertyRows, useFieldRowDefinition, isSingleValueProperty, useIsChildOf, usePropertyDefinitions } from './fieldRow'
-import { resolvePropertyValueInlinePresentation } from './resolvePropertyValueInlinePresentation'
 
 const ReferenceWarning = ({block, schema, targetId}: {block: Block; schema: AnyPropertySchema; targetId: string}) => {
   const warning = useHandle(block.repo.block(targetId), {selector: target => referenceWarningMessage(block, schema, target)})
@@ -23,10 +25,12 @@ const ReferenceWarning = ({block, schema, targetId}: {block: Block; schema: AnyP
 const InlineValue = ({block, Inner, schema}: {block: Block; Inner: BlockRenderer; schema: AnyPropertySchema | undefined}) => {
   const runtime = useAppRuntime()
   const definitions = usePropertyDefinitions(block.repo)
-  const Editor = resolvePropertyValueInlinePresentation(runtime, definitions, schema)?.InlineEditor
   const data = useHandle(block, {selector: row => row ? {
     content: row.content, isFieldForm: row.isFieldForm, referenceTargetId: row.referenceTargetId,
   } : undefined})
+  const override = schema && resolveEditorOverride(schema.name, definitions,
+    runtime.read(propertyEditorOverridesFacet), schema)
+  const Editor = override?.InlineEditor ?? (schema && readValuePresets(runtime).get(schema.codec.type)?.InlineEditor)
   const focusHandlers = usePropertyEditingActivation(block)
   if (!data || data.isFieldForm || !schema) {
     return <Inner block={block}/>

@@ -33,8 +33,7 @@ import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewport
 import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
-import { BooleanPropertyEditor } from '@/components/propertyEditors/defaults'
-import { propertyRowsPlugin, resolvePropertyValueInlinePresentation } from '../index'
+import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { referencesPlugin } from '@/plugins/references'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
@@ -170,7 +169,7 @@ const testExtensions = (): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
-  propertyRowsPlugin,
+  propertyRows.propertyRowsPlugin,
   referencesPlugin,
   plainOutlinerPlugin,
   defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
@@ -380,17 +379,8 @@ describe('ordinary property value content', () => {
 })
 
 describe('editing through a property row', () => {
-  it('exports the inline editor lookup with definition overrides and preset fallback', () => {
-    const Override = () => <button type="button">Custom editor</button>
-    const lookup = (name?: string) => resolvePropertyValueInlinePresentation(
-      runtime, repo.propertyDefinitions, name === undefined ? undefined : repo.propertySchemas.get(name),
-    )?.InlineEditor
-    expect(lookup(readyProp.name)).toBe(BooleanPropertyEditor)
-
-    addExtensions(propertyEditorOverridesFacet.of(definePropertyEditorOverride(readyProp, {InlineEditor: Override})))
-    expect(lookup(readyProp.name)).toBe(Override)
-    expect(lookup(statusProp.name)).toBeUndefined()
-    expect(lookup()).toBeUndefined()
+  it('keeps inline editor selection internal to ordinary value-row rendering', () => {
+    expect(propertyRows).not.toHaveProperty('resolvePropertyValueInlinePresentation')
   })
 
   it.each(['click', 'keyboard'])('opens the same block editor by %s and projects its edit to the property', async entry => {
