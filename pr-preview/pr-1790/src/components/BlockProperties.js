@@ -1,0 +1,1 @@
+export{nH as BlockProperties}from"../../chunks/app-DBvFP7wO.js";

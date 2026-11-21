@@ -1,0 +1,1 @@
+export{sI as dynamicExtensionsExtension}from"../../chunks/app-DBvFP7wO.js";

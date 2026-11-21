@@ -1,0 +1,1 @@
+export{hL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,gL as openExtensionsSettings}from"../../chunks/app-DBvFP7wO.js";

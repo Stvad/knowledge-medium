@@ -1,0 +1,1 @@
+export{Sx as useIsReadOnly}from"../../chunks/app-DBvFP7wO.js";

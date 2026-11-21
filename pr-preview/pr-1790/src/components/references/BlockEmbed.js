@@ -1,0 +1,1 @@
+export{eP as BlockEmbed}from"../../../chunks/app-DBvFP7wO.js";
