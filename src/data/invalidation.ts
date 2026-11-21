@@ -114,6 +114,8 @@ export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'
 export const TYPED_BLOCKS_PROPERTY_CHANNEL = 'typedBlocks.property'
 export const TYPED_BLOCKS_REFERENCE_CHANNEL = 'typedBlocks.reference'
 export const TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL = 'typedBlocks.referenceField'
+export const TYPED_BLOCKS_MOVES_CHANNEL = 'typedBlocks.moves'
+export const TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL = 'typedBlocks.propertyRows'
 export const TYPED_BLOCKS_STRUCTURE_CHANNEL = 'typedBlocks.structure'
 export const TYPED_BLOCKS_REFS_OF_CHANNEL = 'typedBlocks.refsOf'
 export const TYPED_BLOCKS_LABEL_CHANNEL = 'typedBlocks.label'
@@ -130,6 +132,10 @@ export const KERNEL_FIELD_RECOGNITION_KEY = 'active-registry'
  *  which definitions the outline's default view skips — what that child
  *  view binds. */
 export const KERNEL_FIELD_OUTLINE_SKIP_KEY = 'active-registry-outline-skips'
+
+/** Query inputs supplied by the active or retained registry, outside row-change notifications. */
+export const QUERY_SCHEMA_CHANNEL = 'kernel.querySchema'
+export const QUERY_PROPERTY_SCHEMAS_KEY = 'properties'
 
 const SEP = '\u0000'
 
