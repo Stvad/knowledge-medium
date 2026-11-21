@@ -1,1 +1,1 @@
-export{FE as usePromotableBreadcrumb}from"../../../chunks/app-BUKO58DY.js";
+export{FE as usePromotableBreadcrumb}from"../../../chunks/app-DNlbQUHX.js";

@@ -1,1 +1,1 @@
-export{Kq as omnilinerNamespace}from"../../chunks/app-BUKO58DY.js";
+export{Kq as omnilinerNamespace}from"../../chunks/app-DNlbQUHX.js";

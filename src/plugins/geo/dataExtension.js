@@ -1,1 +1,1 @@
-export{aX as geoDataExtension}from"../../../chunks/app-BUKO58DY.js";
+export{aX as geoDataExtension}from"../../../chunks/app-DNlbQUHX.js";

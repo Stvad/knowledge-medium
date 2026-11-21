@@ -1,1 +1,1 @@
-export{SO as usePendingInvitations}from"../../chunks/app-BUKO58DY.js";
+export{SO as usePendingInvitations}from"../../chunks/app-DNlbQUHX.js";
