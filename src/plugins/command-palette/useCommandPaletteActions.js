@@ -1,1 +1,1 @@
-export{IM as useCommandPaletteActions}from"../../../chunks/app-COIx8n3n.js";
+export{IM as useCommandPaletteActions}from"../../../chunks/app-2aFIfWdl.js";

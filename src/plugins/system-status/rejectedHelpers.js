@@ -1,1 +1,1 @@
-export{sl as extractBlockDetails,cl as parseRejectionError,ll as shortenId,ul as summarizeOp}from"../../../chunks/app-COIx8n3n.js";
+export{sl as extractBlockDetails,cl as parseRejectionError,ll as shortenId,ul as summarizeOp}from"../../../chunks/app-2aFIfWdl.js";

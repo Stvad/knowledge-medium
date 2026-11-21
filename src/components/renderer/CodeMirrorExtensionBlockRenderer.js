@@ -1,1 +1,1 @@
-export{WL as CodeMirrorExtensionBlockRenderer,GL as ExtensionEditor}from"../../../chunks/app-COIx8n3n.js";
+export{WL as CodeMirrorExtensionBlockRenderer,GL as ExtensionEditor}from"../../../chunks/app-2aFIfWdl.js";

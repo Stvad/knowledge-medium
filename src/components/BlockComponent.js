@@ -1,1 +1,1 @@
-export{BI as BlockChildren,VI as BlockComponent}from"../../chunks/app-COIx8n3n.js";
+export{BI as BlockChildren,VI as BlockComponent}from"../../chunks/app-2aFIfWdl.js";

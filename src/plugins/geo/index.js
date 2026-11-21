@@ -1,1 +1,1 @@
-export{bb as geoPlugin}from"../../../chunks/app-COIx8n3n.js";
+export{bb as geoPlugin}from"../../../chunks/app-2aFIfWdl.js";

@@ -1,1 +1,1 @@
-export{Pot as MIGRATIONS_PAGE_ALIAS,Fot as getOrCreateMigrationsPage,Iot as migrationsPageBlockId,Lot as migrationsPageSpec}from"../../chunks/app-COIx8n3n.js";
+export{Pot as MIGRATIONS_PAGE_ALIAS,Fot as getOrCreateMigrationsPage,Iot as migrationsPageBlockId,Lot as migrationsPageSpec}from"../../chunks/app-2aFIfWdl.js";

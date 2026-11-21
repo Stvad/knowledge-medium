@@ -1,1 +1,1 @@
-export{UK as appRuntimeUpdateEvent,WK as refreshAppRuntime}from"../../chunks/app-COIx8n3n.js";
+export{UK as appRuntimeUpdateEvent,WK as refreshAppRuntime}from"../../chunks/app-2aFIfWdl.js";
