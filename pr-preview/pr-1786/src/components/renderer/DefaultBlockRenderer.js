@@ -1,1 +1,1 @@
-export{oR as BlockFrame,sR as BulletDot,cR as DefaultBlockLayout,lR as DefaultBlockRenderer}from"../../../chunks/app-B8AS4kfu.js";
+export{oR as BlockFrame,sR as BulletDot,cR as DefaultBlockLayout,lR as DefaultBlockRenderer}from"../../../chunks/app-CwwjDuZu.js";

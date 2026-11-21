@@ -1,1 +1,1 @@
-export{pD as WorkspaceSwitcher}from"../../../chunks/app-B8AS4kfu.js";
+export{pD as WorkspaceSwitcher}from"../../../chunks/app-CwwjDuZu.js";

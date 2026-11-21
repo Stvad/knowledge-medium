@@ -1,1 +1,1 @@
-export{yot as getOrCreateKernelPage,bot as kernelPageBlockId}from"../../chunks/app-B8AS4kfu.js";
+export{yot as getOrCreateKernelPage,bot as kernelPageBlockId}from"../../chunks/app-CwwjDuZu.js";
