@@ -1,8 +1,8 @@
 # Headless client
 
-> **Status:** Slice 1 implemented and tested locally. Last verified against code: 2026-11-21. Hosted scratch-workspace checks remain for the owner. Slices 2–4 describe future work.
+> **Status:** Slices 1 and 3 implemented for local verification. Last verified against code: 2026-11-21. Hosted scratch-workspace checks remain for the owner. The real-graph runs in slices 2 and 4 remain future work.
 > Each claim is tagged **[read]** (seen in the code, by the author or a reviewer citing the line), **[measured]** (run or queried, with where) or **[reasoned]** (inferred; the slice that verifies it is named in [§13](#13-still-open)).
-> Not re-read since 2026-11-19: the §4 table, the row-level-security and per-user-row claims in §8, the 4 s timer in §9, the count of app-side-only seed plugins in §10.
+> Not re-read since 2026-11-19: the §4 table, the row-level-security and per-user-row claims in §8, the count of app-side-only seed plugins in §10.
 
 ## 1. Goal
 
@@ -86,11 +86,11 @@ A tab is safe to write from because the app shell around the Repo does several t
    - *plaintext:* on `quarantine`, pin `plaintext` with the same `setModePin` the tab's gate calls. **[read]** This is the one place the host pins on the config's word and the server row's, with no key to prove it, which is exactly what the person clicking "confirm plaintext" in a tab goes on.
 
    Resolve again, and proceed only when the answer is ready *and* the pin equals the configured mode. Everything else exits non-zero with the reason: a config that says plaintext against a row that says encrypted, or the reverse, never pins anything. When the workspace row is not local yet (the first boot), step 6 runs first and this step waits for the row. The real PowerSync core makes the row visible on completion of the checkpoint that contains it. Before that the operations remain in the oplog. **[measured]** locally. The hosted service determines how it divides a first download into checkpoints. The downloaded data survives a wrong-key refusal, so the owner can correct the key file and restart.
-6. **Connect for downloads.** The Node host uses PowerSync's download-only options, the production credential lookup and the deployment's WebSocket transport. The SDK installs no upload callback. Startup refuses a pre-existing upload queue and preserves it for recovery. If a permitted Repo scope queues a write after startup, the row stays on disk. **[measured]** with the SDK's normalized connector and a real UI-state transaction.
+6. **Connect.** With `writable` omitted or false, the SDK gets download-only options and boot refuses a pre-existing upload queue. With `writable: true`, the host installs the tab's encrypting connector behind the upload hold. Both modes use the deployment's credential lookup and WebSocket transport. A writable host with queued operations but no local workspace row refuses before connecting. Preserve its database for inspection: it cannot validate its configured mode before replay, and pending uploads prevent the missing row's checkpoint from applying.
 7. **Build the Repo, read-only**: `new Repo({db, cache, user, syncObserverDeps, isReadOnly: true})` with no backfill claim, the `staticDataExtensions` runtime, and the configured workspace active. Always after step 5, so the observer's first drain already has the key and defers nothing. Not through `createTestRepo`, which installs a working stand-in claim. **[read]** On the first boot (the workspace has no blocks) take `repo.holdBulkSyncLoad(workspaceId)` at once and release it when the gate first opens: its contract, that nothing waits on the write lock and the rows are reaching `blocks` for the first time, is true here. **[read]**
-8. **Register with the bridge server.** Once access is decided and the Repo exists, the slice-1 read-only token serves `health` and `ping` while the gate is closed. The bridge checks token scope before forwarding a command. This makes a long first drain observable. While waiting for the first workspace row there is no Repo to register.
+8. **Register with the bridge server.** Once access is decided and the Repo exists, both token scopes serve `health` and `ping` while the gate is closed. A writable config grants a read-write token, which can also request local rematerialization while closed. The bridge checks token scope before forwarding a command. This makes a long first drain observable. While waiting for the first workspace row there is no Repo to register.
 9. **Run the gate** for the life of the process.
-10. **Shutdown** (SIGTERM). Re-register with an empty token list, stop polling and drain in-flight commands. If the server is unreachable its client record expires after 60 seconds. Stop the gate, disconnect sync, flush and stop the observer, unpin, advance one Node timer turn, await deferred Repo work and cancel delayed processors before closing the database. Slice 1 never starts with pending uploads.
+10. **Shutdown** (SIGTERM). Re-register with an empty token list, stop polling and drain in-flight commands. If the server is unreachable its client record expires after 60 seconds. Stop the gate, disconnect sync, flush and stop the observer, unpin, advance one Node timer turn, await deferred Repo work and cancel delayed processors before closing the database. Pending and rejected uploads stay on disk.
 
 ### The gate
 
@@ -101,7 +101,7 @@ Serving is a state the host enters and can leave, not a point boot passes once. 
 - `repo.workspaceViewGap(workspaceId)` is null: nothing staged, sync settled, no re-materialization running, no downloaded row left unapplied. All arms, where the tab's gate asks only the local ones behind a per-device marker; a daemon has no reason to open on a backlog. While the gap is transient the host waits and kicks the drain with `repo.flushSyncObserver()`, since a failed drain window otherwise retries only on the next arrival. A durable gap does not clear by waiting: `health` gives the count, and the read-only bridge profile cannot invoke the local repair command. **[read]** Sized on one live client by #1777: zero such rows;
 - the host's member row is local.
 
-**Open**: reads are served. Slice 1 keeps the Repo read-only for every role, awaits the shared data bootstrap and both namespace reads, and enables watcher events. In slice 3, on entering and on any later change of role, the host sets `repo.setReadOnly(…)` and then calls the data half of the workspace bootstrap ([§10](#10-code-changes)), in the tab's order: gates, role, bootstrap. Idempotent, as a tab calls it on every open. The Repo is writable only while the role is editor or owner *and* the upload queue is not held.
+**Open.** The gate sets the Repo's access before calling `openWorkspaceData` on entry and on a role change. Only an editor or owner on a write-enabled host with no stale upload hold gets a writable Repo. The host awaits both namespace reads before admitting commands. It rechecks membership when a command arrives so demotion takes effect even ahead of the table notification. A failed membership read closes admission and revokes write access.
 
 **Back to closed** when the member row disappears. Removing the member drops the whole workspace from the device, and restoring it returns the member row and a million blocks in one checkpoint **[read]**; without this the host would be writable over a workspace that is still draining, and its get-or-create verbs would mint pages the server already has.
 
@@ -111,9 +111,11 @@ The host does not use the tab's per-workspace first-sync marker; that marker exi
 
 ### The upload hold (slice 3)
 
-The host wraps the connector's upload: if the oldest queued write is more than a week old, it throws the existing `UploadHeldError` instead of uploading, and the Repo goes read-only. Age is `now` minus the smallest `updated_at` a queued entry carries; the upload trigger emits it whenever the column changed, which is every write except a derived-column patch. **[read]** `health` reports the hold, the queue depth and the oldest age. Restarting with `--release-stale-queue` uploads it; nothing is discarded either way.
+The host checks the production connector’s queue after it collects each batch, before transport or quarantine. One callback can collect a second batch while an earlier RPC is in flight. At that boundary, if the oldest queued write is more than a week old, it throws the existing `UploadHeldError` instead of uploading, and the Repo goes read-only. Age is `now` minus the smallest `updated_at` a queued entry carries; the upload trigger emits it whenever the column changed, which is every write except a derived-column patch. **[read]** `health` reports the hold, the queue depth and the oldest age. A restart with `--release-stale-queue` releases entries through the highest queue id present at startup if that queue was stale. Later entries still receive the age check, including in the same upload call. Queued edits are preserved across restart.
 
-Why: the server merges a patch's columns in on arrival. It knows the row moved under the edit, and bumps the version, but refuses nothing, so a weeks-old agent patch would replace whatever a person wrote to the same column since. **[read]** The hold sits where uploads happen, so it covers a restart after weeks down and a process that stayed up through a long outage alike. It guards one device against a rule every device has; whether the server should let the stale write win at all is #1783, and the hold goes when that is answered there. A held queue also stops downloaded checkpoints applying **[read]**, so a host that boots held stays closed.
+A deterministic creation, including a seed definition or the first comments container, can carry `updated_at = 0` **[measured]**. The minimum includes zero. A first writable open that mints those definitions can therefore require operator release immediately. Opening the scratch workspace in a tab first makes seed writes through the tab. The first comment can independently mint its container and trigger the same hold.
+
+Why: the server merges a patch's columns in on arrival. It knows the row moved under the edit, and bumps the version, but refuses nothing, so a weeks-old agent patch would replace whatever a person wrote to the same column since. **[read]** The hold sits where uploads happen, so it covers a restart after weeks down and a process that stayed up through a long outage alike. It guards one device against a rule every device has; whether the server should let the stale write win at all is #1783, and the hold goes when that is answered there. With a held queue, the real PowerSync core can download new rows into its oplog. The checkpoint does not advance and the new rows do not reach staging **[measured]**. A warm host booted held stays behind its checkpoint gate. A previously admitted host continues serving its last applied view read-only. In `health.host`, `uploadHold` explains the stall, `queuedEntries` counts raw operations, `oldestQueuedAgeMs` is null for a queue without a timestamp, and `closedReason` reports actual admission.
 
 ## 8. Identity, secrets, invariants
 
@@ -128,11 +130,11 @@ The read scope of the bridge token is the member account's local replica. The co
 **Invariants.** Each names its mechanism and the test that fails when the mechanism is deleted.
 
 1. **Only classified verbs run, and only in the state that allows them.** One table in `scripts/headless/`, typed `Record<KnownCommandType, 'always' | 'open' | {refuse: string}>`, so a verb added to the protocol is a compile error until someone classifies it, as `knownCommandRegistry` already does. **[read]** The table does not say which verbs write: a read-only Repo refuses those itself. The one write that bypasses the Repo is `sql` in execute mode, so `sql` is served only when `isReadOnlyAgentCommand` says so. *Test:* table-driven, one case per refusal and per state.
-2. **A write needs write access and a complete view.** The gate. Slice 1 forces read-only even for an editor or owner. *Test:* a normal document write reaches the read-only Repo and is refused; with the row removed, every verb but the `always` ones is; with the row restored beside a backlog, writes stay refused until the gap clears. Each clause deleted fails its own case.
+2. **A write needs write access and a complete view.** The gate. The default config forces read-only even for an editor or owner. *Test:* a normal document write reaches the read-only Repo and is refused; with the row removed, every verb but the `always` ones is; with the row restored beside a backlog, writes stay refused until the gap clears. Each clause deleted fails its own case.
 3. **One identity per database.** The pidfile lock. The state directory is never copied to another machine. *Test:* a second boot, and a `login`, on a held directory exit before opening the database.
-4. **No workspace backfill from the host.** The Repo has no backfill claim, and the host refuses `run-backfill`. On a read-only Repo the shared bootstrap schedules seed materialization, which declines to write. The slice 1 test observes that call, verifies that a reference gets its missing local target column, and checks that the document content and empty upload queue are preserved. **[measured]** Writable first-open parity belongs to slice 3.
+4. **No workspace backfill from the host.** The Repo has no backfill claim, and the host refuses `run-backfill`. On a read-only Repo the shared bootstrap schedules seed materialization, which declines to write. The slice 1 test observes that call, verifies that a reference gets its missing local target column, and checks that the document content and empty upload queue are preserved. **[measured]** The writable parity fixture verifies the host seed pass on a tab-prepared workspace and inspects the queue before issuing commands.
 5. **A plaintext upload to an encrypted workspace is impossible.** The production resolver derives the upload mode from the device pin. An encrypted pin requires the key. A synced row reporting encryption while the device lacks that pin holds uploads. The plaintext first-encounter path requires both the configured mode and the synced row to say plaintext. The owner accepts the same reliance on that row as a person confirming plaintext in a tab. **[read]** As defence in depth, `createPowerSyncConnector` requires an encryption resolver and validates each create and patch before compaction can merge its envelope with a later edit. An invalid or absent `workspace_id` quarantines the entire original transaction in `ps_crud_rejected`. Later valid transactions drain. A missing key or held workspace leaves the transaction queued for retry. Local tests cover both malformed operations and both config/row mode mismatches. **[measured]**
-6. **A stale queue is not uploaded unattended.** Slice 1 refuses any nonempty upload queue before connecting and preserves the queued rows on disk. **[measured]** Slice 3 will add the age-based hold and test release of an eight-day-old write.
+6. **A stale queue is not uploaded unattended.** Slice 1 refuses any nonempty upload queue before connecting and preserves the queued rows on disk. **[measured]** The writable host inspects the whole queue before upload. An eight-day-old entry holds fresh entries beside it. Stamp-less patches alone can upload.
 7. **The agent surface returns neither the key nor the session.** `eval` is refused, and a pass over the served read commands searches their serialized results for a synthetic device-storage value and workspace key. **[measured]** on the local test database.
 8. **Attribution is unchanged**: with the contributors processor in the runtime (it is in `staticDataExtensions`), `executeCommand` rebinds `repo.withTxContext({contributorId, contributorSource: 'agent'})` and an unchosen contributor is refused. **[read]** *Test:* the slice 3 parity test compares attribution columns too.
 
@@ -141,7 +143,7 @@ The read scope of the bridge token is the member account's local replica. The co
 - *open* (served once the gate is open): read-only `sql` (also applied to SQL inside watcher definitions), `get-block`, `get-subtree`, `view-*`, `backlinks`, `grouped-backlinks`, `page`, `daily-note`, `search`, `comments`, `recent-changes`, `block-history`, `data-model`, `resolve-block-id`, `list-contributors`, `describe-runtime`, `runtime-summary`, `watch-events`; and the block writes `create-block`, `update-block`, `edit-block`, `move-block`, `delete-block`, `restore-block`, `append-markdown`, `reconcile-markdown-subtree`, `create-page`, `add-comment`, `create-contributor`.
 - *refused:* `eval` (it runs with the daemon's OS privileges and could read the key file); the extension verbs and `audit-extension` (they compile through the page's importmap and blob URLs); `run-action`; `run-backfill`, `audit-properties`; `add-media` / `read-media` (not ported; [§12](#12-later)).
 
-The planned writable profile covers dispatch and the graph MCP tools except media. Slice 1 provides the read subset. **[read]** An agent with a shell on the same machine as the same OS user can still read the key file; run the daemon as its own user if that matters.
+The write-enabled profile serves the listed write verbs via the shared command layer. The default profile provides the read subset. **[read]** An agent with a shell on the same machine as the same OS user can still read the key file; run the daemon as its own user if that matters.
 
 ## 9. Failure and recovery
 
@@ -153,10 +155,10 @@ The planned writable profile covers dispatch and the graph MCP tools except medi
 | Wrong or missing key | Boot exits before bridge registration | Fix the key file, restart |
 | No network at boot, or a long first drain | A retryable refresh failure reuses a still-valid stored session. A warm host can register and report a closed gate. An expired session without a usable refresh exits. A cold host needs its first workspace row before it registers. | Restore connectivity. Restart if the process exited. |
 | Downloaded rows still unapplied at entry | The gate stays closed and `health` reports the gap | Preserve the state directory for operator diagnosis. The slice-1 token cannot invoke local rematerialization. |
-| Demoted to viewer | The Repo goes read-only at once; writes already queued are rejected by row-level security into `ps_crud_rejected`, which `health` counts | Restore the role. The rejected rows stay in the host's `blocks` and nowhere else, so its view differs from the server's by those rows until slice 3 decides whether to serve the retry or discard them |
+| Demoted to viewer | The local member-row change immediately revokes Repo write access. Already queued operations still go to the server, where a permanent rejection goes into `ps_crud_rejected`. The `rejectedUploads` health field counts those rows | Restore the role and inspect the rejected entries. The host keeps local edits and their quarantine records. An operator retry surface remains undecided |
 | Membership removed | The gate closes and the workspace leaves the device | Restore the member; the gate re-opens when the re-download has drained |
-| Slice 1 finds queued writes on disk | Boot refuses before connecting and preserves the queue | Keep the state directory intact for inspection and recovery |
-| Slice 3: oldest queued write over a week old | The upload hold; the host is read-only and, at boot, closed | Look at the queue, then restart with `--release-stale-queue` |
+| Download-only config finds queued writes on disk | Boot refuses before connecting and preserves the queue | Keep the state directory intact for inspection and recovery |
+| Oldest queued stamp more than a week old | The upload hold; the host is read-only and, at boot, closed | Look at the queue, then restart with `--release-stale-queue` |
 | Workspace converted to encrypted while the host is configured plaintext | Uploads hold and arriving rows defer **[read]**; nothing plaintext leaves | Conversion is a coordinated event: stop the host first, as for a deploy. Afterwards set the config to `e2ee` with the key file. Which flow upgrades the host's existing plaintext pin is not designed ([§13](#13-still-open)) |
 | Corrupt or suspect database | Refuse to boot; never auto-wipe | Inspect the queue first: deleting the state directory discards the queue, the rejected rows and device storage. Then delete it, `login`, cold-sync |
 
@@ -166,21 +168,21 @@ The planned writable profile covers dispatch and the graph MCP tools except medi
 
 **Core (`src/`, no plugin imports), each an extraction or a strictness change:**
 - *Client-schema initialisation.* Browser and Node share the ordered DDL and backfills. The browser adapter executes a batch of statements including its completion sentinel. The Node adapter prepares one statement per call. **[read]** Direct importers of `initializeClientSchema`, `BATCH_SENTINEL_SQL` and the `SchemaDb` type now use `src/data/internals/initializeClientDatabase.ts`. That module also constructs the raw-table schema and runs the ordered backfills. Browser OPFS setup stays in `repoProvider.ts`. `createTestDb.ts` uses the shared implementation when preparing its template.
-- *Connection setup.* Browser and host share credential lookup and WebSocket transport. The browser installs its encrypting uploader. The host supplies only download options. The resolver needs no extraction: `createSyncResolver` and `readWorkspaceEncryptionMode` are already platform-neutral, and `resolverForUser` only memoizes them over the browser's database map. **[read]**
+- *Connection setup.* Browser and host share credential lookup and WebSocket transport. The browser installs its encrypting uploader. The writable host wraps the same uploader. The default host supplies only download options. The resolver needs no extraction: `createSyncResolver` and `readWorkspaceEncryptionMode` are already platform-neutral, and `resolverForUser` only memoizes them over the browser's database map. **[read]**
 - *Workspace bootstrap.* `openWorkspaceData` waits for definitions, starts both namespace reads, schedules the workspace backfills and local derivations, ensures system pages, then schedules seed materialization. After the data bootstrap succeeds, the tab remembers the workspace for the next launch and continues to layout without waiting for either namespace read. The read-only host awaits both returned promises. A local test reaches seed scheduling, verifies that a pre-existing reference gets its local target column, and checks the upload queue is empty.
 - *Auth storage*: `services/supabase.ts` passes `auth.storage` from an override a leaf module holds, unset in browsers, so `createClient` behaves there exactly as today.
 - `createPowerSyncConnector` requires the `encryption` option. TypeScript rejects an omitted option, and an untyped caller omitting it gets a `TypeError` during construction. A create or patch missing a valid `workspace_id` quarantines its original transaction before transport.
-- `health` reports the rejected-upload count, and uses an optional provider for the host's commit, forced role, gate reason and checkpoint timestamps. The existing upload-queue preview remains available. Age-based hold reporting belongs to slice 3.
+- `health` reports the rejected-upload count, and uses an optional provider for the host's commit, effective read-only state, gate reason and checkpoint timestamps. The existing upload-queue preview remains available. The host also reports its stale-queue hold, operation count and oldest queued age.
 
 **`packages/agent-dispatch`:** the pidfile helper's "already running" message takes the daemon's name instead of hard-coding its own. **[read]** A README note on the headless profile. Nothing else there or in `packages/agent-cli` changes.
 
-**New, in `scripts/headless/`:** entry point, boot, the read gate, `login`, the verb table. It calls `startBridgeLoop` directly, as the eval host does, and reuses the eval host's `window`/`document` shim (which leaves an existing `localStorage` alone **[read]**). The host wires the watcher event transport on admission. Registering a watcher over the bridge requires a writable token in a later slice. **[read]**
+**New, in `scripts/headless/`:** entry point, boot, the read gate, `login`, the verb table. It calls `startBridgeLoop` directly, as the eval host does, and reuses the eval host's `window`/`document` shim (which leaves an existing `localStorage` alone **[read]**). The host wires the watcher event transport on admission. Registering a watcher over the bridge requires a writable token. **[read]**
 
 **Device storage needs no code.** Node 26 persists `localStorage` across processes under `--localstorage-file`, with `window` and `document` still undefined. **[measured]** on this machine's Node; Node labels Web Storage experimental. If that proves fragile the fallback is a file-backed `Storage` of some forty lines with a write-temp-then-rename.
 
-**Config.** One file: state directory, workspace id, the workspace's mode (`e2ee` or `plaintext`), key-file path when encrypted, bridge profile. The bridge URL and secret come from `agent-cli`'s `bridgeUrl()` / `bridgeSecret()`, and the host's token lives in `agent-cli`'s token store under its profile (`loadStoredToken` / `writeStoredToken`), where the CLIs already look. **[read]** The operator supervises both processes under one OS user. The owner procedure below uses systemd user units or temporary launchd jobs.
+**Config.** One file: state directory, workspace id, the workspace's mode (`e2ee` or `plaintext`), key-file path when encrypted, bridge profile, optional boolean `writable` (default false). The bridge URL and secret come from `agent-cli`'s `bridgeUrl()` / `bridgeSecret()`, and the host's token lives in `agent-cli`'s token store under its profile (`loadStoredToken` / `writeStoredToken`), where the CLIs already look. **[read]** The operator supervises both processes under one OS user. The owner procedure below uses systemd user units or temporary launchd jobs.
 
-**Seeds.** Eleven static plugins register seeds only on the app side **[measured]**, and installed extensions cannot load in Node (Babel plus blob-URL imports **[read]**), so the host's seed set is narrower than a tab's. The read-only runtime uses `staticDataExtensions` without the React `kernelValuePresetsExtension`. The served read commands run against the data runtime. Write parity is slice 3's first check: a write to a property whose seed the host lacks must be refused or stored under the synced definition, never re-typed. Only if that fails do the static seeds move into data extensions.
+**Seeds.** Eleven static plugins register seeds only on the app side **[measured]**, and installed extensions cannot load in Node (Babel plus blob-URL imports **[read]**), so the host's seed set is narrower than a tab's. The host uses `staticDataExtensions` without the React `kernelValuePresetsExtension`. When a local seed is missing, the data layer uses the synced definition and a registered preset to reconstruct the property's codec. When that behavior is unavailable, creates and changes to the value are refused in both cell and child-backed storage. Content edits preserve the value and its references. The merged missing-seed tests exercise both paths in `src/plugins/agent-runtime/test/missingSeedWrites.test.ts`. No seed relocation is needed. **[measured]**
 
 **Untouched:** Supabase, the sync rules.
 
@@ -190,7 +192,7 @@ Slices 1 and 2 run every boot step with the role forced to read-only, so the gat
 
 1. **Read-only host on a scratch encrypted workspace**, and the same boot against a scratch plaintext one, which differs only in step 5. The extractions, device storage with a test that a refreshed session survives a restart, `login`, lock, boot, the gate, the read verbs. Asserts `ps_crud` stays empty throughout: a read-only Repo still passes UI-state, prefs and automation writes, and the served reads make none. A separately injected UI-state write remains queued because the SDK has no uploader. **[read]**
 2. **The real graph, still read-only.** Measure cold sync, memory and file size. Compare `health` counts and a sample of `view-*` outputs with a tab's.
-3. **Writes on a scratch encrypted workspace.** The missing-seed check first; then role-following, the write verbs, the upload hold, and a parity test: one command sequence against a tab-shaped and a host-shaped runtime yields identical rows.
+3. **Writes on a scratch encrypted workspace.** The shared data layer enforces missing-seed behavior. This slice adds role-following, write access, the upload hold, and a parity test: one command sequence against a tab-shaped and a host-shaped runtime yields identical rows.
 4. **The real graph.** First open the workspace once in a browser as the host's account, so the first-open writes are made by the tab path and the host's own open should queue nothing; check `health`'s queue depth after it. Then stop the tab-pointed `agent-dispatch` and point it at the host's profile. Dispatch runs only there, so the claim race it documents does not widen.
 
 ### Owner verification for slice 1
@@ -272,6 +274,44 @@ launchctl bootout "$domain/org.knowledge-medium.scratch-bridge"
 
 These hosted sign-in, invitation, reconnect and supervision checks require the owner's environment.
 
+### Owner verification for slice 3
+
+Use the scratch setup above with a dedicated editor. Open the workspace in the browser first and let it finish syncing. Stop the host, set `"writable": true` in its config, then start it in one terminal:
+
+```sh
+pnpm headless run "$config"
+```
+
+In another terminal, check for an open gate, a writable Repo, zero queued entries and zero rejections after bootstrap. Set `tab` to the scratch tab’s bridge profile. Reload that tab before the test to start with empty undo history. After the edit arrives, compare its undo depths before and after using the tab command below.
+
+```sh
+pnpm agent --profile headless-scratch health
+pnpm agent --profile "$tab" --contributor none eval "return repo.undoManager.depths('block-default')"
+pnpm agent --profile headless-scratch --contributor none create-block '{"content":"headless scratch verification"}'
+# Set block to the returned id.
+pnpm agent --profile "$tab" get-block "$block"
+pnpm agent --profile "$tab" --contributor none eval "return repo.undoManager.depths('block-default')"
+pnpm agent --profile headless-scratch health
+```
+
+Demote the dedicated member in the scratch owner's membership UI and repeat the following command. It must refuse and the tab must retain the original content. Promote it and repeat: the tab should receive the edit. Remove and restore membership using the owner's UI and the original invitation procedure. Sample `health` on reconnect and after a warm restart, comparing baseline and last checkpoint with the slice 1 instructions. For reconnect frequency, observe the host's WebSocket connection at the scratch service over an identified interval. Run the same write/read checks on the encrypted and plaintext scratch configurations.
+
+```sh
+pnpm agent --profile headless-scratch --contributor none update-block "{\"id\":\"$block\",\"content\":\"scratch role check\"}"
+pnpm agent --profile headless-scratch health
+pnpm agent --profile "$tab" get-block "$block"
+```
+
+For a held scratch queue, inspect its entries before release, stop the host, and run:
+
+```sh
+pnpm headless run "$config" --release-stale-queue
+# In the other terminal
+pnpm agent --profile headless-scratch health
+```
+
+Confirm the queue drains, checkpoint application resumes, and the peer sees the intended edits. Production-scale sync time, memory, file size and dispatch cutover belong to slices 2 and 4.
+
 ## 12. Later
 
 **Media verbs.** Without them an agent on the host cannot read an image in a note or attach a file. Owner: no strong view on scope, so the plan is fetch-on-`read-media` and upload-on-`add-media`, with no replication of every asset down to the host. What it takes, none started:
@@ -298,10 +338,9 @@ What this design keeps open for it at no cost: the state directory is the whole 
 | Dedicated-member login, browser invitation acceptance and process supervision in the deployment | owner scratch run |
 | Hosted first-download checkpoint boundaries | owner scratch run |
 | Cold sync time, memory and file size under Node | slice 2 |
-| A write to a property whose seed the host lacks | slice 3 |
-| Writable `openWorkspaceData` preserving an existing tab-created workspace | slice 3 |
-| How often the sync stream reconnects | slice 3 |
-| Whether to serve the rejected-upload retry or discard rejected rows | slice 3 |
+| Writable open on the deployed scratch workspace (tab-prepared writable open covered locally) | owner scratch run |
+| How often the hosted sync stream reconnects | owner scratch run |
+| Whether to expose the tab’s explicit retry or leave rejected rows quarantined | operator decision |
 | Upgrading a host's plaintext pin after the workspace is converted (the tab has `upgradeWorkspacePin` for this) | when a plaintext workspace served by a host is first converted |
-| A synced agent write never landing on another device's undo stack | slice 3 |
+| A synced agent write never landing on another device's undo stack in the deployment | owner scratch run |
 | Resetting PowerSync's client id being sufficient after a restore | the transient-client design |

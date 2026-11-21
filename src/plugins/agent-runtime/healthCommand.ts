@@ -66,7 +66,7 @@ export const runHealthCommand = async (repo: Repo, hostHealth?: AgentRuntimeCont
       countOf(repo, rejectedCountSql),
     ])
   return {
-    ...(hostHealth && {host: hostHealth()}),
+    ...(hostHealth && {host: await hostHealth()}),
     rejectedUploads,
     activeWorkspaceId: repo.activeWorkspaceId,
     blocks,

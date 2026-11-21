@@ -9,7 +9,7 @@ import {parseWorkspaceRow, readWorkspaceEncryptionMode, type WorkspaceRow} from 
 import {SELECT_LOCAL_WORKSPACE_BY_ID_SQL} from '@/data/workspaces'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {createSyncResolver} from '@/sync/keys/resolver'
-import {connectWorkspaceDownloads, hasRemoteSyncConfig} from '@/services/powersync'
+import {connectWorkspaceSync, createWorkspaceConnector, hasRemoteSyncConfig} from '@/services/powersync'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {createAgentRuntimeContext} from '@/plugins/agent-runtime/commands'
@@ -20,6 +20,7 @@ import type {User} from '@/types'
 import {resolveAppVersion} from '../app-version'
 import {openDeviceWorkspace} from './access'
 import {startReadGate} from './gate'
+import {readUploadQueue, staleUploadHold, STALE_QUEUE_REASON} from './uploadHold'
 import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
@@ -39,13 +40,14 @@ const untilAbort = (signal: AbortSignal): Promise<void> =>
 /** Owns sync and the Repo. The caller owns the open database. */
 export async function serveDatabase(
   db: PowerSyncDatabase, config: HeadlessConfig, user: User, signal: AbortSignal,
-  connect = connectWorkspaceDownloads, register = connectBridge,
+  connect = connectWorkspaceSync, register = connectBridge, releaseStaleQueue = false,
 ) {
   const {workspaceId} = config
   await db.waitForReady()
   const baseline = db.currentStatus.lastSyncedAt?.getTime()
   await initializeClientDatabase(db, 'node')
-  if (await db.getOptional('SELECT 1 FROM ps_crud LIMIT 1')) {
+  const queue = await readUploadQueue(db)
+  if (!config.writable && queue.queuedEntries) {
     throw new Error('Read-only host found queued writes. Preserve this database for recovery.')
   }
   const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(db, id))
@@ -55,11 +57,18 @@ export async function serveDatabase(
   let releaseBulk: (() => void) | undefined
   try {
     const existing = await db.getOptional<WorkspaceRow>(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId])
-    if (!existing) await connect(db)
+    // A cold database can download to discover its mode. Replaying prior writes
+    // requires a validated workspace row and pin before installing the uploader.
+    if (!existing && queue.queuedEntries) throw new Error('Queued writes without a workspace row. Preserve this database for recovery.')
+    const hold = staleUploadHold(db, workspaceId, queue, releaseStaleQueue, () => gate?.uploadHoldChanged())
+    const connector = config.writable
+      ? createWorkspaceConnector(dbFilenameForUser(user.id), resolver, hold.beforeUploadBatch)
+      : undefined
+    if (!existing) await connect(db, connector)
     const row = existing ?? await waitForWorkspace(db, workspaceId, signal)
     signal.throwIfAborted()
     await openDeviceWorkspace(config, user.id, parseWorkspaceRow(row))
-    if (existing) await connect(db)
+    if (existing) await connect(db, connector)
     const cold = !await db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
     const active = new Repo({db, user, cache: new BlockCache(), syncObserverDeps: resolver, isReadOnly: true})
     repo = active
@@ -70,12 +79,16 @@ export async function serveDatabase(
     const commit = resolveAppVersion().sha
     const context = createAgentRuntimeContext({
       repo: active, runtime, safeMode: false,
-      hostHealth: () => ({
-        commit, readOnly: active.isReadOnly,
-        baselineSyncedAt: baseline ?? null,
-        lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
-        closedReason: gate ? gate.reason() : 'Starting gate',
-      }),
+      hostHealth: async () => {
+        const {queuedEntries, oldestQueuedAgeMs} = await readUploadQueue(db)
+        return {
+          queuedEntries, oldestQueuedAgeMs, uploadHold: hold.isHeld() ? STALE_QUEUE_REASON : null,
+          commit, readOnly: active.isReadOnly,
+          baselineSyncedAt: baseline ?? null,
+          lastSyncedAt: db.currentStatus.lastSyncedAt?.getTime() ?? null,
+          closedReason: gate ? gate.reason() : 'Starting gate',
+        }
+      },
     })
     bridge = await register(config, user, async command => {
       signal.throwIfAborted()
@@ -96,7 +109,7 @@ export async function serveDatabase(
       } else {
         watchEventsRegistry.disposeAll()
       }
-    })
+    }, {writable: config.writable === true, isUploadHeld: hold.isHeld})
     await untilAbort(signal)
   } finally {
     try {
@@ -121,7 +134,7 @@ export async function serveDatabase(
   }
 }
 
-export async function runHost(config: HeadlessConfig, user: User, signal: AbortSignal) {
+export async function runHost(config: HeadlessConfig, user: User, signal: AbortSignal, releaseStaleQueue = false) {
   if (!hasRemoteSyncConfig) throw new Error('Set VITE_POWERSYNC_URL to run the headless host')
   provideRuntimeGlobals()
   const db = new PowerSyncDatabase({
@@ -129,7 +142,7 @@ export async function runHost(config: HeadlessConfig, user: User, signal: AbortS
     database: {dbLocation: config.stateDir, dbFilename: dbFilenameForUser(user.id), readWorkerCount: 1},
   })
   try {
-    await serveDatabase(db, config, user, signal)
+    await serveDatabase(db, config, user, signal, undefined, undefined, releaseStaleQueue)
   } catch (error) {
     if (!signal.aborted || error !== signal.reason) throw error
   } finally {

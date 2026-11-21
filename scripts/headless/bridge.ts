@@ -15,6 +15,7 @@ export const connectBridge = async (
     token = randomBytes(32).toString('hex')
     await writeStoredToken(token, config.profile)
   }
+  const scope = config.writable === true ? 'read-write' : 'read-only'
   let accepting = true
   const loop = startBridgeLoop({
     clientId: randomUUID(), baseUrl: bridgeUrl, headers: () => ({'x-agent-runtime-secret': secret}),
@@ -22,7 +23,7 @@ export const connectBridge = async (
       activeWorkspaceId: config.workspaceId, currentUser: user, safeMode: false,
       href: 'node:headless', userAgent: `node ${process.version}`, focusedAt: null,
       audience: {workspaceId: config.workspaceId, userId: user.id},
-      tokens: accepting ? [{token, label: config.profile, scope: 'read-only', userId: user.id}] : [],
+      tokens: accepting ? [{token, label: config.profile, scope, userId: user.id}] : [],
     }),
     execute,
     fetch: (url, init) => fetch(url, {...init, signal: AbortSignal.any([

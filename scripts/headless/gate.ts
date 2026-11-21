@@ -1,40 +1,43 @@
 import type {CommonPowerSyncDatabase} from '@powersync/common'
 import type {Repo} from '@/data/repo'
 import {getLocalMemberRole} from '@/data/workspaces'
+import type {WorkspaceRole} from '@/types'
 
 export const startReadGate = (
   db: CommonPowerSyncDatabase, repo: Repo, workspaceId: string, baseline: number | undefined,
   open: (signal: AbortSignal) => Promise<void>, visibility: (open: boolean) => void,
+  access = {writable: false, isUploadHeld: () => false},
 ) => {
   let reason: string | null = 'Checking workspace access'
+  let role: WorkspaceRole | null = null
+  let admitted = false
   let preparation: AbortController | 'ready' | undefined
   let pending: Promise<void> | undefined
   let dirty = false
   let stopped = false
 
+  function applyWritability() {
+    repo.setReadOnly(!(access.writable && (role === 'editor' || role === 'owner') && !access.isUploadHeld()))
+  }
+
   function cancelPreparation() {
     if (preparation instanceof AbortController) preparation.abort()
     preparation = undefined
+    role = null
+    applyWritability()
   }
 
-  async function membershipRefusal(): Promise<string | null> {
-    try {
-      if (await getLocalMemberRole(repo, workspaceId, repo.user.id) === null) {
-        cancelPreparation()
-        if (reason === null) visibility(false)
-        reason = 'Waiting for the local member row'
-        return reason
-      }
-      return null
-    } catch (error) {
-      console.error('Could not verify workspace membership', error)
-      return 'Could not verify workspace membership'
-    }
+  function close(message: string) {
+    cancelPreparation()
+    if (admitted) visibility(false)
+    admitted = false
+    reason = message
   }
 
-  // The membership subscription must stay responsive even if a projector
-  // never primes. A completed preparation wakes the same entry checks again.
-  function startPreparation() {
+  // A stalled namespace read must not block demotion, removal or shutdown.
+  function startPreparation(nextRole: WorkspaceRole) {
+    role = nextRole
+    applyWritability()
     const attempt = new AbortController()
     preparation = attempt
     reason = 'Opening workspace data'
@@ -44,42 +47,52 @@ export const startReadGate = (
       wake()
     }, error => {
       if (attempt.signal.aborted) return
-      preparation = undefined
-      reason = 'Could not open workspace data'
+      close('Could not open workspace data')
       console.error(reason, error)
     })
   }
 
-  async function refresh() {
-    const refusal = await membershipRefusal()
-    if (refusal) {
-      if (reason !== null) reason = refusal
-      return
-    }
-    // Entry checks run once per membership. Ordinary downloads must preserve
-    // watcher registrations and the already-open workspace data.
-    if (reason === null || preparation instanceof AbortController) return
+  async function entryRefusal() {
     const stamp = db.currentStatus.lastSyncedAt?.getTime()
-    if (stamp === undefined || stamp === baseline) {
-      reason = 'Waiting for a checkpoint from this connection'
-      return
-    }
+    if (stamp === undefined || stamp === baseline) return 'Waiting for a checkpoint from this connection'
     let gap = await repo.workspaceViewGap(workspaceId)
     if (gap?.transient) {
       reason = gap.reason
       await repo.flushSyncObserver()
       gap = await repo.workspaceViewGap(workspaceId)
     }
-    if (gap) {
-      reason = gap.reason
+    return gap?.reason ?? null
+  }
+
+  async function refresh() {
+    // Admission lasts for this membership. Read its role after a potentially
+    // long drain so the permission used by bootstrap is current.
+    const refusal = admitted || preparation instanceof AbortController ? null : await entryRefusal()
+    let member: WorkspaceRole | null
+    try {
+      member = await getLocalMemberRole(repo, workspaceId, repo.user.id)
+    } catch (error) {
+      close('Could not verify workspace membership')
+      console.error(reason, error)
       return
     }
+    if (member === null) {
+      close('Waiting for the local member row')
+      return
+    }
+    if (refusal !== null) {
+      close(refusal)
+      return
+    }
+    if (role !== member) cancelPreparation()
+    if (preparation instanceof AbortController) return
     if (stopped) return
     if (preparation === 'ready') {
       reason = null
-      visibility(true)
+      if (!admitted) visibility(true)
+      admitted = true
     } else {
-      startPreparation()
+      startPreparation(member)
     }
   }
 
@@ -92,25 +105,28 @@ export const startReadGate = (
           await refresh()
         }
       } catch (error) {
-        reason = 'Could not check the workspace view'
+        close('Could not check the workspace view')
         console.error(reason, error)
       } finally {
         pending = undefined
       }
     })()
+    return pending
   }
   const offStatus = db.registerListener({statusChanged: wake})
   const offTables = db.onChange({onChange: wake}, {tables: ['workspace_members', 'blocks_synced_changes', 'blocks_synced']})
   wake()
   return {
     reason: () => reason,
+    uploadHoldChanged: applyWritability,
     async readReason() {
       if (reason !== null) {
         if (!pending) wake()
         return reason
       }
-      // A command may arrive before the membership table notification.
-      return await membershipRefusal() ?? reason
+      // A command can arrive before the role-change notification.
+      await wake()
+      return reason
     },
     async stop() {
       stopped = true

@@ -19,7 +19,11 @@ const latch = () => {
 
 afterEach(() => vi.unstubAllGlobals())
 
-it('withdraws the token and drains the in-flight result before closing on shutdown', async () => {
+it.each([
+  [undefined, 'read-only'],
+  [false, 'read-only'],
+  [true, 'read-write'],
+] as const)('uses writable=%s to register a %s token, then withdraws it and drains the result on shutdown', async (writable, scope) => {
   const execution = latch()
   const acknowledge = latch()
   const received = {tokenScopes: [] as string[][], results: [] as unknown[], finished: [] as string[]}
@@ -48,7 +52,7 @@ it('withdraws the token and drains the in-flight result before closing on shutdo
     return Response.json({ok: true})
   })
 
-  const bridge = await connectBridge(config, user, async () => {
+  const bridge = await connectBridge(writable === undefined ? config : {...config, writable}, user, async () => {
     await execution.wait
     return 'complete'
   })
@@ -56,7 +60,7 @@ it('withdraws the token and drains the in-flight result before closing on shutdo
     await vi.waitFor(() => expect(parked?.aborted).toBe(false))
     const closing = bridge.close().then(() => { received.finished.push('closed') })
     await vi.waitFor(() => expect(parked?.aborted).toBe(true))
-    expect(received.tokenScopes).toEqual([['read-only'], ['read-only'], []])
+    expect(received.tokenScopes).toEqual([[scope], [scope], []])
     execution.resolve()
     await vi.waitFor(() => expect(received.results).toEqual([{ok: true, value: 'complete'}]))
     acknowledge.resolve()

@@ -3,5 +3,6 @@
   "workspaceId": "<scratch-workspace-id>",
   "mode": "e2ee",
   "keyFile": "workspace.key",
-  "profile": "headless-scratch"
+  "profile": "headless-scratch",
+  "writable": false
 }

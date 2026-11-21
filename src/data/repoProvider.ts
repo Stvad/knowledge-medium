@@ -42,7 +42,7 @@ import {
   tagHandoffErrorUserId,
   type LocalDbVfs,
 } from '@/data/localDbVfs.js'
-import { connectWorkspaceSync, hasRemoteSyncConfig } from '@/services/powersync.js'
+import { connectWorkspaceSync, createWorkspaceConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
@@ -397,7 +397,7 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
       // resolve mode 'none' (no-op); e2ee workspaces seal content columns; a
       // workspace the server calls e2ee but this device can't seal yet holds.
       // Same per-user resolver the observer deps draw from (`syncObserverDepsFor`).
-      await connectWorkspaceSync(db, dbFilenameForUser(userId), resolverForUser(userId))
+      await connectWorkspaceSync(db, createWorkspaceConnector(dbFilenameForUser(userId), resolverForUser(userId)))
     })
     .catch((error) => {
       console.error(`PowerSync background connect failed for ${userId}:`, error)
