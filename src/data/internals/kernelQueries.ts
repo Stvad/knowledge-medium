@@ -82,6 +82,8 @@ import {
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_MOVES_CHANNEL,
+  TYPED_BLOCKS_TIMESTAMP_CHANNEL,
+  typedBlocksTimestampKey,
   TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
@@ -1243,6 +1245,9 @@ const collectTypedBlockAxisDeps = (
     })
   }
   if (normalized.parentId !== undefined) ctx.depend({kind: 'parent-edge', parentId: normalized.parentId})
+  if (normalized.order === 'created-asc' || normalized.order === 'created-desc') {
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, 'created')})
+  }
   if (typeof normalized.order === 'object') {
     ctx.depend({
       kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL,

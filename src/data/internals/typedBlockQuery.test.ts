@@ -162,6 +162,30 @@ describe('hydrated typedBlocks limit', () => {
 })
 
 describe('typed queries for table rows', () => {
+  it.each([undefined, 'created-asc', 'created-desc'] as const)('reorders limited ids after a synced creation-time correction (%s)', async order => {
+    env.repo.startSyncObserver({throttleMs: 0})
+    const put = async (id: string, createdAt: number, updatedAt: number) => {
+      await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id, workspaceId: WS, parentId: 'parent', orderKey: id, content: '',
+        properties: {}, references: [], createdAt, updatedAt, userUpdatedAt: 1,
+        createdBy: 'remote', updatedBy: 'remote', deleted: false,
+      }))
+      await env.repo.flushSyncObserver()
+    }
+    await put('first', 10, 10)
+    await put('second', 20, 20)
+    const query = {workspaceId: WS, parentId: 'parent', order}
+    const handle = env.repo.query.typedBlockIds({...query, limit: 1})
+    expect(await handle.load()).toEqual([order === 'created-desc' ? 'second' : 'first'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await put('second', 5, 30)
+      await waitFor(() => expect(handle.peek()).toEqual([order === 'created-desc' ? 'first' : 'second']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
   it('limits direct children after outline ordering while counting all live matches', async () => {
     await create({id: 'parent'})
     await create({id: 'other-parent'})
