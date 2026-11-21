@@ -273,6 +273,15 @@ const compileTargetTraversal = (
   }
 }
 
+const virtualOperator = (field: QueryableField, value: unknown): readonly [string, unknown] => {
+  const entries = isPlainOperatorObject(value) ? Object.entries(value) : [['eq', value] as const]
+  const entry = entries[0]
+  if (entries.length !== 1 || !entry || !Object.hasOwn(field.operators, entry[0])) {
+    throw new Error(`[queryBlocks] where.${field.name} requires one of: ${Object.keys(field.operators).join(', ')}`)
+  }
+  return entry
+}
+
 const compileWhereClause = (
   name: string,
   value: unknown,
@@ -287,12 +296,8 @@ const compileWhereClause = (
   if (schema === undefined) {
     const field = context.fields?.get(name)
     if (field) {
-      const entries = isPlainOperatorObject(value) ? Object.entries(value) : [['eq', value] as const]
-      const entry = entries[0]
-      if (entries.length !== 1 || !entry || !Object.hasOwn(field.operators, entry[0])) {
-        throw new Error(`[queryBlocks] where.${name} requires one of: ${Object.keys(field.operators).join(', ')}`)
-      }
-      const compiled = field.operators[entry[0]]!(rowAlias, entry[1])
+      const [operator, operand] = virtualOperator(field, value)
+      const compiled = field.operators[operator]!(rowAlias, operand)
       return {sql: `(${compiled.sql})`, params: compiled.params}
     }
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
@@ -314,9 +319,9 @@ const compileWhereClause = (
     return compileTargetTraversal(name, parsed.inner, schema, rowAlias, context, aliasCounter)
   }
   if (parsed.kind === 'contains') {
-    const member = schema.codec.member?.where
+    const member = schema.codec.contains
     if (!member || !Object.hasOwn(STORAGE_TEST, member.storage)) {
-      throw new Error(`[queryBlocks] where.${name}.contains requires a list with a comparable member codec`)
+      throw new Error(`[queryBlocks] where.${name}.contains requires a codec with a contains capability`)
     }
     // json_each.type distinguishes JSON true from the number 1 without reparsing a string member.
     const memberTypes = {text: "'text'", number: "'integer','real'", boolean: "'true','false'", 'iso-date': "'text'"} as const
@@ -512,8 +517,15 @@ export const isSelectiveWhereValue = (value: unknown): boolean => {
 export const hasSelectiveProperty = (
   where: Readonly<Record<string, unknown>> | undefined, context: WhereContext,
 ): boolean => Object.entries(where ?? {}).some(([name, value]) =>
-  (context.properties.has(name) || !context.fields?.has(name)) && isSelectiveWhereValue(value),
+  context.properties.has(name) && isSelectiveWhereValue(value),
 )
+
+const boundsByWhere = (where: BlockPredicate['where'], context: WhereContext): boolean =>
+  hasSelectiveProperty(where, context) || Object.entries(where ?? {}).some(([name, value]) => {
+    if (context.properties.has(name)) return false
+    const field = context.fields?.get(name)
+    return field?.boundingOperators?.includes(virtualOperator(field, value)[0]) === true
+  })
 
 /** Does this self-scope predicate actually bound the candidate set
  *  (vs. just match-anything)? Used by the ancestor-walk safety gate
@@ -522,7 +534,7 @@ export const hasSelectiveProperty = (
 const selfPredicateNarrows = (predicate: BlockPredicate, context: WhereContext): boolean =>
   predicate.id !== undefined ||
   predicate.referencedBy !== undefined ||
-  hasSelectiveProperty(predicate.where, context)
+  boundsByWhere(predicate.where, context)
 
 /** Ancestor-scope predicates require at least one candidate-bounding
  *  filter; otherwise the recursive walk seeds from every live block
@@ -539,7 +551,7 @@ export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, contex
     query.parentId !== undefined ||
     query.referencedBy !== undefined ||
     types.length > 0 ||
-    hasSelectiveProperty(query.where, context) ||
+    boundsByWhere(query.where, context) ||
     matchPredicates.some(p => isSelfScope(p) && selfPredicateNarrows(p, context)) ||
     (!!query.anyOf?.length && query.anyOf.every(p => isSelfScope(p) && selfPredicateNarrows(p, context)))
   if (!hasGate) {

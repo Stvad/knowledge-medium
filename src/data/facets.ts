@@ -25,7 +25,7 @@ import {
 } from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
-import type { InvalidationRule } from './invalidation.ts'
+import { TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey, type InvalidationRule } from './invalidation.ts'
 import type { KernelPageSpec } from './kernelPage.ts'
 import type { Repo } from './repo.ts'
 import type { BlockSearchFilter } from './searchFilter.ts'
@@ -292,7 +292,6 @@ export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.n
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
-
 type QueryableFieldOperator = (alias: string, operand: unknown) => {
   sql: string
   params: readonly unknown[]
@@ -306,6 +305,8 @@ type QueryableFieldDependency = (workspaceId: string) => Dependency
 export interface QueryableField {
   name: string
   operators: Readonly<Record<string, QueryableFieldOperator>>
+  /** Operators whose successful predicates restrict the candidate set before an ancestor walk. */
+  boundingOperators?: readonly string[]
   dependencies: readonly [QueryableFieldDependency, ...QueryableFieldDependency[]]
 }
 
@@ -313,6 +314,8 @@ const isQueryableField = (value: unknown): value is QueryableField => {
   if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim()) return false
   if (!isRecord(value.operators) || Array.isArray(value.operators)) return false
   const operators = Object.entries(value.operators)
+  const bounds = value.boundingOperators
+  if (bounds !== undefined && (!isStringArray(bounds) || !bounds.every(op => Object.hasOwn(value.operators as object, op)))) return false
   return operators.length > 0 &&
     operators.every(([name, operator]) => name.trim() && typeof operator === 'function') &&
     Array.isArray(value.dependencies) && value.dependencies.length > 0 &&
@@ -341,7 +344,7 @@ const timestampOperand = (field: string, operand: unknown): number => {
   throw new TypeError(`Expected a timestamp operand for ${field}`)
 }
 
-const timestampField = (name: string, column: (alias: string) => string): QueryableField => {
+const timestampField = (name: 'created' | 'updated', column: (alias: string) => string): QueryableField => {
   const compare = (operator: string): QueryableFieldOperator => (alias, operand) => ({
     sql: `${column(alias)} ${operator} ?`,
     params: [timestampOperand(name, operand)],
@@ -364,8 +367,7 @@ const timestampField = (name: string, column: (alias: string) => string): Querya
         }
       },
     },
-    // Both stamps can change on existing rows, including during import and replay.
-    dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    dependencies: [workspaceId => ({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, name)})],
   }
 }
 

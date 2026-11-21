@@ -33,6 +33,8 @@ import {
   mutatorsFacet,
   postCommitProcessorsFacet,
   queriesFacet,
+  queryableFieldsFacet,
+  KERNEL_QUERYABLE_FIELDS,
   sameTxProcessorsFacet,
   searchSourcesFacet,
   systemPagesFacet,
@@ -69,6 +71,7 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_PROCESSORS.map(p => postCommitProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_SAME_TX_PROCESSORS.map(p => sameTxProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_QUERIES.map(q => queriesFacet.of(q, {source: 'kernel'})),
+  KERNEL_QUERYABLE_FIELDS.map(field => queryableFieldsFacet.of(field, {source: 'kernel'})),
   searchSourcesFacet.of(coreContentSearchSource, {source: 'kernel'}),
   KERNEL_PROPERTY_SEEDS.map(seed => definitionSeedsFacet.of(seed, {source: 'kernel'})),
   // C4a: kernel types are code seeds now — contributed to `typeSeedsFacet` (not

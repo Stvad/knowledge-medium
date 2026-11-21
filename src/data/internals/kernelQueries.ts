@@ -76,6 +76,7 @@ import {
   KERNEL_FIELD_RECOGNITION_KEY,
   QUERY_SCHEMA_CHANNEL,
   QUERY_PROPERTY_SCHEMAS_KEY,
+  QUERY_VIRTUAL_FIELDS_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
@@ -1130,6 +1131,7 @@ const collectWhereDeps = (
   for (const [name, value] of Object.entries(where)) {
     const field = !context.properties.has(name) && context.fields?.get(name)
     if (field) {
+      ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_VIRTUAL_FIELDS_KEY})
       for (const dependency of field.dependencies) ctx.depend(dependency(workspaceId))
       continue
     }
@@ -1403,7 +1405,7 @@ const prepareTypedBlockQuery = async (
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, 'property-schema')})
     recognition = dependOnRecognitionParams(ctx, registry)
   }
-  const context: WhereContext = {properties: schemas, fields: ctx.repo.facetRuntime?.read(queryableFieldsFacet)}
+  const context: WhereContext = {properties: schemas, fields: ctx.repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)}
   const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition, fields: context.fields})
   const targetProps = collectTypedBlockAxisDeps(normalized, ctx, projection !== 'count', context)
   if (needsAncestorChain(normalized)) {

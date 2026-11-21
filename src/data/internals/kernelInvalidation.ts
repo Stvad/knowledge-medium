@@ -58,6 +58,8 @@ import {
   TYPED_BLOCKS_REFS_OF_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   TYPED_BLOCKS_TYPE_CHANNEL,
+  TYPED_BLOCKS_TIMESTAMP_CHANNEL,
+  typedBlocksTimestampKey,
   kernelAliasesKey,
   kernelContentKey,
   typedBlocksLabelKey,
@@ -330,6 +332,13 @@ export const emitKernelInvalidations = (
 
   if (snapshot.before?.parentId !== snapshot.after?.parentId) {
     emitStructure(workspaceId)
+  }
+
+  if (before?.createdAt !== after?.createdAt) {
+    emit(TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey(workspaceId, 'created'))
+  }
+  if ((before?.userUpdatedAt ?? before?.updatedAt) !== (after?.userUpdatedAt ?? after?.updatedAt)) {
+    emit(TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey(workspaceId, 'updated'))
   }
 
   const beforeTypes = decodeTypes(snapshot.before?.properties)

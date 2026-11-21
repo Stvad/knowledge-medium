@@ -153,6 +153,7 @@ import {
   KERNEL_FIELD_RECOGNITION_KEY,
   QUERY_SCHEMA_CHANNEL,
   QUERY_PROPERTY_SCHEMAS_KEY,
+  QUERY_VIRTUAL_FIELDS_KEY,
   type InvalidationRule,
 } from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
@@ -1289,6 +1290,9 @@ export class Repo {
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
+      invalidateQueryableFields: () => {
+        this.handleStore.invalidate({plugin: new Map([[QUERY_SCHEMA_CHANNEL, [QUERY_VIRTUAL_FIELDS_KEY]]])})
+      },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
     })

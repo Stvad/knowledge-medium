@@ -4,6 +4,9 @@ export type PluginInvalidationMap = ReadonlyMap<string, PluginInvalidationKeys>
 export interface ChangeSnapshotSide {
   id?: string
   parentId: string | null
+  createdAt?: number
+  updatedAt?: number
+  userUpdatedAt?: number
   orderKey?: string
   workspaceId: string
   deleted?: boolean
@@ -110,6 +113,7 @@ export const pluginInvalidationSize = (
 // own emit rules live in `internals/kernelInvalidation.ts`.
 
 export const TYPED_BLOCKS_LIVE_CHANNEL = 'typedBlocks.live'
+export const TYPED_BLOCKS_TIMESTAMP_CHANNEL = 'typedBlocks.timestamp'
 export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'
 export const TYPED_BLOCKS_PROPERTY_CHANNEL = 'typedBlocks.property'
 export const TYPED_BLOCKS_REFERENCE_CHANNEL = 'typedBlocks.reference'
@@ -134,11 +138,14 @@ export const KERNEL_FIELD_OUTLINE_SKIP_KEY = 'active-registry-outline-skips'
 
 /** Query inputs supplied by the active or retained registry, outside row-change notifications. */
 export const QUERY_SCHEMA_CHANNEL = 'kernel.querySchema'
+export const QUERY_VIRTUAL_FIELDS_KEY = 'virtual-fields'
 export const QUERY_PROPERTY_SCHEMAS_KEY = 'properties'
 
 const SEP = '\u0000'
 
 export const typedBlocksLiveKey = (workspaceId: string): string => workspaceId
+export const typedBlocksTimestampKey = (workspaceId: string, field: 'created' | 'updated'): string =>
+  `${workspaceId}${SEP}${field}`
 export const typedBlocksTypeKey = (workspaceId: string, type: string): string =>
   `${workspaceId}${SEP}${type}`
 export const typedBlocksPropertyKey = (workspaceId: string, name: string): string =>

@@ -28,6 +28,9 @@ export interface TypedBlockQueryReferenceFilter {
  *  matches none, so no `exclude` removes it either. Dates compare within
  *  years 0000–9999; an operand outside them is refused.
  *
+ *  `contains` compares an array member on codecs with a `contains` capability.
+ *  `codecs.list` inherits this capability from its member's scalar `where`.
+ *
  *  `target` is the ref-traversal operator. Valid only on `ref`-typed
  *  (and `refList`-typed) properties; the operand is an inner where-map
  *  compiled against the referenced block's `properties_json`. Lets

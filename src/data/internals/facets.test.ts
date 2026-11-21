@@ -184,6 +184,7 @@ describe('queryableFieldsFacet', () => {
     const invalid = [
       {...field, name: ''},
       {...field, name: 'no-operators', operators: {}},
+      {...field, name: 'unknown-bound', boundingOperators: ['unsupported']},
       {...field, name: 'blank-operator', operators: {' ': field.operators.eq}},
       {...field, name: 'invalid-operator', operators: {eq: 'equals'}},
       {...field, name: 'missing-dependencies', dependencies: undefined},
