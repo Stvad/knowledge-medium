@@ -274,6 +274,9 @@ it('kicks a stalled transient drain and verifies its result before opening', asy
   await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(randomUUID(), workspaceId)])
   const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true, startSyncObserver: false})
   expect(await repo.workspaceViewGap(workspaceId)).toMatchObject({transient: true})
+  // Hold the table notification so this admission must observe the completed
+  // drain itself, even if no second wake reaches the gate.
+  vi.spyOn(fixture.db, 'onChange').mockImplementation(() => () => {})
   vi.spyOn(repo, 'flushSyncObserver').mockImplementation(async () => { await drainStaged(fixture.db) })
   const open = vi.fn(async () => {})
   const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, () => {})
