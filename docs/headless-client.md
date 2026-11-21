@@ -79,7 +79,7 @@ A tab is safe to write from because the app shell around the Repo does several t
 
 1. **Lock** the state directory with the pidfile helper `agent-dispatch` already has (stale-pid detection, so a SIGKILL does not block the restart). **[read]** `headless login` takes the same lock, so it never runs beside the daemon.
 2. **Device storage.** The process is started with `--localstorage-file` pointing into the state directory (mode 0700; the file is created 0644 **[measured]**). `window` is provided after the app's module graph loads, as the eval shim does, because the mode-pin module looks for `window.localStorage`. **[read]**
-3. **Sign in.** Restore and refresh the session. None, or a refused refresh: exit non-zero naming the `login` subcommand. A `SIGNED_OUT` event shuts down a running host. The installed auth-js preserves the session on a permanently refused proactive refresh while the access token is valid. After expiry the same refusal clears storage and emits `SIGNED_OUT`. **[measured]** against a fake transport, with the rotated session restored in a second Node process.
+3. **Sign in.** Restore and refresh the session. An absent session or permanent refusal exits non-zero naming the `login` subcommand. A retryable transport failure reuses a still-valid stored session, keeping warm-boot health available behind the checkpoint gate. With an expired token and no connection, restart once connectivity returns. A `SIGNED_OUT` event shuts down a running host. The installed auth-js preserves the session on a permanently refused proactive refresh while the access token is valid. After expiry the same refusal clears storage and emits `SIGNED_OUT`. **[measured]** against a fake transport, with the rotated session restored in a second Node process.
 4. **Open the database**, await `waitForReady()`, sample the sync status's `lastSyncedAt`, then run client-schema initialisation. Sampling before ready would read `undefined` and take the persisted value's arrival for a server answer. **[read]**
 5. **Decide access** with `resolveWorkspaceEntry`, which can return ready, waiting for the workspace row, or locked. Lock reasons include `key-required`, `server-e2ee`, `quarantine` (unpinned plaintext) and `finishing-upgrade` (interrupted pin upgrade). The host refuses an interrupted upgrade in either mode and leaves its marker for recovery. **[read]** Then, by the configured mode:
    - *encrypted:* on `key-required` or a first-encounter `server-e2ee`, run the existing `unlockWorkspaceWithKey` flow with the key file, against the synced canary, into the process-wide key store (in memory, since Node has no IndexedDB **[read]**). It pins `e2ee` when the key validates.
@@ -105,7 +105,7 @@ Serving is a state the host enters and can leave, not a point boot passes once. 
 
 **Back to closed** when the member row disappears. Removing the member drops the whole workspace from the device, and restoring it returns the member row and a million blocks in one checkpoint **[read]**; without this the host would be writable over a workspace that is still draining, and its get-or-create verbs would mint pages the server already has.
 
-A host that loses its connection while open keeps serving, as a laptop does, and the upload hold bounds what a long outage can do. Requiring a live connection for every write was considered and declined: each stream reconnect would refuse writes until the gate re-opened, and how often the stream reconnects is not measured.
+A previously admitted offline host checks the local gap arms on each read. A new gap closes admission and requires a complete view again. Closed requests receive their current refusal immediately, including during a long drain or bootstrap. A host that loses its connection while open keeps serving its complete local view, and the upload hold bounds what a long outage can do. Requiring a live connection for every write was considered and declined: each stream reconnect would refuse writes until the gate re-opened, and how often the stream reconnects is not measured.
 
 The host does not use the tab's per-workspace first-sync marker; that marker exists so a tab is not held again by a later backlog.
 
@@ -119,6 +119,8 @@ Why: the server merges a patch's columns in on arrival. It knows the row moved u
 
 **Account: a dedicated member with the editor role** (owner decision). The credential on an unattended machine is bounded by row-level security to the workspaces it is a member of, cannot change ownership, convert the workspace or flip its `properties_migration` mode, and is revoked by removing the member. **[read]** It can still do everything a writer can, including deleting blocks. Per-user rows are minted only app-side, so the host creates none. **[read]** The account may own a personal workspace if it ever opened the app; that workspace is never pinned, so nothing materializes in it and nothing can be written to it. **[read]**
 
+The read scope of the bridge token is the member account's local replica. The configured workspace controls admission and the Repo's active workspace. Once the gate opens, a read-only SQL query can inspect any rows already downloaded for the account, including raw staging and workspace metadata. The session and device key live outside this database. **[read]**
+
 **Sign-in.** The app offers an emailed code or an anonymous session. **[read]** `headless login` uses the emailed code, once, interactively. A password or service credential would be a new auth surface for one host; not proposed.
 
 **Workspace key.** Read once at start from a file the config names (mode 0600) and handed to the unlock flow, which zeroes its parsed copy; the string read from the file is left to the garbage collector. **[read]** No key-delivery endpoint: it would put the key on a server, which is what end-to-end encryption exists to avoid, and the revocable thing is membership.
@@ -128,9 +130,9 @@ Why: the server merges a patch's columns in on arrival. It knows the row moved u
 1. **Only classified verbs run, and only in the state that allows them.** One table in `scripts/headless/`, typed `Record<KnownCommandType, 'always' | 'open' | {refuse: string}>`, so a verb added to the protocol is a compile error until someone classifies it, as `knownCommandRegistry` already does. **[read]** The table does not say which verbs write: a read-only Repo refuses those itself. The one write that bypasses the Repo is `sql` in execute mode, so `sql` is served only when `isReadOnlyAgentCommand` says so. *Test:* table-driven, one case per refusal and per state.
 2. **A write needs write access and a complete view.** The gate. Slice 1 forces read-only even for an editor or owner. *Test:* a normal document write reaches the read-only Repo and is refused; with the row removed, every verb but the `always` ones is; with the row restored beside a backlog, writes stay refused until the gap clears. Each clause deleted fails its own case.
 3. **One identity per database.** The pidfile lock. The state directory is never copied to another machine. *Test:* a second boot, and a `login`, on a held directory exit before opening the database.
-4. **No workspace backfill from the host.** The Repo has no claim, so backfills refuse, and `run-backfill` is refused. The bootstrap's data half does write: system pages and seed definitions, through `repo.tx`, with deterministic ids and insert-or-touch on the server, as any device's first open does. **[read]** *Test:* against a workspace a tab-shaped runtime has already opened, the host's open leaves `ps_crud` empty, and the test first proves the seed pass ran (it returns early on a read-only Repo, so an unconditional "queue is empty" would pass with the pass never run).
-5. **A plaintext upload to an encrypted workspace is impossible.** The production resolver decides the upload mode from the pin, never from the config: `e2ee` for a workspace pinned encrypted; a hold whenever the synced row says encrypted and the pin does not, which covers a lost pin and a workspace converted under a plaintext pin; a throw when the key is missing. **[read]** The host pins plaintext only when its config and the synced row both say so (step 5). What that leaves is a server row that wrongly says "not encrypted" beside a config that agrees, the exposure a person has at the tab's gate. Two hardenings, labelled defence in depth: `createPowerSyncConnector`'s `encryption` option becomes required (today it defaults to plaintext pass-through and two test call sites omit it **[read]**), and a create or patch with no `workspace_id` throws instead of passing through unsealed (unreachable today, since the upload trigger always sets it **[read]**). *Test:* configured plaintext against a row that says encrypted, the host exits with no pin written; configured encrypted against a row that says plaintext, the same; each mismatch check deleted fails its own case.
-6. **A stale queue is not uploaded unattended.** The upload hold. *Test:* a queued write stamped eight days ago reaches no sink, and does once the hold is deleted.
+4. **No workspace backfill from the host.** The Repo has no backfill claim, and the host refuses `run-backfill`. On a read-only Repo the shared bootstrap schedules seed materialization, which declines to write. The slice 1 test observes that call, verifies that a reference gets its missing local target column, and checks that the document content and empty upload queue are preserved. **[measured]** Writable first-open parity belongs to slice 3.
+5. **A plaintext upload to an encrypted workspace is impossible.** The production resolver derives the upload mode from the device pin. An encrypted pin requires the key. A synced row reporting encryption while the device lacks that pin holds uploads. The plaintext first-encounter path requires both the configured mode and the synced row to say plaintext. The owner accepts the same reliance on that row as a person confirming plaintext in a tab. **[read]** As defence in depth, `createPowerSyncConnector` requires an encryption resolver and throws on a create or patch with a missing or empty `workspace_id`. Local tests cover those malformed operations and both config/row mode mismatches. **[measured]**
+6. **A stale queue is not uploaded unattended.** Slice 1 refuses any nonempty upload queue before connecting and preserves the queued rows on disk. **[measured]** Slice 3 will add the age-based hold and test release of an eight-day-old write.
 7. **The agent surface returns neither the key nor the session.** `eval` is refused, and a pass over the served read commands searches their serialized results for a synthetic device-storage value and workspace key. **[measured]** on the local test database.
 8. **Attribution is unchanged**: with the contributors processor in the runtime (it is in `staticDataExtensions`), `executeCommand` rebinds `repo.withTxContext({contributorId, contributorSource: 'agent'})` and an unchosen contributor is refused. **[read]** *Test:* the slice 3 parity test compares attribution columns too.
 
@@ -163,11 +165,11 @@ That covers what `agent-dispatch` calls and every `km-mcp` tool except media. **
 ## 10. Code changes
 
 **Core (`src/`, no plugin imports), each an extraction or a strictness change:**
-- *Client-schema initialisation.* Browser and Node share the ordered DDL and backfills. The browser adapter executes a batch of statements including its completion sentinel. The Node adapter prepares one statement per call. **[read]** The shared raw-table schema, `initializeClientSchema` and its ordered backfills live in `src/data/internals/initializeClientDatabase.ts`. Browser OPFS setup stays in `repoProvider.ts`. `createTestDb.ts` uses the shared implementation when preparing its template.
+- *Client-schema initialisation.* Browser and Node share the ordered DDL and backfills. The browser adapter executes a batch of statements including its completion sentinel. The Node adapter prepares one statement per call. **[read]** Direct importers of `initializeClientSchema`, `BATCH_SENTINEL_SQL` and the `SchemaDb` type now use `src/data/internals/initializeClientDatabase.ts`. That module also constructs the raw-table schema and runs the ordered backfills. Browser OPFS setup stays in `repoProvider.ts`. `createTestDb.ts` uses the shared implementation when preparing its template.
 - *Connector construction* is shared so the host connects with the production options, not a copy. The resolver needs no extraction: `createSyncResolver` and `readWorkspaceEncryptionMode` are already platform-neutral, and `resolverForUser` only memoizes them over the browser's database map. **[read]**
 - *Workspace bootstrap.* `openWorkspaceData` waits for definitions, starts both namespace reads, schedules the workspace backfills and local derivations, ensures system pages, then schedules seed materialization. The tab passes its remember-workspace callback, invoked after starting both reads and before scheduling backfills, and continues to layout without waiting for IndexedDB. The read-only host awaits both returned promises. A local test reaches seed scheduling, verifies that a pre-existing reference gets its local target column, and checks the upload queue is empty.
 - *Auth storage*: `services/supabase.ts` passes `auth.storage` from an override a leaf module holds, unset in browsers, so `createClient` behaves there exactly as today.
-- `createPowerSyncConnector`: `encryption` required; a create or patch without `workspace_id` throws.
+- `createPowerSyncConnector` requires the `encryption` option. TypeScript rejects an omitted option, and an untyped caller omitting it gets a `TypeError` during construction. A create or patch with a missing or empty `workspace_id` throws before mode lookup.
 - `health` reports the rejected-upload count, and uses an optional provider for the host's commit, forced role, gate reason and checkpoint timestamps. The existing upload-queue preview remains available. Age-based hold reporting belongs to slice 3.
 
 **`packages/agent-dispatch`:** the pidfile helper's "already running" message takes the daemon's name instead of hard-coding its own. **[read]** A README note on the headless profile. Nothing else there or in `packages/agent-cli` changes.
@@ -193,7 +195,7 @@ Slices 1 and 2 run every boot step with the role forced to read-only, so the gat
 
 ### Owner verification for slice 1
 
-Use a scratch graph and a dedicated member account. In the deployed browser app, sign in as that member, open the envelope in the workspace header, select the scratch invitation and click **Accept**. The browser calls `accept_invitation` and navigates to that workspace. On Linux, open the app with `xdg-open https://stvad.github.io/knowledge-medium/`. The headless login command only authenticates the device.
+Use a scratch graph and a dedicated member account. In the deployed browser app, sign in as that member, open the envelope in the workspace header, select the scratch invitation and click **Accept**. The browser calls `accept_invitation` and navigates to that workspace. On macOS, open the app with `open https://stvad.github.io/knowledge-medium/`. On Linux, use `xdg-open https://stvad.github.io/knowledge-medium/`. The headless login command only authenticates the device.
 
 From this checkout, use Node 26 and run `node scripts/ensure-deps.mjs`. Create a private config file outside the checkout. Paths in the file resolve relative to the config. For example, save the following as `headless.json` beside a mode-0600 file containing the exported scratch key.
 
@@ -245,6 +247,33 @@ If the bridge belongs to the scratch run, restart it and confirm the host regist
 systemctl --user restart km-scratch-bridge
 pnpm agent --profile headless-scratch health
 systemctl --user stop km-scratch-host km-scratch-bridge
+```
+
+For a macOS scratch run, launch the same two foreground programs as temporary user jobs from the checkout. The job arguments below pass only the three public client settings. For a private scratch bridge, choose an unused loopback port and pass the same port to both jobs and the CLI.
+
+```sh
+export AGENT_RUNTIME_PORT=18787
+domain="gui/$(id -u)"
+scratch_job() {
+  label=$1
+  shift
+  launchctl submit -l "$label" -- /bin/sh -c 'cd "$1" && shift && exec "$@"' sh "$PWD" \
+    /usr/bin/env "PATH=$PATH" "AGENT_RUNTIME_PORT=$AGENT_RUNTIME_PORT" "$@"
+}
+scratch_job org.knowledge-medium.scratch-bridge "$(command -v node)" packages/agent-cli/dist/server.js
+scratch_job org.knowledge-medium.scratch-host /usr/bin/env \
+  "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" "VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY" \
+  "VITE_POWERSYNC_URL=$VITE_POWERSYNC_URL" "$(command -v node)" scripts/headless/launch.ts run "$config"
+pnpm agent --profile headless-scratch health
+launchctl kill SIGTERM "$domain/org.knowledge-medium.scratch-host"
+# Once the host exits, start it from the same job definition.
+launchctl kickstart "$domain/org.knowledge-medium.scratch-host"
+pnpm agent --profile headless-scratch health
+pnpm agent --profile headless-scratch sql get 'SELECT count(*) AS queued FROM ps_crud'
+launchctl kickstart -k "$domain/org.knowledge-medium.scratch-bridge"
+pnpm agent --profile headless-scratch health
+launchctl bootout "$domain/org.knowledge-medium.scratch-host"
+launchctl bootout "$domain/org.knowledge-medium.scratch-bridge"
 ```
 
 These hosted sign-in, invitation, reconnect and supervision checks require the owner's environment.

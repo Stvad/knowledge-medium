@@ -1,11 +1,12 @@
 import {readFile} from 'node:fs/promises'
 import {dirname, resolve} from 'node:path'
+import {normalizeProfileName} from '@knowledge-medium/agent-cli/config'
 import {z} from 'zod'
 
 const common = {
   workspaceId: z.string().trim().min(1),
   stateDir: z.string().trim().min(1),
-  profile: z.string().trim().regex(/^[A-Za-z0-9_.-]+$/),
+  profile: z.string().trim().min(1).transform(normalizeProfileName),
 }
 const configSchema = z.discriminatedUnion('mode', [
   z.strictObject({...common, mode: z.literal('e2ee'), keyFile: z.string().trim().min(1)}),
