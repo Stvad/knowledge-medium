@@ -1,1 +1,1 @@
-export{LG as withMoveTransition}from"../../chunks/app-CuTy6TeP.js";
+export{LG as withMoveTransition}from"../../chunks/app-XY2X1QlB.js";

@@ -1,1 +1,1 @@
-export{WG as BackgroundSubtreeContext,GG as BackgroundSubtreeProvider,KG as useIsBackgroundSubtree}from"../../chunks/app-CuTy6TeP.js";
+export{WG as BackgroundSubtreeContext,GG as BackgroundSubtreeProvider,KG as useIsBackgroundSubtree}from"../../chunks/app-XY2X1QlB.js";

@@ -1,1 +1,1 @@
-export{mn as HtmlDocumentView,hn as HtmlSourceEditor,gn as htmlDocumentContentContribution,_n as htmlDocumentReferenceLayout}from"../../../chunks/app-CuTy6TeP.js";
+export{mn as HtmlDocumentView,hn as HtmlSourceEditor,gn as htmlDocumentContentContribution,_n as htmlDocumentReferenceLayout}from"../../../chunks/app-XY2X1QlB.js";
