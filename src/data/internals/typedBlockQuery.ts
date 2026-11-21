@@ -553,7 +553,7 @@ export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, contex
     types.length > 0 ||
     boundsByWhere(query.where, context) ||
     matchPredicates.some(p => isSelfScope(p) && selfPredicateNarrows(p, context)) ||
-    (!!query.anyOf?.length && query.anyOf.every(p => isSelfScope(p) && selfPredicateNarrows(p, context)))
+    query.anyOf?.every(p => isSelfScope(p) && selfPredicateNarrows(p, context)) === true
   if (!hasGate) {
     throw new Error(
       '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +

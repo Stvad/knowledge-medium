@@ -1349,6 +1349,25 @@ describe('typed query disjunctions and extended where operators', () => {
     expect(await env.repo.query.typedBlockIds({...query, anyOf: []}).load()).toEqual([])
   })
 
+  it('returns no matches for empty alternatives even alongside an unbounded ancestor predicate', async () => {
+    await create({id: 'parent'})
+    await create({id: 'child', parentId: 'parent'})
+    const query = {workspaceId: WS, anyOf: [], match: [{scope: 'ancestor', id: 'parent'}]} as const
+    expect(await env.repo.query.typedBlockIds(query).load()).toEqual([])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(0)
+  })
+
+  it.each([
+    {label: 'where', predicates: {where: {created: {gt: 0}}}},
+    {label: 'self alternative', predicates: {anyOf: [{where: {created: {gt: 0}}}]}},
+    {label: 'ancestor alternative', predicates: {anyOf: [{scope: 'ancestor', where: {created: {gt: 0}}}]}},
+  ] as const)('refuses timestamp filters in an unloaded workspace ($label)', async ({predicates}) => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await create({id: 'foreign', workspaceId: OTHER_WS, types: ['entry']})
+    const query = {workspaceId: OTHER_WS, types: ['entry'], ...predicates}
+    await expect(env.repo.query.typedBlockIds(query).load()).rejects.toThrow('property registry unavailable')
+  })
+
   it('stops an ancestor alternative at the workspace boundary', async () => {
     await create({id: 'local', types: ['entry']})
     await create({id: 'foreign-parent', workspaceId: OTHER_WS, properties: {status: 'open'}})
@@ -1370,6 +1389,43 @@ describe('typed query disjunctions and extended where operators', () => {
     try {
       await create({id: 'later', parentId: 'parent'})
       await waitFor(() => expect(handle.peek()).toEqual(['later']))
+    } finally {
+      off()
+    }
+  })
+
+  it('admits a candidate when its previously missing ancestor arrives', async () => {
+    await create({id: 'child', types: ['entry']})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET parent_id = ? WHERE id = ?', ['late-parent', 'child'],
+    ))
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, types: ['entry'], anyOf: [{scope: 'ancestor', id: 'late-parent'}],
+    })
+    expect(await handle.load()).toEqual([])
+    const off = handle.subscribe(() => {})
+    try {
+      await create({id: 'late-parent'})
+      await waitFor(() => expect(handle.peek()).toEqual(['child']))
+    } finally {
+      off()
+    }
+  })
+
+  it('keeps all-self alternatives quiet for an unrelated block create', async () => {
+    await create({id: 'target'})
+    await create({id: 'property-match', properties: {status: 'open'}})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, anyOf: [{where: {status: 'open'}}, {referencedBy: {id: 'target'}}],
+    })
+    expect(await handle.load()).toEqual(['property-match'])
+    const off = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await create({id: 'unrelated'})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+      await create({id: 'reference-match', references: [{id: 'target', alias: 'target'}]})
+      await waitFor(() => expect(handle.peek()).toEqual(['property-match', 'reference-match']))
     } finally {
       off()
     }
@@ -1421,6 +1477,25 @@ describe('typed query disjunctions and extended where operators', () => {
     expect(await handle.load()).toEqual(['second'])
     env.repo.setRuntimeContributions(queryableFieldsFacet, source, [])
     await expect(handle.load()).rejects.toThrow(field)
+  })
+
+  it('recovers a subscribed query when its initially missing runtime field is installed', async () => {
+    await create({id: 'row'})
+    const field = 'test:late-field'
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, where: {[field]: true}})
+    const off = handle.subscribe(() => {})
+    try {
+      await waitFor(() => expect(handle.status()).toBe('error'))
+      expect(() => handle.read()).toThrow(field)
+      env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+        name: field,
+        operators: {eq: () => ({sql: '1', params: []})},
+        dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+      }])
+      await waitFor(() => expect(handle.peek()).toEqual(['row']))
+    } finally {
+      off()
+    }
   })
 
   it('uses the requested workspace for scoped queryable fields', async () => {
