@@ -556,6 +556,7 @@ describe('switching views', () => {
 
     const status = await fieldRow(statusProp.name)
     const [statusValue] = await repo.query.children({id: status.id}).load()
+    await Promise.all([statusValue, value].map(row => repo.query.ancestors({id: row.id}).load()))
     await act(() => focusBlock(repo.block(PANEL), statusValue.id, {edit: true}))
     await editorFor(statusValue.id)
     await act(() => focusBlock(repo.block(PANEL), value.id, {edit: true}))
@@ -572,6 +573,52 @@ describe('switching views', () => {
 
     await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
     expect(screen.getByText('a note')).toBe(note)
+  })
+
+  it('keeps a newly hidden field mounted while focus moves within its values', async () => {
+    const owner = repo.block(OWNER)
+    const panel = repo.block(PANEL)
+    const field = await fieldRow(secretProp.name)
+    const [value] = await repo.query.children({id: field.id}).load()
+    const siblingId = 'second-secret-value'
+    await insertSyncedValue(siblingId, field.id, 'z0', 'second value')
+    await repo.query.ancestors({id: value.id}).load()
+    await setBlockPropertyDisplay([owner], 'all')
+    mount()
+    await screen.findByText(propertyDisplayProp.name)
+    await screen.findByText('second value')
+    await act(() => focusBlock(panel, value.id, {edit: true}))
+    await editorFor(value.id)
+    const link = screen.getByRole('link', {name: secretProp.name})
+
+    await act(() => setBlockPropertyDisplay([owner], 'non-hidden'))
+    await waitFor(() => expect(shownRows()).not.toContain(propertyDisplayProp.name))
+    expect(screen.getByRole('link', {name: secretProp.name})).toBe(link)
+
+    const ancestors = repo.query.ancestors({id: siblingId})
+    expect(ancestors.status()).toBe('idle')
+    const originalLoad = ancestors.load.bind(ancestors)
+    let release = () => {}
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const load = vi.spyOn(ancestors, 'load').mockImplementation(async () => {
+      await ready
+      return originalLoad()
+    })
+    try {
+      await act(() => focusBlock(panel, siblingId, {edit: true}))
+      expect(load).toHaveBeenCalled()
+      expect(screen.getByRole('link', {name: secretProp.name})).toBe(link)
+      await act(async () => {
+        release()
+        await ancestors.load()
+      })
+    } finally {
+      release()
+      load.mockRestore()
+    }
+    await editorFor(siblingId)
+    await act(() => focusBlock(panel, OWNER))
+    await waitFor(() => expect(shownRows()).toEqual(['rows:status']))
   })
 
   it('keeps the children both views show mounted across show-non-hidden → show-all', async () => {

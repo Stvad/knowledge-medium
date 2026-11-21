@@ -13,14 +13,22 @@ interface FieldRetention {
   ids: string[]
 }
 
+const peekFieldChild = (parent: Block, id: string): BlockData | null => {
+  const row = parent.repo.block(id).peek()
+  return row?.parentId === parent.id && row.isFieldForm === true && !row.deleted ? row : null
+}
+
 export const useRetainedFieldRows = (block: Block, renderScopeId: unknown) => {
   const mode = usePropertyDisplayMode(block)
-  const focusedChild = useFocusedChild(block, renderScopeId)
+  const observedChild = useFocusedChild(block, renderScopeId)
   const focusWithin = useFocusWithin(block, renderScopeId)
   const listed = useChildIdsForMode(block, mode)
-  const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
   const [retention, setRetention] = useState<FieldRetention>({mode, focusedFieldId: null, ids: []})
+  // An incomplete ancestor chain can still resolve to the same field.
+  const pendingFieldId = focusWithin === undefined ? retention.focusedFieldId : null
+  const focusedChild = pendingFieldId === null ? observedChild : peekFieldChild(block, pendingFieldId)
   const focusedFieldId = focusedChild?.isFieldForm ? focusedChild.id : null
+  const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
   // Retention belongs to the view that admitted the field. Across a mode
   // switch, the current child stays mounted by focus until the user moves off it.
   const retainedFieldIds = retention.mode === mode && focusWithin !== false ? retention.ids : []
@@ -30,9 +38,8 @@ export const useRetainedFieldRows = (block: Block, renderScopeId: unknown) => {
   // while there is one (otherwise this is the listing's own handle again).
   const allChildIds = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: observesAllChildren ? 'all' : mode}),
     {selector: ids => ids})
-  const retainedRows = retainedFieldIds.map(id => block.repo.block(id).peek()).filter((row): row is BlockData =>
-    row?.parentId === block.id && row.isFieldForm === true && !row.deleted &&
-      (allChildIds === undefined || allChildIds.includes(row.id)))
+  const retainedRows = retainedFieldIds.map(id => peekFieldChild(block, id)).filter((row): row is BlockData =>
+    row !== null && (allChildIds === undefined || allChildIds.includes(row.id)))
   const nextRetainedIds = retainedRows.map(row => row.id)
   if (focusedFieldId !== null && focusedFieldId !== retention.focusedFieldId && !nextRetainedIds.includes(focusedFieldId)) {
     nextRetainedIds.push(focusedFieldId)
