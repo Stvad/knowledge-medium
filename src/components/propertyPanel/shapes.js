@@ -1,1 +1,1 @@
-export{zK as propertyShapeLabel}from"../../../chunks/app-2aFIfWdl.js";
+export{KK as propertyShapeLabel}from"../../../chunks/app-D2UOHZ9D.js";

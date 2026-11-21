@@ -1,1 +1,1 @@
-export{pot as deviceSurface,mot as getClientId,hot as getDeviceLabel,got as isClientIdPersistent,_ot as resetClientIdCache}from"../../chunks/app-2aFIfWdl.js";
+export{Not as deviceSurface,Pot as getClientId,Fot as getDeviceLabel,Iot as isClientIdPersistent,Lot as resetClientIdCache}from"../../chunks/app-D2UOHZ9D.js";

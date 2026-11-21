@@ -1,1 +1,1 @@
-export{S_ as refuseDanglingBlockRefs}from"../../../chunks/app-2aFIfWdl.js";
+export{k_ as refuseDanglingBlockRefs}from"../../../chunks/app-D2UOHZ9D.js";

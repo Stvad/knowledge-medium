@@ -1,1 +1,1 @@
-export{VK as AppRuntimeContextProvider,HK as useAppRuntime}from"../../chunks/app-2aFIfWdl.js";
+export{JK as AppRuntimeContextProvider,YK as useAppRuntime}from"../../chunks/app-D2UOHZ9D.js";
