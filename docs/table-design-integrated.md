@@ -178,7 +178,7 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 
 - While any editor inside the table is open (a cell, or a block in an expanded row's subtree), the id list is frozen, plus the rows created here. It settles when editing ends. This is one gate in place of #363's per-row pin; the cost is that a remote change shows a few seconds late.
 - The placeholder row creates a block and back-fills what the query implies (type terms, `=` terms, parent terms), as in #363.
-- A new row that doesn't match the query is still visible: it is a child of the host, listed below the grid (§3).
+- A new row that doesn't match the query stays in the grid, marked as not matching, for as long as the table is mounted: the rows created here are a local list kept beside the query's ids, so a row created under a query's parent term (outside the host) stays reachable while its remaining cells are filled in. After a remount it follows the query; a non-matching row under the host is then still listed below the grid (§3), and one under another parent is where the query put it.
 
 ## 6. Views and columns
 
