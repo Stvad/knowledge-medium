@@ -1,0 +1,1 @@
+export{ec as dataIntegrityPlugin}from"../../../chunks/app-CU0-BBhH.js";

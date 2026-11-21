@@ -1,0 +1,1 @@
+export{Co as propertyReadContentContribution}from"../../../chunks/app-CU0-BBhH.js";

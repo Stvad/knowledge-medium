@@ -1,0 +1,1 @@
+export{K5 as emitKernelInvalidations,q5 as kernelInvalidationRule}from"../../../chunks/app-CU0-BBhH.js";

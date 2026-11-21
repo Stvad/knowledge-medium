@@ -1,0 +1,1 @@
+export{p5 as kernelDataExtension}from"../../chunks/app-CU0-BBhH.js";

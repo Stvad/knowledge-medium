@@ -1,0 +1,1 @@
+export{bY as preferredSpanReplacement}from"../../../chunks/app-CU0-BBhH.js";

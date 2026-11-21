@@ -1,0 +1,1 @@
+export{f4 as instrumentAdapter}from"../../../chunks/app-CU0-BBhH.js";

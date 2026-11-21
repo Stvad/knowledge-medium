@@ -1,0 +1,1 @@
+export{vft as defineQuery}from"../../../chunks/app-CU0-BBhH.js";

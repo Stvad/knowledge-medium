@@ -1,0 +1,1 @@
+export{GV as defineVariant,KV as defineVariantFacet}from"../../chunks/app-CU0-BBhH.js";

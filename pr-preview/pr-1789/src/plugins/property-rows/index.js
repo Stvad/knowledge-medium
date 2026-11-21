@@ -1,0 +1,1 @@
+export{So as propertyRowsPlugin,wo as resolvePropertyValueInlinePresentation}from"../../../chunks/app-CU0-BBhH.js";

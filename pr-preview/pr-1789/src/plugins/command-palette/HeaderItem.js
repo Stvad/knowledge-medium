@@ -1,0 +1,1 @@
+export{cN as CommandPaletteHeaderItem}from"../../../chunks/app-CU0-BBhH.js";

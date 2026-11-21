@@ -1,0 +1,1 @@
+export{Yo as MigrationGate}from"../../../chunks/app-CU0-BBhH.js";

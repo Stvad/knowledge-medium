@@ -1,0 +1,1 @@
+export{lX as geoDataExtension}from"../../../chunks/app-CU0-BBhH.js";

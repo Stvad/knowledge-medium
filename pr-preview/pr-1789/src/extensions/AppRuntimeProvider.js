@@ -1,0 +1,1 @@
+export{$t as AppRuntimeProvider}from"../../chunks/app-CU0-BBhH.js";

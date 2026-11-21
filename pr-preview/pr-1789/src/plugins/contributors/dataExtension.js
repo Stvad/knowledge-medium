@@ -1,0 +1,1 @@
+export{H$ as contributorsDataExtension}from"../../../chunks/app-CU0-BBhH.js";

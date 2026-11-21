@@ -1,0 +1,1 @@
+export{Kz as useShortcutSurfaceActivations}from"../../chunks/app-CU0-BBhH.js";

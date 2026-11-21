@@ -1,0 +1,1 @@
+export{fP as DEFAULT_TYPE_COLORS,pP as defaultTypeColor,mP as pickLeastUsedTypeColor}from"../../chunks/app-CU0-BBhH.js";

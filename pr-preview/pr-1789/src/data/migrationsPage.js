@@ -1,0 +1,1 @@
+export{Sot as MIGRATIONS_PAGE_ALIAS,Cot as getOrCreateMigrationsPage,wot as migrationsPageBlockId,Tot as migrationsPageSpec}from"../../chunks/app-CU0-BBhH.js";

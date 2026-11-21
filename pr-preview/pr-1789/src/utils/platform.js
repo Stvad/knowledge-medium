@@ -1,0 +1,1 @@
+export{LG as isIOS,RG as isMacPlatform}from"../../chunks/app-CU0-BBhH.js";

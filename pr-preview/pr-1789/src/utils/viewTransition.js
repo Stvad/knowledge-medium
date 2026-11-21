@@ -1,0 +1,1 @@
+export{UG as withMoveTransition}from"../../chunks/app-CU0-BBhH.js";

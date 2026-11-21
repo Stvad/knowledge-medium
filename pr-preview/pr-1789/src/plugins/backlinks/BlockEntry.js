@@ -1,0 +1,1 @@
+export{tb as LazyBlockEntry}from"../../../chunks/app-CU0-BBhH.js";

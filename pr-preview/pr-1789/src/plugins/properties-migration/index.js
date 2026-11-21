@@ -1,0 +1,1 @@
+export{Qo as migratePropertiesToBlocksAction,Jo as propertiesMigrationPlugin}from"../../../chunks/app-CU0-BBhH.js";

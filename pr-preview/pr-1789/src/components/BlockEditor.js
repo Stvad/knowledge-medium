@@ -1,0 +1,1 @@
+export{zz as BlockEditor}from"../../chunks/app-CU0-BBhH.js";

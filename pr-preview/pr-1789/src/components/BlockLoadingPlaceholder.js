@@ -1,0 +1,1 @@
+export{YI as BlockLoadingPlaceholder}from"../../chunks/app-CU0-BBhH.js";

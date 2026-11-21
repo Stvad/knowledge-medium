@@ -1,0 +1,1 @@
+export{Rf as annotationsPlugin}from"../../../chunks/app-CU0-BBhH.js";

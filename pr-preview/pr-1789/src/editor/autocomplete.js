@@ -1,0 +1,1 @@
+export{oF as editorAutocompleteExtension}from"../../chunks/app-CU0-BBhH.js";

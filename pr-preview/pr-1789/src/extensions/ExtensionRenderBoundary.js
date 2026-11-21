@@ -1,0 +1,1 @@
+export{BB as ExtensionRenderBoundary}from"../../chunks/app-CU0-BBhH.js";

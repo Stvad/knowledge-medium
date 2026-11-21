@@ -1,0 +1,1 @@
+export{dd as BlockTagsConfigEditor}from"../../../chunks/app-CU0-BBhH.js";

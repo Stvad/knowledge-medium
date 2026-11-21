@@ -1,0 +1,1 @@
+export{tP as BlockEmbed}from"../../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{Sg as extensionsOverridesProp,Cg as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-CU0-BBhH.js";

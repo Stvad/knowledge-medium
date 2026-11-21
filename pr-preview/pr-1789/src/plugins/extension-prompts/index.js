@@ -1,0 +1,1 @@
+export{lF as ExtensionPromptSurface,uF as extensionPromptsExtension}from"../../../chunks/app-CU0-BBhH.js";

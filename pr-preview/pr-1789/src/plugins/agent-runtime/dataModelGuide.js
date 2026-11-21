@@ -1,0 +1,1 @@
+export{Yv as DATA_MODEL_GUIDE,Xv as dataModelGuide}from"../../../chunks/app-CU0-BBhH.js";

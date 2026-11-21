@@ -1,0 +1,1 @@
+export{qF as dispatchPointerAction,JF as setPointerActionDispatcher}from"../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{tot as deviceSurface,not as getClientId,rot as getDeviceLabel,iot as isClientIdPersistent,aot as resetClientIdCache}from"../../chunks/app-CU0-BBhH.js";

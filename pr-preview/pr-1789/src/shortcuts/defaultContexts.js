@@ -1,0 +1,1 @@
+export{UP as defaultActionContextConfigs}from"../../chunks/app-CU0-BBhH.js";

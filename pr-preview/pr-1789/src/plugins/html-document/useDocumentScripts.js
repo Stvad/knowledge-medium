@@ -1,0 +1,1 @@
+export{yn as hasScripts,bn as useDocumentScripts}from"../../../chunks/app-CU0-BBhH.js";

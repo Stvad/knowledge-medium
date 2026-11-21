@@ -1,0 +1,1 @@
+export{UX as matchCharTrigger}from"../../chunks/app-CU0-BBhH.js";

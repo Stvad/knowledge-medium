@@ -1,0 +1,1 @@
+export{_l as appVersion}from"../chunks/app-CU0-BBhH.js";

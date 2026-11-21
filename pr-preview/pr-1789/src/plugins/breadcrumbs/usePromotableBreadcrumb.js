@@ -1,0 +1,1 @@
+export{IE as usePromotableBreadcrumb}from"../../../chunks/app-CU0-BBhH.js";

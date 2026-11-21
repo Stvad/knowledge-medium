@@ -1,0 +1,1 @@
+export{BE as Breadcrumbs}from"../../../chunks/app-CU0-BBhH.js";

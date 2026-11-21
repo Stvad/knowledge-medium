@@ -1,0 +1,1 @@
+export{XC as attachmentObjectPath,ZC as authenticatedObjectUrl,QC as deriveObjectKey,$C as storageObjectUrl}from"../../../chunks/app-CU0-BBhH.js";

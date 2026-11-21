@@ -1,0 +1,1 @@
+export{VE as BreadcrumbList}from"../../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{oH as BlockProperties}from"../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{iI as ClientLocalSettings,aI as clientLocalSettings}from"../../chunks/app-CU0-BBhH.js";

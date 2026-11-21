@@ -1,0 +1,1 @@
+export{GF as gestureBindingDescriptor,KF as matchesGestureEvent}from"../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{W_ as buildBlockView,G_ as renderBlockView}from"../../../../chunks/app-CU0-BBhH.js";

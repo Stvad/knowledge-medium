@@ -1,0 +1,1 @@
+export{sC as DEFAULT_MAX_CAPTURE_BYTES,cC as captureMedia,lC as mediaBlockId}from"../../../chunks/app-CU0-BBhH.js";

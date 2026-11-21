@@ -1,0 +1,1 @@
+export{FK as floatingAnchorFromRect,IK as useAnchoredFloating}from"../../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{XP as BlockPasteShellDecorator,ZP as blockPasteShellDecorator}from"../../chunks/app-CU0-BBhH.js";

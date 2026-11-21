@@ -1,0 +1,1 @@
+export{uh as HIGHLIGHT_CLASS,dh as MOVED_HIGHLIGHT_CLASS,fh as SUGGESTION_HIGHLIGHT_CLASS,ph as coveringStyle,mh as highlightClasses,hh as highlightField,gh as highlightRange,_h as highlightRanges,vh as threadHighlights,yh as threadHighlightsContribution}from"../../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{cI as dynamicExtensionsExtension}from"../../chunks/app-CU0-BBhH.js";

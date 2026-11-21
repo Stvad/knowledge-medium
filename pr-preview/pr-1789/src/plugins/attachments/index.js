@@ -1,0 +1,1 @@
+export{nS as attachmentsPlugin}from"../../../chunks/app-CU0-BBhH.js";

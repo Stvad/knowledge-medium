@@ -1,0 +1,1 @@
+export{$x as richPasteDecisionContribution}from"../../../chunks/app-CU0-BBhH.js";

@@ -1,0 +1,1 @@
+export{Jr as extensionsOverridesUi}from"../../../chunks/app-CU0-BBhH.js";

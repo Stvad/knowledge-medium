@@ -1,0 +1,1 @@
+export{Bb as EmbedComponent,Vb as referenceTargetOf}from"../../../../chunks/app-CU0-BBhH.js";

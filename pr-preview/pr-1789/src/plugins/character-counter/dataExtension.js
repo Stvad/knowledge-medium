@@ -1,0 +1,1 @@
+export{c1 as characterCounterDataExtension}from"../../../chunks/app-CU0-BBhH.js";

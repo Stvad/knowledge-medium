@@ -1,0 +1,1 @@
+export{nd as ADD_TAG_ACTION_ID,rd as ADD_TAG_BLOCKS_ACTION_ID,sd as appendTagToBlocks,cd as appendTagToContent,td as blockTaggingPlugin,_d as blockTagsConfigProp}from"../../../chunks/app-CU0-BBhH.js";

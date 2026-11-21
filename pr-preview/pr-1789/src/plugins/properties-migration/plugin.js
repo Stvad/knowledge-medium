@@ -1,0 +1,1 @@
+export{Jo as propertiesMigrationPlugin}from"../../../chunks/app-CU0-BBhH.js";

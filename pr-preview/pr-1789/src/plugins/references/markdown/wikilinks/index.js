@@ -1,0 +1,1 @@
+export{Ib as wikilinkMarkdownExtension}from"../../../../../chunks/app-CU0-BBhH.js";
