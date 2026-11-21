@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import {AuthRetryableFetchError} from '@supabase/supabase-js'
 import {setAuthStorage} from '@/services/authStorage'
 
 const step = process.argv.at(-1)
@@ -24,15 +25,21 @@ await auth.stopAutoRefresh()
 if (restore) {
   const session = (await auth.getSession()).data.session
   assert.equal(session?.refresh_token, 'rotated')
+  const {restoreHeadlessSession} = await import('../session')
+  const offline = {refreshSession: async () => ({
+    data: {user: null, session: null}, error: new AuthRetryableFetchError('offline', 503),
+  })}
+  assert.equal((await restoreHeadlessSession(offline)).refresh_token, 'rotated')
   let signedOut = 0
   auth.onAuthStateChange(event => { if (event === 'SIGNED_OUT') signedOut++ })
-  assert.equal((await auth.refreshSession()).error?.status, 400)
+  await assert.rejects(restoreHeadlessSession(auth), /headless login/)
   assert.equal(signedOut, 0)
   assert.equal((await auth.getSession()).data.session?.refresh_token, 'rotated')
 
   // After expiry a permanently refused refresh removes the persisted session.
   const afterExpiry = (session.expires_at! + 1) * 1000
   Date.now = () => afterExpiry
+  await assert.rejects(restoreHeadlessSession(offline), /Restore the connection/)
   assert.equal((await auth.getSession()).error?.status, 400)
   assert.equal(signedOut, 1)
   assert.equal((await auth.getSession()).data.session, null)

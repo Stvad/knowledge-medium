@@ -35,7 +35,10 @@ export const connectBridge = async (
       accepting = false
       // Empty registration withdraws the token. An unreachable server expires
       // the client by TTL and has no explicit deregistration endpoint.
-      try { await loop.register() } finally { await loop.stopAndDrain() }
+      await loop.register().catch(() => {
+        console.warn('Headless bridge could not withdraw its token. The registration will expire.')
+      })
+      await loop.stopAndDrain()
     },
   }
 }

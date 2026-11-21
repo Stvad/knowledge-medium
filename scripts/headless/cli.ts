@@ -40,10 +40,10 @@ async function main() {
       process.once('SIGTERM', terminate)
       process.once('SIGINT', terminate)
       try {
-        const {data, error} = await supabase.auth.refreshSession()
-        if (error || !data.session) throw new Error('Session unavailable. Run headless login.')
+        const {restoreHeadlessSession} = await import('./session')
+        const session = await restoreHeadlessSession(supabase.auth)
         const {runHost} = await import('./host')
-        await runHost(config, sessionUserToAppUser(data.session), controller.signal)
+        await runHost(config, sessionUserToAppUser(session), controller.signal)
       } finally {
         process.off('SIGTERM', terminate)
         process.off('SIGINT', terminate)

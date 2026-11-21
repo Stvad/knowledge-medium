@@ -7,7 +7,9 @@ import {join} from 'node:path'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
-import {clearSyncState, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
+import {createTestRepo} from '@/data/test/createTestRepo'
+import {startReadGate} from './gate'
+import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
@@ -108,7 +110,7 @@ it('keeps a warm persisted checkpoint closed, opens on a new checkpoint, and clo
       await deliver([stagedBlock(randomUUID(), workspaceId)])
       expect(fixture.db.currentStatus.lastSyncedAt?.getTime()).not.toBe(stamp)
     })
-    await expect(read()).resolves.toEqual([{n: 1}])
+    await vi.waitFor(async () => expect(await read()).toEqual([{n: 1}]))
     await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
     await expect(read()).rejects.toThrow('Waiting for the local member row')
   } finally {
@@ -134,9 +136,9 @@ it('holds a rejoining member behind a durable materialization gap until repaired
         [member.id, workspaceId, user.id, 'editor'])
     })
     expect(await fixture.db.get('SELECT needs_apply FROM blocks_synced WHERE id = ?', [id])).toEqual({needs_apply: 1})
-    await expect(read()).rejects.toThrow('have not been verified locally')
+    await vi.waitFor(async () => { await expect(read()).rejects.toThrow('have not been verified locally') })
     await host.execute({type: 'rematerialize-workspace'})
-    await expect(read()).resolves.toMatchObject({id})
+    await vi.waitFor(async () => expect(await read()).toMatchObject({id}))
   } finally {
     await host.stop()
   }
@@ -180,4 +182,79 @@ it('samples the persisted checkpoint only after the reopened database is ready',
     await host.stop()
     await second.close()
   }
+})
+
+it('keeps admitted reads available offline but rechecks durable gaps after admission', async () => {
+  const id = randomUUID()
+  const host = start(plaintext(), () => syncServer(fixture.db)([
+    serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(id, workspaceId),
+  ]))
+  try {
+    const read = () => host.execute({type: 'get-block', id})
+    await vi.waitFor(async () => expect(await read()).toMatchObject({id}))
+    await vi.waitFor(async () => expect(await fixture.db.getOptional(
+      'SELECT 1 FROM client_schema_state WHERE key = ?', [RECONCILE_RESCAN_MARKER_PREFIX + workspaceId],
+    )).toBeTruthy())
+    vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'connected', 'get').mockReturnValue(false)
+    expect(await read()).toMatchObject({id})
+    await fixture.db.execute('UPDATE blocks_synced SET needs_apply = 1 WHERE id = ?', [id])
+    await expect(read()).rejects.toThrow('have not been verified locally')
+  } finally {
+    await host.stop()
+  }
+})
+
+it('refuses a read during bootstrap immediately and rechecks membership before enabling watchers', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  let finish!: () => void
+  const open = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+  const visibility = vi.fn()
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, visibility)
+  try {
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
+    const viewCheck = vi.spyOn(repo, 'workspaceViewGap')
+    expect(await gate.readReason()).toBe('Opening workspace data')
+    expect(viewCheck).not.toHaveBeenCalled()
+    await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
+    finish()
+    await vi.waitFor(() => expect(gate.reason()).toBe('Waiting for the local member row'))
+    expect(visibility).not.toHaveBeenCalledWith(true)
+  } finally {
+    finish?.()
+    await gate.stop()
+  }
+})
+
+it('kicks a stalled transient drain and verifies its result before opening', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(randomUUID(), workspaceId)])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true, startSyncObserver: false})
+  expect(await repo.workspaceViewGap(workspaceId)).toMatchObject({transient: true})
+  vi.spyOn(repo, 'flushSyncObserver').mockImplementation(async () => { await drainStaged(fixture.db) })
+  const open = vi.fn(async () => {})
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, () => {})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(repo.flushSyncObserver).toHaveBeenCalled()
+    expect(open).toHaveBeenCalledOnce()
+    expect(await repo.workspaceViewGap(workspaceId)).toBeNull()
+  } finally {
+    await gate.stop()
+  }
+})
+
+it('requires a defined checkpoint when the persisted timestamp disappears', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const baseline = fixture.db.currentStatus.lastSyncedAt!.getTime()
+  await clearSyncState(fixture.db)
+  expect(fixture.db.currentStatus.lastSyncedAt).toBeUndefined()
+  await fixture.db.execute('INSERT OR REPLACE INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, 1)',
+    [member.id, workspaceId, user.id, 'viewer'])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  const open = vi.fn(async () => {})
+  const gate = startReadGate(fixture.db, repo, workspaceId, baseline, open, () => {})
+  // stop waits for the initial check, including its eligibility reads.
+  await gate.stop()
+  expect(open).not.toHaveBeenCalled()
+  expect(gate.reason()).toBe('Waiting for a checkpoint from this connection')
 })

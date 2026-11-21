@@ -82,8 +82,7 @@ export async function serveDatabase(
       signal.throwIfAborted()
       return executeHeadlessCommand(command, context, async () => {
         if (!gate) return 'Starting gate'
-        await gate.refresh()
-        return gate.reason()
+        return gate.readReason()
       })
     })
     const transport = bridge.postEvent

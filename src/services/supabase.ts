@@ -45,11 +45,12 @@ const supabaseAuthStorageKey = supabaseUrl
 // JSON.stringify; we tolerate the legacy `{currentSession}` / `{session}`
 // envelopes defensively.
 export const readPersistedSession = (): Session | null => {
-  if (!supabaseAuthStorageKey || typeof window === 'undefined') return null
+  if (!supabaseAuthStorageKey) return null
 
   let raw: string | null
   try {
-    raw = window.localStorage.getItem(supabaseAuthStorageKey)
+    const storage = authStorage ?? (typeof window === 'undefined' ? undefined : window.localStorage)
+    raw = storage?.getItem(supabaseAuthStorageKey) ?? null
   } catch {
     return null
   }
