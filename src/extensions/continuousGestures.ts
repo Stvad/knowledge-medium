@@ -46,8 +46,8 @@ import {
   type GestureProgressDispatch,
 } from '@/shortcuts/gestureAction.js'
 
-/** Mark a surface wrapper to reserve continuous gestures and block drag for
- *  the surface itself. */
+/** Mark a surface wrapper before mounting its blocks to reserve continuous
+ *  gestures and block drag for the surface itself. */
 export const NO_BLOCK_GESTURES_ATTRIBUTE = 'data-no-block-gestures'
 
 export const allowsBlockGestures = (target: EventTarget | null): boolean =>
