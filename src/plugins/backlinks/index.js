@@ -1,1 +1,1 @@
-export{Py as backlinksPlugin}from"../../../chunks/app-DNlbQUHX.js";
+export{Py as backlinksPlugin}from"../../../chunks/app-VV6GtXQC.js";

@@ -1,1 +1,1 @@
-export{xj as DailyNotePickerHeaderItem}from"../../../chunks/app-DNlbQUHX.js";
+export{xj as DailyNotePickerHeaderItem}from"../../../chunks/app-VV6GtXQC.js";

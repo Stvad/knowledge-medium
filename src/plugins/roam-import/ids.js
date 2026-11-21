@@ -1,1 +1,1 @@
-export{Tf as resolveDailyPage}from"../../../chunks/app-DNlbQUHX.js";
+export{Tf as resolveDailyPage}from"../../../chunks/app-VV6GtXQC.js";
