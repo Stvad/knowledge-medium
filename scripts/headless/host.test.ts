@@ -104,12 +104,14 @@ it('keeps a warm persisted checkpoint closed, opens on a new checkpoint, and clo
   const host = start(plaintext(), async () => {})
   try {
     const read = () => host.execute({type: 'sql', sql: 'SELECT 1 AS n'})
+    await vi.waitFor(async () => expect(await host.execute({type: 'health'})).toMatchObject({host: {
+      baselineSyncedAt: stamp, lastSyncedAt: stamp, closedReason: 'Waiting for a checkpoint from this connection',
+    }}))
     await expect(read()).rejects.toThrow('Waiting for a checkpoint')
-    expect(await host.execute({type: 'health'})).toMatchObject({host: {baselineSyncedAt: stamp, lastSyncedAt: stamp}})
     await vi.waitFor(async () => {
       await deliver([stagedBlock(randomUUID(), workspaceId)])
       expect(fixture.db.currentStatus.lastSyncedAt?.getTime()).not.toBe(stamp)
-    })
+    }, {timeout: 5000})
     await vi.waitFor(async () => expect(await read()).toEqual([{n: 1}]))
     await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
     await expect(read()).rejects.toThrow('Waiting for the local member row')
@@ -257,4 +259,29 @@ it('requires a defined checkpoint when the persisted timestamp disappears', asyn
   await gate.stop()
   expect(open).not.toHaveBeenCalled()
   expect(gate.reason()).toBe('Waiting for a checkpoint from this connection')
+})
+
+it('closes an admitted host while a connected download is outstanding', async () => {
+  const host = start(plaintext(), () => syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member]))
+  try {
+    const read = () => host.execute({type: 'sql', sql: 'SELECT 1 AS n'})
+    await vi.waitFor(async () => expect(await read()).toEqual([{n: 1}]))
+    vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'downloading', 'get').mockReturnValue(true)
+    await expect(read()).rejects.toThrow('not caught up with the server')
+  } finally {
+    await host.stop()
+  }
+})
+
+it('holds a disconnected host before its first admission even with a fresh checkpoint', async () => {
+  vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'connected', 'get').mockReturnValue(false)
+  const host = start(plaintext(), () => syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member]))
+  try {
+    await vi.waitFor(async () => expect(await host.execute({type: 'health'})).toMatchObject({
+      host: {closedReason: expect.stringContaining('not caught up with the server')},
+    }))
+    await expect(host.execute({type: 'sql', sql: 'SELECT 1'})).rejects.toThrow('not caught up with the server')
+  } finally {
+    await host.stop()
+  }
 })

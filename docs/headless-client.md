@@ -90,7 +90,7 @@ A tab is safe to write from because the app shell around the Repo does several t
 7. **Build the Repo, read-only**: `new Repo({db, cache, user, syncObserverDeps, isReadOnly: true})` with no backfill claim, the `staticDataExtensions` runtime, and the configured workspace active. Always after step 5, so the observer's first drain already has the key and defers nothing. Not through `createTestRepo`, which installs a working stand-in claim. **[read]** On the first boot (the workspace has no blocks) take `repo.holdBulkSyncLoad(workspaceId)` at once and release it when the gate first opens: its contract, that nothing waits on the write lock and the rows are reaching `blocks` for the first time, is true here. **[read]**
 8. **Register with the bridge server.** Once access is decided and the Repo exists, `health`, `ping` and `rematerialize-workspace` are served; every other verb is refused with the host's state as the reason until the gate opens. This makes a long first drain observable. While waiting for the first workspace row there is no Repo to register.
 9. **Run the gate** for the life of the process.
-10. **Shutdown** (SIGTERM). Re-register with an empty token list, stop polling and drain in-flight commands. If the server is unreachable its client record expires after 60 seconds. Stop the gate, disconnect sync, flush and stop the observer, unpin, await deferred Repo work and cancel delayed processors before closing the database. Slice 1 never starts with pending uploads.
+10. **Shutdown** (SIGTERM). Re-register with an empty token list, stop polling and drain in-flight commands. If the server is unreachable its client record expires after 60 seconds. Stop the gate, disconnect sync, flush and stop the observer, unpin, advance one Node timer turn, await deferred Repo work and cancel delayed processors before closing the database. Slice 1 never starts with pending uploads.
 
 ### The gate
 
@@ -178,7 +178,7 @@ That covers what `agent-dispatch` calls and every `km-mcp` tool except media. **
 
 **Device storage needs no code.** Node 26 persists `localStorage` across processes under `--localstorage-file`, with `window` and `document` still undefined. **[measured]** on this machine's Node; Node labels Web Storage experimental. If that proves fragile the fallback is a file-backed `Storage` of some forty lines with a write-temp-then-rename.
 
-**Config.** One file: state directory, workspace id, the workspace's mode (`e2ee` or `plaintext`), key-file path when encrypted, bridge profile. The bridge URL and secret come from `agent-cli`'s `bridgeUrl()` / `bridgeSecret()`, and the host's token lives in `agent-cli`'s token store under its profile (`loadStoredToken` / `writeStoredToken`), where the CLIs already look. **[read]** The operator supervises both processes under one OS user. The owner procedure below uses separate systemd user units.
+**Config.** One file: state directory, workspace id, the workspace's mode (`e2ee` or `plaintext`), key-file path when encrypted, bridge profile. The bridge URL and secret come from `agent-cli`'s `bridgeUrl()` / `bridgeSecret()`, and the host's token lives in `agent-cli`'s token store under its profile (`loadStoredToken` / `writeStoredToken`), where the CLIs already look. **[read]** The operator supervises both processes under one OS user. The owner procedure below uses systemd user units or temporary launchd jobs.
 
 **Seeds.** Eleven static plugins register seeds only on the app side **[measured]**, and installed extensions cannot load in Node (Babel plus blob-URL imports **[read]**), so the host's seed set is narrower than a tab's. The read-only runtime uses `staticDataExtensions` without the React `kernelValuePresetsExtension`. The served read commands run against the data runtime. Write parity is slice 3's first check: a write to a property whose seed the host lacks must be refused or stored under the synced definition, never re-typed. Only if that fails do the static seeds move into data extensions.
 
@@ -197,16 +197,11 @@ Slices 1 and 2 run every boot step with the role forced to read-only, so the gat
 
 Use a scratch graph and a dedicated member account. In the deployed browser app, sign in as that member, open the envelope in the workspace header, select the scratch invitation and click **Accept**. The browser calls `accept_invitation` and navigates to that workspace. On macOS, open the app with `open https://stvad.github.io/knowledge-medium/`. On Linux, use `xdg-open https://stvad.github.io/knowledge-medium/`. The headless login command only authenticates the device.
 
-From this checkout, use Node 26 and run `node scripts/ensure-deps.mjs`. Create a private config file outside the checkout. Paths in the file resolve relative to the config. For example, save the following as `headless.json` beside a mode-0600 file containing the exported scratch key.
+From this checkout, use Node 26 and run `node scripts/ensure-deps.mjs`. Set `config` to the desired absolute path for a new config file. Copy the [example config](../scripts/headless/config.example.json) outside the checkout and set `workspaceId` to the scratch workspace ID. Paths in the config resolve relative to that file. For an encrypted run, place the exported scratch key in the configured mode-0600 file.
 
-```json
-{
-  "stateDir": "device",
-  "workspaceId": "<scratch-workspace-id>",
-  "mode": "e2ee",
-  "keyFile": "workspace.key",
-  "profile": "headless-scratch"
-}
+```sh
+config=/absolute/path/to/headless.json
+install -m 600 scripts/headless/config.example.json "$config"
 ```
 
 For the plaintext run, set `mode` to `plaintext`, omit `keyFile` and use a separate state directory and profile. The launcher creates the state directory with mode 0700 and selects Node's persistent Web Storage file. Use a dedicated profile in the same OS user's agent-cli store. Export the deployment's three public client settings in the launching shell. The headless Vite config disables dotenv loading.
@@ -215,7 +210,6 @@ For the plaintext run, set `mode` to `plaintext`, omit `keyFile` and use a separ
 export VITE_SUPABASE_URL='<public project URL>'
 export VITE_SUPABASE_ANON_KEY='<public client key>'
 export VITE_POWERSYNC_URL='<PowerSync endpoint URL>'
-config=/absolute/path/to/headless.json
 pnpm headless login "$config"
 ```
 

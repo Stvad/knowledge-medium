@@ -1,4 +1,5 @@
 import {provideRuntimeGlobals} from '../agent-eval/nodeShims'
+import {setTimeout as nextTimerTurn} from 'node:timers/promises'
 import {PowerSyncDatabase} from '@powersync/node'
 import {createClientPowerSyncSchema, initializeClientDatabase} from '@/data/internals/initializeClientDatabase'
 import {dbFilenameForUser} from '@/data/localDbStorage'
@@ -111,6 +112,9 @@ export async function serveDatabase(
         await repo.flushSyncObserver()
         repo.stopSyncObserver()
         repo.setActiveWorkspaceId(null)
+        // Node schedules idle work with a zero-delay timer. Let already-armed
+        // callbacks enter the pending set before asking the Repo to drain it.
+        await nextTimerTurn(0)
         await repo.awaitDeferredWork()
         repo.cancelDelayedProcessors()
       }

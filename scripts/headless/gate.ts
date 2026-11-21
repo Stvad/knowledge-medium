@@ -7,7 +7,7 @@ export const startReadGate = (
   open: () => Promise<void>, visibility: (open: boolean) => void,
 ) => {
   const awaitingCheckpoint = 'Waiting for a checkpoint from this connection'
-  let reason: string | null = awaitingCheckpoint
+  let reason: string | null = 'Checking workspace access'
   let pending: Promise<void> | undefined
   let dirty = false
   let stopped = false

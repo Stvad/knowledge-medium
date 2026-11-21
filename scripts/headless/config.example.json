@@ -1,0 +1,7 @@
+{
+  "stateDir": "device",
+  "workspaceId": "<scratch-workspace-id>",
+  "mode": "e2ee",
+  "keyFile": "workspace.key",
+  "profile": "headless-scratch"
+}
