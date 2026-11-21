@@ -1,0 +1,1 @@
+export{Qz as useShortcutSurfaceActivations}from"../../chunks/app-YvTluj8A.js";

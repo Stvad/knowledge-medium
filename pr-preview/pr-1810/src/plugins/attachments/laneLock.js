@@ -1,0 +1,1 @@
+export{wC as runSingleOwner}from"../../../chunks/app-YvTluj8A.js";

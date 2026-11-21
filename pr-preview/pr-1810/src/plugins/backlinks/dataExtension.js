@@ -1,0 +1,1 @@
+export{w1 as backlinksDataExtension}from"../../../chunks/app-YvTluj8A.js";

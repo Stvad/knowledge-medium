@@ -1,0 +1,1 @@
+export{kx as useIsReadOnly}from"../../chunks/app-YvTluj8A.js";

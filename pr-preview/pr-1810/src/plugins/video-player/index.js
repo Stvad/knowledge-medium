@@ -1,0 +1,1 @@
+export{ow as videoPlayerPlugin}from"../../../chunks/app-YvTluj8A.js";

@@ -1,0 +1,1 @@
+export{gd as blockTagsConfigUi}from"../../../chunks/app-YvTluj8A.js";
