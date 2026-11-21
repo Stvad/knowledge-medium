@@ -1,1 +1,1 @@
-export{z5 as USER_TYPES_PROJECTOR_ID,B5 as UserTypesService,V5 as userTypesProjector}from"../../chunks/app-tF7kmgr9.js";
+export{z5 as USER_TYPES_PROJECTOR_ID,B5 as UserTypesService,V5 as userTypesProjector}from"../../chunks/app-fpkX8a3L.js";
