@@ -1,1 +1,1 @@
-export{su as getOrCreateReviewDeck,cu as reviewDeckBlockId,lu as reviewDeckSpec,uu as startReviewDeck}from"../../../chunks/app-DE0kZ5Sa.js";
+export{cu as getOrCreateReviewDeck,lu as reviewDeckBlockId,uu as reviewDeckSpec,du as startReviewDeck}from"../../../chunks/app-DdiqAC9H.js";

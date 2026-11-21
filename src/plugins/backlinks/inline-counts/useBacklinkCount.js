@@ -1,1 +1,1 @@
-export{Ry as useBacklinkCount}from"../../../../chunks/app-DE0kZ5Sa.js";
+export{By as useBacklinkCount}from"../../../../chunks/app-DdiqAC9H.js";

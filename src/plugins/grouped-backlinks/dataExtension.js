@@ -1,1 +1,1 @@
-export{QJ as groupedBacklinksDataExtension}from"../../../chunks/app-DE0kZ5Sa.js";
+export{MY as groupedBacklinksDataExtension}from"../../../chunks/app-DdiqAC9H.js";

@@ -1,1 +1,1 @@
-export{d as holdScreenWakeLock}from"../../chunks/app-DE0kZ5Sa.js";
+export{d as holdScreenWakeLock}from"../../chunks/app-DdiqAC9H.js";

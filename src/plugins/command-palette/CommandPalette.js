@@ -1,1 +1,1 @@
-export{NM as CommandPalette}from"../../../chunks/app-DE0kZ5Sa.js";
+export{FM as CommandPalette}from"../../../chunks/app-DdiqAC9H.js";

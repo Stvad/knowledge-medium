@@ -1,1 +1,1 @@
-export{Xt as ProgressRow,Zt as SyncProgress}from"../../../chunks/app-DE0kZ5Sa.js";
+export{Zt as ProgressRow,Qt as SyncProgress}from"../../../chunks/app-DdiqAC9H.js";
