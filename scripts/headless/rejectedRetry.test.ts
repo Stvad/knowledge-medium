@@ -1,15 +1,13 @@
 // @vitest-environment node
 import {randomUUID} from 'node:crypto'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
-import type {PowerSyncBackendConnector} from '@powersync/common'
-import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import type {RejectedUpload} from '@/data/rejectedUploads'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {clearSyncState, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {UploadHeldError} from '@/services/powersync'
 import type {HeadlessConfig} from './config'
-import {serveDatabase} from './host'
+import {startHost} from './test/startHost'
 import {STALE_QUEUE_REASON} from './uploadHold'
 
 const accepted = () => ({abortSignal: async () => ({error: null, status: 200})})
@@ -44,41 +42,26 @@ const refuseUploads = () => rpc.mockImplementation((name: string) => ({abortSign
 
 function start(config: HeadlessConfig, blocks: string[]) {
   const {db} = fixture
-  const stop = new AbortController()
-  let connector!: PowerSyncBackendConnector
-  type Execute = (command: KnownAgentCommand) => Promise<unknown>
-  let register!: (execute: Execute) => void
-  const registered = new Promise<Execute>(resolve => { register = resolve })
-  const run = serveDatabase(db, config, user, stop.signal,
-    async (_db, production) => {
-      connector = production!
-      await syncServer(db)([serverWorkspace(testWorkspaceRow(workspaceId)), member,
-        ...blocks.map(id => stagedBlock(id, workspaceId))])
-    },
-    async (_config, _user, execute) => {
-      register(execute)
-      return {close: async () => {}, postEvent: async () => {}}
-    })
-  const ready = Promise.race([registered, run.then(() => { throw new Error('Host stopped') })])
-  const execute = async (command: KnownAgentCommand) => (await ready)(command)
+  const host = startHost(db, config, user, {connect: () => syncServer(db)([
+    serverWorkspace(testWorkspaceRow(workspaceId)), member, ...blocks.map(id => stagedBlock(id, workspaceId)),
+  ])})
+  const {execute, upload} = host
   return {
-    execute,
+    ...host,
     health: () => execute({type: 'health'}) as Promise<{rejectedUploads: number, host: {readOnly: boolean}}>,
     rejected: () => execute({type: 'rejected-uploads'}) as Promise<RejectedUpload[]>,
     retry: (txId: number) => execute({type: 'retry-rejected-upload', txId, contributorId: null}),
     update: (id: string, content: string) => execute({type: 'update-block', id, content, contributorId: null}),
-    upload: () => connector.uploadData(db),
     untilOpen: (readOnly: boolean) => vi.waitFor(async () => expect(await execute({type: 'health'}))
       .toMatchObject({host: {closedReason: null, readOnly}}), {timeout: 15_000}),
     /** Uploads what the bootstrap queued (seed rows) so a test starts from an empty queue. */
     drainBootstrap: async () => {
       await vi.waitFor(async () => {
-        await connector.uploadData(db)
+        await upload()
         expect(await db.getAll('SELECT 1 FROM ps_crud')).toEqual([])
       }, {timeout: 20_000})
       rpc.mockClear()
     },
-    stop: () => { stop.abort(); return run },
   }
 }
 

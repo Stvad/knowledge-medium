@@ -67,11 +67,16 @@ const isReadOnlyQuery = (sql: string, mode?: string) => isReadOnlyAgentCommand({
   type: 'sql', mode, sql: sql.trimStart().replace(/^explain\b(?:\s+query\s+plan\b)?/i, ''),
 })
 
+/** What the verb table asks of the read gate (`startReadGate`). */
+export interface HostGate {
+  readReason(): string | null | Promise<string | null>
+  writeRefusal(): string | null
+}
+
 export const executeHeadlessCommand = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
-  gateReason: () => string | null | Promise<string | null>,
-  writeRefusal: () => string | null,
+  gate: () => HostGate | undefined,
 ): Promise<unknown> => {
   if (!classified(command.type)) throw new Error(`Unsupported headless command: ${command.type}`)
   const policy = commands[command.type]
@@ -81,11 +86,12 @@ export const executeHeadlessCommand = async (
     throw new Error('Headless watcher SQL is read-only')
   }
   if (policy !== 'always') {
-    const reason = await gateReason()
-    if (reason !== null) throw new Error(`Headless gate closed: ${reason}`)
+    const current = gate()
+    const reason = current ? await current.readReason() : 'Starting gate'
+    if (!current || reason !== null) throw new Error(`Headless gate closed: ${reason}`)
+    // Read after the gate, which refreshes the role a command can arrive ahead of.
+    const refusal = policy === 'writable' ? current.writeRefusal() : null
+    if (refusal !== null) throw new Error(`${command.type}: ${refusal}`)
   }
-  // Read after the gate, which refreshes the role a command can arrive ahead of.
-  const refusal = policy === 'writable' ? writeRefusal() : null
-  if (refusal !== null) throw new Error(`${command.type}: ${refusal}`)
   return executeCommand(command, context)
 }
