@@ -32,7 +32,7 @@
  * Pure + dependency-injected (`allFiles` / `toBaseUrl`) so it unit-tests
  * without touching a real dist tree.
  */
-import {ASSET_EXTENSION, contentDigest} from '../src/sw/assets'
+import {ASSET_EXTENSION, contentDigest, type PrecacheManifest} from '../src/sw/assets'
 
 export {ASSET_EXTENSION}
 
@@ -104,12 +104,24 @@ export const collectRestAssets = ({
   return [...rest].sort()
 }
 
+// The HTML shell + icons the app boots from, dist-relative; '' is the scope
+// root, which the host answers with index.html.
+export const SHELL_FILES = [
+  '',
+  'index.html',
+  'manifest.webmanifest',
+  'icon.svg',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable.png',
+  'apple-touch-icon.png',
+]
+
 /**
- * `contentDigest` of each base-prefixed URL's dist file, for the worker to check
- * what it fetches at install against. The base itself (the scope root `./`) is
- * served as index.html.
+ * The URL → `contentDigest` manifest install checks each fetched body against,
+ * in the given order. The base itself (the scope root) is served as index.html.
  */
-export const collectPrecacheDigests = async ({
+export const collectPrecacheManifest = async ({
   urls,
   base,
   read,
@@ -119,7 +131,7 @@ export const collectPrecacheDigests = async ({
   base: string
   /** dist-relative POSIX path → file bytes */
   read: (rel: string) => Uint8Array<ArrayBuffer>
-}): Promise<Record<string, string>> => {
+}): Promise<PrecacheManifest> => {
   const digests: Record<string, string> = {}
   for (const url of urls) {
     if (!url.startsWith(base)) throw new Error(`precache URL ${url} is outside base ${base}`)

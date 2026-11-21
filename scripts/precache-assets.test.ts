@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {bootWorkerAssets, collectPrecacheDigests, collectRestAssets, isPrecacheableAsset} from './precache-assets'
+import {bootWorkerAssets, collectPrecacheManifest, collectRestAssets, isPrecacheableAsset} from './precache-assets'
 import {contentDigest} from '../src/sw/assets'
 
 describe('isPrecacheableAsset', () => {
@@ -132,7 +132,7 @@ describe('bootWorkerAssets', () => {
   })
 })
 
-describe('collectPrecacheDigests', () => {
+describe('collectPrecacheManifest', () => {
   const files: Record<string, string> = {'index.html': '<html>', 'src/main.js': 'main'}
   const read = (rel: string) => {
     if (!(rel in files)) throw new Error(`no ${rel}`)
@@ -140,7 +140,7 @@ describe('collectPrecacheDigests', () => {
   }
 
   it('digests each URL from its dist file, the scope root as index.html', async () => {
-    const digests = await collectPrecacheDigests({
+    const digests = await collectPrecacheManifest({
       urls: ['/knowledge-medium/', '/knowledge-medium/index.html', '/knowledge-medium/src/main.js'],
       base: '/knowledge-medium/',
       read,
@@ -153,7 +153,7 @@ describe('collectPrecacheDigests', () => {
   })
 
   it('throws for a URL outside the base', async () => {
-    await expect(collectPrecacheDigests({urls: ['/elsewhere/a.js'], base: '/knowledge-medium/', read}))
+    await expect(collectPrecacheManifest({urls: ['/elsewhere/a.js'], base: '/knowledge-medium/', read}))
       .rejects.toThrow('/elsewhere/a.js')
   })
 })
