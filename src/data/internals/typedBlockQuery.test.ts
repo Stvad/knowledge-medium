@@ -186,6 +186,17 @@ describe('typed queries for table rows', () => {
     }
   })
 
+  it('treats an unconstrained OR alternative as true and preserves the outer query', async () => {
+    await create({id: 'first', types: ['entry'], properties: {status: 'open'}})
+    await create({id: 'second', types: ['entry']})
+    await create({id: 'outside'})
+    for (const anyOf of [[{}], [{where: {status: 'open'}}, {scope: 'ancestor', where: {}}]] as const) {
+      const query = {workspaceId: WS, types: ['entry'], anyOf}
+      expect(await env.repo.query.typedBlockIds(query).load()).toEqual(['first', 'second'])
+      expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
+    }
+  })
+
   it('limits direct children after outline ordering while counting all live matches', async () => {
     await create({id: 'parent'})
     await create({id: 'other-parent'})

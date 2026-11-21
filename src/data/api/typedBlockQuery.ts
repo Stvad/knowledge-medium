@@ -110,7 +110,7 @@ export interface TypedBlockQuery {
    *  scope, so the same query can mix block-itself and block-or-any-
    *  ancestor filters. */
   readonly match?: readonly BlockPredicate[]
-  /** At least one alternative must match. An explicitly empty disjunction matches nothing. */
+  /** At least one alternative must match. An empty group matches nothing. One unconstrained alternative matches every candidate. */
   readonly anyOf?: readonly BlockPredicate[]
   /** NORed predicates: a block matches iff none of these match. Same
    *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or

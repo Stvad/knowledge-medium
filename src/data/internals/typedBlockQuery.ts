@@ -478,15 +478,8 @@ const compileAlternatives = (predicates: readonly BlockPredicate[], context: Whe
   }
 }
 
-const dedupePredicates = (predicates: readonly BlockPredicate[] | undefined): BlockPredicate[] => {
-  if (!predicates) return []
-  return predicates.filter(p => {
-    const hasWhere = p.where !== undefined && Object.keys(p.where).length > 0
-    const hasRef = p.referencedBy !== undefined
-    const hasId = p.id !== undefined
-    return hasWhere || hasRef || hasId
-  })
-}
+const hasConstraints = (p: BlockPredicate): boolean =>
+  p.id !== undefined || p.referencedBy !== undefined || Object.keys(p.where ?? {}).length > 0
 
 export const normalizeTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
@@ -500,9 +493,9 @@ export const normalizeTypedBlockQuery = (
     : Array.from(new Set(query.types.map(type => type.trim()).filter(Boolean))).sort(),
   where: query.where,
   referencedBy: query.referencedBy,
-  match: dedupePredicates(query.match),
-  exclude: dedupePredicates(query.exclude),
-  anyOf: query.anyOf === undefined ? undefined : dedupePredicates(query.anyOf),
+  match: query.match?.filter(hasConstraints) ?? [],
+  exclude: query.exclude?.filter(hasConstraints) ?? [],
+  anyOf: query.anyOf?.every(hasConstraints) ? query.anyOf : undefined,
   order: projection === 'count' ? undefined : query.order ?? 'created-asc',
 })
 
