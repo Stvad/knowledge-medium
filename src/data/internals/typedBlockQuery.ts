@@ -291,8 +291,20 @@ const compileTargetTraversal = (
 export const virtualFieldFor = (name: string, context: WhereContext): QueryableField | undefined =>
   context.properties.has(name) ? undefined : context.fields?.get(name)
 
+// Skip SQLite quoted tokens and comments before counting anonymous parameter slots.
+const sqlTokens = /'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|\?\d*|[:@$][\w\u0080-\uFFFF]+|[a-zA-Z_\u0080-\uFFFF][\w$\u0080-\uFFFF]*/gu
+
 const fieldExpression = (field: QueryableField, alias: string): CompiledClause => {
   const {sql, params} = field.value(alias)
+  if (!Array.isArray(params)) throw new TypeError(`[queryBlocks] ${field.name} expression params must be an array`)
+  let slots = 0
+  for (const [token] of sql.matchAll(sqlTokens)) {
+    if (token === '?') slots++
+    else if (/^[?:@$]/.test(token)) throw new Error(`[queryBlocks] ${field.name} accepts only anonymous ? placeholders`)
+  }
+  if (slots !== params.length) {
+    throw new Error(`[queryBlocks] ${field.name} expression has ${slots} placeholders and ${params.length} params`)
+  }
   return {sql: `(${sql})`, params}
 }
 

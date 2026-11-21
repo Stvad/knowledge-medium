@@ -298,6 +298,7 @@ type QueryableFieldDependency = (workspaceId: string) => Dependency
 /** A trusted plugin SQL expression over one block. Return SQL NULL for a missing or malformed value. */
 export interface QueryableField {
   name: string
+  /** Parentheses group expressions. Plugins already have full SQL access through queriesFacet. */
   value: (alias: string) => {sql: string; params: readonly unknown[]}
   encode: (operand: unknown) => WhereValue
   /** A positive predicate on this field may bound an ancestor walk. */

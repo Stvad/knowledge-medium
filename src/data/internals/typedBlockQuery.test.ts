@@ -206,6 +206,24 @@ describe('typed queries for table rows', () => {
     }
   })
 
+  it('validates field expression params and placeholders before executing SQL', () => {
+    const name = 'test:expression'
+    const compile = (sql: string, params: unknown) => {
+      const field: QueryableField = {
+        name, value: () => ({sql, params: params as readonly unknown[]}), encode: Number,
+        dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+      }
+      return compileTypedBlockQuery({workspaceId: WS, where: {[name]: 5}},
+        new Map(), {fields: new Map([[name, field]])})
+    }
+    expect(() => compile('?', 'x')).toThrow(/params.*array/)
+    expect(() => compile('? + ?', [1])).toThrow(/placeholder/)
+    expect(() => compile('?', [1, 2])).toThrow(/placeholder/)
+    expect(() => compile('?2', [1])).toThrow(/anonymous/)
+    expect(() => compile(':val', [])).toThrow(/anonymous/)
+    expect(compile("(SELECT a$b FROM (SELECT ? AS a$b)) + length('it''s ?') /* ? */", [1]).params).toEqual([WS, 1, 5])
+  })
+
   it('limits direct children after outline ordering while counting all live matches', async () => {
     await create({id: 'parent'})
     await create({id: 'other-parent'})
