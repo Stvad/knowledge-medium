@@ -1,6 +1,7 @@
 import {describe, expect, it, vi} from 'vitest'
+import path from 'node:path'
 import {createEngine, THREAD_BUSY_ACTIVITY, type EngineDeps} from '../src/engine'
-import {parseConfig, PROPS} from '../src/config'
+import {defaultWorkspacesDir, parseConfig, PROPS} from '../src/config'
 import type {CommentThreadView} from '@knowledge-medium/agent-cli/protocol'
 import type {BlockData, Graph, MemoryScope, ReplyWriter} from '../src/graph'
 import {createStreamJsonParser, type AgentRunResult} from '../src/runner'
@@ -169,12 +170,78 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
     deliverToChannel: vi.fn(async () => {}),
-    mcpConfigPath: '/tmp/mcp.json',
+    mcpConfigPathFor: () => '/tmp/mcp.json',
     log: () => {},
     now: () => NOW,
     delay: async () => {}, // no-op so deliverReply retries don't slow tests
     ...deps,
   })
+
+describe('workspace watchers', () => {
+  const root = path.join(defaultWorkspacesDir(), 'mentions')
+  const workspaceConfig = (watcher: Record<string, unknown> = {}) => parseConfig({
+    workspaceId: 'ws-test',
+    watchers: [{
+      kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, memory: false,
+      runner: {executor: 'claude', workspace: {allowedDomains: ['pypi.org']}}, ...watcher,
+    }],
+  })
+  const runOf = (runTask: ReturnType<typeof vi.fn>) =>
+    runTask.mock.calls[0][0] as {cwd: string, workspace?: unknown, mcpConfigPath?: string, newSessionId?: string}
+
+  it('runs a new thread in a folder named for the session it starts, sandboxed, with the watcher\'s km server', async () => {
+    const {graph} = fakeGraph({backlinks: [{id: 'b-1'}], blocks: {'b-1': {content: '[[claude]] chart this'}}})
+    const runTask = vi.fn(async () => okRun())
+    const config = workspaceConfig()
+    const mcpConfigPathFor = vi.fn(() => '/tmp/mcp-mentions.json')
+    const engine = engineWith({graph, runTask, config, mcpConfigPathFor})
+    await engine.tick()
+    await engine.drain()
+
+    const run = runOf(runTask)
+    expect(run.newSessionId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(run).toMatchObject({
+      cwd: `${root}/threads/${run.newSessionId}`, workspace: {root, allowedDomains: ['pypi.org']}, mcpConfigPath: '/tmp/mcp-mentions.json',
+    })
+    expect(mcpConfigPathFor).toHaveBeenCalledWith(config.watchers[0])
+  })
+
+  it('runs a follow-up in its session\'s folder, however deep the thread', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-child'}],
+      blocks: {
+        'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'sess-root'}},
+        'b-mid': {content: '[[claude]] more', parentId: 'b-root', properties: {[PROPS.status]: 'done', [PROPS.session]: 'sess-root'}},
+        'b-child': {content: '[[claude]] and again', parentId: 'b-mid'},
+      },
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: workspaceConfig()})
+    await engine.tick()
+    await engine.drain()
+
+    expect(runOf(runTask)).toMatchObject({cwd: `${root}/threads/sess-root`, resumeSessionId: 'sess-root'})
+    expect(runOf(runTask).newSessionId).toBeUndefined()
+  })
+
+  it('starts a fresh thread folder when the watcher does not resume', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-child'}],
+      blocks: {
+        'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'sess-root'}},
+        'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+      },
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, config: workspaceConfig({resume: false})})
+    await engine.tick()
+    await engine.drain()
+
+    const run = runOf(runTask)
+    expect(run.cwd).toBe(`${root}/threads/${run.newSessionId}`)
+    expect(run.newSessionId).not.toBe('sess-root')
+  })
+})
 
 describe('watcher memory', () => {
   const seed = (memory: MemoryEntry[] = [{id: 'n-1', content: 'replies short'}]): FakeGraphSeed => ({
@@ -2157,6 +2224,21 @@ describe('query watcher lifecycle', () => {
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).toContain('"id": "b"')
     expect(state.cursors.get('inbox')).toEqual(['a', 'b'])
+  })
+
+  it('runs in the workspace root: a query run belongs to no thread', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const runTask = vi.fn(async () => okRun())
+    const config = queryConfig({runner: {executor: 'claude', workspace: {}}})
+    const engine = engineWith({graph, runTask, state, config})
+    await engine.tick()
+    await engine.drain()
+
+    const root = path.join(defaultWorkspacesDir(), 'inbox')
+    expect(runTask.mock.calls[0][0]).toMatchObject({cwd: root, workspace: {root, allowedDomains: []}})
   })
 
   it('advances the cursor even when the run fails (no re-bill loop)', async () => {

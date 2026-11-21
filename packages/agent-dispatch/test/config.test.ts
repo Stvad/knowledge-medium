@@ -288,6 +288,53 @@ describe('parseConfig', () => {
     }).watchers[0]).toMatchObject({delivery: 'channel', runner: {executor: 'claude'}})
   })
 
+  describe('runner.workspace', () => {
+    const withRunner = (runner: Record<string, unknown>, extra: Record<string, unknown> = {}) => parseConfig({
+      workspaceId: 'ws-test',
+      watchers: [{kind: 'backlinks', name: 'notes-agent', target: 'claude', runner: {executor: 'claude', ...runner}, ...extra}],
+    })
+
+    it('roots a workspace in a per-watcher folder under the default directory', () => {
+      const {runner} = withRunner({workspace: {}}).watchers[0]
+      const base = path.join(os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch', 'workspaces')
+      expect(runner).toMatchObject({workspace: {root: path.join(base, 'notes-agent'), allowedDomains: []}})
+    })
+
+    it('keeps the hosts Bash may reach', () => {
+      expect(withRunner({workspace: {allowedDomains: ['pypi.org']}}).watchers[0].runner)
+        .toMatchObject({workspace: {allowedDomains: ['pypi.org']}})
+    })
+
+    it('takes no root of its own: a folder chosen elsewhere could hold files later runs trust', () => {
+      expect(() => withRunner({workspace: {root: '/tmp/ws'}})).toThrow()
+    })
+
+    it('refuses a cwd beside it: the run works in its thread folder', () => {
+      expect(() => withRunner({workspace: {}, cwd: '/tmp'})).toThrow(/cwd/)
+    })
+
+    it('refuses a watcher name that is not one folder name', () => {
+      expect(() => parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [{kind: 'backlinks', name: '../escape', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
+      })).toThrow(/folder/)
+    })
+
+    it('refuses watcher names that differ only in case: the disk folds them into one folder', () => {
+      expect(() => parseConfig({
+        workspaceId: 'ws-test',
+        watchers: [
+          {kind: 'backlinks', name: 'Research', target: 'a', runner: {executor: 'claude', workspace: {}}},
+          {kind: 'backlinks', name: 'research', target: 'b'},
+        ],
+      })).toThrow(/duplicate watcher name/)
+    })
+
+    it('refuses channel delivery: the ambient session is not a spawned run', () => {
+      expect(() => withRunner({workspace: {}}, {delivery: 'channel'})).toThrow(/channel/)
+    })
+  })
+
   it('accepts an explicit opt-in to usage-based billing', () => {
     expect(parseConfig({workspaceId: 'ws-test', billing: 'api', watchers: []}).billing).toBe('api')
     expect(() => parseConfig({workspaceId: 'ws-test', billing: 'wallet', watchers: []})).toThrow()

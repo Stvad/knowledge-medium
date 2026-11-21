@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {saveContributorSelection} from '@knowledge-medium/agent-cli/config'
+import {MEDIA_ROOT_ENV} from '../src/mcpServerDef'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const mcpScript = path.resolve(here, '../dist/mcp.js')
@@ -134,6 +135,38 @@ beforeEach(async () => {
     [CANONICAL_PROFILE]: {token: 'DISPATCH-TEST-TOKEN'},
     default: {token: 'DEFAULT-TEST-TOKEN'},
   }}))
+})
+
+// A media root needs macOS's O_NOFOLLOW_ANY (agent-cli mediaFile.ts).
+describe.runIf(process.platform === 'darwin')('compiled dispatch MCP add_media', {timeout: 20_000}, () => {
+  const pathArgument = async () => {
+    const {tools} = await client!.listTools()
+    const addMedia = tools.find(tool => tool.name === 'add_media')!
+    return (addMedia.inputSchema.properties as Record<string, unknown>).path
+  }
+
+  it('takes no path without a workspace', async () => {
+    await saveContributorSelection(CANONICAL_PROFILE, CANONICAL_WORKSPACE, null)
+    await connectAndCreatePage(processEnv(CANONICAL_PROFILE, CANONICAL_WORKSPACE))
+    expect(await pathArgument()).toBeUndefined()
+  })
+
+  it('reads a path only under the workspace root it is given', async () => {
+    const root = path.join(tempDir, 'workspace')
+    await fs.mkdir(root)
+    await fs.writeFile(path.join(root, 'chart.png'), 'inside')
+    await fs.writeFile(tokenFile + '.png', 'outside')
+    await saveContributorSelection(CANONICAL_PROFILE, CANONICAL_WORKSPACE, null)
+    await connectAndCreatePage({...processEnv(CANONICAL_PROFILE, CANONICAL_WORKSPACE), [MEDIA_ROOT_ENV]: root})
+    expect(await pathArgument()).toBeDefined()
+
+    await client!.callTool({name: 'add_media', arguments: {path: path.join(root, 'chart.png')}}, undefined, {timeout: 5_000})
+    const outside = await client!.callTool({name: 'add_media', arguments: {path: tokenFile + '.png'}}, undefined, {timeout: 5_000})
+
+    expect(postedCommands.map(command => command.body.type)).toEqual(['create-page', 'add-media'])
+    expect(postedCommands[1].body).toMatchObject({base64: Buffer.from('inside').toString('base64')})
+    expect(outside).toMatchObject({isError: true})
+  })
 })
 
 describe('compiled dispatch MCP contributor/workspace selection', {timeout: 20_000}, () => {
