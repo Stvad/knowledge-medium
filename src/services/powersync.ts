@@ -590,9 +590,7 @@ const applyCompactedBlockOperations = async (
     }
   }
 
-  // Order matters: creates first so subsequent patches/deletes find their
-  // rows (when the row is genuinely new). Insert-or-skip semantics make
-  // this safe when the row already exists.
+  // Creates establish missing rows before patches and preserve existing rows on replay.
   await sink.createRows(creates)
 
   if (patches.length > 0) {

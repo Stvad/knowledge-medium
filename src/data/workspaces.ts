@@ -514,11 +514,11 @@ export const listLocalMembershipsForUser = async (
 // PowerSync hasn't replicated the membership row yet). Caller decides the
 // default behavior in that case.
 export const getLocalMemberRole = async (
-  repo: Repo,
+  reader: Pick<Repo['db'], 'getOptional'>,
   workspaceId: string,
   userId: string,
 ): Promise<WorkspaceRole | null> => {
-  const row = await repo.db.getOptional<{role: string}>(
+  const row = await reader.getOptional<{role: string}>(
     `SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ? LIMIT 1`,
     [workspaceId, userId],
   )
@@ -550,7 +550,7 @@ export const awaitLocalMemberRole = async (
   const {signal} = options
   if (signal?.aborted) throw memberRoleAbortError()
 
-  const immediate = await getLocalMemberRole(repo, workspaceId, userId)
+  const immediate = await getLocalMemberRole(repo.db, workspaceId, userId)
   if (signal?.aborted) throw memberRoleAbortError()
   if (immediate !== null) return immediate
 
@@ -609,7 +609,7 @@ export const awaitLocalMemberRole = async (
       runningChecks += 1
       unpark()
       try {
-        const role = await getLocalMemberRole(repo, workspaceId, userId)
+        const role = await getLocalMemberRole(repo.db, workspaceId, userId)
         if (signal?.aborted) {
           fail(memberRoleAbortError())
         } else if (role !== null) {

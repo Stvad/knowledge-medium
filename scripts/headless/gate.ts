@@ -1,7 +1,10 @@
 import type {CommonPowerSyncDatabase} from '@powersync/common'
-import type {Repo} from '@/data/repo'
+import type {Repo, ViewGap} from '@/data/repo'
+import {viewGapReadsOver} from '@/data/internals/syncObserver/reconcile'
 import {getLocalMemberRole} from '@/data/workspaces'
 import type {WorkspaceRole} from '@/types'
+
+type Admission = {role: WorkspaceRole} | ViewGap
 
 export const startReadGate = (
   db: CommonPowerSyncDatabase, repo: Repo, workspaceId: string, baseline: number | undefined,
@@ -20,15 +23,15 @@ export const startReadGate = (
     repo.setReadOnly(!(access.writable && (role === 'editor' || role === 'owner') && !access.isUploadHeld()))
   }
 
-  function cancelPreparation() {
+  function resetPreparation(nextRole: WorkspaceRole | null) {
     if (preparation instanceof AbortController) preparation.abort()
     preparation = undefined
-    role = null
+    role = nextRole
     applyWritability()
   }
 
   function close(message: string) {
-    cancelPreparation()
+    resetPreparation(null)
     if (admitted) visibility(false)
     admitted = false
     reason = message
@@ -36,8 +39,7 @@ export const startReadGate = (
 
   // A stalled namespace read must not block demotion, removal or shutdown.
   function startPreparation(nextRole: WorkspaceRole) {
-    role = nextRole
-    applyWritability()
+    resetPreparation(nextRole)
     const attempt = new AbortController()
     preparation = attempt
     reason = 'Opening workspace data'
@@ -52,47 +54,48 @@ export const startReadGate = (
     })
   }
 
-  async function entryRefusal() {
-    const stamp = db.currentStatus.lastSyncedAt?.getTime()
-    if (stamp === undefined || stamp === baseline) return 'Waiting for a checkpoint from this connection'
-    let gap = await repo.workspaceViewGap(workspaceId)
-    if (gap?.transient) {
-      reason = gap.reason
-      await repo.flushSyncObserver()
-      gap = await repo.workspaceViewGap(workspaceId)
-    }
-    return gap?.reason ?? null
+  async function readAdmission(): Promise<Admission> {
+    // A membership checkpoint can also stage its entire workspace. Sample
+    // permission and completeness from the same replica snapshot.
+    return db.readTransaction(async tx => {
+      let member: WorkspaceRole | null
+      try {
+        member = await getLocalMemberRole(tx, workspaceId, repo.user.id)
+      } catch (error) {
+        console.error('Could not verify workspace membership', error)
+        return {reason: 'Could not verify workspace membership', transient: false}
+      }
+      if (member === null) return {reason: 'Waiting for the local member row', transient: false}
+      if (!admitted) {
+        const stamp = db.currentStatus.lastSyncedAt?.getTime()
+        if (stamp === undefined || stamp === baseline) {
+          return {reason: 'Waiting for a checkpoint from this connection', transient: false}
+        }
+        const gap = await repo.workspaceViewGap(workspaceId, viewGapReadsOver(tx))
+        if (gap) return gap
+      }
+      return {role: member}
+    })
   }
 
   async function refresh() {
-    // Admission lasts for this membership. Read its role after a potentially
-    // long drain so the permission used by bootstrap is current.
-    const refusal = admitted || preparation instanceof AbortController ? null : await entryRefusal()
-    let member: WorkspaceRole | null
-    try {
-      member = await getLocalMemberRole(repo, workspaceId, repo.user.id)
-    } catch (error) {
-      close('Could not verify workspace membership')
-      console.error(reason, error)
+    let admission = await readAdmission()
+    if ('reason' in admission && admission.transient) {
+      close(admission.reason)
+      await repo.flushSyncObserver()
+      admission = await readAdmission()
+    }
+    if ('reason' in admission) {
+      close(admission.reason)
       return
     }
-    if (member === null) {
-      close('Waiting for the local member row')
-      return
-    }
-    if (refusal !== null) {
-      close(refusal)
-      return
-    }
-    if (role !== member) cancelPreparation()
-    if (preparation instanceof AbortController) return
     if (stopped) return
-    if (preparation === 'ready') {
+    if (role !== admission.role) {
+      startPreparation(admission.role)
+    } else if (preparation === 'ready') {
       reason = null
       if (!admitted) visibility(true)
       admitted = true
-    } else {
-      startPreparation(member)
     }
   }
 
@@ -132,7 +135,7 @@ export const startReadGate = (
       stopped = true
       offTables()
       offStatus()
-      cancelPreparation()
+      resetPreparation(null)
       await pending
     },
   }

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {PowerSyncDatabase} from '@powersync/node'
-import type {PowerSyncBackendConnector} from '@powersync/common'
+import type {PowerSyncBackendConnector, Transaction} from '@powersync/common'
 import {createClientPowerSyncSchema, initializeClientDatabase} from '@/data/internals/initializeClientDatabase'
 import {randomUUID} from 'node:crypto'
 import {writeFile} from 'node:fs/promises'
@@ -10,6 +10,7 @@ import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import * as bootstrap from '@/bootstrap/openWorkspaceData'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
+import * as workspaces from '@/data/workspaces'
 import {startReadGate} from './gate'
 import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
@@ -368,7 +369,7 @@ it('closes the gate on a membership lookup error during command admission', asyn
   try {
     await vi.waitFor(() => expect(gate.reason()).toBeNull())
     expect(repo.isReadOnly).toBe(false)
-    vi.spyOn(fixture.db, 'getOptional').mockRejectedValueOnce(cause)
+    vi.spyOn(workspaces, 'getLocalMemberRole').mockRejectedValueOnce(cause)
     expect(await gate.readReason()).toBe('Could not verify workspace membership')
     expect(gate.reason()).toBe('Could not verify workspace membership')
     expect(repo.isReadOnly).toBe(true)
@@ -398,6 +399,91 @@ it('cancels a stalled open on membership loss and admits the restored member onc
     await vi.waitFor(() => expect(gate.reason()).toBeNull())
     expect(open).toHaveBeenCalledTimes(2)
     expect(visibility.mock.calls).toEqual([[true]])
+  } finally {
+    await gate.stop()
+  }
+})
+
+it('never combines a clean view with membership restored alongside a staged row', async () => {
+  const {db} = fixture
+  await syncServer(db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db, user, isReadOnly: true})
+  vi.spyOn(db, 'onChange').mockImplementation(() => () => {})
+  const flush = vi.spyOn(repo, 'flushSyncObserver').mockResolvedValue(undefined)
+  const open = vi.fn(async () => {})
+  const gate = startReadGate(db, repo, workspaceId, undefined, open, () => {},
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(false)
+    await db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
+    expect(await gate.readReason()).toBe('Waiting for the local member row')
+    expect(await repo.workspaceViewGap(workspaceId)).toBeNull()
+
+    const restore = () => db.writeTransaction(async tx => {
+      await tx.execute('INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, 1)',
+        [member.id, workspaceId, user.id, 'editor'])
+      await tx.execute("INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'delete')", ['staged-removal'])
+    })
+    const readGap = repo.workspaceViewGap.bind(repo)
+    const readTransaction = db.readTransaction.bind(db)
+    // Put the restore at the first snapshot boundary. With split reads, it
+    // lands after the clean gap check and before the membership lookup.
+    const restored = vi.fn(restore)
+    vi.spyOn(repo, 'workspaceViewGap').mockImplementationOnce(async (...args) => {
+      const gap = await readGap(...args)
+      if (!restored.mock.calls.length) await restored()
+      return gap
+    })
+    vi.spyOn(db, 'readTransaction').mockImplementationOnce(async <T>(callback: (tx: Transaction) => Promise<T>) => {
+      const result = await readTransaction(callback)
+      if (!restored.mock.calls.length) await restored()
+      return result
+    })
+    await vi.waitFor(async () => {
+      await gate.readReason()
+      expect(flush.mock.calls.length + open.mock.calls.length).toBeGreaterThan(1)
+    })
+    expect(restored).toHaveBeenCalledOnce()
+    expect(await db.getOptional('SELECT 1 FROM blocks_synced_changes')).toBeTruthy()
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(true)
+    await drainStaged(db)
+    await vi.waitFor(async () => expect(await gate.readReason()).toBeNull())
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(repo.isReadOnly).toBe(false)
+  } finally {
+    await gate.stop()
+  }
+})
+
+it('checks the staging queue before replacing an unadmitted viewer bootstrap with an editor bootstrap', async () => {
+  const {db} = fixture
+  await syncServer(db)([serverWorkspace(testWorkspaceRow(workspaceId)), {...member, data: {...member.data, role: 'viewer'}}])
+  const {repo} = createTestRepo({db, user, isReadOnly: true})
+  const open = vi.fn<(signal: AbortSignal) => Promise<void>>().mockResolvedValue(undefined)
+    .mockImplementationOnce(() => new Promise<void>(() => {}))
+  const flush = vi.spyOn(repo, 'flushSyncObserver').mockResolvedValue(undefined)
+  const gate = startReadGate(db, repo, workspaceId, undefined, open, () => {},
+    {writable: true, isUploadHeld: () => false})
+  try {
+    await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
+    expect(gate.reason()).toBe('Opening workspace data')
+    expect(repo.isReadOnly).toBe(true)
+    await db.writeTransaction(async tx => {
+      await tx.execute("UPDATE workspace_members SET role = 'editor' WHERE id = ?", [member.id])
+      await tx.execute("INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'delete')", ['staged-removal'])
+    })
+    await vi.waitFor(() => expect(flush.mock.calls.length + open.mock.calls.length).toBeGreaterThan(1))
+    expect(open.mock.calls[0]![0].aborted).toBe(true)
+    expect(await db.getOptional('SELECT 1 FROM blocks_synced_changes')).toBeTruthy()
+    expect(open).toHaveBeenCalledOnce()
+    expect(repo.isReadOnly).toBe(true)
+    await drainStaged(db)
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(repo.isReadOnly).toBe(false)
   } finally {
     await gate.stop()
   }

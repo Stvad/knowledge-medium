@@ -103,7 +103,7 @@ export const resolveInitialLayout = async (
 
   // A null role (membership not synced yet) opens writable: a viewer's next
   // sync tick flips it, and the server rejects its writes meanwhile.
-  const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
+  const role = await getLocalMemberRole(repo.db, workspaceId, repo.user.id)
   repo.setReadOnly(role === 'viewer')
 
   // Phase 4 — bootstrap writes (remember-as-default, backfills, tutorial, the

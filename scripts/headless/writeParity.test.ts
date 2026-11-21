@@ -111,12 +111,13 @@ const changedSnapshot = async (db: Db, before: BlockRow[]) => {
     for (const [id, name] of ids) wire = wire.replaceAll(id, name)
     return wire
   }
-  const changedIds = new Set(rows.map(row => row.id))
+  const liveIds = new Set(all.map(row => row.id))
+  const removed = before.filter(row => !liveIds.has(row.id)).map(row => row.id)
   const references = await db.getAll<ReferenceRow>(
     'SELECT source_id, target_id, alias, source_field, workspace_id FROM block_references WHERE workspace_id = ?',
     [workspaceId],
   )
-  return {rows: rows.map(normalize).sort(), references: references.filter(row => changedIds.has(row.source_id)).map(normalize).sort()}
+  return {rows: rows.map(normalize).sort(), removed, references: references.map(normalize).sort()}
 }
 
 // The scratch server has one bucket. Replay accepted tab writes into it before
@@ -244,6 +245,7 @@ it('writes the same rows as the tab and seals every uploaded content column', as
     await hostRepo.awaitDeferredWork()
     expect(await queue(host.db)).toEqual([])
     const hostBaseline = await rowsIn(host.db)
+    expect(hostBaseline).toEqual(tabBaseline)
 
     const steps: KnownAgentCommand[] = [
       {type: 'create-block', parentId: fromId, data: {id: noteId}, content: 'draft', properties: {status: 'open'}, contributorId: creator},

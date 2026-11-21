@@ -101,7 +101,7 @@ Serving is a state the host enters and can leave, not a point boot passes once. 
 - `repo.workspaceViewGap(workspaceId)` is null: nothing staged, sync settled, no re-materialization running, no downloaded row left unapplied. All arms, where the tab's gate asks only the local ones behind a per-device marker; a daemon has no reason to open on a backlog. While the gap is transient the host waits and kicks the drain with `repo.flushSyncObserver()`, since a failed drain window otherwise retries only on the next arrival. A durable gap does not clear by waiting: `health` gives the count, and the read-only bridge profile cannot invoke the local repair command. **[read]** Sized on one live client by #1777: zero such rows;
 - the host's member row is local.
 
-**Open.** The gate sets the Repo's access before calling `openWorkspaceData` on entry and on a role change. Only an editor or owner on a write-enabled host with no stale upload hold gets a writable Repo. The host awaits both namespace reads before admitting commands. It rechecks membership when a command arrives so demotion takes effect even ahead of the table notification. A failed membership read closes admission and revokes write access.
+**Open.** The gate sets the Repo's access before calling `openWorkspaceData` on entry and on a role change. Only an editor or owner on a write-enabled host with no stale upload hold gets a writable Repo. Before admission, membership and the workspace view gap come from one database snapshot. The host checks again after flushing a backlog and awaits both namespace reads before admitting commands. It rechecks membership when a command arrives so demotion takes effect even ahead of the table notification. A failed membership read closes admission and revokes write access.
 
 **Back to closed** when the member row disappears. Removing the member drops the whole workspace from the device, and restoring it returns the member row and a million blocks in one checkpoint **[read]**; without this the host would be writable over a workspace that is still draining, and its get-or-create verbs would mint pages the server already has.
 
@@ -149,7 +149,7 @@ The write-enabled profile serves the listed write verbs via the shared command l
 
 | Failure | What happens | Recovery |
 |---|---|---|
-| Killed mid-upload | The queue is on disk. Delivery is at-least-once: creates are insert-or-skip, a replayed patch re-applies the same columns **[read]** | Restart |
+| Killed mid-upload | The queue is on disk. Delivery is at-least-once: a replayed create preserves the existing row and touches it to emit a sync echo. A replayed patch re-applies its columns **[read]** | Restart |
 | Killed between a write and its post-commit processor | Derived columns such as parsed references stay underived until the block is next edited; content is intact. Same as a tab closed at that moment **[read]** | None; accepted |
 | Session refresh refused | Boot exits non-zero. Mid-run a permanent refusal after access-token expiry emits sign-out and exits | Run `pnpm headless login <config.json>`, restart |
 | Wrong or missing key | Boot exits before bridge registration | Fix the key file, restart |
@@ -302,7 +302,14 @@ pnpm agent --profile headless-scratch health
 pnpm agent --profile "$tab" get-block "$block"
 ```
 
-For a held scratch queue, inspect its entries before release, stop the host, and run:
+For a held scratch queue, stop the host and inspect its on-disk operations. Set `state` to the configured state directory and `db` to the dedicated member’s database listed by the first command. Review the local queue before authorizing replay.
+
+```sh
+find "$state" -maxdepth 1 -name 'kmp-v6-*.db'
+sqlite3 -readonly "$db" "SELECT id, tx_id, json_extract(data,'$.op'), json_extract(data,'$.id'), json_extract(data,'$.data.updated_at') FROM ps_crud ORDER BY id"
+```
+
+To release that queue, run:
 
 ```sh
 pnpm headless run "$config" --release-stale-queue
