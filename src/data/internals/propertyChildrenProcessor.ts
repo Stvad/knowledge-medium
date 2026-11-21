@@ -90,6 +90,8 @@ type ResolveNameSchema = (name: string) => (AnyPropertySchema & {fieldId: string
 interface PropertyChildrenLookups {
   resolveFieldSchema: ResolveFieldSchema
   resolveNameSchema: ResolveNameSchema
+  /** Row edits are authoritative for these cells in the deferred pass. */
+  editedCells?: AffectedOwners
 }
 
 /** The projection direction's lookup half, on its own: raw repair paths
@@ -101,7 +103,7 @@ export type ProjectionLookups = Pick<PropertyChildrenLookups, 'resolveFieldSchem
  *  direction never resolves a fieldId — which lets a caller that already
  *  knows which schemas it is materializing supply just those, instead of a
  *  whole workspace resolver (`mergeBlocksInTx`'s pre-backfill catch-up). */
-export type MaterializeLookups = Pick<PropertyChildrenLookups, 'resolveNameSchema'>
+export type MaterializeLookups = Pick<PropertyChildrenLookups, 'resolveNameSchema' | 'editedCells'>
 
 /** The fields the projection direction reads off a changed row. Narrower
  *  than `BlockData` so a repair path can retain a few columns per stamped
@@ -600,6 +602,7 @@ export const materializePropertyChildrenForExistingRow = async (
       // never a silent skip-and-delete here.
       continue
     }
+    if (lookups.editedCells?.get(row.id)?.has(schema.fieldId)) continue
     const matchingChildren = fieldRowsForSchema(children, schema.fieldId)
     const encoded = storedPropertyValue(row.properties, name)
 
@@ -980,14 +983,9 @@ export const freshSlots = (
   }
 }
 
-const reconcileMemberValueChildren = async (
-  tx: Tx,
-  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
-  schema: AnyPropertySchema,
-  values: readonly BlockData[],
-  contents: readonly string[],
-  additive: boolean,
-): Promise<void> => {
+export const matchMemberValueChildren = (
+  schema: AnyPropertySchema, values: readonly BlockData[], contents: readonly string[],
+) => {
   // By VALUE, not raw text: a member a person spelled ` 1 ` projects to exactly
   // what the canonical text projects to, and matching on text alone reaps that
   // row — with its comments, its own properties and its history — to mint a
@@ -1012,6 +1010,18 @@ const reconcileMemberValueChildren = async (
   const keptRows = new Set(kept)
   const surplus = values.filter(value => !keptRows.has(value))
 
+  return {kept, surplus, contentKeys, keyByRow}
+}
+
+const reconcileMemberValueChildren = async (
+  tx: Tx,
+  fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
+  schema: AnyPropertySchema,
+  values: readonly BlockData[],
+  contents: readonly string[],
+  additive: boolean,
+): Promise<void> => {
+  const {kept, surplus, contentKeys, keyByRow} = matchMemberValueChildren(schema, values, contents)
   // `additive` governs EVERY removal, folding included: a fold takes a row
   // away, and multiplicity is part of a list's value, so a repeated member that
   // arrived unobserved has to survive one too.
@@ -1262,7 +1272,9 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
     // Revival reads the tx's write log through `ctx`, never this event: on the
     // re-run pass the event holds only rows dirtied since the first, with a
     // merged `before`.
-    await materializeChangedRows(ctx.tx, event.changedRows, lookupsFor(ctx, event.workspaceId), ctx)
+    await materializeChangedRows(ctx.tx, event.changedRows, {
+      ...lookupsFor(ctx, event.workspaceId), editedCells: cellEdits.get(ctx.tx.meta),
+    }, ctx)
   },
 })
 
@@ -1346,31 +1358,38 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
   },
 })
 
-export const REPROJECT_CELL_EVENT = 'core.reprojectPropertyCell'
+// Per writing transaction. A paste may address the same cell twice through
+// two columns. Once a row edit supersedes the eager bag write, the deferred
+// materializer must leave that pair to projection. Eager typed writes still
+// reconcile normally, including a later paste into the same cell.
+const cellEdits = new WeakMap<Tx['meta'], AffectedOwners>()
+const REPROJECT_CELL_EVENT = 'core.reprojectPropertyCell'
 
-interface ReprojectCell {ownerId: string; fieldId: string}
+export const hasPendingCellProjection = (tx: Tx, ownerId: string, fieldId: string): boolean =>
+  cellEdits.get(tx.meta)?.get(ownerId)?.has(fieldId) === true
 
-declare module '../api/sameTxProcessor' {
-  interface SameTxEventRegistry {
-    'core.reprojectPropertyCell': ReprojectCell
+export const requestCellProjection = (
+  tx: Tx, owner: BlockData, fieldId: string, schema: AnyPropertySchema,
+): void => {
+  let owners = cellEdits.get(tx.meta)
+  if (!owners) {
+    tx.emitEvent(REPROJECT_CELL_EVENT, undefined, owner.workspaceId)
+    owners = new Map()
+    cellEdits.set(tx.meta, owners)
   }
+  let fields = owners.get(owner.id)
+  if (!fields) owners.set(owner.id, fields = new Map())
+  fields.set(fieldId, schema)
 }
 
-/** A cell edit can change the projection without changing any source row,
- * e.g. clearing a pending key. Projection writes must stay settled so
- * materialization cannot interpret the removed key as a subtree delete. */
+/** A pending bag key can be cleared without a source-row change. Only
+ * cells registered by a checked row edit participate in settled projection. */
 export const REPROJECT_CELL_PROCESSOR = defineSameTxProcessor({
   name: REPROJECT_CELL_EVENT,
   watches: {kind: 'event', events: [REPROJECT_CELL_EVENT]},
   settledWrites: true,
-  apply: async (event, ctx) => {
-    const affected: AffectedOwners = new Map()
-    const lookups = lookupsFor(ctx, event.workspaceId)
-    for (const emitted of event.emittedEvents) {
-      const {ownerId, fieldId} = emitted.payload as ReprojectCell
-      addAffectedProjection(affected, ownerId, fieldId, lookups)
-    }
-    for (const [ownerId, fields] of affected) {
+  apply: async (_event, ctx) => {
+    for (const [ownerId, fields] of cellEdits.get(ctx.tx.meta) ?? []) {
       await reprojectOwner(ctx.tx, ownerId, fields, 'full')
     }
   },

@@ -60,6 +60,7 @@ const setup = async (schema: AnyPropertySchema = textProperty, mode = 'children'
 interface RawBlock {
   id: string
   parent?: string
+  workspace?: string
   content?: string
   properties?: Record<string, unknown>
   references?: Array<{id: string; alias: string; sourceField: string}>
@@ -69,13 +70,13 @@ interface RawBlock {
 
 const seed = async (...blocks: RawBlock[]) => {
   await db.db.writeTransaction(async tx => {
-    for (const {id, parent, content, properties, references, fieldTarget, deleted} of blocks) {
+    for (const {id, parent, workspace, content, properties, references, fieldTarget, deleted} of blocks) {
       await tx.execute(
         `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
           references_json, created_at, updated_at, user_updated_at, created_by, updated_by,
           deleted, is_field_form, reference_target_id)
           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 'test-user', 'test-user', ?, ?, ?)`,
-        [id, workspaceId, parent ?? null, 'a0', content ?? (fieldTarget ? `::((${fieldTarget}))` : ''),
+        [id, workspace ?? workspaceId, parent ?? null, 'a0', content ?? (fieldTarget ? `::((${fieldTarget}))` : ''),
           JSON.stringify(properties ?? {}), JSON.stringify(references ?? []), deleted ? 1 : 0, fieldTarget ? 1 : null, fieldTarget ?? null],
       )
     }
@@ -404,7 +405,7 @@ describe('clearCell', () => {
     {state: 'a nested note', extra: [value('note', 'keep', 'value-a')]},
     {state: 'properties on the blank value', properties: {annotation: 'keep'}},
     {state: 'another value row', extra: [value('peer', 'keep')]},
-    {state: 'another blank value row', extra: [value('peer', '')]},
+    {state: 'another blank value row', extra: [value('z-peer', '')]},
     {state: 'another field with a value', extra: [field('field-b'), value('peer', 'keep', 'field-b')]},
     {state: 'another empty field', extra: [field('field-b')]},
   ])('keeps the cell after editing when it has $state', async ({content = '', id = 'value-a', properties, extra = []}) => {
@@ -446,21 +447,21 @@ const operations = {
 
 describe.each(Object.entries(operations))('%s cell eligibility', (_operation, run) => {
   it.each([
-    {state: 'missing owner', owner: 'missing'},
-    {state: 'deleted owner', deleted: true},
-    {state: 'pre-flip workspace', mode: 'cell'},
-    {state: 'unknown definition', definition: 'unknown'},
-    {state: 'non-block-scoped definition', schema: uiProperty},
-    {state: 'wrong transaction scope', scope: ChangeScope.UiState},
+    {state: 'missing owner', owner: 'missing', error: 'The cell owner is missing or deleted.'},
+    {state: 'deleted owner', deleted: true, error: 'The cell owner is missing or deleted.'},
+    {state: 'pre-flip workspace', mode: 'cell', error: 'Cells require child-backed properties.'},
+    {state: 'unknown definition', definition: 'unknown', error: 'The column definition is unavailable.'},
+    {state: 'non-block-scoped definition', schema: uiProperty, error: 'Cells require a block-scoped property and transaction.'},
+    {state: 'wrong transaction scope', scope: ChangeScope.UiState, error: 'Cells require a block-scoped property and transaction.'},
   ])('refuses a $state before touching any rows', async ({
     owner = ownerId, deleted = false, mode = 'children', definition = fieldId, schema = textProperty,
-    scope = ChangeScope.BlockDefault,
+    scope = ChangeScope.BlockDefault, error,
   }) => {
     const repo = await setup(schema, mode)
     await seed({id: ownerId, deleted, properties: {[schema.name]: 'old text'}}, field(), value('value-a', 'old text'))
     const before = await snapshot()
 
-    await expect(repo.tx(async tx => { await run(tx, owner, definition) }, {scope})).rejects.toThrow()
+    await expect(repo.tx(async tx => { await run(tx, owner, definition) }, {scope})).rejects.toThrow(error)
     expect(await snapshot()).toEqual(before)
   })
 })
@@ -576,7 +577,9 @@ describe('list cells', () => {
 
   it('rolls back a whole reference list paste when one member is invalid', async () => {
     const repo = await setup(refListProperty)
-    await seed({id: ownerId, properties: {[refListProperty.name]: ['target']}}, field(), value('value-a', '((target))'))
+    await seed({id: ownerId, properties: {[refListProperty.name]: ['target']},
+      references: [{id: 'target', alias: 'target', sourceField: refListProperty.name}]},
+    field(), value('value-a', '((target))'))
     const before = await snapshot()
 
     await expect(repo.tx(tx => writeCellText(tx, ownerId, fieldId, '((replacement))\nunfinished'), options))
@@ -672,6 +675,248 @@ describe('range cell writes', () => {
       await writeCellText(tx, 'other-owner', fieldId, '::((definition))')
     }, options)).rejects.toThrow()
 
+    expect(await snapshot()).toEqual(before)
+  })
+})
+
+describe('cell write boundaries', () => {
+  it('refuses navigation in a transaction pinned to a different workspace', async () => {
+    const repo = await setup()
+    await seed({id: ownerId}, field(), value('value-a', 'saved'))
+    await repo.tx(async tx => {
+      await tx.create({workspaceId: 'other', parentId: null, content: 'other', orderKey: 'a0'})
+      expect(tx.meta.workspaceId).toBe('other')
+      await expect(openCell(tx, ownerId, fieldId)).rejects.toMatchObject({name: 'WorkspaceMismatchError'})
+    }, {...options, allowUnloadedWorkspace: true})
+  })
+
+  it('refuses a new blank among unreadable scalar peers with a stale stored value', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 2}}, field(), value('value-a', 'one'), value('value-b', 'two'))
+    const before = await snapshot()
+    await repo.tx(async tx => {
+      await expect(openCell(tx, ownerId, fieldId)).rejects.toThrow('would change its stored value')
+    }, options)
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it('reprojects unchanged unreadable text when the bag has a late value', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 2}}, field(), value('value-a', 'unfinished'))
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, 'unfinished'), options)
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: 'unfinished'}])
+    expect(await projection()).toEqual({})
+  })
+
+  it('retains an annotated primary when its scalar is pasted again', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 3}}, field(), value('value-a', '3'), value('note', 'keep', 'value-a'))
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, '3'), options)
+    expect(await children('value-a')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[numberProperty.name]: 3})
+  })
+
+  it('keeps an annotated divergent peer when replacing the scalar', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 3}}, field(), value('value-a', '3'),
+      value('value-b', '7'), value('note', 'keep', 'value-b'))
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, '4'), options)
+    expect(await children('value-b')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[numberProperty.name]: 4})
+  })
+
+  it('folds an unannotated scalar peer that already holds the pasted value', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 3}}, field(), value('value-a', '3'), value('value-b', '7'))
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, '7'), options)
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: '7'}])
+  })
+
+  it('preserves an unreadable list member and its notes while replacing valid members', async () => {
+    const repo = await setup(refListProperty)
+    await seed({id: ownerId}, field(), value('value-a', 'invalid'), value('note', 'keep', 'value-a'))
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, '((target))'), options)
+    expect(await children('field-a')).toEqual(expect.arrayContaining([{id: 'value-a', content: 'invalid'}]))
+    expect(await children('value-a')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[refListProperty.name]: ['target']})
+  })
+})
+
+describe('several edits to the same cell in one transaction', () => {
+  it.each([undefined, 5])('keeps the invalid draft after writing a valid scalar (prior: %s)', async prior => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: prior === undefined ? {} : {[numberProperty.name]: prior}},
+      ...(prior === undefined ? [] : [field(), value('value-a', String(prior))]))
+
+    await repo.tx(async tx => {
+      await writeCellText(tx, ownerId, fieldId, '6')
+      await writeCellText(tx, ownerId, fieldId, 'unfinished')
+    }, options)
+
+    const [fieldRow] = await children(ownerId)
+    expect(await children(fieldRow!.id)).toEqual([{id: prior === undefined ? expect.any(String) : 'value-a', content: 'unfinished'}])
+    expect(await projection()).toEqual({})
+  })
+
+  it.each([false, true])('honors a clear after writing a valid scalar (with note: %s)', async withNote => {
+    const repo = await setup()
+    await seed({id: ownerId, properties: {[textProperty.name]: 'before'}}, field(), value('value-a', 'before'),
+      ...(withNote ? [value('note', 'keep', 'value-a')] : []))
+
+    await repo.tx(async tx => {
+      await writeCellText(tx, ownerId, fieldId, 'after')
+      await clearCell(tx, ownerId, fieldId)
+    }, options)
+
+    expect(await children(ownerId)).toEqual(withNote ? [{id: 'field-a', content: '::((definition))'}] : [])
+    expect(await children('field-a')).toEqual(withNote ? [{id: 'value-a', content: ''}] : [])
+    expect(await children('value-a')).toEqual(withNote ? [{id: 'note', content: 'keep'}] : [])
+    expect(await projection()).toEqual(withNote ? {[textProperty.name]: ''} : {})
+  })
+
+  it('opens a blank row after clearing a pending key without rematerializing the cleared value', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 5}})
+
+    const valueId = await repo.tx(async tx => {
+      await clearCell(tx, ownerId, fieldId)
+      return openCell(tx, ownerId, fieldId)
+    }, options)
+
+    const [fieldRow] = await children(ownerId)
+    expect(await children(fieldRow!.id)).toEqual([{id: valueId, content: ''}])
+    expect(await projection()).toEqual({})
+  })
+
+  it('projects the valid edit after an invalid edit to the same row', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(), value('value-a', '5'))
+
+    await repo.tx(async tx => {
+      await writeCellText(tx, ownerId, fieldId, 'unfinished')
+      await writeCellText(tx, ownerId, fieldId, '6')
+    }, options)
+
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: '6'}])
+    expect(await projection()).toEqual({[numberProperty.name]: 6})
+  })
+})
+
+describe('reference cell editing', () => {
+  it.each([
+    {schema: refProperty, encoded: '\ud800'},
+    {schema: refListProperty, encoded: ['\ud800']},
+  ])('refuses to materialize an unpaired surrogate stored in $schema.name', async ({schema, encoded}) => {
+    const repo = await setup(schema)
+    const id = '\ud800'
+    await seed({id: ownerId, properties: {[schema.name]: encoded}, references: [{id, alias: id, sourceField: schema.name}]})
+    const before = await snapshot()
+
+    await repo.tx(async tx => {
+      await expect(openCell(tx, ownerId, fieldId)).rejects.toThrow()
+    }, options)
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it.each([refProperty, refListProperty])('refuses a pasted reference to an unpaired surrogate in $name', async schema => {
+    const repo = await setup(schema)
+    await seed({id: ownerId})
+    const before = await snapshot()
+
+    await repo.tx(async tx => {
+      await expect(writeCellText(tx, ownerId, fieldId, '((\ud800))')).rejects.toThrow()
+    }, options)
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it('cleans up only the opened reference-list draft on repeated opens and closes', async () => {
+    const repo = await setup(refListProperty)
+    const original = [value('value-a', '((first))'), value('value-b', '((second))')]
+    await seed({
+      id: ownerId,
+      properties: {[refListProperty.name]: ['first', 'second']},
+      references: ['first', 'second'].map(id => ({id, alias: id, sourceField: refListProperty.name})),
+    }, field(), ...original, value('note', 'keep', 'value-b'))
+
+    for (let i = 0; i < 2; i += 1) {
+      const draft = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+      expect(await children('field-a')).toEqual([
+        {id: 'value-a', content: '((first))'}, {id: 'value-b', content: '((second))'}, {id: draft, content: ''},
+      ])
+      await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: draft}), options)
+      expect(await children('field-a')).toEqual([{id: 'value-a', content: '((first))'}, {id: 'value-b', content: '((second))'}])
+      expect(await children('value-b')).toEqual([{id: 'note', content: 'keep'}])
+      expect(await projection()).toEqual({[refListProperty.name]: ['first', 'second']})
+    }
+  })
+})
+
+describe('cell projection and workspace boundaries', () => {
+  it('keeps stored keys in a cell workspace even when an extension requests projection', async () => {
+    const repo = await setup(textProperty, 'cell')
+    await seed({id: ownerId, properties: {[textProperty.name]: 'pending'}})
+    const before = await snapshot()
+
+    await repo.tx(async tx => {
+      tx.emitEvent('core.reprojectPropertyCell', {ownerId, fieldId}, workspaceId)
+    }, options)
+
+    expect(await snapshot()).toEqual(before)
+  })
+
+  describe.each(Object.entries(operations))('%s with inconsistent synced rows', (_operation, run) => {
+    it.each([
+      {state: 'a foreign field', fieldWorkspace: 'other', valueWorkspace: workspaceId},
+      {state: 'a foreign value', fieldWorkspace: workspaceId, valueWorkspace: 'other'},
+    ])('refuses $state even when the caller catches the error', async ({fieldWorkspace, valueWorkspace}) => {
+      const repo = await setup()
+      await seed({id: ownerId, properties: {[textProperty.name]: 'saved'}},
+        {...field(), workspace: fieldWorkspace}, {...value('value-a', 'saved'), workspace: valueWorkspace})
+      const before = await snapshot()
+
+      await repo.tx(async tx => {
+        await expect(run(tx, ownerId, fieldId)).rejects.toThrow(/workspace/i)
+      }, options)
+
+      expect(await snapshot()).toEqual(before)
+    })
+  })
+})
+
+describe('opening and finishing an edit against existing rows', () => {
+  it('opens an existing scalar without reconciling a different stored value over its row', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 2}}, field(), value('value-a', '5'))
+    const before = await snapshot()
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe('value-a')
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it('opens an explicitly empty reference list without adding a projected member', async () => {
+    const repo = await setup(refListProperty)
+    await seed({id: ownerId, properties: {[refListProperty.name]: []}})
+    const id = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    expect(await children((await children(ownerId))[0]!.id)).toEqual([{id, content: ''}])
+    expect(await projection()).toEqual({[refListProperty.name]: []})
+  })
+
+  it('reuses a trailing reference-list draft before edit end', async () => {
+    const repo = await setup(refListProperty)
+    await seed({id: ownerId, properties: {[refListProperty.name]: []}}, field(), value('value-a', ''))
+    const before = await snapshot()
+    await expect(repo.tx(tx => openCell(tx, ownerId, fieldId), options)).resolves.toBe('value-a')
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it.each([
+    {name: 'a stored empty member', schema: textListProperty, content: 'first', stored: ['first', ''], extra: []},
+    {name: 'a draft with a note', schema: refListProperty, content: 'invalid', stored: [], extra: [value('note', 'keep', 'value-b')]},
+  ])('keeps $name when ending a list edit', async ({schema, content, stored, extra}) => {
+    const repo = await setup(schema)
+    await seed({id: ownerId, properties: {[schema.name]: stored}}, field(),
+      value('value-a', content), value('value-b', ''), ...extra)
+    const before = await snapshot()
+    await repo.tx(tx => clearCell(tx, ownerId, fieldId, {ifBlankValueId: 'value-b'}), options)
     expect(await snapshot()).toEqual(before)
   })
 })

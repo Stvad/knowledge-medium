@@ -1034,9 +1034,9 @@ export const propertyCellQuery = defineQuery<{ownerId: string; fieldId: string},
     for (const field of ctx.hydrateBlocks(asBlockRows(rows))) {
       ctx.depend({kind: 'parent-edge', parentId: field.id})
       const values = await ctx.db.getAll<BlockRow>(`
-        SELECT * FROM blocks WHERE parent_id = ? AND deleted = 0 AND is_field_form IS NOT 1
+        SELECT * FROM blocks WHERE parent_id = ? AND workspace_id = ? AND deleted = 0 AND is_field_form IS NOT 1
         ORDER BY order_key, id
-      `, [field.id])
+      `, [field.id, owner.workspaceId])
       fields.push({field, values: ctx.hydrateBlocks(asBlockRows(values))})
     }
     return {owner, fields}

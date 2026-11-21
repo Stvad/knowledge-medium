@@ -29,6 +29,7 @@ describe('core.propertyCell', () => {
     await raw('field-a', 'owner', 'a', {field: true, target: 'definition'})
     await raw('value-b', 'field-a', 'b', {content: 'same'})
     await raw('value-a', 'field-a', 'a', {content: 'same'})
+    await raw('foreign-value', 'field-a', 'b', {workspace: 'other'})
     await raw('nested-field', 'field-a', 'c', {field: true, target: 'definition'})
     await raw('deleted', 'field-a', 'd', {deleted: true})
     await raw('other', 'owner', 'c', {target: 'definition'})
