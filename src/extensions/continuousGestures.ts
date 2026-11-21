@@ -38,13 +38,20 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { RefCallback, RefObject } from 'react'
 import { defineFacet, isFunction } from '@/facets/facet.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { ownsGestureTarget, type BlockResolveContext } from '@/extensions/blockInteraction.js'
+import { elementOf, ownsGestureTarget, type BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { ActionTrigger, BaseShortcutDependencies } from '@/shortcuts/types.js'
 import {
   dispatchGesture as defaultDispatchGesture,
   beginGestureProgress as defaultBeginGestureProgress,
   type GestureProgressDispatch,
 } from '@/shortcuts/gestureAction.js'
+
+/** Mark a surface wrapper to reserve continuous gestures and block drag for
+ *  the surface itself. */
+export const NO_BLOCK_GESTURES_ATTRIBUTE = 'data-no-block-gestures'
+
+export const allowsBlockGestures = (target: EventTarget | null): boolean =>
+  !elementOf(target)?.closest(`[${NO_BLOCK_GESTURES_ATTRIBUTE}]`)
 
 /** A pointer currently in contact with the gesture surface. */
 export interface GesturePointer {
@@ -516,6 +523,7 @@ export const createBlockGestureController = ({
       // block (see `ownsGestureTarget`). Never registering it is what drops the
       // rest of its session: every later phase is gated on `pointers`.
       if (!ownsGestureTarget(element, sample.target)) return false
+      if (!allowsBlockGestures(sample.target)) return false
       pointers.set(sample.pointerId, toPointer(sample))
       if (consumed) return false
       const prevent = run('down', sample)
@@ -769,7 +777,7 @@ export const useContinuousGestures = (
   )
   useEffect(() => {
     const element = nodeRef.current
-    if (!element || recognizers.length === 0) return
+    if (!element || recognizers.length === 0 || !allowsBlockGestures(element)) return
     const previousTouchAction = element.style.touchAction
     if (desiredTouchAction) element.style.touchAction = desiredTouchAction
     return () => {
