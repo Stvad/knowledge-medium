@@ -1,25 +1,16 @@
 import {adoptOrCreatePropertySchema} from './propertySchemaCreation'
 import type {Block} from './block'
 import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema} from './api'
-import {fieldRowsForSchema, fieldValueChildren, propertyFieldContent, scalarValueRow} from './propertyChildren'
+import {isPropertyAbsent, openPropertyValue, settlePropertyField} from './internals/propertyValueEdits'
+import {propertyFieldContent} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
 
-const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) => {
-  const parent = await tx.get(owner.id)
-  if (!parent || parent.deleted || !await tx.isPropertyChildBackedWorkspace(parent.workspaceId)) {
-    throw new Error('This block no longer supports properties in the outline.')
-  }
+const resolveChosenSchema = async (tx: Tx, owner: Block, requested: AnyPropertySchema) => {
   const schema = await tx.resolvePropertySchema(owner.id, requested) as AnyResolvedPropertySchema
   if (!scopePoliciesEquivalent(requested.changeScope, schema.changeScope)) {
     throw new PropertySchemaScopeMismatchError(schema.name, requested.changeScope, schema.changeScope)
   }
-  const fields = fieldRowsForSchema(await tx.childrenOf(owner.id), schema.fieldId)
-  if (!fields.length && storedPropertyValue(parent.properties, schema.name) !== undefined) {
-    throw new Error('This property has a stored value awaiting its field row. Open the property panel to inspect it.')
-  }
-  const field = memberCodecOf(schema.codec) ? fields.at(-1) : fields[0]
-  const values = field ? await fieldValueChildren(tx, field.id) : []
-  return {parent, schema, field, values}
+  return schema
 }
 
 const validateScaffold = async (tx: Tx, owner: Block, source: Block, content: string, isCurrent: () => boolean) => {
@@ -31,17 +22,24 @@ const validateScaffold = async (tx: Tx, owner: Block, source: Block, content: st
   if (!isCurrent()) throw new Error('The input block changed. Your text was kept.')
 }
 
-/** Convert in place; an existing field consumes only the verified scaffold. */
+/** An absent property takes the scaffold as its field row. Otherwise the scaffold goes and the
+ *  property's rows settle as every property edit settles them, materializing a stored value that
+ *  has no rows yet. A scalar then opens its value; a list returns no value, for the caller to
+ *  append a member (opening would select its last one). */
 export const choosePropertyField = async (owner: Block, schema: AnyPropertySchema, source: Block, content: string, isCurrent: () => boolean) => {
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
   return owner.repo.tx(async tx => {
-    const context = await fieldContext(tx, owner, schema)
+    const resolved = await resolveChosenSchema(tx, owner, schema)
+    const absent = await isPropertyAbsent(tx, owner.id, resolved.fieldId)
     await validateScaffold(tx, owner, source, content, isCurrent)
-    const {field, values, schema: resolved} = context
-    if (field) await tx.delete(source.id)
-    else await tx.update(source.id, {content: propertyFieldContent(resolved.fieldId)})
-    const value = memberCodecOf(resolved.codec) ? undefined : scalarValueRow(resolved, values) ?? values[0]
-    return {schema: resolved, fieldRowId: field?.id ?? source.id, valueId: value?.id}
+    if (absent) {
+      await tx.update(source.id, {content: propertyFieldContent(resolved.fieldId)})
+      return {schema: resolved, fieldRowId: source.id, valueId: undefined}
+    }
+    await tx.delete(source.id)
+    const fieldRowId = await settlePropertyField(tx, owner.id, resolved.fieldId)
+    if (memberCodecOf(resolved.codec)) return {schema: resolved, fieldRowId, valueId: undefined}
+    return {schema: resolved, fieldRowId, valueId: (await openPropertyValue(tx, owner.id, resolved.fieldId)).valueId}
   }, {scope: schema.changeScope, description: 'Choose property field'})
 }
 

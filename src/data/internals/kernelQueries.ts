@@ -1005,16 +1005,16 @@ export const childrenQuery = defineQuery<
   },
 })
 
-export interface PropertyCellResult {
+export interface PropertyRowsResult {
   owner: BlockData | null
   fields: Array<{field: BlockData; values: Array<BlockData & {hasChildren: boolean}>}>
 }
 
-/** The source rows for a property cell, including duplicate field rows. */
-export const propertyCellQuery = defineQuery<{ownerId: string; fieldId: string}, PropertyCellResult>({
-  name: 'core.propertyCell',
+/** One property's rows under its owner: every field row, duplicates included, with its value rows. */
+export const propertyRowsQuery = defineQuery<{ownerId: string; fieldId: string}, PropertyRowsResult>({
+  name: 'core.propertyRows',
   argsSchema: z.object({ownerId: z.string(), fieldId: z.string()}).strict(),
-  resultSchema: {parse: input => input as PropertyCellResult},
+  resultSchema: {parse: input => input as PropertyRowsResult},
   resolve: async ({ownerId, fieldId}, ctx) => {
     ctx.depend({kind: 'row', id: ownerId})
     ctx.depend({kind: 'row', id: fieldId})
@@ -1030,7 +1030,7 @@ export const propertyCellQuery = defineQuery<{ownerId: string; fieldId: string},
         AND blocks.reference_target_id = ? AND (${recognizedFieldRowSql('blocks')})
       ORDER BY blocks.order_key, blocks.id
     `, [ownerId, owner.workspaceId, fieldId, ...recognition])
-    const fields: PropertyCellResult['fields'] = []
+    const fields: PropertyRowsResult['fields'] = []
     for (const field of ctx.hydrateBlocks(asBlockRows(rows))) {
       ctx.depend({kind: 'parent-edge', parentId: field.id})
       const values = await ctx.db.getAll<BlockRow & {has_children: number}>(`
@@ -2192,7 +2192,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   ancestorsQuery,
   manyAncestorsQuery,
   childrenQuery,
-  propertyCellQuery,
+  propertyRowsQuery,
   childIdsQuery,
   byTypeQuery,
   typedBlocksQuery,
@@ -2225,7 +2225,7 @@ declare module '@/data/api' {
     'core.ancestors': typeof ancestorsQuery
     'core.manyAncestors': typeof manyAncestorsQuery
     'core.children': typeof childrenQuery
-    'core.propertyCell': typeof propertyCellQuery
+    'core.propertyRows': typeof propertyRowsQuery
     'core.childIds': typeof childIdsQuery
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery

@@ -21,7 +21,7 @@ const raw = async (id: string, parent: string | null, order: string, options: {
   })
 }
 
-describe('core.propertyCell', () => {
+describe('core.propertyRows', () => {
   it('returns field groups and value rows in projection order with the stored owner', async () => {
     await raw('definition', null, 'a', {properties: {types: ['property-schema']}})
     await raw('owner', null, 'a', {properties: {sample: 'fallback'}})
@@ -38,7 +38,7 @@ describe('core.propertyCell', () => {
     await raw('deleted-field', 'owner', 'd', {field: true, target: 'definition', deleted: true})
     await raw('foreign', 'owner', 'd', {workspace: 'other', field: true, target: 'definition'})
     const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
-    const result = await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()
+    const result = await repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'}).load()
     expect(result.owner?.properties.sample).toBe('fallback')
     expect(result.fields.map(group => [group.field.id, group.values.map(value => value.id)]))
       .toEqual([['field-a', ['value-a', 'value-b']], ['field-b', []]])
@@ -49,7 +49,7 @@ describe('core.propertyCell', () => {
     await raw('definition', null, 'a', {workspace: 'other', properties: {types: ['property-schema']}})
     await raw('field', 'owner', 'a', {workspace: 'other', field: true, target: 'definition'})
     const {repo} = createTestRepo({db: db.db})
-    expect((await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()).fields).toEqual([])
+    expect((await repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'}).load()).fields).toEqual([])
   })
 
   it('marks value rows with live nested blocks in the owner workspace', async () => {
@@ -62,7 +62,7 @@ describe('core.propertyCell', () => {
     await raw('deleted-nested', 'empty-value', 'a', {deleted: true})
     await raw('foreign-nested', 'empty-value', 'b', {workspace: 'other'})
     const {repo} = createTestRepo({db: db.db})
-    const result = await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()
+    const result = await repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'}).load()
     expect(result.fields[0]?.values.map(value => [value.id, value.hasChildren]))
       .toEqual([['value', true], ['empty-value', false]])
     expect(repo.block('value').peek()).not.toHaveProperty('hasChildren')
@@ -75,7 +75,7 @@ describe('core.propertyCell', () => {
     await raw('value', 'field', 'a')
     await raw('sibling', 'owner', 'b')
     const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
-    const handle = repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'})
+    const handle = repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'})
     const unsubscribe = handle.subscribe(() => {})
     try {
       expect((await handle.load()).fields[0]?.values[0]?.hasChildren).toBe(false)
@@ -95,12 +95,12 @@ describe('core.propertyCell', () => {
     } finally { unsubscribe() }
   })
 
-  it('returns no cell for a deleted owner even with live field rows', async () => {
+  it('returns no rows for a deleted owner even with live field rows', async () => {
     await raw('definition', null, 'a', {properties: {types: ['property-schema']}})
     await raw('owner', null, 'a', {deleted: true})
     await raw('field', 'owner', 'a', {field: true, target: 'definition'})
     const {repo} = createTestRepo({db: db.db})
-    expect(await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load())
+    expect(await repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'}).load())
       .toEqual({owner: null, fields: []})
   })
 
@@ -109,7 +109,7 @@ describe('core.propertyCell', () => {
     await raw('owner', null, 'a', {properties: {sample: 'old'}})
     await raw('field', 'owner', 'a', {field: true, target: 'definition'})
     const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
-    const handle = repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'})
+    const handle = repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'})
     const unsubscribe = handle.subscribe(() => {})
     try {
       expect((await handle.load()).fields).toEqual([])
@@ -126,7 +126,7 @@ describe('core.propertyCell', () => {
     await raw('candidate', 'owner', 'a')
     await raw('value', 'candidate', 'a', {content: 'before'})
     const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
-    const handle = repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'})
+    const handle = repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'})
     const unsubscribe = handle.subscribe(() => {})
     try {
       expect((await handle.load()).fields).toEqual([])
@@ -144,7 +144,7 @@ describe('core.propertyCell', () => {
     await raw('nested', 'field', 'a', {field: true, target: 'definition'})
     await raw('sibling', 'owner', 'b')
     const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
-    const handle = repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'})
+    const handle = repo.query.propertyRows({ownerId: 'owner', fieldId: 'definition'})
     const unsubscribe = handle.subscribe(() => {})
     try {
       expect((await handle.load()).fields[0]?.values).toEqual([])
