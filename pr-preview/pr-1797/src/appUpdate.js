@@ -1,1 +1,0 @@
-export{BF as appUpdate,VF as useAppUpdateAvailable}from"../chunks/app-CE-MaSO-.js";

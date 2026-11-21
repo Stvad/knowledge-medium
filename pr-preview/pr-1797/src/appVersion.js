@@ -1,1 +1,0 @@
-export{Cl as appVersion}from"../chunks/app-CE-MaSO-.js";

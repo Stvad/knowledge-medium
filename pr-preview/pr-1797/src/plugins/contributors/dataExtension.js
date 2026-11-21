@@ -1,1 +1,0 @@
-export{q$ as contributorsDataExtension}from"../../../chunks/app-CE-MaSO-.js";

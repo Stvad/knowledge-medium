@@ -1,1 +1,0 @@
-export{GB as ExtensionRenderBoundary}from"../../chunks/app-CE-MaSO-.js";

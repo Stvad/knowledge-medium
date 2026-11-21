@@ -1,1 +1,0 @@
-export{kx as useIsReadOnly}from"../../chunks/app-CE-MaSO-.js";

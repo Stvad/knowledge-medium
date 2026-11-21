@@ -1,1 +1,0 @@
-export{wF as approveExtensionHere}from"../../chunks/app-CE-MaSO-.js";

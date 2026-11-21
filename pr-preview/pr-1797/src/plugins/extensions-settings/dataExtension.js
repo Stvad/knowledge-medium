@@ -1,1 +1,0 @@
-export{qr as extensionsDataExtension}from"../../../chunks/app-CE-MaSO-.js";
