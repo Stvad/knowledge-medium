@@ -65,7 +65,7 @@ Reading list             <- host block, table type; content is a free title
   - Field: `optional-ref` to a property definition (`targetTypes: ['property-schema']`; legal, with precedents: read). No field row at all means "the row's own content". A field row that doesn't resolve is an **error column** with read-only cells; it never falls back to row content.
   - Width: a number, written when a drag ends.
   - Content: an optional header label. Empty shows the definition's name.
-- **Row sources never return table machinery.** Field and value rows are excluded by the engine option in §5; the host's own view blocks by id.
+- **Row sources never return table machinery.** Field and value rows are excluded by the engine option in §5; view and column blocks by their types, in every row source, so another table's configuration never shows up as data rows or counts toward the cap.
 
 **Seeds.** v1 declares only what it uses: three types (table, view, column) and five properties (query, column field, column width, view sort column, view sort direction). Ids must be namespaced and **freeze when shipped**; naming is #363's open question (a markdown pipe table is already called a table in the UI). Hidden columns, multi-sort and an active-view pointer are not declared until a phase needs them. View and column blocks are created with `createTypedChild`.
 
@@ -103,8 +103,8 @@ Three core functions, each classifying **inside its transaction**. They live bes
 | Function | Does |
 |---|---|
 | open cell (owner, schema, first text?) → {value row id, created} | Field row exists: return its scalar value row, or append a member. No field row but a stored value: materialize the rows through the `setProperty` path (it creates them even when the value is unchanged: read). Neither: create both. Goes through `upsertFieldRow`, so duplicates collapse. Takes the typed first character, so the common way in writes the value in the same transaction and never projects a blank. Reports whether it opened an existing value or a new draft, so the grid knows whether typing replaces or fills |
-| write cell text (owner, schema, text) | Text that decodes goes through `setProperty`. Text that doesn't is written as the value row's content, so it stays visible with ⚠, unless the text would stop the row being a value at all. Empty text means clear |
-| clear cell (owner, schema) | Never calls unset. For every field row: a value row with anything nested is blanked and kept, otherwise deleted; the field row is deleted once it has no children. The projection processor then unsets the key |
+| write cell text (owner, schema, text) | Text that decodes goes through `setProperty`. Text that doesn't is written as the value row's content, so it stays visible with ⚠, unless the text would stop the row being a value at all. Empty text means clear. Replacing a list never deletes an annotated member: members that match keep their rows, and a write that would remove a member carrying nested blocks or properties is refused (resolve in the outline) |
+| clear cell (owner, schema) | Never calls unset. If any value row has something nested, the clear is refused (resolve in the outline): blanking and keeping it would still project `''`, or an empty list member, and leave the property set. Otherwise every value row is deleted, then each field row once it has no children, and the projection unsets the key |
 
 Why not the existing calls:
 
@@ -176,7 +176,7 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 
 ### While editing
 
-- While any cell editor in the table is open, the id list is frozen, plus the rows created here. It settles when editing ends. This is one gate in place of #363's per-row pin; the cost is that a remote change shows a few seconds late.
+- While any editor inside the table is open (a cell, or a block in an expanded row's subtree), the id list is frozen, plus the rows created here. It settles when editing ends. This is one gate in place of #363's per-row pin; the cost is that a remote change shows a few seconds late.
 - The placeholder row creates a block and back-fills what the query implies (type terms, `=` terms, parent terms), as in #363.
 - A new row that doesn't match the query is still visible: it is a child of the host, listed below the grid (§3).
 
@@ -213,6 +213,7 @@ Three modes, bound through the shortcut-surface activation seam that backlink en
 
 - **Each cell's value block is its own scope root.** The structural edit policy already refuses indent, outdent and merge-up at a scope root, and vertical move never moves one (read). Backlink entries rely on the same policy. Indent, outdent, merge-up and vertical move were refused at a cell (measured in the risk check, headless Chromium, dev build). **Split is not covered:** Split block from the palette created a persisted child of the value row that the cell does not show. Split is refused for a table cell at action dispatch, so the palette and the keyboard share one rule. No wildcard action guard: it would block undo, the palette and every extension action while a cell is focused. If something still leaks, deny it by id.
 - **Undo** stays per editor flush: two flushes of one cell edit are two undo steps, and `undoGroup` over `block(id).setContent` did not merge them (only `mutate.setContent` writes did) (measured in the risk check, headless Chromium, dev build). One undo per cell edit would need a grouped write path through the editor; not planned.
+- **Typing the exact field-form text** `::((id))` into a value block turns it into a field row, as it does anywhere in the outline. Accepted: the block and its text are kept, and only the exact marked syntax does it.
 - **Completions are not actions.** In an empty cell, `::` converts the value row itself into a field row (read: the `::` flow converts the block it is typed in), so the value disappears from a cell that cannot show a field row; `::` is switched off in cells. Everything else stays on. `#type` tags the value block, which is ordinary block behaviour: the row stays a value, and a reference value whose text gains a tag shows ⚠ like any other edit. `[[`, `((` and the value autocomplete (the enum and reference candidates a ref cell needs) stay on too. The seam is a per-surface flag that only the `::` source checks, not a switch for the whole completion engine, which would also remove the value candidates. The cell's Enter yields to an open completion. The grid sets the flag around cells only, not on the host, or the row's own editor and its expanded subtree inherit it.
 - **Paste.** The grid owns every paste inside it, bound on the host's shell so it also fires when the row is focused. Editing a cell: always a single-block insert, and an armed cut is refused. Row focused: TSV into the range.
 - **Shift-click** extends the grid range and never reaches block selection (measured).
@@ -223,7 +224,7 @@ Three modes, bound through the shortcut-surface activation seam that backlink en
 Select by mouse drag and Shift+arrow; copy and paste as TSV; fill; clear.
 
 - Pasting writes through write-cell-text, targeting the scalar value row.
-- A list cell copies as its members on separate lines in one quoted TSV cell, and pastes back the same way.
+- A list cell copies as a JSON array of its members inside one quoted TSV cell, so a member containing a newline survives the round trip. A pasted cell that parses as a JSON array of strings is taken as members; any other text is one member per line.
 - A paste larger than the table is clipped to existing rows and visible columns. It creates no rows.
 - Measured in the spike only on string columns, through `setProperty`. The helpers here are new paths, and the spike's TSV parser does not handle quoted cells.
 
