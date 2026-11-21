@@ -1945,7 +1945,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     expect(runs).toBe(2)
   })
 
-  it('queue is discarded on load failure (deps were rolled back too)', async () => {
+  it('queue is discarded on load failure', async () => {
     const store = makeStore()
     let releaseSql!: () => void
     let runs = 0
@@ -1976,9 +1976,7 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     releaseSql()
     await waitFor(() => expect(h.status()).toBe('error'))
 
-    // The errored load discards `changesDuringLoad` along with the
-    // partial deps. A future rerun must not fire spuriously off the
-    // queue from the failed run.
+    // A queued change for a never-declared dependency cannot trigger a retry.
     shouldFail = false
     await Promise.resolve()
     await Promise.resolve()

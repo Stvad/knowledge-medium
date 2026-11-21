@@ -850,7 +850,7 @@ const runAllPaths = async (
   query: ResolvedTypedBlockQuery,
 ): Promise<Record<string, Outcome>> => {
   const direct = (projection: TypedBlockQueryProjection) => async () => {
-    const compiled = compileTypedBlockQuery(query, repo.propertySchemas, {projection})
+    const compiled = compileTypedBlockQuery(query, {properties: repo.propertySchemas}, {projection})
     if (projection === 'count') {
       const row = await sharedDb.db.get<{count: number}>(compiled.sql, [...compiled.params])
       return row.count
