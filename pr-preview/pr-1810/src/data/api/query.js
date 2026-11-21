@@ -1,1 +1,0 @@
-export{Xft as defineQuery}from"../../../chunks/app-YvTluj8A.js";

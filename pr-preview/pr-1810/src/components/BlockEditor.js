@@ -1,1 +1,0 @@
-export{Gz as BlockEditor}from"../../chunks/app-YvTluj8A.js";

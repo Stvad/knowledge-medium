@@ -1,1 +1,0 @@
-export{YI as LazyBlockComponent}from"../../chunks/app-YvTluj8A.js";

@@ -1,1 +1,0 @@
-export{kF as appUpdatePromptExtension}from"../../../chunks/app-YvTluj8A.js";

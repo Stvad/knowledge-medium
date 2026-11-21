@@ -1,1 +1,0 @@
-export{UZ as annotationsDataExtension}from"../../../chunks/app-YvTluj8A.js";

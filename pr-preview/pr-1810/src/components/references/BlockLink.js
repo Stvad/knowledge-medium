@@ -1,1 +1,0 @@
-export{wk as BlockLink}from"../../../chunks/app-YvTluj8A.js";

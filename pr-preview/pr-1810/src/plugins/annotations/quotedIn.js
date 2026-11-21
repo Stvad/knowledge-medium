@@ -1,1 +1,0 @@
-export{Kf as quotedInFooterContribution}from"../../../chunks/app-YvTluj8A.js";

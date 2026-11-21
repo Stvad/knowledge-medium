@@ -1,1 +1,0 @@
-export{wF as approveExtensionHere}from"../../chunks/app-YvTluj8A.js";

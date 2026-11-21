@@ -1,1 +1,0 @@
-export{vM as EXTENSIONS_PAGE_TITLE,yM as TUTORIAL_DEFAULT_TITLE,bM as TUTORIAL_VIM_TITLE,Iw as onboardingPlugin,_M as seedTutorial}from"../../../chunks/app-YvTluj8A.js";

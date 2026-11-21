@@ -1,1 +1,0 @@
-export{ZF as gestureBindingDescriptor,QF as matchesGestureEvent}from"../../chunks/app-YvTluj8A.js";

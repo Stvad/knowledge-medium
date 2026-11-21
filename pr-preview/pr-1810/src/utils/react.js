@@ -1,1 +1,0 @@
-export{$R as useIsMobile,ez as usePointerCoarse}from"../../chunks/app-YvTluj8A.js";

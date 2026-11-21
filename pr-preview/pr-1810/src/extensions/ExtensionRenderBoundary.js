@@ -1,1 +1,0 @@
-export{GB as ExtensionRenderBoundary}from"../../chunks/app-YvTluj8A.js";
