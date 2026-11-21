@@ -1,1 +1,1 @@
-export{wp as ANCHOR_BADGES,Tp as useAnchorState}from"../../../chunks/app-B9-Lkc-1.js";
+export{wp as ANCHOR_BADGES,Tp as useAnchorState}from"../../../chunks/app-qNTgWuXT.js";

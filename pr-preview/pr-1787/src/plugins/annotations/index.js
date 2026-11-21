@@ -1,1 +1,1 @@
-export{Lf as annotationsPlugin}from"../../../chunks/app-B9-Lkc-1.js";
+export{Lf as annotationsPlugin}from"../../../chunks/app-qNTgWuXT.js";

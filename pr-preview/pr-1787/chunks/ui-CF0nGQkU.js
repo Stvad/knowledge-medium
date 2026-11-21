@@ -1,2 +1,0 @@
-import{r as e}from"./rolldown-runtime-CNOWq4Kh.js";import{$V as t,QV as n,a3 as r,eH as i,r3 as a,wA as o}from"./app-B9-Lkc-1.js";import{a as s,i as c,n as l,o as u,r as d,t as f}from"./card-DPVBIDP8.js";var p=e({Button:()=>a,Card:()=>f,CardContent:()=>l,CardDescription:()=>d,CardFooter:()=>c,CardHeader:()=>s,CardTitle:()=>u,Collapsible:()=>n,CollapsibleContent:()=>t,CollapsibleTrigger:()=>i,Input:()=>r,Label:()=>o});export{p as t};
-//# sourceMappingURL=ui-CF0nGQkU.js.map
