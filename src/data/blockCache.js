@@ -1,1 +1,1 @@
-export{n3 as BlockCache,r3 as BlockCacheMetrics}from"../../chunks/app-B1DVV9Mg.js";
+export{dnt as BlockCache,fnt as BlockCacheMetrics,pnt as deepFreeze}from"../../chunks/app-DE0kZ5Sa.js";
