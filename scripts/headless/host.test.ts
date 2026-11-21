@@ -10,7 +10,6 @@ import type {KnownAgentCommand} from '@knowledge-medium/agent-cli/protocol'
 import * as bootstrap from '@/bootstrap/openWorkspaceData'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import * as workspaces from '@/data/workspaces'
 import {startReadGate} from './gate'
 import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
@@ -358,7 +357,7 @@ it('refuses stale write access before the membership notification arrives', asyn
   }
 })
 
-it('closes the gate on a membership lookup error during command admission', async () => {
+it('closes the gate on a failed membership snapshot during command admission', async () => {
   await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
   const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
   const visibility = vi.fn()
@@ -369,9 +368,9 @@ it('closes the gate on a membership lookup error during command admission', asyn
   try {
     await vi.waitFor(() => expect(gate.reason()).toBeNull())
     expect(repo.isReadOnly).toBe(false)
-    vi.spyOn(workspaces, 'getLocalMemberRole').mockRejectedValueOnce(cause)
-    expect(await gate.readReason()).toBe('Could not verify workspace membership')
-    expect(gate.reason()).toBe('Could not verify workspace membership')
+    vi.spyOn(fixture.db, 'readTransaction').mockRejectedValueOnce(cause)
+    expect(await gate.readReason()).toBe('Could not check the workspace view')
+    expect(gate.reason()).toBe('Could not check the workspace view')
     expect(repo.isReadOnly).toBe(true)
     expect(visibility.mock.calls).toEqual([[true], [false]])
     expect(logged).toHaveBeenCalledWith(expect.any(String), cause)

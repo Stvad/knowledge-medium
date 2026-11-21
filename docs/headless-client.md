@@ -94,18 +94,16 @@ A tab is safe to write from because the app shell around the Repo does several t
 
 ### The gate
 
-Serving is a state the host enters and can leave, not a point boot passes once. One function decides it, re-run on every sync-status change, member-row change and drain end.
+Serving is a state the host enters and can leave, not a point boot passes once. One function decides it, re-run on every sync-status change, workspace or membership change and drain end.
 
 **Entry conditions.** The slice-1 profile serves only `health` and `ping` until all of these hold:
 - the server has answered in this process: `lastSyncedAt` differs from the value sampled in step 4. `onFirstSync` cannot serve, because `hasSynced` persists across sessions, and `onSyncSettled` is true between connecting and a queued download starting. **[read]** On the Node SDK the field moved after every reconnect with nothing changed and never while idle (**[measured]** 2026-11-05, self-hosted service, SDK since upgraded);
 - `repo.workspaceViewGap(workspaceId)` is null: nothing staged, sync settled, no re-materialization running, no downloaded row left unapplied. All arms, where the tab's gate asks only the local ones behind a per-device marker; a daemon has no reason to open on a backlog. While the gap is transient the host waits and kicks the drain with `repo.flushSyncObserver()`, since a failed drain window otherwise retries only on the next arrival. A durable gap does not clear by waiting: `health` gives the count, and the read-only bridge profile cannot invoke the local repair command. **[read]** Sized on one live client by #1777: zero such rows;
-- the host's member row is local.
+- the workspace row and the host’s member row are both local.
 
 **Open.** The gate sets the Repo's access before calling `openWorkspaceData` on entry and on a role change. Only an editor or owner on a write-enabled host with no stale upload hold gets a writable Repo. Before admission, membership and the workspace view gap come from one database snapshot. The host checks again after flushing a backlog and awaits both namespace reads before admitting commands. It rechecks membership when a command arrives so demotion takes effect even ahead of the table notification. A failed membership read closes admission and revokes write access.
 
-**Back to closed** when the member row disappears. Removing the member drops the whole workspace from the device, and restoring it returns the member row and a million blocks in one checkpoint **[read]**; without this the host would be writable over a workspace that is still draining, and its get-or-create verbs would mint pages the server already has.
-
-Admission lasts for the observed membership. Ordinary downloads, staging backlogs and offline operation preserve reads, watchers and the existing workspace bootstrap. Membership loss cancels an in-progress open or closes an admitted workspace. A rejoin goes through every entry check again. Shutdown also cancels the open. The host returns fixed reasons for failed checks and logs the diagnostic locally.
+**Back to closed.** Admission belongs to the member row’s id. The gate watches the workspace and membership tables and reads both rows in the same snapshot as the view gap. A missing row closes admission and cancels any pending bootstrap. Removing and re-inviting the same account gives it a new member id, even when its role stays the same. If the changes arrive between refreshes, that id change expires the old watchers and preparation. The restored member passes every entry check before its workspace opens. Ordinary downloads, workspace renames and offline operation preserve the current membership’s admission. **[measured]** on the local replica.
 
 The host does not use the tab's per-workspace first-sync marker; that marker exists so a tab is not held again by a later backlog.
 

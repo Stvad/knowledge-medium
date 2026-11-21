@@ -68,7 +68,7 @@ it('keeps an admitted editor read-only, preserving an allowed UI-state write wit
     const execute = register.mock.calls[0]![2]
     await vi.waitFor(async () => expect(await execute({type: 'sql', sql: 'SELECT 1 AS n'})).toEqual([{n: 1}]))
     const {repo} = capture.mock.calls[0]![0]
-    expect(await getLocalMemberRole(repo.db, workspaceId, user.id)).toBe('editor')
+    expect(await getLocalMemberRole(repo, workspaceId, user.id)).toBe('editor')
     expect(repo.isReadOnly).toBe(true)
     const documentWrite = vi.fn()
     await expect(repo.tx(documentWrite, {scope: ChangeScope.BlockDefault})).rejects.toThrow('read-only')

@@ -1,7 +1,6 @@
 import type {CommonPowerSyncDatabase} from '@powersync/common'
 import type {Repo, ViewGap} from '@/data/repo'
 import {viewGapReadsOver} from '@/data/internals/syncObserver/reconcile'
-import {getLocalMemberRole} from '@/data/workspaces'
 import type {WorkspaceRole} from '@/types'
 
 type Admission = {role: WorkspaceRole} | ViewGap
@@ -13,6 +12,7 @@ export const startReadGate = (
 ) => {
   let reason: string | null = 'Checking workspace access'
   let role: WorkspaceRole | null = null
+  let membershipId: string | null = null
   let admitted = false
   let preparation: AbortController | 'ready' | undefined
   let pending: Promise<void> | undefined
@@ -58,14 +58,17 @@ export const startReadGate = (
     // A membership checkpoint can also stage its entire workspace. Sample
     // permission and completeness from the same replica snapshot.
     return db.readTransaction(async tx => {
-      let member: WorkspaceRole | null
-      try {
-        member = await getLocalMemberRole(tx, workspaceId, repo.user.id)
-      } catch (error) {
-        console.error('Could not verify workspace membership', error)
-        return {reason: 'Could not verify workspace membership', transient: false}
+      const member = await tx.getOptional<{id: string, role: WorkspaceRole} | {id: null, role: null}>(
+        `SELECT m.id, m.role FROM workspaces w LEFT JOIN workspace_members m
+         ON m.workspace_id = w.id AND m.user_id = ? WHERE w.id = ?`, [repo.user.id, workspaceId])
+      if (!member) return {reason: 'Waiting for the local workspace row', transient: false}
+      if (member.id === null) return {reason: 'Waiting for the local member row', transient: false}
+      // A re-invitation mints a new member id. Both changes can arrive
+      // between refreshes, so the old admission and its watchers expire here.
+      if (member.id !== membershipId) {
+        close('Checking workspace access')
+        membershipId = member.id
       }
-      if (member === null) return {reason: 'Waiting for the local member row', transient: false}
       if (!admitted) {
         const stamp = db.currentStatus.lastSyncedAt?.getTime()
         if (stamp === undefined || stamp === baseline) {
@@ -74,7 +77,7 @@ export const startReadGate = (
         const gap = await repo.workspaceViewGap(workspaceId, viewGapReadsOver(tx))
         if (gap) return gap
       }
-      return {role: member}
+      return {role: member.role}
     })
   }
 
@@ -117,7 +120,7 @@ export const startReadGate = (
     return pending
   }
   const offStatus = db.registerListener({statusChanged: wake})
-  const offTables = db.onChange({onChange: wake}, {tables: ['workspace_members', 'blocks_synced_changes', 'blocks_synced']})
+  const offTables = db.onChange({onChange: wake}, {tables: ['workspaces', 'workspace_members', 'blocks_synced_changes', 'blocks_synced']})
   wake()
   return {
     reason: () => reason,
