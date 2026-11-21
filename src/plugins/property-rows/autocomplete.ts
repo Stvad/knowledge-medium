@@ -86,7 +86,7 @@ export const propertyCompletionSource = (editor: CodeMirrorExtensionContext): Co
 }
 
 export const propertyAutocomplete: CodeMirrorExtensionContribution = context => {
-  if (!context.block || context.disableStructuralCompletions) return []
+  if (!context.block || context.disablePropertyFieldCompletion) return []
   const source = propertyCompletionSource(context)
   return [EditorState.languageData.of(() => [{autocomplete: source}])]
 }

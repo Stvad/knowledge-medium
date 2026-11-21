@@ -238,7 +238,7 @@ describe('ordinary property creation in the outline', () => {
     const fieldId = await repo.mutate.createChild({parentId: OWNER, content: '::'})
     await choosePropertyField(repo.block(OWNER), stage, repo.block(fieldId), '::', () => true)
     const valueId = await repo.mutate.createChild({parentId: fieldId})
-    mount('all', OWNER, {disableStructuralCompletions: true})
+    mount('all', OWNER, {disablePropertyFieldCompletion: true})
     await act(() => focusBlock(repo.block(PANEL), valueId, {edit: true, renderScopeId: 'creation-test'}))
     await screen.findByRole('option', {name: /In progress/})
     const view = EditorView.findFromDOM(document.querySelector<HTMLElement>('.cm-editor')!)!
@@ -378,13 +378,13 @@ describe('ordinary property creation in the outline', () => {
   })
 
   it.each([
-    {text: '::', label: plain.name, disabled: false},
-    {text: '#Expected', label: expectedType.label, disabled: false},
-    {text: '::', label: plain.name, disabled: true},
-    {text: '#Expected', label: expectedType.label, disabled: true},
-  ])('routes structural completion for $text (disabled: $disabled)', async ({text, label, disabled}) => {
+    {text: '::', label: plain.name, disabled: false, offered: true},
+    {text: '#Expected', label: expectedType.label, disabled: false, offered: true},
+    {text: '::', label: plain.name, disabled: true, offered: false},
+    {text: '#Expected', label: expectedType.label, disabled: true, offered: true},
+  ])('routes completion for $text (property-field completion disabled: $disabled)', async ({text, label, disabled, offered}) => {
     const id = await repo.mutate.createChild({parentId: OWNER, content: text})
-    mount('all', OWNER, {disableStructuralCompletions: disabled})
+    mount('all', OWNER, {disablePropertyFieldCompletion: disabled})
     await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
     const view = await waitFor(() => {
       const node = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
@@ -397,8 +397,8 @@ describe('ordinary property creation in the outline', () => {
     const sources = view.state.languageDataAt<CompletionSource>('autocomplete', text.length)
     const results = await Promise.all(sources.map(source => source(context)))
     const labels = results.flatMap(result => result?.options.map(option => option.label) ?? [])
-    if (disabled) expect(labels).toEqual([])
-    else expect(labels).toContain(label)
+    if (offered) expect(labels).toContain(label)
+    else expect(labels).toEqual([])
   }, 20_000) // The seeded outline and editor mount took 1.3 s in isolation.
 
   it.each([false, true])('runs Split block from the command palette (blocked: %s)', async disableBlockSplit => {

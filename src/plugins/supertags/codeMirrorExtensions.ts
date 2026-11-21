@@ -164,8 +164,8 @@ export const buildTypeTagSource = ({repo, block}: BlockEditorExtensionContext): 
 }
 
 /** A `#tag` tags the edited block, so a draft has none to offer. */
-export const supertagsCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo, block, disableStructuralCompletions}) => {
-  if (!block || disableStructuralCompletions) return []
+export const supertagsCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo, block}) => {
+  if (!block) return []
   const source = buildTypeTagSource({repo, block})
   return [EditorState.languageData.of(() => [{autocomplete: source}])]
 }

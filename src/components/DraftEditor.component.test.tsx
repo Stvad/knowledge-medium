@@ -15,7 +15,6 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
-import {BlockContextProvider} from '@/context/block'
 import {referencesPlugin} from '@/plugins/references'
 import {supertagsPlugin} from '@/plugins/supertags'
 import {geoPlugin} from '@/plugins/geo'
@@ -94,16 +93,8 @@ describe('DraftEditor', () => {
     )
   }
 
-  const draft = (disableStructuralCompletions?: boolean) => (
-    <AppRuntimeContextProvider value={repo.facetRuntime!}>
-      <BlockContextProvider initialValue={{disableStructuralCompletions}}>
-        <Harness/>
-      </BlockContextProvider>
-    </AppRuntimeContextProvider>
-  )
-
-  const mount = async (disableStructuralCompletions?: boolean): Promise<EditorView> => {
-    render(draft(disableStructuralCompletions))
+  const mount = async (): Promise<EditorView> => {
+    render(<AppRuntimeContextProvider value={repo.facetRuntime!}><Harness/></AppRuntimeContextProvider>)
     const view = EditorView.findFromDOM(await screen.findByLabelText('New comment'))!
     act(() => { view.focus() })
     return view
@@ -118,8 +109,8 @@ describe('DraftEditor', () => {
     view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, cancelable: true, ...init}))
   })
 
-  it.each([undefined, true])('offers [[ completion with structural completions disabled: %s', async disabled => {
-    const view = await mount(disabled)
+  it('offers the references plugin’s [[ completion, as a block’s editor does', async () => {
+    const view = await mount()
     type(view, '[[Laun')
     act(() => { startCompletion(view) })
     await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Launch plan'))

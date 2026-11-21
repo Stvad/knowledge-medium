@@ -14,7 +14,8 @@ export interface CodeMirrorExtensionContext {
   childBacked?: boolean
   /** Present on direct value children rendered in a property field. */
   propertyValueSchema?: AnyPropertySchema
-  disableStructuralCompletions?: boolean
+  /** `::` would turn the edited value row into a field row; the surface cannot show one. */
+  disablePropertyFieldCompletion?: boolean
   /** UI state and render location used for editor focus handoff. */
   uiStateBlock?: Block
   renderScopeId?: string
