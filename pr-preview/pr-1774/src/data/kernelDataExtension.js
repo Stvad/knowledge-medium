@@ -1,1 +1,1 @@
-export{V8 as kernelDataExtension}from"../../chunks/app-BoBO8tOL.js";
+export{i5 as kernelDataExtension}from"../../chunks/app-CWkUhrGq.js";

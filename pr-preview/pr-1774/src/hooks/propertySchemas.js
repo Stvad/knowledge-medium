@@ -1,1 +1,1 @@
-export{vK as usePropertySchemas}from"../../chunks/app-BoBO8tOL.js";
+export{jK as usePropertySchemas}from"../../chunks/app-CWkUhrGq.js";

@@ -1,1 +1,1 @@
-export{WP as editorAutocompleteExtension}from"../../chunks/app-BoBO8tOL.js";
+export{rF as editorAutocompleteExtension}from"../../chunks/app-CWkUhrGq.js";

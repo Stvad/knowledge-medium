@@ -1,1 +1,1 @@
-export{Oz as useShortcutSurfaceActivations}from"../../chunks/app-BoBO8tOL.js";
+export{Vz as useShortcutSurfaceActivations}from"../../chunks/app-CWkUhrGq.js";
