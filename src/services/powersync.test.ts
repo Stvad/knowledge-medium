@@ -1,6 +1,7 @@
 import { type CrudEntry, UpdateType, type CrudTransaction, type CommonPowerSyncDatabase } from '@powersync/common'
 import { crudEntry } from '@/data/test/crudEntry'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -459,23 +460,23 @@ describe('encryptUploadOps (encrypt-on-upload)', () => {
 })
 
 describe('uploadTransactionsWithFallback', () => {
-  it('applies encryptOps to the compacted batch before handing it to applyOperations', async () => {
+  it('sends the prepared batch to applyOperations', async () => {
     const {applyOperations, recordRejection} = collectCalls()
-    // encryptOps returns its own transformed ops; assert those exact ops are
+    // prepareOperations returns its own transformed ops; assert those exact ops are
     // what applyOperations receives (i.e. encryption sits in the pipeline).
     const sealed: CompactedBlockOperation[] = [
       {kind: 'create', id: 'b1', order: 0, payload: {id: 'b1', workspace_id: 'w', content: 'SEALED'}},
     ]
-    const encryptOps = vi.fn(async () => sealed)
+    const prepareOperations = vi.fn(async () => sealed)
     const tx = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, encryptOps},
+      {applyOperations, recordRejection, prepareOperations},
     )
 
-    expect(encryptOps).toHaveBeenCalledTimes(1)
+    expect(prepareOperations).toHaveBeenCalledTimes(1)
     expect(applyOperations.mock.calls[0]![1]).toBe(sealed)
   })
 
@@ -599,7 +600,7 @@ describe('uploadTransactionsWithFallback', () => {
 
   it('un-encryptable tx (missing e2ee key) does not jam the batch: drains the OK prefix, stops at it', async () => {
     // tx1 is plaintext (encryptable); tx2 is an e2ee workspace whose key is
-    // momentarily unavailable, so encryptOps throws for any batch containing it.
+    // momentarily unavailable, so prepareOperations throws for any batch containing it.
     // The guard must NOT abort the whole batch preflight: tx1 (the OK prefix)
     // drains, and we stop at tx2 (throw → PowerSync retries it once the key is
     // back). tx2 is NOT recorded as a rejection — a missing key is transient, so
@@ -611,7 +612,8 @@ describe('uploadTransactionsWithFallback', () => {
       crudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
     ])
     const {applyOperations, recordRejection} = collectCalls()
-    const encryptOps = vi.fn(async (ops: readonly CompactedBlockOperation[]) => {
+    const prepareOperations = vi.fn(async (entries: readonly CrudEntry[]) => {
+      const ops = __compactBlockCrudEntriesForTest(entries)
       if (
         ops.some(
           o => o.kind !== 'delete' && (o.payload as {workspace_id?: string}).workspace_id === 'w-locked',
@@ -626,7 +628,7 @@ describe('uploadTransactionsWithFallback', () => {
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
         [tx1, tx2] as unknown as CrudTransaction[],
-        {applyOperations, recordRejection, encryptOps},
+        {applyOperations, recordRejection, prepareOperations},
       ),
     ).rejects.toThrow(/workspace key/)
 
@@ -1333,6 +1335,43 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     const [, , , errorCode, errorMessage] = calls[1]!.params
     expect(errorCode).toBe('23503')
     expect(JSON.parse(errorMessage as string)).toMatchObject(fkViolation)
+  })
+})
+
+describe('uploadData — malformed workspace envelopes', () => {
+  let fixture: TestDb
+  beforeAll(async () => { fixture = await createTestDb() })
+  beforeEach(async () => {
+    await resetTestDb(fixture.db)
+    supabaseRef.rpc.mockReset().mockResolvedValue({data: null, error: null})
+  })
+  afterAll(async () => { await fixture.cleanup() })
+
+  it.each(['PUT', 'PATCH'])('quarantines the original %s transaction and drains the valid same-block edit behind it', async op => {
+    const malformed = {op, type: 'blocks', id: 'item', data: {content: 'preserve this', base_updated_at: 17}}
+    const sibling = {op: 'PATCH', type: 'blocks', id: 'sibling', data: {workspace_id: 'ws', content: 'same transaction'}}
+    // Two PATCHes for the same block compact across transactions: the later
+    // workspace_id must never legitimize the earlier envelope.
+    const valid = {op: 'PATCH', type: 'blocks', id: 'item', data: {workspace_id: 'ws', updated_at: 20}}
+    for (const [txId, row] of [[1, malformed], [1, sibling], [2, valid]] as const) {
+      await fixture.db.execute('INSERT INTO ps_crud (tx_id, data) VALUES (?, ?)', [txId, JSON.stringify(row)])
+    }
+    const original = await fixture.db.getAll<{original_id: number, tx_id: number, data: string}>(
+      'SELECT id AS original_id, tx_id, data FROM ps_crud WHERE tx_id = 1 ORDER BY id',
+    )
+    expect(original.map(row => JSON.parse(row.data))).toEqual([malformed, sibling])
+
+    const connector = createPowerSyncConnector({
+      dbFilename: 'upload-test', encryption: {getWorkspaceMode: () => 'none', getCek: async () => null},
+    })
+    await connector.uploadData(fixture.db)
+
+    const rejected = await fixture.db.getAll(
+      'SELECT original_id, tx_id, data, error_message FROM ps_crud_rejected ORDER BY original_id',
+    )
+    expect(rejected).toEqual(original.map(row => ({...row, error_message: expect.stringContaining('workspace_id')})))
+    expect(await fixture.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+    expect(supabaseRef.rpc.mock.calls).toEqual([['apply_block_patches', {patches: [{id: valid.id, ...valid.data}]}]])
   })
 })
 

@@ -148,7 +148,7 @@ it('holds a rejoining member behind a durable materialization gap until repaired
 
 it('preserves an existing upload queue and refuses before connecting', async () => {
   await fixture.db.execute("INSERT INTO ps_crud (data) VALUES ('{}')")
-  const connect = vi.fn(async () => {})
+  const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
   const run = serveDatabase(fixture.db, plaintext(), user, new AbortController().signal, connect)
   await expect(run).rejects.toThrow('queued writes')
   expect(connect).not.toHaveBeenCalled()
@@ -186,44 +186,82 @@ it('samples the persisted checkpoint only after the reopened database is ready',
   }
 })
 
-it('keeps admitted reads available offline but rechecks durable gaps after admission', async () => {
+it('keeps watchers, reads and the same bootstrap through ordinary downloads and offline gaps', async () => {
   const id = randomUUID()
-  const host = start(plaintext(), () => syncServer(fixture.db)([
-    serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(id, workspaceId),
-  ]))
+  const deliver = syncServer(fixture.db)
+  await deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, stagedBlock(id, workspaceId)])
+  await drainStaged(fixture.db)
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true, startSyncObserver: false})
+  const open = vi.fn(async () => {})
+  const visibility = vi.fn()
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, visibility)
   try {
-    const read = () => host.execute({type: 'get-block', id})
-    await vi.waitFor(async () => expect(await read()).toMatchObject({id}))
-    await vi.waitFor(async () => expect(await fixture.db.getOptional(
-      'SELECT 1 FROM client_schema_state WHERE key = ?', [RECONCILE_RESCAN_MARKER_PREFIX + workspaceId],
-    )).toBeTruthy())
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    const checkGap = vi.spyOn(repo, 'workspaceViewGap')
+    const downloading = vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'downloading', 'get')
+    downloading.mockReturnValue(true)
+    expect(await gate.readReason()).toBeNull()
+    await deliver([stagedBlock(randomUUID(), workspaceId)])
+    expect(await fixture.db.getOptional('SELECT 1 FROM blocks_synced_changes')).toBeTruthy()
+    expect(await gate.readReason()).toBeNull()
+    downloading.mockReturnValue(false)
     vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'connected', 'get').mockReturnValue(false)
-    expect(await read()).toMatchObject({id})
-    await fixture.db.execute('UPDATE blocks_synced SET needs_apply = 1 WHERE id = ?', [id])
-    await expect(read()).rejects.toThrow('have not been verified locally')
+    expect(await gate.readReason()).toBeNull()
+    expect(checkGap).not.toHaveBeenCalled()
+    expect(open).toHaveBeenCalledOnce()
+    expect(visibility.mock.calls).toEqual([[true]])
   } finally {
-    await host.stop()
+    await gate.stop()
   }
 })
 
-it('refuses a read during bootstrap immediately and rechecks membership before enabling watchers', async () => {
+it('cancels a stalled open on membership loss and admits the restored member once', async () => {
   await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
   const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
-  let finish!: () => void
-  const open = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+  const open = vi.fn<(signal: AbortSignal) => Promise<void>>().mockResolvedValue(undefined).mockImplementationOnce(() => new Promise<void>(() => {}))
   const visibility = vi.fn()
   const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, visibility)
   try {
     await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
-    const viewCheck = vi.spyOn(repo, 'workspaceViewGap')
+    const first = open.mock.calls[0]![0]
     expect(await gate.readReason()).toBe('Opening workspace data')
-    expect(viewCheck).not.toHaveBeenCalled()
     await fixture.db.execute('DELETE FROM workspace_members WHERE id = ?', [member.id])
-    finish()
-    await vi.waitFor(() => expect(gate.reason()).toBe('Waiting for the local member row'))
+    await vi.waitFor(() => expect(first.aborted).toBe(true))
+    expect(gate.reason()).toBe('Waiting for the local member row')
     expect(visibility).not.toHaveBeenCalledWith(true)
+    await fixture.db.execute('INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, 1)',
+      [member.id, workspaceId, user.id, 'viewer'])
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(visibility.mock.calls).toEqual([[true]])
   } finally {
-    finish?.()
+    await gate.stop()
+  }
+})
+
+it('stops while workspace data is still opening', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  const open = vi.fn<(signal: AbortSignal) => Promise<void>>(() => new Promise<void>(() => {}))
+  const visibility = vi.fn()
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, visibility)
+  await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
+  await gate.stop()
+  expect(open.mock.calls[0]![0].aborted).toBe(true)
+  expect(visibility).not.toHaveBeenCalledWith(true)
+})
+
+it('keeps a bootstrap error in local logs and returns a fixed reason to the caller', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  const cause = new Error('private-device-marker')
+  const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, async () => { throw cause }, vi.fn())
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBe('Could not open workspace data'))
+    expect(await gate.readReason()).toBe('Could not open workspace data')
+    expect(logged).toHaveBeenCalledWith(expect.any(String), cause)
+  } finally {
     await gate.stop()
   }
 })
@@ -261,18 +299,6 @@ it('requires a defined checkpoint when the persisted timestamp disappears', asyn
   expect(gate.reason()).toBe('Waiting for a checkpoint from this connection')
 })
 
-it('closes an admitted host while a connected download is outstanding', async () => {
-  const host = start(plaintext(), () => syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member]))
-  try {
-    const read = () => host.execute({type: 'sql', sql: 'SELECT 1 AS n'})
-    await vi.waitFor(async () => expect(await read()).toEqual([{n: 1}]))
-    vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'downloading', 'get').mockReturnValue(true)
-    await expect(read()).rejects.toThrow('not caught up with the server')
-  } finally {
-    await host.stop()
-  }
-})
-
 it('holds a disconnected host before its first admission even with a fresh checkpoint', async () => {
   vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'connected', 'get').mockReturnValue(false)
   const host = start(plaintext(), () => syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId)), member]))
@@ -283,5 +309,24 @@ it('holds a disconnected host before its first admission even with a fresh check
     await expect(host.execute({type: 'sql', sql: 'SELECT 1'})).rejects.toThrow('not caught up with the server')
   } finally {
     await host.stop()
+  }
+})
+
+it('requires the local member row before bootstrapping a fully synced workspace', async () => {
+  await syncServer(fixture.db)([serverWorkspace(testWorkspaceRow(workspaceId))])
+  const {repo} = createTestRepo({db: fixture.db, user, isReadOnly: true})
+  expect(fixture.db.currentStatus.lastSyncedAt).toBeDefined()
+  expect(await repo.workspaceViewGap(workspaceId)).toBeNull()
+  const open = vi.fn(async () => {})
+  const gate = startReadGate(fixture.db, repo, workspaceId, undefined, open, () => {})
+  try {
+    await vi.waitFor(() => expect(gate.reason()).toBe('Waiting for the local member row'))
+    expect(open).not.toHaveBeenCalled()
+    await fixture.db.execute('INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time) VALUES (?, ?, ?, ?, 1)',
+      [member.id, workspaceId, user.id, 'viewer'])
+    await vi.waitFor(() => expect(gate.reason()).toBeNull())
+    expect(open).toHaveBeenCalledOnce()
+  } finally {
+    await gate.stop()
   }
 })

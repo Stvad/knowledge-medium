@@ -22,13 +22,14 @@ afterEach(() => vi.unstubAllGlobals())
 it('withdraws the token and drains the in-flight result before closing on shutdown', async () => {
   const execution = latch()
   const acknowledge = latch()
-  const received = {tokenCounts: [] as number[], results: [] as unknown[], finished: [] as string[]}
+  const received = {tokenScopes: [] as string[][], results: [] as unknown[], finished: [] as string[]}
   let parked: AbortSignal | null | undefined
   let delivered = false
   vi.stubGlobal('fetch', async (url: URL | string, init: RequestInit) => {
     const route = new URL(url).pathname
     if (route.startsWith('/runtime/clients/')) {
-      received.tokenCounts.push(JSON.parse(String(init.body)).tokens.length)
+      const {tokens} = JSON.parse(String(init.body)) as {tokens: {scope: string}[]}
+      received.tokenScopes.push(tokens.map(token => token.scope))
     } else if (route.endsWith('/next')) {
       if (!delivered) {
         delivered = true
@@ -55,7 +56,7 @@ it('withdraws the token and drains the in-flight result before closing on shutdo
     await vi.waitFor(() => expect(parked?.aborted).toBe(false))
     const closing = bridge.close().then(() => { received.finished.push('closed') })
     await vi.waitFor(() => expect(parked?.aborted).toBe(true))
-    expect(received.tokenCounts).toEqual([1, 1, 0])
+    expect(received.tokenScopes).toEqual([['read-only'], ['read-only'], []])
     execution.resolve()
     await vi.waitFor(() => expect(received.results).toEqual([{ok: true, value: 'complete'}]))
     acknowledge.resolve()

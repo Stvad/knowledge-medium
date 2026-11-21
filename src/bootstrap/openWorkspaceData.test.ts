@@ -33,3 +33,21 @@ it('derives reference targets on read-only open without writing document rows or
   expect(scheduleSeeds).toHaveBeenCalledWith(workspaceId, false)
   expect(await db.getAll('SELECT * FROM ps_crud')).toEqual([])
 })
+
+it('cancels pending definitions without starting derivations when the late result arrives', async () => {
+  const {repo} = createTestRepo({db: database.db, isReadOnly: true})
+  let finish!: () => void
+  const pending = new Promise<void>(resolve => { finish = resolve })
+  vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockReturnValue(pending)
+  const derive = vi.spyOn(repo, 'scheduleReferenceTargetDerivePass')
+  const controller = new AbortController()
+  const opening = openWorkspaceData(repo, 'scratch', false, undefined, controller.signal)
+  controller.abort()
+  try {
+    await expect(opening).rejects.toBe(controller.signal.reason)
+  } finally {
+    finish()
+  }
+  await pending
+  expect(derive).not.toHaveBeenCalled()
+})

@@ -22,7 +22,7 @@ export const connectBridge = async (
       activeWorkspaceId: config.workspaceId, currentUser: user, safeMode: false,
       href: 'node:headless', userAgent: `node ${process.version}`, focusedAt: null,
       audience: {workspaceId: config.workspaceId, userId: user.id},
-      tokens: accepting ? [{token, label: config.profile, scope: 'read-write', userId: user.id}] : [],
+      tokens: accepting ? [{token, label: config.profile, scope: 'read-only', userId: user.id}] : [],
     }),
     execute,
     fetch: (url, init) => fetch(url, {...init, signal: AbortSignal.any([

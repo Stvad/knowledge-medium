@@ -9,12 +9,13 @@ import {readWorkspaceEncryptionMode} from '@/data/workspaceSchema'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import type {GateWorkspace} from '@/sync/keys/resolveWorkspaceEntry'
 import {createSyncResolver} from '@/sync/keys/resolver'
-import {connectWorkspaceSync, hasRemoteSyncConfig} from '@/services/powersync'
+import {connectWorkspaceDownloads, hasRemoteSyncConfig} from '@/services/powersync'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {createAgentRuntimeContext} from '@/plugins/agent-runtime/commands'
 import {watchEventsRegistry} from '@/plugins/agent-runtime/watchEvents'
 import {openWorkspaceData} from '@/bootstrap/openWorkspaceData'
+import {untilStopped} from '@/utils/untilStopped'
 import type {User} from '@/types'
 import {resolveAppVersion} from '../app-version'
 import {openDeviceWorkspace} from './access'
@@ -40,7 +41,7 @@ const untilAbort = (signal: AbortSignal): Promise<void> =>
 /** Owns sync and the Repo. The caller owns the open database. */
 export async function serveDatabase(
   db: PowerSyncDatabase, config: HeadlessConfig, user: User, signal: AbortSignal,
-  connect = connectWorkspaceSync, register = connectBridge,
+  connect = connectWorkspaceDownloads, register = connectBridge,
 ) {
   const {workspaceId} = config
   await db.waitForReady()
@@ -50,7 +51,7 @@ export async function serveDatabase(
     throw new Error('Read-only host found queued writes. Preserve this database for recovery.')
   }
   const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(db, id))
-  const connectDb = () => connect(db, dbFilenameForUser(user.id), resolver)
+  const connectDb = () => connect(db)
   let repo: Repo | undefined
   let gate: ReturnType<typeof startReadGate> | undefined
   let bridge: HostBridge | undefined
@@ -87,8 +88,9 @@ export async function serveDatabase(
       })
     })
     const transport = bridge.postEvent
-    gate = startReadGate(db, active, workspaceId, baseline, async () => {
-      await Promise.all(await openWorkspaceData(active, workspaceId))
+    gate = startReadGate(db, active, workspaceId, baseline, async signal => {
+      const namespaces = await openWorkspaceData(active, workspaceId, false, undefined, signal)
+      await untilStopped(Promise.all(namespaces), signal)
     }, visible => {
       if (visible) {
         releaseBulk?.()

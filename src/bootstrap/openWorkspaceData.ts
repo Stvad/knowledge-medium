@@ -1,3 +1,4 @@
+import {untilStopped} from '@/utils/untilStopped'
 import type {Repo} from '@/data/repo.js'
 import {resolveAliasSeatNamespaces} from '@/data/aliasSeatNamespace.js'
 import {resolvePropertyChildNamespace} from '@/data/internals/propertyChildMint.js'
@@ -10,10 +11,12 @@ export const openWorkspaceData = async (
   workspaceId: string,
   freshlyCreated = false,
   onNamespacesStarted?: (workspaceId: string) => void,
+  signal?: AbortSignal,
 ): Promise<readonly Promise<unknown>[]> => {
   // A stored definition can shadow a seed. Wait for the complete projector
   // snapshot before starting any bootstrap work that could synthesize one.
-  await repo.whenPropertyDefinitionsReady(workspaceId)
+  await untilStopped(repo.whenPropertyDefinitionsReady(workspaceId), signal)
+  signal?.throwIfAborted()
 
   // In-transaction writers cannot fetch K_id. Start both reads pre-lock and
   // retain their rejection for callers that require the namespace to be ready.
@@ -36,7 +39,8 @@ export const openWorkspaceData = async (
 
   // The seed definitions need their parent pages. The tab's landing resolver
   // also needs their reserved aliases to exist before seeding any wiki-links.
-  await repo.ensureSystemPages(workspaceId)
+  await untilStopped(repo.ensureSystemPages(workspaceId), signal)
+  signal?.throwIfAborted()
   repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
   return [aliasSeats, propertyChild]
 }
