@@ -1,10 +1,12 @@
 /**
- * Post-build step that stamps dist/sw.js with three things:
+ * Post-build step that stamps dist/sw.js with four things:
  *
  *   1. A per-build identifier (`__BUILD_ID__` placeholder) so each deploy
  *      lands in its own cache namespace and stale entries are dropped on
- *      activate. Source order: SW_BUILD_ID env, GITHUB_SHA, git rev-parse
- *      HEAD, then a timestamped fallback.
+ *      activate: the commit (SW_BUILD_ID env, GITHUB_SHA, git rev-parse HEAD,
+ *      then a timestamped fallback) plus a digest of the worker source and the
+ *      manifests below, so a rebuild of one commit with different bytes is a
+ *      different generation.
  *   2. The first-paint asset list (`__PRECACHE_ASSETS__` placeholder) — the
  *      HTML graph the browser dispatches before our SW activates — so the
  *      install handler can fetch them up front; without it a first-time
@@ -19,6 +21,11 @@
  *      old page — the `does not provide an export named …` skew). It also makes
  *      the app fully offline.
  *
+ *   4. The shell + icons (`__PRECACHE_SHELL__` placeholder).
+ *
+ *   Each list is stamped as a URL → content-digest manifest, which install
+ *   checks every fetched body against (see the sw.ts header).
+ *
  *   The two lists are separate for install ORDERING, not cache mode — the SW
  *   fetches BOTH with `{ cache: 'no-cache' }` (a conditional revalidate that
  *   can't copy a stale prior-deploy entry), first-paint first because it's the
@@ -32,7 +39,8 @@ import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
 import {dirname, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {bootWorkerAssets, collectRestAssets} from './precache-assets'
+import {bootWorkerAssets, collectPrecacheManifest, collectRestAssets, SHELL_FILES} from './precache-assets'
+import {contentDigest} from '../src/sw/assets'
 import {stampSwSource} from './stamp-sw-source'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
@@ -116,8 +124,6 @@ const walkDistFiles = (): string[] => {
   return out
 }
 
-const buildId = resolveBuildId()
-
 // Two lists (see sw.ts). first-paint is the HTML-derived offline-boot set; rest
 // is the full emitted graph minus first-paint (the SW installs it second so the
 // boot-critical set lands first). The SW fetches BOTH with { cache: 'no-cache' }
@@ -136,6 +142,14 @@ const restAssets = collectRestAssets({
   firstPaint: firstPaintAssets,
   toBaseUrl,
 })
+const manifest = (urls: string[]) =>
+  collectPrecacheManifest({urls, base, read: rel => readFileSync(resolve(distDir, rel))})
+const shell = await manifest(SHELL_FILES.map(toBaseUrl))
+const firstPaint = await manifest(firstPaintAssets)
+const rest = await manifest(restAssets)
+const unstamped = readFileSync(swPath, 'utf8')
+const contentId = (await contentDigest(Buffer.from(JSON.stringify([unstamped, shell, firstPaint, rest])))).slice(0, 8)
+const buildId = `${resolveBuildId()}-${contentId}`
 const fail = (msg: string): never => {
   console.error(`[inject-sw-build-id] ${msg}`)
   process.exit(1)
@@ -148,10 +162,11 @@ const fail = (msg: string): never => {
 // worker source + collected lists and turn a thrown failure into a clean exit.
 const source = (() => {
   try {
-    return stampSwSource(readFileSync(swPath, 'utf8'), {
+    return stampSwSource(unstamped, {
       buildId,
-      firstPaintAssets,
-      restAssets,
+      shell,
+      firstPaint,
+      rest,
     })
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err))

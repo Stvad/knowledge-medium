@@ -35,3 +35,17 @@ export const isCacheableAsset = (
   sameOrigin: boolean,
 ): boolean =>
   sameOrigin && (ASSET_DESTINATIONS.has(destination) || ASSET_EXTENSION.test(pathname))
+
+/** URL (base-prefixed or scope-relative) → `contentDigest` of its bytes, as
+ *  the build stamps it into sw.js. Install fetches the keys in order. */
+export type PrecacheManifest = Readonly<Record<string, string>>
+
+/**
+ * The fingerprint the build stamps for each precached file and the worker
+ * recomputes over the bytes it fetched: hex SHA-256 cut to 64 bits, enough to
+ * tell two builds' bytes apart. The one definition both sides use.
+ */
+export const contentDigest = async (bytes: BufferSource): Promise<string> => {
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  return Array.from(hash.subarray(0, 8), b => b.toString(16).padStart(2, '0')).join('')
+}

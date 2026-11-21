@@ -1204,15 +1204,8 @@ const updateRuntimeBlock = async (
       : input.replaceProperties
         ? structuredClone(input.properties) as Record<string, unknown>
         : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
-    // Deliberately the RAW bag write, not the typed setProperty/setProperties:
-    // `input.properties` is arbitrary external JSON (raw-encoded values, often
-    // schema-less keys from agent extensions). The typed primitives would throw
-    // on an unresolvable schema or an undecodable value; the raw write + the
-    // same-tx MATERIALIZE processor instead reconciles the schema-backed,
-    // decodable subset into children (create/update, and delete-by-omission on
-    // a `replaceProperties` replace) and gracefully leaves the rest cell-only
-    // (MATERIALIZE skips keys it can't resolve/decode). Read-inside-tx above
-    // already closed the TOCTOU clobber this verb was once flagged for.
+    // Agent properties arrive encoded. Pass the bag to tx.update so the
+    // workspace's storage mode governs validation and child materialization.
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
