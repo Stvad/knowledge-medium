@@ -203,6 +203,22 @@ describe('cell storage with an unavailable reference preset', () => {
     expect(await stored(owner)).toEqual({bag: replacement, rows: [], refs: [refRow]})
   })
 
+  it.each(['input', 'peek'] as const)('validates against the stored value after edits to the %s bag', async source => {
+    await update(host, owner, {'sample:other': ['kept']})
+    const bag = {...original, 'sample:other': ['kept']}
+    await host.repo.tx(async tx => {
+      await tx.update(owner, {content: 'first edit', properties: bag})
+      const edits: Record<string, unknown> = source === 'input' ? bag : tx.peek(owner)!.properties
+      const other = edits['sample:other'] as string[]
+      other.push('unwritten')
+      edits[seed.name] = targets[1]
+      await expect(tx.update(owner, {content: 'retargeted', properties: edits})).rejects.toMatchObject(refusal)
+      await tx.update(owner, {content: 'independent edit'})
+    }, {scope: ChangeScope.BlockDefault})
+    await host.repo.awaitProcessors()
+    expect(await stored(owner)).toEqual({bag: {...original, 'sample:other': ['kept']}, rows: [], refs: [refRow]})
+  })
+
   it('refuses a local createOrGet but accepts the same incoming row through sync materialization', async () => {
     const row = makeBlockData({
       id: crypto.randomUUID(), workspaceId: WS, properties: original,

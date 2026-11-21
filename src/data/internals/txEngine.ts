@@ -73,7 +73,7 @@ import { isValidSeededDefinition, seededDefinitionKey } from '@/data/definitionS
 import { isPropertySeedKey } from '@/data/propertySeeds'
 import { propertyHideInOutlineProp } from '@/data/properties'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
-import { chunk as chunksOf } from 'lodash-es'
+import { chunk as chunksOf, cloneDeep } from 'lodash-es'
 import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
@@ -501,6 +501,9 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
+    // Later writes use this row as their preimage. Own the caller's bag
+    // before validation so reusing it cannot change what was validated.
+    if (after.properties !== before?.properties) after.properties = cloneDeep(after.properties)
     const names = changedPropertyNames(before?.properties ?? {}, after.properties)
     if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
@@ -726,7 +729,7 @@ export class TxImpl implements Tx {
 
   peek(id: string): BlockData | null {
     const own = peekSnapshot(this.ctx.snapshots, id)
-    if (own !== undefined) return own
+    if (own !== undefined) return cloneDeep(own)
     return this.ctx.cache.getSnapshot(id) ?? null
   }
 
