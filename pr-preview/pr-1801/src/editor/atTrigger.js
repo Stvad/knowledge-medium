@@ -1,1 +1,0 @@
-export{GX as matchBareAt,KX as matchMentionTrigger,qX as matchPlaceTrigger}from"../../chunks/app-p-m7NlcZ.js";

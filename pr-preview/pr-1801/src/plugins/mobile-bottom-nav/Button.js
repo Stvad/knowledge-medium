@@ -1,1 +1,0 @@
-export{IE as MobileBottomNavButton}from"../../../chunks/app-p-m7NlcZ.js";

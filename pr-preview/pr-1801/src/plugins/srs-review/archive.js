@@ -1,1 +1,0 @@
-export{ql as archiveSrsCard}from"../../../chunks/app-p-m7NlcZ.js";

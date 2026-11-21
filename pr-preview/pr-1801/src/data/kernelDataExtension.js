@@ -1,1 +1,0 @@
-export{v5 as kernelDataExtension}from"../../chunks/app-p-m7NlcZ.js";

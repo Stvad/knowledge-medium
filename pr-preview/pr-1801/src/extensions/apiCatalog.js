@@ -1,1 +1,0 @@
-export{Tg as extensionApiCatalog,Eg as extensionApiRuntimeExports}from"../../chunks/app-p-m7NlcZ.js";

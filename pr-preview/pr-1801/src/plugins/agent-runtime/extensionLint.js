@@ -1,1 +1,0 @@
-export{Zg as lintExtensionSource}from"../../../chunks/app-p-m7NlcZ.js";

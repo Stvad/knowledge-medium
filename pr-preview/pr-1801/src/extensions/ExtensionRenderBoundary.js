@@ -1,1 +1,0 @@
-export{GB as ExtensionRenderBoundary}from"../../chunks/app-p-m7NlcZ.js";

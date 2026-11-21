@@ -1,1 +1,0 @@
-export{ts as MigrationGate}from"../../../chunks/app-p-m7NlcZ.js";
