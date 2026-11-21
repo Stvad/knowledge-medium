@@ -4,6 +4,7 @@
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
+import { editTimeSql } from '@/data/blockSchema'
 import type { ResolvedPropertySchema } from '@/data/api/propertySchema'
 import type {
   AnyMutator,
@@ -347,7 +348,7 @@ const timestampField = (name: 'created' | 'updated', column: (alias: string) => 
 
 export const KERNEL_QUERYABLE_FIELDS: readonly QueryableField[] = [
   timestampField('created', alias => `${alias}.created_at`),
-  timestampField('updated', alias => `coalesce(${alias}.user_updated_at, ${alias}.updated_at)`),
+  timestampField('updated', editTimeSql),
 ]
 
 /** Code-owned property definitions. The declaration object is also the typed

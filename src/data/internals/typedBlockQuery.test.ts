@@ -214,7 +214,7 @@ describe('typed queries for table rows', () => {
         dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
       }
       return compileTypedBlockQuery({workspaceId: WS, where: {[name]: 5}},
-        new Map(), {fields: new Map([[name, field]])})
+        {properties: new Map(), fields: new Map([[name, field]])})
     }
     expect(() => compile('?', 'x')).toThrow(/params.*array/)
     expect(() => compile('? + ?', [1])).toThrow(/placeholder/)
@@ -772,7 +772,7 @@ describe('repo.queryBlocks', () => {
       } as unknown as AnyPropertySchema
       expect(() => compileTypedBlockQuery(
         {workspaceId: WS, where: {priority: {gt: 1}}},
-        new Map([['priority', legacy]]),
+        {properties: new Map([['priority', legacy]])},
       )).toThrow('declares where.storage undefined')
     })
 
@@ -1314,7 +1314,7 @@ describe('compileTypedBlockQuery — type filter join order', () => {
   const compileTypes = (types: string[], extra: Partial<ResolvedTypedBlockQuery> = {}) =>
     compileTypedBlockQuery(
       {workspaceId: WS, types, match: [], exclude: [], ...extra},
-      new Map(),
+      {properties: new Map()},
       {projection: 'ids'},
     )
 
@@ -1368,7 +1368,7 @@ it('bounds limited table queries by workspace, type, or siblings with and withou
     const order = {property: priorityProp.name, direction: 'asc'} as const
     const fields = new Map(KERNEL_QUERYABLE_FIELDS.map(field => [field.name, field]))
     const readPlan = async (query: ResolvedTypedBlockQuery) => {
-      const compiled = compileTypedBlockQuery(query, env.repo.propertySchemas, {projection: 'ids', limit: 20, fields})
+      const compiled = compileTypedBlockQuery(query, {properties: env.repo.propertySchemas, fields}, {projection: 'ids', limit: 20})
       const plan = await tx.getAll<{parent: number; detail: string}>(
         `EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params],
       )
@@ -1425,7 +1425,7 @@ describe('typed query disjunctions and extended where operators', () => {
       const query = {workspaceId: WS, anyOf: [
         {referencedBy: {id: 'target-3'}}, {referencedBy: {id: 'target-7', sourceField: 'reviewer'}},
       ]}
-      const compiled = compileTypedBlockQuery(query, env.repo.propertySchemas, {projection: 'ids', limit: 5})
+      const compiled = compileTypedBlockQuery(query, {properties: env.repo.propertySchemas}, {projection: 'ids', limit: 5})
       const check = async () => {
         const plan = (await tx.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params]))
           .map(row => row.detail)
@@ -1754,8 +1754,28 @@ describe('typed query disjunctions and extended where operators', () => {
     }
     expect(() => compileTypedBlockQuery(
       {workspaceId: WS, where: {[property.name]: {contains: 'label'}}},
-      new Map([[property.name, property]]),
+      {properties: new Map([[property.name, property]])},
     )).toThrow('contains requires a codec with a contains capability')
+  })
+
+  it('checks ISO date member shape even if a contributed encoder binds noncanonical text', async () => {
+    const canonical = '2026-01-01T00:00:00.000Z'
+    const malformed = canonical + '\u0000junk'
+    const name = 'dates'
+    const property = {
+      ...labelsProp, name,
+      codec: {...labelsProp.codec, contains: {storage: 'iso-date' as const, encode: String}},
+    }
+    await create({id: 'valid', properties: {[name]: [canonical]}})
+    await create({id: 'malformed', properties: {[name]: [malformed]}})
+    const memberIds = async (contains: string) => {
+      const {sql, params} = compileTypedBlockQuery(
+        {workspaceId: WS, where: {[name]: {contains}}}, {properties: new Map([[name, property]])}, {projection: 'ids'},
+      )
+      return env.h.db.getAll<{id: string}>(sql, [...params])
+    }
+    expect(await memberIds(canonical)).toEqual([{id: 'valid'}])
+    expect(await memberIds(malformed)).toEqual([])
   })
 
   it('matches scalar list members while ignoring malformed stored list shapes', async () => {

@@ -5,6 +5,7 @@ import {
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
   type TypedBlockQueryReferenceFilter,
+  type WhereCapability,
   type WhereStorage,
   type WhereValue,
 } from '@/data/api'
@@ -167,20 +168,17 @@ const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
 const ISO_DATE_GLOB =
   "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'"
 
-/** SQL that holds only for a cell of `storage`'s shape, given the cell's
- *  `properties_json, path` argument pair. A comparator ANDs it onto the
- *  comparison, which on its own orders a cell of any shape against the
- *  operand — see `WhereStorage`. */
-const STORAGE_TEST: Readonly<Record<WhereStorage, (cell: string) => string>> = {
-  text: cell => `json_type(${cell}) = 'text'`,
-  number: cell => `json_type(${cell}) IN ('integer', 'real')`,
-  boolean: cell => `json_type(${cell}) IN ('true', 'false')`,
+/** SQLite compares different storage classes; the cell or member must first match its codec's shape. */
+const STORAGE_TEST: Readonly<Record<WhereStorage, (type: string, value: string) => string>> = {
+  text: type => `${type} = 'text'`,
+  number: type => `${type} IN ('integer', 'real')`,
+  boolean: type => `${type} IN ('true', 'false')`,
   // No `json_type` needed: anything but a JSON string extracts as a number or
   // as JSON text opening with `[` / `{`, and none of those fit the pattern.
   // The byte length because GLOB stops at an embedded NUL, so
   // `…000Z\u0000junk` fits on its prefix while `<` / `>` read the bytes past it.
-  'iso-date': cell =>
-    `json_extract(${cell}) GLOB ${ISO_DATE_GLOB} AND length(CAST(json_extract(${cell}) AS BLOB)) = 24`,
+  'iso-date': (_type, value) =>
+    `${value} GLOB ${ISO_DATE_GLOB} AND length(CAST(${value} AS BLOB)) = 24`,
 }
 
 interface Comparable {
@@ -206,23 +204,32 @@ const comparableCell = (
       '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
     )
   }
-  const where = schema.codec.where
+  return comparableValue(name, schema.codec.type, schema.codec.where, `json_type(${cell})`, `json_extract(${cell})`)
+}
+
+const comparableValue = (
+  name: string,
+  codecType: string,
+  capability: WhereCapability<unknown>,
+  type: string,
+  value: string,
+): Comparable => {
   // A codec from a DB-stored extension is never type-checked against `WhereStorage`.
-  if (!Object.hasOwn(STORAGE_TEST, where.storage)) {
+  if (!Object.hasOwn(STORAGE_TEST, capability.storage)) {
     throw new Error(
-      `[queryBlocks] where.${name}: codec type ${JSON.stringify(schema.codec.type)} declares ` +
-      `where.storage ${JSON.stringify(where.storage)}; expected one of ${Object.keys(STORAGE_TEST).join(', ')}`,
+      `[queryBlocks] where.${name}: codec type ${JSON.stringify(codecType)} declares ` +
+      `where.storage ${JSON.stringify(capability.storage)}; expected one of ${Object.keys(STORAGE_TEST).join(', ')}`,
     )
   }
   return {
-    test: STORAGE_TEST[where.storage](cell),
-    storage: where.storage,
-    encode: value => {
+    test: STORAGE_TEST[capability.storage](type, value),
+    storage: capability.storage,
+    encode: operand => {
       try {
-        return where.encode(value)
+        return capability.encode(operand)
       } catch (err) {
         throw new Error(
-          `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+          `[queryBlocks] where.${name} value is not a valid ${codecType}: ${(err as Error).message}`,
           {cause: err},
         )
       }
@@ -337,14 +344,13 @@ const compileWhereClause = (
   }
   if (parsed.kind === 'contains') {
     const member = schema?.codec.contains
-    if (!member || !Object.hasOwn(STORAGE_TEST, member.storage)) {
+    if (!member) {
       throw new Error(`[queryBlocks] where.${name}.contains requires a codec with a contains capability`)
     }
-    // json_each.type distinguishes JSON true from the number 1 without reparsing a string member.
-    const memberTypes = {text: "'text'", number: "'integer','real'", boolean: "'true','false'", 'iso-date': "'text'"} as const
+    const comparable = comparableValue(`${name}.contains`, schema.codec.type, member, 'item.type', 'item.value')
     return {
-      sql: `EXISTS (SELECT 1 FROM ${listMembersSql(rowAlias, name)} item WHERE item.type IN (${memberTypes[member.storage]}) AND item.value = ?)`,
-      params: [member.encode(parsed.operand)],
+      sql: `EXISTS (SELECT 1 FROM ${listMembersSql(rowAlias, name)} item WHERE ${comparable.test} AND item.value = ?)`,
+      params: [comparable.encode(parsed.operand)],
     }
   }
   // The comparison stays its own AND term, in the indexed `json_extract`
@@ -760,14 +766,13 @@ const resultOrder = (query: ResolvedTypedBlockQuery, context: WhereContext): Com
 
 export const compileTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams; fields?: Fields} = {},
+  context: WhereContext,
+  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams} = {},
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query, opts.projection)
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
 
-  const context = {properties: propertySchemas, fields: opts.fields}
   assertAncestorWalkBounded(normalized, context)
 
   const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)

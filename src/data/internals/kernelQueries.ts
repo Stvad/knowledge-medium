@@ -30,7 +30,7 @@ import {
   type AnyPropertySchema,
   type PropertyChildrenView,
 } from '@/data/api'
-import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
+import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, editTimeSql, type BlockRow } from '@/data/blockSchema'
 import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
@@ -360,7 +360,7 @@ const selectBlocksByContentSql = (
       WHEN LOWER(b.content) LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
-    coalesce(b.user_updated_at, b.updated_at) DESC
+    ${editTimeSql('b')} DESC
   LIMIT ?
 `
 
@@ -373,7 +373,7 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-  ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
+  ORDER BY ${editTimeSql()} DESC, id ASC
   LIMIT ?
 `
 
@@ -435,7 +435,7 @@ export const SELECT_RECENT_USER_BLOCKS_SQL = `
        WHERE bt.block_id = blocks.id
          AND bt.type IN (${SYSTEM_BLOCK_TYPES.map(() => '?').join(', ')})
     )
-  ORDER BY coalesce(blocks.user_updated_at, blocks.updated_at) DESC, blocks.id ASC
+  ORDER BY ${editTimeSql('blocks')} DESC, blocks.id ASC
   LIMIT ?
 `
 
@@ -608,7 +608,7 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number, constrainTypes = f
       a.alias AS alias,
       b.id AS blockId,
       b.content AS content,
-      coalesce(b.user_updated_at, b.updated_at) AS updatedAt
+      ${editTimeSql('b')} AS updatedAt
     FROM block_aliases a
     JOIN blocks b ON b.id = a.block_id
     WHERE a.workspace_id = ?
@@ -1391,7 +1391,7 @@ const prepareTypedBlockQuery = async (
     recognition = dependOnRecognitionParams(ctx, ctx.repo.propertyDefinitionsFor(workspaceId))
   }
   const context: WhereContext = {properties: schemas, fields: ctx.repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)}
-  const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition, fields: context.fields})
+  const compiled = compileTypedBlockQuery(normalized, context, {projection, limit: query.limit, recognition})
   const targetProps = collectTypedBlockAxisDeps(normalized, ctx, context)
   if (needsAncestorChain(normalized)) {
     await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', targetProps, context, recognition)

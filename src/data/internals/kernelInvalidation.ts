@@ -339,7 +339,7 @@ export const emitKernelInvalidations = (
   if (before?.createdAt !== after?.createdAt) {
     emit(TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey(workspaceId, 'created'))
   }
-  if ((before?.userUpdatedAt ?? before?.updatedAt) !== (after?.userUpdatedAt ?? after?.updatedAt)) {
+  if (before?.userUpdatedAt !== after?.userUpdatedAt) {
     emit(TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey(workspaceId, 'updated'))
   }
 
