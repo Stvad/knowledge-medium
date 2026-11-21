@@ -673,6 +673,45 @@ describe('list cells', () => {
     expect(await projection()).toEqual({[textListProperty.name]: ['first', 'second', 'first']})
   })
 
+  it.each([false, true])('pastes the visible lagging member and keeps its note (offline copy: %s)', async copy => {
+    const repo = await setup(textListProperty)
+    await seed({id: ownerId, properties: {[textListProperty.name]: ['first']}}, field(),
+      value('value-a', 'first'), value('lagging', 'second'), value('note', 'keep on second', 'lagging'),
+      ...(copy ? [field('field-b'), value('copy', 'second', 'field-b'), value('copy-note', 'also keep', 'copy')] : []))
+
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, 'second\nfirst\nthird'), options)
+
+    expect(await projection()).toEqual({[textListProperty.name]: ['second', 'first', 'third']})
+    expect(await children('field-a')).toEqual([
+      {id: 'lagging', content: 'second'}, {id: 'value-a', content: 'first'}, {id: expect.any(String), content: 'third'},
+    ])
+    expect(await children('lagging')).toEqual([
+      {id: 'note', content: 'keep on second'}, ...(copy ? [{id: 'copy-note', content: 'also keep'}] : []),
+    ])
+  })
+
+  it('retains both annotated occurrences when a paste includes both offline rows', async () => {
+    const repo = await setup(textListProperty)
+    await seed({id: ownerId, properties: {[textListProperty.name]: ['old']}}, field(), field('field-b'),
+      value('value-a', 'same'), value('value-b', 'same', 'field-b'), value('note', 'keep', 'value-b'))
+    await repo.tx(tx => writeCellText(tx, ownerId, fieldId, 'same\nsame'), options)
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: 'same'}, {id: 'value-b', content: 'same'}])
+    expect(await children('value-b')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[textListProperty.name]: ['same', 'same']})
+  })
+
+  it('refuses to remove a lagging member whose offline copy carries the only note', async () => {
+    const repo = await setup(textListProperty)
+    await seed({id: ownerId, properties: {[textListProperty.name]: ['first']}}, field(),
+      value('value-a', 'first'), value('lagging', 'second'), field('field-b'),
+      value('copy', 'second', 'field-b'), value('note', 'keep', 'copy'))
+    const before = await snapshot()
+    await repo.tx(async tx => {
+      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, 'first'), 'resolve-in-outline')
+    }, options)
+    expect(await snapshot()).toEqual(before)
+  })
+
   it('refuses a whole reference list paste when one member is invalid', async () => {
     const repo = await setup(refListProperty)
     await seed({id: ownerId, properties: {[refListProperty.name]: ['target']},

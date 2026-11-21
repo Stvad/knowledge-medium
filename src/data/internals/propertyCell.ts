@@ -60,10 +60,15 @@ const appendValue = async (tx: Tx, field: Field, schema: AnyPropertySchema, text
   return createValueChild(tx, field, text, freshSlots(values, 1)[0]!, {valueKey, occurrence})
 }
 
-const planFieldFold = (cell: Cell) => {
+const fieldValueUnion = (cell: Cell) => {
   const duplicates = new Map<BlockData, BlockData>()
   const groups = cell.fields.map(({children}) => children.filter(isFieldValueChild))
   const values = unionValuesAcrossFieldRows(cell.schema, groups, (copy, survivor) => duplicates.set(copy, survivor))
+  return {values, duplicates}
+}
+
+const planOpenFold = (cell: Cell) => {
+  const {values, duplicates} = fieldValueUnion(cell)
   // A stored list can explicitly count copies across fields as distinct occurrences.
   if (duplicates.size && memberCodecOf(cell.schema.codec) && cell.stored !== undefined &&
     !jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, values), cell.stored) &&
@@ -120,7 +125,7 @@ export const openCell = async (
   const cell = await readCell(tx, ownerId, fieldId)
   if (initialText !== undefined) assertValueText(initialText)
   const {schema, stored} = cell
-  const {values, duplicates} = planFieldFold(cell)
+  const {values, duplicates} = planOpenFold(cell)
   const list = memberCodecOf(schema.codec) !== undefined
   const blankCounts = list && (childContentsToEncodedPropertyValue(schema, ['']) as unknown[]).length > 0
   const target = (rows: BlockData[]) => {
@@ -192,13 +197,18 @@ export const writeCellText = async (tx: Tx, ownerId: string, fieldId: string, te
       if (!(error instanceof CodecError)) throw error
       throw new CellRefusedError('invalid-text', 'A pasted member is invalid for this list.')
     }
-    const {surplus, keyByRow} = matchMemberValueChildren(schema, cell.values, contents)
+    const {kept, surplus, keyByRow} = matchMemberValueChildren(schema, cell.values, contents)
+    const retained = new Set(kept)
+    const {duplicates} = fieldValueUnion(cell)
+    for (const [copy, survivor] of duplicates) {
+      if (retained.has(copy) || !retained.has(survivor)) duplicates.delete(copy)
+    }
     for (const row of surplus) {
-      if (keyByRow.get(row.id)!.denotesValue && await carriesData(tx, row)) {
+      if (!duplicates.has(row) && keyByRow.get(row.id)!.denotesValue && await carriesData(tx, row)) {
         throw new CellRefusedError('resolve-in-outline', 'Replacing this list would remove a member with nested data.')
       }
     }
-    if (cell.fields.length > 1) await foldFields(tx, cell)
+    await foldFields(tx, cell, duplicates)
     await tx.setProperty(ownerId, schema, decoded)
     return
   }
