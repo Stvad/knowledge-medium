@@ -1,1 +1,1 @@
-export{lk as RecentsList,uk as RecentsPageBlockRenderer}from"../../../chunks/app-ecsRuifu.js";
+export{lk as RecentsList,uk as RecentsPageBlockRenderer}from"../../../chunks/app-Bq-FUq3r.js";

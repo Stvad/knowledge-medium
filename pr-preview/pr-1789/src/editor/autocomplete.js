@@ -1,1 +1,1 @@
-export{aF as editorAutocompleteExtension}from"../../chunks/app-ecsRuifu.js";
+export{aF as editorAutocompleteExtension}from"../../chunks/app-Bq-FUq3r.js";

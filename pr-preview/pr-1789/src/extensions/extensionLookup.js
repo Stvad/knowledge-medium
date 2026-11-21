@@ -1,1 +1,1 @@
-export{Gg as findExtensionBlock}from"../../chunks/app-ecsRuifu.js";
+export{Gg as findExtensionBlock}from"../../chunks/app-Bq-FUq3r.js";

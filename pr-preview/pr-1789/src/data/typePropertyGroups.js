@@ -1,1 +1,1 @@
-export{kH as typePropertyGroups}from"../../chunks/app-ecsRuifu.js";
+export{kH as typePropertyGroups}from"../../chunks/app-Bq-FUq3r.js";

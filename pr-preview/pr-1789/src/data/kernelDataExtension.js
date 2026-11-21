@@ -1,1 +1,1 @@
-export{d5 as kernelDataExtension}from"../../chunks/app-ecsRuifu.js";
+export{d5 as kernelDataExtension}from"../../chunks/app-Bq-FUq3r.js";
