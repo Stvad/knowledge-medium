@@ -147,13 +147,27 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
  *  costs one `get` + one `childrenOf` + one `update`, not *k* of each. The
  *  `setProperties` fan-out and the one-time cell→children pass both hit this
  *  with several fields on one row. */
-type AffectedOwners = Map<string, Map<string, AnyPropertySchema>>
+type AffectedOwners = Map<string, AffectedOwner>
+
+interface AffectedOwner {
+  readonly fields: Map<string, AnyPropertySchema>
+  /** A row the user wrote in this tx reaches this owner, so a changed cell is
+   *  the user's edit of the owner and carries its edit time. */
+  userEdited: boolean
+}
+
+/** Whether the user (not a processor, a materialization or sync) wrote row
+ *  `id` in this tx — `SameTxCtx.hasUserWrite`. */
+export type IsUserWrite = (id: string) => boolean
+
+const noUserWrites: IsUserWrite = () => false
 
 const addAffectedProjection = (
   out: AffectedOwners,
   parentId: string | null,
   fieldId: string | undefined,
   lookups: ProjectionLookups,
+  userEdited: boolean,
 ): void => {
   if (parentId === null) return
   if (fieldId === undefined) return
@@ -162,12 +176,13 @@ const addAffectedProjection = (
   // nothing can reach.
   const schema = lookups.resolveFieldSchema(fieldId)
   if (!schema) return
-  let fields = out.get(parentId)
-  if (fields === undefined) {
-    fields = new Map()
-    out.set(parentId, fields)
+  let owner = out.get(parentId)
+  if (owner === undefined) {
+    owner = {fields: new Map(), userEdited: false}
+    out.set(parentId, owner)
   }
-  fields.set(fieldId, schema)
+  owner.fields.set(fieldId, schema)
+  owner.userEdited ||= userEdited
 }
 
 /** Reads a parent row at most once per collection pass. The processor path
@@ -187,14 +202,16 @@ const collectAffectedProjection = async (
   row: ProjectableRow | null,
   lookups: ProjectionLookups,
   readParent: ParentReader,
+  isUserWrite: IsUserWrite,
 ): Promise<void> => {
   if (row === null) return
+  const userEdited = isUserWrite(row.id)
   // The row as a FIELD ROW (parent = owning block): §9 selection keys on
   // the bit — an unmarked ref row is never a field row. The before side of
   // a bit change carries its own snapshot's bit, so a row that just left
   // the marked form still re-projects (drops) its old key.
   if (row.isFieldForm === true) {
-    addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups)
+    addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups, userEdited)
   }
 
   if (row.parentId === null) return
@@ -203,7 +220,7 @@ const collectAffectedProjection = async (
   // The row as a VALUE child (parent = field row → owning block): only a
   // marked parent is a field row, and only a non-marked row is its value.
   if (parent.isFieldForm === true && isFieldValueChild(row)) {
-    addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups)
+    addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups, userEdited)
   }
 }
 
@@ -272,7 +289,7 @@ const fieldRowsForSchema = (
 const reprojectOwner = async (
   tx: Tx,
   parentId: string,
-  fields: ReadonlyMap<string, AnyPropertySchema>,
+  {fields, userEdited}: AffectedOwner,
   mode: ProjectionMode,
 ): Promise<void> => {
   const parent = await tx.get(parentId)
@@ -318,7 +335,10 @@ const reprojectOwner = async (
   }
   // Idempotence short-circuit (§5 invariant 1).
   if (propertiesEqual(parent.properties, nextProperties)) return
-  await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
+  // A user's value-row edit is an edit of the owner, stamped as `setProperty`
+  // stamps one; anything else is bookkeeping over children that already carry
+  // their own time.
+  await tx.update(parent.id, {properties: nextProperties}, userEdited ? undefined : {skipMetadata: true})
 }
 
 /**
@@ -336,12 +356,17 @@ const reprojectOwner = async (
  * so without this call the owner's cell would never gain the key.
  *
  * Caller owns the flip gate: pre-flip there are no cells to project.
+ *
+ * `isUserWrite` names the row states the user wrote in this tx: an owner one
+ * of them reaches takes the user's edit time when its cell changes. Repair
+ * paths keep the default, since nothing they project is a user's edit.
  */
 export const reprojectOwnersForRowStates = async (
   tx: Tx,
   rowStates: Iterable<ProjectableRow | null>,
   lookups: ProjectionLookups,
   mode: ProjectionMode,
+  isUserWrite: IsUserWrite = noUserWrites,
 ): Promise<void> => {
   const affected: AffectedOwners = new Map()
   // Collection reads; re-projection writes. Keeping them as two loops is what
@@ -356,10 +381,10 @@ export const reprojectOwnersForRowStates = async (
     return parent
   }
   for (const row of rowStates) {
-    await collectAffectedProjection(affected, row, lookups, readParent)
+    await collectAffectedProjection(affected, row, lookups, readParent, isUserWrite)
   }
-  for (const [parentId, fields] of affected) {
-    await reprojectOwner(tx, parentId, fields, mode)
+  for (const [parentId, owner] of affected) {
+    await reprojectOwner(tx, parentId, owner, mode)
   }
 }
 
@@ -1313,6 +1338,7 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       // Authoritative: this processor's writes ARE settled, which is what
       // makes the lossy unset safe here and nowhere else.
       'full',
+      ctx.hasUserWrite,
     )
   },
 })
