@@ -30,6 +30,8 @@ import {__resetLazyMountRegistryForTesting} from '@/components/util/lazyMountReg
 import {kernelPropertyUiExtension} from '@/components/propertyEditors/typesPropertyUi'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
+import {supertagsCodeMirrorExtensions} from '@/plugins/supertags/codeMirrorExtensions'
+import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
 import {focusBlock, isCollapsedProp, isEditingProp, peekFocusedBlockLocation, topLevelBlockIdProp, typesProp} from '@/data/properties'
 import {EditorView} from '@codemirror/view'
 import {CompletionContext} from '@codemirror/autocomplete'
@@ -39,7 +41,7 @@ import * as propertyCreation from '@/data/propertyRowCreation'
 import * as properties from '@/data/properties'
 import {choosePropertyField} from '@/data/propertyRowCreation'
 import {propertyRowsPlugin} from '../index'
-import {acceptCompletion, completionStatus, startCompletion} from '@codemirror/autocomplete'
+import {acceptCompletion, startCompletion, type CompletionSource} from '@codemirror/autocomplete'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 
@@ -74,6 +76,7 @@ const configureRuntime = () => {
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
     defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
+    codeMirrorExtensionsFacet.of(supertagsCodeMirrorExtensions),
     vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}),
     blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
     defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
@@ -131,7 +134,7 @@ const ContextProbe = () => {
   return null
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, disableEditorCompletions?: boolean) => render(
+const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, disableStructuralCompletions?: boolean) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
@@ -141,7 +144,7 @@ const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER,
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root}}>
             <GlobalShortcuts/>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
-              <NestedBlockContextProvider overrides={{disableEditorCompletions}}>
+              <NestedBlockContextProvider overrides={{disableStructuralCompletions}}>
                 <BlockComponent blockId={root}/>
               </NestedBlockContextProvider>
             </PropertyDisplayScopeContext>
@@ -222,7 +225,7 @@ describe('ordinary property creation in the outline', () => {
     const fieldId = await repo.mutate.createChild({parentId: OWNER, content: '::'})
     await choosePropertyField(repo.block(OWNER), stage, repo.block(fieldId), '::', () => true)
     const valueId = await repo.mutate.createChild({parentId: fieldId})
-    mount('all')
+    mount('all', OWNER, true)
     await act(() => focusBlock(repo.block(PANEL), valueId, {edit: true, renderScopeId: 'creation-test'}))
     await screen.findByRole('option', {name: /In progress/})
     const view = EditorView.findFromDOM(document.querySelector<HTMLElement>('.cm-editor')!)!
@@ -361,19 +364,28 @@ describe('ordinary property creation in the outline', () => {
     expect(await repo.block(OWNER).get(list)).toEqual(['saved'])
   })
 
-  it('offers no native completion on a surface that disables it', async () => {
-    const id = await repo.mutate.createChild({parentId: OWNER, content: '::'})
-    mount('all', OWNER, true)
+  it.each([
+    {text: '::', label: plain.name, disabled: false},
+    {text: '#Expected', label: expectedType.label, disabled: false},
+    {text: '::', label: plain.name, disabled: true},
+    {text: '#Expected', label: expectedType.label, disabled: true},
+  ])('routes structural completion for $text (disabled: $disabled)', async ({text, label, disabled}) => {
+    const id = await repo.mutate.createChild({parentId: OWNER, content: text})
+    mount('all', OWNER, disabled)
     await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
     const view = await waitFor(() => {
       const node = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
       expect(node).not.toBeNull()
       return EditorView.findFromDOM(node!)!
     })
-    act(() => { view.focus(); view.dispatch({selection: {anchor: 2}}) })
-    expect(view.state.doc.toString()).toBe('::')
-    act(() => { startCompletion(view) })
-    expect(completionStatus(view.state)).toBeNull()
+    expect(view.state.doc.toString()).toBe(text)
+    act(() => { view.dispatch({selection: {anchor: text.length}}) })
+    const context = new CompletionContext(view.state, text.length, true)
+    const sources = view.state.languageDataAt<CompletionSource>('autocomplete', text.length)
+    const results = await Promise.all(sources.map(source => source(context)))
+    const labels = results.flatMap(result => result?.options.map(option => option.label) ?? [])
+    if (disabled) expect(labels).toEqual([])
+    else expect(labels).toContain(label)
   }, 20_000) // The seeded outline and editor mount took 1.3 s in isolation.
 
   it('opens native completion and an ordinary first child', async () => {

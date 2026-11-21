@@ -15,15 +15,7 @@ import {
 } from './codeMirrorExtensions.ts'
 import type { AppExtension } from '@/facets/facet.js'
 
-/** Keep completion state installed while disabling its sources. In-flight
- *  completion callbacks still read that state after reconfiguration. */
-export const disabledEditorAutocomplete = autocompletion({
-  override: [],
-  activateOnTyping: false,
-  defaultKeymap: false,
-})
-
-const markdownEditorAutocomplete = [
+const editorAutocompleteContribution: CodeMirrorExtensionContribution = () => [
   autocompletion({
     defaultKeymap: false,
     icons: false,
@@ -40,9 +32,6 @@ const markdownEditorAutocomplete = [
   }),
   keymap.of(completionKeymapWithEscapeFallthrough),
 ]
-
-const editorAutocompleteContribution: CodeMirrorExtensionContribution = ({disableEditorCompletions}) =>
-  disableEditorCompletions ? [disabledEditorAutocomplete] : markdownEditorAutocomplete
 
 export const editorAutocompleteExtension: AppExtension =
   codeMirrorExtensionsFacet.of(editorAutocompleteContribution, {source: 'editor-autocomplete'})

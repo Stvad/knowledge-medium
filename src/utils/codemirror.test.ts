@@ -5,7 +5,7 @@ import { autocompletion, completionKeymap, completionStatus, startCompletion } f
 import { describe, expect, it, vi } from 'vitest'
 import { basicSetup } from '@uiw/codemirror-extensions-basic-setup'
 import {
-  MARKDOWN_EDITOR_BASIC_SETUP,
+  BLOCK_EDITOR_BASIC_SETUP,
   acceptCompletionOnEnterCapture,
   clampSelectionToLength,
   createMinimalMarkdownConfig,
@@ -165,7 +165,7 @@ describe('minimal markdown CodeMirror config', () => {
       parent: document.body,
       state: EditorState.create({
         doc,
-        extensions: [basicSetup(MARKDOWN_EDITOR_BASIC_SETUP), createMinimalMarkdownConfig()],
+        extensions: [basicSetup(BLOCK_EDITOR_BASIC_SETUP), createMinimalMarkdownConfig()],
       }),
     })
 

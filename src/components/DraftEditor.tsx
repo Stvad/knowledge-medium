@@ -17,7 +17,7 @@ import {
 } from '@/paste/operations.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
-import { MARKDOWN_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 
 interface DraftEditorProps {
@@ -78,7 +78,7 @@ export const DraftEditor = ({
 }: DraftEditorProps) => {
   const repo = useRepo()
   const runtime = useAppRuntime()
-  const {disableEditorCompletions} = useBlockContext()
+  const {disableStructuralCompletions} = useBlockContext()
   // Stable extensions read the latest callbacks without rebuilding on each edit.
   const handlers = useRef({onChange, onSubmit, onCancel})
   useLayoutEffect(() => { handlers.current = {onChange, onSubmit, onCancel} })
@@ -112,7 +112,7 @@ export const DraftEditor = ({
       // owner made the draft read-only to submit it; dispatch ignores readOnly.
       EditorState.changeFilter.of(tr => !tr.startState.readOnly),
       ...createMinimalMarkdownConfig([
-        ...runtime.read(codeMirrorExtensionsFacet)({repo, disableEditorCompletions}),
+        ...runtime.read(codeMirrorExtensionsFacet)({repo, disableStructuralCompletions}),
         // After the plugins', so an open completion takes Enter first. In a
         // block, Enter is the outline's split, which never reaches a draft.
         // eslint-disable-next-line react-hooks/refs -- read on a key press, never during render
@@ -125,7 +125,7 @@ export const DraftEditor = ({
         EditorView.contentAttributes.of({'aria-label': label, 'aria-multiline': 'true'}),
       ]),
     ]
-  }, [repo, runtime, label, disableEditorCompletions])
+  }, [repo, runtime, label, disableStructuralCompletions])
 
   return (
     <div
@@ -140,7 +140,7 @@ export const DraftEditor = ({
         value={value}
         onChange={stableOnChange}
         extensions={extensions}
-        basicSetup={MARKDOWN_EDITOR_BASIC_SETUP}
+        basicSetup={BLOCK_EDITOR_BASIC_SETUP}
         indentWithTab={false}
         readOnly={readOnly}
         placeholder={placeholder}

@@ -21,7 +21,6 @@ import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
-import { disabledEditorAutocomplete } from '@/editor/autocomplete.js'
 import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
@@ -42,7 +41,7 @@ export const BlockEditor = ({
   const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
-  const {editorTooltipParent, disableEditorCompletions} = blockContext
+  const {editorTooltipParent} = blockContext
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -246,14 +245,7 @@ export const BlockEditor = ({
   // Every block editor gets keyboard-aware scrolling so the caret stays
   // above the on-screen keyboard (see keyboardAwareScroll). Prepended so
   // a caller-supplied extension can still override anything if it needs to.
-  const {extensions: providedExtensions, basicSetup, ...restCodeMirrorProps} = codeMirrorProps
-  // Source editors can get their completion engine from UIW's basic setup.
-  // Markdown editors resolve the opt-out through the app extension facet.
-  const suppressBasicAutocomplete = disableEditorCompletions && basicSetup !== false &&
-    (typeof basicSetup !== 'object' || basicSetup.autocompletion !== false)
-  const surfaceBasicSetup = useMemo(() => suppressBasicAutocomplete
-    ? {...(typeof basicSetup === 'object' ? basicSetup : {}), completionKeymap: false}
-    : basicSetup, [basicSetup, suppressBasicAutocomplete])
+  const {extensions: providedExtensions, ...restCodeMirrorProps} = codeMirrorProps
   const mergedExtensions = useMemo<Extension[]>(
     // Publish this editor's content flush into the view so completion
     // sources can persist pending keystrokes at accept time (see
@@ -267,10 +259,9 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
-      suppressBasicAutocomplete ? disabledEditorAutocomplete : [],
       editorTooltipParent ? tooltips({parent: editorTooltipParent}) : [],
     ],
-    [providedExtensions, flushDebouncers, editorTooltipParent, suppressBasicAutocomplete],
+    [providedExtensions, flushDebouncers, editorTooltipParent],
   )
 
   if (!blockEditData) return null
@@ -340,7 +331,6 @@ export const BlockEditor = ({
         })
       }}
       extensions={mergedExtensions}
-      basicSetup={surfaceBasicSetup}
       {...restCodeMirrorProps}
     />
   )

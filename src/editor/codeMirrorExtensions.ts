@@ -14,7 +14,7 @@ export interface CodeMirrorExtensionContext {
   childBacked?: boolean
   /** Present on direct value children rendered in a property field. */
   propertyValueSchema?: AnyPropertySchema
-  disableEditorCompletions?: boolean
+  disableStructuralCompletions?: boolean
   /** UI state and render location used for editor focus handoff. */
   uiStateBlock?: Block
   renderScopeId?: string

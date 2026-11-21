@@ -4,7 +4,7 @@
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {act, cleanup, render, screen, waitFor} from '@testing-library/react'
-import {completionStatus, currentCompletions, startCompletion} from '@codemirror/autocomplete'
+import {currentCompletions, startCompletion} from '@codemirror/autocomplete'
 import {isolateHistory} from '@codemirror/commands'
 import {EditorView} from '@codemirror/view'
 import {useState} from 'react'
@@ -94,16 +94,16 @@ describe('DraftEditor', () => {
     )
   }
 
-  const draft = (disableEditorCompletions?: boolean) => (
+  const draft = (disableStructuralCompletions?: boolean) => (
     <AppRuntimeContextProvider value={repo.facetRuntime!}>
-      <BlockContextProvider initialValue={{disableEditorCompletions}}>
+      <BlockContextProvider initialValue={{disableStructuralCompletions}}>
         <Harness/>
       </BlockContextProvider>
     </AppRuntimeContextProvider>
   )
 
-  const mount = async (disableEditorCompletions?: boolean): Promise<EditorView> => {
-    render(draft(disableEditorCompletions))
+  const mount = async (disableStructuralCompletions?: boolean): Promise<EditorView> => {
+    render(draft(disableStructuralCompletions))
     const view = EditorView.findFromDOM(await screen.findByLabelText('New comment'))!
     act(() => { view.focus() })
     return view
@@ -118,8 +118,8 @@ describe('DraftEditor', () => {
     view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, cancelable: true, ...init}))
   })
 
-  it('offers the references plugin’s [[ completion, as a block’s editor does', async () => {
-    const view = await mount()
+  it.each([undefined, true])('offers [[ completion with structural completions disabled: %s', async disabled => {
+    const view = await mount(disabled)
     type(view, '[[Laun')
     act(() => { startCompletion(view) })
     await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Launch plan'))
@@ -136,36 +136,6 @@ describe('DraftEditor', () => {
     type(view, '@@Corn')
     act(() => { startCompletion(view) })
     await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Corner Cafe'))
-  })
-
-  it('leaves ordinary typing available in drafts on surfaces that disable completion', async () => {
-    const view = await mount(true)
-    type(view, '[[Laun')
-    expect(view.state.doc.toString()).toBe('[[Laun')
-    act(() => { startCompletion(view) })
-    expect(completionStatus(view.state)).toBeNull()
-    press(view, {key: 'Enter'})
-    expect(view.state.doc.toString()).toBe('[[Laun\n')
-  })
-
-  it('turns completions off while an open editor has a pending completion', async () => {
-    const {rerender} = render(draft())
-    const view = EditorView.findFromDOM(await screen.findByLabelText('New comment'))!
-    vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']})
-    try {
-      type(view, '[[Laun')
-      act(() => { startCompletion(view) })
-      expect(completionStatus(view.state)).toBe('pending')
-
-      rerender(draft(true))
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(60) })
-      expect(EditorView.findFromDOM(view.contentDOM)).toBe(view)
-      expect(completionStatus(view.state)).toBeNull()
-      expect(view.state.doc.toString()).toBe('[[Laun')
-    } finally {
-      vi.useRealTimers()
-    }
   })
 
   it('submits on Mod+Enter, and makes a line break on Enter', async () => {

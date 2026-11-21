@@ -1,33 +1,15 @@
 // @vitest-environment happy-dom
 import {describe, expect, it, vi} from 'vitest'
-import {completionStatus, startCompletion} from '@codemirror/autocomplete'
-import {NestedBlockContextProvider} from '@/context/block'
-import type {BlockRendererProps} from '@/types'
 import {doc, press, setupBlockUi} from '@/test/blockUiFixture.tsx'
 import {HtmlSourceEditor} from '../HtmlDocumentContent.tsx'
 
 const SOURCE = '<p>hi</p>'
-
-const SourceWithoutCompletions = (props: BlockRendererProps) => (
-  <NestedBlockContextProvider overrides={{disableEditorCompletions: true}}>
-    <HtmlSourceEditor {...props}/>
-  </NestedBlockContextProvider>
-)
 
 vi.mock('@/components/Login.tsx', () => ({useUser: () => ({id: 'user-1', name: 'Alice'})}))
 
 describe('the HTML source editor', () => {
   const {openEditorAt, reachedWindow} = setupBlockUi(SOURCE)
   const open = (caret: number) => openEditorAt(HtmlSourceEditor, caret)
-
-  it.each([
-    {Editor: HtmlSourceEditor, status: 'pending'},
-    {Editor: SourceWithoutCompletions, status: null},
-  ])('uses the surface policy for HTML completion ($status)', async ({Editor, status}) => {
-    const view = await openEditorAt(Editor, 1)
-    startCompletion(view)
-    expect(completionStatus(view.state)).toBe(status)
-  })
 
   it.each<[string, KeyboardEventInit]>([
     ['Enter', {}],

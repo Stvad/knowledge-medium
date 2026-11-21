@@ -5,7 +5,7 @@ import { useHandle } from '@/hooks/block'
 import { isFieldValueChild } from '@/data/propertyChildren'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
-import { MARKDOWN_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { editorSelection, focusBlock } from '@/data/properties.js'
@@ -60,10 +60,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
     const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
     const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema,
-      childBacked: propertyDisplay.childBacked, disableEditorCompletions: blockContext.disableEditorCompletions,
+      childBacked: propertyDisplay.childBacked, disableStructuralCompletions: blockContext.disableStructuralCompletions,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, blockContext.disableEditorCompletions, propertyDisplay.childBacked, propertyValueSchema])
+  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, blockContext.disableStructuralCompletions, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before
@@ -192,7 +192,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       block={block}
       extensions={extensions}
       className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}
-      basicSetup={MARKDOWN_EDITOR_BASIC_SETUP}
+      basicSetup={BLOCK_EDITOR_BASIC_SETUP}
       indentWithTab={false}
       onKeyDownCapture={handleKeyDownCapture}
       onPasteCapture={handlePaste}
