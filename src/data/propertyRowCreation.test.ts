@@ -212,11 +212,35 @@ describe('property rows created as blocks', () => {
     expect(await live()).toEqual(before)
   })
 
+  it.each([
+    {schema: note, stored: 'z', rows: [['x'], ['y']]},
+    {schema: tags, stored: ['a', 'b'], rows: [['a'], ['a']]},
+  ])('refuses to fold duplicate field rows that disagree with the stored value: $schema.name', async ({schema, stored, rows}) => {
+    const resolution = repo.propertySchemaResolverFor('ws').resolve(schema.name)
+    if (resolution.status !== 'resolved') throw new Error('Missing definition')
+    const definition = resolution.schema.fieldId
+    await h.db.writeTransaction(async tx => {
+      const insert = (id: string, parentId: string, content: string, fieldId: string | null = null) => tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          reference_target_id, is_field_form, deleted, created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES (?, 'ws', ?, 'a1', ?, '{}', ?, ?, 0, 1, 1, 1, 'user', 'user')`,
+        [id, parentId, content, fieldId, fieldId ? 1 : 0])
+      for (const [index, values] of rows.entries()) {
+        await insert(`field-${index}`, 'owner', `::((${definition}))`, definition)
+        for (const value of values) await insert(`field-${index}-${value}`, `field-${index}`, value)
+      }
+      await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[schema.name]: stored}), 'owner'])
+    })
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/would change its stored value/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
   it('refuses a stored value that cannot be materialized unchanged, before touching the scaffold', async () => {
     await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
       [JSON.stringify({[tags.name]: ['ok', 5]}), 'owner']))
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(choosePropertyField(repo.block('owner'), tags, repo.block('source'), '::', () => true)).rejects.toThrow(/materialized unchanged/)
+    await expect(choosePropertyField(repo.block('owner'), tags, repo.block('source'), '::', () => true)).rejects.toThrow(/without changing it/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
 

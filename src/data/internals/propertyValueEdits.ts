@@ -53,12 +53,7 @@ const readPropertyRows = async (tx: Tx, ownerId: string, fieldId: string) => {
 
 type PropertyRows = Awaited<ReturnType<typeof readPropertyRows>>
 
-/** Whether the owner has neither a field row nor a stored value for this property. Refuses what
- *  every edit here refuses. */
-export const isPropertyAbsent = async (tx: Tx, ownerId: string, fieldId: string): Promise<boolean> => {
-  const {fields, stored} = await readPropertyRows(tx, ownerId, fieldId)
-  return fields.length === 0 && stored === undefined
-}
+
 type Field = Pick<BlockData, 'id' | 'workspaceId'>
 
 const appendValue = async (tx: Tx, field: Field, schema: AnyPropertySchema, text: string) => {
@@ -120,25 +115,34 @@ const assertValueText = (text: string) => {
   }
 }
 
+interface FoldPlan {
+  values: BlockData[]
+  duplicates: Map<BlockData, BlockData>
+}
+
 /** Fold the property's field rows into one and materialize a stored value that has no rows yet.
- *  Refuses, before any write, a stored value that would not come back unchanged. */
-const settleFieldRows = async (tx: Tx, rows: PropertyRows, duplicates: ReadonlyMap<BlockData, BlockData>) => {
+ *  Refuses, before any write, a fold or materialization that would change the stored value. */
+const materializeFieldRows = async (tx: Tx, rows: PropertyRows, {values, duplicates}: FoldPlan) => {
   const {schema, stored} = rows
   const materialize = rows.values.length === 0 && stored !== undefined
   // The round trip checks members; only the rejection runs a list codec over the whole list.
   if (materialize && (propertyCellValueRejection(schema, stored) || !valueSurvivesChildRoundTrip(schema, stored))) {
-    throw new PropertyEditRefusedError('would-change-stored-value', 'This stored value cannot be materialized unchanged.')
+    throw new PropertyEditRefusedError('would-change-stored-value', 'This stored value cannot be written out as rows without changing it.')
+  }
+  if (!materialize && stored !== undefined && rows.fields.length > 1 && !rowsProjectToValue(schema, values, stored)) {
+    throw new PropertyEditRefusedError('would-change-stored-value', 'Folding this property\u2019s duplicate field rows would change its stored value.')
   }
   const field = await foldFields(tx, rows, duplicates)
   if (materialize) await reconcileFieldValueChildren(tx, field, schema, stored)
   return field
 }
 
-/** Give the owner one field row for this property without opening a value: duplicates fold and a
- *  stored value without rows is materialized, as `openPropertyValue` does first. */
-export const settlePropertyField = async (tx: Tx, ownerId: string, fieldId: string): Promise<string> => {
+/** Give the owner one field row for this property without opening a value, as `openPropertyValue`
+ *  does first. Returns undefined, writing nothing, when it has neither a field row nor a stored value. */
+export const materializePropertyField = async (tx: Tx, ownerId: string, fieldId: string): Promise<string | undefined> => {
   const rows = await readPropertyRows(tx, ownerId, fieldId)
-  return (await settleFieldRows(tx, rows, planOpenFold(rows).duplicates)).id
+  if (rows.fields.length === 0 && rows.stored === undefined) return undefined
+  return (await materializeFieldRows(tx, rows, planOpenFold(rows))).id
 }
 
 export interface OpenedPropertyValue {
@@ -158,7 +162,8 @@ export const openPropertyValue = async (
   const rows = await readPropertyRows(tx, ownerId, fieldId)
   if (initialText !== undefined) assertValueText(initialText)
   const {schema, stored} = rows
-  const {values, duplicates} = planOpenFold(rows)
+  const plan = planOpenFold(rows)
+  const {values} = plan
   const list = memberCodecOf(schema.codec) !== undefined
   const blankCounts = list && (childContentsToEncodedPropertyValue(schema, ['']) as unknown[]).length > 0
   const target = (candidates: BlockData[]) => {
@@ -187,16 +192,15 @@ export const openPropertyValue = async (
     if (blankCounts && !initialText && jsonValuesEqual(stored, [])) {
       throw new PropertyEditRefusedError('would-change-stored-value', 'Opening this empty list would add a stored member.')
     }
-    const field = await settleFieldRows(tx, rows, duplicates)
+    const field = await materializeFieldRows(tx, rows, plan)
     return openValue(field, target(await fieldValueChildren(tx, field.id)))
   }
 
   const existing = target(values)
-  if (stored !== undefined && (rows.fields.length > 1 || !existing) &&
-    !rowsProjectToValue(schema, existing ? values : [...values, ''], stored)) {
+  if (stored !== undefined && !existing && !rowsProjectToValue(schema, [...values, ''], stored)) {
     throw new PropertyEditRefusedError('would-change-stored-value', 'Opening this property would change its stored value.')
   }
-  return openValue(await settleFieldRows(tx, rows, duplicates), existing)
+  return openValue(await materializeFieldRows(tx, rows, plan), existing)
 }
 
 const carriesData = async (tx: Tx, row: BlockData) =>
@@ -223,7 +227,7 @@ const preparePaste = (schema: AnyPropertySchema, text: string) => {
     return {kind: 'typed' as const, decoded, contents}
   } catch (error) {
     if (!(error instanceof CodecError)) throw error
-    throw new PropertyEditRefusedError('invalid-text', 'This value cannot be written with the column codec.')
+    throw new PropertyEditRefusedError('invalid-text', 'This value cannot be written with the property codec.')
   }
 }
 

@@ -1,7 +1,7 @@
 import {adoptOrCreatePropertySchema} from './propertySchemaCreation'
 import type {Block} from './block'
 import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema} from './api'
-import {isPropertyAbsent, openPropertyValue, settlePropertyField} from './internals/propertyValueEdits'
+import {materializePropertyField, openPropertyValue} from './internals/propertyValueEdits'
 import {propertyFieldContent} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
 
@@ -23,21 +23,19 @@ const validateScaffold = async (tx: Tx, owner: Block, source: Block, content: st
 }
 
 /** An absent property takes the scaffold as its field row. Otherwise the scaffold goes and the
- *  property's rows settle as every property edit settles them, materializing a stored value that
- *  has no rows yet. A scalar then opens its value; a list returns no value, for the caller to
- *  append a member (opening would select its last one). */
+ *  property's rows materialize as every property edit materializes them. A scalar then opens its
+ *  value; a list returns no value, for the caller to append a member (opening would select its last). */
 export const choosePropertyField = async (owner: Block, schema: AnyPropertySchema, source: Block, content: string, isCurrent: () => boolean) => {
   if (owner.repo.isReadOnly) throw new Error('This workspace is read-only.')
   return owner.repo.tx(async tx => {
     const resolved = await resolveChosenSchema(tx, owner, schema)
-    const absent = await isPropertyAbsent(tx, owner.id, resolved.fieldId)
+    const fieldRowId = await materializePropertyField(tx, owner.id, resolved.fieldId)
     await validateScaffold(tx, owner, source, content, isCurrent)
-    if (absent) {
+    if (fieldRowId === undefined) {
       await tx.update(source.id, {content: propertyFieldContent(resolved.fieldId)})
       return {schema: resolved, fieldRowId: source.id, valueId: undefined}
     }
     await tx.delete(source.id)
-    const fieldRowId = await settlePropertyField(tx, owner.id, resolved.fieldId)
     if (memberCodecOf(resolved.codec)) return {schema: resolved, fieldRowId, valueId: undefined}
     return {schema: resolved, fieldRowId, valueId: (await openPropertyValue(tx, owner.id, resolved.fieldId)).valueId}
   }, {scope: schema.changeScope, description: 'Choose property field'})
