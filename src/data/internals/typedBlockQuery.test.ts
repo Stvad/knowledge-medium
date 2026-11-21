@@ -286,6 +286,100 @@ describe('typed queries for table rows', () => {
     }
   })
 
+  it('reorders mounted limited ids when a synced definition changes the sort codec', async () => {
+    const property = 'custom-sort'
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    env.repo.startSyncObserver({throttleMs: 0})
+    const syncDefinition = async (preset: string, updatedAt: number) => {
+      await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id: 'sort-definition', workspaceId: WS, parentId: null, orderKey: 'a0', content: '',
+        properties: {types: ['property-schema'], 'property-schema:name': property, 'property-schema:preset': preset},
+        references: [], createdAt: 1, updatedAt, userUpdatedAt: updatedAt,
+        createdBy: 'remote', updatedBy: 'remote', deleted: false,
+      }))
+      await env.repo.flushSyncObserver()
+      await waitFor(() => expect(env.repo.propertySchemas.get(property)?.codec.type).toBe(preset))
+    }
+    await syncDefinition('string', 1)
+    await create({id: 'text-value', types: ['entry']})
+    await create({id: 'numeric-value', types: ['entry']})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$."custom-sort"',
+         CASE id WHEN 'numeric-value' THEN 2 ELSE '2' END)
+       WHERE id IN ('numeric-value', 'text-value')`,
+    ))
+
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, types: ['entry'], order: {property, direction: 'asc'}, limit: 1,
+    })
+    expect(await handle.load()).toEqual(['text-value'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await syncDefinition('number', 2)
+      expect(await env.h.db.getAll(
+        'SELECT id, json_extract(properties_json, ?) AS value FROM blocks WHERE id IN (?, ?) ORDER BY id',
+        ['$."custom-sort"', 'numeric-value', 'text-value'],
+      )).toEqual([{id: 'numeric-value', value: 2}, {id: 'text-value', value: '2'}])
+      await waitFor(() => expect(handle.peek()).toEqual(['numeric-value']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('uses the workspace sort codec and field recognition after switching workspaces', async () => {
+    const property = 'custom-sort'
+    const definition = {types: ['property-schema'], 'property-schema:name': property}
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await create({id: 'definition-a', properties: {...definition, 'property-schema:preset': 'string'}})
+    await create({id: 'malformed-a', properties: {...definition, 'property-schema:name': ''}})
+    await create({id: 'parent-a'})
+    await create({id: 'text-a', parentId: 'parent-a', properties: {[property]: '2'}})
+    await create({id: 'number-a', parentId: 'parent-a'})
+    await create({id: 'field-a', parentId: 'parent-a'})
+    await create({id: 'plain-a', parentId: 'parent-a'})
+    await env.repo.tx(async tx => {
+      await tx.stampReferenceTarget('field-a', 'definition-a', true)
+      await tx.stampReferenceTarget('plain-a', 'malformed-a', true)
+    }, {scope: ChangeScope.BlockDefault})
+    await waitFor(() => {
+      expect(env.repo.propertySchemas.get(property)?.codec.type).toBe('string')
+      expect(env.repo.propertyDefinitions?.unparseableDefinitionIds.has('malformed-a')).toBe(true)
+    })
+    const order = {property, direction: 'asc'} as const
+    const queryA = {workspaceId: WS, parentId: 'parent-a', propertyChildren: 'none', order} as const
+    expect(await env.repo.query.typedBlockIds({...queryA, limit: 1}).load()).toEqual(['text-a'])
+
+    env.repo.setActiveWorkspaceId(OTHER_WS)
+    await env.repo.whenPropertyDefinitionsReady(OTHER_WS)
+    await create({id: 'definition-b', workspaceId: OTHER_WS, properties: {...definition, 'property-schema:preset': 'number'}})
+    await create({id: 'parent-b', workspaceId: OTHER_WS})
+    await create({id: 'a-text-b', workspaceId: OTHER_WS, parentId: 'parent-b'})
+    await create({id: 'z-number-b', workspaceId: OTHER_WS, parentId: 'parent-b'})
+    await env.h.db.writeTransaction(async tx => {
+      for (const [id, value] of [['number-a', 2], ['z-number-b', 2], ['a-text-b', '2']]) {
+        await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[property]: value}), id])
+      }
+    })
+    await waitFor(() => expect(env.repo.propertySchemas.get(property)?.codec.type).toBe('number'))
+
+    expect(await env.repo.query.typedBlockIds({workspaceId: OTHER_WS, parentId: 'parent-b', order}).load())
+      .toEqual(['z-number-b', 'a-text-b'])
+    expect(await env.repo.query.typedBlockIds(queryA).load()).toEqual(['text-a', 'number-a', 'plain-a'])
+  })
+
+  it('refuses registry-dependent queries for an unloaded workspace', async () => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    const workspaceId = OTHER_WS
+    await create({id: 'foreign', workspaceId, properties: {[priorityProp.name]: 1}})
+    const unloaded = 'property registry unavailable for the requested workspace'
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId, order: {property: priorityProp.name, direction: 'asc'},
+    }).load())).rejects.toThrow(unloaded)
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId, propertyChildren: 'none',
+    }).load())).rejects.toThrow(unloaded)
+  })
+
   it('excludes recognized fields and their direct values while retaining blocks below a value', async () => {
     await env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
     const fieldId = propertyDefinitionBlockId(WS, statusProp.seedKey)
@@ -1170,7 +1264,7 @@ describe('compileTypedBlockQuery — type filter join order', () => {
 })
 
 // Seeding the large fixture and refreshing statistics takes about 2 seconds.
-it('bounds limited table queries by type or siblings with and without statistics', async () => {
+it('bounds limited table queries by workspace, type, or siblings with and without statistics', async () => {
   const {db} = env.h
   await db.writeTransaction(async tx => {
     await tx.execute(`
@@ -1201,12 +1295,16 @@ it('bounds limited table queries by type or siblings with and without statistics
       return plan.filter(row => row.parent === 0).map(row => row.detail)
     }
     const assertPlans = async () => {
+      const tempSort = 'USE TEMP B-TREE FOR ORDER BY'
+      const workspacePlan = await readPlan({...base, order})
+      expect(workspacePlan[0]).toBe('SEARCH b USING INDEX idx_blocks_workspace_active (workspace_id=?)')
+      expect(workspacePlan).toContain(tempSort)
+
       const typePlan = await readPlan({...base, types: ['entry'], order})
       expect(typePlan[0]).toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
       expect(typePlan[1]).toBe('SEARCH b USING INDEX sqlite_autoindex_blocks_1 (id=?)')
 
       const siblingSearch = 'SEARCH b USING INDEX idx_blocks_parent_order (parent_id=?)'
-      const tempSort = 'USE TEMP B-TREE FOR ORDER BY'
       for (const types of [undefined, ['entry']]) {
         const siblings = {...base, parentId: 'parent-1', types}
         const outlinePlan = await readPlan({...siblings, order: 'outline'})

@@ -56,9 +56,9 @@ import {
 } from './treeQueries'
 import {
   ANCESTOR_CHAIN_CTE_SQL,
-  assertAncestorWalkBounded,
   buildCandidatesCte,
   compileTypedBlockQuery,
+  type TypedBlockQueryProjection,
   isSelectiveWhereValue,
   normalizeTypedBlockQuery,
   NOT_PROPERTY_ROW_SQL,
@@ -71,6 +71,8 @@ import {
   KERNEL_FIELD_OUTLINE_SKIP_KEY,
   KERNEL_FIELD_RECOGNITION_CHANNEL,
   KERNEL_FIELD_RECOGNITION_KEY,
+  QUERY_SCHEMA_CHANNEL,
+  QUERY_PROPERTY_SCHEMAS_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
@@ -899,17 +901,16 @@ const recognitionParamsBySnapshot = new WeakMap<object, RecognitionParams>()
  *  dependency that re-runs it when they change, which no row write announces —
  *  the registry republishes after the write that moved them. Bind through this,
  *  never the bare params, or a mounted view keeps the old answer. */
-export const dependOnRecognitionParams = (ctx: QueryCtx): RecognitionParams => {
+export const dependOnRecognitionParams = (ctx: QueryCtx, registry = ctx.repo.propertyDefinitions): RecognitionParams => {
   ctx.depend({
     kind: 'plugin',
     channel: KERNEL_FIELD_RECOGNITION_CHANNEL,
     key: KERNEL_FIELD_RECOGNITION_KEY,
   })
-  return registryRecognitionParams(ctx.repo)
+  return registryRecognitionParams(ctx.repo, registry)
 }
 
-export const registryRecognitionParams = (repo: Repo): RecognitionParams => {
-  const registry = repo.propertyDefinitions
+export const registryRecognitionParams = (repo: Repo, registry = repo.propertyDefinitions): RecognitionParams => {
   if (!registry) return NO_REGISTRY_RECOGNITION_PARAMS
   const cached = recognitionParamsBySnapshot.get(registry)
   if (cached) return cached
@@ -1120,6 +1121,7 @@ const collectWhereDeps = (
   enumerableTargetProps: Set<string> | null,
 ): void => {
   if (where === undefined) return
+  ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
   for (const [name, value] of Object.entries(where)) {
     ctx.depend({
       kind: 'plugin',
@@ -1336,13 +1338,14 @@ const declareAncestorDeps = async (
    *  (which `collectWhereDeps` already did) without also picking up the
    *  precise ids that replace it — the under-firing direction. */
   targetProps: ReadonlySet<string>,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  recognition: RecognitionParams | undefined,
 ): Promise<void> => {
-  assertAncestorWalkBounded(normalized)
-  const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas, typedQueryRecognition(normalized, ctx))
+  const candidatesCte = buildCandidatesCte(normalized, schemas, recognition)
   const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string | null}>(
     ANCESTOR_DEP_NODES_SQL(
       candidatesCte.sql,
-      targetLivenessArms(targetProps, ctx.repo.propertySchemas),
+      targetLivenessArms(targetProps, schemas),
     ),
     [...candidatesCte.params],
   )
@@ -1379,11 +1382,34 @@ const declareAncestorDeps = async (
   }
 }
 
-const typedQueryRecognition = (query: ResolvedTypedBlockQuery, ctx: QueryCtx): RecognitionParams | undefined => {
-  if (query.propertyChildren !== 'none') return undefined
-  ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, key: query.workspaceId})
-  ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(query.workspaceId, 'property-schema')})
-  return dependOnRecognitionParams(ctx)
+const prepareTypedBlockQuery = async (
+  query: ResolvedTypedBlockQuery & {limit?: number},
+  ctx: QueryCtx,
+  projection: TypedBlockQueryProjection,
+) => {
+  const normalized = normalizeTypedBlockQuery(query)
+  const {workspaceId} = normalized
+  const registry = ctx.repo.propertyDefinitionsFor(workspaceId)
+  const foreign = ctx.repo.activeWorkspaceId !== null && workspaceId !== ctx.repo.activeWorkspaceId
+  const schemas = registry?.schemas ?? (foreign ? new Map<string, AnyPropertySchema>() : ctx.repo.propertySchemas)
+  const propertyOrder = typeof normalized.order === 'object'
+  if (!registry && foreign && (propertyOrder || normalized.propertyChildren === 'none')) {
+    throw new Error('[queryBlocks] property registry unavailable for the requested workspace')
+  }
+  if (propertyOrder) ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
+  let recognition: RecognitionParams | undefined
+  if (normalized.propertyChildren === 'none') {
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, key: workspaceId})
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, 'property-schema')})
+    recognition = dependOnRecognitionParams(ctx, registry)
+  }
+  const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition})
+  const {matchPredicates, excludePredicates, ancestorTargetProps} =
+    collectTypedBlockAxisDeps(normalized, ctx, projection !== 'count')
+  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
+    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', ancestorTargetProps, schemas, recognition)
+  }
+  return compiled
 }
 
 /** Resolve a typed block query against the given context. Used both
@@ -1395,20 +1421,7 @@ export const resolveTypedBlocks = async (
   ctx: QueryCtx,
 ): Promise<BlockData[]> => {
   if (!query.workspaceId) return []
-  const normalized = normalizeTypedBlockQuery(query)
-  const {matchPredicates, excludePredicates, ancestorTargetProps} = collectTypedBlockAxisDeps(normalized, ctx)
-  const needsAncestorChain = typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)
-
-  // Ancestor-scope predicates inspect rows up the parent chain.
-  // Register row deps on every ancestor id touched so a property /
-  // content / parent_id change on any ancestor wakes the handle.
-  if (needsAncestorChain) {
-    await declareAncestorDeps(normalized, ctx, 'row', ancestorTargetProps)
-  }
-
-  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {
-    limit: query.limit, recognition: typedQueryRecognition(normalized, ctx),
-  })
+  const compiled = await prepareTypedBlockQuery(query, ctx, 'rows')
   const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
   return ctx.hydrateBlocks(asBlockRows(rows))
 }
@@ -1422,15 +1435,7 @@ export const resolveTypedBlockIds = async (
   ctx: QueryCtx,
 ): Promise<string[]> => {
   if (!query.workspaceId) return []
-  const normalized = normalizeTypedBlockQuery(query)
-  const {matchPredicates, excludePredicates, ancestorTargetProps} =
-    collectTypedBlockAxisDeps(normalized, ctx)
-  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
-    await declareAncestorDeps(normalized, ctx, 'structure', ancestorTargetProps)
-  }
-  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {
-    projection: 'ids', limit: query.limit, recognition: typedQueryRecognition(normalized, ctx),
-  })
+  const compiled = await prepareTypedBlockQuery(query, ctx, 'ids')
   const rows = await ctx.db.getAll<{id: string}>(compiled.sql, [...compiled.params])
   return rows.map(row => row.id)
 }
@@ -1480,15 +1485,7 @@ export const resolveTypedBlockCount = async (
   ctx: QueryCtx,
 ): Promise<number> => {
   if (!query.workspaceId) return 0
-  const normalized = normalizeTypedBlockQuery(query)
-  const {matchPredicates, excludePredicates, ancestorTargetProps} =
-    collectTypedBlockAxisDeps(normalized, ctx, false)
-  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
-    await declareAncestorDeps(normalized, ctx, 'structure', ancestorTargetProps)
-  }
-  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {
-    projection: 'count', recognition: typedQueryRecognition(normalized, ctx),
-  })
+  const compiled = await prepareTypedBlockQuery(query, ctx, 'count')
   const row = await ctx.db.get<{count: number}>(compiled.sql, [...compiled.params])
   return row?.count ?? 0
 }

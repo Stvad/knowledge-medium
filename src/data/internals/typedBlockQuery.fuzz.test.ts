@@ -20,9 +20,7 @@
  *   - `compileTypedBlockQuery` with each projection (`rows` / `ids` /
  *     `count`), executed directly;
  *   - the Repo resolvers (`repo.query.typedBlocks` / `typedBlockIds` /
- *     `typedBlockCount`), which add the single-type fast path
- *     (`SELECT_BLOCKS_BY_TYPE_SQL`), normalization, and the ancestor-dep
- *     walk (`declareAncestorDeps`) that runs its own SQL before the query.
+ *     `typedBlockCount`), which add normalization and ancestor dependency discovery.
  * Ordering is compared exactly (the spec defines `created_at` then `id`);
  * `count` against the model's cardinality.
  *

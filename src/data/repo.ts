@@ -151,6 +151,8 @@ import {
   KERNEL_FIELD_RECOGNITION_CHANNEL,
   KERNEL_FIELD_OUTLINE_SKIP_KEY,
   KERNEL_FIELD_RECOGNITION_KEY,
+  QUERY_SCHEMA_CHANNEL,
+  QUERY_PROPERTY_SCHEMAS_KEY,
   type InvalidationRule,
 } from './invalidation'
 import { KERNEL_PROPERTY_SEEDS } from './properties'
@@ -1014,6 +1016,11 @@ export class Repo {
     return this._propertyDefinitionRegistry
   }
 
+  /** Active or immediately previous workspace snapshot. An unloaded workspace has no registry. */
+  propertyDefinitionsFor(workspaceId: string): PropertyDefinitionRegistrySnapshot | null {
+    return registryForWorkspace(this._propertyDefinitionRegistry, this._previousPropertyDefinitionRegistry, workspaceId)
+  }
+
   /** Active-workspace type-definition registry snapshot (kernel/plugin code
    *  types are NOT in it — those live only in `types`; this is the block-built +
    *  seed side that `getTypeBlockId` and the seed read-only gates read). Null
@@ -1032,11 +1039,7 @@ export class Repo {
     // for a workspace whose definitions aren't loaded (which could resolve a
     // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
     // allow-plain) still uses the transitional resolver.
-    const snapshot = registryForWorkspace(
-      this._propertyDefinitionRegistry,
-      this._previousPropertyDefinitionRegistry,
-      workspaceId,
-    )
+    const snapshot = this.propertyDefinitionsFor(workspaceId)
     return propertySchemaResolverForWorkspace(
       snapshot,
       workspaceId,
@@ -1213,6 +1216,7 @@ export class Repo {
         propertySeedNameCounts,
         typeDefinitions,
       ) => {
+        const codecsChanged = !sameKeyedMap(this._propertySchemas, propertySchemas, (a, b) => a.codec === b.codec)
         this._types = types
         this._propertySchemas = propertySchemas
         // Retain the outgoing workspace's faithful snapshot when pinning a
@@ -1262,11 +1266,12 @@ export class Repo {
           ...(recognitionChanged ? [KERNEL_FIELD_RECOGNITION_KEY] : []),
           ...(outlineSkipsChanged ? [KERNEL_FIELD_OUTLINE_SKIP_KEY] : []),
         ]
-        if (recognitionKeys.length > 0) {
-          this.handleStore.invalidate({plugin: new Map([
-            [KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys],
-          ])})
+        const registryChanges = new Map<string, string[]>()
+        if (recognitionKeys.length) registryChanges.set(KERNEL_FIELD_RECOGNITION_CHANNEL, recognitionKeys)
+        if (codecsChanged || incomingWorkspaceId !== currentWorkspaceId) {
+          registryChanges.set(QUERY_SCHEMA_CHANNEL, [QUERY_PROPERTY_SCHEMAS_KEY])
         }
+        if (registryChanges.size) this.handleStore.invalidate({plugin: registryChanges})
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
@@ -3414,11 +3419,7 @@ export class Repo {
    *  locally and red on CI. Pinning it wants a Repo whose priming is
    *  injectable, which does not exist yet. */
   private propertyRegistryReadyFor(workspaceId: string): boolean {
-    return registryForWorkspace(
-      this._propertyDefinitionRegistry,
-      this._previousPropertyDefinitionRegistry,
-      workspaceId,
-    ) !== null
+    return this.propertyDefinitionsFor(workspaceId) !== null
   }
 
   /** Is this device caught up right now? Same predicate the scheduler gates

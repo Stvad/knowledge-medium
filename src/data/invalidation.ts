@@ -132,6 +132,10 @@ export const KERNEL_FIELD_RECOGNITION_KEY = 'active-registry'
  *  view binds. */
 export const KERNEL_FIELD_OUTLINE_SKIP_KEY = 'active-registry-outline-skips'
 
+/** Query inputs supplied by the active or retained registry, outside row-change notifications. */
+export const QUERY_SCHEMA_CHANNEL = 'kernel.querySchema'
+export const QUERY_PROPERTY_SCHEMAS_KEY = 'properties'
+
 const SEP = '\u0000'
 
 export const typedBlocksLiveKey = (workspaceId: string): string => workspaceId

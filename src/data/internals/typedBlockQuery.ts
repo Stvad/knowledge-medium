@@ -502,7 +502,7 @@ export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery): void 
   if (!hasGate) {
     throw new Error(
       '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
-      '(types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
+      '(parentId, types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
     )
   }
 }

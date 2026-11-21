@@ -75,6 +75,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   propertyDefinitions: 'getter read',
   typeDefinitions: 'getter read',
   propertySchemas: 'getter read',
+  propertyDefinitionsFor: 'workspace-scoped registry read',
   types: 'getter read',
   typesPageId: 'getter read',
   undoManager: 'getter; delegates to undoManagerFor (see its entry for the mint)',
