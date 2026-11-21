@@ -217,11 +217,14 @@ describe('typed queries for table rows', () => {
     const query = {workspaceId: WS, parentId: 'parent'}
     const asc = {...query, order: {property: priorityProp.name, direction: 'asc'}} as const
     const desc = {...query, order: {property: priorityProp.name, direction: 'desc'}} as const
-    const ascending = ['empty', 'malformed', 'b-two', 'c-two', 'a-ten']
+    const ascending = ['b-two', 'c-two', 'a-ten', 'empty', 'malformed']
+    const descending = ['a-ten', 'b-two', 'c-two', 'empty', 'malformed']
     expect(await env.repo.query.typedBlockIds(asc).load()).toEqual(ascending)
     expect(ids(await env.repo.query.typedBlocks(asc).load())).toEqual(ascending)
-    expect(await env.repo.query.typedBlockIds({...desc, limit: 4}).load())
-      .toEqual(['a-ten', 'b-two', 'c-two', 'empty'])
+    expect(await env.repo.query.typedBlockIds(desc).load()).toEqual(descending)
+    expect(ids(await env.repo.query.typedBlocks(desc).load())).toEqual(descending)
+    expect(await env.repo.query.typedBlockIds({...asc, limit: 3}).load()).toEqual(ascending.slice(0, 3))
+    expect(await env.repo.query.typedBlockIds({...desc, limit: 3}).load()).toEqual(descending.slice(0, 3))
     expect(await env.repo.query.typedBlockCount(desc).load()).toBe(ascending.length)
   })
 
@@ -1166,40 +1169,58 @@ describe('compileTypedBlockQuery — type filter join order', () => {
   })
 })
 
-it('plans bounded table queries from the sibling index', async () => {
+// Seeding the large fixture and refreshing statistics takes about 2 seconds.
+it('bounds limited table queries by type or siblings with and without statistics', async () => {
   const {db} = env.h
   await db.writeTransaction(async tx => {
     await tx.execute(`
-      WITH RECURSIVE parents(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM parents WHERE n < 99)
+      WITH RECURSIVE parents(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM parents WHERE n < 399)
       INSERT INTO blocks (id, workspace_id, order_key, created_at, updated_at, created_by, updated_by)
-      SELECT 'parent-' || n, CASE WHEN n < 90 THEN ? ELSE ? END, printf('%03d', n), n, n, 'user', 'user'
+      SELECT 'parent-' || n, CASE WHEN n < 360 THEN ? ELSE ? END, printf('%03d', n), n, n, 'user', 'user'
       FROM parents
     `, [WS, OTHER_WS])
     await tx.execute(`
-      WITH RECURSIVE children(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM children WHERE n < 4999)
+      WITH RECURSIVE children(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM children WHERE n < 41999)
       INSERT INTO blocks (id, workspace_id, parent_id, order_key, properties_json,
                           created_at, updated_at, created_by, updated_by)
-      SELECT 'child-' || n, CASE WHEN n % 100 < 90 THEN ? ELSE ? END, 'parent-' || (n % 100),
-             printf('%05d', n), json_object('priority', n % 37, 'types', json_array('entry')),
-             n, n, 'user', 'user'
+      SELECT 'child-' || n, CASE WHEN n % 400 < 360 THEN ? ELSE ? END, 'parent-' || (n % 400),
+             printf('%05d', n), CASE
+               WHEN n % 137 = 1 THEN json_object('priority', n % 37, 'types', json_array('entry'))
+               WHEN n % 2 = 0 THEN json_object('types', json_array('todo'))
+               ELSE '{}'
+             END, n, n, 'user', 'user'
       FROM children
     `, [WS, OTHER_WS])
-
     const base = {workspaceId: WS, propertyChildren: 'none'} as const
-    const propertyOrder = {property: priorityProp.name, direction: 'asc'} as const
-    const siblingSearch = expect.stringMatching(/^SEARCH b USING INDEX idx_blocks_parent_order \(parent_id=\?\)/)
-    const tempSort = expect.stringMatching(/TEMP B-TREE FOR ORDER BY/)
-    for (const types of [undefined, ['entry']]) {
-      const query = {...base, parentId: 'parent-1', types}
-      const readPlan = async (order: ResolvedTypedBlockQuery['order']) => {
-        const compiled = compileTypedBlockQuery({...query, order}, env.repo.propertySchemas, {projection: 'ids', limit: 20})
-        const plan = await tx.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params])
-        return plan.map(row => row.detail)
-      }
-      const outlinePlan = await readPlan('outline')
-      expect(outlinePlan).toContainEqual(siblingSearch)
-      expect(outlinePlan).not.toContainEqual(tempSort)
-      expect(await readPlan(propertyOrder)).toContainEqual(siblingSearch)
+    const order = {property: priorityProp.name, direction: 'asc'} as const
+    const readPlan = async (query: ResolvedTypedBlockQuery) => {
+      const compiled = compileTypedBlockQuery(query, env.repo.propertySchemas, {projection: 'ids', limit: 20})
+      const plan = await tx.getAll<{parent: number; detail: string}>(
+        `EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params],
+      )
+      return plan.filter(row => row.parent === 0).map(row => row.detail)
     }
+    const assertPlans = async () => {
+      const typePlan = await readPlan({...base, types: ['entry'], order})
+      expect(typePlan[0]).toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
+      expect(typePlan[1]).toBe('SEARCH b USING INDEX sqlite_autoindex_blocks_1 (id=?)')
+
+      const siblingSearch = 'SEARCH b USING INDEX idx_blocks_parent_order (parent_id=?)'
+      const tempSort = 'USE TEMP B-TREE FOR ORDER BY'
+      for (const types of [undefined, ['entry']]) {
+        const siblings = {...base, parentId: 'parent-1', types}
+        const outlinePlan = await readPlan({...siblings, order: 'outline'})
+        expect(outlinePlan[0]).toBe(siblingSearch)
+        expect(outlinePlan).not.toContain(tempSort)
+        const propertyPlan = await readPlan({...siblings, order})
+        expect(propertyPlan[0]).toBe(siblingSearch)
+        expect(propertyPlan).toContain(tempSort)
+      }
+    }
+
+    await assertPlans()
+    await tx.execute('ANALYZE main.blocks')
+    await tx.execute('ANALYZE main.block_types')
+    await assertPlans()
   })
-})
+}, 20_000)

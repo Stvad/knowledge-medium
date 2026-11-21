@@ -672,7 +672,8 @@ const resultOrderSql = (
     }
     const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
     const {test} = comparableCell(order.property, schema, cell)
-    return `CASE WHEN ${test} THEN json_extract(${cell}) END ${order.direction === 'desc' ? 'DESC' : 'ASC'}, b.id`
+    const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
+    return `CASE WHEN ${test} THEN json_extract(${cell}) END ${direction} NULLS LAST, b.id`
   }
   return `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`
 }

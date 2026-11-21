@@ -161,7 +161,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   makeQueryCtx: 'private (reached via delegated runQuery / real-repo query proxy)',
   propertyDefinitionProjector: 'private read through the constructor-bound projector service',
   reprojectRefTypedProperties: 'private-ish maintenance; invoked by constructor-bound facetBridge',
-  resolveTypedBlockQuery: 'private read',
   runReconcileRescan: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runWorkspaceSeedMaterialization: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   materializeSeedKind: 'private; reached only from runWorkspaceSeedMaterialization (delegated schedule* overrides)',

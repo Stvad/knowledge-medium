@@ -73,6 +73,7 @@ import {
   KERNEL_FIELD_RECOGNITION_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
@@ -1380,6 +1381,7 @@ const declareAncestorDeps = async (
 
 const typedQueryRecognition = (query: ResolvedTypedBlockQuery, ctx: QueryCtx): RecognitionParams | undefined => {
   if (query.propertyChildren !== 'none') return undefined
+  ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL, key: query.workspaceId})
   ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(query.workspaceId, 'property-schema')})
   return dependOnRecognitionParams(ctx)
 }

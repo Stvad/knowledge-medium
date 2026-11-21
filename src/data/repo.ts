@@ -21,7 +21,6 @@ import type {
   Query,
   QueryCtx,
   QueryRegistry,
-  ResolvedTypedBlockQuery,
   RepoTxOptions,
   TypedBlockQuery,
   TypeContribution,
@@ -2577,25 +2576,13 @@ export class Repo {
     return this.dispatchQuery(name)(args).load() as Promise<R>
   }
 
-  private resolveTypedBlockQuery(query: TypedBlockQuery): ResolvedTypedBlockQuery {
-    return normalizeTypedBlockQuery({
-      workspaceId: query.workspaceId,
-      types: query.types,
-      where: query.where,
-      referencedBy: query.referencedBy,
-      match: query.match,
-      exclude: query.exclude,
-      order: query.order,
-    })
-  }
-
   /** Run a typed block query once. `workspaceId` is required: callers
    *  that want the user's currently-active workspace use
    *  `queryActiveWorkspace` instead — making the workspace explicit at
    *  the call site prevents background flows / import runs from silently
    *  mis-scoping on a workspace switch. */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
-    return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
+    return this.query.typedBlocks(normalizeTypedBlockQuery(query)).load()
   }
 
   /** Subscribe to a typed block query. `workspaceId` is required: callers
@@ -2611,7 +2598,7 @@ export class Repo {
       onInitialError?: (error: unknown) => void
     },
   ): Unsubscribe {
-    const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
+    const handle = this.query.typedBlocks(normalizeTypedBlockQuery(query))
     if (options?.freshInitial) {
       // A projector's registries are what a local transaction encodes with,
       // so its rows may not wait out a sync backlog's held invalidations.
@@ -2668,7 +2655,7 @@ export class Repo {
    *  the rows are unchanged. For `ProjectorLifecycle.upsert`, its only caller;
    *  `LoaderHandle.forgetNotifiedValue` carries the reasoning. */
   requireNextBlockDelivery(query: TypedBlockQuery): void {
-    this.query.typedBlocks(this.resolveTypedBlockQuery(query)).forgetNotifiedValue()
+    this.query.typedBlocks(normalizeTypedBlockQuery(query)).forgetNotifiedValue()
   }
 
   /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
