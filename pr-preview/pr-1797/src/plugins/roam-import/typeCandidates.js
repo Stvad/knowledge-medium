@@ -1,0 +1,1 @@
+export{Id as collectTypeCandidates,Ld as formatTypeCandidateReport}from"../../../chunks/app-CE-MaSO-.js";

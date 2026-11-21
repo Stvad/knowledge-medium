@@ -1,0 +1,1 @@
+export{RF as checkForAppUpdate,zF as registerServiceWorker}from"../chunks/app-CE-MaSO-.js";

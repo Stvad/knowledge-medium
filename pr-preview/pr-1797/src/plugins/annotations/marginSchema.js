@@ -1,0 +1,1 @@
+export{x$ as annotationMarginOpenProp,S$ as annotationMarginShareProp}from"../../../chunks/app-CE-MaSO-.js";

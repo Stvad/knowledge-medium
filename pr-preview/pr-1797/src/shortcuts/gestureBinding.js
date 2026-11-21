@@ -1,0 +1,1 @@
+export{ZF as gestureBindingDescriptor,QF as matchesGestureEvent}from"../../chunks/app-CE-MaSO-.js";

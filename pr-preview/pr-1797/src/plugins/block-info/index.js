@@ -1,0 +1,1 @@
+export{Ty as blockInfoPlugin}from"../../../chunks/app-CE-MaSO-.js";

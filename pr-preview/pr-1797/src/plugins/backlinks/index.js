@@ -1,0 +1,1 @@
+export{Vy as backlinksPlugin}from"../../../chunks/app-CE-MaSO-.js";

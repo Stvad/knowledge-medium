@@ -1,0 +1,1 @@
+export{is as migratePropertiesToBlocksAction,es as propertiesMigrationPlugin}from"../../../chunks/app-CE-MaSO-.js";

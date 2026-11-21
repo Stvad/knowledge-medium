@@ -1,0 +1,1 @@
+export{nn as supertagsPlugin}from"../../../chunks/app-CE-MaSO-.js";

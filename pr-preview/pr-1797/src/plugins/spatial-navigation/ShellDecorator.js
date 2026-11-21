@@ -1,0 +1,1 @@
+export{CT as SpatialNavigationShellDecorator}from"../../../chunks/app-CE-MaSO-.js";

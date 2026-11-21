@@ -1,0 +1,1 @@
+export{Dc as parsePropertiesJson}from"../../../chunks/app-CE-MaSO-.js";

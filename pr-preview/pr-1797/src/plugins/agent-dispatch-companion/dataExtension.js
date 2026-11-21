@@ -1,0 +1,1 @@
+export{A2 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CE-MaSO-.js";

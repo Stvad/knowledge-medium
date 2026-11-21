@@ -1,0 +1,1 @@
+export{kq as SuspenseFallback}from"../../../chunks/app-CE-MaSO-.js";

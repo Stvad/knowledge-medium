@@ -1,0 +1,1 @@
+export{kJ as staticDataExtensions}from"../../chunks/app-CE-MaSO-.js";

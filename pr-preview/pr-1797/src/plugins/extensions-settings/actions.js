@@ -1,0 +1,1 @@
+export{ii as openExtensionsSettingsAction}from"../../../chunks/app-CE-MaSO-.js";

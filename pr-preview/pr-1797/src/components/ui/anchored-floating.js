@@ -1,0 +1,1 @@
+export{BK as floatingAnchorFromRect,VK as useAnchoredFloating}from"../../../chunks/app-CE-MaSO-.js";

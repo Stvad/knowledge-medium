@@ -1,0 +1,1 @@
+export{ts as MigrationGate}from"../../../chunks/app-CE-MaSO-.js";

@@ -1,0 +1,1 @@
+export{Xft as defineQuery}from"../../../chunks/app-CE-MaSO-.js";

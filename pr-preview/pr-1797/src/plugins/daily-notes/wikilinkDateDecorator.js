@@ -1,0 +1,1 @@
+export{mj as dailyDateWikilinkDecorator}from"../../../chunks/app-CE-MaSO-.js";

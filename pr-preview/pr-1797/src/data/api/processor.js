@@ -1,0 +1,1 @@
+export{ipt as definePostCommitProcessor}from"../../../chunks/app-CE-MaSO-.js";

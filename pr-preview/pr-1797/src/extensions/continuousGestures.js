@@ -1,0 +1,1 @@
+export{_R as GESTURE_ACTIVE,vR as GESTURE_CANCEL,yR as GESTURE_IDLE,bR as NO_BLOCK_GESTURES_ATTRIBUTE,xR as TOUCH_HOLD_MS,SR as TOUCH_SLOP_PX,CR as allowsBlockGestures,wR as continuousGestureRecognizersFacet,TR as createBlockGestureController,ER as enabledTouchAction,DR as suppressNextClick,OR as unionTouchAction,kR as useContinuousGestures}from"../../chunks/app-CE-MaSO-.js";

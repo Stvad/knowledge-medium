@@ -1,0 +1,1 @@
+export{Wf as annotationsPlugin}from"../../../chunks/app-CE-MaSO-.js";

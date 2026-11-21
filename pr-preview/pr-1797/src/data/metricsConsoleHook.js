@@ -1,0 +1,1 @@
+export{FP as ensureMetricsConsoleHook}from"../../chunks/app-CE-MaSO-.js";

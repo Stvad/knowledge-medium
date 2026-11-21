@@ -1,0 +1,1 @@
+export{gx as BLOCK_HOLD_GESTURE,_x as BLOCK_HOLD_RECOGNIZER_ID,vx as blockHoldRecognizer}from"../../../chunks/app-CE-MaSO-.js";

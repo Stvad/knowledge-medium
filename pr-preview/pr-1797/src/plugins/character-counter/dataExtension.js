@@ -1,0 +1,1 @@
+export{p1 as characterCounterDataExtension}from"../../../chunks/app-CE-MaSO-.js";

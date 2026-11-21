@@ -1,0 +1,1 @@
+export{Qz as useShortcutSurfaceActivations}from"../../chunks/app-CE-MaSO-.js";

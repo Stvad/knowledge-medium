@@ -1,0 +1,1 @@
+export{b3 as FacetBridge}from"../../chunks/app-CE-MaSO-.js";

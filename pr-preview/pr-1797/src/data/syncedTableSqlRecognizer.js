@@ -1,0 +1,1 @@
+export{K2 as SYNCED_TABLES,q2 as syncedWriteTarget,J2 as writeTargets}from"../../chunks/app-CE-MaSO-.js";

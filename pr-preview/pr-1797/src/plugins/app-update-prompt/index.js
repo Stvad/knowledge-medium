@@ -1,0 +1,1 @@
+export{kF as appUpdatePromptExtension}from"../../../chunks/app-CE-MaSO-.js";

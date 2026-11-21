@@ -1,0 +1,1 @@
+export{Ub as Wikilink}from"../../../../../chunks/app-CE-MaSO-.js";

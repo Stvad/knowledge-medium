@@ -1,0 +1,1 @@
+export{UZ as annotationsDataExtension}from"../../../chunks/app-CE-MaSO-.js";

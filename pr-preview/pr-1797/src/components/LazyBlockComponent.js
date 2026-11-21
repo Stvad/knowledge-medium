@@ -1,0 +1,1 @@
+export{YI as LazyBlockComponent}from"../../chunks/app-CE-MaSO-.js";

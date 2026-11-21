@@ -1,0 +1,1 @@
+export{UE as PromotableBreadcrumbList}from"../../../chunks/app-CE-MaSO-.js";

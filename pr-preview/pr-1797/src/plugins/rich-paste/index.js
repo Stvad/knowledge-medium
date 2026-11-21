@@ -1,0 +1,1 @@
+export{iS as richPastePlugin}from"../../../chunks/app-CE-MaSO-.js";

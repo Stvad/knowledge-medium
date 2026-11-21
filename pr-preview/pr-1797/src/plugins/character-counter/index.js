@@ -1,0 +1,1 @@
+export{m1 as CHAR_COUNTER_TYPE,y1 as RAW_CHARACTER_COUNT_PROFILE_ID,b1 as WORDS_COUNT_PROFILE_ID,_1 as WORD_COUNTER_TYPE,cr as charCountDisplay,x1 as charLimitProp,S1 as charProfileProp,C1 as charScopeProp,er as characterCountProfilesFacet,Yn as characterCounterPlugin,ir as textCountProfile}from"../../../chunks/app-CE-MaSO-.js";

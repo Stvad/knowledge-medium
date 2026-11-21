@@ -1,0 +1,1 @@
+export{Rot as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,zot as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Bot as __resetLayoutSessionIdForTesting,Vot as getLayoutSessionId,Hot as isInstalledAppDisplayMode,Uot as readOrCreateLayoutSessionId}from"../../chunks/app-CE-MaSO-.js";

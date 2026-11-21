@@ -1,0 +1,1 @@
+export{Qct as deriveWorkspaceIdNamespace}from"../../../chunks/app-CE-MaSO-.js";

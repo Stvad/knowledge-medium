@@ -1,0 +1,1 @@
+export{Kf as quotedInFooterContribution}from"../../../chunks/app-CE-MaSO-.js";

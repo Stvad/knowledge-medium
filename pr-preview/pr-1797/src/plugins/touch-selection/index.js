@@ -1,0 +1,1 @@
+export{gx as BLOCK_HOLD_GESTURE,ox as touchSelectionPlugin,fx as touchSelectionToolbarItemsFacet}from"../../../chunks/app-CE-MaSO-.js";

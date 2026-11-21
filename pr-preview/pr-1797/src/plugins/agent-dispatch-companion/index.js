@@ -1,0 +1,1 @@
+export{Fh as agentDispatchCompanionPlugin}from"../../../chunks/app-CE-MaSO-.js";

@@ -1,0 +1,1 @@
+export{cS as attachmentsPlugin}from"../../../chunks/app-CE-MaSO-.js";

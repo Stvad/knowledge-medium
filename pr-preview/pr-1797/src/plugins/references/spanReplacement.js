@@ -1,0 +1,1 @@
+export{TY as preferredSpanReplacement}from"../../../chunks/app-CE-MaSO-.js";

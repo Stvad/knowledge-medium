@@ -1,0 +1,1 @@
+export{es as propertiesMigrationPlugin}from"../../../chunks/app-CE-MaSO-.js";

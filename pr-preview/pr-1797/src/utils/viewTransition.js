@@ -1,0 +1,1 @@
+export{JG as withMoveTransition}from"../../chunks/app-CE-MaSO-.js";
