@@ -91,7 +91,7 @@ export async function serveDatabase(
       return executeHeadlessCommand(command, context, async () => {
         if (!gate) return 'Starting gate'
         return gate.readReason()
-      })
+      }, () => gate ? gate.writeRefusal() : 'the gate is starting')
     })
     const transport = bridge.postEvent
     gate = startReadGate(db, active, workspaceId, baseline, async signal => {

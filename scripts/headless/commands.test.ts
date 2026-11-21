@@ -17,6 +17,8 @@ afterAll(async () => { await shared.cleanup() })
 
 const open = () => null
 const closed = () => 'membership missing'
+const uploads = () => null
+const cannotUpload = () => 'the member role viewer cannot write'
 const context = () => createTestAgentContext(
   createTestRepo({db: shared.db, user, isReadOnly: true, startSyncObserver: true}).repo,
   workspaceId,
@@ -43,17 +45,17 @@ it.each(refusals)('refuses $type even with an open gate', async command => {
   const error = command.type === 'action' || command.type === 'set-extension-enabled'
     ? `Unsupported headless command: ${command.type}`
     : new RegExp(`^${command.type}: (?:arbitrary code|actions require|extension loading|workspace backfills|property audits|media storage)`)
-  await expect(executeHeadlessCommand(command, context(), open)).rejects.toThrow(error)
+  await expect(executeHeadlessCommand(command, context(), open, cannotUpload)).rejects.toThrow(error)
 })
 
-it.each(['ping', 'health', 'rematerialize-workspace'] as const)('serves %s while closed', async type => {
+it.each(['ping', 'health', 'rematerialize-workspace', 'rejected-uploads'] as const)('serves %s while closed', async type => {
   const evaluatingGate = vi.fn(closed)
-  await expect(executeHeadlessCommand({type}, context(), evaluatingGate)).resolves.toBeDefined()
+  await expect(executeHeadlessCommand({type}, context(), evaluatingGate, cannotUpload)).resolves.toBeDefined()
   expect(evaluatingGate).not.toHaveBeenCalled()
 })
 
 it('refuses reads and document writes while closed with the gate condition', async () => {
-  const always = new Set(['ping', 'health', 'rematerialize-workspace'])
+  const always = new Set(['ping', 'health', 'rematerialize-workspace', 'rejected-uploads'])
   const commands: KnownAgentCommand[] = [
     ...readCommands('test').filter(command => !always.has(command.type)),
     {type: 'create-block'},
@@ -67,29 +69,30 @@ it('refuses reads and document writes while closed with the gate condition', asy
     {type: 'append-markdown', target: 'test', markdown: 'test'},
     {type: 'reconcile-markdown-subtree', parentId: 'test', markdown: 'test', key: 'test'},
     {type: 'add-comment', target: 'test'},
+    {type: 'retry-rejected-upload', txId: 1},
   ]
   const runtime = context()
   for (const command of commands) {
-    await expect(executeHeadlessCommand(command, runtime, closed), command.type)
+    await expect(executeHeadlessCommand(command, runtime, closed, uploads), command.type)
       .rejects.toThrow('Headless gate closed: membership missing')
   }
 })
 
 it.each([null, 'membership missing'])('refuses SQL execute when the gate reason is %s', async reason => {
-  await expect(executeHeadlessCommand({type: 'sql', mode: 'execute', sql: 'SELECT 1'}, context(), () => reason))
+  await expect(executeHeadlessCommand({type: 'sql', mode: 'execute', sql: 'SELECT 1'}, context(), () => reason, uploads))
     .rejects.toThrow('Headless SQL is read-only')
 })
 
 it('refuses a mutating SQL statement even in a read mode', async () => {
-  await expect(executeHeadlessCommand({type: 'sql', mode: 'all', sql: 'CREATE TABLE test (n INT)'}, context(), open))
+  await expect(executeHeadlessCommand({type: 'sql', mode: 'all', sql: 'CREATE TABLE test (n INT)'}, context(), open, cannotUpload))
     .rejects.toThrow('Headless SQL is read-only')
 })
 
 it('accepts query plans for reads and refuses to prepare a non-read PRAGMA under EXPLAIN', async () => {
   const runtime = context()
-  await expect(executeHeadlessCommand({type: 'sql', sql: 'EXPLAIN QUERY PLAN SELECT 1'}, runtime, open))
+  await expect(executeHeadlessCommand({type: 'sql', sql: 'EXPLAIN QUERY PLAN SELECT 1'}, runtime, open, cannotUpload))
     .resolves.toEqual(expect.arrayContaining([expect.objectContaining({detail: expect.any(String)})]))
-  await expect(executeHeadlessCommand({type: 'sql', sql: 'EXPLAIN PRAGMA cache_size = 32'}, runtime, open))
+  await expect(executeHeadlessCommand({type: 'sql', sql: 'EXPLAIN PRAGMA cache_size = 32'}, runtime, open, cannotUpload))
     .rejects.toThrow('Headless SQL is read-only')
 })
 
@@ -97,5 +100,15 @@ it('applies the same SQL restriction before registering a watcher', async () => 
   await expect(executeHeadlessCommand({
     type: 'watch-events', consumer: 'test',
     watchers: [{kind: 'sql', name: 'test', sql: 'EXPLAIN PRAGMA cache_size = 32'}],
-  }, context(), open)).rejects.toThrow('Headless watcher SQL is read-only')
+  }, context(), open, cannotUpload)).rejects.toThrow('Headless watcher SQL is read-only')
+})
+
+it('refuses an upload retry with the reason the host cannot upload, after the gate refreshes', async () => {
+  const order: string[] = []
+  const command = {type: 'retry-rejected-upload', txId: 1} as const
+  await expect(executeHeadlessCommand(command, context(), () => { order.push('gate'); return null },
+    () => { order.push('write'); return cannotUpload() }))
+    .rejects.toThrow('retry-rejected-upload: the member role viewer cannot write')
+  expect(order).toEqual(['gate', 'write'])
+  await expect(executeHeadlessCommand(command, context(), open, uploads)).rejects.toThrow('No rejected transaction 1')
 })

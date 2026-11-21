@@ -6,10 +6,14 @@ import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 
 const extensions = {refuse: 'extension loading requires a browser'}
 const media = {refuse: 'media storage requires a browser'}
-const commands: Record<KnownCommandType, 'always' | 'open' | {refuse: string}> = {
+// `writable`: served once the gate is open and the host may upload. For writes
+// that bypass the Repo, so its read-only state cannot refuse them.
+const commands: Record<KnownCommandType, 'always' | 'open' | 'writable' | {refuse: string}> = {
   ping: 'always',
   health: 'always',
   'rematerialize-workspace': 'always',
+  'rejected-uploads': 'always',
+  'retry-rejected-upload': 'writable',
   sql: 'open',
   'get-block': 'open',
   'get-subtree': 'open',
@@ -67,6 +71,7 @@ export const executeHeadlessCommand = async (
   command: KnownAgentCommand,
   context: AgentRuntimeContext,
   gateReason: () => string | null | Promise<string | null>,
+  writeRefusal: () => string | null,
 ): Promise<unknown> => {
   if (!classified(command.type)) throw new Error(`Unsupported headless command: ${command.type}`)
   const policy = commands[command.type]
@@ -75,9 +80,12 @@ export const executeHeadlessCommand = async (
   if (command.type === 'watch-events' && command.watchers.some(w => w.kind === 'sql' && !isReadOnlyQuery(w.sql))) {
     throw new Error('Headless watcher SQL is read-only')
   }
-  if (policy === 'open') {
+  if (policy !== 'always') {
     const reason = await gateReason()
     if (reason !== null) throw new Error(`Headless gate closed: ${reason}`)
   }
+  // Read after the gate, which refreshes the role a command can arrive ahead of.
+  const refusal = policy === 'writable' ? writeRefusal() : null
+  if (refusal !== null) throw new Error(`${command.type}: ${refusal}`)
   return executeCommand(command, context)
 }
