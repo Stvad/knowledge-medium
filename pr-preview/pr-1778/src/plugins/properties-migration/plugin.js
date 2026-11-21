@@ -1,1 +1,1 @@
-export{Bo as propertiesMigrationPlugin}from"../../../chunks/app-BNXMuxOJ.js";
+export{Ko as propertiesMigrationPlugin}from"../../../chunks/app-aSZrL_aA.js";

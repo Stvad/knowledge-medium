@@ -1,1 +1,1 @@
-export{eL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,tL as openExtensionsSettings}from"../../chunks/app-BNXMuxOJ.js";
+export{pL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,mL as openExtensionsSettings}from"../../chunks/app-aSZrL_aA.js";

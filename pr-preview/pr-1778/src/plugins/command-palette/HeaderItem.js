@@ -1,1 +1,1 @@
-export{qM as CommandPaletteHeaderItem}from"../../../chunks/app-BNXMuxOJ.js";
+export{aN as CommandPaletteHeaderItem}from"../../../chunks/app-aSZrL_aA.js";

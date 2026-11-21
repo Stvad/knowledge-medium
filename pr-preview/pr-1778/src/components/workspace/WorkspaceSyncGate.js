@@ -1,0 +1,1 @@
+export{It as WorkspaceSyncGate}from"../../../chunks/app-aSZrL_aA.js";

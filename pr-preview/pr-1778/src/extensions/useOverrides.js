@@ -1,1 +1,1 @@
-export{LF as useOverrides}from"../../chunks/app-BNXMuxOJ.js";
+export{XF as useOverrides}from"../../chunks/app-aSZrL_aA.js";

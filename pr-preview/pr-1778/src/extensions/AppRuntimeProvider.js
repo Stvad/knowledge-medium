@@ -1,1 +1,1 @@
-export{Kt as AppRuntimeProvider}from"../../chunks/app-BNXMuxOJ.js";
+export{Qt as AppRuntimeProvider}from"../../chunks/app-aSZrL_aA.js";
