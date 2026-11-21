@@ -1,1 +1,1 @@
-export{f2 as omnilinerNamespace}from"../../chunks/app-DcHpkrx6.js";
+export{f2 as omnilinerNamespace}from"../../chunks/app-DKPcdE6N.js";

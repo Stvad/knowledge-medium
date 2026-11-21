@@ -1,1 +1,1 @@
-export{ZC as videoPlayerPlugin}from"../../../chunks/app-DcHpkrx6.js";
+export{ZC as videoPlayerPlugin}from"../../../chunks/app-DKPcdE6N.js";
