@@ -1,1 +1,1 @@
-export{vk as classifyLinkInteraction}from"../../../chunks/app-Bh16sD7P.js";
+export{vk as classifyLinkInteraction}from"../../../chunks/app-DscBCHmK.js";
