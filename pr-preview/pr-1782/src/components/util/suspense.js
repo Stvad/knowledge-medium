@@ -1,1 +1,0 @@
-export{vq as SuspenseFallback}from"../../../chunks/app-DVvgCO_H.js";

@@ -1,1 +1,0 @@
-export{Rf as quotedInFooterContribution}from"../../../chunks/app-DVvgCO_H.js";

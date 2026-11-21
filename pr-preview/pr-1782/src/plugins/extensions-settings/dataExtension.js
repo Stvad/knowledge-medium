@@ -1,1 +1,0 @@
-export{Kr as extensionsDataExtension}from"../../../chunks/app-DVvgCO_H.js";

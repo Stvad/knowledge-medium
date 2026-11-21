@@ -1,1 +1,0 @@
-export{It as WorkspaceSyncGate}from"../../../chunks/app-DVvgCO_H.js";

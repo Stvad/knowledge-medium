@@ -1,1 +1,0 @@
-export{aj as dailyDateWikilinkDecorator}from"../../../chunks/app-DVvgCO_H.js";

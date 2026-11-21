@@ -1,1 +1,0 @@
-export{A7 as agree,j7 as pluralize}from"../../chunks/app-DVvgCO_H.js";

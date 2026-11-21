@@ -1,1 +1,0 @@
-export{Pb as Wikilink}from"../../../../../chunks/app-DVvgCO_H.js";

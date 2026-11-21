@@ -1,1 +1,0 @@
-export{ur as birthdayPlugin}from"../../../chunks/app-DVvgCO_H.js";

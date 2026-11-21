@@ -1,1 +1,0 @@
-export{ld as BlockTagsConfigEditor}from"../../../chunks/app-DVvgCO_H.js";

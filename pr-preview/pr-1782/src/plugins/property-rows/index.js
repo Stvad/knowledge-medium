@@ -1,1 +1,0 @@
-export{xo as propertyRowsPlugin}from"../../../chunks/app-DVvgCO_H.js";

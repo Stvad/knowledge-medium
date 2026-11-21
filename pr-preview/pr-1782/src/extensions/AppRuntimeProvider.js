@@ -1,1 +1,0 @@
-export{Qt as AppRuntimeProvider}from"../../chunks/app-DVvgCO_H.js";

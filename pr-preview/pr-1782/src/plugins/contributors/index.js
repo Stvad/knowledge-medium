@@ -1,1 +1,0 @@
-export{vh as contributorsPlugin}from"../../../chunks/app-DVvgCO_H.js";

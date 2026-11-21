@@ -1,1 +1,0 @@
-export{TH as typePropertyGroups}from"../../chunks/app-DVvgCO_H.js";

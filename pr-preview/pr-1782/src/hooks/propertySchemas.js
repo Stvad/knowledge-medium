@@ -1,1 +1,0 @@
-export{jK as usePropertySchemas}from"../../chunks/app-DVvgCO_H.js";

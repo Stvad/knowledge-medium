@@ -1,1 +1,0 @@
-export{i5 as kernelDataExtension}from"../../chunks/app-DVvgCO_H.js";

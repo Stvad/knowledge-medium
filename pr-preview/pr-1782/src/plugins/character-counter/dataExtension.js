@@ -1,1 +1,0 @@
-export{w$ as characterCounterDataExtension}from"../../../chunks/app-DVvgCO_H.js";

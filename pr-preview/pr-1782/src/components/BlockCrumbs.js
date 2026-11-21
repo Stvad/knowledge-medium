@@ -1,1 +1,0 @@
-export{Wk as BlockCrumbs}from"../../chunks/app-DVvgCO_H.js";
