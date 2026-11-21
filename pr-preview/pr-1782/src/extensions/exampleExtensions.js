@@ -1,1 +1,1 @@
-export{FP as exampleExtensions,IP as insertExampleExtensionsUnder}from"../../chunks/app-DBIQQItI.js";
+export{FP as exampleExtensions,IP as insertExampleExtensionsUnder}from"../../chunks/app-DVvgCO_H.js";

@@ -1,1 +1,1 @@
-export{aD as getOrCreateShortcutsBlock,oD as journalShortcutBlockId,sD as shortcutsBlockId}from"../../../chunks/app-DBIQQItI.js";
+export{aD as getOrCreateShortcutsBlock,oD as journalShortcutBlockId,sD as shortcutsBlockId}from"../../../chunks/app-DVvgCO_H.js";
