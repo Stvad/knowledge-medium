@@ -305,6 +305,7 @@ describe('App / LayoutRootContext provision', () => {
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
     await renderSyncedApp()
     await screen.findByRole('heading', {name: /opening/i})
+    await vi.waitFor(() => expect(syncGates.onReady).toHaveLength(1))
     const [open] = syncGates.onReady
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
     await act(async () => open!())
@@ -320,6 +321,7 @@ describe('App / LayoutRootContext provision', () => {
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
     await renderSyncedApp()
     await screen.findByRole('heading', {name: /opening/i})
+    await vi.waitFor(() => expect(syncGates.onReady).toHaveLength(1))
     const [open] = syncGates.onReady
     vi.mocked(resolveWorkspace).mockResolvedValueOnce({id: 'ws-2', freshlyCreated: false})
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
