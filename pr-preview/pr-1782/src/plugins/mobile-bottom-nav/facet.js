@@ -1,0 +1,1 @@
+export{OE as mobileBottomNavItemsFacet}from"../../../chunks/app-DBIQQItI.js";

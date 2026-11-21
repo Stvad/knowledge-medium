@@ -1,0 +1,1 @@
+export{Pb as Wikilink}from"../../../../../chunks/app-DBIQQItI.js";

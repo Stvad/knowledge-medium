@@ -1,0 +1,1 @@
+export{i5 as kernelDataExtension}from"../../chunks/app-DBIQQItI.js";

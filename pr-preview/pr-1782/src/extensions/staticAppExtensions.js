@@ -1,0 +1,1 @@
+export{en as staticAppExtensions}from"../../chunks/app-DBIQQItI.js";

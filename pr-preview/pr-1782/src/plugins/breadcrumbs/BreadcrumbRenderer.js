@@ -1,0 +1,1 @@
+export{FE as BreadcrumbRenderer}from"../../../chunks/app-DBIQQItI.js";

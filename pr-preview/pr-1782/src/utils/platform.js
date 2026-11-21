@@ -1,0 +1,1 @@
+export{jG as isIOS,MG as isMacPlatform}from"../../chunks/app-DBIQQItI.js";

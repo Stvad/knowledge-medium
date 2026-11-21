@@ -1,0 +1,1 @@
+export{IJ as preferredSpanReplacement}from"../../../chunks/app-DBIQQItI.js";

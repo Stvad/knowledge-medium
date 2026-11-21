@@ -1,0 +1,1 @@
+export{On as useFrameThemeCss}from"../../../chunks/app-DBIQQItI.js";

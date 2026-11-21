@@ -1,0 +1,1 @@
+export{Tst as aliasSeatNamespacesInTx,Est as resolveAliasSeatNamespaces}from"../../chunks/app-DBIQQItI.js";

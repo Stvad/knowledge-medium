@@ -1,0 +1,1 @@
+export{Kr as extensionsDataExtension}from"../../../chunks/app-DBIQQItI.js";

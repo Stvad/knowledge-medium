@@ -1,0 +1,1 @@
+export{PB as ExtensionRenderBoundary}from"../../chunks/app-DBIQQItI.js";

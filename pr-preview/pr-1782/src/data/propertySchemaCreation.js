@@ -1,0 +1,1 @@
+export{IK as adoptOrCreatePropertySchema}from"../../chunks/app-DBIQQItI.js";

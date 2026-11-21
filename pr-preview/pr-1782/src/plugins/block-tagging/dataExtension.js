@@ -1,0 +1,1 @@
+export{dd as blockTaggingDataExtension}from"../../../chunks/app-DBIQQItI.js";

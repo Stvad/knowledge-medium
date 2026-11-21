@@ -1,0 +1,1 @@
+export{sP as TypeChip}from"../../../chunks/app-DBIQQItI.js";

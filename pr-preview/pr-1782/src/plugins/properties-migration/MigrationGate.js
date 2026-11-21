@@ -1,0 +1,1 @@
+export{qo as MigrationGate}from"../../../chunks/app-DBIQQItI.js";

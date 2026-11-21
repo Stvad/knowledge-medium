@@ -1,0 +1,1 @@
+export{cd as blockTagsConfigUi}from"../../../chunks/app-DBIQQItI.js";

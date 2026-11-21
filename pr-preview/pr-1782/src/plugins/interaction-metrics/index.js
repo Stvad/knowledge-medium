@@ -1,0 +1,1 @@
+export{ua as interactionMetricsPlugin}from"../../../chunks/app-DBIQQItI.js";

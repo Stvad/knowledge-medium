@@ -1,0 +1,1 @@
+export{jK as usePropertySchemas}from"../../chunks/app-DBIQQItI.js";

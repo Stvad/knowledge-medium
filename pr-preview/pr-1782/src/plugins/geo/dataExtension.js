@@ -1,0 +1,1 @@
+export{TY as geoDataExtension}from"../../../chunks/app-DBIQQItI.js";

@@ -1,0 +1,1 @@
+export{pp as moveCommentToOwnThread}from"../../../chunks/app-DBIQQItI.js";

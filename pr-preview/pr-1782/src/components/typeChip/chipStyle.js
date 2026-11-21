@@ -1,0 +1,1 @@
+export{cP as chipStyle}from"../../../chunks/app-DBIQQItI.js";
