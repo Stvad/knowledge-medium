@@ -1,1 +1,1 @@
-export{xct as aliasSeatNamespacesInTx,Sct as resolveAliasSeatNamespaces}from"../../chunks/app-B_AkIzxA.js";
+export{xct as aliasSeatNamespacesInTx,Sct as resolveAliasSeatNamespaces}from"../../chunks/app-C_sgHRic.js";

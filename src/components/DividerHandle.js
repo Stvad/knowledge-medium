@@ -1,1 +1,1 @@
-export{JL as DIVIDER_HANDLE_WIDTH_PX,YL as DividerHandle}from"../../chunks/app-B_AkIzxA.js";
+export{JL as DIVIDER_HANDLE_WIDTH_PX,YL as DividerHandle}from"../../chunks/app-C_sgHRic.js";

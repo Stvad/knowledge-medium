@@ -1,1 +1,1 @@
-export{mot as InvalidBlockIdError,hot as assertCanonicalBlockId}from"../../chunks/app-B_AkIzxA.js";
+export{mot as InvalidBlockIdError,hot as assertCanonicalBlockId}from"../../chunks/app-C_sgHRic.js";

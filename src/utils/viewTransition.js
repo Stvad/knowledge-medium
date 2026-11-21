@@ -1,1 +1,1 @@
-export{XG as withMoveTransition}from"../../chunks/app-B_AkIzxA.js";
+export{XG as withMoveTransition}from"../../chunks/app-C_sgHRic.js";

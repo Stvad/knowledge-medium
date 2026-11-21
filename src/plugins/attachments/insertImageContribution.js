@@ -1,1 +1,1 @@
-export{BS as insertImageAction,VS as insertImageNormalModeAction,HS as insertImageToolbarItem}from"../../../chunks/app-B_AkIzxA.js";
+export{BS as insertImageAction,VS as insertImageNormalModeAction,HS as insertImageToolbarItem}from"../../../chunks/app-C_sgHRic.js";

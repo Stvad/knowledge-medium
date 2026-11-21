@@ -1,1 +1,1 @@
-export{YE as BreadcrumbList}from"../../../chunks/app-B_AkIzxA.js";
+export{YE as BreadcrumbList}from"../../../chunks/app-C_sgHRic.js";

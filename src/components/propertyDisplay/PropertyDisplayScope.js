@@ -1,1 +1,1 @@
-export{UL as PropertyDisplayScope}from"../../../chunks/app-B_AkIzxA.js";
+export{UL as PropertyDisplayScope}from"../../../chunks/app-C_sgHRic.js";
