@@ -1,0 +1,1 @@
+export{Bq as staticDataExtensions}from"../../chunks/app-AlpLbYWP.js";

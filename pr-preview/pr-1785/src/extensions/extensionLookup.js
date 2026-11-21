@@ -1,0 +1,1 @@
+export{Wg as findExtensionBlock}from"../../chunks/app-AlpLbYWP.js";

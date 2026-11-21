@@ -1,0 +1,1 @@
+export{aX as matchCharTrigger}from"../../chunks/app-AlpLbYWP.js";

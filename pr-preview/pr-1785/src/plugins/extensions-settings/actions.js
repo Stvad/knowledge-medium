@@ -1,0 +1,1 @@
+export{ri as openExtensionsSettingsAction}from"../../../chunks/app-AlpLbYWP.js";

@@ -1,0 +1,1 @@
+export{ld as BlockTagsConfigEditor}from"../../../chunks/app-AlpLbYWP.js";

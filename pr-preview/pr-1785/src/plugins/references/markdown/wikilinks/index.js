@@ -1,0 +1,1 @@
+export{Nb as wikilinkMarkdownExtension}from"../../../../../chunks/app-AlpLbYWP.js";

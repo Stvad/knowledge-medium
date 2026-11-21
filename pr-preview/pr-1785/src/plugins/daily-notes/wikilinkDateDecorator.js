@@ -1,0 +1,1 @@
+export{aj as dailyDateWikilinkDecorator}from"../../../chunks/app-AlpLbYWP.js";

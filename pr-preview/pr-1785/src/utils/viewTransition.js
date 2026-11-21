@@ -1,0 +1,1 @@
+export{LG as withMoveTransition}from"../../chunks/app-AlpLbYWP.js";

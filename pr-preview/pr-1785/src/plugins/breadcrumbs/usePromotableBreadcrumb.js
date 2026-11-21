@@ -1,0 +1,1 @@
+export{NE as usePromotableBreadcrumb}from"../../../chunks/app-AlpLbYWP.js";

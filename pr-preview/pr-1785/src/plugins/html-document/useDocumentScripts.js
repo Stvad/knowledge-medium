@@ -1,0 +1,1 @@
+export{vn as hasScripts,yn as useDocumentScripts}from"../../../chunks/app-AlpLbYWP.js";

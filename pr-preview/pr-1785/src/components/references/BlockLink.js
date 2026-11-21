@@ -1,0 +1,1 @@
+export{hk as BlockLink}from"../../../chunks/app-AlpLbYWP.js";

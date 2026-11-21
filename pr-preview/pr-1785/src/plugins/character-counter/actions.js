@@ -1,0 +1,1 @@
+export{cr as addWordCounterAction,lr as counterActions}from"../../../chunks/app-AlpLbYWP.js";

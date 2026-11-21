@@ -1,0 +1,1 @@
+export{w$ as characterCounterDataExtension}from"../../../chunks/app-AlpLbYWP.js";

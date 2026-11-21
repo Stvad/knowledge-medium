@@ -1,0 +1,1 @@
+export{LP as resolveStructuralEditPolicy,RP as structuralEditPolicyForBlock}from"../../chunks/app-AlpLbYWP.js";

@@ -1,0 +1,1 @@
+export{Va as startupMetricsPlugin}from"../../../chunks/app-AlpLbYWP.js";

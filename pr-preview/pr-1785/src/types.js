@@ -1,0 +1,1 @@
+export{Mct as isChildBackedPropertiesWorkspace}from"../chunks/app-AlpLbYWP.js";

@@ -1,0 +1,1 @@
+export{vq as SuspenseFallback}from"../../../chunks/app-AlpLbYWP.js";

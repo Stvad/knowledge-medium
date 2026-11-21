@@ -1,0 +1,1 @@
+export{$x as attachmentsPlugin}from"../../../chunks/app-AlpLbYWP.js";

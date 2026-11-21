@@ -1,0 +1,1 @@
+export{ZC as videoPlayerPlugin}from"../../../chunks/app-AlpLbYWP.js";

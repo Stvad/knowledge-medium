@@ -1,0 +1,1 @@
+export{Gk as useAncestorCrumbs}from"../../chunks/app-AlpLbYWP.js";

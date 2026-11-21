@@ -1,0 +1,1 @@
+export{pn as htmlDocumentPlugin}from"../../../chunks/app-AlpLbYWP.js";

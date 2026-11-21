@@ -1,0 +1,1 @@
+export{Bc as requestPersistenceActionContribution}from"../../../chunks/app-AlpLbYWP.js";

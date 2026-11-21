@@ -1,0 +1,1 @@
+export{o_ as authorIdOf}from"../../../chunks/app-AlpLbYWP.js";

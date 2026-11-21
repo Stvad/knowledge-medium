@@ -1,0 +1,1 @@
+export{Ib as blockrefMarkdownExtension}from"../../../../../chunks/app-AlpLbYWP.js";

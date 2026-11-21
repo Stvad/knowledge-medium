@@ -1,0 +1,1 @@
+export{i$ as contributorsDataExtension}from"../../../chunks/app-AlpLbYWP.js";

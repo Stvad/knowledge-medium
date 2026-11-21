@@ -1,0 +1,1 @@
+export{eZ as annotationsDataExtension}from"../../../chunks/app-AlpLbYWP.js";

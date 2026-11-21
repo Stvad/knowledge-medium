@@ -1,0 +1,1 @@
+export{pT as spatialNavigationShellDecorator}from"../../../chunks/app-AlpLbYWP.js";

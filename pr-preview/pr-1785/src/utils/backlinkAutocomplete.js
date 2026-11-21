@@ -1,0 +1,1 @@
+export{Gb as backlinkCompletionSource,Kb as createBacklinkAutocomplete,qb as isInsideBacklinkBrackets}from"../../chunks/app-AlpLbYWP.js";

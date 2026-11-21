@@ -1,0 +1,1 @@
+export{vh as contributorsPlugin}from"../../../chunks/app-AlpLbYWP.js";

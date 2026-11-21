@@ -1,0 +1,1 @@
+export{mT as SpatialNavigationShellDecorator}from"../../../chunks/app-AlpLbYWP.js";

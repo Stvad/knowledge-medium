@@ -1,0 +1,1 @@
+export{i4 as instrumentAdapter}from"../../../chunks/app-AlpLbYWP.js";

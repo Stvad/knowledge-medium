@@ -1,0 +1,1 @@
+export{KI as BlockLoadingPlaceholder}from"../../chunks/app-AlpLbYWP.js";

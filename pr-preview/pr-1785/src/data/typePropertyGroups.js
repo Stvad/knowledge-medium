@@ -1,0 +1,1 @@
+export{TH as typePropertyGroups}from"../../chunks/app-AlpLbYWP.js";
