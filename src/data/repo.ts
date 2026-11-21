@@ -1391,6 +1391,13 @@ export class Repo {
     }
   }
 
+  /** Treat a workspace's sync deliveries as a bulk load until the returned
+   *  release is called — see `BlocksSyncedObserver.holdBulkLoad` for what that changes
+   *  and who may. */
+  holdBulkSyncLoad(workspaceId: string): () => void {
+    return this.syncObserver?.holdBulkLoad(workspaceId) ?? (() => {})
+  }
+
   /** Manually flush the sync observer — drains any pending `blocks_synced`
    *  changes into `blocks` and walks `handleStore.invalidate(...)`. Tests
    *  use this instead of waiting on the throttle window; it's a real settle
