@@ -87,7 +87,7 @@ vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({
   },
 }))
 
-// The real sync gate, with the `onReady` each mounted instance was handed
+// The real sync gate, with each distinct `onReady` a mounted gate holds
 // recorded, so a test can call a gate's open after a later resolve has hidden
 // it. Recorded at commit, not render: React may render a gate it then discards,
 // with an `onReady` no mounted gate ever holds.
