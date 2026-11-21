@@ -673,7 +673,9 @@ const resultOrderSql = (
     const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
     const {test} = comparableCell(order.property, schema, cell)
     const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
-    return `CASE WHEN ${test} THEN json_extract(${cell}) END ${direction} NULLS LAST, b.id`
+    // SQLite NOCASE folds ASCII; accented letters retain code-point order.
+    const collation = schema.codec.where.storage === 'text' ? ' COLLATE NOCASE' : ''
+    return `CASE WHEN ${test} THEN json_extract(${cell}) END${collation} ${direction} NULLS LAST, b.id`
   }
   return `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`
 }

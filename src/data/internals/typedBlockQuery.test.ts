@@ -201,6 +201,19 @@ describe('typed queries for table rows', () => {
     expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
   })
 
+  it('sorts ASCII text without case and keeps accented letters after z', async () => {
+    await create({id: 'parent'})
+    for (const word of ['Banana', 'apple', 'zebra', 'Éclair']) {
+      await create({id: word, parentId: 'parent', properties: {[statusProp.name]: word}})
+    }
+    for (const direction of ['asc', 'desc'] as const) {
+      const ordered = ['apple', 'Banana', 'zebra', 'Éclair']
+      expect(await env.repo.query.typedBlockIds({
+        workspaceId: WS, parentId: 'parent', order: {property: statusProp.name, direction},
+      }).load()).toEqual(direction === 'asc' ? ordered : ordered.reverse())
+    }
+  })
+
   it('sorts numeric cells in SQL with deterministic ties and treats malformed values as missing', async () => {
     await create({id: 'parent'})
     await create({id: 'a-ten', parentId: 'parent', properties: {[priorityProp.name]: 10}})
