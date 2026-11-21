@@ -1,1 +1,1 @@
-export{nH as BlockProperties}from"../../chunks/app-DIasVfWu.js";
+export{nH as BlockProperties}from"../../chunks/app-CFNISOsB.js";

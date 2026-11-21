@@ -1,1 +1,1 @@
-export{qr as extensionsDataExtension}from"../../../chunks/app-DIasVfWu.js";
+export{qr as extensionsDataExtension}from"../../../chunks/app-CFNISOsB.js";

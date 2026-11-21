@@ -1,1 +1,1 @@
-export{tS as attachmentsPlugin}from"../../../chunks/app-DIasVfWu.js";
+export{tS as attachmentsPlugin}from"../../../chunks/app-CFNISOsB.js";
