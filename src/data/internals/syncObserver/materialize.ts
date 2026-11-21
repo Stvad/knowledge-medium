@@ -40,6 +40,7 @@ import {
 import { normalizeReferences, type BlockData } from '@/data/api'
 import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
+import { syncBulkLoadScope } from '@/data/internals/clientSchema.js'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { buildInClause, MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds.js'
 import type { ReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor.js'
@@ -323,6 +324,8 @@ const readExistingStagingIds = async (
 /** Tunables (batch sizing). Defaults are production values; tests override. */
 export interface MaterializeOptions {
   readonly readChunkSize?: number
+  /** Workspaces this window is bulk-loading — see `syncBulkLoadScope`. */
+  readonly bulkLoadWorkspaceIds?: readonly string[]
 }
 
 /**
@@ -480,9 +483,12 @@ export const materializeStagingRows = async (
   // ── Phase 2 (inside the write tx): authoritative re-gate, then write. ──
   await db.writeTransaction(async tx => {
     // Bracket the writes in a source-NULL tx_context so the upload triggers
-    // skip them. NULL is already the resting state between local txns, but
-    // set it explicitly to defend against any stale value.
-    await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
+    // skip them, with the scope that says whether this window is a bulk load.
+    // DEFENCE IN DEPTH, both columns: NULL is their resting state between
+    // local transactions, and each is written on every pass so a value left
+    // by anything else decides nothing here.
+    const bulkLoadScope = syncBulkLoadScope(options.bulkLoadWorkspaceIds ?? [])
+    await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [bulkLoadScope])
 
     // Re-gate authoritatively INSIDE the lock, but bulk-read the inputs once.
     // Candidate ids are distinct (deduped upstream) so no upsert below feeds a
@@ -620,6 +626,9 @@ export const materializeStagingRows = async (
         await tx.execute(setNeedsApplySql(value, chunk.length), chunk)
       }
     }
+    // Back to the resting state: another source-NULL writer to `blocks` must
+    // not inherit this window's exemption.
+    if (bulkLoadScope !== null) await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
   })
   const timings: MaterializeTimings = {...stagesBeforeWrite, writeMs: performance.now() - decodeDoneAt}
 

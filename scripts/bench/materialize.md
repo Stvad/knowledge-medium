@@ -232,3 +232,69 @@ What the matrix shows:
 
 Not measured here: the WebKit/OPFS runner with these flags, windows and
 dropped triggers combined, and any device.
+
+## Cache-bound matrix: a database much larger than its page cache
+
+A real first sync of a large workspace (Chromium, the write-ahead VFS) ran at
+140–210 rows/s where the figures above say thousands: the database was 4.5 GB
+against a 256 MB page cache, about 3% cached, and the browser was doing about
+35 single-page reads per materialized row. Every earlier run in this file fits
+its whole fixture in cache.
+
+Flags added for this, in both runners:
+
+- `--cache-kb N`: total page cache, split over the connections as production
+  splits it. The output's `cache` block reports the pragma read back from
+  writer and reader, the page count, and the cached fraction.
+- `--drop-indexes`: drop every secondary index on `blocks` before the pass;
+  with `--rebuild-derived`, re-create each afterwards, timed.
+- Browser runner only: `--browser chromium|webkit`, `--vfs
+  coop-sync|write-ahead`, and the variant flags the Node runner has.
+  `summarize-materialize.mjs` prints one line per sample from either runner.
+
+Measured 2026-11-20: headless Chromium, `OPFSWriteAheadVFS` (writer plus one
+reader), 150,000 encrypted rows with scattered ids, `initial` scenario, one
+sample after one warmup, variants run one at a time. The finished database is
+510 MB (127,423 pages); the cap is `--cache-kb 15000`, 3% of it. The machine
+was shared (load average 8–14 at each start; variant F's run overlapped
+another job and ended at 33), so read differences of tens of percent, not
+single percents.
+
+| Variant | Wall s | Write tx s | Upsert s | Rows/s | Rebuild s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A: cache larger than the file | 70.7 | 47.6 | 12.8 | 2,121 | |
+| B: capped at 3% | 97.8 | 75.4 | 51.8 | 1,534 | |
+| C: B, cache 4x larger (12%) | 77.5 | 56.3 | 15.4 | 1,934 | |
+| D: B + `--window 5000` | 66.7 | 54.7 | 43.6 | 2,250 | |
+| E: B + `--window 20000` | 59.2 | 50.4 | 41.6 | 2,534 | |
+| F: B + drop `blocks_row_event_insert` | 75.4 | 56.1 | 36.0 | 1,989 | |
+| G: B + `--drop-indexes` | 69.6 | 52.5 | 34.2 | 2,156 | 2.1 |
+| H: E + drop `blocks_row_event_insert` | 49.1 | 41.4 | 33.2 | 3,053 | |
+| I: G + drop `blocks_row_event_insert`, `blocks_fts_insert` | 38.8 | 25.1 | 9.7 | 3,867 | 5.9 |
+| J: I + `--window 20000` | 23.5 | 15.8 | 7.9 | 6,383 | 5.3 |
+
+"Upsert" is the summed time of the multi-row `INSERT INTO blocks` statements,
+triggers included. "Rebuild" is the set-based backfill of the derived tables
+plus re-creating the dropped indexes: all twelve indexes take 1.4–1.7 s
+together, `blocks_fts` 3.7–3.8 s where its trigger was dropped.
+
+What it shows:
+
+- The cap is reproduced in the work, not in the wall clock. Capping the cache
+  quadruples the upsert time (12.8 s to 51.8 s) but slows the run only 1.4x,
+  where the device was slower than its in-cache rate by an order of magnitude.
+  The likely reason, not measured: a miss here is a read from a fast local
+  disk, and there it was a read through a sandboxed network filesystem. So
+  rank the variants by upsert time; the wall-clock ratios understate what a
+  slow-disk device would see.
+- Each change alone is worth 20–40%, and they compound: dropping the indexes,
+  the row-event trigger and the FTS trigger and using 20,000-row windows (J)
+  is 3.4x faster than B including its rebuild, and faster than the uncapped
+  run. Its upsert time is 6.6x lower.
+- Window size and the row-event trigger alone (H) reach 2x with no rebuild
+  step.
+- A larger cache (C) buys back most of the upsert time, which is the direct
+  evidence that the cost is misses.
+
+Not measured: more than one sample per variant, WebKit, a database at the
+device's scale, or any slow-disk machine.

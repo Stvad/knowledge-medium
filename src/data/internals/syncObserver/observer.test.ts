@@ -13,6 +13,8 @@ import type { InvalidationRule } from '@/data/invalidation'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import { constMat, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
 import type { SyncDrainStats } from './observer.js'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
+import { syncBulkLoadScope } from '@/data/internals/clientSchema'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -854,4 +856,224 @@ describe('blocksSyncedObserver — drain stats', () => {
     expect(errors).toEqual([new Error('listener')])
   })
 
+})
+
+describe('blocksSyncedObserver — handle invalidation during a backlog', () => {
+  const stageFive = async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+  }
+  const rowIds = (n: { rowIds?: ReadonlySet<string> | readonly string[] }) => [...(n.rowIds ?? [])].sort()
+
+  it('delivers the first window at once and the rest of the drain together', async () => {
+    await stageFive()
+    const { observer, notifications, staleMarks, cache } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
+    })
+    await observer.flush()
+
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3', 'b4']])
+    // Staleness is not part of what waits, and neither is the cache.
+    expect(staleMarks.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3'], ['b4']])
+    expect(cache.getSnapshot('b4')).toMatchObject({ content: 'c4' })
+  })
+
+  it('delivers the first window of a later drain at once too', async () => {
+    await stageFive()
+    const { observer, notifications } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
+    })
+    await observer.flush()
+    notifications.length = 0
+
+    // One transaction, so the second batch is one delivery and one drain.
+    await env.db.writeTransaction(async (tx) => {
+      for (let i = 5; i < 10; i++) {
+        await tx.execute(
+          BLOCKS_SYNCED_RAW_TABLE.put.sql,
+          blockToSyncedRowParams(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` })),
+        )
+      }
+    })
+    await observer.flush()
+    expect(notifications.map(rowIds)).toEqual([['b5', 'b6'], ['b7', 'b8', 'b9']])
+  })
+
+  it('delivers every window once the interval has passed', async () => {
+    await stageFive()
+    const { observer, notifications } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 0,
+    })
+    await observer.flush()
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3'], ['b4']])
+  })
+
+  it('still delivers what a failed drain had held back', async () => {
+    await stageFive()
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 3) throw new Error('boom')
+      return 'copy'
+    }
+    const { observer, notifications } = start({
+      getMaterializability, drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000, onError: () => {},
+    })
+    await observer.flush().catch(() => {})
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3']])
+  })
+})
+
+describe('blocksSyncedObserver — bulk windows', () => {
+  it('drains in bulk-sized windows while a hold is out, and in live ones after its release', async () => {
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, bulkDrainChunkSize: 4,
+      onDrainStats: stats => seen.push(stats),
+    })
+    await observer.flush()
+    const stage = (from: number) => env.db.writeTransaction(async (tx) => {
+      for (let i = from; i < from + 6; i++) {
+        await tx.execute(
+          BLOCKS_SYNCED_RAW_TABLE.put.sql,
+          blockToSyncedRowParams(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` })),
+        )
+      }
+    })
+
+    const release = observer.holdBulkLoad('ws')
+    const nested = observer.holdBulkLoad('ws')
+    nested()
+    nested() // a second call releases nothing further
+    await stage(0)
+    await observer.flush()
+    expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 2 })
+
+    release()
+    await stage(6)
+    await observer.flush()
+    expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 3 })
+
+    // The workspace pass sizes its windows the same way.
+    const again = observer.holdBulkLoad('ws')
+    await observer.drainWorkspace('ws', 'all')
+    expect(seen.at(-1)).toMatchObject({ source: 'workspace', rows: 12, windows: 3 })
+    again()
+  })
+})
+
+describe('blocksSyncedObserver — a bulk load\'s change log', () => {
+  const events = () => env.db.getAll<{ block_id: string; kind: string }>(
+    'SELECT block_id, kind FROM row_events ORDER BY id',
+  )
+
+  it('logs no create for a row a bulk load inserts, and logs its later changes', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'bulk', content: 'v1' }])
+    expect(await events()).toEqual([])
+
+    // Still under the hold: an UPDATE is a change to a row this device has.
+    await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v2', updatedAt: 2 }))
+    await observer.flush()
+    expect(await events()).toEqual([{ block_id: 'bulk', kind: 'update' }])
+
+    // The hold names a workspace: another one's arrivals are logged throughout.
+    await put(data({ id: 'other', workspaceId: 'ws-other', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'other', kind: 'create' },
+    ])
+
+    release()
+    await put(data({ id: 'live', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'other', kind: 'create' },
+      { block_id: 'live', kind: 'create' },
+    ])
+  })
+
+  it('still logs a create for a local write that carries the bulk scope', async () => {
+    // DEFENCE IN DEPTH: no ChangeScope is the bulk scope, but a scope is a
+    // string an extension passes, and an unlogged local create has no undo.
+    await env.db.writeTransaction(async (tx) => {
+      await tx.execute(`UPDATE tx_context SET source = 'user', scope = '${syncBulkLoadScope(['ws'])}', tx_seq = 1 WHERE id = 1`)
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+           created_at, updated_at, created_by, updated_by, deleted)
+         VALUES ('local', 'ws', NULL, 'a0', '', '{}', '[]', 1, 1, 'u', 'u', 0)`,
+      )
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = NULL, tx_seq = NULL WHERE id = 1')
+    })
+    expect(await events()).toEqual([{ block_id: 'local', kind: 'create' }])
+  })
+
+  it('logs no update for the derived columns a bulk load stamps on its own rows', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws' }))
+    await observer.flush()
+    release()
+
+    const stamp = (scope: string | null, set: string) => env.db.writeTransaction(async (tx) => {
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [scope])
+      await tx.execute(`UPDATE blocks SET ${set} WHERE id = 'bulk'`)
+      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+    })
+    await stamp(syncBulkLoadScope(['ws']), `reference_target_id = 't1'`)
+    expect(await events()).toEqual([])
+    // Outside a bulk load the same stamp is an event, as it always was.
+    await stamp(null, `reference_target_id = 't2'`)
+    // And inside one, a change to a synced column still is.
+    await stamp(syncBulkLoadScope(['ws']), `content = 'changed', reference_target_id = 't3'`)
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'bulk', kind: 'update' },
+    ])
+  })
+
+  it('logs nothing for a held row whose reference the window itself stamps', async () => {
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      referenceTargetLookups: () => ({ aliasTargetId: async () => null }),
+    })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'ref', workspaceId: 'ws', content: '((t1))' }))
+    await observer.flush()
+    release()
+
+    // The stamp happened, in the window's own transaction...
+    expect(await env.db.get<{ reference_target_id: string | null }>(
+      `SELECT reference_target_id FROM blocks WHERE id = 'ref'`,
+    )).toEqual({ reference_target_id: 't1' })
+    // ...and while its bulk scope was still set.
+    expect(await events()).toEqual([])
+  })
+
+  it('logs a create on a live pass whatever scope was left behind', async () => {
+    // DEFENCE IN DEPTH: nothing leaves a bulk scope committed, so this state is
+    // written by hand.
+    await env.db.execute('UPDATE tx_context SET scope = ? WHERE id = 1', [syncBulkLoadScope(['ws'])])
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await put(data({ id: 'live', workspaceId: 'ws' }))
+    await observer.flush()
+    expect(await events()).toEqual([{ block_id: 'live', kind: 'create' }])
+  })
+
+  it('leaves no exemption behind for another source-NULL write', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws' }))
+    await observer.flush()
+    release()
+
+    expect(await env.db.get<{ scope: string | null }>('SELECT scope FROM tx_context WHERE id = 1'))
+      .toEqual({ scope: null })
+  })
 })

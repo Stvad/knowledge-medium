@@ -21,7 +21,7 @@
  * that is the safe direction.
  */
 
-import { linkFormWrapperAround, parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser.js'
+import { isPageEmbed, linkFormWrapperAround, parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser.js'
 
 /** Characters of context remembered on each side of a quote. */
 export const ANCHOR_CONTEXT_LENGTH = 16
@@ -103,7 +103,7 @@ const referenceSpans = (content: string): Span[] => [
   ...parseReferences(content).map(span => {
     const wrapper = linkFormWrapperAround(content, span)
     if (wrapper) return {startIndex: wrapper.image ? wrapper.start - 1 : wrapper.start, endIndex: wrapper.end}
-    return content[span.startIndex - 1] === '!' ? {...span, startIndex: span.startIndex - 1} : span
+    return isPageEmbed(content, span) ? {...span, startIndex: span.startIndex - 1} : span
   }),
   ...parseBlockRefs(content),
 ]

@@ -21,7 +21,7 @@ describe('cliOptionsFor', () => {
     const options = cliOptionsFor(tool('subtree'))
     const byKey = Object.fromEntries(options.map(o => [o.key, o]))
     expect(Object.keys(byKey).sort()).toEqual(
-      ['depth', 'expand-collapsed', 'limit', 'offset', 'properties', 'workspace'],
+      ['depth', 'expand-collapsed', 'expand-refs', 'limit', 'offset', 'properties', 'workspace'],
     )
     expect(byKey['expand-collapsed'].flag).toBe('--expand-collapsed')
     expect(byKey.depth.flag).toBe('--depth <value>')

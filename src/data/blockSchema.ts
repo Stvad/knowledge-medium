@@ -87,12 +87,14 @@ export const BLOCK_LOCAL_COLUMNS = [
 
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
 
+export const BLOCK_LOCAL_COLUMN_NAMES: readonly (keyof BlockRow)[] = BLOCK_LOCAL_COLUMNS.map(column => column.name)
+
 /** Column list for reads/writes against the live `blocks` table (synced
  *  storage columns + local-only columns). `blocks_synced` reads must keep
  *  using the storage-only list. */
 export const BLOCKS_TABLE_COLUMN_NAMES: readonly (keyof BlockRow)[] = [
   ...BLOCK_COLUMN_NAMES,
-  ...BLOCK_LOCAL_COLUMNS.map(column => column.name),
+  ...BLOCK_LOCAL_COLUMN_NAMES,
 ]
 
 const formatSqlList = (items: readonly string[], indentSize: number) => {

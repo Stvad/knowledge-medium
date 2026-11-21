@@ -4,6 +4,7 @@ import {
   buildAppHashInContext,
   buildLayout,
   buildLayoutFromSlots,
+  hashOpeningWorkspace,
   layoutWorkspaceChanged,
   parseAppHash,
   parseLayout,
@@ -542,5 +543,17 @@ describe('buildAppHash', () => {
 
   it('renders workspace-only when blockId is omitted', () => {
     expect(buildAppHash('ws-1')).toBe('#ws-1')
+  })
+})
+
+describe('hashOpeningWorkspace', () => {
+  it('keeps a hash already naming the workspace, deep link and all', () => {
+    const deepLink = buildLayout('ws-1', ['page-a'])
+    expect(hashOpeningWorkspace(deepLink, 'ws-1')).toBe(deepLink)
+  })
+
+  it('names the workspace when the hash is empty or names another', () => {
+    expect(hashOpeningWorkspace('', 'ws-1')).toBe(buildAppHash('ws-1'))
+    expect(hashOpeningWorkspace(buildLayout('ws-2', ['page-a']), 'ws-1')).toBe(buildAppHash('ws-1'))
   })
 })

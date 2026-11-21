@@ -108,13 +108,12 @@ import {
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
 import {
-  CLEAR_REPROJECT_REF_MARKER_SQL,
-  RECORD_REPROJECT_REF_MARKER_SQL,
+  DELETE_KEYED_MARKER_SQL,
+  RECORD_KEYED_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
   RECONCILE_RESCAN_MARKER_PREFIX,
-  SELECT_RECONCILE_RESCAN_MARKER_SQL,
-  RECORD_RECONCILE_RESCAN_MARKER_SQL,
+  SELECT_KEYED_MARKER_SQL,
 } from './internals/clientSchema'
 import {
   deriveReferenceColumns,
@@ -1156,8 +1155,8 @@ export class Repo {
       this.db,
       REPROJECT_REF_MARKER_PREFIX,
       SELECT_REPROJECT_REF_MARKERS_SQL,
-      RECORD_REPROJECT_REF_MARKER_SQL,
-      CLEAR_REPROJECT_REF_MARKER_SQL,
+      RECORD_KEYED_MARKER_SQL,
+      DELETE_KEYED_MARKER_SQL,
     )
     this.backfillCompletionClaim = opts.backfillCompletionClaim
     this.backfillSyncGate = opts.backfillSyncGate
@@ -1392,6 +1391,13 @@ export class Repo {
     }
   }
 
+  /** Treat a workspace's sync deliveries as a bulk load until the returned
+   *  release is called — see `BlocksSyncedObserver.holdBulkLoad` for what that changes
+   *  and who may. */
+  holdBulkSyncLoad(workspaceId: string): () => void {
+    return this.syncObserver?.holdBulkLoad(workspaceId) ?? (() => {})
+  }
+
   /** Manually flush the sync observer — drains any pending `blocks_synced`
    *  changes into `blocks` and walks `handleStore.invalidate(...)`. Tests
    *  use this instead of waiting on the throttle window; it's a real settle
@@ -1411,7 +1417,7 @@ export class Repo {
     if (!this.syncObserver) return null
     const report = await this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress)
     if (report.deferred === 0 && report.quarantined === 0) {
-      await this.db.execute(RECORD_RECONCILE_RESCAN_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
+      await this.db.execute(RECORD_KEYED_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
     }
     return report
   }
@@ -2607,6 +2613,9 @@ export class Repo {
   ): Unsubscribe {
     const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
     if (options?.freshInitial) {
+      // A projector's registries are what a local transaction encodes with,
+      // so its rows may not wait out a sync backlog's held invalidations.
+      handle.rerunOnStaleMark()
       let initialPending = true
       const unsubscribe = handle.subscribe(rows => {
         if (!initialPending) listener(rows)
@@ -4827,7 +4836,7 @@ export class Repo {
 
   private async runReconcileRescan(workspaceId: string): Promise<void> {
     const key = `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`
-    const done = await this.db.getOptional<{key: string}>(SELECT_RECONCILE_RESCAN_MARKER_SQL, [key])
+    const done = await this.db.getOptional<{key: string}>(SELECT_KEYED_MARKER_SQL, [key])
     if (done) return
     try {
       await this.drainSyncWorkspace(workspaceId)

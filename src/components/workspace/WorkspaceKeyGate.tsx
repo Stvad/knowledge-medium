@@ -34,7 +34,16 @@ export interface WorkspaceGateDeps {
 }
 
 export const workspaceGateDeps = (repo: Repo, workspaceId: string): WorkspaceGateDeps => ({
-  drainWorkspace: onProgress => repo.drainSyncWorkspace(workspaceId, onProgress),
+  // A bulk load for as long as the drain runs, which can be longer than the
+  // gate is up — `BlocksSyncedObserver.holdBulkLoad` has what that costs.
+  drainWorkspace: async (onProgress) => {
+    const release = repo.holdBulkSyncLoad(workspaceId)
+    try {
+      return await repo.drainSyncWorkspace(workspaceId, onProgress)
+    } finally {
+      release()
+    }
+  },
   fetchConversionState: () => fetchWorkspaceConversionState(workspaceId),
   hasCopiedCiphertext: () => hasCopiedCiphertext(repo.db, workspaceId),
 })
