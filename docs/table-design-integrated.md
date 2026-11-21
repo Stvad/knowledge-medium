@@ -134,7 +134,7 @@ Engine additions on the typed query (read: none exists today):
 3. `propertyChildren: 'none'`, reusing `NOT_PROPERTY_ROW_SQL`. Smallish: that SQL is private to the kernel queries and its parameters must be threaded through the compiler.
 4. `limit` on the ids query.
 
-**What sorts in v1.** Columns whose codec is comparable in SQL: string, number, boolean, date, enum (by value, not option order) and url. Reference, list and row-content columns do not sort until the engine learns them.
+**What sorts in v1.** Columns whose codec is comparable in SQL: string, number, boolean, date, enum (by value, not option order) and url. Text sorts case-insensitively (`COLLATE NOCASE`); accented letters still sort by code point, after `z`. Reference, list and row-content columns do not sort until the engine learns them.
 
 v1 fetches every matching id up to a cap, with a visible "narrow the query" notice. At 5000 rows a SQL sort took 8 to 19 ms and a filter 4 to 6 ms with no index (measured, through plugin SQL, not through the engine).
 
@@ -155,9 +155,10 @@ Decided: extend `TypedBlockQuery` with what tables need, and add a seam so plugi
 What goes where (the shape below is my proposal, reasoned; I have not designed it against the compiler in detail):
 
 - **Core, built in:** structure that a contribution cannot add. The parent predicate, `order`, `propertyChildren`, `limit` (the four above) and `anyOf`, the or-group across predicates.
-- **The seam: queryable fields.** Today a `where` key must be a registered property (read). A contribution adds a **virtual field**: a name that is not a stored property but can appear in `where`, and later in `order`. It declares its operators and operand parsing, the SQL for each operator over the candidate row, and its invalidation dependencies.
+- **The seam: queryable fields.** Today a `where` key must be a registered property (read). A contribution adds a **virtual field**: a name that is not a stored property but can appear in `where`, and later in `order`. It declares one SQL value expression over the candidate row, how an operand is encoded for binding, whether it bounds the ancestor walk, and its invalidation dependencies. The engine applies its own comparators, `between`, presence and `order` to that expression, so a field gets filtering and sorting from one declaration and cannot re-implement an operator. An operator beyond comparison (a substring match, say) is added to the contract when a field needs it. Its SQL is wrapped and its parameters are checked (count against placeholders); a fragment can still be written to escape its parentheses, which is accepted because a plugin can already register its own SQL (below).
 - **First users of the seam, in place of hard-coding them:** `created` and `updated`. Then row content, as a filter and as a sort key, and sort by a reference's label. Building these through the seam is what proves its contract.
 - **List contains** is a different axis: an operator a codec declares in its existing `where` capability, not a virtual field.
+- **Dates are instants in the engine.** A date-only operand on `created`/`updated` is refused there; the query parser turns `created>2026-01-01` into instants bounding that day in the user's time zone (`eq` is the day's range, `lte` ends at the next midnight), because a user writing a date means the whole local day.
 - **Text grammar.** No change needed for fields: `created>2026-01-01` is already the `field op value` shape, so a contributed field is usable in query text as soon as it is registered. The parser resolves names against properties and virtual fields alike.
 
 Constraints on the seam:
@@ -279,6 +280,7 @@ The risk check (§10 step 1) measured the focus model, scope-root cells, the inl
 - A real table query and per-cell lookup in the loop; a 5000-row grid of real blocks.
 - IME, fast multi-character typing, focus restoration after reload, the row-title editor, reference-value completion.
 - A release build, a real phone, production bundle size.
+- What `updated` means for a row: editing a cell's value row moves the value row's edit time, not the owner's, so "updated since X" misses rows whose cells were edited (measured in review of the query terms). Undecided whether the projection should move the owner's edit time when a user edit changes the projected value.
 
 ## 13. What the review changed
 
