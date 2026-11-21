@@ -1007,7 +1007,7 @@ export const childrenQuery = defineQuery<
 
 export interface PropertyCellResult {
   owner: BlockData | null
-  fields: Array<{field: BlockData; values: BlockData[]}>
+  fields: Array<{field: BlockData; values: Array<BlockData & {hasChildren: boolean}>}>
 }
 
 /** The source rows for a property cell, including duplicate field rows. */
@@ -1033,11 +1033,18 @@ export const propertyCellQuery = defineQuery<{ownerId: string; fieldId: string},
     const fields: PropertyCellResult['fields'] = []
     for (const field of ctx.hydrateBlocks(asBlockRows(rows))) {
       ctx.depend({kind: 'parent-edge', parentId: field.id})
-      const values = await ctx.db.getAll<BlockRow>(`
-        SELECT * FROM blocks WHERE parent_id = ? AND workspace_id = ? AND deleted = 0 AND is_field_form IS NOT 1
+      const values = await ctx.db.getAll<BlockRow & {has_children: number}>(`
+        SELECT blocks.*, EXISTS (
+          SELECT 1 FROM blocks nested
+          WHERE nested.parent_id = blocks.id AND nested.workspace_id = blocks.workspace_id AND nested.deleted = 0
+        ) AS has_children
+        FROM blocks WHERE parent_id = ? AND workspace_id = ? AND deleted = 0 AND is_field_form IS NOT 1
         ORDER BY order_key, id
       `, [field.id, owner.workspaceId])
-      fields.push({field, values: ctx.hydrateBlocks(asBlockRows(values))})
+      fields.push({field, values: ctx.hydrateBlocks(asBlockRows(values)).map((value, index) => {
+        ctx.depend({kind: 'parent-edge', parentId: value.id})
+        return {...value, hasChildren: Boolean(values[index]!.has_children)}
+      })})
     }
     return {owner, fields}
   },

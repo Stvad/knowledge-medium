@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
-import {ChangeScope, codecs, defineProperty, type AnyPropertySchema, type Tx} from '@/data/api'
+import {ChangeScope, CodecError, codecs, defineProperty, type AnyPropertySchema, type Tx} from '@/data/api'
 import {projectedPropertyDefinitionsFacet} from '@/data/facets'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
@@ -31,6 +31,17 @@ const refListProperty = defineProperty('test:cell-ref-list', {
 })
 const uiProperty = defineProperty('test:cell-ui', {
   codec: codecs.string, defaultValue: '', changeScope: ChangeScope.UiState,
+})
+
+const retiredProperty = defineProperty<string>('test:retired', {
+  codec: {
+    ...codecs.string, type: 'test-retired',
+    encode(value: string) {
+      if (value === 'retired') throw new CodecError('current value', value)
+      return value
+    },
+  },
+  changeScope: ChangeScope.BlockDefault, defaultValue: '',
 })
 
 let db: TestDb
@@ -99,8 +110,28 @@ const expectCellRefusal = async (action: Promise<unknown>, reason: CellRefusalRe
   expect(error).toMatchObject({reason})
   if (message) expect(error).toHaveProperty('message', message)
 }
+const expectCommittedCellRefusal = async (
+  repo: Awaited<ReturnType<typeof setup>>, run: (tx: Tx) => Promise<unknown>,
+  reason: CellRefusalReason, message?: string, scope: ChangeScope = ChangeScope.BlockDefault,
+) => {
+  const before = await snapshot()
+  await repo.tx(async tx => {
+    await expectCellRefusal(run(tx), reason, message)
+  }, {scope})
+  expect(await snapshot()).toEqual(before)
+}
 
 describe('openCell', () => {
+  it('materializes a readable stored value whose codec no longer accepts new writes', async () => {
+    const schema = retiredProperty
+    const repo = await setup(schema)
+    await seed({id: ownerId, properties: {[schema.name]: 'retired'}})
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const [fieldRow] = await children(ownerId)
+    expect(await children(fieldRow!.id)).toEqual([{id: edit.valueId, content: '"retired"'}])
+    expect(await projection()).toEqual({[schema.name]: 'retired'})
+  })
+
   it.each([
     {prior: 'absent', rows: [], stored: undefined, created: true},
     {prior: 'stored only', rows: [], stored: 'old', created: false},
@@ -153,35 +184,17 @@ describe('openCell', () => {
     await seed({id: ownerId, properties: {[refProperty.name]: encoded}, references: [
       {id: encoded, alias: encoded, sourceField: refProperty.name},
     ]}, ...(hasField ? [field()] : []))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'would-change-stored-value')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'would-change-stored-value')
   })
 
-  it('refuses to materialize a stored empty reference as an unset projection', async () => {
-    const repo = await setup(refProperty)
-    await seed({id: ownerId, properties: {[refProperty.name]: ''}})
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'would-change-stored-value')
-    }, options)
-    expect(await snapshot()).toEqual(before)
-  })
-
-  it('refuses to fold duplicate fields when that would replace the stored projection', async () => {
-    const repo = await setup(numberProperty)
-    await seed({id: ownerId, properties: {[numberProperty.name]: 9}}, field(), field('field-b'),
-      value('value-a', '5'), value('value-b', '9', 'field-b'))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'would-change-stored-value')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+  it.each([
+    {state: 'materialize a stored empty reference as an unset projection', schema: refProperty, encoded: '', rows: []},
+    {state: 'fold duplicate fields when that would replace the stored projection', schema: numberProperty, encoded: 9,
+      rows: [field(), field('field-b'), value('value-a', '5'), value('value-b', '9', 'field-b')]},
+  ])('refuses to $state', async ({schema, encoded, rows}) => {
+    const repo = await setup(schema)
+    await seed({id: ownerId, properties: {[schema.name]: encoded}}, ...rows)
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'would-change-stored-value')
   })
 
   it.each([
@@ -226,6 +239,25 @@ describe('openCell', () => {
     expect(await projection()).toEqual({[schema.name]: stored})
   })
 
+  it('folds scalar copies by decoded value and keeps the survivor spelling', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(), field('field-b'),
+      value('value-a', ' 5 '), value('value-b', '5', 'field-b'), value('note', 'keep', 'value-b'))
+    await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    expect(await children('field-a')).toEqual([{id: 'value-a', content: ' 5 '}])
+    expect(await children('value-a')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[numberProperty.name]: 5})
+  })
+
+  it('keeps independently unreadable scalar rows across fields', async () => {
+    const repo = await setup(numberProperty)
+    await seed({id: ownerId}, field(), field('field-b'), value('value-a', '?'), value('value-b', '?', 'field-b'))
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    expect(await children('field-a')).toEqual([
+      {id: 'value-a', content: '?'}, {id: 'value-b', content: '?'}, {id: edit.valueId, content: ''},
+    ])
+  })
+
   it.each([
     {metadata: 'a stored property', properties: {annotation: 'keep'}, nested: []},
     {metadata: 'a nested field', properties: {}, nested: [field('nested', 'copy-b')]},
@@ -235,11 +267,7 @@ describe('openCell', () => {
     await seed({id: ownerId, properties: {[textListProperty.name]: members}}, field(), field('field-b'),
       value('value-a', 'first'), value('value-b', 'second'),
       value('copy-a', 'first', 'field-b'), {...value('copy-b', 'second', 'field-b'), properties}, ...nested)
-    const before = await snapshot()
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'resolve-in-outline')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'resolve-in-outline')
   })
 
   it('keeps both occurrences introduced together by the later field', async () => {
@@ -271,6 +299,12 @@ describe('openCell', () => {
 })
 
 describe('writeCellText', () => {
+  it('refuses a new value rejected by the write side of a readable codec', async () => {
+    const repo = await setup(retiredProperty)
+    await seed({id: ownerId})
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, '"retired"'), 'invalid-text')
+  })
+
   it.each([
     ['absent', undefined, false],
     ['projection only', 7, false],
@@ -313,12 +347,7 @@ describe('writeCellText', () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(),
       value('value-a', '5'), {...value('value-b', '9'), properties}, ...notes)
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, '9'), 'resolve-in-outline')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, '9'), 'resolve-in-outline')
   })
 
   it('uses the only unreadable row for valid text', async () => {
@@ -357,23 +386,13 @@ describe('writeCellText', () => {
   it('refuses invalid pasted text that would turn a value row into a field', async () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(), value('value-a', '5'))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, '::((definition))'), 'invalid-text')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, '::((definition))'), 'invalid-text')
   })
 
   it('refuses an invalid draft with an unpaired surrogate before the content column replaces it', async () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}}, field(), value('value-a', '5'))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, '\ud800'), 'invalid-text')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, '\ud800'), 'invalid-text')
   })
 
   it('clears on empty text', async () => {
@@ -517,6 +536,12 @@ describe('clearCell', () => {
     expect(await snapshot()).toEqual(before)
   })
 
+  it('refuses to save final text into a row that moved out of the cell', async () => {
+    const repo = await setup()
+    await seed({id: ownerId}, field(), value('value-a', 'old', ownerId))
+    await expectCommittedCellRefusal(repo, tx => finishCellEdit(tx, ownerId, fieldId, 'value-a', 'edited'), 'resolve-in-outline')
+  })
+
   it('keeps a pending key when the edited row is already gone', async () => {
     const repo = await setup()
     await seed({id: ownerId, properties: {[textProperty.name]: 'pending'}})
@@ -555,12 +580,7 @@ describe.each(Object.entries(operations))('%s cell eligibility', (_operation, ru
   }) => {
     const repo = await setup(schema, mode)
     await seed({id: ownerId, deleted, properties: {[schema.name]: 'old text'}}, field(), value('value-a', 'old text'))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(run(tx, owner, definition), 'read-only', error)
-    }, {scope})
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => run(tx, owner, definition), 'read-only', error, scope)
   })
 })
 
@@ -575,12 +595,7 @@ describe.each([
     const repo = await setup()
     await seed({id: ownerId, properties: {[textProperty.name]: 'same'}}, field(),
       {...field('field-b'), properties}, value('value-a', 'same'), ...nested)
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(run(tx, ownerId, fieldId), 'resolve-in-outline')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => run(tx, ownerId, fieldId), 'resolve-in-outline')
   })
 })
 
@@ -612,12 +627,7 @@ describe('list cells', () => {
   it('refuses to add a text member to a stored empty list just by opening it', async () => {
     const repo = await setup(textListProperty)
     await seed({id: ownerId, properties: {[textListProperty.name]: []}})
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'would-change-stored-value')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'would-change-stored-value')
   })
 
   it.each([false, true])('opens a new reference-list member for a blank cell (field: %s)', async hasField => {
@@ -643,6 +653,15 @@ describe('list cells', () => {
       {id: 'value-a', content: '((target))'}, {id: 'value-b', content: '((target))'}, {id: valueId, content: ''},
     ])
     expect(await projection()).toEqual({[refListProperty.name]: ['target', 'target']})
+  })
+
+  it('adds the first typed member to an explicitly empty string list', async () => {
+    const repo = await setup(textListProperty)
+    await seed({id: ownerId, properties: {[textListProperty.name]: []}})
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId, {initialText: 'first'}), options)
+    const [fieldRow] = await children(ownerId)
+    expect(await children(fieldRow!.id)).toEqual([{id: edit.valueId, content: 'first'}])
+    expect(await projection()).toEqual({[textListProperty.name]: ['first']})
   })
 
   it('opens a blank reference-list member without projecting it', async () => {
@@ -705,11 +724,7 @@ describe('list cells', () => {
     await seed({id: ownerId, properties: {[textListProperty.name]: ['first']}}, field(),
       value('value-a', 'first'), value('lagging', 'second'), field('field-b'),
       value('copy', 'second', 'field-b'), value('note', 'keep', 'copy'))
-    const before = await snapshot()
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, 'first'), 'resolve-in-outline')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, 'first'), 'resolve-in-outline')
   })
 
   it('refuses a whole reference list paste when one member is invalid', async () => {
@@ -717,24 +732,14 @@ describe('list cells', () => {
     await seed({id: ownerId, properties: {[refListProperty.name]: ['target']},
       references: [{id: 'target', alias: 'target', sourceField: refListProperty.name}]},
     field(), value('value-a', '((target))'))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, '((replacement))\nunfinished'), 'invalid-text')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, '((replacement))\nunfinished'), 'invalid-text')
   })
 
   it('refuses a replacement that would remove an annotated list member', async () => {
     const repo = await setup(textListProperty)
     await seed({id: ownerId, properties: {[textListProperty.name]: ['first', 'second']}}, field(),
       value('value-a', 'first'), value('value-b', 'second'), value('note', 'keep', 'value-b'))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, 'first'), 'resolve-in-outline')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, 'first'), 'resolve-in-outline')
   })
 
   it.each([
@@ -744,12 +749,7 @@ describe('list cells', () => {
     const repo = await setup(textListProperty)
     await seed({id: ownerId, properties: {[textListProperty.name]: ['same', 'same']}}, field(),
       value('value-a', 'same'), {...value('value-b', 'same'), properties}, ...notes)
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, 'same'), 'resolve-in-outline')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, 'same'), 'resolve-in-outline')
   })
 
   it.each([
@@ -835,11 +835,7 @@ describe('cell write boundaries', () => {
   it('refuses a new blank among unreadable scalar peers with a stale stored value', async () => {
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 2}}, field(), value('value-a', 'one'), value('value-b', 'two'))
-    const before = await snapshot()
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'would-change-stored-value')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'would-change-stored-value')
   })
 
   it('reprojects unchanged unreadable text when the bag has a late value', async () => {
@@ -953,13 +949,7 @@ describe.each([
     const repo = await setup(numberProperty)
     await seed({id: ownerId, properties: {[numberProperty.name]: 5}},
       ...(existing ? [field(), value('value-a', '5')] : []))
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(run(tx, text), 'invalid-text')
-    }, options)
-
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => run(tx, text), 'invalid-text')
   })
 })
 
@@ -971,23 +961,13 @@ describe('reference cell editing', () => {
     const repo = await setup(schema)
     const id = '\ud800'
     await seed({id: ownerId, properties: {[schema.name]: encoded}, references: [{id, alias: id, sourceField: schema.name}]})
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(openCell(tx, ownerId, fieldId), 'would-change-stored-value')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'would-change-stored-value')
   })
 
   it.each([refProperty, refListProperty])('refuses a pasted reference to an unpaired surrogate in $name', async schema => {
     const repo = await setup(schema)
     await seed({id: ownerId})
-    const before = await snapshot()
-
-    await repo.tx(async tx => {
-      await expectCellRefusal(writeCellText(tx, ownerId, fieldId, '((\ud800))'), 'invalid-text')
-    }, options)
-    expect(await snapshot()).toEqual(before)
+    await expectCommittedCellRefusal(repo, tx => writeCellText(tx, ownerId, fieldId, '((\ud800))'), 'invalid-text')
   })
 
   it('cleans up only the opened reference-list draft on repeated opens and closes', async () => {
@@ -1013,7 +993,7 @@ describe('reference cell editing', () => {
 })
 
 describe('cell projection and workspace boundaries', () => {
-  it('keeps stored keys in a cell workspace even when an extension requests projection', async () => {
+  it('keeps stored keys when a bare projection event names a cell', async () => {
     const repo = await setup(textProperty, 'cell')
     await seed({id: ownerId, properties: {[textProperty.name]: 'pending'}})
     const before = await snapshot()
@@ -1033,13 +1013,7 @@ describe('cell projection and workspace boundaries', () => {
       const repo = await setup()
       await seed({id: ownerId, properties: {[textProperty.name]: 'saved'}},
         {...field(), workspace: fieldWorkspace}, {...value('value-a', 'saved'), workspace: valueWorkspace})
-      const before = await snapshot()
-
-      await repo.tx(async tx => {
-        await expectCellRefusal(run(tx, ownerId, fieldId), 'resolve-in-outline')
-      }, options)
-
-      expect(await snapshot()).toEqual(before)
+      await expectCommittedCellRefusal(repo, tx => run(tx, ownerId, fieldId), 'resolve-in-outline')
     })
   })
 })

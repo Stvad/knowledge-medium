@@ -1,16 +1,16 @@
 import {ChangeScope, CodecError, memberCodecOf, type AnyPropertySchema, type BlockData, type Tx} from '@/data/api'
 import {
-  childContentsToEncodedPropertyValue, encodedPropertyValueToChildContents, fieldValueChildren, isFieldValueChild, memberKeysFor, scalarValueRow,
-  propertyCellValueRejection, unionValuesAcrossFieldRows, valueChildContentToEncoded, valueSurvivesChildRoundTrip,
+  childContentsToEncodedPropertyValue, decodedMemberKeysFor, encodedPropertyValueToChildContents, fieldRowsForSchema, fieldValueChildren,
+  isFieldValueChild, memberKeysFor, propertyCellValueRejection, rowsProjectToValue, scalarDuplicates, scalarValueRow,
+  unionFieldValues, valueChildContentToEncoded, valueSurvivesChildRoundTrip, verbatimValueTextProblem,
 } from '@/data/propertyChildren'
-import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
 import {storedPropertyValue} from '@/data/rowProperty'
 import {deleteSubtreeAnnouncedInTx} from '@/data/subtreeDelete'
 import {hasLoneSurrogate} from '@/utils/string'
 import {jsonValuesEqual} from './jsonCanonical'
 import {
-  collapseDuplicateValueChild, createValueChild, fieldRowsForSchema, freshSlots, hasPendingCellProjection, matchMemberValueChildren,
-  projectFieldRowValues, requestCellProjection, upsertFieldRow,
+  collapseDuplicateValueChild, createValueChild, freshSlots, hasPendingCellProjection, matchMemberValueChildren,
+  projectFieldRowValues, reconcileFieldValueChildren, requestCellProjection, upsertFieldRow,
 } from './propertyChildrenProcessor'
 
 export type CellRefusalReason = 'read-only' | 'resolve-in-outline' | 'would-change-stored-value' | 'invalid-text'
@@ -23,7 +23,7 @@ export class CellRefusedError extends Error {
 }
 
 /** Whether the column's resolved definition supports block-scoped cell edits. */
-export const isCellEditable = (schema: AnyPropertySchema | null | undefined): schema is AnyPropertySchema =>
+export const isCellEditable = (schema: AnyPropertySchema | null | undefined): boolean =>
   schema?.changeScope === ChangeScope.BlockDefault
 
 const readCell = async (tx: Tx, ownerId: string, fieldId: string) => {
@@ -45,7 +45,7 @@ const readCell = async (tx: Tx, ownerId: string, fieldId: string) => {
   const perField = fields.map(group => group.children.filter(isFieldValueChild))
   const stored = hasPendingCellProjection(tx, ownerId, fieldId)
     ? projectFieldRowValues(schema, perField) : storedPropertyValue(owner.properties, schema.name)
-  return {owner, fieldId, schema, fields, values: perField.flat(), stored}
+  return {owner, fieldId, schema, fields, perField, values: perField.flat(), stored}
 }
 
 type Cell = Awaited<ReturnType<typeof readCell>>
@@ -62,8 +62,8 @@ const appendValue = async (tx: Tx, field: Field, schema: AnyPropertySchema, text
 
 const fieldValueUnion = (cell: Cell) => {
   const duplicates = new Map<BlockData, BlockData>()
-  const groups = cell.fields.map(({children}) => children.filter(isFieldValueChild))
-  const values = unionValuesAcrossFieldRows(cell.schema, groups, (copy, survivor) => duplicates.set(copy, survivor))
+  if (cell.perField.length < 2) return {values: cell.values, duplicates}
+  const values = unionFieldValues(cell.perField, decodedMemberKeysFor(cell.schema), (copy, survivor) => duplicates.set(copy, survivor))
   return {values, duplicates}
 }
 
@@ -71,8 +71,8 @@ const planOpenFold = (cell: Cell) => {
   const {values, duplicates} = fieldValueUnion(cell)
   // A stored list can explicitly count copies across fields as distinct occurrences.
   if (duplicates.size && memberCodecOf(cell.schema.codec) && cell.stored !== undefined &&
-    !jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, values), cell.stored) &&
-    jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, cell.values), cell.stored)) {
+    !rowsProjectToValue(cell.schema, values, cell.stored) &&
+    rowsProjectToValue(cell.schema, cell.values, cell.stored)) {
     duplicates.clear()
     return {values: cell.values, duplicates}
   }
@@ -105,7 +105,7 @@ const writableContents = (schema: AnyPropertySchema, encoded: unknown) => {
 }
 
 const assertValueText = (text: string) => {
-  if (parseExactReferenceBlockContent(text)?.fieldForm || hasLoneSurrogate(text)) {
+  if (verbatimValueTextProblem(text)) {
     throw new CellRefusedError('invalid-text', 'This text cannot be stored verbatim as a value block.')
   }
 }
@@ -151,24 +151,22 @@ export const openCell = async (
   // Validate before even minting the field: callers can catch a refusal
   // inside their range transaction and still commit its other cells.
   if (values.length === 0 && stored !== undefined) {
-    if (propertyCellValueRejection(schema, stored) || !valueSurvivesChildRoundTrip(schema, stored) ||
-      encodedPropertyValueToChildContents(schema, stored).some(hasLoneSurrogate)) {
+    if (propertyCellValueRejection(schema, stored) || !valueSurvivesChildRoundTrip(schema, stored)) {
       throw new CellRefusedError('would-change-stored-value', 'This stored value cannot be materialized unchanged.')
     }
-    const decoded = schema.codec.decode(stored)
     if (blankCounts && !initialText && jsonValuesEqual(stored, [])) {
       throw new CellRefusedError('would-change-stored-value', 'Opening this empty list would add a stored member.')
     }
     const field = await foldFields(tx, cell, duplicates)
-    await tx.setProperty(ownerId, schema, decoded)
+    await reconcileFieldValueChildren(tx, field, schema, stored)
     const materialized = await fieldValueChildren(tx, field.id)
     return openValue(field, target(materialized))
   }
 
   const existing = target(values)
-  if (stored !== undefined && (cell.fields.length > 1 || !existing)) {
-    const after = childContentsToEncodedPropertyValue(schema, existing ? values : [...values, ''])
-    if (!jsonValuesEqual(after, stored)) throw new CellRefusedError('would-change-stored-value', 'Opening this cell would change its stored value.')
+  if (stored !== undefined && (cell.fields.length > 1 || !existing) &&
+    !rowsProjectToValue(schema, existing ? values : [...values, ''], stored)) {
+    throw new CellRefusedError('would-change-stored-value', 'Opening this cell would change its stored value.')
   }
   const field = await foldFields(tx, cell, duplicates)
   return openValue(field, existing)
@@ -180,61 +178,62 @@ const carriesData = async (tx: Tx, row: BlockData) =>
 const requestProjection = (tx: Tx, cell: Cell) =>
   requestCellProjection(tx, cell.owner, cell.fieldId, cell.schema)
 
-/** Whole-list paste uses one member per line. Invalid list text refuses the
- * whole paste so a subset cannot replace the user's list. */
+const preparePaste = (schema: AnyPropertySchema, text: string) => {
+  const list = memberCodecOf(schema.codec) !== undefined
+  let decoded: unknown
+  try {
+    const encoded = list ? text.split(/\r?\n/).map(line => valueChildContentToEncoded(schema, line))
+      : valueChildContentToEncoded(schema, text)
+    decoded = schema.codec.decode(encoded)
+  } catch (error) {
+    if (!(error instanceof CodecError)) throw error
+    if (list) throw new CellRefusedError('invalid-text', 'A pasted member is invalid for this list.')
+    assertValueText(text)
+    return {kind: 'draft' as const}
+  }
+  try {
+    const contents = writableContents(schema, schema.codec.encode(decoded))
+    return {kind: 'typed' as const, decoded, contents}
+  } catch (error) {
+    if (!(error instanceof CodecError)) throw error
+    throw new CellRefusedError('invalid-text', 'This value cannot be written with the column codec.')
+  }
+}
+
+const planTypedPaste = (cell: Cell, contents: string[]) => {
+  const {schema, values} = cell
+  if (!memberCodecOf(schema.codec)) {
+    const content = contents[0]!
+    return {removed: scalarDuplicates(values, scalarValueRow(schema, values, content), content)}
+  }
+  const {kept, surplus, keyByRow} = matchMemberValueChildren(schema, values, contents)
+  const retained = new Set(kept)
+  const {duplicates} = fieldValueUnion(cell)
+  for (const [copy, survivor] of duplicates) {
+    if (retained.has(copy) || !retained.has(survivor)) duplicates.delete(copy)
+  }
+  return {duplicates, removed: surplus.filter(row => !duplicates.has(row) && keyByRow.get(row.id)!.denotesValue)}
+}
+
+/** Whole-list paste takes one member per line. An invalid member refuses the whole edit. */
 export const writeCellText = async (tx: Tx, ownerId: string, fieldId: string, text: string): Promise<void> => {
   if (text === '') return clearCell(tx, ownerId, fieldId)
   const cell = await readCell(tx, ownerId, fieldId)
   const {schema} = cell
-  if (memberCodecOf(schema.codec)) {
-    const lines = text.split(/\r?\n/)
-    let decoded: unknown
-    let contents: string[]
-    try {
-      decoded = schema.codec.decode(lines.map(line => valueChildContentToEncoded(schema, line)))
-      contents = writableContents(schema, schema.codec.encode(decoded))
-    } catch (error) {
-      if (!(error instanceof CodecError)) throw error
-      throw new CellRefusedError('invalid-text', 'A pasted member is invalid for this list.')
+  const paste = preparePaste(schema, text)
+  const plan = paste.kind === 'typed' ? planTypedPaste(cell, paste.contents) : undefined
+  for (const row of plan?.removed ?? []) {
+    if (await carriesData(tx, row)) {
+      throw new CellRefusedError('resolve-in-outline', 'Replacing this value would consume an annotated row.')
     }
-    const {kept, surplus, keyByRow} = matchMemberValueChildren(schema, cell.values, contents)
-    const retained = new Set(kept)
-    const {duplicates} = fieldValueUnion(cell)
-    for (const [copy, survivor] of duplicates) {
-      if (retained.has(copy) || !retained.has(survivor)) duplicates.delete(copy)
-    }
-    for (const row of surplus) {
-      if (!duplicates.has(row) && keyByRow.get(row.id)!.denotesValue && await carriesData(tx, row)) {
-        throw new CellRefusedError('resolve-in-outline', 'Replacing this list would remove a member with nested data.')
-      }
-    }
-    await foldFields(tx, cell, duplicates)
-    await tx.setProperty(ownerId, schema, decoded)
-    return
   }
 
-  let decoded: unknown
-  try {
-    decoded = schema.codec.decode(valueChildContentToEncoded(schema, text))
-  } catch (error) {
-    if (!(error instanceof CodecError)) throw error
-    assertValueText(text)
-    const field = await foldFields(tx, cell)
-    const target = scalarValueRow(schema, cell.values)
-    if (!target) await appendValue(tx, field, schema, text)
-    else await tx.update(target.id, {content: text})
-    requestProjection(tx, cell)
-    return
-  }
-  const [content] = writableContents(schema, schema.codec.encode(decoded))
-  const primary = scalarValueRow(schema, cell.values, content)
-  for (const value of cell.values) {
-    if (value !== primary && value.content === content && await carriesData(tx, value)) {
-      throw new CellRefusedError('resolve-in-outline', 'Replacing this value would fold an annotated peer. Resolve it in the outline.')
-    }
-  }
-  if (cell.fields.length > 1) await foldFields(tx, cell)
-  await tx.setProperty(ownerId, schema, decoded)
+  const field = await foldFields(tx, cell, plan?.duplicates)
+  if (paste.kind === 'typed') return tx.setProperty(ownerId, schema, paste.decoded)
+  const target = scalarValueRow(schema, cell.values)
+  if (target) await tx.update(target.id, {content: text})
+  else await appendValue(tx, field, schema, text)
+  requestProjection(tx, cell)
 }
 
 // Only the open result grants cleanup ownership. A bare id can save text on an existing row.
@@ -255,8 +254,7 @@ export const finishCellEdit = async (
   }
   if (finalText !== '' || typeof edit === 'string' || !edit.created || cell.fields.length !== 1) return
   if (await carriesData(tx, row)) return
-  const projected = childContentsToEncodedPropertyValue(cell.schema, cell.values)
-  if (cell.stored !== undefined && !jsonValuesEqual(cell.stored, projected)) return
+  if (cell.stored !== undefined && !rowsProjectToValue(cell.schema, cell.values, cell.stored)) return
   const peers = cell.values.filter(value => value.id !== id)
   if (peers.length && (!memberCodecOf(cell.schema.codec) ||
     !jsonValuesEqual(childContentsToEncodedPropertyValue(cell.schema, [...peers, '']),

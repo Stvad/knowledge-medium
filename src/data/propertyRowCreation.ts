@@ -1,11 +1,8 @@
 import {adoptOrCreatePropertySchema} from './propertySchemaCreation'
 import type {Block} from './block'
-import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema, type BlockData} from './api'
-import {fieldValueChildren, propertyFieldContent, scalarValueRow} from './propertyChildren'
+import {memberCodecOf, scopePoliciesEquivalent, PropertySchemaScopeMismatchError, type Tx, type AnyPropertySchema, type AnyResolvedPropertySchema} from './api'
+import {fieldRowsForSchema, fieldValueChildren, propertyFieldContent, scalarValueRow} from './propertyChildren'
 import {storedPropertyValue} from './rowProperty'
-
-const fieldRowsFor = (rows: readonly BlockData[], fieldId: string) =>
-  rows.filter(row => row.isFieldForm && row.referenceTargetId === fieldId)
 
 const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) => {
   const parent = await tx.get(owner.id)
@@ -16,7 +13,7 @@ const fieldContext = async (tx: Tx, owner: Block, requested: AnyPropertySchema) 
   if (!scopePoliciesEquivalent(requested.changeScope, schema.changeScope)) {
     throw new PropertySchemaScopeMismatchError(schema.name, requested.changeScope, schema.changeScope)
   }
-  const fields = fieldRowsFor(await tx.childrenOf(owner.id), schema.fieldId)
+  const fields = fieldRowsForSchema(await tx.childrenOf(owner.id), schema.fieldId)
   if (!fields.length && storedPropertyValue(parent.properties, schema.name) !== undefined) {
     throw new Error('This property has a stored value awaiting its field row. Open the property panel to inspect it.')
   }

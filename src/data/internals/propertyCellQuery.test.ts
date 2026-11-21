@@ -52,6 +52,49 @@ describe('core.propertyCell', () => {
     expect((await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()).fields).toEqual([])
   })
 
+  it('marks value rows with live nested blocks in the owner workspace', async () => {
+    await raw('definition', null, 'a', {properties: {types: ['property-schema']}})
+    await raw('owner', null, 'a')
+    await raw('field', 'owner', 'a', {field: true, target: 'definition'})
+    await raw('value', 'field', 'a')
+    await raw('empty-value', 'field', 'b')
+    await raw('nested', 'value', 'a', {field: true, target: 'definition'})
+    await raw('deleted-nested', 'empty-value', 'a', {deleted: true})
+    await raw('foreign-nested', 'empty-value', 'b', {workspace: 'other'})
+    const {repo} = createTestRepo({db: db.db})
+    const result = await repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'}).load()
+    expect(result.fields[0]?.values.map(value => [value.id, value.hasChildren]))
+      .toEqual([['value', true], ['empty-value', false]])
+    expect(repo.block('value').peek()).not.toHaveProperty('hasChildren')
+  })
+
+  it('reacts to first and last nested membership without invalidating for nested text or siblings', async () => {
+    await raw('definition', null, 'a', {properties: {types: ['property-schema']}})
+    await raw('owner', null, 'a')
+    await raw('field', 'owner', 'a', {field: true, target: 'definition'})
+    await raw('value', 'field', 'a')
+    await raw('sibling', 'owner', 'b')
+    const {repo} = createTestRepo({db: db.db, user: {id: 'u'}})
+    const handle = repo.query.propertyCell({ownerId: 'owner', fieldId: 'definition'})
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      expect((await handle.load()).fields[0]?.values[0]?.hasChildren).toBe(false)
+      const beforeCreate = repo.handleStore.metrics.loaderInvalidations
+      await repo.tx(tx => tx.create({
+        id: 'nested', workspaceId: 'ws', parentId: 'value', orderKey: 'a', content: 'before',
+      }), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => expect(handle.peek()?.fields[0]?.values[0]?.hasChildren).toBe(true))
+      expect(repo.handleStore.metrics.loaderInvalidations).toBeGreaterThan(beforeCreate)
+      const beforeEdits = repo.handleStore.metrics.loaderInvalidations
+      await repo.tx(tx => tx.update('nested', {content: 'after'}), {scope: ChangeScope.BlockDefault})
+      await repo.tx(tx => tx.update('sibling', {content: 'ordinary edit'}), {scope: ChangeScope.BlockDefault})
+      expect(repo.handleStore.metrics.loaderInvalidations).toBe(beforeEdits)
+      await repo.tx(tx => tx.delete('nested'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => expect(handle.peek()?.fields[0]?.values[0]?.hasChildren).toBe(false))
+      expect(repo.handleStore.metrics.loaderInvalidations).toBeGreaterThan(beforeEdits)
+    } finally { unsubscribe() }
+  })
+
   it('returns no cell for a deleted owner even with live field rows', async () => {
     await raw('definition', null, 'a', {properties: {types: ['property-schema']}})
     await raw('owner', null, 'a', {deleted: true})

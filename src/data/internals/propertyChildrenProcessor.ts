@@ -61,9 +61,11 @@ import {
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
   scalarValueRow,
+  scalarDuplicates,
   valueChildContentToEncoded,
   getPropertyFieldTargetId,
   fieldValueChildren,
+  fieldRowsForSchema,
   isFieldValueChild,
   isPropertyFieldInstance,
   memberKeysFor,
@@ -256,15 +258,6 @@ export const projectFieldRowValues = (
   return childContentsToEncodedPropertyValue(
     schema, unionValuesAcrossFieldRows(schema, perFieldRow))
 }
-
-// §9 selection: the bit + target pair (the JS twin of
-// SELECT_PROPERTY_FIELD_CHILD_SQL) — without the bit an unmarked
-// `((fieldId))` link row would be selected as the field row.
-export const fieldRowsForSchema = (
-  children: readonly BlockData[],
-  fieldId: string,
-): BlockData[] => children.filter(child =>
-  child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
 
 /** Re-project ONE owner's cell for every field of it this pass touched.
  *
@@ -962,10 +955,8 @@ const reconcileSingleValueChild = async (
   // dual-writes of the same value); DIVERGENT siblings are a surfaced
   // conflict — from a merge or divergent concurrent write — and are kept as
   // peer values, not silently collapsed onto the winner.
-  for (const duplicate of values) {
-    if (duplicate !== primary && duplicate.content === content) {
-      await collapseDuplicateValueChild(tx, primary.id, duplicate)
-    }
+  for (const duplicate of scalarDuplicates(values, primary, content)) {
+    await collapseDuplicateValueChild(tx, primary.id, duplicate)
   }
 }
 
