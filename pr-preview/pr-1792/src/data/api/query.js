@@ -1,1 +1,1 @@
-export{Tft as defineQuery}from"../../../chunks/app-HXWsnutT.js";
+export{Oft as defineQuery}from"../../../chunks/app-BJtOJ-B8.js";

@@ -1,1 +1,1 @@
-export{OM as shortcutHelpToggle}from"../../../chunks/app-HXWsnutT.js";
+export{OM as shortcutHelpToggle}from"../../../chunks/app-BJtOJ-B8.js";
