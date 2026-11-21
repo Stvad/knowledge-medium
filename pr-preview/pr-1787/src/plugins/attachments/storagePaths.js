@@ -1,1 +1,1 @@
-export{YC as attachmentObjectPath,XC as authenticatedObjectUrl,ZC as deriveObjectKey,QC as storageObjectUrl}from"../../../chunks/app-4yNOVopP.js";
+export{YC as attachmentObjectPath,XC as authenticatedObjectUrl,ZC as deriveObjectKey,QC as storageObjectUrl}from"../../../chunks/app-B9-Lkc-1.js";
