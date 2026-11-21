@@ -258,7 +258,7 @@ export const projectFieldRowValues = (
 // §9 selection: the bit + target pair (the JS twin of
 // SELECT_PROPERTY_FIELD_CHILD_SQL) — without the bit an unmarked
 // `((fieldId))` link row would be selected as the field row.
-const fieldRowsForSchema = (
+export const fieldRowsForSchema = (
   children: readonly BlockData[],
   fieldId: string,
 ): BlockData[] => children.filter(child =>
@@ -912,7 +912,7 @@ export const reconcileFieldValueChildren = async (
 
 /** Mint one value child. `valueKey` is `content`'s `MemberKeys.content`, and
  *  `occurrence` counts the equal values before it — what its id derives from. */
-const createValueChild = (
+export const createValueChild = (
   tx: Tx,
   fieldRow: Pick<BlockData, 'id' | 'workspaceId'>,
   content: string,
@@ -966,7 +966,7 @@ const reconcileSingleValueChild = async (
   }
 }
 
-const freshSlots = (
+export const freshSlots = (
   values: readonly BlockData[],
   count: number,
 ): string[] => {
@@ -1343,5 +1343,35 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
       }
     }
     await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'full')
+  },
+})
+
+export const REPROJECT_CELL_EVENT = 'core.reprojectPropertyCell'
+
+interface ReprojectCell {ownerId: string; fieldId: string}
+
+declare module '../api/sameTxProcessor' {
+  interface SameTxEventRegistry {
+    'core.reprojectPropertyCell': ReprojectCell
+  }
+}
+
+/** A cell edit can change the projection without changing any source row,
+ * e.g. clearing a pending key. Projection writes must stay settled so
+ * materialization cannot interpret the removed key as a subtree delete. */
+export const REPROJECT_CELL_PROCESSOR = defineSameTxProcessor({
+  name: REPROJECT_CELL_EVENT,
+  watches: {kind: 'event', events: [REPROJECT_CELL_EVENT]},
+  settledWrites: true,
+  apply: async (event, ctx) => {
+    const affected: AffectedOwners = new Map()
+    const lookups = lookupsFor(ctx, event.workspaceId)
+    for (const emitted of event.emittedEvents) {
+      const {ownerId, fieldId} = emitted.payload as ReprojectCell
+      addAffectedProjection(affected, ownerId, fieldId, lookups)
+    }
+    for (const [ownerId, fields] of affected) {
+      await reprojectOwner(ctx.tx, ownerId, fields, 'full')
+    }
   },
 })
