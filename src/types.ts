@@ -128,6 +128,8 @@ export interface BlockContextType {
     editorTooltipParent?: HTMLElement
     /** Suppress property-creation (`::`) and type-tagging (`#`) completions. */
     disableStructuralCompletions?: boolean
+    /** Refuse the Split block action for editors on this surface. */
+    disableBlockSplit?: boolean
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
      *  one rendered occurrence of that block, even when the same block is

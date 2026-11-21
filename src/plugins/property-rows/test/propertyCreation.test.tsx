@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import {Suspense, useEffect} from 'react'
-import {ActionContextTypes, type BlockShortcutDependencies} from '@/shortcuts/types'
+import {Suspense, useEffect, type ReactNode} from 'react'
+import {ActionContextTypes, type ActionHandlerResult, type BlockShortcutDependencies} from '@/shortcuts/types'
+import {actionDispatchWrap} from '@/shortcuts/actionDispatch'
 import {getDefaultActionGroups} from '@/shortcuts/defaultShortcuts'
 import {useActionContext} from '@/shortcuts/useActionContext'
 import {HotkeyReconciler} from '@/shortcuts/HotkeyReconciler'
@@ -15,7 +16,7 @@ import {kernelDataExtension} from '@/data/kernelDataExtension'
 import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
-import {resolveFacetRuntimeSync, type FacetRuntime} from '@/facets/facet'
+import {resolveFacetRuntimeSync, type AppExtension, type FacetRuntime} from '@/facets/facet'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
 import {actionContextsFacet, actionsFacet} from '@/extensions/core'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
@@ -44,6 +45,10 @@ import {propertyRowsPlugin} from '../index'
 import {acceptCompletion, startCompletion, type CompletionSource} from '@codemirror/autocomplete'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
+import {commandPalettePlugin} from '@/plugins/command-palette'
+import {CommandPalette} from '@/plugins/command-palette/CommandPalette'
+import {commandPaletteToggle} from '@/plugins/command-palette/toggleStore'
+import type {BlockContextType} from '@/types'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -71,7 +76,7 @@ const TestFooter = () => <div data-testid="children-footer-marker">footer marker
 let db: TestDb
 let repo: Repo
 let runtime: FacetRuntime
-const configureRuntime = () => {
+const configureRuntime = (...additionalExtensions: AppExtension[]) => {
   const defaults = getDefaultActionGroups({repo})
   runtime = resolveFacetRuntimeSync([
     kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
@@ -83,6 +88,7 @@ const configureRuntime = () => {
     [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions].map(action => actionsFacet.of(action)),
     props.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
     typeSeedsFacet.of(expectedType, {source: 'test'}),
+    ...additionalExtensions,
   ])
   repo.setFacetRuntime(runtime)
 }
@@ -92,6 +98,7 @@ afterAll(async () => { await db.cleanup() })
 afterEach(() => {
   vi.restoreAllMocks()
   cleanup()
+  commandPaletteToggle.close()
   window.removeEventListener('selectionchange', swallowSelectionChange, true)
   vi.unstubAllGlobals()
   __resetLazyMountRegistryForTesting()
@@ -134,7 +141,12 @@ const ContextProbe = () => {
   return null
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, disableStructuralCompletions?: boolean) => render(
+const mount = (
+  mode: 'all' | 'non-hidden' | 'none' = 'non-hidden',
+  root = OWNER,
+  overrides: Partial<BlockContextType> = {},
+  extra?: ReactNode,
+) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
@@ -144,10 +156,11 @@ const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER,
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root}}>
             <GlobalShortcuts/>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
-              <NestedBlockContextProvider overrides={{disableStructuralCompletions}}>
+              <NestedBlockContextProvider overrides={overrides}>
                 <BlockComponent blockId={root}/>
               </NestedBlockContextProvider>
             </PropertyDisplayScopeContext>
+            {extra}
           </BlockContextProvider>
         </Suspense>
       </ActiveContextsProvider>
@@ -225,7 +238,7 @@ describe('ordinary property creation in the outline', () => {
     const fieldId = await repo.mutate.createChild({parentId: OWNER, content: '::'})
     await choosePropertyField(repo.block(OWNER), stage, repo.block(fieldId), '::', () => true)
     const valueId = await repo.mutate.createChild({parentId: fieldId})
-    mount('all', OWNER, true)
+    mount('all', OWNER, {disableStructuralCompletions: true})
     await act(() => focusBlock(repo.block(PANEL), valueId, {edit: true, renderScopeId: 'creation-test'}))
     await screen.findByRole('option', {name: /In progress/})
     const view = EditorView.findFromDOM(document.querySelector<HTMLElement>('.cm-editor')!)!
@@ -371,7 +384,7 @@ describe('ordinary property creation in the outline', () => {
     {text: '#Expected', label: expectedType.label, disabled: true},
   ])('routes structural completion for $text (disabled: $disabled)', async ({text, label, disabled}) => {
     const id = await repo.mutate.createChild({parentId: OWNER, content: text})
-    mount('all', OWNER, disabled)
+    mount('all', OWNER, {disableStructuralCompletions: disabled})
     await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
     const view = await waitFor(() => {
       const node = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
@@ -387,6 +400,40 @@ describe('ordinary property creation in the outline', () => {
     if (disabled) expect(labels).toEqual([])
     else expect(labels).toContain(label)
   }, 20_000) // The seeded outline and editor mount took 1.3 s in isolation.
+
+  it.each([false, true])('runs Split block from the command palette (blocked: %s)', async disableBlockSplit => {
+    const dispatched = vi.fn<(result: ActionHandlerResult) => void>()
+    configureRuntime(commandPalettePlugin, actionDispatchWrap({
+      actionId: 'split_block_cm',
+      wrap: (deps, trigger, next, dispatch) => {
+        const result = next(deps, trigger, dispatch)
+        dispatched(result)
+        return result
+      },
+    }))
+    mount('all', NOTE, {disableBlockSplit}, <CommandPalette/>)
+    await act(() => focusBlock(repo.block(PANEL), NOTE, {edit: true, renderScopeId: 'creation-test'}))
+    const editor = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.cm-editor')
+      expect(node).not.toBeNull()
+      return EditorView.findFromDOM(node!)!
+    })
+    act(() => {
+      editor.focus()
+      editor.dispatch({selection: {anchor: 'Existing'.length}})
+      commandPaletteToggle.open()
+    })
+    const item = await screen.findByText('Split block at cursor')
+    await act(async () => {
+      fireEvent.click(item)
+      expect(dispatched).toHaveBeenCalledOnce()
+      await dispatched.mock.lastCall?.[0]
+    })
+
+    const children = await repo.query.children({id: NOTE, propertyChildren: 'all'}).load()
+    expect(children.map(block => block.content)).toEqual(disableBlockSplit ? [] : [' note'])
+    expect((await repo.load(NOTE))?.content).toBe(disableBlockSplit ? 'Existing note' : 'Existing')
+  })
 
   it('opens native completion and an ordinary first child', async () => {
     const id = await repo.mutate.createChild({parentId: OWNER, content: ''})
