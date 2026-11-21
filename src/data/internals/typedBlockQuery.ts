@@ -18,7 +18,7 @@ import { recognizedFieldRowSql, NO_REGISTRY_RECOGNITION_PARAMS, type Recognition
  *  and stays, where `core.subtree`'s `'none'` prunes the whole branch: that
  *  one answers what an outline draws, this one what counts as note text.
  *  Binds {@link RecognitionParams} twice. */
-export const NOT_PROPERTY_ROW_SQL = `
+const NOT_PROPERTY_ROW_SQL = `
     NOT (${recognizedFieldRowSql('b')})
     AND NOT EXISTS (
       SELECT 1 FROM blocks field_row
@@ -38,6 +38,11 @@ export interface CompiledTypedBlockQuery {
   readonly sql: string
   readonly params: readonly unknown[]
 }
+
+export const notPropertyRow = (recognition: RecognitionParams): CompiledTypedBlockQuery => ({
+  sql: NOT_PROPERTY_ROW_SQL,
+  params: [...recognition, ...recognition],
+})
 
 export type TypedBlockQueryProjection = 'rows' | 'ids' | 'count'
 
@@ -181,18 +186,27 @@ const STORAGE_TEST: Readonly<Record<WhereStorage, (cell: string) => string>> = {
 interface Comparable {
   /** {@link STORAGE_TEST} for this cell. */
   readonly test: string
+  readonly storage: WhereStorage
   readonly encode: (value: unknown) => WhereValue
 }
 
-const comparableCell = (name: string, schema: AnyPropertySchema, cell: string): Comparable => {
-  const where = schema.codec.where
-  if (!where) {
+const comparableCell = (
+  name: string,
+  schema: AnyPropertySchema | undefined,
+  cell: string,
+  use: 'where' | 'order' = 'where',
+): Comparable => {
+  if (!schema?.codec.where) {
+    if (use === 'order') {
+      throw new Error(`[queryBlocks] order requires a registered scalar property; got ${JSON.stringify(name)}`)
+    }
     throw new Error(
       `[queryBlocks] where.${name} is not where-queryable; ` +
-      `codec type ${JSON.stringify(schema.codec.type)} doesn't support comparison predicates ` +
+      `codec type ${JSON.stringify(schema?.codec.type)} doesn't support comparison predicates ` +
       '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
     )
   }
+  const where = schema.codec.where
   // A codec from a DB-stored extension is never type-checked against `WhereStorage`.
   if (!Object.hasOwn(STORAGE_TEST, where.storage)) {
     throw new Error(
@@ -202,6 +216,7 @@ const comparableCell = (name: string, schema: AnyPropertySchema, cell: string): 
   }
   return {
     test: STORAGE_TEST[where.storage](cell),
+    storage: where.storage,
     encode: value => {
       try {
         return where.encode(value)
@@ -475,6 +490,7 @@ const dedupePredicates = (predicates: readonly BlockPredicate[] | undefined): Bl
 
 export const normalizeTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
+  projection: TypedBlockQueryProjection = 'rows',
 ): ResolvedTypedBlockQuery => ({
   workspaceId: query.workspaceId,
   parentId: query.parentId,
@@ -487,14 +503,16 @@ export const normalizeTypedBlockQuery = (
   match: dedupePredicates(query.match),
   exclude: dedupePredicates(query.exclude),
   anyOf: query.anyOf === undefined ? undefined : dedupePredicates(query.anyOf),
-  order: query.order,
+  order: projection === 'count' ? undefined : query.order ?? 'created-asc',
 })
 
-export const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
+export const predicateGroups = (query: ResolvedTypedBlockQuery) => [query.match ?? [], query.exclude ?? [], query.anyOf ?? []]
+
+const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
   predicates.some(p => p.scope === 'ancestor')
 
 export const needsAncestorChain = (query: ResolvedTypedBlockQuery): boolean =>
-  [query.match, query.exclude, query.anyOf].some(group => group !== undefined && hasAncestorScope(group))
+  predicateGroups(query).some(hasAncestorScope)
 
 const isSelfScope = (predicate: BlockPredicate): boolean =>
   (predicate.scope ?? 'self') === 'self'
@@ -536,6 +554,14 @@ const selfPredicateNarrows = (predicate: BlockPredicate, context: WhereContext):
   predicate.referencedBy !== undefined ||
   boundsByWhere(predicate.where, context)
 
+/** Bounding the SQL walk and receiving a new-row signal count different predicates. */
+export const hasCandidateAxis = (
+  query: ResolvedTypedBlockQuery,
+  predicateCounts: (predicate: BlockPredicate) => boolean,
+): boolean =>
+  query.parentId !== undefined || (query.types?.length ?? 0) > 0 ||
+  predicateCounts(query) || (query.match ?? []).some(predicateCounts) || query.anyOf?.every(predicateCounts) === true
+
 /** Ancestor-scope predicates require at least one candidate-bounding
  *  filter; otherwise the recursive walk seeds from every live block
  *  in the workspace. Throw before the walk runs — callers that
@@ -543,18 +569,7 @@ const selfPredicateNarrows = (predicate: BlockPredicate, context: WhereContext):
  *  before issuing the dep SQL so an invalid query doesn't trigger
  *  exactly the expensive walk the gate is meant to prevent. */
 export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, context: WhereContext): void => {
-  const matchPredicates = query.match ?? []
-  if (!needsAncestorChain(query)) return
-
-  const types = query.types ?? []
-  const hasGate =
-    query.parentId !== undefined ||
-    query.referencedBy !== undefined ||
-    types.length > 0 ||
-    boundsByWhere(query.where, context) ||
-    matchPredicates.some(p => isSelfScope(p) && selfPredicateNarrows(p, context)) ||
-    query.anyOf?.every(p => isSelfScope(p) && selfPredicateNarrows(p, context)) === true
-  if (!hasGate) {
+  if (needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p, context))) {
     throw new Error(
       '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
       '(parentId, types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
@@ -567,7 +582,7 @@ const candidateSource = (
   normalized: ResolvedTypedBlockQuery,
   context: WhereContext,
   recognition: RecognitionParams,
-): {sql: string; params: unknown[]} => {
+): {sql: string; params: unknown[]; distinct: boolean} => {
   const types = normalized.types ?? []
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
@@ -624,7 +639,7 @@ const candidateSource = (
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
     } else if (typeof normalized.order === 'object' && !types.length &&
-      !normalized.where && !matchPredicates.length && !excludePredicates.length && normalized.anyOf === undefined) {
+      !normalized.where && predicateGroups(normalized).every(group => group.length === 0)) {
       // Arbitrary property sorts visit the workspace's live rows. Keep foreign workspaces off that path.
       index = ' INDEXED BY idx_blocks_workspace_active'
     }
@@ -638,8 +653,9 @@ const candidateSource = (
     params.push(normalized.parentId)
   }
   if (normalized.propertyChildren === 'none') {
-    clauses.push(NOT_PROPERTY_ROW_SQL)
-    params.push(...recognition, ...recognition)
+    const clause = notPropertyRow(recognition)
+    clauses.push(clause.sql)
+    params.push(...clause.params)
   }
 
   if (normalized.where !== undefined) {
@@ -675,7 +691,9 @@ const candidateSource = (
     params.push(...compiled.params)
   }
 
-  return {sql: `${from} WHERE ${clauses.join(' AND ')}`, params}
+  // An inner join can repeat a block through distinct matching types or reference fields.
+  const distinct = types.length > 1 || normalized.referencedBy !== undefined
+  return {sql: `${from} WHERE ${clauses.join(' AND ')}`, params, distinct}
 }
 
 export const buildCandidatesCte = (
@@ -729,13 +747,12 @@ const resultOrderSql = (
   }
   if (typeof order === 'object') {
     const schema = schemas.get(order.property)
-    if (!schema?.codec.where || schema.codec.member || isRefCodec(schema.codec)) {
-      throw new Error(`[queryBlocks] order requires a registered scalar property; got ${JSON.stringify(order.property)}`)
-    }
     const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
-    const {test} = comparableCell(order.property, schema, cell)
+    const {test, storage} = comparableCell(order.property, schema, cell, 'order')
     const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
-    return `CASE WHEN ${test} THEN json_extract(${cell}) END ${direction} NULLS LAST, b.id`
+    // SQLite NOCASE folds ASCII; accented letters retain code-point order.
+    const collation = storage === 'text' ? ' COLLATE NOCASE' : ''
+    return `CASE WHEN ${test} THEN json_extract(${cell}) END${collation} ${direction} NULLS LAST, b.id`
   }
   return `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`
 }
@@ -745,7 +762,7 @@ export const compileTypedBlockQuery = (
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams; fields?: Fields} = {},
 ): CompiledTypedBlockQuery => {
-  const normalized = normalizeTypedBlockQuery(query)
+  const normalized = normalizeTypedBlockQuery(query, opts.projection)
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
 
@@ -754,15 +771,13 @@ export const compileTypedBlockQuery = (
 
   const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)
   const params = source.params
-  const order = resultOrderSql(normalized, propertySchemas)
   const isCount = opts.projection === 'count'
   const select = opts.projection === 'ids' ? 'b.id AS id' : buildQualifiedBlockColumnsSql('b')
-  const suffix = isCount ? '' : `ORDER BY ${order}${opts.limit === undefined ? '' : ' LIMIT ?'}`
+  const suffix = isCount ? '' : `ORDER BY ${resultOrderSql(normalized, propertySchemas)}${opts.limit === undefined ? '' : ' LIMIT ?'}`
   if (!needsAncestorChain(normalized)) {
-    const duplicates = (normalized.types?.length ?? 0) > 1 || normalized.referencedBy !== undefined
     const projection = isCount
-      ? `COUNT(${duplicates ? 'DISTINCT b.id' : '*'}) AS count`
-      : `${duplicates ? 'DISTINCT ' : ''}${select}`
+      ? `COUNT(${source.distinct ? 'DISTINCT b.id' : '*'}) AS count`
+      : `${source.distinct ? 'DISTINCT ' : ''}${select}`
     if (!isCount && opts.limit !== undefined) params.push(opts.limit)
     return {sql: `SELECT ${projection} ${source.sql} ${suffix}`, params}
   }

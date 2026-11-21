@@ -202,6 +202,19 @@ describe('typed queries for table rows', () => {
     expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
   })
 
+  it('sorts ASCII text without case and keeps accented letters after z', async () => {
+    await create({id: 'parent'})
+    for (const word of ['Banana', 'apple', 'zebra', 'Éclair']) {
+      await create({id: word, parentId: 'parent', properties: {[statusProp.name]: word}})
+    }
+    for (const direction of ['asc', 'desc'] as const) {
+      const ordered = ['apple', 'Banana', 'zebra', 'Éclair']
+      expect(await env.repo.query.typedBlockIds({
+        workspaceId: WS, parentId: 'parent', order: {property: statusProp.name, direction},
+      }).load()).toEqual(direction === 'asc' ? ordered : ordered.reverse())
+    }
+  })
+
   it('sorts numeric cells in SQL with deterministic ties and treats malformed values as missing', async () => {
     await create({id: 'parent'})
     await create({id: 'a-ten', parentId: 'parent', properties: {[priorityProp.name]: 10}})
@@ -243,6 +256,9 @@ describe('typed queries for table rows', () => {
       const before = env.repo.handleStore.metrics.loaderInvalidations
       await env.repo.tx(tx => tx.update('a', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
       await create({id: 'elsewhere', parentId: 'other-parent'})
+      await env.repo.tx(
+        tx => tx.move('elsewhere', {parentId: null, orderKey: 'a'}), {scope: ChangeScope.BlockDefault},
+      )
       expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
 
       await env.repo.tx(
