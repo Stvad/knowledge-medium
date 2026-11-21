@@ -47,9 +47,8 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   // plugin and a pane just sits on the dead page until you navigate away —
   // the pre-existing behaviour, not data loss.
   panelMountsFacet.of(panelContentRecoveryMount, {source: 'spatial-navigation'}),
-  // Core's own surface exclusion — see `exclusionsFacet.ts`. A plugin with a
-  // custom `data-block-surface` (grid/kanban/canvas renderer) contributes its
-  // own surface name here to exempt its cells from the arrow-key walker.
+  // A plugin can contribute the name it sets on the block context as
+  // spatialNavigationSurface to exempt its blocks from the arrow-key walker.
   spatialNavExclusionsFacet.of('breadcrumb', {source: 'spatial-navigation'}),
 ])
 
