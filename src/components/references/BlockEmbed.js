@@ -1,1 +1,1 @@
-export{sP as BlockEmbed}from"../../../chunks/app-bdLp_rkC.js";
+export{lP as BlockEmbed}from"../../../chunks/app-B_AkIzxA.js";

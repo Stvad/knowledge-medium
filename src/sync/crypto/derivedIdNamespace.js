@@ -1,1 +1,1 @@
-export{Qct as deriveWorkspaceIdNamespace}from"../../../chunks/app-bdLp_rkC.js";
+export{tlt as deriveWorkspaceIdNamespace}from"../../../chunks/app-B_AkIzxA.js";

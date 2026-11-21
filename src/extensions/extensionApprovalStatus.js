@@ -1,1 +1,1 @@
-export{TF as ExtensionApprovalStatusProvider,EF as ExtensionApprovalStatusStore,DF as useExtensionApprovalStatus,OF as useExtensionApprovalStatuses}from"../../chunks/app-bdLp_rkC.js";
+export{DF as ExtensionApprovalStatusProvider,OF as ExtensionApprovalStatusStore,kF as useExtensionApprovalStatus,AF as useExtensionApprovalStatuses}from"../../chunks/app-B_AkIzxA.js";

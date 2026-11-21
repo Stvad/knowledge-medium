@@ -1,1 +1,1 @@
-export{jp as ANCHOR_BADGES,Mp as useAnchorState}from"../../../chunks/app-bdLp_rkC.js";
+export{jp as ANCHOR_BADGES,Mp as useAnchorState}from"../../../chunks/app-B_AkIzxA.js";

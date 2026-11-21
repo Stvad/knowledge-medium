@@ -1,1 +1,1 @@
-export{kn as useFrameThemeCss}from"../../../chunks/app-bdLp_rkC.js";
+export{kn as useFrameThemeCss}from"../../../chunks/app-B_AkIzxA.js";

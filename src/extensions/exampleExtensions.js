@@ -1,1 +1,1 @@
-export{WP as exampleExtensions,GP as insertExampleExtensionsUnder}from"../../chunks/app-bdLp_rkC.js";
+export{KP as exampleExtensions,qP as insertExampleExtensionsUnder}from"../../chunks/app-B_AkIzxA.js";
