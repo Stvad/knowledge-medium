@@ -106,6 +106,17 @@ describe('rejected uploads', () => {
     expect(await queued()).toEqual([{txId: 99, op: 'PATCH', type: 'blocks', id: a, data: {content: 'first'}}])
   })
 
+  it('requeues a payload that is not a block write unchanged', async () => {
+    const {a} = await setup()
+    await shared.db.execute('DELETE FROM ps_crud')
+    const envelope = {op: 'DELETE', type: 'blocks', id: a}
+    await shared.db.execute(`INSERT INTO ps_crud_rejected (original_id, tx_id, data, rejected_at) VALUES (1, 98, ?, 1)`,
+      [JSON.stringify(envelope)])
+
+    await retryRejectedUpload(shared.db, 98)
+    expect(await queued()).toEqual([{txId: 98, ...envelope}])
+  })
+
   it('refuses, and keeps the quarantine, when a row it wrote is gone locally', async () => {
     const {a} = await setup()
     await rejectQueue()
