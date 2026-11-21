@@ -1,1 +1,0 @@
-export{oF as ExtensionPromptSurface,sF as extensionPromptsExtension}from"../../../chunks/app-Bn5XB1sD.js";

@@ -1,1 +1,0 @@
-export{ri as openExtensionsSettingsAction}from"../../../chunks/app-Bn5XB1sD.js";

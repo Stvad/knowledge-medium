@@ -1,1 +1,0 @@
-export{Kat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,qat as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Jat as __resetLayoutSessionIdForTesting,Yat as getLayoutSessionId,Xat as isInstalledAppDisplayMode,Zat as readOrCreateLayoutSessionId}from"../../chunks/app-bAaplrjn.js";

@@ -1,1 +1,0 @@
-export{BI as LazyBlockComponent}from"../../chunks/app-bAaplrjn.js";

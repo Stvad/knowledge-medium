@@ -1,1 +1,0 @@
-export{_g as extensionApiCatalog,vg as extensionApiRuntimeExports}from"../../chunks/app-Bn5XB1sD.js";

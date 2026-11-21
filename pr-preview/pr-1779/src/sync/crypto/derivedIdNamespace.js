@@ -1,1 +1,0 @@
-export{rct as deriveWorkspaceIdNamespace}from"../../../chunks/app-bAaplrjn.js";

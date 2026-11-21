@@ -1,1 +1,0 @@
-export{r5 as kernelDataExtension}from"../../chunks/app-bAaplrjn.js";

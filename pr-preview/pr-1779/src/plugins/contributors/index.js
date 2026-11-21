@@ -1,1 +1,0 @@
-export{vh as contributorsPlugin}from"../../../chunks/app-bAaplrjn.js";

@@ -1,1 +1,0 @@
-export{i5 as kernelDataExtension}from"../../chunks/app-Bn5XB1sD.js";

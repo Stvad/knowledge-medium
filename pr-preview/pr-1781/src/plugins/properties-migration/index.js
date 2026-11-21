@@ -1,1 +1,0 @@
-export{Xo as migratePropertiesToBlocksAction,Ko as propertiesMigrationPlugin}from"../../../chunks/app-Bn5XB1sD.js";

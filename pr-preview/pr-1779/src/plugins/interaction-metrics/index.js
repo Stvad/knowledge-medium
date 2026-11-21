@@ -1,1 +1,0 @@
-export{ua as interactionMetricsPlugin}from"../../../chunks/app-bAaplrjn.js";

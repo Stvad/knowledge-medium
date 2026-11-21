@@ -1,1 +1,0 @@
-export{eH as BlockProperties}from"../../chunks/app-bAaplrjn.js";

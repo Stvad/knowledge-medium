@@ -1,1 +1,0 @@
-export{tft as defineQuery}from"../../../chunks/app-bAaplrjn.js";

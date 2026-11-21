@@ -1,1 +1,0 @@
-export{$x as attachmentsPlugin}from"../../../chunks/app-bAaplrjn.js";
