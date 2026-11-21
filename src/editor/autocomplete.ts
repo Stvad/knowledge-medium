@@ -1,7 +1,6 @@
 /** Central autocompletion installer.
  *
- *  Calls `autocompletion()` once per editor with completions enabled. No `override` —
- *  sources are collected from CodeMirror's `EditorState.languageData`
+ *  Sources are collected from CodeMirror's `EditorState.languageData`
  *  facet (the `autocomplete` field on each data entry), which plugins
  *  contribute to via their own `codeMirrorExtensionsFacet` registration.
  *  This is the CM-native contributory path; multiple language-data
@@ -16,7 +15,15 @@ import {
 } from './codeMirrorExtensions.ts'
 import type { AppExtension } from '@/facets/facet.js'
 
-const editorAutocompleteContribution: CodeMirrorExtensionContribution = ({disableEditorCompletions}) => disableEditorCompletions ? [] : [
+/** Keep completion state installed while disabling its sources. In-flight
+ *  completion callbacks still read that state after reconfiguration. */
+export const disabledEditorAutocomplete = autocompletion({
+  override: [],
+  activateOnTyping: false,
+  defaultKeymap: false,
+})
+
+const markdownEditorAutocomplete = [
   autocompletion({
     defaultKeymap: false,
     icons: false,
@@ -33,6 +40,9 @@ const editorAutocompleteContribution: CodeMirrorExtensionContribution = ({disabl
   }),
   keymap.of(completionKeymapWithEscapeFallthrough),
 ]
+
+const editorAutocompleteContribution: CodeMirrorExtensionContribution = ({disableEditorCompletions}) =>
+  disableEditorCompletions ? [disabledEditorAutocomplete] : markdownEditorAutocomplete
 
 export const editorAutocompleteExtension: AppExtension =
   codeMirrorExtensionsFacet.of(editorAutocompleteContribution, {source: 'editor-autocomplete'})

@@ -4,7 +4,7 @@
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {act, cleanup, render, screen, waitFor} from '@testing-library/react'
-import {currentCompletions, startCompletion} from '@codemirror/autocomplete'
+import {completionStatus, currentCompletions, startCompletion} from '@codemirror/autocomplete'
 import {isolateHistory} from '@codemirror/commands'
 import {EditorView} from '@codemirror/view'
 import {useState} from 'react'
@@ -94,14 +94,16 @@ describe('DraftEditor', () => {
     )
   }
 
-  const mount = async (disableEditorCompletions = false): Promise<EditorView> => {
-    render(
-      <AppRuntimeContextProvider value={repo.facetRuntime!}>
-        <BlockContextProvider initialValue={{disableEditorCompletions}}>
-          <Harness/>
-        </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
+  const draft = (disableEditorCompletions?: boolean) => (
+    <AppRuntimeContextProvider value={repo.facetRuntime!}>
+      <BlockContextProvider initialValue={{disableEditorCompletions}}>
+        <Harness/>
+      </BlockContextProvider>
+    </AppRuntimeContextProvider>
+  )
+
+  const mount = async (disableEditorCompletions?: boolean): Promise<EditorView> => {
+    render(draft(disableEditorCompletions))
     const view = EditorView.findFromDOM(await screen.findByLabelText('New comment'))!
     act(() => { view.focus() })
     return view
@@ -140,9 +142,30 @@ describe('DraftEditor', () => {
     const view = await mount(true)
     type(view, '[[Laun')
     expect(view.state.doc.toString()).toBe('[[Laun')
-    act(() => { expect(startCompletion(view)).toBe(false) })
+    act(() => { startCompletion(view) })
+    expect(completionStatus(view.state)).toBeNull()
     press(view, {key: 'Enter'})
     expect(view.state.doc.toString()).toBe('[[Laun\n')
+  })
+
+  it('turns completions off while an open editor has a pending completion', async () => {
+    const {rerender} = render(draft())
+    const view = EditorView.findFromDOM(await screen.findByLabelText('New comment'))!
+    vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']})
+    try {
+      type(view, '[[Laun')
+      act(() => { startCompletion(view) })
+      expect(completionStatus(view.state)).toBe('pending')
+
+      rerender(draft(true))
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(60) })
+      expect(EditorView.findFromDOM(view.contentDOM)).toBe(view)
+      expect(completionStatus(view.state)).toBeNull()
+      expect(view.state.doc.toString()).toBe('[[Laun')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('submits on Mod+Enter, and makes a line break on Enter', async () => {

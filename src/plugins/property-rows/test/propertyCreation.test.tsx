@@ -39,8 +39,7 @@ import * as propertyCreation from '@/data/propertyRowCreation'
 import * as properties from '@/data/properties'
 import {choosePropertyField} from '@/data/propertyRowCreation'
 import {propertyRowsPlugin} from '../index'
-import {editorAutocompleteExtension} from '@/editor/autocomplete'
-import {acceptCompletion, startCompletion} from '@codemirror/autocomplete'
+import {acceptCompletion, completionStatus, startCompletion} from '@codemirror/autocomplete'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {blockChildrenFooterFacet} from '@/extensions/blockInteraction'
 
@@ -73,7 +72,7 @@ let runtime: FacetRuntime
 const configureRuntime = () => {
   const defaults = getDefaultActionGroups({repo})
   runtime = resolveFacetRuntimeSync([
-    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension, editorAutocompleteExtension,
+    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
     defaultRenderersExtension, propertyRowsPlugin, plainOutlinerPlugin, defaultEditorInteractionExtension,
     vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}),
     blockChildrenFooterFacet.of(() => TestFooter, {source: 'test-footer'}),
@@ -132,7 +131,7 @@ const ContextProbe = () => {
   return null
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, disableEditorCompletions = false) => render(
+const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, disableEditorCompletions?: boolean) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
@@ -373,7 +372,8 @@ describe('ordinary property creation in the outline', () => {
     })
     act(() => { view.focus(); view.dispatch({selection: {anchor: 2}}) })
     expect(view.state.doc.toString()).toBe('::')
-    act(() => { expect(startCompletion(view)).toBe(false) })
+    act(() => { startCompletion(view) })
+    expect(completionStatus(view.state)).toBeNull()
   }, 20_000) // The seeded outline and editor mount took 1.3 s in isolation.
 
   it('opens native completion and an ordinary first child', async () => {

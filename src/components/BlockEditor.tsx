@@ -21,6 +21,7 @@ import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
+import { disabledEditorAutocomplete } from '@/editor/autocomplete.js'
 import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
@@ -246,10 +247,13 @@ export const BlockEditor = ({
   // above the on-screen keyboard (see keyboardAwareScroll). Prepended so
   // a caller-supplied extension can still override anything if it needs to.
   const {extensions: providedExtensions, basicSetup, ...restCodeMirrorProps} = codeMirrorProps
-  const surfaceBasicSetup = useMemo(() => {
-    if (!disableEditorCompletions || basicSetup === false) return basicSetup
-    return {...(typeof basicSetup === 'object' ? basicSetup : {}), autocompletion: false}
-  }, [basicSetup, disableEditorCompletions])
+  // Source editors can get their completion engine from UIW's basic setup.
+  // Markdown editors resolve the opt-out through the app extension facet.
+  const suppressBasicAutocomplete = disableEditorCompletions && basicSetup !== false &&
+    (typeof basicSetup !== 'object' || basicSetup.autocompletion !== false)
+  const surfaceBasicSetup = useMemo(() => suppressBasicAutocomplete
+    ? {...(typeof basicSetup === 'object' ? basicSetup : {}), completionKeymap: false}
+    : basicSetup, [basicSetup, suppressBasicAutocomplete])
   const mergedExtensions = useMemo<Extension[]>(
     // Publish this editor's content flush into the view so completion
     // sources can persist pending keystrokes at accept time (see
@@ -263,9 +267,10 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
+      suppressBasicAutocomplete ? disabledEditorAutocomplete : [],
       editorTooltipParent ? tooltips({parent: editorTooltipParent}) : [],
     ],
-    [providedExtensions, flushDebouncers, editorTooltipParent],
+    [providedExtensions, flushDebouncers, editorTooltipParent, suppressBasicAutocomplete],
   )
 
   if (!blockEditData) return null
