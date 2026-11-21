@@ -1,1 +1,1 @@
-export{Qx as richPasteDecisionContribution}from"../../../chunks/app-DBvFP7wO.js";
+export{Qx as richPasteDecisionContribution}from"../../../chunks/app-DIasVfWu.js";

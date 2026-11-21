@@ -1,1 +1,1 @@
-export{SF as appUpdatePromptExtension}from"../../../chunks/app-DBvFP7wO.js";
+export{SF as appUpdatePromptExtension}from"../../../chunks/app-DIasVfWu.js";

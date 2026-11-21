@@ -1,1 +1,1 @@
-export{NG as isIOS,PG as isMacPlatform}from"../../chunks/app-DBvFP7wO.js";
+export{NG as isIOS,PG as isMacPlatform}from"../../chunks/app-DIasVfWu.js";
