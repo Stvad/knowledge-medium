@@ -197,6 +197,13 @@ describe('typed queries for table rows', () => {
     }
   })
 
+  it.each(['created', 'updated'])('refuses a date-only timestamp operand for %s', async name => {
+    for (const value of ['2026-01-01', {lte: '2026-01-01'}, {between: [0, '2026-01-01']}]) {
+      const query = {workspaceId: WS, where: {[name]: value}}
+      await expect(env.repo.query.typedBlockIds(query).load()).rejects.toThrow(/date-only.*instant/i)
+    }
+  })
+
   it('limits direct children after outline ordering while counting all live matches', async () => {
     await create({id: 'parent'})
     await create({id: 'other-parent'})

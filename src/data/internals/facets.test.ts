@@ -218,13 +218,13 @@ describe('kernel queryable timestamps', () => {
   const leapDay = Date.UTC(2024, 1, 29)
 
   it('binds milliseconds, Dates and canonical strings as timestamp parameters', () => {
-    for (const operand of [leapDay, new Date(leapDay), '2024-02-29T00:00:00.000Z', '2024-02-29']) {
+    for (const operand of [leapDay, new Date(leapDay), '2024-02-29T00:00:00.000Z']) {
       expect(created.operators.eq('candidate', operand)).toEqual({
         sql: 'candidate.created_at = ?',
         params: [leapDay],
       })
     }
-    expect(updated.operators.between('candidate', [leapDay, '2024-03-01'])).toEqual({
+    expect(updated.operators.between('candidate', [leapDay, '2024-03-01T00:00:00.000Z'])).toEqual({
       sql: 'coalesce(candidate.user_updated_at, candidate.updated_at) BETWEEN ? AND ?',
       params: [leapDay, Date.UTC(2024, 2, 1)],
     })

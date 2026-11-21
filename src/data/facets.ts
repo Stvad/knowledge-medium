@@ -336,10 +336,12 @@ const timestampOperand = (field: string, operand: unknown): number => {
   if (typeof operand === 'number' && Number.isFinite(operand)) return operand
   if (operand instanceof Date && Number.isFinite(operand.getTime())) return operand.getTime()
   if (typeof operand === 'string') {
-    const iso = /^\d{4}-\d{2}-\d{2}$/.test(operand) ? `${operand}T00:00:00.000Z` : operand
-    const date = new Date(iso)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(operand)) {
+      throw new TypeError(`Date-only timestamp operand for ${field}: supply an instant`)
+    }
+    const date = new Date(operand)
     // Date normalizes some invalid dates. Require the original spelling to round-trip.
-    if (Number.isFinite(date.getTime()) && date.toISOString() === iso) return date.getTime()
+    if (Number.isFinite(date.getTime()) && date.toISOString() === operand) return date.getTime()
   }
   throw new TypeError(`Expected a timestamp operand for ${field}`)
 }
