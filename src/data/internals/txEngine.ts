@@ -503,25 +503,30 @@ export class TxImpl implements Tx {
   ): Promise<PropertyBagWrites> {
     const names = changedPropertyNames(before?.properties ?? {}, after.properties)
     if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
-    if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
-    const schemas = new Map<string, ResolvedPropertySchema<unknown>>()
+    const childSchemas = await this.isPropertyChildBackedWorkspace(after.workspaceId)
+      ? new Map<string, ResolvedPropertySchema<unknown>>()
+      : null
     for (const name of names) {
       const resolution = resolver.resolve(name)
       const encoded = storedPropertyValue(after.properties, name)
       if (resolution.status !== 'resolved') {
+        // A cell can carry an unregistered key. A known definition with no
+        // local codec may own backlinks this writer cannot maintain.
+        if (childSchemas === null && resolution.reason !== 'behavior-unavailable') continue
         // Orphan cleanup cannot leave children owned by an existing definition.
         if (resolution.reason === 'definition-unavailable' && encoded === undefined) continue
         throw new PropertySchemaIdentityError(name, resolution.reason)
       }
+      if (childSchemas === null) continue
       const schema = resolution.schema
       if (encoded !== undefined) {
         const rejection = propertyCellValueRejection(schema, encoded)
         if (rejection) throw undecodableCellValueError(name, after.id, schema, rejection)
       }
-      schemas.set(name, schema)
+      childSchemas.set(name, schema)
     }
-    return schemas
+    return childSchemas
   }
 
   /** A row this tx brought back from a tombstone. Its eager child writes take

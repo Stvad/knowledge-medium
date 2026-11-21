@@ -2,6 +2,9 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 import {definitionProp, EXERCISE_DEF_TYPE} from '../../../../agent-extensions/strength-tracker/src/km/schema'
 import {ChangeScope, codecs, definePresetCore, seedProperty} from '@/data/api'
+import {BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams} from '@/data/blockSchema'
+import {makeBlockData} from '@/data/test/factories'
+import {drainStaged} from '@/data/test/syncCheckpoint'
 import {materializePropertySeeds, propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import {definitionSeedsFacet, valuePresetCoresFacet} from '@/data/facets'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -115,11 +118,14 @@ describe.each(['children', 'cell'] as const)('%s storage with a synced definitio
     expect(registry.definitionsByName.get(name)?.map(row => row.fieldId)).toEqual([fieldId])
     const read = await executeCommand({type: 'get-block', commandId: 'read', id: tabId}, host)
     expect(read).toMatchObject({properties: {[name]: next}})
-    if (mode === 'children' && seed === blockTagsConfigProp) {
+    if (seed === blockTagsConfigProp) {
       expect(host.repo.propertySchemas.get(name)).toBeUndefined()
       const refusal = {schemaName: name, reason: 'behavior-unavailable'}
       await expect(create(host, hostId, {[name]: first})).rejects.toMatchObject(refusal)
       await expect(update(host, tabId, {[name]: first})).rejects.toMatchObject(refusal)
+      await expect(executeCommand({
+        commandId: 'omit', contributorId: null, type: 'update-block', id: tabId, replaceProperties: true, properties: {},
+      }, host)).rejects.toMatchObject(refusal)
       expect(await stored(tabId)).toEqual(expected(next))
       expect(await count()).toBe(afterTab)
       return
@@ -132,58 +138,81 @@ describe.each(['children', 'cell'] as const)('%s storage with a synced definitio
     expect(await count()).toBe(afterTab + createCount)
 
     const hostSchema = host.repo.propertySchemas.get(name)
-    if (seed === blockTagsConfigProp) {
-      expect(hostSchema).toBeUndefined()
-    } else {
-      expect(hostSchema?.codec.type).toBe(seed.codec.type)
-      expect(host.repo.block(tabId).get(hostSchema!)).toEqual(next)
-      if (seed === ref) {
-        expect(hostSchema!.codec).toMatchObject({targetTypes: [EXERCISE_DEF_TYPE]})
-        expect(hostSchema!.codec.decode(null)).toBeUndefined()
-      }
+    expect(hostSchema?.codec.type).toBe(seed.codec.type)
+    expect(host.repo.block(tabId).get(hostSchema!)).toEqual(next)
+    if (seed === ref) {
+      expect(hostSchema!.codec).toMatchObject({targetTypes: [EXERCISE_DEF_TYPE]})
+      expect(hostSchema!.codec.decode(null)).toBeUndefined()
     }
   })
 })
 
-it('known gap: a cell write with an unavailable custom ref preset loses the property backlink', async () => {
-  await insertWorkspace('cell')
+describe('cell storage with an unavailable reference preset', () => {
   const preset = definePresetCore<string>({id: 'sample:reference', build: () => codecs.ref(), defaultValue: ''})
   const seed = seedProperty({
     seedKey: 'sample/property/target', revision: 1, name: 'sample:target',
     preset, defaultValue: '', changeScope: ChangeScope.BlockDefault,
   })
-  const tab = open('tab', [
-    definitionSeedsFacet.of(seed, {source: 'sample'}),
-    valuePresetCoresFacet.of(preset, {source: 'sample'}),
-  ])
-  await materializePropertySeeds(tab.repo, WS, [seed])
-  for (const target of targets) await create(tab, target)
-  const id = crypto.randomUUID()
-  const hostId = crypto.randomUUID()
-  const input = {[seed.name]: targets[0]}
-  await create(tab, id, input)
-  const tabRows = await stored(id)
-  expect(tabRows).toEqual({bag: input, rows: [], refs: [
-    {target_id: targets[0], alias: targets[0], source_field: seed.name},
-  ]})
-  const next = {[seed.name]: targets[1]}
-  await update(tab, id, next)
-  expect(await stored(id)).toEqual({bag: next, rows: [], refs: [
-    {target_id: targets[1], alias: targets[1], source_field: seed.name},
-  ]})
-  tab.repo.setActiveWorkspaceId(null)
+  const original = {[seed.name]: targets[0]}
+  const retarget = {[seed.name]: targets[1]}
+  const refRow = {source_field: seed.name, target_id: targets[0], alias: targets[0]}
+  const refusal = {name: 'PropertySchemaIdentityError', schemaName: seed.name, reason: 'behavior-unavailable'}
+  let host: AgentRuntimeContext
+  let owner: string
 
-  const host = open('host')
-  await host.repo.whenPropertyDefinitionsReady(WS)
-  const fieldId = propertyDefinitionBlockId(WS, seed.seedKey)
-  expect(host.repo.propertyDefinitions?.definitionsByName.get(seed.name)?.map(row => row.fieldId)).toEqual([fieldId])
-  expect(host.repo.propertySchemaResolverFor(WS).resolve(seed.name)).toEqual({
-    status: 'identity-unavailable', reason: 'behavior-unavailable',
+  beforeEach(async () => {
+    await insertWorkspace('cell')
+    const tab = open('tab', [
+      definitionSeedsFacet.of(seed, {source: 'sample'}),
+      valuePresetCoresFacet.of(preset, {source: 'sample'}),
+    ])
+    await materializePropertySeeds(tab.repo, WS, [seed])
+    for (const target of targets) await create(tab, target)
+    owner = crypto.randomUUID()
+    await create(tab, owner, original)
+    expect(await stored(owner)).toEqual({bag: original, rows: [], refs: [refRow]})
+    tab.repo.setActiveWorkspaceId(null)
+
+    host = open('host')
+    await host.repo.whenPropertyDefinitionsReady(WS)
+    expect(host.repo.propertySchemaResolverFor(WS).resolve(seed.name)).toEqual({
+      status: 'identity-unavailable', reason: 'behavior-unavailable',
+    })
   })
-  const before = await count()
-  await create(host, hostId, input)
-  expect(await stored(hostId)).toEqual({bag: input, rows: [], refs: []})
-  await update(host, id, input)
-  expect(await stored(id)).toEqual({bag: input, rows: [], refs: []})
-  expect(await count()).toBe(before + 1)
+
+  it('refuses a create and a retarget, preserving the tab-written value and backlink', async () => {
+    const before = await count()
+    await expect(create(host, crypto.randomUUID(), original)).rejects.toMatchObject(refusal)
+    await expect(update(host, owner, retarget)).rejects.toMatchObject(refusal)
+    expect(await stored(owner)).toEqual({bag: original, rows: [], refs: [refRow]})
+    expect(await count()).toBe(before)
+  })
+
+  it('preserves the value and backlink across content edits, merges and full bag replacements', async () => {
+    await executeCommand({commandId: 'edit', contributorId: null, type: 'update-block', id: owner, content: 'edited'}, host)
+    await host.repo.awaitProcessors()
+    expect((await host.repo.load(owner))?.content).toBe('edited')
+    await update(host, owner, {'sample:other': 'merged'})
+    expect(await stored(owner)).toEqual({bag: {...original, 'sample:other': 'merged'}, rows: [], refs: [refRow]})
+    const replacement = {...original, 'sample:another': 'replaced'}
+    await executeCommand({
+      commandId: 'replace', contributorId: null, type: 'update-block', id: owner,
+      replaceProperties: true, properties: replacement,
+    }, host)
+    await host.repo.awaitProcessors()
+    expect(await stored(owner)).toEqual({bag: replacement, rows: [], refs: [refRow]})
+  })
+
+  it('refuses a local createOrGet but accepts the same incoming row through sync materialization', async () => {
+    const row = makeBlockData({
+      id: crypto.randomUUID(), workspaceId: WS, properties: original,
+      references: [{id: targets[0], alias: targets[0], sourceField: seed.name}],
+    })
+    await expect(host.repo.tx(tx => tx.createOrGet(row), {scope: ChangeScope.BlockDefault}))
+      .rejects.toMatchObject(refusal)
+    expect(await host.repo.load(row.id)).toBeNull()
+    await shared.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(row))
+    await drainStaged(shared.db)
+    expect(await stored(row.id)).toEqual({bag: original, rows: [], refs: [refRow]})
+  })
 })
