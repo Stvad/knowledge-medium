@@ -59,10 +59,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const extensions = useMemo(() => {
     // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
     const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
-    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema, childBacked: propertyDisplay.childBacked,
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema,
+      childBacked: propertyDisplay.childBacked, disablePropertyFieldCompletion: blockContext.disablePropertyFieldCompletion,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, propertyDisplay.childBacked, propertyValueSchema])
+  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, blockContext.disablePropertyFieldCompletion, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before

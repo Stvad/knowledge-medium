@@ -310,9 +310,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/facets.js',
-    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds, and the kernel-page registry.',
-    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'systemPagesFacet', 'typeSeedsFacet'],
-    types: ['SystemPage'],
+    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds, the kernel-page registry and queryableFieldsFacet. A QueryableField supplies name, value(alias) returning {sql, params}, encode(operand), optional bounding, and nonempty dependencies. Its value supports comparisons, presence and ordering.',
+    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'queryableFieldsFacet', 'systemPagesFacet', 'typeSeedsFacet'],
+    types: ['QueryableField', 'SystemPage'],
   },
   {
     category: 'data',

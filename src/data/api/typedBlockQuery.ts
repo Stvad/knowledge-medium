@@ -28,6 +28,9 @@ export interface TypedBlockQueryReferenceFilter {
  *  matches none, so no `exclude` removes it either. Dates compare within
  *  years 0000–9999; an operand outside them is refused.
  *
+ *  `contains` compares an array member on codecs with a `contains` capability.
+ *  `codecs.list` inherits this capability from its member's scalar `where`.
+ *
  *  `target` is the ref-traversal operator. Valid only on `ref`-typed
  *  (and `refList`-typed) properties; the operand is an inner where-map
  *  compiled against the referenced block's `properties_json`. Lets
@@ -53,6 +56,7 @@ export type WhereOperator =
   | { readonly gte: unknown }
   | { readonly between: readonly [unknown, unknown] }
   | { readonly exists: boolean }
+  | { readonly contains: unknown }
   | { readonly target: Readonly<Record<string, unknown>> }
 
 /** A single block predicate. Compiled against either the block itself
@@ -106,12 +110,15 @@ export interface TypedBlockQuery {
    *  scope, so the same query can mix block-itself and block-or-any-
    *  ancestor filters. */
   readonly match?: readonly BlockPredicate[]
+  /** At least one alternative must match. An empty group matches nothing. One unconstrained alternative matches every candidate. */
+  readonly anyOf?: readonly BlockPredicate[]
   /** NORed predicates: a block matches iff none of these match. Same
    *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or
    *  `where` entry is dropped here as in `match`, so it excludes nothing. */
   readonly exclude?: readonly BlockPredicate[]
   /** Defaults to creation time ascending. Outline order requires a direct
-   *  parent. Scalar property order places missing and wrong-shaped values
+   *  parent. A named order reads a comparable property or a virtual field.
+   *  Scalar property order places missing and wrong-shaped values
    *  last in either direction, with block id ascending as the tiebreaker. */
   readonly order?: 'created-asc' | 'created-desc' | 'outline'
     | {readonly property: string; readonly direction: 'asc' | 'desc'}

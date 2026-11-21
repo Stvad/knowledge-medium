@@ -26,7 +26,7 @@ import type { SelectionRangeRow } from '@/utils/selection.js'
  *   Block shell:           `data-block-nav-item="true"`
  *                          `data-block-id="<block.id>"`
  *                          `data-render-scope-id="<render scope>"`
- *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
+ *                          `data-block-surface="<surface name>"`
  *   Block visibility target: `data-block-visibility-target="true"`
  *   Lane beside the panel's content: `data-panel-lane="<name>"`
  *                          (`PANEL_LANE_ATTRIBUTE`, on a panel mount's root)

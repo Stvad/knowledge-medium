@@ -31,7 +31,7 @@ it('seeds the ancestor chain from the candidates, probing blocks by primary key'
     referencedBy: {id: 'target'},
     exclude: [{scope: 'ancestor', referencedBy: {id: 'excluded'}}],
     order: 'created-desc',
-  }, new Map(), {projection: 'ids'})
+  }, {properties: new Map()}, {projection: 'ids'})
   const plan = await h.db.getAll<PlanRow>(`EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params])
   const [outer, inner, ...rest] = ancestorSeedLoops(plan)
   expect(rest).toEqual([])

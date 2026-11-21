@@ -5,9 +5,11 @@ import {
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
   type TypedBlockQueryReferenceFilter,
+  type WhereCapability,
   type WhereStorage,
   type WhereValue,
 } from '@/data/api'
+import type { QueryableField } from '@/data/facets'
 import { buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
 
 import { recognizedFieldRowSql, NO_REGISTRY_RECOGNITION_PARAMS, type RecognitionParams } from './treeQueries'
@@ -26,6 +28,12 @@ const NOT_PROPERTY_ROW_SQL = `
          AND (${recognizedFieldRowSql('field_row')})
     )
 `
+
+type Fields = ReadonlyMap<string, QueryableField>
+export interface WhereContext {
+  readonly properties: ReadonlyMap<string, AnyPropertySchema>
+  readonly fields?: Fields
+}
 
 export interface CompiledTypedBlockQuery {
   readonly sql: string
@@ -80,7 +88,7 @@ export const inlineJsonPath = (name: string): string => {
  *  `decodeRefListIds` — a `ref` → `refList` re-type leaves plain strings behind
  *  (an accepted residual of `propertyDefinitionChangeProcessor`), and a bare
  *  `json_each` over one throws `malformed JSON` for the whole query. */
-export const refListMembersSql = (rowAlias: string, name: string): string => {
+export const listMembersSql = (rowAlias: string, name: string): string => {
   const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
   return `json_each(CASE WHEN json_type(${cell}) = 'array' THEN json_extract(${cell}) END)`
 }
@@ -93,7 +101,7 @@ interface CompiledClause {
 /** Operator names recognised inside `where[name]` object values.
  *  Mirrors `WhereOperator` in `src/data/api/typedBlockQuery.ts`. */
 const COMPARATOR_OPERATORS = new Set(['eq', 'lt', 'lte', 'gt', 'gte'])
-const ALL_OPERATORS = new Set([...COMPARATOR_OPERATORS, 'between', 'exists', 'target'])
+const ALL_OPERATORS = new Set([...COMPARATOR_OPERATORS, 'between', 'exists', 'target', 'contains'])
 
 /** A scalar `where` value goes through `codec.where.encode` and lands
  *  in one of the comparator operators below; an object becomes an
@@ -102,6 +110,7 @@ type ParsedWhere =
   | { readonly kind: 'unset' }              // legacy null shorthand
   | { readonly kind: 'set' }                // exists: true
   | { readonly kind: 'comparator'; readonly op: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; readonly operand: unknown }
+  | { readonly kind: 'contains'; readonly operand: unknown }
   | { readonly kind: 'between'; readonly lo: unknown; readonly hi: unknown }
   | { readonly kind: 'target'; readonly inner: Readonly<Record<string, unknown>> }
 
@@ -134,6 +143,7 @@ const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
       `supported: ${[...ALL_OPERATORS].join(', ')}`,
     )
   }
+  if (op === 'contains') return {kind: 'contains', operand}
   if (op === 'exists') {
     if (typeof operand !== 'boolean') {
       throw new Error(`[queryBlocks] where.${name}.exists must be a boolean; got ${typeof operand}`)
@@ -158,20 +168,17 @@ const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
 const ISO_DATE_GLOB =
   "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'"
 
-/** SQL that holds only for a cell of `storage`'s shape, given the cell's
- *  `properties_json, path` argument pair. A comparator ANDs it onto the
- *  comparison, which on its own orders a cell of any shape against the
- *  operand — see `WhereStorage`. */
-const STORAGE_TEST: Readonly<Record<WhereStorage, (cell: string) => string>> = {
-  text: cell => `json_type(${cell}) = 'text'`,
-  number: cell => `json_type(${cell}) IN ('integer', 'real')`,
-  boolean: cell => `json_type(${cell}) IN ('true', 'false')`,
+/** SQLite compares different storage classes; the cell or member must first match its codec's shape. */
+const STORAGE_TEST: Readonly<Record<WhereStorage, (type: string, value: string) => string>> = {
+  text: type => `${type} = 'text'`,
+  number: type => `${type} IN ('integer', 'real')`,
+  boolean: type => `${type} IN ('true', 'false')`,
   // No `json_type` needed: anything but a JSON string extracts as a number or
   // as JSON text opening with `[` / `{`, and none of those fit the pattern.
   // The byte length because GLOB stops at an embedded NUL, so
   // `…000Z\u0000junk` fits on its prefix while `<` / `>` read the bytes past it.
-  'iso-date': cell =>
-    `json_extract(${cell}) GLOB ${ISO_DATE_GLOB} AND length(CAST(json_extract(${cell}) AS BLOB)) = 24`,
+  'iso-date': (_type, value) =>
+    `${value} GLOB ${ISO_DATE_GLOB} AND length(CAST(${value} AS BLOB)) = 24`,
 }
 
 interface Comparable {
@@ -197,23 +204,32 @@ const comparableCell = (
       '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
     )
   }
-  const where = schema.codec.where
+  return comparableValue(name, schema.codec.type, schema.codec.where, `json_type(${cell})`, `json_extract(${cell})`)
+}
+
+const comparableValue = (
+  name: string,
+  codecType: string,
+  capability: WhereCapability<unknown>,
+  type: string,
+  value: string,
+): Comparable => {
   // A codec from a DB-stored extension is never type-checked against `WhereStorage`.
-  if (!Object.hasOwn(STORAGE_TEST, where.storage)) {
+  if (!Object.hasOwn(STORAGE_TEST, capability.storage)) {
     throw new Error(
-      `[queryBlocks] where.${name}: codec type ${JSON.stringify(schema.codec.type)} declares ` +
-      `where.storage ${JSON.stringify(where.storage)}; expected one of ${Object.keys(STORAGE_TEST).join(', ')}`,
+      `[queryBlocks] where.${name}: codec type ${JSON.stringify(codecType)} declares ` +
+      `where.storage ${JSON.stringify(capability.storage)}; expected one of ${Object.keys(STORAGE_TEST).join(', ')}`,
     )
   }
   return {
-    test: STORAGE_TEST[where.storage](cell),
-    storage: where.storage,
-    encode: value => {
+    test: STORAGE_TEST[capability.storage](type, value),
+    storage: capability.storage,
+    encode: operand => {
       try {
-        return where.encode(value)
+        return capability.encode(operand)
       } catch (err) {
         throw new Error(
-          `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+          `[queryBlocks] where.${name} value is not a valid ${codecType}: ${(err as Error).message}`,
           {cause: err},
         )
       }
@@ -231,7 +247,7 @@ const compileTargetTraversal = (
   inner: Readonly<Record<string, unknown>>,
   schema: AnyPropertySchema,
   rowAlias: string,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   aliasCounter: AliasCounter,
 ): CompiledClause => {
   const isRef = isRefCodec(schema.codec)
@@ -248,8 +264,7 @@ const compileTargetTraversal = (
   const innerParams: unknown[] = []
   for (const [innerName, innerValue] of innerEntries) {
     const compiled = compileWhereClause(
-      innerName, innerValue, propertySchemas.get(innerName),
-      alias, propertySchemas, aliasCounter,
+      innerName, innerValue, alias, context, aliasCounter,
     )
     innerClauses.push(compiled.sql)
     innerParams.push(...compiled.params)
@@ -273,81 +288,116 @@ const compileTargetTraversal = (
   }
   return {
     sql:
-      `EXISTS (SELECT 1 FROM ${refListMembersSql(rowAlias, name)} AS je ` +
+      `EXISTS (SELECT 1 FROM ${listMembersSql(rowAlias, name)} AS je ` +
       `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
       `WHERE ${visible}${inWhere})`,
     params: innerParams,
   }
 }
 
+/** Refuse a stored/virtual name collision so a new registration cannot reinterpret a saved query. */
+export const virtualFieldFor = (name: string, context: WhereContext): QueryableField | undefined => {
+  const field = context.fields?.get(name)
+  if (field && context.properties.has(name)) throw new Error(`[queryBlocks] ambiguous field ${JSON.stringify(name)}: both a stored property and a virtual field`)
+  return field
+}
+
+// Skip SQLite quoted tokens and comments before counting anonymous parameter slots.
+const sqlTokens = /'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|\?\d*|[:@$][\w\u0080-\uFFFF]+|[a-zA-Z_\u0080-\uFFFF][\w$\u0080-\uFFFF]*/gu
+
+const fieldExpression = (field: QueryableField, alias: string): CompiledClause => {
+  const {sql, params} = field.value(alias)
+  if (!Array.isArray(params)) throw new TypeError(`[queryBlocks] ${field.name} expression params must be an array`)
+  let slots = 0
+  for (const [token] of sql.matchAll(sqlTokens)) {
+    if (token === '?') slots++
+    else if (/^[?:@$]/.test(token)) throw new Error(`[queryBlocks] ${field.name} accepts only anonymous ? placeholders`)
+  }
+  if (slots !== params.length) {
+    throw new Error(`[queryBlocks] ${field.name} expression has ${slots} placeholders and ${params.length} params`)
+  }
+  return {sql: `(${sql})`, params}
+}
+
 const compileWhereClause = (
   name: string,
   value: unknown,
-  schema: AnyPropertySchema | undefined,
   rowAlias: string,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   aliasCounter: AliasCounter = {n: 0},
 ): CompiledClause => {
   if (value === undefined) {
     throw new Error(`[queryBlocks] where.${name} is undefined; pass null to match unset values`)
   }
-  if (schema === undefined) {
-    throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
-  }
-  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
-  const extract = `json_extract(${cell})`
+  const field = virtualFieldFor(name, context)
+  const schema = context.properties.get(name)
+  if (!field && !schema) throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema or queryable field`)
   const parsed = parseWhereValue(name, value)
-
-  // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
-  // they're orthogonal to the codec's encoding contract (and
-  // codec.where.encode rejects null/undefined by design).
-  if (parsed.kind === 'unset') {
-    return {sql: `${extract} IS NULL`, params: []}
-  }
-  if (parsed.kind === 'set') {
-    return {sql: `${extract} IS NOT NULL`, params: []}
+  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
+  const expr = field ? fieldExpression(field, rowAlias) : {sql: `json_extract(${cell})`, params: []}
+  if (parsed.kind === 'unset' || parsed.kind === 'set') {
+    return {sql: `${expr.sql} IS ${parsed.kind === 'set' ? 'NOT ' : ''}NULL`, params: expr.params}
   }
   if (parsed.kind === 'target') {
-    return compileTargetTraversal(name, parsed.inner, schema, rowAlias, propertySchemas, aliasCounter)
+    if (!schema) throw new Error(`[queryBlocks] where.${name}.target requires a reference property`)
+    return compileTargetTraversal(name, parsed.inner, schema, rowAlias, context, aliasCounter)
+  }
+  if (parsed.kind === 'contains') {
+    const member = schema?.codec.contains
+    if (!member) {
+      throw new Error(`[queryBlocks] where.${name}.contains requires a codec with a contains capability`)
+    }
+    const comparable = comparableValue(`${name}.contains`, schema.codec.type, member, 'item.type', 'item.value')
+    return {
+      sql: `EXISTS (SELECT 1 FROM ${listMembersSql(rowAlias, name)} item WHERE ${comparable.test} AND item.value = ?)`,
+      params: [comparable.encode(parsed.operand)],
+    }
   }
   // The comparison stays its own AND term, in the indexed `json_extract`
   // spelling, so an expression index on the property still serves it.
-  const comparable = comparableCell(name, schema, cell)
+  const comparable = field ? {test: '', encode: field.encode} : comparableCell(name, schema, cell)
+  const guard = comparable.test && `${comparable.test} AND `
   if (parsed.kind === 'between') {
     return {
-      sql: `(${comparable.test} AND ${extract} BETWEEN ? AND ?)`,
-      params: [comparable.encode(parsed.lo), comparable.encode(parsed.hi)],
+      sql: `(${guard}${expr.sql} BETWEEN ? AND ?)`,
+      params: [...expr.params, comparable.encode(parsed.lo), comparable.encode(parsed.hi)],
     }
   }
   return {
-    sql: `(${comparable.test} AND ${extract} ${COMPARATOR_SQL[parsed.op]} ?)`,
-    params: [comparable.encode(parsed.operand)],
+    sql: `(${guard}${expr.sql} ${COMPARATOR_SQL[parsed.op]} ?)`,
+    params: [...expr.params, comparable.encode(parsed.operand)],
   }
 }
 
-const compileReferencedByExists = (
+const referenceTarget = (ref: TypedBlockQueryReferenceFilter): CompiledClause =>
+  ref.sourceField === undefined
+    ? {sql: 'br.target_id = ?', params: [ref.id]}
+    : {sql: 'br.target_id = ? AND br.source_field = ?', params: [ref.id, ref.sourceField]}
+
+const compileReferencedBy = (
   ref: TypedBlockQueryReferenceFilter,
-  sourceIdExpr: string,
+  sourceId: string,
+  alternativeWorkspace?: string,
 ): CompiledClause => {
-  const refClauses = [
-    `br.source_id = ${sourceIdExpr}`,
-    'br.target_id = ?',
-  ]
-  const params: unknown[] = [ref.id]
-  if (ref.sourceField !== undefined) {
-    refClauses.push('br.source_field = ?')
-    params.push(ref.sourceField)
+  const target = referenceTarget(ref)
+  // A self-scope alternative must expose the source ids to SQLite's multi-index OR planner.
+  if (alternativeWorkspace !== undefined) {
+    return {
+      sql: `${sourceId} IN (SELECT br.source_id FROM block_references br WHERE br.workspace_id = ? AND ${target.sql})`,
+      params: [alternativeWorkspace, ...target.params],
+    }
   }
   return {
-    sql: `EXISTS (SELECT 1 FROM block_references br WHERE ${refClauses.join(' AND ')})`,
-    params,
+    sql: `EXISTS (SELECT 1 FROM block_references br WHERE br.source_id = ${sourceId} AND ${target.sql})`,
+    params: target.params,
   }
 }
 
 const compilePredicateAgainstRow = (
   predicate: BlockPredicate,
   rowAlias: string,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
+  alternativeWorkspace?: string,
 ): CompiledClause => {
   const clauses: string[] = []
   const params: unknown[] = []
@@ -359,14 +409,14 @@ const compilePredicateAgainstRow = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), rowAlias, propertySchemas)
+      const compiled = compileWhereClause(name, value, rowAlias, context)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
   }
 
   if (predicate.referencedBy !== undefined) {
-    const compiled = compileReferencedByExists(predicate.referencedBy, `${rowAlias}.id`)
+    const compiled = compileReferencedBy(predicate.referencedBy, `${rowAlias}.id`, alternativeWorkspace)
     clauses.push(compiled.sql)
     params.push(...compiled.params)
   }
@@ -377,26 +427,17 @@ const compilePredicateAgainstRow = (
   }
 }
 
-/** Compile a predicate against the result block `b` directly (self
- *  scope) or as an EXISTS over the ancestor_chain CTE rows that share
- *  `block_id = b.id` (ancestor scope, includes b itself).
- *
- *  Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
+/** Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
  *  also matches when any ancestor's own id IS X — Roam treats a parent
  *  block/page as an implicit reference target for everything it contains.
  *  Filtering by a parent name should match blocks living under that parent
  *  even when no ancestor sources an explicit reference. `sourceField`
  *  predicates target a specific reference channel and stay strict (the
  *  ancestor-is-itself case has no channel). */
-const compileScopedPredicate = (
+const compileAncestorPredicate = (
   predicate: BlockPredicate,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
 ): CompiledClause => {
-  const scope = predicate.scope ?? 'self'
-  if (scope === 'self') {
-    return compilePredicateAgainstRow(predicate, 'b', propertySchemas)
-  }
-
   const clauses: string[] = []
   const params: unknown[] = []
 
@@ -407,14 +448,14 @@ const compileScopedPredicate = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc', propertySchemas)
+      const compiled = compileWhereClause(name, value, 'anc', context)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
   }
 
   if (predicate.referencedBy !== undefined) {
-    const refExists = compileReferencedByExists(predicate.referencedBy, 'anc.id')
+    const refExists = compileReferencedBy(predicate.referencedBy, 'anc.id')
     if (predicate.referencedBy.sourceField === undefined) {
       clauses.push(`(${refExists.sql} OR anc.id = ?)`)
       params.push(...refExists.params, predicate.referencedBy.id)
@@ -435,15 +476,20 @@ const compileScopedPredicate = (
   }
 }
 
-const dedupePredicates = (predicates: readonly BlockPredicate[] | undefined): BlockPredicate[] => {
-  if (!predicates) return []
-  return predicates.filter(p => {
-    const hasWhere = p.where !== undefined && Object.keys(p.where).length > 0
-    const hasRef = p.referencedBy !== undefined
-    const hasId = p.id !== undefined
-    return hasWhere || hasRef || hasId
-  })
+const compileAlternatives = (
+  predicates: readonly BlockPredicate[], context: WhereContext, workspaceId: string,
+): CompiledClause => {
+  const alternatives = predicates.map(predicate => isSelfScope(predicate)
+    ? compilePredicateAgainstRow(predicate, 'b', context, workspaceId)
+    : compileAncestorPredicate(predicate, context))
+  return {
+    sql: alternatives.length ? `(${alternatives.map(clause => `(${clause.sql})`).join(' OR ')})` : '0',
+    params: alternatives.flatMap(clause => clause.params),
+  }
 }
+
+const hasConstraints = (p: BlockPredicate): boolean =>
+  p.id !== undefined || p.referencedBy !== undefined || Object.keys(p.where ?? {}).length > 0
 
 export const normalizeTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
@@ -457,15 +503,19 @@ export const normalizeTypedBlockQuery = (
     : Array.from(new Set(query.types.map(type => type.trim()).filter(Boolean))).sort(),
   where: query.where,
   referencedBy: query.referencedBy,
-  match: dedupePredicates(query.match),
-  exclude: dedupePredicates(query.exclude),
+  match: query.match?.filter(hasConstraints) ?? [],
+  exclude: query.exclude?.filter(hasConstraints) ?? [],
+  anyOf: query.anyOf?.every(hasConstraints) ? query.anyOf : undefined,
   order: projection === 'count' ? undefined : query.order ?? 'created-asc',
 })
 
-export const predicateGroups = (query: ResolvedTypedBlockQuery) => [query.match ?? [], query.exclude ?? []]
+export const predicateGroups = (query: ResolvedTypedBlockQuery) => [query.match ?? [], query.exclude ?? [], query.anyOf ?? []]
+
+const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
+  predicates.some(p => p.scope === 'ancestor')
 
 export const needsAncestorChain = (query: ResolvedTypedBlockQuery): boolean =>
-  predicateGroups(query).some(group => group.some(p => p.scope === 'ancestor'))
+  predicateGroups(query).some(hasAncestorScope)
 
 const isSelfScope = (predicate: BlockPredicate): boolean =>
   (predicate.scope ?? 'self') === 'self'
@@ -485,17 +535,27 @@ export const isSelectiveWhereValue = (value: unknown): boolean => {
   return !(op === 'exists' && operand === false)
 }
 
-const hasNonNullWhere = (where: Readonly<Record<string, unknown>> | undefined): boolean =>
-  where !== undefined && Object.values(where).some(isSelectiveWhereValue)
+export const hasSelectiveProperty = (
+  where: Readonly<Record<string, unknown>> | undefined, context: WhereContext,
+): boolean => Object.entries(where ?? {}).some(([name, value]) =>
+  context.properties.has(name) && isSelectiveWhereValue(value),
+)
+
+const boundsByWhere = (where: BlockPredicate['where'], context: WhereContext): boolean =>
+  hasSelectiveProperty(where, context) || Object.entries(where ?? {}).some(([name, value]) => {
+    if (context.properties.has(name)) return false
+    const field = context.fields?.get(name)
+    return field?.bounding === true && isSelectiveWhereValue(value)
+  })
 
 /** Does this self-scope predicate actually bound the candidate set
  *  (vs. just match-anything)? Used by the ancestor-walk safety gate
  *  — a predicate that matches every row provides no candidate
  *  bounding even though it's "set". */
-const selfPredicateNarrows = (predicate: BlockPredicate): boolean =>
+const selfPredicateNarrows = (predicate: BlockPredicate, context: WhereContext): boolean =>
   predicate.id !== undefined ||
   predicate.referencedBy !== undefined ||
-  hasNonNullWhere(predicate.where)
+  boundsByWhere(predicate.where, context)
 
 /** Bounding the SQL walk and receiving a new-row signal count different predicates. */
 export const hasCandidateAxis = (
@@ -503,7 +563,7 @@ export const hasCandidateAxis = (
   predicateCounts: (predicate: BlockPredicate) => boolean,
 ): boolean =>
   query.parentId !== undefined || (query.types?.length ?? 0) > 0 ||
-  predicateCounts(query) || (query.match ?? []).some(predicateCounts)
+  predicateCounts(query) || (query.match ?? []).some(predicateCounts) || query.anyOf?.every(predicateCounts) === true
 
 /** Ancestor-scope predicates require at least one candidate-bounding
  *  filter; otherwise the recursive walk seeds from every live block
@@ -511,8 +571,8 @@ export const hasCandidateAxis = (
  *  pre-fetch ancestor dep nodes (e.g. `resolveTypedBlocks`) call this
  *  before issuing the dep SQL so an invalid query doesn't trigger
  *  exactly the expensive walk the gate is meant to prevent. */
-export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery): void => {
-  if (needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p))) {
+export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery, context: WhereContext): void => {
+  if (needsAncestorChain(query) && !hasCandidateAxis(query, p => isSelfScope(p) && selfPredicateNarrows(p, context))) {
     throw new Error(
       '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
       '(parentId, types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
@@ -523,7 +583,7 @@ export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery): void 
 /** Shared WHERE and joins for result projections and ancestor dependency discovery. */
 const candidateSource = (
   normalized: ResolvedTypedBlockQuery,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   recognition: RecognitionParams,
 ): {sql: string; params: unknown[]; distinct: boolean} => {
   const types = normalized.types ?? []
@@ -570,17 +630,18 @@ const candidateSource = (
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id${typeJoin}
     `.trim()
-    clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
-    params.push(normalized.workspaceId, normalized.referencedBy.id)
-    if (normalized.referencedBy.sourceField !== undefined) {
-      clauses.push('br.source_field = ?')
-      params.push(normalized.referencedBy.sourceField)
-    }
+    const target = referenceTarget(normalized.referencedBy)
+    clauses.push('br.workspace_id = ?', target.sql, 'b.deleted = 0')
+    params.push(normalized.workspaceId, ...target.params)
   } else {
     let index = ''
     if (normalized.parentId !== undefined) {
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
+    } else if (!types.length && normalized.anyOf?.length &&
+      normalized.anyOf.every(p => isSelfScope(p) && p.referencedBy)) {
+      // Before ANALYZE SQLite can scan the workspace index for a disjunction of indexed source-id lists.
+      index = ' INDEXED BY sqlite_autoindex_blocks_1'
     } else if (typeof normalized.order === 'object' && !types.length &&
       !normalized.where && predicateGroups(normalized).every(group => group.length === 0)) {
       // Arbitrary property sorts visit the workspace's live rows. Keep foreign workspaces off that path.
@@ -603,21 +664,26 @@ const candidateSource = (
 
   if (normalized.where !== undefined) {
     for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b', propertySchemas)
+      const compiled = compileWhereClause(name, value, 'b', context)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
   }
 
+  if (normalized.anyOf !== undefined && !hasAncestorScope(normalized.anyOf)) {
+    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
+    clauses.push(group.sql)
+    params.push(...group.params)
+  }
   for (const predicate of matchPredicates) {
     if (!isSelfScope(predicate)) continue
-    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
+    const compiled = compilePredicateAgainstRow(predicate, 'b', context)
     clauses.push(compiled.sql)
     params.push(...compiled.params)
   }
   for (const predicate of excludePredicates) {
     if (!isSelfScope(predicate)) continue
-    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
+    const compiled = compilePredicateAgainstRow(predicate, 'b', context)
     // `IS NOT TRUE` (not bare `NOT`): exclude a row only when the
     // predicate is *definitely* true. A scalar `where` over an unset
     // property is NULL, since `json_extract` / `json_type` of a missing
@@ -636,10 +702,10 @@ const candidateSource = (
 
 export const buildCandidatesCte = (
   query: ResolvedTypedBlockQuery,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   recognition: RecognitionParams = NO_REGISTRY_RECOGNITION_PARAMS,
 ): CompiledTypedBlockQuery => {
-  const source = candidateSource(query, schemas, recognition)
+  const source = candidateSource(query, context, recognition)
   return {sql: `candidates AS (SELECT DISTINCT b.id ${source.sql})`, params: source.params}
 }
 
@@ -652,8 +718,8 @@ export const buildCandidatesCte = (
  *  choose, the planner scans every live block and probes an automatic index
  *  over the candidates — `typedBlockQueryJoinOrder.test.ts`. */
 export const ANCESTOR_CHAIN_CTE_SQL = `
-  ancestor_chain(block_id, anc_id, anc_parent_id, depth, path) AS (
-    SELECT c.id, seed.id, seed.parent_id, 0, '!' || hex(seed.id) || '/'
+  ancestor_chain(block_id, anc_id, anc_parent_id, depth, path, workspace_id) AS (
+    SELECT c.id, seed.id, seed.parent_id, 0, '!' || hex(seed.id) || '/', seed.workspace_id
     FROM candidates c
     CROSS JOIN blocks seed ON seed.id = c.id
     WHERE seed.deleted = 0
@@ -663,73 +729,89 @@ export const ANCESTOR_CHAIN_CTE_SQL = `
       parent.id,
       parent.parent_id,
       ancestor_chain.depth + 1,
-      ancestor_chain.path || '!' || hex(parent.id) || '/'
+      ancestor_chain.path || '!' || hex(parent.id) || '/',
+      ancestor_chain.workspace_id
     FROM ancestor_chain
     JOIN blocks parent ON parent.id = ancestor_chain.anc_parent_id
     WHERE parent.deleted = 0
+      AND parent.workspace_id = ancestor_chain.workspace_id
       AND ancestor_chain.depth < 100
       AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
   )
 `.trim()
 
-const resultOrderSql = (
-  query: ResolvedTypedBlockQuery,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-): string => {
+const resultOrder = (query: ResolvedTypedBlockQuery, context: WhereContext): CompiledClause => {
   const order = query.order
   if (order === 'outline') {
     if (query.parentId === undefined) throw new Error('[queryBlocks] outline order requires parentId')
-    return 'b.order_key, b.id'
+    return {sql: 'b.order_key, b.id', params: []}
   }
-  if (typeof order === 'object') {
-    const schema = schemas.get(order.property)
+  if (typeof order !== 'object') {
+    return {sql: `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`, params: []}
+  }
+  const field = virtualFieldFor(order.property, context)
+  let expr: CompiledClause
+  if (field) {
+    expr = fieldExpression(field, 'b')
+  } else {
     const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
-    const {test, storage} = comparableCell(order.property, schema, cell, 'order')
-    const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
+    const {test, storage} = comparableCell(order.property, context.properties.get(order.property), cell, 'order')
     // SQLite NOCASE folds ASCII; accented letters retain code-point order.
     const collation = storage === 'text' ? ' COLLATE NOCASE' : ''
-    return `CASE WHEN ${test} THEN json_extract(${cell}) END${collation} ${direction} NULLS LAST, b.id`
+    expr = {sql: `CASE WHEN ${test} THEN json_extract(${cell}) END${collation}`, params: []}
   }
-  return `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`
+  const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
+  return {sql: `${expr.sql} ${direction} NULLS LAST, b.id`, params: expr.params}
 }
 
 export const compileTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams} = {},
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query, opts.projection)
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
 
-  assertAncestorWalkBounded(normalized)
+  assertAncestorWalkBounded(normalized, context)
 
-  const source = candidateSource(normalized, propertySchemas, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)
+  const source = candidateSource(normalized, context, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)
   const params = source.params
   const isCount = opts.projection === 'count'
   const select = opts.projection === 'ids' ? 'b.id AS id' : buildQualifiedBlockColumnsSql('b')
-  const suffix = isCount ? '' : `ORDER BY ${resultOrderSql(normalized, propertySchemas)}${opts.limit === undefined ? '' : ' LIMIT ?'}`
+  const finish = (sql: string): CompiledTypedBlockQuery => {
+    if (isCount) return {sql, params}
+    const order = resultOrder(normalized, context)
+    const ordered = `${sql} ORDER BY ${order.sql}`
+    return opts.limit === undefined
+      ? {sql: ordered, params: [...params, ...order.params]}
+      : {sql: `${ordered} LIMIT ?`, params: [...params, ...order.params, opts.limit]}
+  }
   if (!needsAncestorChain(normalized)) {
     const projection = isCount
       ? `COUNT(${source.distinct ? 'DISTINCT b.id' : '*'}) AS count`
       : `${source.distinct ? 'DISTINCT ' : ''}${select}`
-    if (!isCount && opts.limit !== undefined) params.push(opts.limit)
-    return {sql: `SELECT ${projection} ${source.sql} ${suffix}`, params}
+    return finish(`SELECT ${projection} ${source.sql}`)
   }
 
   // Outer WHERE — ancestor-scope predicates only.
   const filterClauses: string[] = []
 
+  if (normalized.anyOf && hasAncestorScope(normalized.anyOf)) {
+    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
+    filterClauses.push(group.sql)
+    params.push(...group.params)
+  }
   for (const predicate of matchPredicates) {
     if (isSelfScope(predicate)) continue
-    const compiled = compileScopedPredicate(predicate, propertySchemas)
+    const compiled = compileAncestorPredicate(predicate, context)
     filterClauses.push(compiled.sql)
     params.push(...compiled.params)
   }
 
   for (const predicate of excludePredicates) {
     if (isSelfScope(predicate)) continue
-    const compiled = compileScopedPredicate(predicate, propertySchemas)
+    const compiled = compileAncestorPredicate(predicate, context)
     // `IS NOT TRUE` for the same NULL-safety reason as the self-scope
     // exclude above. The ancestor predicate compiles to `EXISTS(...)`
     // (always 0/1, so `IS NOT TRUE` == `NOT` here), but keeping both
@@ -739,14 +821,12 @@ export const compileTypedBlockQuery = (
     params.push(...compiled.params)
   }
 
-  if (!isCount && opts.limit !== undefined) params.push(opts.limit)
   const sql = `
     WITH RECURSIVE candidates AS (SELECT DISTINCT b.id ${source.sql}), ${ANCESTOR_CHAIN_CTE_SQL}
     SELECT ${isCount ? 'COUNT(*) AS count' : select}
     FROM candidates c
     CROSS JOIN blocks b ON b.id = c.id
     WHERE ${filterClauses.join(' AND ')}
-    ${suffix}
   `
-  return {sql, params}
+  return finish(sql)
 }

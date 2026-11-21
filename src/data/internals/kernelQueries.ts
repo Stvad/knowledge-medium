@@ -30,7 +30,7 @@ import {
   type AnyPropertySchema,
   type PropertyChildrenView,
 } from '@/data/api'
-import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
+import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, editTimeSql, type BlockRow } from '@/data/blockSchema'
 import { declaresExtensionType, EXTENSION_TYPE, SYSTEM_BLOCK_TYPES, USER_TYPE } from '@/data/blockTypes'
 import { userStateRootBlockIds } from '@/data/derivedIds'
 import { seedKeyProp } from '@/data/properties'
@@ -38,6 +38,7 @@ import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
 import { isActiveSearchFilter, type BlockSearchFilter } from '@/data/searchFilter'
+import { queryableFieldsFacet } from '@/data/facets'
 import { refCodecKind } from './refProjection'
 import { ancestorWalk, type AncestorWalk } from './ancestorBatch'
 import {
@@ -60,14 +61,16 @@ import {
   buildCandidatesCte,
   compileTypedBlockQuery,
   type TypedBlockQueryProjection,
-  isSelectiveWhereValue,
-  normalizeTypedBlockQuery,
-  notPropertyRow,
+  hasSelectiveProperty,
   needsAncestorChain,
+  type WhereContext,
+  normalizeTypedBlockQuery,
+  virtualFieldFor,
+  notPropertyRow,
   hasCandidateAxis,
   predicateGroups,
   inlineJsonPath,
-  refListMembersSql,
+  listMembersSql,
 } from './typedBlockQuery'
 import {
   KERNEL_ALIASES_CHANNEL,
@@ -77,9 +80,12 @@ import {
   KERNEL_FIELD_RECOGNITION_KEY,
   QUERY_SCHEMA_CHANNEL,
   QUERY_PROPERTY_SCHEMAS_KEY,
+  QUERY_VIRTUAL_FIELDS_KEY,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_MOVES_CHANNEL,
+  TYPED_BLOCKS_TIMESTAMP_CHANNEL,
+  typedBlocksTimestampKey,
   TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
@@ -355,7 +361,7 @@ const selectBlocksByContentSql = (
       WHEN LOWER(b.content) LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
-    coalesce(b.user_updated_at, b.updated_at) DESC
+    ${editTimeSql('b')} DESC
   LIMIT ?
 `
 
@@ -368,7 +374,7 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-  ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
+  ORDER BY ${editTimeSql()} DESC, id ASC
   LIMIT ?
 `
 
@@ -430,7 +436,7 @@ export const SELECT_RECENT_USER_BLOCKS_SQL = `
        WHERE bt.block_id = blocks.id
          AND bt.type IN (${SYSTEM_BLOCK_TYPES.map(() => '?').join(', ')})
     )
-  ORDER BY coalesce(blocks.user_updated_at, blocks.updated_at) DESC, blocks.id ASC
+  ORDER BY ${editTimeSql('blocks')} DESC, blocks.id ASC
   LIMIT ?
 `
 
@@ -603,7 +609,7 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number, constrainTypes = f
       a.alias AS alias,
       b.id AS blockId,
       b.content AS content,
-      coalesce(b.user_updated_at, b.updated_at) AS updatedAt
+      ${editTimeSql('b')} AS updatedAt
     FROM block_aliases a
     JOIN blocks b ON b.id = a.block_id
     WHERE a.workspace_id = ?
@@ -1108,6 +1114,7 @@ const typedBlocksArgsSchema = z.object({
   referencedBy: referenceFilterSchema.optional(),
   match: z.array(blockPredicateSchema).optional(),
   exclude: z.array(blockPredicateSchema).optional(),
+  anyOf: z.array(blockPredicateSchema).optional(),
   parentId: z.string().optional(),
   propertyChildren: z.literal('none').optional(),
   order: z.union([
@@ -1119,7 +1126,7 @@ const typedBlocksArgsSchema = z.object({
 const limitedTypedBlocksArgsSchema = typedBlocksArgsSchema.extend({limit: z.number().int().nonnegative().optional()})
 
 const ANCESTOR_DEP_KIND = 'a'
-const TARGET_DEP_KIND = 't'
+const STRUCTURE_DEP_KIND = 's'
 
 /** SQL that materializes every (block_id, anc_id) pair the typed query
  *  considers when an ancestor-scoped predicate is present. Returns the
@@ -1137,13 +1144,26 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetArms: readonly stri
   WITH RECURSIVE
     ${candidatesCte},
     ${ANCESTOR_CHAIN_CTE_SQL}
-  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM ancestor_chain${
+  SELECT DISTINCT '${ANCESTOR_DEP_KIND}' AS dep_kind, anc_id AS dep_id FROM ancestor_chain
+  UNION ALL
+  SELECT '${STRUCTURE_DEP_KIND}', id FROM (
+    SELECT anc_parent_id AS id FROM ancestor_chain WHERE anc_parent_id IS NOT NULL AND depth < 100
+    EXCEPT SELECT anc_id FROM ancestor_chain
+  )${
     targetArms.map(arm => `
   UNION
   ${arm}`).join('')}
 `
 
-
+const dependOnField = (name: string, workspaceId: string, ctx: QueryCtx, context: WhereContext) => {
+  const field = virtualFieldFor(name, context)
+  if (field) {
+    for (const dependency of field.dependencies) ctx.depend(dependency(workspaceId))
+  } else {
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL, key: typedBlocksPropertyKey(workspaceId, name)})
+  }
+  return field
+}
 
 /** Subscribe to the property channels relevant to a single `where`
  *  map — every direct key, plus the inner keys reached through any
@@ -1169,15 +1189,11 @@ const collectWhereDeps = (
    *  target ids (`declareAncestorDeps`); null means fall back to the
    *  workspace-wide live channel. */
   enumerableTargetProps: Set<string> | null,
+  context: WhereContext,
 ): void => {
   if (where === undefined) return
-  ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
   for (const [name, value] of Object.entries(where)) {
-    ctx.depend({
-      kind: 'plugin',
-      channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-      key: typedBlocksPropertyKey(workspaceId, name),
-    })
+    if (dependOnField(name, workspaceId, ctx, context)) continue
     if (value === null || typeof value !== 'object' || value instanceof Date || Array.isArray(value)) continue
     const entries = Object.entries(value as Record<string, unknown>)
     if (entries.length !== 1) continue
@@ -1185,7 +1201,7 @@ const collectWhereDeps = (
     if (op !== 'target') continue
     if (operand === null || typeof operand !== 'object' || Array.isArray(operand)) continue
     const inner = operand as Record<string, unknown>
-    const innerHasSelective = Object.values(inner).some(isSelectiveWhereValue)
+    const innerHasSelective = hasSelectiveProperty(inner, context)
     if (!innerHasSelective) {
       // An ancestor-scope caller reaches every row this predicate is
       // evaluated against, so it can depend on the handful of target ids
@@ -1208,7 +1224,7 @@ const collectWhereDeps = (
     //
     // `null`, not the sink: a nested target hangs off the TARGET row, which
     // the ancestor walk never reaches, so its ids are not enumerable here.
-    collectWhereDeps(inner, workspaceId, ctx, null)
+    collectWhereDeps(inner, workspaceId, ctx, null, context)
   }
 }
 
@@ -1245,6 +1261,7 @@ const collectPredicateDeps = (
   workspaceId: string,
   ctx: QueryCtx,
   ancestorTargetProps: Set<string>,
+  context: WhereContext,
 ): void => {
   for (const predicate of predicates) {
     collectWhereDeps(
@@ -1252,6 +1269,7 @@ const collectPredicateDeps = (
       workspaceId,
       ctx,
       predicate.scope === 'ancestor' ? ancestorTargetProps : null,
+      context,
     )
     if (predicate.referencedBy !== undefined) {
       collectReferenceFilterDeps(predicate.referencedBy, workspaceId, ctx, {
@@ -1264,6 +1282,7 @@ const collectPredicateDeps = (
 const collectTypedBlockAxisDeps = (
   normalized: ResolvedTypedBlockQuery,
   ctx: QueryCtx,
+  context: WhereContext,
 ): ReadonlySet<string> => {
   const {workspaceId, types = [], referencedBy} = normalized
   for (const t of types) {
@@ -1274,20 +1293,20 @@ const collectTypedBlockAxisDeps = (
     })
   }
   if (normalized.parentId !== undefined) ctx.depend({kind: 'parent-edge', parentId: normalized.parentId})
+  if (normalized.order === 'created-asc' || normalized.order === 'created-desc') {
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, 'created')})
+  }
   if (typeof normalized.order === 'object') {
-    ctx.depend({
-      kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-      key: typedBlocksPropertyKey(workspaceId, normalized.order.property),
-    })
+    dependOnField(normalized.order.property, workspaceId, ctx, context)
   }
   const ancestorTargetProps = new Set<string>()
   // Top-level `where` is self scope — not enumerable (see collectWhereDeps).
-  collectWhereDeps(normalized.where, workspaceId, ctx, null)
+  collectWhereDeps(normalized.where, workspaceId, ctx, null, context)
   if (referencedBy !== undefined) {
     collectReferenceFilterDeps(referencedBy, workspaceId, ctx)
   }
   for (const group of predicateGroups(normalized)) {
-    collectPredicateDeps(group, workspaceId, ctx, ancestorTargetProps)
+    collectPredicateDeps(group, workspaceId, ctx, ancestorTargetProps, context)
   }
 
   // Live channel — only when there's no positive membership axis to
@@ -1303,7 +1322,7 @@ const collectTypedBlockAxisDeps = (
   //     don't need live: matching rows must set `foo='bar'` to
   //     match, which fires the foo property channel.)
   const hasEntrySignal = (p: BlockPredicate) =>
-    p.referencedBy !== undefined || Object.values(p.where ?? {}).some(isSelectiveWhereValue)
+    p.scope !== 'ancestor' && (p.referencedBy !== undefined || hasSelectiveProperty(p.where, context))
   if (!hasCandidateAxis(normalized, hasEntrySignal)) {
     ctx.depend({
       kind: 'plugin',
@@ -1341,14 +1360,14 @@ const targetLivenessArms = (
     const kind = refCodecKind(propertySchemas.get(name))
     if (kind === 'ref') {
       arms.push(
-        `SELECT DISTINCT '${TARGET_DEP_KIND}', ${extract}\n` +
+        `SELECT DISTINCT '${STRUCTURE_DEP_KIND}', ${extract}\n` +
         `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id\n` +
         `  WHERE ${extract} IS NOT NULL`,
       )
     } else if (kind === 'refList') {
       arms.push(
-        `SELECT DISTINCT '${TARGET_DEP_KIND}', je.value\n` +
-        `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id, ${refListMembersSql('b', name)} je`,
+        `SELECT DISTINCT '${STRUCTURE_DEP_KIND}', je.value\n` +
+        `  FROM ancestor_chain ac CROSS JOIN blocks b ON b.id = ac.anc_id, ${listMembersSql('b', name)} je`,
       )
     }
   }
@@ -1365,39 +1384,21 @@ const declareAncestorDeps = async (
    *  (which `collectWhereDeps` already did) without also picking up the
    *  precise ids that replace it — the under-firing direction. */
   targetProps: ReadonlySet<string>,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  context: WhereContext,
   recognition: RecognitionParams | undefined,
 ): Promise<void> => {
-  const candidatesCte = buildCandidatesCte(normalized, schemas, recognition)
+  const candidatesCte = buildCandidatesCte(normalized, context, recognition)
   const rows = await ctx.db.getAll<{dep_kind: string; dep_id: string | null}>(
     ANCESTOR_DEP_NODES_SQL(
       candidatesCte.sql,
-      targetLivenessArms(targetProps, schemas),
+      targetLivenessArms(targetProps, context.properties),
     ),
     [...candidatesCte.params],
   )
   for (const row of rows) {
     if (row.dep_id === null) continue
-    if (row.dep_kind === TARGET_DEP_KIND) {
-      // The predicate compiles to `EXISTS(… AND deleted = 0)`, so this target
-      // being created, deleted or restored flips membership, and
-      // `typedBlocks.structure` is emitted keyed on the changed block's own
-      // id. A target with no row yet still gets a dep — that is the case a
-      // later create would otherwise admit unnoticed.
-      //
-      // The branch only diverges from the fallthrough when `kind === 'row'`:
-      // a row dep would also fire on the target's CONTENT edits, which cannot
-      // change this predicate. Under `kind === 'structure'` both arms land on
-      // the same dep, so deleting this branch fails nothing there — what the
-      // tests pin is the SQL arm that produces these rows at all.
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
-        key: typedBlocksStructureKey(normalized.workspaceId, row.dep_id),
-      })
-      continue
-    }
-    if (kind === 'row') {
+    // A missing or foreign parent can become reachable, just as a dangling target can become live.
+    if (kind === 'row' && row.dep_kind === ANCESTOR_DEP_KIND) {
       ctx.depend({kind: 'row', id: row.dep_id})
     } else {
       ctx.depend({
@@ -1417,12 +1418,15 @@ const prepareTypedBlockQuery = async (
   const normalized = normalizeTypedBlockQuery(query, projection)
   const {workspaceId} = normalized
   const workspaceSchemas = ctx.repo.propertySchemasFor(workspaceId)
-  const propertyOrder = typeof normalized.order === 'object'
-  if (!workspaceSchemas && (propertyOrder || normalized.propertyChildren === 'none')) {
-    throw new Error('[queryBlocks] property registry unavailable for the requested workspace')
+  const hasWhere = [normalized, ...predicateGroups(normalized).flat()]
+    .some(p => p.where !== undefined && Object.keys(p.where).length > 0)
+  const usesRegistry = hasWhere || typeof normalized.order === 'object' || normalized.propertyChildren === 'none'
+  if (usesRegistry) {
+    ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
+    if (hasWhere || typeof normalized.order === 'object') ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_VIRTUAL_FIELDS_KEY})
+    if (!workspaceSchemas) throw new Error('[queryBlocks] property registry unavailable for the requested workspace')
   }
   const schemas = workspaceSchemas ?? new Map<string, AnyPropertySchema>()
-  if (propertyOrder) ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
   let recognition: RecognitionParams | undefined
   if (normalized.propertyChildren === 'none') {
     if (normalized.parentId === undefined) {
@@ -1432,10 +1436,11 @@ const prepareTypedBlockQuery = async (
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, 'property-schema')})
     recognition = dependOnRecognitionParams(ctx, ctx.repo.propertyDefinitionsFor(workspaceId))
   }
-  const compiled = compileTypedBlockQuery(normalized, schemas, {projection, limit: query.limit, recognition})
-  const ancestorTargetProps = collectTypedBlockAxisDeps(normalized, ctx)
+  const context: WhereContext = {properties: schemas, fields: ctx.repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)}
+  const compiled = compileTypedBlockQuery(normalized, context, {projection, limit: query.limit, recognition})
+  const targetProps = collectTypedBlockAxisDeps(normalized, ctx, context)
   if (needsAncestorChain(normalized)) {
-    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', ancestorTargetProps, schemas, recognition)
+    await declareAncestorDeps(normalized, ctx, projection === 'rows' ? 'row' : 'structure', targetProps, context, recognition)
   }
   return compiled
 }

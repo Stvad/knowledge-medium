@@ -32,9 +32,12 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   definitionSeedsFacet,
+  KERNEL_QUERYABLE_FIELDS,
   mutatorsFacet,
   propertyEditorOverridesFacet,
   queriesFacet,
+  queryableFieldsFacet,
+  type QueryableField,
   typeSeedsFacet,
   valuePresetCoresFacet,
 } from '../facets'
@@ -167,6 +170,67 @@ describe('setFacetRuntime + mutatorsFacet', () => {
     // Kernel mutator NOT in the runtime — dispatch fails.
     await expect(repo.run('core.setContent', {id: 'p1', content: 'x'}))
       .rejects.toThrow(MutatorNotRegisteredError)
+  })
+})
+
+describe('queryableFieldsFacet', () => {
+  const field: QueryableField = {
+    name: 'plugin:score',
+    value: () => ({sql: '1', params: []}),
+    encode: Number,
+    dependencies: [workspaceId => ({kind: 'plugin', channel: 'scores', key: workspaceId})],
+  }
+
+  it('resolves a custom field by name and drops malformed contributions', () => {
+    const invalid = [
+      {...field, name: ''},
+      {...field, name: 'missing-value', value: undefined},
+      {...field, name: 'missing-encode', encode: undefined},
+      {...field, name: 'invalid-bound', bounding: 'true'},
+      {...field, name: 'missing-dependencies', dependencies: undefined},
+      {...field, name: 'empty-dependencies', dependencies: []},
+      {...field, name: 'invalid-dependencies', dependencies: ['scores']},
+    ]
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const runtime = resolveFacetRuntimeSync([
+        queryableFieldsFacet.of(field),
+        ...invalid.map(value => queryableFieldsFacet.of(value as unknown as QueryableField)),
+      ])
+      expect(runtime.read(queryableFieldsFacet)).toEqual(new Map([[field.name, field]]))
+      expect(error).toHaveBeenCalledTimes(invalid.length)
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('keeps the registered field when an invalid runtime contribution has the same name', () => {
+    const runtime = resolveFacetRuntimeSync([queryableFieldsFacet.of(field)])
+    runtime.setRuntimeContributions(queryableFieldsFacet, 'plugin', [
+      {...field, dependencies: []} as unknown as QueryableField,
+    ])
+    expect(runtime.read(queryableFieldsFacet).get(field.name)).toBe(field)
+  })
+})
+
+describe('kernel queryable timestamps', () => {
+  const [created, updated] = KERNEL_QUERYABLE_FIELDS
+  const leapDay = Date.UTC(2024, 1, 29)
+
+  it('encodes milliseconds, Dates and canonical strings as timestamp parameters', () => {
+    for (const field of [created, updated]) {
+      for (const operand of [leapDay, new Date(leapDay), '2024-02-29T00:00:00.000Z']) {
+        expect(field.encode(operand)).toBe(leapDay)
+      }
+    }
+  })
+
+  it('rejects date-only strings, normalized dates and invalid operands', () => {
+    for (const field of [created, updated]) {
+      for (const operand of [Infinity, new Date(NaN), '2024-02-29', '2024-02-30T00:00:00.000Z', '2024-2-9']) {
+        expect(() => field.encode(operand)).toThrow('timestamp operand')
+      }
+    }
   })
 })
 

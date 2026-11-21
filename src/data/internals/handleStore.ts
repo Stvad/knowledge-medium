@@ -877,10 +877,9 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // releases its own slot up there.)
         batch?.finish(null)
         if (!this.disposed) {
-          // Roll back to the priorDeps — collected was incomplete.
-          // The queued changes are discarded along with the partial
-          // deps; a successful retry will rebuild both from scratch.
-          this.deps = priorDeps
+          // Keep the last successful dependency set. On cold failure the dependencies
+          // declared so far are the only signals that can make a mounted query recover.
+          this.deps = this.settleSeq === 0 ? collected : priorDeps
           this.changesDuringLoad = []
           this.status_ = 'error'
           this.error = err

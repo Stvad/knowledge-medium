@@ -233,6 +233,12 @@ export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
   WHERE deleted = 0 AND properties_json <> '{}'
 `
 
+/** Read the user edit stamp using the same expression as the recency index. */
+export const editTimeSql = (alias?: string): string => {
+  const prefix = alias ? `${alias}.` : ''
+  return `coalesce(${prefix}user_updated_at, ${prefix}updated_at)`
+}
+
 /** Serves the recency window every "what did I touch lately" surface pages
  *  through: the empty-query pickers (`core.recentBlocks`,
  *  `core.recentUserBlocks`), the activity feed (`core.recentActivity`) and
@@ -264,7 +270,7 @@ export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
  *  serves are interactive and the writes it taxes are one row at a time. */
 export const CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_recent
-  ON blocks (workspace_id, coalesce(user_updated_at, updated_at) DESC, id ASC)
+  ON blocks (workspace_id, ${editTimeSql()} DESC, id ASC)
   WHERE deleted = 0 AND content != ''
 `
 
@@ -449,7 +455,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
   {key: 'createdAt', sqlExpression: rowRef => `${rowRef}.created_at`},
   {key: 'updatedAt', sqlExpression: rowRef => `${rowRef}.updated_at`},
-  {key: 'userUpdatedAt', sqlExpression: rowRef => `coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at)`},
+  {key: 'userUpdatedAt', sqlExpression: editTimeSql},
   {key: 'createdBy', sqlExpression: rowRef => `${rowRef}.created_by`},
   {key: 'updatedBy', sqlExpression: rowRef => `${rowRef}.updated_by`},
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},

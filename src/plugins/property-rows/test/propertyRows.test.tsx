@@ -33,7 +33,7 @@ import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewport
 import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
-import { propertyRowsPlugin } from '../index'
+import * as propertyRows from '../index'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { referencesPlugin } from '@/plugins/references'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
@@ -169,7 +169,7 @@ const testExtensions = (): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
-  propertyRowsPlugin,
+  propertyRows.propertyRowsPlugin,
   referencesPlugin,
   plainOutlinerPlugin,
   defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
@@ -379,6 +379,10 @@ describe('ordinary property value content', () => {
 })
 
 describe('editing through a property row', () => {
+  it('keeps inline editor selection internal to ordinary value-row rendering', () => {
+    expect(propertyRows).not.toHaveProperty('resolvePropertyValueInlinePresentation')
+  })
+
   it.each(['click', 'keyboard'])('opens the same block editor by %s and projects its edit to the property', async entry => {
     if (entry === 'keyboard') {
       addExtensions(vimNormalModeInteractionExtension, vimNormalModeActionsExtension({repo}))

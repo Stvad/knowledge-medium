@@ -449,7 +449,7 @@ describe('idx_blocks_daily_note_date', () => {
    *  ships to prod. */
   const compiledDateQuery = (value: unknown) => compileTypedBlockQuery(
     {workspaceId: WS, where: {[dailyNoteDateProp.name]: value}},
-    env.repo.propertySchemas,
+    {properties: env.repo.propertySchemas},
     {projection: 'ids'},
   )
 
