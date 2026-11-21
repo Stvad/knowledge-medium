@@ -24,6 +24,8 @@ import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
 import type { AnyPropertySchema, ResolvedTypedBlockQuery } from '@/data/api'
 import { trackTestRepo } from '@/data/test/testRepoScope'
+import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { LoaderHandle } from './handleStore'
 
 const WS = 'ws-1'
@@ -123,6 +125,7 @@ const create = async (args: {
   id: string
   workspaceId?: string
   parentId?: string | null
+  orderKey?: string
   types?: readonly string[]
   properties?: Record<string, unknown>
   references?: BlockReference[]
@@ -135,7 +138,7 @@ const create = async (args: {
     id: args.id,
     workspaceId: args.workspaceId ?? WS,
     parentId: args.parentId ?? null,
-    orderKey: `k-${args.id}`,
+    orderKey: args.orderKey ?? `k-${args.id}`,
     properties,
     references: args.references ?? [],
   }), {
@@ -154,6 +157,212 @@ describe('hydrated typedBlocks limit', () => {
     expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 1}).load())).toEqual(['first'])
     expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo', 'task'], limit: 2}).load())).toEqual(['first', 'second'])
     expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 0}).load())).toEqual([])
+  })
+})
+
+describe('typed queries for table rows', () => {
+  it('limits direct children after outline ordering while counting all live matches', async () => {
+    await create({id: 'parent'})
+    await create({id: 'other-parent'})
+    await create({id: 'a', parentId: 'parent', orderKey: 'b', types: ['entry']})
+    await create({id: 'c', parentId: 'parent', orderKey: 'a', types: ['entry']})
+    await create({id: 'b', parentId: 'parent', orderKey: 'a', types: ['entry']})
+    await create({id: 'deleted', parentId: 'parent', orderKey: 'A', types: ['entry']})
+    await create({id: 'nested', parentId: 'b', orderKey: 'A', types: ['entry']})
+    await create({id: 'outside', parentId: 'other-parent', orderKey: 'A', types: ['entry']})
+    await create({id: 'untyped', parentId: 'parent', orderKey: 'A'})
+    await env.repo.tx(tx => tx.delete('deleted'), {scope: ChangeScope.BlockDefault})
+
+    const query = {workspaceId: WS, parentId: 'parent', order: 'outline', types: ['entry']} as const
+    expect(await env.repo.query.typedBlockIds(query).load()).toEqual(['b', 'c', 'a'])
+    expect(await env.repo.query.typedBlockIds({...query, limit: 2}).load()).toEqual(['b', 'c'])
+    expect(ids(await env.repo.query.typedBlocks({...query, limit: 2}).load())).toEqual(['b', 'c'])
+    expect(await env.repo.query.typedBlockIds({...query, limit: 0}).load()).toEqual([])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(3)
+    void (() => {
+      // @ts-expect-error Count always covers the complete match set.
+      env.repo.query.typedBlockCount({...query, limit: 2})
+    })
+  })
+
+  it('uses a direct parent to bound the ancestor walk before limiting', async () => {
+    await create({id: 'parent', properties: {[statusProp.name]: 'open'}})
+    await create({id: 'first', parentId: 'parent', orderKey: 'a'})
+    await create({id: 'second', parentId: 'parent', orderKey: 'b'})
+    await create({id: 'descendant', parentId: 'first', orderKey: 'A'})
+    const query = {
+      workspaceId: WS,
+      parentId: 'parent',
+      order: 'outline',
+      match: [{scope: 'ancestor', where: {[statusProp.name]: 'open'}}],
+    } as const
+    expect(await env.repo.query.typedBlockIds({...query, limit: 1}).load()).toEqual(['first'])
+    expect(ids(await env.repo.query.typedBlocks(query).load())).toEqual(['first', 'second'])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
+  })
+
+  it('sorts numeric cells in SQL with deterministic ties and treats malformed values as missing', async () => {
+    await create({id: 'parent'})
+    await create({id: 'a-ten', parentId: 'parent', properties: {[priorityProp.name]: 10}})
+    await create({id: 'c-two', parentId: 'parent', properties: {[priorityProp.name]: 2}})
+    await create({id: 'b-two', parentId: 'parent', properties: {[priorityProp.name]: 2}})
+    await create({id: 'empty', parentId: 'parent'})
+    await create({id: 'malformed', parentId: 'parent'})
+    // The stored projection can outlive a schema change and carry an old shape.
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[priorityProp.name]: '1'}), 'malformed'],
+    ))
+
+    const query = {workspaceId: WS, parentId: 'parent'}
+    const asc = {...query, order: {property: priorityProp.name, direction: 'asc'}} as const
+    const desc = {...query, order: {property: priorityProp.name, direction: 'desc'}} as const
+    const ascending = ['empty', 'malformed', 'b-two', 'c-two', 'a-ten']
+    expect(await env.repo.query.typedBlockIds(asc).load()).toEqual(ascending)
+    expect(ids(await env.repo.query.typedBlocks(asc).load())).toEqual(ascending)
+    expect(await env.repo.query.typedBlockIds({...desc, limit: 4}).load())
+      .toEqual(['a-ten', 'b-two', 'c-two', 'empty'])
+    expect(await env.repo.query.typedBlockCount(desc).load()).toBe(ascending.length)
+  })
+
+  it('keeps outline ids quiet for irrelevant edits and follows reorders and moves', async () => {
+    await create({id: 'parent'})
+    await create({id: 'other-parent'})
+    await create({id: 'a', parentId: 'parent', orderKey: 'a'})
+    await create({id: 'b', parentId: 'parent', orderKey: 'b'})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, parentId: 'parent', order: 'outline', propertyChildren: 'none',
+    })
+    expect(await handle.load()).toEqual(['a', 'b'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('a', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+      await create({id: 'elsewhere', parentId: 'other-parent'})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+
+      await env.repo.tx(
+        tx => tx.move('b', {parentId: 'parent', orderKey: 'A'}), {scope: ChangeScope.BlockDefault},
+      )
+      await waitFor(() => expect(handle.peek()).toEqual(['b', 'a']))
+      await env.repo.tx(
+        tx => tx.move('b', {parentId: 'other-parent', orderKey: 'x'}), {scope: ChangeScope.BlockDefault},
+      )
+      await waitFor(() => expect(handle.peek()).toEqual(['a']))
+      await env.repo.tx(
+        tx => tx.move('elsewhere', {parentId: 'parent', orderKey: 'A'}), {scope: ChangeScope.BlockDefault},
+      )
+      await waitFor(() => expect(handle.peek()).toEqual(['elsewhere', 'a']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('invalidates limited property-sort ids for a sort-key edit beyond the limit', async () => {
+    await create({id: 'first', types: ['entry'], properties: {[priorityProp.name]: 1}})
+    await create({id: 'second', types: ['entry'], properties: {[priorityProp.name]: 2}})
+    const query = {
+      workspaceId: WS, types: ['entry'], order: {property: priorityProp.name, direction: 'asc'},
+    } as const
+    const handle = env.repo.query.typedBlockIds({...query, limit: 1})
+    const count = env.repo.query.typedBlockCount(query)
+    expect(await handle.load()).toEqual(['first'])
+    expect(await count.load()).toBe(2)
+    const unsubscribers = [handle.subscribe(() => {}), count.subscribe(() => {})]
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('first', {properties: {
+        [typesProp.name]: ['entry'], [priorityProp.name]: 1, [statusProp.name]: 'edited',
+      }}), {scope: ChangeScope.BlockDefault})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+      await env.repo.tx(tx => tx.setProperty('second', priorityProp, 0), {scope: ChangeScope.BlockDefault})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before + 1)
+      await waitFor(() => expect(handle.peek()).toEqual(['second']))
+    } finally {
+      unsubscribers.forEach(unsubscribe => unsubscribe())
+    }
+  })
+
+  it('excludes recognized fields and their direct values while retaining blocks below a value', async () => {
+    await env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
+    const fieldId = propertyDefinitionBlockId(WS, statusProp.seedKey)
+    expect(await env.repo.db.getOptional('SELECT id FROM blocks WHERE id = ?', [fieldId])).toBeNull()
+    await create({id: 'owner'})
+    await create({id: 'field', parentId: 'owner', types: ['entry']})
+    await create({id: 'value', parentId: 'field', types: ['entry']})
+    await create({id: 'nested', parentId: 'value', types: ['entry']})
+    const query = {workspaceId: WS, types: ['entry'], propertyChildren: 'none'} as const
+    const handle = env.repo.query.typedBlockIds(query)
+    const count = env.repo.query.typedBlockCount(query)
+    const hydrated = env.repo.query.typedBlocks(query)
+    expect(await handle.load()).toEqual(['field', 'value', 'nested'])
+    expect(await count.load()).toBe(3)
+    const before = env.repo.handleStore.metrics.loaderInvalidations
+    await env.repo.tx(tx => tx.update('nested', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+    expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+    expect(ids(await hydrated.load())).toEqual(['field', 'value', 'nested'])
+    const unsubscribers = [handle.subscribe(() => {}), count.subscribe(() => {}), hydrated.subscribe(() => {})]
+    try {
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', fieldId, true), {scope: ChangeScope.BlockDefault})
+      expect(await env.h.db.get('SELECT is_field_form, reference_target_id FROM blocks WHERE id = ?', ['field']))
+        .toEqual({is_field_form: 1, reference_target_id: fieldId})
+      await waitFor(() => {
+        expect(handle.peek()).toEqual(['nested'])
+        expect(count.peek()).toBe(1)
+        expect(ids(hydrated.peek() ?? [])).toEqual(['nested'])
+      })
+      await env.repo.tx(tx => tx.move('value', {parentId: 'owner', orderKey: 'z'}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['value', 'nested']))
+      await env.repo.tx(tx => tx.move('value', {parentId: 'field', orderKey: 'z'}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['nested']))
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', 'unknown', true), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['field', 'value', 'nested']))
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', fieldId, true), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['nested']))
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', fieldId, false), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['field', 'value', 'nested']))
+    } finally {
+      unsubscribers.forEach(unsubscribe => unsubscribe())
+    }
+  })
+
+  it('re-resolves mounted child ids when a tagged definition starts and stops parsing', async () => {
+    await env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
+    const definition = {types: ['property-schema'], 'property-schema:preset': 'string'}
+    const broken = {...definition, 'property-schema:name': ''}
+    await create({id: 'definition', properties: broken})
+    await create({id: 'owner'})
+    await create({id: 'field', parentId: 'owner'})
+    await env.repo.tx(
+      tx => tx.stampReferenceTarget('field', 'definition', true), {scope: ChangeScope.BlockDefault},
+    )
+    await waitFor(() => expect(env.repo.propertyDefinitions?.unparseableDefinitionIds.has('definition')).toBe(true))
+
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, parentId: 'owner', propertyChildren: 'none'})
+    expect(await handle.load()).toEqual(['field'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await env.repo.tx(tx => tx.update('definition', {properties: {
+        ...definition, 'property-schema:name': 'custom-property',
+      }}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual([]))
+      await env.repo.tx(tx => tx.update('definition', {properties: broken}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['field']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it.each([reviewerProp.name, reviewersProp.name, labelsProp.name])('refuses sorting by %s', async property => {
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId: WS, order: {property, direction: 'asc'},
+    }).load())).rejects.toThrow(new RegExp(property))
+  })
+
+  it('refuses outline order without a direct parent', async () => {
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId: WS, order: 'outline',
+    }).load())).rejects.toThrow(/parentId/)
   })
 })
 
@@ -954,5 +1163,43 @@ describe('compileTypedBlockQuery — type filter join order', () => {
     const {sql, params} = compileTypes(['todo'], {referencedBy: {id: 'target-1'}})
     expect(params).toEqual(['todo', WS, 'target-1'])
     expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('br.workspace_id = ?'))
+  })
+})
+
+it('plans bounded table queries from the sibling index', async () => {
+  const {db} = env.h
+  await db.writeTransaction(async tx => {
+    await tx.execute(`
+      WITH RECURSIVE parents(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM parents WHERE n < 99)
+      INSERT INTO blocks (id, workspace_id, order_key, created_at, updated_at, created_by, updated_by)
+      SELECT 'parent-' || n, CASE WHEN n < 90 THEN ? ELSE ? END, printf('%03d', n), n, n, 'user', 'user'
+      FROM parents
+    `, [WS, OTHER_WS])
+    await tx.execute(`
+      WITH RECURSIVE children(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM children WHERE n < 4999)
+      INSERT INTO blocks (id, workspace_id, parent_id, order_key, properties_json,
+                          created_at, updated_at, created_by, updated_by)
+      SELECT 'child-' || n, CASE WHEN n % 100 < 90 THEN ? ELSE ? END, 'parent-' || (n % 100),
+             printf('%05d', n), json_object('priority', n % 37, 'types', json_array('entry')),
+             n, n, 'user', 'user'
+      FROM children
+    `, [WS, OTHER_WS])
+
+    const base = {workspaceId: WS, propertyChildren: 'none'} as const
+    const propertyOrder = {property: priorityProp.name, direction: 'asc'} as const
+    const siblingSearch = expect.stringMatching(/^SEARCH b USING INDEX idx_blocks_parent_order \(parent_id=\?\)/)
+    const tempSort = expect.stringMatching(/TEMP B-TREE FOR ORDER BY/)
+    for (const types of [undefined, ['entry']]) {
+      const query = {...base, parentId: 'parent-1', types}
+      const readPlan = async (order: ResolvedTypedBlockQuery['order']) => {
+        const compiled = compileTypedBlockQuery({...query, order}, env.repo.propertySchemas, {projection: 'ids', limit: 20})
+        const plan = await tx.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params])
+        return plan.map(row => row.detail)
+      }
+      const outlinePlan = await readPlan('outline')
+      expect(outlinePlan).toContainEqual(siblingSearch)
+      expect(outlinePlan).not.toContainEqual(tempSort)
+      expect(await readPlan(propertyOrder)).toContainEqual(siblingSearch)
+    }
   })
 })

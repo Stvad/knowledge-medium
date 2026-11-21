@@ -10,6 +10,23 @@ import {
 } from '@/data/api'
 import { buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
 
+import { recognizedFieldRowSql, NO_REGISTRY_RECOGNITION_PARAMS, type RecognitionParams } from './treeQueries'
+
+/** The `'none'` view's clause: a recognized field row, or a value row — a
+ *  DIRECT child of one. A block nested under a value row is ordinary content
+ *  and stays, where `core.subtree`'s `'none'` prunes the whole branch: that
+ *  one answers what an outline draws, this one what counts as note text.
+ *  Binds {@link RecognitionParams} twice. */
+export const NOT_PROPERTY_ROW_SQL = `
+    NOT (${recognizedFieldRowSql('b')})
+    AND NOT EXISTS (
+      SELECT 1 FROM blocks field_row
+       WHERE field_row.id = b.parent_id
+         AND field_row.workspace_id = b.workspace_id
+         AND (${recognizedFieldRowSql('field_row')})
+    )
+`
+
 export interface CompiledTypedBlockQuery {
   readonly sql: string
   readonly params: readonly unknown[]
@@ -417,6 +434,8 @@ export const normalizeTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
 ): ResolvedTypedBlockQuery => ({
   workspaceId: query.workspaceId,
+  parentId: query.parentId,
+  propertyChildren: query.propertyChildren,
   types: query.types === undefined
     ? undefined
     : Array.from(new Set(query.types.map(type => type.trim()).filter(Boolean))).sort(),
@@ -475,6 +494,7 @@ export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery): void 
 
   const types = query.types ?? []
   const hasGate =
+    query.parentId !== undefined ||
     query.referencedBy !== undefined ||
     types.length > 0 ||
     hasNonNullWhere(query.where) ||
@@ -487,17 +507,12 @@ export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery): void 
   }
 }
 
-/** Build the `candidates AS (...)` CTE body that selects the
- *  fully self-filtered result set for a typed-block query. Shared
- *  between the main SQL compiler and the ancestor-dep seed walk in
- *  `resolveTypedBlocks` so both observe the SAME candidate set —
- *  the row-dep declarations stay scoped to rows that actually feed
- *  into the result. */
-export const buildCandidatesCte = (
-  query: ResolvedTypedBlockQuery,
+/** Shared WHERE and joins for result projections and ancestor dependency discovery. */
+const candidateSource = (
+  normalized: ResolvedTypedBlockQuery,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  recognition: RecognitionParams,
 ): {sql: string; params: unknown[]} => {
-  const normalized = normalizeTypedBlockQuery(query)
   const types = normalized.types ?? []
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
@@ -549,9 +564,27 @@ export const buildCandidatesCte = (
       params.push(normalized.referencedBy.sourceField)
     }
   } else {
-    from = `FROM blocks b${typeJoin}`
+    let index = ''
+    if (normalized.parentId !== undefined) {
+      // Without stats SQLite may sort all workspace rows to select one parent's children.
+      index = ' INDEXED BY idx_blocks_parent_order'
+    } else if (typeof normalized.order === 'object' && !types.length &&
+      !normalized.where && !matchPredicates.length && !excludePredicates.length) {
+      // Arbitrary property sorts visit the workspace's live rows. Keep foreign workspaces off that path.
+      index = ' INDEXED BY idx_blocks_workspace_active'
+    }
+    from = `FROM blocks b${index}${typeJoin}`
     clauses.push('b.workspace_id = ?', 'b.deleted = 0')
     params.push(normalized.workspaceId)
+  }
+
+  if (normalized.parentId !== undefined) {
+    clauses.push('b.parent_id = ?')
+    params.push(normalized.parentId)
+  }
+  if (normalized.propertyChildren === 'none') {
+    clauses.push(NOT_PROPERTY_ROW_SQL)
+    params.push(...recognition, ...recognition)
   }
 
   if (normalized.where !== undefined) {
@@ -582,21 +615,16 @@ export const buildCandidatesCte = (
     params.push(...compiled.params)
   }
 
-  // DISTINCT is LOAD-BEARING, not defensive. It was redundant while the type
-  // filter was an EXISTS (b.id is unique in `blocks`); now it is the only thing
-  // absorbing the `block_types` join's row multiplication, so a block carrying
-  // two of the requested types yields one candidate rather than two — which
-  // `projection: 'count'` would otherwise report as two. `INNER` on the join is
-  // load-bearing for the same reason in reverse: LEFT would readmit untyped
-  // blocks. Both are pinned by the multi-type cases in typedBlockQuery.test.ts.
-  return {
-    sql: `candidates AS (
-      SELECT DISTINCT b.id
-      ${from}
-      WHERE ${clauses.join('\n        AND ')}
-    )`,
-    params,
-  }
+  return {sql: `${from} WHERE ${clauses.join(' AND ')}`, params}
+}
+
+export const buildCandidatesCte = (
+  query: ResolvedTypedBlockQuery,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  recognition: RecognitionParams = NO_REGISTRY_RECOGNITION_PARAMS,
+): CompiledTypedBlockQuery => {
+  const source = candidateSource(query, schemas, recognition)
+  return {sql: `candidates AS (SELECT DISTINCT b.id ${source.sql})`, params: source.params}
 }
 
 /** Recursive ancestor-chain CTE keyed off `candidates`. One row per
@@ -628,10 +656,31 @@ export const ANCESTOR_CHAIN_CTE_SQL = `
   )
 `.trim()
 
+const resultOrderSql = (
+  query: ResolvedTypedBlockQuery,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): string => {
+  const order = query.order
+  if (order === 'outline') {
+    if (query.parentId === undefined) throw new Error('[queryBlocks] outline order requires parentId')
+    return 'b.order_key, b.id'
+  }
+  if (typeof order === 'object') {
+    const schema = schemas.get(order.property)
+    if (!schema?.codec.where || schema.codec.member || isRefCodec(schema.codec)) {
+      throw new Error(`[queryBlocks] order requires a registered scalar property; got ${JSON.stringify(order.property)}`)
+    }
+    const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
+    const {test} = comparableCell(order.property, schema, cell)
+    return `CASE WHEN ${test} THEN json_extract(${cell}) END ${order.direction === 'desc' ? 'DESC' : 'ASC'}, b.id`
+  }
+  return `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`
+}
+
 export const compileTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-  opts: {projection?: TypedBlockQueryProjection} = {},
+  opts: {projection?: TypedBlockQueryProjection; limit?: number; recognition?: RecognitionParams} = {},
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query)
   const matchPredicates = normalized.match ?? []
@@ -641,8 +690,20 @@ export const compileTypedBlockQuery = (
 
   assertAncestorWalkBounded(normalized)
 
-  const candidatesCte = buildCandidatesCte(normalized, propertySchemas)
-  const params: unknown[] = [...candidatesCte.params]
+  const source = candidateSource(normalized, propertySchemas, opts.recognition ?? NO_REGISTRY_RECOGNITION_PARAMS)
+  const params = source.params
+  const order = resultOrderSql(normalized, propertySchemas)
+  const isCount = opts.projection === 'count'
+  const select = opts.projection === 'ids' ? 'b.id AS id' : buildQualifiedBlockColumnsSql('b')
+  const suffix = isCount ? '' : `ORDER BY ${order}${opts.limit === undefined ? '' : ' LIMIT ?'}`
+  if (!needsAncestorChain) {
+    const duplicates = (normalized.types?.length ?? 0) > 1 || normalized.referencedBy !== undefined
+    const projection = isCount
+      ? `COUNT(${duplicates ? 'DISTINCT b.id' : '*'}) AS count`
+      : `${duplicates ? 'DISTINCT ' : ''}${select}`
+    if (!isCount && opts.limit !== undefined) params.push(opts.limit)
+    return {sql: `SELECT ${projection} ${source.sql} ${suffix}`, params}
+  }
 
   // Outer WHERE — ancestor-scope predicates only.
   const filterClauses: string[] = []
@@ -666,35 +727,14 @@ export const compileTypedBlockQuery = (
     params.push(...compiled.params)
   }
 
-  const ctes = needsAncestorChain
-    ? `WITH RECURSIVE ${candidatesCte.sql}, ${ANCESTOR_CHAIN_CTE_SQL}`
-    : `WITH ${candidatesCte.sql}`
-
-  // `count` aggregates the same candidate set as `ids` (candidates is
-  // `SELECT DISTINCT b.id`, joined 1:1 to blocks), so `COUNT(*)` is the
-  // distinct-source membership count — identical filtering to the id
-  // projection, just not materialised. ORDER BY is meaningless on the
-  // aggregate, so it's dropped.
-  const isCount = opts.projection === 'count'
-  const selectClause = isCount
-    ? 'COUNT(*) AS count'
-    : opts.projection === 'ids'
-      ? 'b.id AS id'
-      : buildQualifiedBlockColumnsSql('b')
-  const orderClause = isCount
-    ? ''
-    : normalized.order === 'created-desc'
-      ? 'ORDER BY b.created_at DESC, b.id'
-      : 'ORDER BY b.created_at ASC, b.id ASC'
-
+  if (!isCount && opts.limit !== undefined) params.push(opts.limit)
   const sql = `
-    ${ctes}
-    SELECT ${selectClause}
+    WITH RECURSIVE candidates AS (SELECT DISTINCT b.id ${source.sql}), ${ANCESTOR_CHAIN_CTE_SQL}
+    SELECT ${isCount ? 'COUNT(*) AS count' : select}
     FROM candidates c
-    JOIN blocks b ON b.id = c.id
-    ${filterClauses.length > 0 ? `WHERE ${filterClauses.join('\n      AND ')}` : ''}
-    ${orderClause}
+    CROSS JOIN blocks b ON b.id = c.id
+    WHERE ${filterClauses.join(' AND ')}
+    ${suffix}
   `
-
   return {sql, params}
 }
