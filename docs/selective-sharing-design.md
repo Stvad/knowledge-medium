@@ -2,7 +2,8 @@
 
 > **Status:** proposal, nothing built. Code claims last verified against code 2026-11-21.
 > Synthesis of an independent design (first commit of this file) with the earlier sharing designs,
-> then revised after one adversarial review round. §14 records where it departs from the earlier
+> revised after an adversarial review round, then extended with a sizing of linked workspaces
+> (§3.1) and join links (§5.6). §14 records where it departs from the earlier
 > documents. If accepted it replaces the recommendation in `subtree-sharing-e2ee.md` (PR #259) and
 > the access-control mechanics of [`subtree-sharing.md`](subtree-sharing.md) and
 > [`shares-and-api-tokens.html`](shares-and-api-tokens.html); the API-token half of the latter is
@@ -28,8 +29,8 @@ Two planes, a split taken from the PR #259 document: **access** (which rows reac
 reads only ids, tree shape and membership, so it is the same for plaintext and e2ee workspaces;
 **keys** (can the guest open them; §6) exists only for e2ee.
 
-Not in scope: public or anonymous links (§14), a guest reading history, presence, mounting a share
-inside the guest's own workspace.
+Not in scope: a public web page with no account (§14), a guest reading history, presence, mounting
+a share inside the guest's own workspace.
 
 ## 2. What the code does today
 
@@ -50,28 +51,83 @@ inside the guest's own workspace.
 
 ## 3. The first decision: where shared content lives
 
+The bar, in the owner's words: sharing must allow collaboration while preserving normal
+behaviour. A shared page has to keep behaving like any other page of the graph.
+
 **A. Regions inside the workspace (recommended).** Shared blocks stay where they are. The server
 learns which blocks are under a share root and gives guests exactly those rows; in an e2ee
 workspace those rows are sealed under a key of their own.
 
 **B. A separate workspace per share.** A share is an ordinary workspace with both people as
-members; sharing a page means moving it there. (PR #259 calls this option E and recommends it for
-e2ee.)
+members; sharing a page means moving it there. (PR #259 calls this option E.) On its own this
+fails the bar: the page leaves the graph. `[[P]]` in a daily note no longer resolves to it, it
+drops out of search, queries and typed views, and a subtree has to be cut out of its parent.
 
-| | A: regions | B: separate workspace |
+**C. Linked workspaces.** B, plus the client presenting the home workspace and the workspaces
+linked to it as one graph: links, backlinks, search and queries reach across, and a subtree shared
+"in place" is a *mount*, a block in the home workspace that renders a root from the other one as
+its children. This is how B could meet the bar, so it was sized against the code (§3.1).
+
+| | A: regions | C: linked workspaces |
 |---|---|---|
-| To build | §11: access plane, key plane, guest session, then dependencies and media | one feature: a structural cross-workspace move that carries properties (remapped to the other workspace's definitions), references and media, and re-seals |
-| New authorization or cryptography | yes: the server decides per row, and a second key domain | none |
-| Guest gets | their regions; user-defined properties, media, comments and new pages arrive in later steps | a complete workspace on day one |
-| Owner keeps | one graph: links, backlinks, search, queries and types keep reaching shared content; a subtree is shared where it sits | two graphs: after moving page P, `[[P]]` in daily notes no longer resolves to it, P leaves search and typed views, a subtree must be cut out of its parent, and the two schemas drift |
-| Standing cost | every processor, backfill and plugin must behave on a guest's partial workspace (§7) | none |
-| Isolation if the server is hostile | weaker: the server controls tree shape, so it can present private rows as shared (§6.5) | full |
+| New server authorization or cryptography | yes: the server decides per row, and a second key domain | almost none: a move RPC and a join link |
+| Guest gets | their regions; user-defined properties, media, comments and new pages arrive in later steps | a complete workspace on day one, which they can link into their own graph too |
+| Owner's client | unchanged apart from the share dialog, badges and re-key flows; a shared block is still an ordinary block of the one workspace | the single-active-workspace core is rebuilt: registries, the extension runtime, write admission, read-only, undo and maintenance all become per workspace |
+| "Normal behaviour" for the owner | by construction | approximated: two schemas, two undo stacks, a precedence rule for names that exist in both, a daily note per workspace, and a mount boundary with its own gesture rules |
+| Crossing the boundary | the server flips a region; rows are re-keyed; ids, properties and references are untouched | a cross-workspace move: ids, property rows, definitions, media and the seal all change or need remapping |
+| Where new code runs | only when a share exists; a workspace without shares takes none of these paths | in the core read and write paths of every session |
+| Standing cost | every processor, backfill and plugin must behave on a guest's partial workspace (§7) | about 2,000 rows of seeded definitions per shared workspace, synced to every participant |
+| Isolation if the server is hostile | weaker: the server controls tree shape (§6.5) | full |
 
-B is roughly one build step where A is five. B is the right answer when the shared material is
-self-contained (a document for someone else); A is the right answer when it is part of the graph,
-which is what "share a subtree without sharing the rest" describes. This document recommends A and
-designs it. If A is chosen, the partial-workspace risk is tested first (§11 step 0), before any
-server work, because it is the assumption most likely to change that recommendation.
+### 3.1 What sizing linked workspaces found
+
+Read from code by four surveys on 2026-11-21; consequences are reasoned, nothing was prototyped.
+
+- **Reads are the cheap part.** Of 167 non-test reads of the active workspace, only 29 choose
+  which rows come back, and most queries filter on a single `workspace_id = ?` that widens to a
+  set. A block from another workspace already renders: `BlockRef` and `BlockEmbed` load by id with
+  no workspace check, and an embed is the normal block component with a scope root. Not
+  mechanical: the recents query (its plan depends on one workspace as the leading index column),
+  typed queries (compiled against the active registry; a cross-workspace target is refused), SRS
+  due, grouped backlinks, field-row recognition (bound to the active registry), and name
+  resolution, where the same alias may legally exist in both workspaces.
+- **Writes are the expensive part.** A transaction is admitted only for the workspace that was
+  active when it started (`WorkspaceRegistryUnavailableError`); the bypass flag has no production
+  caller. Behind that sit: one property and one type registry (about 150 consumers read them
+  ambiently, by name), one extension runtime built from the active workspace's own extension
+  blocks and toggles, one read-only boolean (about 88 sites), an undo stack per workspace with
+  Cmd-Z bound to the active one, and bootstrap and maintenance passes that are deliberately
+  active-only. A workspace never opened on a device has no materialized rows there at all. The
+  kernel seams take a workspace id already, so this is tractable, but it is a re-architecture of
+  the session, not a feature beside it.
+- **The move is the risky part.** Seeded definitions have per-workspace ids, so every property
+  row of every moved block (a plain page carries four from birth) must be re-pointed at the other
+  workspace's definitions; a missed one leaves orphan or duplicate property rows. Ids the app
+  re-derives to *find* a row are keyed by workspace (alias seats, daily notes, kernel and user
+  pages, plugin records, media): keeping a moved page's id makes typing its name in the old
+  workspace throw, and re-minting ids breaks every reference to it. Media has to be re-captured
+  under the other workspace. And a device with an offline edit to a moved block has its whole
+  transaction refused, permanently, including unrelated edits in it; A's accept-and-repair has no
+  equivalent once `workspace_id` itself has changed.
+- **The mount is fine.** The surface model (scope root, structural-edit policy, focus by
+  location) carries over; a handful of boundary gestures need defining.
+
+**Verdict.** C is viable, and it is the better answer to a different question: several workspaces
+as one graph. As a way to share part of a workspace it costs more than A, puts that cost in the
+paths every session uses every day instead of in code that runs only when a share exists, and
+still approximates the bar where A meets it by construction. Its real advantages are the guest's
+complete workspace and the stronger isolation. One problem is common to both: links from
+someone's private graph into shared content are invisible to the other participants, so the
+add-only rules of §7.3 would be needed under C as well.
+
+A part of C is worth having regardless and is cheap: links and embeds from one of your workspaces
+to pages of another, and search across them. That is a feature of its own, not a sharing
+mechanism, and nothing in A forecloses it. It is also what would later let a guest use a share
+from inside their own graph.
+
+This document recommends A and designs it. The partial-workspace risk is tested first (§11 step
+0), before any server work, because it is the assumption most likely to change that
+recommendation.
 
 PR #259 deferred A for e2ee as "encryption-core surgery". Three choices here reduce that: a block
 has exactly one region, so one row never needs two keys (§4); the share key is stored wrapped
@@ -113,7 +169,8 @@ accepted and repaired instead of rejected (§6.4).
 shares            (id, workspace_id, wrapped_key, key_canary, created_by, create_time, revoked_at)
 share_roots       (share_id, block_id UNIQUE, workspace_id, root_auth, create_time)
 share_members     (id, share_id, workspace_id, user_id, role, create_time)   -- role: editor | viewer
-share_invitations (id, share_id, workspace_id, email, role, invited_by_user_id, create_time)
+share_links       (id, share_id, workspace_id, role, token_hash, email NULL, created_by,
+                   create_time, expires_at, revoked_at)                     -- §5.6
 blocks.share_id       text NULL      -- the block's region. Server-maintained only.
 blocks.guest_written  boolean        -- set once by the server, cleared only by the owner (§5.3).
 ```
@@ -128,8 +185,8 @@ blocks.guest_written  boolean        -- set once by the server, cleared only by 
   `accept_invitation` (becoming a member) deletes that user's share memberships in the workspace.
 - Every new table is created with row-level security enabled and `anon` / `authenticated` grants
   revoked in the same migration. All four are written only through owner-only `SECURITY DEFINER`
-  RPCs mirroring the member RPCs. `invite_to_share` refuses a workspace member; accepting never
-  lowers an existing role.
+  RPCs mirroring the member RPCs, plus `redeem_share_link`, which any signed-in account may call
+  (§5.6). Joining refuses a workspace member and never lowers an existing role.
 - `share_members` is generic on purpose: an API or agent principal can later join a share the
   same way (the service-user idea in `shares-and-api-tokens.html`).
 
@@ -240,6 +297,29 @@ the `workspaces` query can share the stream.
   keyed. Keyed namespaces close it; until then the share dialog says so.
 - Not: other shares' ids, the member roster, history, tombstones from before the share.
 
+### 5.6 Join links
+
+Joining a share is by link, as with a shared document: **anyone who has the link and an account
+can join**, with the role the link carries. There is one mechanism, not links beside invitations:
+a link whose `email` is set can be redeemed only by that account, which is what an invitation is.
+
+- The link is `…/#join/<link id>.<token>`, with the share key appended in an e2ee workspace
+  (§6.1). All of it is in the URL fragment, which browsers do not send to any server. The server
+  stores only a hash of the token.
+- Opening it while signed in calls `redeem_share_link(link id, token)`: check the hash, expiry,
+  revocation and the bound email if any; refuse a workspace member; insert the caller's
+  `share_members` row with the link's role, recording which link they joined by. Not signed in
+  means sign in first, then the same call. The client then removes the fragment from the address
+  bar and history.
+- The owner can copy a link again at any time: in an e2ee workspace the token is also stored
+  sealed under WK beside the hash; in a plaintext workspace it sits in a row only the owner can
+  read. Links are never in a sync stream that reaches guests.
+- **Revoking a link stops new joins.** People who already joined stay until removed; the dialog
+  offers "also remove the N people who joined by this link". In an e2ee workspace everyone who
+  ever had the URL has the share key, so a real cut-off is the same as for any removed guest (§10).
+- Accounts created by anonymous sign-in are refused for now (`is_anonymous` in the token claims);
+  whether to admit them is an open decision (§13), and it is one line here.
+
 ## 6. Key plane (e2ee workspaces only)
 
 ### 6.1 Share key and authenticated roots
@@ -256,8 +336,12 @@ region's rows are sealed under its share's SK; everything else stays under WK.
   root. A member client treats a root as real only if that opens. The server cannot mint a root,
   and neither can a guest.
 - `shares.key_canary` is the share id sealed under SK; a guest's client checks a pasted key
-  against it. A guest gets SK the way a collaborator gets WK today: the owner copies it
-  (`kmp-sk-1:…`) and sends it over a channel of their choosing, once per share per device.
+  against it. A guest gets SK inside the join link (§5.6), which the owner sends over a channel
+  of their choosing; a second device opens the same link. That is the same trust as handing over
+  a key string today, in one step instead of two, and the key still never reaches the server.
+  The known hazards of a key in a URL apply and are accepted: whoever obtains the URL can join
+  and read, and a browser that syncs history may have recorded it before the client removed it.
+  Pasting the bare key (`kmp-sk-1:…`) remains as a fallback.
 - SK plays WK's whole role for its region, including the derived HMAC subkey (`K_id`) that names
   attachment objects and namespaces derived ids.
 
@@ -347,7 +431,7 @@ per block.
   who holds an SK can move private rows under a real root. Existing content is still not re-keyed
   without a member confirming a list that would look wrong, but anything a member then *types*
   there is sealed under SK, behind a "shared" badge that is true as far as the client can tell.
-  Alternative B does not have this limit. Closing it needs authenticated tree structure, which
+  Alternatives B and C do not have this limit. Closing it needs authenticated tree structure, which
   nothing in the current encryption design provides.
 - A revoked share keeps its `wrapped_key`, so rows and history still sealed under it stay readable
   to members. No share key is ever discarded.
@@ -483,8 +567,9 @@ constraint it has to meet.
 
 ## 9. Owner experience
 
-- "Share…" on any block: pick or create a share, invite by email with a role, copy the share key
-  (e2ee). The dialog lists roots, members, pending invitations, how many deleted blocks under the
+- "Share…" on any block: pick or create a share, then "Copy link" with a role (anyone with the
+  link and an account), optionally limited to one email. The dialog lists roots, members and the
+  link each joined by, live links, how many deleted blocks under the
   root are *not* being shared, what guests can see besides content (§5.5), and rows awaiting
   confirmation (§6.4). Share actions are online-only, as member management is.
 - A root shows a badge; a block inside a region shows who can see it in its breadcrumb.
@@ -516,20 +601,21 @@ constraint it has to meet.
    turns §7.3's table into evidence and sizes step 3. (b) The three Sync Streams questions in
    §5.4. (c) The region rule against its oracle under concurrent sessions.
 1. **Access plane, read-only guests, plaintext workspaces.** Tables, the trigger, policies,
-   streams, share RPCs, the member-or-guest fact and every gate re-keyed on it, the local-only
-   write source, a minimal share dialog. An internal milestone: not useful to an e2ee owner.
+   streams, share RPCs and join links (§5.6), the member-or-guest fact and every gate re-keyed on
+   it, the local-only write source, a minimal share dialog. An internal milestone: not useful to
+   an e2ee owner.
 2. **Key plane.** SK and authenticated roots, envelope v2 and its matchers, the per-key resolver
-   (§6.3), `rekey_blocks`, the gesture and confirmation flows, the guest key prompt (reusing
-   `openCanaryWithPastedKey` and the key UI; `WorkspaceKeyGate` itself gates a whole workspace and
-   does not fit). After this step an e2ee workspace can share read-only.
+   (§6.3), `rekey_blocks`, the gesture and confirmation flows, the share key carried in the join
+   link and checked on arrival (reusing `openCanaryWithPastedKey` and the key UI for the paste
+   fallback; `WorkspaceKeyGate` itself gates a whole workspace and does not fit). After this step
+   an e2ee workspace can share read-only.
 3. **Guest editing.** The commit gate, root locking, the server allowlist, the derivation rules of
    §7.3 and the decision on member-side completion. This is the first point the stated baseline
    (shared editing) exists, and it exists without user-defined properties, media, comments or
    guest-created pages.
 4. Definition stand-ins; guest-created pages.
 5. Media in regions.
-6. Later: comments and the commenter role, per-block edit affordances, an invite link carrying the
-   key in the URL fragment (delivery only; access still needs the membership row), key rotation.
+6. Later: comments and the commenter role, per-block edit affordances, key rotation.
 
 Verification that is part of the work. The first attempt at sharing in this codebase was abandoned
 for lack of it, according to the earlier design's test plan.
@@ -555,8 +641,11 @@ supporting. Existing data is untouched until the first share is created.
 
 ## 13. Decisions for Vlad
 
-1. **Regions in place (A) or a separate workspace per share (B)?** §3 has both build lists and
-   what each costs the owner. Pick: A, with step 0 run first because it can change the answer.
+1. **Regions in place (A) or linked workspaces (C)?** A separate workspace alone (B) is ruled out:
+   the page leaves the graph. C was sized against the code (§3.1): viable, but it rebuilds the
+   single-workspace core every session runs on and adds a risky cross-workspace move, where A's
+   new code runs only when a share exists. Pick: A, with step 0 run first because it can change
+   the answer. Cross-workspace links and search are worth doing as a feature of their own.
 2. **Re-keying into a share needs intent on a member device** (§6.4). The cost: a block that a
    stale device added under a shared page stays invisible to guests until someone confirms it.
    The alternative, re-keying automatically wherever the server says a row is shared, is simpler
@@ -564,9 +653,13 @@ supporting. Existing data is untouched until the first share is created.
 3. **When is editing shippable?** At step 3 a guest can edit text, structure and built-in
    properties, but sees user-defined properties as "not shared", sees no images, cannot comment
    and cannot create pages. Pick: ship at step 3, say so in the dialog.
-4. **Key handling is manual and keys are not rotated.** One paste per share per device; removing a
-   guest stops delivery but does not re-key. Pick: accept, as the workspace key works today.
-5. **What guests can see besides content** (§5.5): structure, timing, authors, and whether a given
+4. **The share key travels in the join link and is not rotated.** Whoever obtains the URL can
+   join and read; removing a guest or revoking a link stops delivery but does not re-key. Pick:
+   accept; a real cut-off is "revoke the share, create a new one" until rotation exists.
+5. **Anonymous accounts.** Join links admit any signed-in account; accounts made by anonymous
+   sign-in are refused for now. Admitting them is one line (§5.6) and brings accounts that
+   accumulate and authors nobody can name. Pick: refuse until there is a reason.
+6. **What guests can see besides content** (§5.5): structure, timing, authors, and whether a given
    block id exists. Pick: accept and disclose.
 
 Defaults, not forks: nearest root wins and a root inside another share is refused at first; the
@@ -591,7 +684,9 @@ workspace owner alone manages shares; tombstones from before a share are never s
 | A per-block key for every row, with key grants per share | rejected | re-encrypts the whole workspace once and derives a key per row on every read |
 | Rejecting a write sealed under the wrong key | rejected | a stale device's edit is lost |
 | A shared "schema region" all guests read | rejected | leaks every schema name; a type definition's subtree is arbitrary content |
-| Public and anonymous links | deferred | in e2ee mode a link can only be a client-side plaintext export (PR #259 option D), a deliberate and irreversible declassification; in a plaintext workspace the link design in `subtree-sharing.md` can sit on this access plane later |
+| Email invitations and link tokens as two mechanisms, links redeemed by anonymous sign-in | one join link, optionally bound to an email, for signed-in accounts (§5.6) | one table and one RPC; anonymous accounts are a separate decision |
+| A separate workspace per share, made one graph on the client (linked workspaces) | sized in §3.1 and not chosen | rebuilds the session's single-workspace core and needs a cross-workspace move that changes ids, property rows and seals |
+| A public web page with no account | deferred | in e2ee mode it can only be a client-side plaintext export (PR #259 option D), a deliberate and irreversible declassification |
 
 Taken unchanged from the earlier documents: the access/key split, row-level security as the read
 boundary, the workspace row reaching the guest, a key id on the wire and in the associated data,
