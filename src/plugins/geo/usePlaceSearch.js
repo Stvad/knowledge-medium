@@ -1,1 +1,1 @@
-export{Cb as usePlaceSearch}from"../../../chunks/app-DdiqAC9H.js";
+export{Cb as usePlaceSearch}from"../../../chunks/app-BUKO58DY.js";

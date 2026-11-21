@@ -1,1 +1,1 @@
-export{l5 as kernelDataExtension}from"../../chunks/app-DdiqAC9H.js";
+export{l5 as kernelDataExtension}from"../../chunks/app-BUKO58DY.js";

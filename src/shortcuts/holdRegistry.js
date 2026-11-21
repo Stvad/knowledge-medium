@@ -1,1 +1,1 @@
-export{HF as cancelArmedHolds,UF as registerArmedHold}from"../../chunks/app-DdiqAC9H.js";
+export{HF as cancelArmedHolds,UF as registerArmedHold}from"../../chunks/app-BUKO58DY.js";

@@ -1,1 +1,1 @@
-export{So as propertyRowsPlugin}from"../../../chunks/app-DdiqAC9H.js";
+export{So as propertyRowsPlugin}from"../../../chunks/app-BUKO58DY.js";

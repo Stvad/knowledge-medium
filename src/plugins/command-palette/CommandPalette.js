@@ -1,1 +1,1 @@
-export{FM as CommandPalette}from"../../../chunks/app-DdiqAC9H.js";
+export{FM as CommandPalette}from"../../../chunks/app-BUKO58DY.js";
