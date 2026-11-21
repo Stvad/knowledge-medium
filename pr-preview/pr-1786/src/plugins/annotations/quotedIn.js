@@ -1,0 +1,1 @@
+export{zf as quotedInFooterContribution}from"../../../chunks/app-D20NQDTR.js";

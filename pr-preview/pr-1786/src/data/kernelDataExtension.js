@@ -1,0 +1,1 @@
+export{c5 as kernelDataExtension}from"../../chunks/app-D20NQDTR.js";

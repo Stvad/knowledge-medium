@@ -1,0 +1,1 @@
+export{BQ as adoptTypedBlock,VQ as createTypedChild,Bct as derivedBlockId,HQ as getOrCreateTypedChild}from"../../chunks/app-D20NQDTR.js";

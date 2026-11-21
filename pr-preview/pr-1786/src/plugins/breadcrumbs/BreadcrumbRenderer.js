@@ -1,0 +1,1 @@
+export{IE as BreadcrumbRenderer}from"../../../chunks/app-D20NQDTR.js";

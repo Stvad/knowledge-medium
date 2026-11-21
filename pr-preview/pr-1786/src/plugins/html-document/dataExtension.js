@@ -1,0 +1,1 @@
+export{kY as htmlDocumentDataExtension}from"../../../chunks/app-D20NQDTR.js";

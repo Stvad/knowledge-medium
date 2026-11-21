@@ -1,0 +1,1 @@
+export{Gq as omnilinerNamespace}from"../../chunks/app-D20NQDTR.js";

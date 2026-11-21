@@ -1,0 +1,1 @@
+export{mT as spatialNavigationShellDecorator}from"../../../chunks/app-D20NQDTR.js";

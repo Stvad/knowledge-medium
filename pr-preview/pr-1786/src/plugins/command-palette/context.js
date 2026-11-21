@@ -1,0 +1,1 @@
+export{VM as COMMAND_PALETTE_ACTION_ID,HM as COMMAND_PALETTE_CONTEXT,UM as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,WM as commandPaletteActionContext}from"../../../chunks/app-D20NQDTR.js";

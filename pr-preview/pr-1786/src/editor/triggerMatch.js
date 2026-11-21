@@ -1,0 +1,1 @@
+export{RX as matchCharTrigger}from"../../chunks/app-D20NQDTR.js";

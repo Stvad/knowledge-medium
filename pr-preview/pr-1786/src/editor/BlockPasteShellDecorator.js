@@ -1,0 +1,1 @@
+export{JP as BlockPasteShellDecorator,YP as blockPasteShellDecorator}from"../../chunks/app-D20NQDTR.js";

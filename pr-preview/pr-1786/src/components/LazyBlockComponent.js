@@ -1,0 +1,1 @@
+export{VI as LazyBlockComponent}from"../../chunks/app-D20NQDTR.js";

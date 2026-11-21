@@ -1,0 +1,1 @@
+export{qI as BlockLoadingPlaceholder}from"../../chunks/app-D20NQDTR.js";

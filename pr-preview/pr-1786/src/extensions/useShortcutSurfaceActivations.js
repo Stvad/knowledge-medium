@@ -1,0 +1,1 @@
+export{Hz as useShortcutSurfaceActivations}from"../../chunks/app-D20NQDTR.js";

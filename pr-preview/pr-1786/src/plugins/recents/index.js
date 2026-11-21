@@ -1,0 +1,1 @@
+export{ik as OPEN_RECENTS_ACTION_ID,ak as openRecentsAction,ok as recentsHeaderItem,sk as recentsPlugin}from"../../../chunks/app-D20NQDTR.js";

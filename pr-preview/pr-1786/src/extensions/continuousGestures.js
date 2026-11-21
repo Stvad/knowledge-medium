@@ -1,0 +1,1 @@
+export{lR as GESTURE_ACTIVE,uR as GESTURE_CANCEL,dR as GESTURE_IDLE,fR as TOUCH_HOLD_MS,pR as TOUCH_SLOP_PX,mR as continuousGestureRecognizersFacet,hR as createBlockGestureController,gR as enabledTouchAction,_R as suppressNextClick,vR as unionTouchAction,yR as useContinuousGestures}from"../../chunks/app-D20NQDTR.js";

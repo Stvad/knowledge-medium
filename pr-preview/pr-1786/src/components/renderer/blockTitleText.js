@@ -1,0 +1,1 @@
+export{rV as BLOCK_TITLE_TEXT_CLASS,iV as useBlockTitleTextClass}from"../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{$N as BlockEmbed}from"../../../chunks/app-D20NQDTR.js";

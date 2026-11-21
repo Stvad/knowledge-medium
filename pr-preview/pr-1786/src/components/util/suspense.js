@@ -1,0 +1,1 @@
+export{yq as SuspenseFallback}from"../../../chunks/app-D20NQDTR.js";

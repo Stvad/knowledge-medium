@@ -1,0 +1,1 @@
+export{oN as CommandPaletteHeaderItem}from"../../../chunks/app-D20NQDTR.js";

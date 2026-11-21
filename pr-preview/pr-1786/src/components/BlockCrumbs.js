@@ -1,0 +1,1 @@
+export{Gk as BlockCrumbs}from"../../chunks/app-D20NQDTR.js";

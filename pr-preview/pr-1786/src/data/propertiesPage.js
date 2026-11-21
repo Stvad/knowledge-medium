@@ -1,0 +1,1 @@
+export{Ost as getOrCreatePropertiesPage,kst as propertiesPageBlockId,Ast as propertiesPageSpec}from"../../chunks/app-D20NQDTR.js";

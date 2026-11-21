@@ -1,0 +1,1 @@
+export{XR as BlockInfoDialog}from"../../../chunks/app-D20NQDTR.js";

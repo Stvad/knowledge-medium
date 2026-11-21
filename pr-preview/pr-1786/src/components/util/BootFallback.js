@@ -1,0 +1,1 @@
+export{vq as BootFallback}from"../../../chunks/app-D20NQDTR.js";

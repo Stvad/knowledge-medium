@@ -1,0 +1,1 @@
+export{hY as preferredSpanReplacement}from"../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{_N as SwipeActionMenu}from"../../../chunks/app-D20NQDTR.js";

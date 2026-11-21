@@ -1,0 +1,1 @@
+export{CA as Label}from"../../../chunks/app-D20NQDTR.js";

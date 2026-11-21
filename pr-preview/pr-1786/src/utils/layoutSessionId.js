@@ -1,0 +1,1 @@
+export{Qat as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,$at as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,eot as __resetLayoutSessionIdForTesting,tot as getLayoutSessionId,not as isInstalledAppDisplayMode,rot as readOrCreateLayoutSessionId}from"../../chunks/app-D20NQDTR.js";

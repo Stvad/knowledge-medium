@@ -1,0 +1,1 @@
+export{Pb as wikilinkMarkdownExtension}from"../../../../../chunks/app-D20NQDTR.js";

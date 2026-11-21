@@ -1,0 +1,1 @@
+export{MG as isIOS,NG as isMacPlatform}from"../../chunks/app-D20NQDTR.js";

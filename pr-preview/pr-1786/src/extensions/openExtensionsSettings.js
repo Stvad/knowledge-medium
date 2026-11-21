@@ -1,0 +1,1 @@
+export{mL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,hL as openExtensionsSettings}from"../../chunks/app-D20NQDTR.js";

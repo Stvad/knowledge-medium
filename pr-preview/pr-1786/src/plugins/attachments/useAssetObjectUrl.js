@@ -1,0 +1,1 @@
+export{xC as useAssetObjectUrl}from"../../../chunks/app-D20NQDTR.js";

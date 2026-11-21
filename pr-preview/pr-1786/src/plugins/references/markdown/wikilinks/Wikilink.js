@@ -1,0 +1,1 @@
+export{Fb as Wikilink}from"../../../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{mot as MIGRATIONS_PAGE_ALIAS,hot as getOrCreateMigrationsPage,got as migrationsPageBlockId,_ot as migrationsPageSpec}from"../../chunks/app-D20NQDTR.js";

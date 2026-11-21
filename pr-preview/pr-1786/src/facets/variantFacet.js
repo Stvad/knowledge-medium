@@ -1,0 +1,1 @@
+export{BV as defineVariant,VV as defineVariantFacet}from"../../chunks/app-D20NQDTR.js";

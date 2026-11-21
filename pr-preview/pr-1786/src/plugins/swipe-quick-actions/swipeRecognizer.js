@@ -1,0 +1,1 @@
+export{vN as SWIPE_QUICK_ACTIONS_GESTURE_ID,yN as SWIPE_TRIGGER_PX,bN as swipeRecognizer}from"../../../chunks/app-D20NQDTR.js";

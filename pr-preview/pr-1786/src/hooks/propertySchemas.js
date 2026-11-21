@@ -1,0 +1,1 @@
+export{MK as usePropertySchemas}from"../../chunks/app-D20NQDTR.js";

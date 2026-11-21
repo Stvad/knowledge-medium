@@ -1,0 +1,1 @@
+export{bw as DEFAULT_VIDEO_NOTES_PANE_RATIO,xw as VIDEO_NOTES_VIEW_MODE,Sw as videoNotesPaneRatioProp}from"../../../chunks/app-D20NQDTR.js";

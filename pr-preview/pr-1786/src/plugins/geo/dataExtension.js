@@ -1,0 +1,1 @@
+export{iX as geoDataExtension}from"../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{_y as blockInfoPlugin}from"../../../chunks/app-D20NQDTR.js";

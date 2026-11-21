@@ -1,0 +1,1 @@
+export{lP as chipStyle}from"../../../chunks/app-D20NQDTR.js";

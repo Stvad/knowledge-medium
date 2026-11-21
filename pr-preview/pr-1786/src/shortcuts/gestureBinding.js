@@ -1,0 +1,1 @@
+export{UF as gestureBindingDescriptor,WF as matchesGestureEvent}from"../../chunks/app-D20NQDTR.js";

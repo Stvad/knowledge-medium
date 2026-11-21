@@ -1,0 +1,1 @@
+export{tn as staticAppExtensions}from"../../chunks/app-D20NQDTR.js";

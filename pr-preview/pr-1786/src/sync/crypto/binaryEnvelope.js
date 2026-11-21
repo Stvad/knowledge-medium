@@ -1,0 +1,1 @@
+export{YD as BINARY_ENVELOPE_MAGIC,XD as BINARY_ENVELOPE_MIN_BYTES,ZD as BINARY_ENVELOPE_OVERHEAD_BYTES,QD as BINARY_MAGIC_BYTES,$D as decodeBinaryEnvelope,eO as encodeBinaryEnvelope,tO as hasBinaryEnvelopeMagic}from"../../../chunks/app-D20NQDTR.js";

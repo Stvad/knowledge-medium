@@ -1,0 +1,1 @@
+export{oj as dailyDateWikilinkDecorator}from"../../../chunks/app-D20NQDTR.js";

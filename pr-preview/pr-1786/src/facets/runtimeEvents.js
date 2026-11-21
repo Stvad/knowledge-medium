@@ -1,0 +1,1 @@
+export{BK as appRuntimeUpdateEvent,VK as refreshAppRuntime}from"../../chunks/app-D20NQDTR.js";

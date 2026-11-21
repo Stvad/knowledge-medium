@@ -1,0 +1,1 @@
+export{P7 as agree,F7 as pluralize}from"../../chunks/app-D20NQDTR.js";

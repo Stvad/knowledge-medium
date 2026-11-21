@@ -1,0 +1,1 @@
+export{iF as editorAutocompleteExtension}from"../../chunks/app-D20NQDTR.js";

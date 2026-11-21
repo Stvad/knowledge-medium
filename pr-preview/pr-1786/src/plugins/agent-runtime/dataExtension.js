@@ -1,0 +1,1 @@
+export{v2 as agentRuntimeDataExtension}from"../../../chunks/app-D20NQDTR.js";

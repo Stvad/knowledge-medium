@@ -1,0 +1,1 @@
+export{PE as usePromotableBreadcrumb}from"../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{AY as htmlDocumentTypeSeed}from"../../../chunks/app-D20NQDTR.js";

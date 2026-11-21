@@ -1,0 +1,1 @@
+export{MF as appUpdate,NF as useAppUpdateAvailable}from"../chunks/app-D20NQDTR.js";

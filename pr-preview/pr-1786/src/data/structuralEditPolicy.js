@@ -1,0 +1,1 @@
+export{RP as resolveStructuralEditPolicy,zP as structuralEditPolicyForBlock}from"../../chunks/app-D20NQDTR.js";

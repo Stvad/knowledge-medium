@@ -1,0 +1,1 @@
+export{Ib as remarkWikilinks}from"../../../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{oD as getOrCreateShortcutsBlock,sD as journalShortcutBlockId,cD as shortcutsBlockId}from"../../../chunks/app-D20NQDTR.js";

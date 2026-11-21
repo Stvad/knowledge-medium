@@ -1,0 +1,1 @@
+export{AF as checkForAppUpdate,jF as registerServiceWorker}from"../chunks/app-D20NQDTR.js";

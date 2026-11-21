@@ -1,0 +1,1 @@
+export{nI as ClientLocalSettings,rI as clientLocalSettings}from"../../chunks/app-D20NQDTR.js";

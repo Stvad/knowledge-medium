@@ -1,0 +1,1 @@
+export{DP as ensureMetricsConsoleHook}from"../../chunks/app-D20NQDTR.js";

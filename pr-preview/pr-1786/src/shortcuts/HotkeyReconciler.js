@@ -1,0 +1,1 @@
+export{BF as HotkeyReconciler}from"../../chunks/app-D20NQDTR.js";

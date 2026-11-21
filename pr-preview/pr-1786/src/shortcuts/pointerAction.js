@@ -1,0 +1,1 @@
+export{GF as dispatchPointerAction,KF as setPointerActionDispatcher}from"../../chunks/app-D20NQDTR.js";

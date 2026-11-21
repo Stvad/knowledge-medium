@@ -1,0 +1,1 @@
+export{dct as deriveWorkspaceIdNamespace}from"../../../chunks/app-D20NQDTR.js";

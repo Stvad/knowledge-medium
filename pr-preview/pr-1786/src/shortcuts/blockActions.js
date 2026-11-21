@@ -1,0 +1,1 @@
+export{OP as bindBlockActionContext,kP as createSharedBlockActions,AP as enterEditMode,jP as extendSelectionDown,MP as extendSelectionUp,NP as requestEditorFocusIfEditing}from"../../chunks/app-D20NQDTR.js";

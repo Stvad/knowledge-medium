@@ -1,0 +1,1 @@
+export{JC as attachmentObjectPath,YC as authenticatedObjectUrl,XC as deriveObjectKey,ZC as storageObjectUrl}from"../../../chunks/app-D20NQDTR.js";

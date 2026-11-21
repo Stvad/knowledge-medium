@@ -1,0 +1,1 @@
+export{FB as ExtensionRenderBoundary}from"../../chunks/app-D20NQDTR.js";

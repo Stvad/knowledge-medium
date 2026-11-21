@@ -1,0 +1,1 @@
+export{QC as videoPlayerPlugin}from"../../../chunks/app-D20NQDTR.js";

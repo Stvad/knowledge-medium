@@ -1,0 +1,1 @@
+export{Kk as useAncestorCrumbs}from"../../chunks/app-D20NQDTR.js";

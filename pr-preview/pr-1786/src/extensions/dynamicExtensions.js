@@ -1,0 +1,1 @@
+export{oI as dynamicExtensionsExtension}from"../../chunks/app-D20NQDTR.js";

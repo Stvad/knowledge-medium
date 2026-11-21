@@ -1,0 +1,1 @@
+export{iR as ConfirmBulkDeleteDialog}from"../../chunks/app-D20NQDTR.js";

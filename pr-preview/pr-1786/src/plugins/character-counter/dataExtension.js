@@ -1,0 +1,1 @@
+export{r1 as characterCounterDataExtension}from"../../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{Sq as closePowerSyncDbIfOpen,Cq as ensurePowerSyncReady,wq as getActiveSyncResolver,Tq as getActiveUserId,Eq as getPowerSyncDb,Dq as isRemoteSyncActive,Oq as syncObserverDepsFor,kq as syncResolverForUser,Aq as webDatabaseOptions}from"../../chunks/app-D20NQDTR.js";

@@ -1,0 +1,1 @@
+export{J3 as applySyncInvalidation}from"../../../../chunks/app-D20NQDTR.js";

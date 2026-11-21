@@ -1,0 +1,1 @@
+export{rft as SYSTEM_AUTHOR_PREFIX,ift as isSystemAuthor,aft as systemAuthor}from"../../../chunks/app-D20NQDTR.js";

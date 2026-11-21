@@ -1,0 +1,1 @@
+export{bk as openRecentsPage}from"../../../chunks/app-D20NQDTR.js";

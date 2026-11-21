@@ -1,0 +1,1 @@
+export{UR as useIsMobile,WR as usePointerCoarse}from"../../chunks/app-D20NQDTR.js";

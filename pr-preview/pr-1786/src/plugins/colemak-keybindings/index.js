@@ -1,0 +1,1 @@
+export{$w as COLEMAK_KEYBINDINGS_PLUGIN_ID,eT as colemakKeybindingsPlugin,tT as colemakMovementKeybindingOverrides}from"../../../chunks/app-D20NQDTR.js";

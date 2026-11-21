@@ -1,0 +1,1 @@
+export{a5 as Block,o5 as requireLoadedBlock}from"../../chunks/app-D20NQDTR.js";

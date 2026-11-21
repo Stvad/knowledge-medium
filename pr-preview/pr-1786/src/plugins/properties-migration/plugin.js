@@ -1,0 +1,1 @@
+export{qo as propertiesMigrationPlugin}from"../../../chunks/app-D20NQDTR.js";

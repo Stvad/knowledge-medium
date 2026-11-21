@@ -1,0 +1,1 @@
+export{L$ as contributorsDataExtension}from"../../../chunks/app-D20NQDTR.js";

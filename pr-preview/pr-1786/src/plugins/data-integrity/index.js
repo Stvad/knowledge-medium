@@ -1,0 +1,1 @@
+export{$s as dataIntegrityPlugin}from"../../../chunks/app-D20NQDTR.js";

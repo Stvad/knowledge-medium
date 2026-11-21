@@ -1,0 +1,1 @@
+export{xx as useIsReadOnly}from"../../chunks/app-D20NQDTR.js";

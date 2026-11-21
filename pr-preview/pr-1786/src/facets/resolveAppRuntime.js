@@ -1,0 +1,1 @@
+export{iI as resolveAppRuntime,aI as resolveAppRuntimeSync}from"../../chunks/app-D20NQDTR.js";

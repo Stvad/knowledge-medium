@@ -1,0 +1,1 @@
+export{gC as runSingleOwner}from"../../../chunks/app-D20NQDTR.js";

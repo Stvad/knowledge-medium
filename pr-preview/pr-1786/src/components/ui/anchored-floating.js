@@ -1,0 +1,1 @@
+export{AK as floatingAnchorFromRect,jK as useAnchoredFloating}from"../../../chunks/app-D20NQDTR.js";

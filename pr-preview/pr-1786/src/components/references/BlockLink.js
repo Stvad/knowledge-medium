@@ -1,0 +1,1 @@
+export{gk as BlockLink}from"../../../chunks/app-D20NQDTR.js";

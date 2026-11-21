@@ -1,0 +1,1 @@
+export{Xx as richPastePlugin}from"../../../chunks/app-D20NQDTR.js";

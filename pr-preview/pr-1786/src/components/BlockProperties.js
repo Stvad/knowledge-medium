@@ -1,0 +1,1 @@
+export{tH as BlockProperties}from"../../chunks/app-D20NQDTR.js";

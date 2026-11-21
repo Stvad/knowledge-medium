@@ -1,0 +1,1 @@
+export{yJ as staticDataExtensions}from"../../chunks/app-D20NQDTR.js";

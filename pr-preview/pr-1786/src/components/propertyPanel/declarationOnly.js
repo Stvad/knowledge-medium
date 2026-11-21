@@ -1,0 +1,1 @@
+export{AH as declarationOnlyDefinitionForName,jH as declarationOnlyStatusText}from"../../../chunks/app-D20NQDTR.js";

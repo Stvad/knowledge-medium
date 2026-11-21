@@ -1,0 +1,1 @@
+export{FM as useCommandPaletteActions}from"../../../chunks/app-D20NQDTR.js";

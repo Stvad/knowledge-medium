@@ -1,0 +1,1 @@
+export{npt as CHANGE_SCOPE_POLICIES,rpt as ChangeScope,ipt as isChangeScope,apt as policyForScope,opt as scopeAllowedInReadOnly,spt as scopeIsUndoable,cpt as scopePoliciesEquivalent,lpt as scopeUploadsToServer,upt as sourceForScope}from"../../../chunks/app-D20NQDTR.js";
