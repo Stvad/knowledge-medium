@@ -1,1 +1,0 @@
-export{UM as useCommandPaletteActions}from"../../../chunks/app-CdvvFxMJ.js";

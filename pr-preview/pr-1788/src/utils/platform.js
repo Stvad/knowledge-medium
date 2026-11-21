@@ -1,1 +1,0 @@
-export{HG as isIOS,UG as isMacPlatform}from"../../chunks/app-CdvvFxMJ.js";

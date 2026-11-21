@@ -1,1 +1,0 @@
-export{mI as dynamicExtensionsExtension}from"../../chunks/app-CdvvFxMJ.js";

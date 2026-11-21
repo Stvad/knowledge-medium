@@ -1,1 +1,0 @@
-export{YI as LazyBlockComponent}from"../../chunks/app-CdvvFxMJ.js";

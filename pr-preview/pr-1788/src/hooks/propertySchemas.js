@@ -1,1 +1,0 @@
-export{HK as usePropertySchemas}from"../../chunks/app-CdvvFxMJ.js";

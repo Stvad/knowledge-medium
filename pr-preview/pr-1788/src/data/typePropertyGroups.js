@@ -1,1 +1,0 @@
-export{IH as typePropertyGroups}from"../../chunks/app-CdvvFxMJ.js";

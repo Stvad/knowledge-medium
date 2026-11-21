@@ -1,1 +1,0 @@
-export{gP as TypeChip}from"../../../chunks/app-CdvvFxMJ.js";

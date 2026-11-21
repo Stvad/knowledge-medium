@@ -1,1 +1,0 @@
-export{v5 as kernelDataExtension}from"../../chunks/app-CdvvFxMJ.js";

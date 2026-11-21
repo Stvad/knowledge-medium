@@ -1,1 +1,0 @@
-export{Ty as blockInfoPlugin}from"../../../chunks/app-CdvvFxMJ.js";

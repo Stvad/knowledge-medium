@@ -1,1 +1,0 @@
-export{ns as MigrationGateDialog}from"../../../chunks/app-CdvvFxMJ.js";

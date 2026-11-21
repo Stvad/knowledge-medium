@@ -1,1 +1,0 @@
-export{qK as adoptOrCreatePropertySchema}from"../../chunks/app-CdvvFxMJ.js";

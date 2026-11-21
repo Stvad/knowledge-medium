@@ -1,1 +1,0 @@
-export{sP as BlockEmbed}from"../../../chunks/app-CdvvFxMJ.js";

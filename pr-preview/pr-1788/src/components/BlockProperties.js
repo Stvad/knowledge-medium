@@ -1,1 +1,0 @@
-export{dH as BlockProperties}from"../../chunks/app-CdvvFxMJ.js";

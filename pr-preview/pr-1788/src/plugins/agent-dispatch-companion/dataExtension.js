@@ -1,1 +1,0 @@
-export{A2 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CdvvFxMJ.js";

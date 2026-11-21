@@ -1,1 +1,0 @@
-export{UE as PromotableBreadcrumbList}from"../../../chunks/app-CdvvFxMJ.js";

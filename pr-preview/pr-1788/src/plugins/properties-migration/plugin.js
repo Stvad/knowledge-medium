@@ -1,1 +1,0 @@
-export{es as propertiesMigrationPlugin}from"../../../chunks/app-CdvvFxMJ.js";

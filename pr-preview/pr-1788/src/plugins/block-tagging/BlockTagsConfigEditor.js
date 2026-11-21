@@ -1,1 +1,0 @@
-export{_d as BlockTagsConfigEditor}from"../../../chunks/app-CdvvFxMJ.js";

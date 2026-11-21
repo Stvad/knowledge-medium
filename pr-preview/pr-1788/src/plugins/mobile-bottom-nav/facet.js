@@ -1,1 +1,0 @@
-export{LE as mobileBottomNavItemsFacet}from"../../../chunks/app-CdvvFxMJ.js";

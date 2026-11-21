@@ -1,1 +1,0 @@
-export{p1 as characterCounterDataExtension}from"../../../chunks/app-CdvvFxMJ.js";
