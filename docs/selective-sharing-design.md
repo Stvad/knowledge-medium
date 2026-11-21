@@ -1,10 +1,10 @@
 # Selective sharing: share a collection of pages or subtrees with a guest
 
 > **Status:** proposal, nothing built. Code claims last verified against code 2026-11-21.
-> This is a synthesis: an independent design (first commit of this file) merged with the earlier
-> sharing designs. §15 says what came from where and where this document disagrees with them.
-> If accepted it replaces the recommendation in `subtree-sharing-e2ee.md` (PR #259) and the
-> access-control mechanics of [`subtree-sharing.md`](subtree-sharing.md) and
+> Synthesis of an independent design (first commit of this file) with the earlier sharing designs,
+> then revised after one adversarial review round. §14 records where it departs from the earlier
+> documents. If accepted it replaces the recommendation in `subtree-sharing-e2ee.md` (PR #259) and
+> the access-control mechanics of [`subtree-sharing.md`](subtree-sharing.md) and
 > [`shares-and-api-tokens.html`](shares-and-api-tokens.html); the API-token half of the latter is
 > untouched.
 
@@ -17,17 +17,16 @@ editing. It has to work for end-to-end-encrypted (e2ee) workspaces.
 Terms:
 
 - **share**: a named collection with its own member list and one or more roots.
-- **root**: a block attached to a share. The root and everything under it is shared.
+- **root**: a block attached to a share. The root and everything live under it is shared.
 - **region**: the set of blocks whose *nearest* enclosing root belongs to one share. Every block
-  is in at most one region. Blocks in no region are the **remainder** of the workspace.
-- **guest**: a user who is a member of a share but not of the workspace (the earlier docs say
-  "share recipient").
+  is in at most one region.
+- **guest**: a user who is a member of a share but not of the workspace (the earlier documents
+  say "share recipient").
 - **member**: a workspace member, as today (`workspace_members`).
 
-The design has two planes, a split taken from the PR #259 document because it keeps the rest
-tractable: **access** (which rows reach a guest; §5) reads only ids, tree shape and membership, so
-it is the same for plaintext and e2ee workspaces; **keys** (can the guest open them; §6) exists
-only for e2ee.
+Two planes, a split taken from the PR #259 document: **access** (which rows reach a guest; §5)
+reads only ids, tree shape and membership, so it is the same for plaintext and e2ee workspaces;
+**keys** (can the guest open them; §6) exists only for e2ee.
 
 Not in scope: public or anonymous links (§14), a guest reading history, presence, mounting a share
 inside the guest's own workspace.
@@ -36,17 +35,17 @@ inside the guest's own workspace.
 
 | Fact | Where |
 |---|---|
-| Every authorization decision keys on whole-workspace membership: row-level security on `blocks`, `workspaces`, `workspace_members`; the sync stream; Storage. `blocks` is granted to `anon` and `authenticated`, so row-level security, not the sync stream, is the read boundary. | `supabase/migrations/20260510222352_consolidated_initial.sql`, `powersync/sync-config.yaml`, `…20260625000000_add_attachments_storage.sql` |
-| The upload RPCs (`apply_block_creates`, `apply_block_patches`) run as the caller and rely on row-level security. Patches are per-column last-writer-wins; there is no compare-and-swap. `created_by` / `updated_by` are client-supplied. | `…20260709000000…`, `…20260803000000…` |
-| The server has no tree concept. `parent_id` is a deferred foreign key inside one workspace; `workspace_id` is immutable; `id` is a global primary key. | `consolidated_initial.sql` |
-| An e2ee workspace has one key (WK), handed to other people out of band (paste). Nothing key-related is stored server-side except a canary. The key is held as a non-extractable `CryptoKey`. There is no rotation and no asymmetric cryptography. | `src/sync/keys/`, `src/sync/crypto/workspaceKey.ts` |
-| Three columns are sealed (`content`, `properties_json`, `references_json`); ids, `parent_id`, `order_key`, authors and timestamps are cleartext. The envelope is `enc:v1:` + nonce + ciphertext and names no key; the associated data binds block, workspace, column and version. | `src/sync/transform.ts`, `src/sync/crypto/envelope.ts`, `src/sync/crypto/aad.ts` |
-| The local database holds plaintext. Sealing happens on upload and opening happens when a staged row (`blocks_synced`) is materialized into `blocks`; both look the key up by workspace id. | `src/services/powersync.ts`, `src/data/internals/syncObserver/materialize.ts` |
+| Every authorization decision keys on whole-workspace membership: row-level security on `blocks`, `workspaces`, `workspace_members`; the sync stream; Storage. `blocks` is granted to `anon` and `authenticated`, so row-level security, not the sync stream, is the boundary, and any column a policy or trigger does not protect is writable directly. | `supabase/migrations/20260510222352_consolidated_initial.sql`, `powersync/sync-config.yaml`, `…20260625000000_add_attachments_storage.sql` |
+| The upload RPCs run as the caller and rely on row-level security. Patches are per-column last-writer-wins with no compare-and-swap, and they accept client values for `created_by`, `created_at`, `updated_by`. A refused upload quarantines its whole local transaction. | `…20260709000000…`, `…20260803000000…`, `src/services/uploadErrorClassifier.ts` |
+| The server has no tree concept. `parent_id` is a deferred foreign key inside one workspace; `workspace_id` is immutable; `id` is a global primary key. Deleting is a flag: a tombstone keeps its content and its place in the tree. | `consolidated_initial.sql`, `src/data/internals/txEngine.ts` |
+| An e2ee workspace has one key (WK), handed to other people out of band (paste). Nothing key-related is stored server-side except a canary. There is no rotation and no asymmetric cryptography. | `src/sync/keys/`, `src/sync/crypto/workspaceKey.ts` |
+| Three columns are sealed (`content`, `properties_json`, `references_json`); ids, `parent_id`, `order_key`, authors and timestamps are cleartext and unauthenticated. The envelope is `enc:v1:` + nonce + ciphertext and names no key. | `src/sync/transform.ts`, `src/sync/crypto/envelope.ts`, `src/sync/crypto/aad.ts` |
+| The local database holds plaintext. Sealing happens on upload; opening happens when a staged row (`blocks_synced`) is materialized into `blocks`. Entry, materialization, the key-loss signal and about twenty other readers all resolve the key **per workspace**: without a workspace key record an e2ee workspace is locked as a whole. | `src/sync/keys/resolver.ts`, `resolveWorkspaceEntry.ts`, `openWorkspaceKeys.ts`, `src/data/internals/syncObserver/materialize.ts` |
+| Rows that arrive by sync are not run through processors. Arrival trusts `references_json` as written and derives only two device-local columns; the rename rewriter has no arrival counterpart, deliberately. | `materialize.ts`, `src/plugins/references/renameProcessor.ts` |
 | One local database holds every workspace of the user; a session has one active workspace and one property-definition registry. | `src/data/clientContext.ts`, `src/data/repo.ts` |
-| Read-only is one boolean per session. The commit pipeline rejects document writes; UI-state and preference writes still upload and the server rejects them into the quarantine. | `src/data/internals/commitPipeline.ts`, `src/data/api/changeScope.ts` |
-| A property is a child block whose content is `::((fieldId))`; `fieldId` is a definition block under the Properties page. Seeded definitions resolve from code with no row; user-defined ones need the row. E2ee workspaces can be child-backed too. | `src/data/propertyChildren.ts`, `src/data/propertyDefinitionRegistry.ts`, `…20260821120000_allow_e2ee_properties_migration_flip.sql` |
-| A media block lives under the Assets page and is embedded by id; its bytes are at `<workspace_id>/<contentKey>`, sealed under WK in e2ee mode. | `src/plugins/attachments/` |
-| Comment threads live under a per-workspace "Comments" page. | `src/plugins/annotations/container.ts` |
+| Read-only is one boolean per session, and bootstrap, kernel pages, seeds and backfills all branch on it. The commit pipeline rejects document writes; UI-state and preference writes still upload, the server rejects them, and each rejection is counted in a "changes couldn't sync" warning. | `src/data/internals/commitPipeline.ts`, `src/data/api/changeScope.ts`, `src/plugins/system-status/` |
+| Definitions (property schemas, block types) and extensions are discovered by type tag anywhere in the workspace. A property is a child block whose content is `::((fieldId))`; built-in seeded definitions resolve from code with no row. | `src/data/projectorRuntime.ts`, `src/data/userSchemasService.ts`, `src/data/propertyChildren.ts`, `src/extensions/extensionLookup.ts` |
+| A media block lives under the Assets page and is embedded by id. Its id, its object path `<workspace_id>/<contentKey>` and the byte seal are all derived from the workspace and its key. | `src/plugins/attachments/` |
 | Cross-workspace copy is markdown text only: property values and media do not survive it. | `src/paste/operations.ts`, `src/utils/copy.ts` |
 
 ## 3. The first decision: where shared content lives
@@ -59,46 +58,48 @@ workspace those rows are sealed under a key of their own.
 members; sharing a page means moving it there. (PR #259 calls this option E and recommends it for
 e2ee.)
 
-B needs no new server authorization and no new cryptography, and the guest gets a complete,
-ordinary workspace. But the page leaves the owner's graph: backlinks, queries, search, typed
-properties and daily-note references stop reaching it, and a subtree cannot be shared *in place*.
-Putting that back means the client presenting several workspaces as one graph, which touches
-every layer that assumes one active workspace (about 175 reads of `activeWorkspaceId`,
-transactions pinned to one workspace, one definition registry). B is also not free today: there is
-no structural cross-workspace move, and the copy that exists drops properties and media.
+| | A: regions | B: separate workspace |
+|---|---|---|
+| To build | §11: access plane, key plane, guest session, then dependencies and media | one feature: a structural cross-workspace move that carries properties (remapped to the other workspace's definitions), references and media, and re-seals |
+| New authorization or cryptography | yes: the server decides per row, and a second key domain | none |
+| Guest gets | their regions; user-defined properties, media, comments and new pages arrive in later steps | a complete workspace on day one |
+| Owner keeps | one graph: links, backlinks, search, queries and types keep reaching shared content; a subtree is shared where it sits | two graphs: after moving page P, `[[P]]` in daily notes no longer resolves to it, P leaves search and typed views, a subtree must be cut out of its parent, and the two schemas drift |
+| Standing cost | every processor, backfill and plugin must behave on a guest's partial workspace (§7) | none |
+| Isolation if the server is hostile | weaker: the server controls tree shape, so it can present private rows as shared (§6.5) | full |
 
-A keeps one graph for the owner and concentrates the cost at the sync boundary and in the guest's
-session. Its two risks are different in kind: new server code decides who can read what, and a
-guest client holds a partial workspace. §6.4 and §7.3 are about containing them.
+B is roughly one build step where A is five. B is the right answer when the shared material is
+self-contained (a document for someone else); A is the right answer when it is part of the graph,
+which is what "share a subtree without sharing the rest" describes. This document recommends A and
+designs it. If A is chosen, the partial-workspace risk is tested first (§11 step 0), before any
+server work, because it is the assumption most likely to change that recommendation.
 
-PR #259 recommended deferring A for e2ee as "encryption-core surgery". The requirement has since
-changed (e2ee must work), and three choices below make it smaller than that estimate: a block has
-exactly one region, so one row never needs two keys (§4); the share key is stored wrapped under
-WK, so workspace members need no key delivery (§6.1); and writes sealed under the wrong key are
-accepted and repaired instead of made atomic (§6.3, §6.4).
-
-The rest of this document designs A.
+PR #259 deferred A for e2ee as "encryption-core surgery". Three choices here reduce that: a block
+has exactly one region, so one row never needs two keys (§4); the share key is stored wrapped
+under WK, so members need no key delivery (§6.1); and a write sealed under the wrong key is
+accepted and repaired instead of rejected (§6.4).
 
 ## 4. Model
 
-- A **share is a block**: a `share`-typed block under a lazily created per-workspace "Shares"
-  page. Its content is the share's name (so the name is sealed like any content). Its id is the
-  share id. It is the first root of its own share, so anything created *inside* the share that has
-  no better home (a page a guest creates, definition stand-ins, a comments container) lives under
-  it and is in the region automatically. For the owner it is an ordinary page that also lists the
-  share's other roots.
-- Other roots are attached to the share by reference, not by moving them. A root stays where it is
-  in the owner's tree.
-- **Nearest root wins.** A block's region is decided by the nearest root at or above it. A share
-  root inside another share's region carves its own region out of the outer one. The earlier
-  designs made nesting additive (a block carries every share above it); that cannot work once a
-  region has a key, because a row is sealed once.
-- Access is per region, by role: `editor` or `viewer`. A member's access is unchanged: members see
-  and write every region, and a member who is also on a share uses their workspace role.
+- A **share is a block**: a `share`-typed block under a per-workspace "Shares" page
+  (`getOrCreateKernelPage`, `createTypedChild`). Its content is the share's name, so the name is
+  sealed like any content; it claims no alias, so it can be named after the page it shares. Its id
+  is the share id. It is a root of its own share, so things created *inside* the share that have
+  no better home live under it.
+- Other roots are attached by reference, not by moving them. The server's `share_roots` table is
+  the only list of roots; the share page renders it.
+- **Nearest root wins.** A block's region is decided by the nearest root at or above it. A root
+  inside another share's region carves its own region out. The earlier designs made nesting
+  additive; that cannot work once a region has a key, because a row is sealed once.
+- **A tombstone never gains a region.** Sharing covers what is live. A block deleted while shared
+  stays in its region, so a guest's delete and its undo work; a block deleted before its subtree
+  was shared is never delivered.
+- Access is per region, by role: `editor` or `viewer`. Members are unaffected: they see and write
+  every region under their workspace role, and share membership grants nothing to a member.
 - Access follows tree position. Moving a block under a root shares it; moving it out unshares it.
-
-"Share this page" in the UI creates a share named after the page and attaches the page as a root.
-"Add to share…" attaches another root to an existing share.
+- **A region is guest-writable, so nothing in it may define schema or load code for the
+  workspace.** Member clients skip rows that have a region when discovering property definitions,
+  block types and extensions; the share gesture refuses a subtree that contains one, and
+  schema-authoring gestures are refused inside a region for everyone.
 
 ## 5. Access plane (server)
 
@@ -106,79 +107,79 @@ The rest of this document designs A.
 
 ```
 shares            (id, workspace_id, wrapped_key, key_canary, created_by, create_time, revoked_at)
-share_roots       (share_id, block_id UNIQUE, workspace_id, create_time)
+share_roots       (share_id, block_id UNIQUE, workspace_id, root_auth, create_time)
 share_members     (id, share_id, workspace_id, user_id, role, create_time)   -- role: editor | viewer
 share_invitations (id, share_id, workspace_id, email, role, invited_by_user_id, create_time)
 blocks.share_id   text NULL          -- the block's region. Server-maintained only.
 ```
 
-- `shares.id` is the share block's id; the share block is an implicit root.
-- A share is **never hard-deleted**. Revoking sets `revoked_at`, which removes its roots and stops
-  delivery; the row and its `wrapped_key` stay, because rows and history sealed under that key
-  must remain readable (§6.4, §10).
+- `shares.id` is the share block's id, and the share block has its own `share_roots` row like any
+  other root. There is no foreign key from `shares` to the block: deleting the block must not
+  delete the key.
+- A share is **never hard-deleted**. Revoking sets `revoked_at` and removes its roots; the row
+  and its `wrapped_key` stay, because rows and history sealed under that key must stay readable.
 - Guests are deliberately **not** `workspace_members` rows: every existing policy tests that
   table, so a guest stays locked out of everything this design does not explicitly open.
+  `accept_invitation` (becoming a member) deletes that user's share memberships in the workspace.
 - Every new table is created with row-level security enabled and `anon` / `authenticated` grants
-  revoked in the same migration.
-- All four tables are written only through `SECURITY DEFINER` RPCs callable by the workspace owner
-  (`create_share`, `revoke_share`, `add_share_root`, `remove_share_root`, `invite_to_share`,
-  `accept_share_invitation`, `remove_share_member`, `set_share_member_role`), mirroring the member
-  RPCs. `invite_to_share` refuses a workspace member. Accepting never lowers an existing role; only
-  `set_share_member_role` can.
-- `share_members` is deliberately generic: an API or agent principal can later join a share the
-  same way (the service-user idea in `shares-and-api-tokens.html`) without touching this plane.
+  revoked in the same migration. All four are written only through owner-only `SECURITY DEFINER`
+  RPCs mirroring the member RPCs. `invite_to_share` refuses a workspace member; accepting never
+  lowers an existing role.
+- `share_members` is generic on purpose: an API or agent principal can later join a share the
+  same way (the service-user idea in `shares-and-api-tokens.html`).
 
-### 5.2 Keeping `blocks.share_id` right
+### 5.2 One rule for `blocks.share_id`
 
-The rule: `share_id` = the share of the nearest block at or above this one that is in
-`share_roots`, else null. One scalar column, so read checks are O(1) per row and nothing walks
-parents at read time.
+A `BEFORE INSERT OR UPDATE` trigger computes the column on **every** write and ignores whatever
+the client sent, so there is no second writer and a direct `UPDATE … SET share_id` changes nothing:
 
-- **Insert, or `parent_id` change** (`BEFORE` trigger): if the block is a root, its own share;
-  otherwise the parent's `share_id`, read with `FOR SHARE` on the parent row. The client's value
-  is always overwritten, so it cannot be forged.
-- **Cascade** (`AFTER`, when the value changed or the row was just inserted, and from
-  `add_share_root` / `remove_share_root` / `revoke_share`): update the children that are not
-  roots, level by level, one statement per level, until a level changes nothing. Cascading from an
-  insert covers a child that reached the server before its parent (the foreign key is deferred).
-- Region does not look at `deleted`: a tombstone keeps its region, so a restore lands where it was.
+```
+share_id :=  the row's own share            if the row is in share_roots
+             the value it already had        if the row is a tombstone (null on insert)
+             its parent's share_id           otherwise
+```
 
-Locking the parent and cascading one level per statement is meant to close the race between a move
-and a concurrent insert below it: an insert under a row the cascade has not reached waits on that
-row's lock and then reads the new region; an insert that got there first is committed before the
-cascade's next level reads. This is reasoned, not tested; the spike (§11) decides between it and
-the blunter alternative, a per-workspace advisory lock taken shared by inserts and exclusive by
-anything that changes a region. The property either must hold is **never over-share**: a row must
-never keep a region its ancestor chain no longer supports. Under-sharing is a bug; over-sharing is
-a leak.
+When a row's value changes, or a live row is inserted, the change cascades to its children that
+are not roots: live children take the new value, tombstones lose theirs. `add_share_root`,
+`remove_share_root` and `revoke_share` run the same cascade from the root; revoke also clears by
+`share_id`, which catches rows a `parent_id` cycle keeps out of reach of any walk.
 
-The trigger functions are `SECURITY DEFINER` (a guest's write must be able to read its parent's
-region and cascade). `share_id` is excluded from `blocks_history` diffs and from the version bump,
-so sharing ten thousand rows writes no history and does not look like ten thousand edits.
+**Serialization.** One advisory lock per workspace: taken exclusively by anything that can change
+a region (the share RPCs, a `parent_id` change, a restore) and shared by plain inserts. Region
+changes are rare gestures and short transactions, so the contention is negligible, and it makes
+the rule correct by construction instead of by a row-lock interleaving argument. Creates and
+patches upload in separate RPC calls, so one transaction never needs both modes.
+
+The property to hold is **never over-share**: no row keeps a region its ancestor chain does not
+support. Under-sharing is a bug; over-sharing is a leak. §11 tests it against an oracle.
+
+`share_id` is a staging-only column on the client (it is not a `blocks` storage column), so a
+region flip does not re-materialize every row on every device. It is excluded from the version
+bump (already true: the bump enumerates columns) and must be excluded from the history trigger's
+diff, which today covers all columns.
 
 ### 5.3 Row-level security
 
 ```
-blocks read:      member(workspace_id)  OR  share_id in my shares
-blocks write:     writer(workspace_id)  OR  share_id in my editor shares     (USING and WITH CHECK)
+blocks read:      member(workspace_id)  OR  (not member  AND  share_id in my shares)
+blocks write:     writer(workspace_id)  OR  (not member  AND  share_id in my editor shares)
 workspaces read:  member(id)            OR  I am on a share of this workspace
 ```
 
 `WITH CHECK` runs after the `BEFORE` trigger, so it tests the region the row *ends up* in: a guest
-cannot create a block outside their regions, move one out, or move one in. A guest gets no
-`DELETE` policy (the client only soft-deletes). `blocks_history` and `workspace_members` stay
-member-only. A guest reads their own `share_members` row and nobody else's; the owner lists a
-share's audience through an RPC.
+cannot create a block outside their regions, move one out, or move one in. `blocks_history` and
+`workspace_members` stay member-only. A guest reads only their own `share_members` row; the owner
+lists a share's audience through an RPC.
 
-Further checks on a write by someone who is not a workspace writer, in the same trigger:
-
-1. A root row's `parent_id`, `order_key` and `deleted` cannot change. A guest can edit a shared
-   page's title and contents but cannot delete, move or reorder the page itself; its siblings are
-   rows they cannot see.
-2. In an e2ee workspace, each content column written must be a v2 envelope naming the row's
-   region (§6.2).
-3. `created_by` (on insert) and `updated_by` are set from `auth.uid()`. They are client-supplied
-   today; that is tolerable among members and not for guests.
+**A guest's write is an allowlist**, enforced in the same trigger: they may change `content`,
+`properties_json`, `references_json`, `parent_id`, `order_key`, `deleted` and the two edit
+timestamps. `id`, `workspace_id`, `created_at` and `created_by` are frozen on update and
+`created_by` is `auth.uid()` on insert; `updated_by` is `auth.uid()` whenever a content column
+changed. On a root row, `parent_id`, `order_key` and `deleted` are frozen too: a guest can edit a
+shared page's title and contents but not delete, move or reorder the page among siblings they
+cannot see. In an e2ee workspace each content column a guest *changes* must be a v2 envelope
+naming a share they edit (§6.2). No `DELETE` policy on `blocks`, and Storage gets read and insert
+only.
 
 ### 5.4 Sync
 
@@ -199,54 +200,49 @@ share_data:
     - SELECT … FROM public.share_members WHERE share_members.user_id = auth.user_id()
 ```
 
-plus the guest's `workspaces` row (name, `encryption_mode`, `properties_migration`), keyed on
-`share_members.workspace_id`, in this stream or a third one. The entry path reads the mode off the
-synced workspace row, so without it a guest cannot even reach a key prompt.
+plus the guest's `workspaces` row, keyed on `share_members.workspace_id`. The entry path reads the
+encryption mode off the synced workspace row, so without it a guest cannot reach a key prompt.
 
 `IN (subquery on auth.user_id())` over a plain column is the documented Sync Streams shape, so the
 scalar region needs neither the `= ANY(array)` join nor the coverage junction table the earlier
-designs planned around. A guest gets one bucket per share; the limit is 1,000 per user. Members
-keep one bucket per workspace, which the create RPC's ordering argument depends on.
+designs planned around. A guest gets one bucket per share (limit 1,000 per user). Members keep one
+bucket per workspace, which the create RPC's ordering argument depends on.
 
-To verify in the spike before building on it: a new `share_members` row adds the bucket to a
-connected client without a reconnect; a row moving between two of one user's buckets arrives as
-one consistent checkpoint; the `workspaces` query can share the stream.
+Unverified, for the spike: a new `share_members` row adds the bucket to a connected client without
+a reconnect; a row moving between two of one user's buckets arrives as one consistent checkpoint;
+the `workspaces` query can share the stream.
 
 ### 5.5 What a guest learns besides content
 
-For every row in their region: ids, tree shape, `order_key`, timestamps, author ids, tombstones,
-the row count, and in e2ee mode the length of each sealed column. Keys do not hide any of that.
-A guest does not learn other shares' ids (the region is a scalar, not a list) or the workspace
-roster. The share dialog should say that structure and timing are visible to the server and to
-guests even when content is sealed.
+- For every row in their region: ids, tree shape, `order_key`, timestamps, author ids, the row
+  count, and in e2ee mode the length of each sealed column. Also the workspace's name and owner id.
+- **Whether a block id exists anywhere in the workspace.** Inserting a chosen id either succeeds
+  or fails, and no policy can hide which. Where ids are derived from guessable names under a
+  public namespace, that tests names: every derived id in a plaintext workspace (page names, file
+  hashes), and in an e2ee workspace daily-note dates and alias seats minted before seat ids were
+  keyed. Keyed namespaces close it; until then the share dialog says so.
+- Not: other shares' ids, the member roster, history, tombstones from before the share.
 
 ## 6. Key plane (e2ee workspaces only)
 
-### 6.1 Share key
+### 6.1 Share key and authenticated roots
 
 Each share in an e2ee workspace has its own random 32-byte key, **SK**, not derived from WK. A
-region's rows are sealed under its share's SK; the remainder stays under WK.
+region's rows are sealed under its share's SK; everything else stays under WK.
 
-- `shares.wrapped_key` is SK sealed under WK, with associated data binding the share id and
-  workspace id. Any device holding WK reads the synced `shares` row and unwraps SK. Nothing is
-  handed between the owner's own devices or to other members, and the existing non-extractable WK
-  handle is enough (unwrap is an AES-GCM decrypt), so no member device re-enters its key. This is
-  the "workspace members need the share key too" cost PR #259 expected to need a per-member key
-  hierarchy; one symmetric wrap covers it.
-- `shares.key_canary` is the share id sealed under SK. A guest's client checks a pasted key
-  against it, as `wk_canary` does for WK.
-- A guest gets SK the way a collaborator gets WK today: the owner copies it (`kmp-sk-1:…`) and
-  sends it over a channel of their choosing; the guest pastes it into a key gate after accepting
-  the invitation. The server never sees it. A guest's second device pastes it again.
-- A **key context** is `{content key, K_id}`: SK plays WK's role for its region, including the
-  derived HMAC subkey that names attachment objects and namespaces derived ids. The key store
-  gains records keyed by share id with the same shape as today's workspace records.
-- The mode pin stays per workspace. A guest's pin is set to e2ee when their first SK validates;
-  a server claiming an e2ee workspace is plaintext lands in the same quarantine branch a new
-  member's device does, and a pasted SK defeats the claim.
-
-A guest never holds WK. A guest colluding with the server can read exactly what was ever sealed
-under an SK they hold.
+- `shares.wrapped_key` is SK sealed under WK, bound to the share id and workspace id. Any device
+  holding WK reads the synced `shares` row and unwraps SK with the WK handle it already has
+  (unwrap is an AES-GCM decrypt), so nothing is handed between the owner's devices or to other
+  members, and the owner can show SK again on any device. This is the "workspace members need the
+  share key too" cost PR #259 expected to need a per-member key hierarchy.
+- `share_roots.root_auth` is (share id, block id) sealed under WK by the device that attached the
+  root. A member client treats a root as real only if that opens. The server cannot mint a root,
+  and neither can a guest.
+- `shares.key_canary` is the share id sealed under SK; a guest's client checks a pasted key
+  against it. A guest gets SK the way a collaborator gets WK today: the owner copies it
+  (`kmp-sk-1:…`) and sends it over a channel of their choosing, once per share per device.
+- SK plays WK's whole role for its region, including the derived HMAC subkey (`K_id`) that names
+  attachment objects and namespaces derived ids.
 
 ### 6.2 Envelope v2 names its key
 
@@ -255,271 +251,273 @@ enc:v1:<payload>            sealed under WK                 (unchanged; all exis
 enc:v2:<share_id>:<payload> sealed under that share's SK
 ```
 
-Associated data for v2 adds the share id, which authenticates the key domain. Existing rows need
-no migration. The server's `is_enc_v1_envelope` check widens to accept both. Because each column
-names its key, a row whose three columns are sealed under different keys (a patch touched one
-column after the region changed) is still fully readable by anyone holding both keys, the mismatch
-is visible without decrypting anything, and no reader ever trial-decrypts.
+Associated data for v2 adds the share id. Existing rows need no migration. Because each column
+names its key, a row whose columns are sealed under different keys is still readable by anyone
+holding both, the mismatch is visible without decrypting, and no reader trial-decrypts.
 
-Key lookup changes from "by workspace" to "by workspace and key id" at its two call sites
-(`encryptUploadOps`, `materializeStagingRows`). A staged row a client cannot open yet (no key for
-that id) stays staged, per row, as a locked e2ee workspace's rows do today.
+Everything that pattern-matches `enc:v1:` has to learn v2: the server's block check (a new
+predicate beside `is_enc_v1_envelope`, which also guards `wk_canary` and must not widen),
+`envelope.ts`, the divergence scan and ciphertext audit in `src/plugins/data-integrity/`, and the
+rejected-write helper in `src/plugins/system-status/`.
 
-### 6.3 Which key a write is sealed under
+### 6.3 Key resolution becomes per key, not per workspace
 
-At upload, the client computes the row's region structurally (walk local ancestors to the nearest
-id in `share_roots`) and seals under that region's key. A workspace with no shares skips the walk.
+This is the larger part of the key plane. Today "is this workspace unlocked" is one answer per
+workspace (§2). It becomes a resolver over (workspace, key id) that replaces, for every reader:
+key presence at entry, the materializability decision, the key-loss signal that closes a
+workspace, and the "rows I cannot open yet" accounting behind first sync. A member resolves v2 ids
+by unwrapping; a guest resolves only the shares they hold, and holds no WK record at all. A staged
+row whose key the device is not meant to hold is not a gap: a guest must not sit on the syncing
+screen because a row in their region is still sealed under WK.
+
+The mode pin stays per workspace. A guest's pin is set to e2ee when their first SK validates; a
+server claiming an e2ee workspace is plaintext lands in the quarantine branch a new member's
+device lands in, and a pasted SK defeats the claim.
+
+### 6.4 Sealing, and repairing the wrong key
+
+At upload a client computes the row's region itself, by walking local ancestors to the nearest
+authenticated root, and seals under that region's key. That walk is the single client-side owner
+of "which region is this row in"; the commit gate (§7.2) uses the same function. The server's
+`share_id` stamp is used for one thing only: noticing a disagreement.
 
 The server does not reject a member's write sealed under the "wrong" key. A device that has not
-yet heard about a share, or about a move, will seal under WK; rejecting that would turn a stale
-view into a lost edit. Instead:
+heard about a share or a move seals under WK, and rejecting that would turn a stale view into a
+lost edit. So a row can **drift**: its envelope names one key and its region is another's. Drift
+comes from sharing, unsharing, moves across a region boundary (a move patches `parent_id` only;
+descendants are not touched) and stale devices. It is repaired by re-sealing the three columns
+and sending them through `rekey_blocks`, a strict form of the patch path: it writes only if the
+row's `updated_at` still equals the version the client decrypted **and** the row's current
+`share_id` is the one the new envelope names, and it leaves `updated_by` / `user_updated_at`
+alone. Plaintext and version both come from the staged row, never from local `blocks` (a local
+stamp is not a version). A lost compare-and-swap is skipped and retried when the newer row
+arrives. Sealing and batching reuse the conversion code (`sealAndSend` in
+`src/sync/conversion/sealing.ts`).
 
-### 6.4 The re-key pass
+The two directions are not symmetric:
 
-**Invariant:** every sealed column of a row names its region's key.
+- **Out of a share (back to WK): automatic**, on any member device. It only reduces exposure.
+- **Into a share: only by intent, on a device that holds both keys.** The device that performs
+  the gesture (share, attach a root, move in, restore) re-keys the live rows it acted on, as part
+  of the gesture. Rows that drift in any other way (a stale device's edit or new child under a shared
+  block) are *offered*: "3 blocks under ‹page› are not visible to guests yet", with the list, and
+  re-keyed on confirmation. Nothing is sealed under SK because the server said so.
 
-**Drift** is a row that breaks it. It arises from sharing a subtree (rows are WK, region is now
-S), unsharing, a move across a region boundary (a move patches `parent_id` only; descendants are
-not touched at all), and a stale device's edit. All of them are the same state, detectable from
-cleartext alone: `blocks_synced.share_id` against the key id in each envelope.
+A re-key changes no local row, creates no undo entry and is not an edit; it writes one history row
+per block.
 
-Any client that can open a drifted row and holds its region's key repairs it: re-seal the three
-columns under the region's key and send them through a new RPC, `rekey_blocks`, which updates a
-row **only if its `updated_at` still equals the version the client decrypted**, and leaves
-`updated_by` / `user_updated_at` alone. A lost compare-and-swap is skipped and picked up again
-when the newer row arrives; a row with local writes still queued is skipped until they land. The
-pass is idempotent, has a fixed point (no drifted rows), and two devices running it at once cannot
-clobber an edit. It runs over the active workspace only.
-
-Why this is safe to run continuously: the local database is plaintext, so re-keying changes no
-local row, creates no undo entry, and is not an edit; it replaces ciphertext with ciphertext of
-the same plaintext, guarded by the row version. Each re-keyed row does write one history row.
-
-"Share this page" is therefore: create the share, attach the root (the server flips N regions in
-one transaction), then let the pass re-key N rows, with progress shown. Guests see rows appear as
-they are re-keyed. Unsharing is the same pass in the other direction.
-
-What drift means for confidentiality:
+### 6.5 What the keys guarantee
 
 | Row | Delivered to guest? | Guest can open? |
 |---|---|---|
 | in region, sealed under SK | yes | yes |
-| in region, still sealed under WK (drift in) | yes | no; appears once re-keyed |
-| left the region, still sealed under SK (drift out) | no | (not delivered) |
+| in region, still sealed under WK | yes | no, until a member re-keys it |
+| left the region, still sealed under SK | no | (not delivered) |
 
-So in an e2ee workspace a server-side region bug alone cannot disclose plaintext: disclosure needs
-a member's client to re-key the row. And because a revoked share keeps its `wrapped_key`, rows
-still sealed under a revoked share's key, and history written while they were, stay readable to
-members.
+- Against an honest server, a guest reads exactly their regions.
+- A guest never holds WK. A bug in §5.2, or a server that forges `share_id` or a root, delivers
+  ciphertext the guest cannot open.
+- The limit: tree shape is cleartext the server controls. A hostile server working with someone
+  who holds an SK can move private rows under a real root. Existing content is still not re-keyed
+  without a member confirming a list that would look wrong, but anything a member then *types*
+  there is sealed under SK, behind a "shared" badge that is true as far as the client can tell.
+  Alternative B does not have this limit. Closing it needs authenticated tree structure, which
+  nothing in the current encryption design provides.
+- A revoked share keeps its `wrapped_key`, so rows and history still sealed under it stay readable
+  to members. No share key is ever discarded.
 
-### 6.5 Plaintext workspaces
+### 6.6 Plaintext workspaces
 
-Everything in §5 applies and nothing in §6 does: no keys, no envelopes, no pass. Sharing takes
-effect the moment the region flips, and the server is the only boundary, as it already is for the
-whole workspace.
+Everything in §5 applies and nothing in §6 does. Sharing takes effect the moment the region flips,
+and the server is the only boundary, as it already is for the whole workspace.
 
 ## 7. The guest's client
 
 A guest has, locally, rows of someone else's workspace: the regions they were given and nothing
-else. The share roots' parents are absent.
+else. No kernel pages, no definitions beyond built-in seeds, no ancestors of a root.
 
 ### 7.1 Session
 
-- Access to a workspace becomes `member(role)` or `guest`, derived from local rows
-  (`workspace_members`, else `share_members`), as a first-class fact other code can ask. Today a
-  missing member row reads as "writable" in one place and is waited on indefinitely in another
-  (`awaitLocalMemberRole`); neither may apply to a guest.
-- A guest workspace appears in the switcher under "Shared with me". Opening it lands on a share
-  page (the share block), which lists that share's roots. A share root is a top of the tree for
-  the guest: ancestor walks and breadcrumbs already stop at a missing parent
-  (`src/data/internals/treeQueries.ts`, `src/utils/blockCrumbs.ts`).
-- Bootstrap takes the path a workspace `viewer` takes today: kernel pages are get-only, seeds and
-  backfills are skipped (`src/data/kernelPage.ts`, `src/data/definitionSeeds.ts`).
-- **Graph-scoped passes refuse guests.** Backfills, migration claims, audits and seed
-  materialization assume the device sees the whole graph, and their "sync has settled" gates
-  measure quiescence, not coverage: a drained share stream looks exactly like a drained workspace.
-  Each such pass gates on access being `member`, not on settledness.
+- Access to a workspace becomes a first-class fact, `member(role)` or `guest`, derived from local
+  rows. **Every gate that today branches on the read-only boolean or on a member row is re-keyed
+  on it**: kernel-page creation, seed materialization, backfills and their claims, schema-change
+  reprojection, the reference-target derive pass, the first-sync wait. The read-only boolean
+  cannot carry this: it is false for an editor guest, who must still never create a kernel page.
+  Those passes' "sync has settled" preconditions measure quiescence, not coverage, so a drained
+  share stream would otherwise look like a drained workspace.
+- A guest workspace appears in the switcher under "Shared with me" and lands on a share page that
+  lists that share's roots. It needs its own landing resolver (the daily-note landing has nothing
+  to show). A root is the top of the tree; ancestor walks already stop at a missing parent.
+- Dynamic-extension seeds and extensions live in workspace blocks a guest lacks, so a guest runs
+  the built-in set only.
 
 ### 7.2 Writes
 
-- **One gate, in the commit pipeline.** The session's read-only boolean stays as the UI's answer
-  (a guest session is read-only unless the guest holds an editor share in that workspace), and the
-  pipeline adds the authoritative check: every row a document-scope transaction touched, on both
-  its before and after position, must be in a region the session may write. A write outside throws
-  before anything is queued. The server enforces the same rule (§5.3); the client gate exists so a
-  refused write never becomes a local phantom. Resolving edit affordances per block (a viewer share
-  and an editor share in the same workspace) is deferred; until then the gate is what stops the
-  write.
-- **Roots are structurally locked** for a guest: no delete, move, indent or reorder of a root.
-- **UI state stays on the device.** A guest's layout, recents and preferences are blocks outside
-  every region. The uploader partitions a guest's queue by region before sealing: rows in a held
-  share are sealed and sent; the rest go straight to the local rejection quarantine without a
-  round trip. This is what already happens to a workspace viewer's UI-state writes, decided
-  locally instead of by the server, and it is required in e2ee mode, where a guest has no key to
-  seal such a row with and the write would otherwise hold the queue forever. That those rows stay
-  usable locally after quarantine is how viewers work today; confirm it in the spike.
+- **Document writes: one gate in the commit pipeline.** Every row a document-scope transaction
+  touched, at both its before and after position, must be in a region the session may write
+  (§6.4's function). A write outside throws before anything is queued, so a refusal never becomes
+  a local phantom. The server enforces the same rule. The session's read-only boolean remains the
+  UI's coarse answer (a guest is read-only unless they hold an editor share in that workspace);
+  per-block edit affordances are deferred.
+- **Everything else stays on the device.** A guest's layout, recents and preferences are blocks
+  outside every region. In a guest session those scopes commit under a write source the upload
+  trigger skips. That is the `local-ephemeral` route the code used to have, removed when the
+  rejection quarantine made it redundant; for a guest it is not redundant, because every such
+  write would be counted in the "couldn't sync" warning forever, and in e2ee mode could not be
+  sealed at all and would hold the queue.
+- **Roots are structurally locked** for a guest: no delete, move, indent or reorder.
+  `structuralEditPolicy.ts` covers indent and outdent at a scope root; delete and reorder are new.
+- **A refused upload drops the whole local transaction** (§2). For a guest this is reachable in
+  ordinary use: a member moves a block out of the region while the guest has an offline
+  transaction touching it and three other blocks, and all four edits are quarantined. The payload
+  is kept in the rejection table and shown; it is not silently lost, but it is not applied. A row
+  leaving the guest's buckets is also removed locally without checking for pending edits.
+  Splitting a transaction on refusal is not proposed; this is accepted and stated in the UI.
 
-### 7.3 Processors on a partial workspace
+### 7.3 Derivations on a partial workspace
 
-This is the highest-risk part of the design. Post-commit processors read the local index and treat
-it as the whole workspace. On a guest that is false, and two kinds of harm follow:
+This is the highest-risk part of the design, and the part the first draft got wrong. Processors
+(most run in the writing transaction) read the local index as if it were the whole workspace, and
+**nothing re-derives a row when it arrives on another device** (§2). So a processor cannot simply
+be skipped on a guest: what it would have derived stays missing in the owner's graph. And it
+cannot run unchanged: it acts on absence it cannot judge.
 
-- writes outside a region: caught by the gate (they throw), so a usability problem;
-- writes **inside** a region that are wrong because of what the guest cannot see: silent damage to
-  the owner's data.
+What goes wrong unchanged, reasoned from the code and not reproduced:
 
-Known members of the second kind. These are reasoned from reading the processors, not
-reproduced; the fuzz suite in §11 is what turns the list into evidence:
-
-| Processor | What goes wrong on a guest |
+| Processor | On a guest |
 |---|---|
-| orphan alias / seat reaping (`src/plugins/references/referencesProcessor.ts`) | tombstones a page in the region because no *local* block references it |
-| `[[alias]]` resolution and seat minting | mints a duplicate page for a name that exists outside the region |
-| property-children projection into `properties_json` (`src/data/internals/propertyChildrenProcessor.ts`) | drops a key whose definition is not local, then uploads the smaller bag |
-| type and schema authoring (typeify, definition edits) | creates definitions the owner's registry does not expect |
-| contributor attribution | writes references to pages outside the region |
+| reference parsing (`src/plugins/references/referencesProcessor.ts`) | looks `[[name]]` up in a partial alias index and mints a page at the workspace root on a miss; the gate then rolls back the whole write. In e2ee it drops the reference to an out-of-region page and uploads that |
+| alias sync on rename (`src/plugins/alias/syncProcessor.ts`) | replaces the old name; blocks outside the region still say `[[Old]]`, and the owner's next edit of one mints a fresh empty "Old" page, silently re-pointing the link |
+| property projection (`src/data/internals/propertyChildrenProcessor.ts`) | in `full` mode, deletes a seeded reference property whose value names a page outside the region |
+| rename backlinks, inline deleted refs, merge retarget, annotation split retarget | rewrite only the referrers the guest can see |
+| typeify, type initial values, definition edits | author schema from inside a region (§4 forbids it) |
 
-Recomputing a block's own outgoing references is not on the list: it reads only that block's
-content, and the add-only reconcile contract (`docs/contracts/derived-data-add-only.md`) keeps
-stored references it cannot re-derive.
+The rule that replaces "skip unless safe":
 
-The rule: **a processor runs in a guest session only if it is declared safe for a partial
-workspace.** The default is not to run. Each processor is classified once (safe as is, safe with a
-guest variant, skipped), and the classification is a property of the registration, not a check
-inside each processor. Skipped derivations are not lost: the owner's client derives them when the
-guest's edit arrives, as it does for any synced row.
+1. **On a guest, a derivation only adds.** It never removes or replaces derived data on the
+   strength of what is absent locally: references the guest cannot resolve are retained, a rename
+   keeps the old alias as well as the new one, projection runs in its existing `additive` mode,
+   pristine-seat reaping does not run.
+2. **A gesture whose derivation needs the whole workspace is refused for a guest**: merge,
+   typeify, definition edits.
+3. Declared per processor at registration (processors register through keyed facets): runs for
+   guests or not. The default is not.
 
-Read-only guests run no document writes at all, so none of this applies to them. That is why the
-build order (§11) ships read-only guests first and enables editing behind the audit.
+That leaves one known gap: a guest typing `[[name]]` for a page outside the region records no
+reference, so the page shows no backlink until a member next edits that block. The candidate fix
+is a member-side step that re-runs the normal processors over a row last written by a non-member
+when it arrives. It is one mechanism instead of a variant per processor, and it is the only place
+derivation would upload from an arrival, so it is decided in step 3 with the fuzz results in hand,
+not here.
+
+Read-only guests run no document writes, so none of this applies to them.
 
 ## 8. What a region depends on outside itself
 
 | Dependency | Without it the guest sees | Plan |
 |---|---|---|
-| seeded property and type definitions | nothing missing; they resolve from code | none needed |
-| user-defined property definition | the field row as a raw `::((id))` child | read-only "property not shared" row first; stand-ins later |
-| user-defined type definition | an untyped block | same |
-| media block and its bytes | a missing-block placeholder | §8.2 |
-| a `[[page]]` outside the region | the link text, not navigable | add the page to the share |
-| a `((block))` outside the region | "not shared with you" placeholder, no label | add it to the share |
-| comment threads | none | §8.3 |
-| ancestors, siblings of a root | nothing; the root is the top | intended |
+| built-in seeded property and type definitions | nothing missing | none needed |
+| user-defined or extension-seeded definition | the field row as a raw `::((id))` child; an untyped block | read-only "not shared" row; stand-ins later |
+| media block and its bytes | a missing-block placeholder | later; constraints below |
+| a `[[page]]` or `((block))` outside the region | link text or a "not shared with you" placeholder, no label | add it to the share |
+| comment threads (under the workspace Comments page) | none | later |
+| ancestors and siblings of a root | nothing; the root is the top | intended |
 
-The earlier design had the server supply labels for references a recipient cannot open. The server
-cannot read content in e2ee mode, and a label is content, so there are none in either mode.
+The earlier design had the server supply labels for references a recipient cannot open. A label is
+content and the server cannot read content in e2ee mode, so there are none in either mode.
 
-### 8.1 Definition stand-ins
+The rest are later steps. Each gets a design of its own when it is built; what is fixed now is the
+constraint it has to meet.
 
-A definition cannot simply be attached as another root: one definition is used by several shares
-and a block has one region, and a type definition can be any block, with arbitrary content under
-it. Sharing the Properties and Types pages with every guest would disclose every schema name in
-the workspace. Instead a share carries **stand-ins**: one small block per user-defined definition
-used in the region, under the share block, holding a copy of what a reader needs (name, codec,
-options) and registered in the guest's registry under the **original** definition id, read-only.
-Field rows are not rewritten.
-
-Stand-ins are derived data that members' clients write. To keep that from becoming a standing
-reconciliation loop, they are written in the same transaction as their cause where there is one
-(setting a property inside a region; editing a definition fans out to its stand-ins as
-`core.migratePropertyDefinition` fans out to consumers), with a deterministic id per (share,
-definition) so two devices converge on one row. The share and re-key operations, which already
-scan the region, create the initial set.
-
-### 8.2 Media
-
-A media block is attached to the share as an extra root (it has no subtree beyond its own field
-rows). Its bytes follow the key context: an object for region S lives at `<share_id>/<contentKey>`
-with the content key derived under S's `K_id` and the bytes sealed under SK; Storage policy keys
-on the first path segment being a share the caller belongs to, or a share of a workspace the
-caller is a member of. Keying on the path keeps Storage policy per-share without the
-content-key-to-block mapping the media design deferred. The re-key pass, when it meets a media
-block in a region whose region object is missing, uploads the copy. A guest's own uploads go to
-the same place, under the share block.
-
-Costs to accept: bytes are duplicated per share, so workspace-wide dedup stops at a region
-boundary, and a revoked share's objects need collecting. An image used in two shares is the
-uncommon case and is reported, not solved, at first.
-
-### 8.3 Comments, and a comment-only role
-
-Threads live under the workspace "Comments" page, outside every region, so guests neither see nor
-write them. Two steps, both later: (1) threads on a block in a region are parented under that
-share's block instead; (2) a `commenter` role is a region rule, not a content rule: a commenter
-may write only under the share's comments container. That is enforceable on the server in e2ee
-mode, where the server cannot tell a comment from an edit by reading it.
-
-**Read-only is cheap; comment-only is not.** A viewer role costs a column and one policy clause
-and falls out of the build order. A commenter role needs (1) and (2).
-
-### 8.4 Pages a guest creates
-
-A guest typing `[[New page]]` cannot create a page at the workspace root. Later (§11 step 4) the
-page is created under the share block, with its id derived under the region's `K_id`. If that name
-already exists outside the region, the workspace now has two pages with one name; the owner's
-client shows its existing duplicate-name banner and offers the merge. The earlier alias design had
-the server detect the collision through a unique index on aliases; in e2ee mode the server cannot
-see an alias, so detection has to be on a client that sees both.
+- **Definition stand-ins.** A definition cannot be attached as a root (several shares use it, a
+  block has one region, and its subtree can be arbitrary content), and sharing the Properties and
+  Types pages would disclose every schema name. So a share carries per-definition copies under the
+  share block that a *guest's* registry reads under the original definition id. Constraint: a
+  stand-in has its own type and its own guest-only projector. A second `property-schema` block
+  with the same name would shadow the real definition in the owner's registry, workspace-wide.
+- **Media.** A media block can be attached as an extra root, and its bytes re-sealed under SK at
+  `<share_id>/<contentKey>`, with Storage policy on the first path segment. Constraints: today the
+  media block id, the object path, the byte seal's associated data, the byte store and the upload
+  queue are all keyed by workspace, so the resolver must try the region object and then the
+  workspace object; the copy must happen in **both** directions (a guest's upload exists only
+  under the share prefix, and must be copied to the workspace prefix when its block leaves the
+  region); and a share's objects are never collected while any media block could still need them,
+  which at first means never. Plaintext-to-e2ee conversion lists only `<workspace_id>/`, so it
+  must refuse, **on the server**, while any share exists or any object remains under a share
+  prefix.
+- **Comments and a comment-only role.** Threads on a block in a region would be parented under
+  the share block; a `commenter` may write only under that container. That is a region rule, so
+  the server can enforce it in e2ee mode, where it cannot tell a comment from an edit by reading.
+  **Read-only is cheap; comment-only is not**: a viewer role is one column and one policy clause.
+- **Pages a guest creates** go under the share block, with ids from a share-scoped namespace in
+  both modes, so they cannot collide with a row the guest cannot see. If the name already exists
+  outside the region the workspace has two pages with one name; the owner's client shows its
+  existing duplicate-name banner and offers the merge. (The earlier alias design had the server
+  detect this through a unique index on aliases, which it cannot read in e2ee mode.)
 
 ## 9. Owner experience
 
 - "Share…" on any block: pick or create a share, invite by email with a role, copy the share key
-  (e2ee). The dialog lists roots, members, pending invitations and re-key progress. Share actions
-  are online-only, as member management is.
+  (e2ee). The dialog lists roots, members, pending invitations, how many deleted blocks under the
+  root are *not* being shared, what guests can see besides content (§5.5), and rows awaiting
+  confirmation (§6.4). Share actions are online-only, as member management is.
 - A root shows a badge; a block inside a region shows who can see it in its breadcrumb.
-- Moving or pasting blocks **into** a region from outside asks once ("this shares N blocks with
-  …"). It is the one gesture that discloses existing content without the user having opened a
-  share dialog. Typing inside a region does not ask.
-- Attaching a root inside an existing share's region is refused in the first version: it would
-  silently take that subtree away from the outer share's guests. Moving one shared page under
-  another is fine and changes nobody's access (nearest root wins, both regions survive).
+- Moving or pasting blocks **into** a region asks once ("this shares N blocks with …"); in e2ee
+  mode that confirmation is what authorizes the re-key. Typing inside a region does not ask.
+- Attaching a root inside another share's region is refused at first: it would silently take that
+  subtree away from the outer share's guests. Moving one shared page under another is fine and
+  changes nobody's access.
 
 ## 10. Corner cases
 
 | Case | Result |
 |---|---|
-| Member moves a subtree into a region | server flips regions; rows drift; pass re-keys; guests see them |
-| Member moves a subtree out | guests lose the rows on next sync; pass re-keys back to WK |
-| Offline member edits a newly shared block, sealing under WK | accepted; that column drifts; guest keeps the previous version until re-keyed |
-| Guest's pending edits when access is revoked or the block leaves the region | the patch finds no row it can write and is quarantined on the guest's device, as for a removed member today |
-| Owner soft-deletes a root | region and share stay; restore brings it back shared |
-| Share revoked | its roots are removed, regions revert to the enclosing region or the remainder, the pass re-keys; the share row and its key are kept |
-| Guest removed | the server stops delivering. They keep what they already pulled. SK is not rotated; "revoke the share and create a new one" re-keys the region under a fresh key until a real rotation exists |
-| History of a region's rows | member-only, as today. It holds ciphertext under whichever key was current at each write, which members can always open because no share key is discarded |
-| Guest becomes a workspace member | rows arrive through both buckets; harmless |
-| Plaintext-to-e2ee conversion of a workspace with shares | conversion preflight refuses; revoke the shares first |
-| Guest renames a shared page | references inside the region are rewritten; link text outside it goes stale (the link still resolves by id) |
+| Offline member edits a shared block, or adds a child, sealing under WK | accepted; guests keep the previous version; a member device offers the re-key |
+| Member moves a subtree out | guests lose the rows on next sync; any member device re-keys back to WK |
+| Share revoked | roots removed, regions revert, rows re-keyed back; the share row and its key are kept |
+| Guest removed | the server stops delivering; they keep what they pulled. SK is not rotated: "revoke the share, create a new one" re-keys under a fresh key until a real rotation exists |
+| Guest becomes a workspace member | their share memberships in that workspace are deleted; the workspace role governs |
+| Owner deletes a shared page | the page and its blocks stay in the region as tombstones, so guests see it deleted and the owner's restore brings it back shared |
+| Member restores a block deleted before sharing | it joins its parent's region on restore; the restore is the intent that re-keys it |
+| Guest deletes a block that has a nested share's root below it | the guest tombstones only what they can see; the owner is left with live blocks under a deleted parent, recoverable by restoring it |
+| History of a region's rows | member-only. Ciphertext under whichever key was current at each write; readable because no share key is discarded |
 
 ## 11. Build order
 
-Each step is a PR or a few; each ends in something usable.
+0. **Spike, no server work.** (a) The partial-workspace fuzz harness: copy a subtree into a fresh
+   database as a guest would hold it, run random edits through today's processors, and record
+   every write outside the subtree and every write inside it that depended on a missing row. This
+   turns §7.3's table into evidence and sizes step 3. (b) The three Sync Streams questions in
+   §5.4. (c) The region rule against its oracle under concurrent sessions.
+1. **Access plane, read-only guests, plaintext workspaces.** Tables, the trigger, policies,
+   streams, share RPCs, the member-or-guest fact and every gate re-keyed on it, the local-only
+   write source, a minimal share dialog. An internal milestone: not useful to an e2ee owner.
+2. **Key plane.** SK and authenticated roots, envelope v2 and its matchers, the per-key resolver
+   (§6.3), `rekey_blocks`, the gesture and confirmation flows, the guest key prompt (reusing
+   `openCanaryWithPastedKey` and the key UI; `WorkspaceKeyGate` itself gates a whole workspace and
+   does not fit). After this step an e2ee workspace can share read-only.
+3. **Guest editing.** The commit gate, root locking, the server allowlist, the derivation rules of
+   §7.3 and the decision on member-side completion. This is the first point the stated baseline
+   (shared editing) exists, and it exists without user-defined properties, media, comments or
+   guest-created pages.
+4. Definition stand-ins; guest-created pages.
+5. Media in regions.
+6. Later: comments and the commenter role, per-block edit affordances, an invite link carrying the
+   key in the URL fragment (delivery only; access still needs the membership row), key rotation.
 
-0. **Spike.** The three Sync Streams questions in §5.4; the region trigger under concurrent move
-   and insert (§5.2); a quarantined UI-state row staying usable (§7.2).
-1. **Access plane, read-only guests, plaintext workspaces.** Tables, triggers, policies, streams,
-   share RPCs, the share dialog, the guest session as a viewer, the member-or-guest fact and the
-   graph-scoped gates.
-2. **Key plane.** SK, envelope v2, key lookup by key id, `rekey_blocks` and the pass, the guest
-   key gate. After this step an e2ee workspace can share read-only.
-3. **Guest editing.** The per-row write gate, root locking, the uploader partition, the processor
-   classification.
-4. **Dependencies.** Definition stand-ins; guest-created pages under the share block.
-5. **Media in regions.**
-6. Later: comments and the commenter role, per-block edit affordances, an invite link that carries
-   the key in the URL fragment (delivery only; access still needs the membership row, so removing
-   a member still works), key rotation.
+Verification that is part of the work. The first attempt at sharing in this codebase was abandoned
+for lack of it, according to the earlier design's test plan.
 
-Verification that is part of the work, not after it. The first attempt at sharing in this
-codebase was abandoned for lack of exactly this, according to the earlier design's test plan.
-
-- A property test of region maintenance: random sequences of add root, remove root, revoke, insert
-  (including child before parent), move and delete, comparing every row's `share_id` with an
-  oracle that walks up `parent_id`.
-- A pgTAP matrix over {member, guest editor, guest viewer, stranger} × {read, insert, edit, move
-  in, move out, root structure, author stamp}.
-- A property test that the re-key pass never changes plaintext and never overwrites a concurrent
-  edit.
-- A partial-workspace fuzz suite: materialize a region into a fresh guest database, run random
-  guest edits, and assert that nothing in the region was written because of a row the guest lacks.
+- A property test of the region rule: random sequences of add root, remove root, revoke, insert
+  (including child before parent), move, delete, restore and a `parent_id` cycle, comparing every
+  row's `share_id` with an oracle that walks up `parent_id`.
+- A pgTAP matrix over {member, workspace viewer who was a guest, guest editor, guest viewer,
+  stranger} × {read, insert, edit, move in, move out, root structure, frozen columns, direct
+  `share_id` write, tombstones}.
+- A property test that a re-key never changes plaintext and never overwrites a concurrent edit,
+  including a peer write landing on a stamp the device already holds, and a move out racing a
+  re-key in.
+- The fuzz harness from step 0, kept as a suite.
 
 ## 12. Rollout
 
@@ -529,65 +527,53 @@ supporting. Existing data is untouched until the first share is created.
 
 ## 13. Decisions for Vlad
 
-1. **Regions in place (A) or a separate workspace per share (B)?** Pick: A. B avoids all new
-   authorization and cryptography but takes the content out of the graph.
-2. **Nested shares:** nearest root wins, and the first version refuses to create a root inside
-   another share. Pick: yes.
-3. **Who manages shares:** the workspace owner only, as for members. Pick: yes.
-4. **Re-keying content that was moved into a region happens automatically on any member device.**
-   The alternative is to hold it until someone confirms on a device that sees it. Pick:
-   automatic; position in the tree is the access rule, and the move itself asks.
-5. **User-defined properties and types** are degraded (visible as "not shared") for guests until
-   stand-ins ship. Pick: accept.
+1. **Regions in place (A) or a separate workspace per share (B)?** §3 has both build lists and
+   what each costs the owner. Pick: A, with step 0 run first because it can change the answer.
+2. **Re-keying into a share needs intent on a member device** (§6.4). The cost: a block that a
+   stale device added under a shared page stays invisible to guests until someone confirms it.
+   The alternative, re-keying automatically wherever the server says a row is shared, is simpler
+   and lets a hostile server choose what gets sealed under a share key. Pick: intent.
+3. **When is editing shippable?** At step 3 a guest can edit text, structure and built-in
+   properties, but sees user-defined properties as "not shared", sees no images, cannot comment
+   and cannot create pages. Pick: ship at step 3, say so in the dialog.
+4. **Key handling is manual and keys are not rotated.** One paste per share per device; removing a
+   guest stops delivery but does not re-key. Pick: accept, as the workspace key works today.
+5. **What guests can see besides content** (§5.5): structure, timing, authors, and whether a given
+   block id exists. Pick: accept and disclose.
 
-## 14. Rejected, and deferred
+Defaults, not forks: nearest root wins and a root inside another share is refused at first; the
+workspace owner alone manages shares; tombstones from before a share are never shared.
 
-- **Guests as `workspace_members` with a `guest` role.** Every existing policy would have to learn
-  to exclude it; one miss exposes the workspace.
-- **Giving the guest WK and scoping them by row-level security** (PR #259's option B). Access to
-  the whole workspace would rest on the server alone, and revoking would mean re-keying everything.
-- **Additive nested shares** (an array of share ids per block). A row is sealed under one key.
-- **A mirrored workspace per share with the owner's client relaying edits** (PR #259's
-  C-projection). Two ciphertext domains with independent row versions need a reconciliation
-  protocol, and nothing syncs while the owner is offline.
-- **A per-block key for every row, with key grants per share.** No re-sealing on a move, but it
-  re-encrypts the whole existing workspace once and derives a key per row on every read.
-- **Rejecting a write sealed under the wrong key.** Turns a stale device into a lost edit, and the
-  client cannot learn the right key while its upload queue is blocked.
-- **A shared "schema region" all guests can read.** Leaks every shared definition's name to every
-  guest, and a type definition's subtree is arbitrary content.
-- **Deferred: public and anonymous links.** In e2ee mode a link can only be a client-side export
-  of a plaintext copy (PR #259's option D), which is a deliberate, irreversible declassification
-  and a separate feature. In a plaintext workspace the link and snapshot design in
-  `subtree-sharing.md` can sit on this access plane later.
+## 14. Rejected, deferred, and changed from the earlier designs
 
-## 15. Relation to the earlier designs
-
-Read after the independent draft was written.
-
-**Taken from them.**
-
-| From | What |
-|---|---|
-| PR #259 | the access/key split as the organizing idea; row-level security, not the sync stream, is the read boundary; the workspace row has to reach a guest; a key id on the wire and in the associated data; history is ciphertext under the key current at each write and cannot be re-sealed, so share keys are never discarded; author stamps must be server-set for guests; the metadata a guest still learns; graph-scoped passes must gate on membership, not settledness; media bytes must be re-sealed and re-addressed per share |
-| `subtree-sharing.md` | the child-before-parent fix-up on insert; role-monotonic accepts; a guest reads only their own membership row; one uniform role per session, with per-block resolution deferred; a member who is also on a share uses the workspace role; the oracle property test and the two-user policy matrix |
-| `shares-and-api-tokens.html` | a share has several roots; shares are soft-revoked; O(1) per-row access checks at 300k rows; share membership as the future home of API principals |
-| `share-aliases-explainer.html` | the duplicate-page problem when a guest names something that exists out of view |
-
-**Where this document differs.**
-
-| Earlier position | Here | Why |
+| Earlier design or alternative | Here | Why |
 |---|---|---|
-| Confidential subtree sharing on e2ee is deferred; e2ee users get a second workspace or a plaintext export (PR #259) | built, as regions with a per-share key | the requirement changed; and the three choices in §3 remove most of the cost that estimate counted |
-| A block carries every share above it; nested access is additive (`effective_share_ids text[]`) | one region per block, nearest root wins | one row, one key; also gives a plain-column sync filter |
-| Workspace members need the share key delivered per member, or a key hierarchy | SK wrapped under WK in the share row | members already hold WK |
-| Region transitions were an open hazard (rows sealed under the old key) | accepted as drift, repaired by a compare-and-swap pass | one mechanism for sharing, unsharing, moves and stale devices |
+| Confidential subtree sharing on e2ee deferred; e2ee users get a second workspace or a plaintext export (PR #259) | built, as regions with a per-share key | the requirement changed, and §3's three choices remove much of the cost counted there |
+| A block carries every share above it; nesting is additive (`effective_share_ids text[]`) | one region per block, nearest root wins | one row, one key; also a plain-column sync filter |
+| Members need the share key delivered per member, or a key hierarchy | SK wrapped under WK in the share row | members already hold WK |
+| Rows sealed under the old key after a transition were an open hazard | accepted as drift; re-keyed out automatically, in by intent | a stale device must not lose an edit, and the server must not choose what is disclosed |
 | A session is entered by a share URL and scoped to one share | a guest session is the workspace, limited to the guest's regions | a share is a collection; the gate is per row |
-| Read-only sessions route writes to a local-only source | UI-state writes are quarantined by the uploader | the local-only source no longer exists in `changeScope.ts` |
+| Read-only sessions route writes to a local-only source (since removed from the code) | reintroduced for a guest's non-document writes only | quarantine does not fit a write that can never be accepted |
 | The server detects alias collisions and labels unreachable references | neither | the server cannot read content in e2ee mode |
-| Recompute is serialized by an advisory lock on the recomputed root | parent row lock plus level-by-level cascade, pending the spike | the root lock does not serialize a move below the root against a share above it |
+| Recompute serialized by an advisory lock on the recomputed root | one advisory lock per workspace | the root lock does not serialize a move below a root against a share above it |
+| Sharing a subtree includes its tombstones | a tombstone never gains a region | the owner cannot see what would be disclosed |
+| Guests as `workspace_members` with a `guest` role | separate table | every existing policy would have to exclude it; one miss exposes the workspace |
+| Giving the guest WK and scoping by row-level security (PR #259 option B) | rejected | access to everything rests on the server alone |
+| A mirrored workspace per share, relayed by the owner's client (PR #259 C-projection) | rejected | two ciphertext domains with independent row versions need a reconciliation protocol |
+| A per-block key for every row, with key grants per share | rejected | re-encrypts the whole workspace once and derives a key per row on every read |
+| Rejecting a write sealed under the wrong key | rejected | a stale device's edit is lost |
+| A shared "schema region" all guests read | rejected | leaks every schema name; a type definition's subtree is arbitrary content |
+| Public and anonymous links | deferred | in e2ee mode a link can only be a client-side plaintext export (PR #259 option D), a deliberate and irreversible declassification; in a plaintext workspace the link design in `subtree-sharing.md` can sit on this access plane later |
 
-**Stale statements in the earlier documents, for whoever reads them next.** PR #259 says e2ee
-workspaces are pinned to cell-backed properties; `…20260821120000_allow_e2ee_properties_migration_flip.sql`
-lifted that. `subtree-sharing.md` describes a `local-ephemeral` write source and a
-`child_ids_json` column; neither is in the current schema or change-scope table.
+Taken unchanged from the earlier documents: the access/key split, row-level security as the read
+boundary, the workspace row reaching the guest, a key id on the wire and in the associated data,
+never discarding a key that history depends on, server-set authorship for guests, gating
+graph-scoped passes on membership (PR #259); the child-before-parent case, role-monotonic accepts,
+a guest reading only their own membership row, one coarse role per session, the oracle test and
+the two-user policy matrix (`subtree-sharing.md`); several roots per share, soft revocation, O(1)
+access checks at 300k rows (`shares-and-api-tokens.html`).
+
+Stale statements in those documents, for whoever reads them next: PR #259 says e2ee workspaces are
+pinned to cell-backed properties, which
+`…20260821120000_allow_e2ee_properties_migration_flip.sql` lifted; `subtree-sharing.md` describes a
+`child_ids_json` column that is not in the current schema.
