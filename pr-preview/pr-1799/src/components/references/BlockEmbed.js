@@ -1,0 +1,1 @@
+export{lP as BlockEmbed}from"../../../chunks/app-D9Uavi2w.js";

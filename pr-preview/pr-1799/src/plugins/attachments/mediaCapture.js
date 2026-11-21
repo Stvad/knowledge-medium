@@ -1,0 +1,1 @@
+export{hC as DEFAULT_MAX_CAPTURE_BYTES,gC as captureMedia,_C as mediaBlockId}from"../../../chunks/app-D9Uavi2w.js";

@@ -1,0 +1,1 @@
+export{pH as BlockProperties}from"../../chunks/app-D9Uavi2w.js";

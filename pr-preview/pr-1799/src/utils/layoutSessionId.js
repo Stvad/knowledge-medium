@@ -1,0 +1,1 @@
+export{Vot as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Hot as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Uot as __resetLayoutSessionIdForTesting,Wot as getLayoutSessionId,Got as isInstalledAppDisplayMode,Kot as readOrCreateLayoutSessionId}from"../../chunks/app-D9Uavi2w.js";

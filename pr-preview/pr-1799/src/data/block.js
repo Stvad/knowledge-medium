@@ -1,0 +1,1 @@
+export{v5 as Block,y5 as requireLoadedBlock}from"../../chunks/app-D9Uavi2w.js";

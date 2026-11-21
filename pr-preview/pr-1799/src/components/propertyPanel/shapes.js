@@ -1,0 +1,1 @@
+export{JK as propertyShapeLabel}from"../../../chunks/app-D9Uavi2w.js";

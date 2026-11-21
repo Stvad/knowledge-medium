@@ -1,0 +1,1 @@
+export{fI as ClientLocalSettings,pI as clientLocalSettings}from"../../chunks/app-D9Uavi2w.js";

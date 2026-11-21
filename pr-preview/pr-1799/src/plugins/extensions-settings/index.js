@@ -1,0 +1,1 @@
+export{Og as extensionsOverridesProp,kg as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-D9Uavi2w.js";

@@ -1,0 +1,1 @@
+export{tlt as deriveWorkspaceIdNamespace}from"../../../chunks/app-D9Uavi2w.js";

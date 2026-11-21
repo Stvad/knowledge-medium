@@ -1,0 +1,1 @@
+export{Id as collectTypeCandidates,Ld as formatTypeCandidateReport}from"../../../chunks/app-D9Uavi2w.js";

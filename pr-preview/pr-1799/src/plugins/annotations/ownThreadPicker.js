@@ -1,0 +1,1 @@
+export{xp as moveCommentToOwnThread}from"../../../chunks/app-D9Uavi2w.js";

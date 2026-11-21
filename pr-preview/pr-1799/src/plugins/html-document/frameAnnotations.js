@@ -1,0 +1,1 @@
+export{En as AnnotatedFrame,Dn as gesturesPlacement}from"../../../chunks/app-D9Uavi2w.js";

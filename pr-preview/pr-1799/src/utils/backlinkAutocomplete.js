@@ -1,0 +1,1 @@
+export{nx as backlinkCompletionSource,rx as createBacklinkAutocomplete,ix as isInsideBacklinkBrackets}from"../../chunks/app-D9Uavi2w.js";

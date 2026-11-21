@@ -1,0 +1,1 @@
+export{rn as typeChipsDecoratorContribution}from"../../../chunks/app-D9Uavi2w.js";

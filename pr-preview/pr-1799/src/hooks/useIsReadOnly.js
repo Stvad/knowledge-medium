@@ -1,0 +1,1 @@
+export{jx as useIsReadOnly}from"../../chunks/app-D9Uavi2w.js";

@@ -1,0 +1,1 @@
+export{XE as plainOutlinerPlugin}from"../../../chunks/app-D9Uavi2w.js";
