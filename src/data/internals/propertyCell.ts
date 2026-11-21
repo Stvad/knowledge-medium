@@ -64,6 +64,12 @@ const writableContents = (schema: AnyPropertySchema, encoded: unknown) => {
   return contents
 }
 
+const assertValueText = (text: string) => {
+  if (parseExactReferenceBlockContent(text)?.fieldForm || hasLoneSurrogate(text)) {
+    throw new Error('This text cannot be stored verbatim as a value block.')
+  }
+}
+
 export interface OpenedCell {
   valueId: string
   created: boolean
@@ -73,8 +79,11 @@ export interface OpenedCell {
 
 /** Open in the caller's editing transaction. A list appends an unprojected
  * blank when its member codec permits one. Otherwise edit its last member. */
-export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promise<OpenedCell> => {
+export const openCell = async (
+  tx: Tx, ownerId: string, fieldId: string, {initialText}: {initialText?: string} = {},
+): Promise<OpenedCell> => {
   const cell = await readCell(tx, ownerId, fieldId)
+  if (initialText !== undefined) assertValueText(initialText)
   const {schema, stored, values} = cell
   const list = memberCodecOf(schema.codec) !== undefined
   const blankCounts = list && (childContentsToEncodedPropertyValue(schema, ['']) as unknown[]).length > 0
@@ -85,8 +94,15 @@ export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promis
   }
 
   const openValue = async (field: Field, existing?: BlockData): Promise<OpenedCell> => {
-    if (existing) return {valueId: existing.id, created: false}
-    const valueId = await appendValue(tx, field, schema, '')
+    if (existing) {
+      if (initialText !== undefined && existing.content !== initialText) {
+        await tx.update(existing.id, {content: initialText})
+        requestProjection(tx, cell)
+      }
+      return {valueId: existing.id, created: false}
+    }
+    const valueId = await appendValue(tx, field, schema, initialText ?? '')
+    requestProjection(tx, cell)
     return cell.fields.length ? {valueId, created: true} : {valueId, created: true, draftFieldId: field.id}
   }
 
@@ -99,7 +115,7 @@ export const openCell = async (tx: Tx, ownerId: string, fieldId: string): Promis
     if (!jsonValuesEqual(projected, stored)) {
       throw new Error('This stored value cannot be materialized unchanged.')
     }
-    if (blankCounts && jsonValuesEqual(stored, [])) {
+    if (blankCounts && !initialText && jsonValuesEqual(stored, [])) {
       throw new Error('Opening this empty list would add a stored member.')
     }
     const field = await foldFields(tx, cell)
@@ -181,9 +197,7 @@ export const finishCellEdit = async (
     if (finalText !== '') throw new Error('The edited row no longer belongs to this cell.')
     return
   }
-  if (parseExactReferenceBlockContent(finalText)?.fieldForm || hasLoneSurrogate(finalText)) {
-    throw new Error('This text cannot be stored verbatim as a value block.')
-  }
+  assertValueText(finalText)
   if (row.content !== finalText) {
     await tx.update(id, {content: finalText})
     requestProjection(tx, cell)

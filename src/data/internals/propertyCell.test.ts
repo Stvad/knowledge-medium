@@ -96,6 +96,21 @@ const snapshot = () => db.db.getAll('SELECT * FROM blocks ORDER BY id')
 
 describe('openCell', () => {
   it.each([
+    {prior: 'absent', rows: [], stored: undefined, created: true},
+    {prior: 'stored only', rows: [], stored: 'old', created: false},
+    {prior: 'an existing value', rows: [field(), value('value-a', 'old')], stored: 'old', created: false},
+  ])('commits the first character while opening $prior', async ({rows, stored, created}) => {
+    const repo = await setup()
+    await seed({id: ownerId, properties: stored === undefined ? {} : {[textProperty.name]: stored}}, ...rows)
+
+    const edit = await repo.tx(tx => openCell(tx, ownerId, fieldId, {initialText: 'h'}), options)
+    const [fieldRow] = await children(ownerId)
+    expect(await children(fieldRow!.id)).toEqual([{id: rows.length ? 'value-a' : edit.valueId, content: 'h'}])
+    expect(edit.created).toBe(created)
+    expect(await projection()).toEqual({[textProperty.name]: 'h'})
+  })
+
+  it.each([
     ['absent cell', false],
     ['existing empty field', true],
   ])('opens a blank value in an %s', async (_state, hasField) => {
