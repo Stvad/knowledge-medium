@@ -1,1 +1,1 @@
-export{zw as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,Bw as enterBlockEditModeOnGestureAction,Vw as vimClickToFocusDecorator,Hw as vimNormalModeActivation}from"../../../chunks/app-CwwjDuZu.js";
+export{zw as ENTER_BLOCK_EDIT_MODE_GESTURE_ACTION_ID,Bw as enterBlockEditModeOnGestureAction,Vw as vimClickToFocusDecorator,Hw as vimNormalModeActivation}from"../../../chunks/app-DD8kI2Id.js";

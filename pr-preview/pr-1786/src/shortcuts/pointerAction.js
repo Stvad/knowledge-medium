@@ -1,1 +1,1 @@
-export{KF as dispatchPointerAction,qF as setPointerActionDispatcher}from"../../chunks/app-CwwjDuZu.js";
+export{KF as dispatchPointerAction,qF as setPointerActionDispatcher}from"../../chunks/app-DD8kI2Id.js";

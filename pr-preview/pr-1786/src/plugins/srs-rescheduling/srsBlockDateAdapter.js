@@ -1,1 +1,1 @@
-export{Ru as srsBlockDateAdapter}from"../../../chunks/app-CwwjDuZu.js";
+export{Ru as srsBlockDateAdapter}from"../../../chunks/app-DD8kI2Id.js";

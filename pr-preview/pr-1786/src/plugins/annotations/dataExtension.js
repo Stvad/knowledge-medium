@@ -1,1 +1,1 @@
-export{PZ as annotationsDataExtension}from"../../../chunks/app-CwwjDuZu.js";
+export{PZ as annotationsDataExtension}from"../../../chunks/app-DD8kI2Id.js";

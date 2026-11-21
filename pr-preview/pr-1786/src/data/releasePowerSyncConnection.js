@@ -1,1 +1,1 @@
-export{Bq as releasePowerSyncConnection}from"../../chunks/app-CwwjDuZu.js";
+export{Bq as releasePowerSyncConnection}from"../../chunks/app-DD8kI2Id.js";

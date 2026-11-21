@@ -1,1 +1,1 @@
-export{wx as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,Tx as moveBlocksContextMenuItem}from"../../../chunks/app-CwwjDuZu.js";
+export{wx as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,Tx as moveBlocksContextMenuItem}from"../../../chunks/app-DD8kI2Id.js";
