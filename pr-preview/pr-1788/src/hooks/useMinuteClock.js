@@ -1,1 +1,1 @@
-export{Dk as useMinuteClock}from"../../chunks/app-BcMqEN88.js";
+export{Dk as useMinuteClock}from"../../chunks/app-CiAN7JVZ.js";

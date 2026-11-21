@@ -1,1 +1,1 @@
-export{VI as ensureExtensionUtilitiesCss}from"../../chunks/app-BcMqEN88.js";
+export{VI as ensureExtensionUtilitiesCss}from"../../chunks/app-CiAN7JVZ.js";

@@ -1,1 +1,1 @@
-export{UX as isInsideLiteralMarkdown}from"../../chunks/app-BcMqEN88.js";
+export{GX as isInsideLiteralMarkdown}from"../../chunks/app-CiAN7JVZ.js";

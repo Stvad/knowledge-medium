@@ -1,1 +1,1 @@
-export{Cp as DELETED_COMMENT_CONTENT,wp as deleteCommentFromCard}from"../../../chunks/app-BcMqEN88.js";
+export{Cp as DELETED_COMMENT_CONTENT,wp as deleteCommentFromCard}from"../../../chunks/app-CiAN7JVZ.js";

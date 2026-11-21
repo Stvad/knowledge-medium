@@ -1,1 +1,1 @@
-export{wm as confirmThreadDeletion}from"../../../chunks/app-BcMqEN88.js";
+export{wm as confirmThreadDeletion}from"../../../chunks/app-CiAN7JVZ.js";

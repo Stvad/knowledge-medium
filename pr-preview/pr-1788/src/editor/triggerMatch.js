@@ -1,1 +1,1 @@
-export{qX as matchCharTrigger}from"../../chunks/app-BcMqEN88.js";
+export{YX as matchCharTrigger}from"../../chunks/app-CiAN7JVZ.js";

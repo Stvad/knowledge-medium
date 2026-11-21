@@ -1,1 +1,1 @@
-export{Gf as annotationsPlugin}from"../../../chunks/app-BcMqEN88.js";
+export{Gf as annotationsPlugin}from"../../../chunks/app-CiAN7JVZ.js";

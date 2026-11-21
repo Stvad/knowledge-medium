@@ -1,1 +1,1 @@
-export{D2 as agentRuntimeDataExtension}from"../../../chunks/app-BcMqEN88.js";
+export{k2 as agentRuntimeDataExtension}from"../../../chunks/app-CiAN7JVZ.js";

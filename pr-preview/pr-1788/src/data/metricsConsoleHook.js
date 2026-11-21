@@ -1,1 +1,1 @@
-export{IP as ensureMetricsConsoleHook}from"../../chunks/app-BcMqEN88.js";
+export{IP as ensureMetricsConsoleHook}from"../../chunks/app-CiAN7JVZ.js";

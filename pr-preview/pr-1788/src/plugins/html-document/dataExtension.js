@@ -1,1 +1,1 @@
-export{RY as htmlDocumentDataExtension}from"../../../chunks/app-BcMqEN88.js";
+export{BY as htmlDocumentDataExtension}from"../../../chunks/app-CiAN7JVZ.js";
