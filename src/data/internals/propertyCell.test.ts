@@ -29,6 +29,9 @@ const textListProperty = defineProperty('test:cell-text-list', {
 const refListProperty = defineProperty('test:cell-ref-list', {
   codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
+const choiceProperty = defineProperty('test:cell-choice', {
+  codec: codecs.enum(['a', 'b']), defaultValue: 'a', changeScope: ChangeScope.BlockDefault,
+})
 const uiProperty = defineProperty('test:cell-ui', {
   codec: codecs.string, defaultValue: '', changeScope: ChangeScope.UiState,
 })
@@ -130,6 +133,23 @@ describe('openCell', () => {
     const [fieldRow] = await children(ownerId)
     expect(await children(fieldRow!.id)).toEqual([{id: edit.valueId, content: '"retired"'}])
     expect(await projection()).toEqual({[schema.name]: 'retired'})
+  })
+
+  it('refuses to materialize a stored value outside the column options', async () => {
+    const repo = await setup(choiceProperty)
+    await seed({id: ownerId, properties: {[choiceProperty.name]: 'retired option'}})
+    await expectCommittedCellRefusal(repo, tx => openCell(tx, ownerId, fieldId), 'would-change-stored-value')
+  })
+
+  it('folds an offline copy into the first of a field\'s repeated members', async () => {
+    const repo = await setup(textListProperty)
+    await seed({id: ownerId, properties: {[textListProperty.name]: ['b', 'b']}}, field(), value('b1', 'b'), value('b2', 'b'),
+      field('field-b'), value('b3', 'b', 'field-b'), value('note', 'keep', 'b3'))
+
+    await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+
+    expect(await children('b1')).toEqual([{id: 'note', content: 'keep'}])
+    expect(await projection()).toEqual({[textListProperty.name]: ['b', 'b']})
   })
 
   it.each([
@@ -522,6 +542,31 @@ describe('clearCell', () => {
     const before = await snapshot()
 
     await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, {valueId: 'value-a', created: true, draftFieldId: 'field-a'}, content), options)
+
+    expect(await snapshot()).toEqual(before)
+  })
+
+  it.each([
+    {state: 'properties', fieldProperties: {annotation: 'keep'}, extra: []},
+    {state: 'a nested field', fieldProperties: {}, extra: [field('nested-field', 'field-a', 'other-definition')]},
+  ])('removes the blank draft but keeps its draft field when the field gained $state', async ({fieldProperties, extra}) => {
+    const repo = await setup()
+    await seed({id: ownerId}, {...field(), properties: fieldProperties}, value('value-a', ''), ...extra)
+
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, {valueId: 'value-a', created: true, draftFieldId: 'field-a'}, ''), options)
+
+    expect(await children(ownerId)).toEqual([{id: 'field-a', content: `::((${fieldId}))`}])
+    expect((await children('field-a')).map(row => row.id)).toEqual(extra.map(row => row.id))
+    expect(await projection('field-a')).toEqual(fieldProperties)
+  })
+
+  it('saves through a bare id without removing the draft it names', async () => {
+    const repo = await setup()
+    await seed({id: ownerId})
+    const draft = await repo.tx(tx => openCell(tx, ownerId, fieldId), options)
+    const before = await snapshot()
+
+    await repo.tx(tx => finishCellEdit(tx, ownerId, fieldId, draft.valueId, ''), options)
 
     expect(await snapshot()).toEqual(before)
   })
