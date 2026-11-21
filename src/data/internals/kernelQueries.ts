@@ -1005,6 +1005,51 @@ export const childrenQuery = defineQuery<
   },
 })
 
+export interface PropertyCellResult {
+  owner: BlockData | null
+  fields: Array<{field: BlockData; values: Array<BlockData & {hasChildren: boolean}>}>
+}
+
+/** The source rows for a property cell, including duplicate field rows. */
+export const propertyCellQuery = defineQuery<{ownerId: string; fieldId: string}, PropertyCellResult>({
+  name: 'core.propertyCell',
+  argsSchema: z.object({ownerId: z.string(), fieldId: z.string()}).strict(),
+  resultSchema: {parse: input => input as PropertyCellResult},
+  resolve: async ({ownerId, fieldId}, ctx) => {
+    ctx.depend({kind: 'row', id: ownerId})
+    ctx.depend({kind: 'row', id: fieldId})
+    ctx.depend({kind: 'parent-edge', parentId: ownerId})
+    const recognition = dependOnRecognitionParams(ctx)
+    const ownerRows = await ctx.db.getAll<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [ownerId])
+    const owner = ctx.hydrateBlocks(asBlockRows(ownerRows))[0] ?? null
+    if (!owner) return {owner, fields: []}
+
+    const rows = await ctx.db.getAll<BlockRow>(`
+      SELECT blocks.* FROM blocks
+      WHERE blocks.parent_id = ? AND blocks.workspace_id = ? AND blocks.deleted = 0
+        AND blocks.reference_target_id = ? AND (${recognizedFieldRowSql('blocks')})
+      ORDER BY blocks.order_key, blocks.id
+    `, [ownerId, owner.workspaceId, fieldId, ...recognition])
+    const fields: PropertyCellResult['fields'] = []
+    for (const field of ctx.hydrateBlocks(asBlockRows(rows))) {
+      ctx.depend({kind: 'parent-edge', parentId: field.id})
+      const values = await ctx.db.getAll<BlockRow & {has_children: number}>(`
+        SELECT blocks.*, EXISTS (
+          SELECT 1 FROM blocks nested
+          WHERE nested.parent_id = blocks.id AND nested.workspace_id = blocks.workspace_id AND nested.deleted = 0
+        ) AS has_children
+        FROM blocks WHERE parent_id = ? AND workspace_id = ? AND deleted = 0 AND is_field_form IS NOT 1
+        ORDER BY order_key, id
+      `, [field.id, owner.workspaceId])
+      fields.push({field, values: ctx.hydrateBlocks(asBlockRows(values)).map((value, index) => {
+        ctx.depend({kind: 'parent-edge', parentId: value.id})
+        return {...value, hasChildren: Boolean(values[index]!.has_children)}
+      })})
+    }
+    return {owner, fields}
+  },
+})
+
 /** Child-id list of `id` (lean shape). With `hydrate: true`, also runs
  *  the full row SELECT and primes the cache — the consumer-facing
  *  variant the React hooks use to avoid N+1 row loads on mount. Same
@@ -2147,6 +2192,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   ancestorsQuery,
   manyAncestorsQuery,
   childrenQuery,
+  propertyCellQuery,
   childIdsQuery,
   byTypeQuery,
   typedBlocksQuery,
@@ -2179,6 +2225,7 @@ declare module '@/data/api' {
     'core.ancestors': typeof ancestorsQuery
     'core.manyAncestors': typeof manyAncestorsQuery
     'core.children': typeof childrenQuery
+    'core.propertyCell': typeof propertyCellQuery
     'core.childIds': typeof childIdsQuery
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery
