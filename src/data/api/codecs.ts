@@ -54,9 +54,11 @@ export interface Codec<T> {
   /** Optional capability: this codec can produce a scalar SQLite value
    *  for `json_extract(properties_json, ?) = ?` comparison. Codecs that
    *  cannot — refs (route via referencedBy), lists, objects — omit it.
-   *  Presence of `where` is the authoritative signal that the property
-   *  is queryable. */
+   *  Presence of `where` opts the codec into scalar comparisons. */
   readonly where?: WhereCapability<T>
+  /** Opts a JSON-array codec into `where: {property: {contains: value}}`.
+   *  The capability validates and encodes a single member for comparison. */
+  readonly contains?: WhereCapability<unknown>
   /** Optional capability: this codec encodes a LIST, member-wise, through
    *  `member`. Presence is the authoritative signal that the property is
    *  MULTI-VALUED — same capability-by-presence discipline as `where` — and
@@ -204,6 +206,7 @@ const list = <T>(inner: Codec<T>): Codec<T[]> => ({
   type: 'list',
   // Member-wise by construction, which is exactly what `member` promises.
   member: inner,
+  contains: inner.where,
   encode: v => v.map(item => inner.encode(item)),
   decode: j => {
     if (!Array.isArray(j)) throw new CodecError('array', j)

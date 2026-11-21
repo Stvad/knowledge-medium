@@ -4,6 +4,7 @@
  */
 
 import { defineFacet, keyedMapFacet } from '@/facets/facet'
+import { editTimeSql } from '@/data/blockSchema'
 import type { ResolvedPropertySchema } from '@/data/api/propertySchema'
 import type {
   AnyMutator,
@@ -16,6 +17,8 @@ import type {
   AnyValuePresetPresentation,
   BlockData,
   BlockReference,
+  Dependency,
+  WhereValue,
   Tx,
 } from '@/data/api'
 import {
@@ -24,7 +27,7 @@ import {
 } from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
-import type { InvalidationRule } from './invalidation.ts'
+import { TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey, type InvalidationRule } from './invalidation.ts'
 import type { KernelPageSpec } from './kernelPage.ts'
 import type { Repo } from './repo.ts'
 import type { BlockSearchFilter } from './searchFilter.ts'
@@ -290,6 +293,63 @@ const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlock
 export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
+
+type QueryableFieldDependency = (workspaceId: string) => Dependency
+
+/** A trusted plugin SQL expression over one block. Return SQL NULL for a missing or malformed value. */
+export interface QueryableField {
+  name: string
+  /** Parentheses group expressions. Plugins already have full SQL access through queriesFacet. */
+  value: (alias: string) => {sql: string; params: readonly unknown[]}
+  encode: (operand: unknown) => WhereValue
+  /** A positive predicate on this field may bound an ancestor walk. */
+  bounding?: boolean
+  dependencies: readonly [QueryableFieldDependency, ...QueryableFieldDependency[]]
+}
+
+const isQueryableField = (value: unknown): value is QueryableField =>
+  isRecord(value) && typeof value.name === 'string' && !!value.name.trim() &&
+  typeof value.value === 'function' && typeof value.encode === 'function' &&
+  (value.bounding === undefined || typeof value.bounding === 'boolean') &&
+  Array.isArray(value.dependencies) && value.dependencies.length > 0 &&
+  [...value.dependencies].every(dependency => typeof dependency === 'function')
+
+const queryableFieldsByName = keyedMapFacet<QueryableField>('data.queryable-fields', field => field.name)
+
+export const queryableFieldsFacet = defineFacet({
+  id: queryableFieldsByName.id,
+  empty: queryableFieldsByName.empty,
+  validate: isQueryableField,
+  // Runtime buckets reach the combiner without the static contribution check.
+  combine: (fields, context) => queryableFieldsByName.combine(fields.filter(isQueryableField), context),
+})
+
+const timestampOperand = (field: string, operand: unknown): number => {
+  if (typeof operand === 'number' && Number.isFinite(operand)) return operand
+  if (operand instanceof Date && Number.isFinite(operand.getTime())) return operand.getTime()
+  if (typeof operand === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(operand)) {
+      throw new TypeError(`Date-only timestamp operand for ${field}: supply an instant`)
+    }
+    const date = new Date(operand)
+    // Date normalizes some invalid dates. Require the original spelling to round-trip.
+    if (Number.isFinite(date.getTime()) && date.toISOString() === operand) return date.getTime()
+  }
+  throw new TypeError(`Expected a timestamp operand for ${field}`)
+}
+
+// Timestamp-only filters follow workspace liveness; edit-time filters also wake on user edits in that workspace.
+const timestampField = (name: 'created' | 'updated', column: (alias: string) => string): QueryableField => ({
+  name,
+  value: alias => ({sql: column(alias), params: []}),
+  encode: operand => timestampOperand(name, operand),
+  dependencies: [workspaceId => ({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, name)})],
+})
+
+export const KERNEL_QUERYABLE_FIELDS: readonly QueryableField[] = [
+  timestampField('created', alias => `${alias}.created_at`),
+  timestampField('updated', editTimeSql),
+]
 
 /** Code-owned property definitions. The declaration object is also the typed
  * PropertyHandle returned by seedProperty. This is deliberately a list facet,
