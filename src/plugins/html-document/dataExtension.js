@@ -1,1 +1,1 @@
-export{XJ as htmlDocumentDataExtension}from"../../../chunks/app-BXyVVwHy.js";
+export{XJ as htmlDocumentDataExtension}from"../../../chunks/app-opmw70Sq.js";

@@ -1,1 +1,1 @@
-export{QC as videoPlayerMarkdownExtension}from"../../../chunks/app-BXyVVwHy.js";
+export{QC as videoPlayerMarkdownExtension}from"../../../chunks/app-opmw70Sq.js";
