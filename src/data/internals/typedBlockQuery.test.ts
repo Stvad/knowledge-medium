@@ -1387,6 +1387,41 @@ it('bounds limited table queries by workspace, type, or siblings with and withou
 }, 20_000)
 
 describe('typed query disjunctions and extended where operators', () => {
+  // Bulk seeding and analyzing the two-workspace graph takes about one second.
+  it('finds reference alternatives from both target indexes before and after ANALYZE', async () => {
+    await env.h.db.writeTransaction(async tx => {
+      // The shared DB can retain planner stats from an earlier fixture after its rows are reset.
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute('ANALYZE main.block_references')
+      await tx.execute(`
+        WITH RECURSIVE nums(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM nums WHERE n < 19999)
+        INSERT INTO blocks (id, workspace_id, order_key, references_json, created_at, updated_at, created_by, updated_by)
+        SELECT 'source-' || n, CASE WHEN n % 5 = 0 THEN ? ELSE ? END, 'a',
+               json_array(json_object('id', 'target-' || (n % 257), 'alias', 'link',
+                 'sourceField', CASE WHEN n % 4 = 3 THEN 'reviewer' ELSE '' END)),
+               n, n, 'user', 'user'
+        FROM nums
+      `, [OTHER_WS, WS])
+      const query = {workspaceId: WS, anyOf: [
+        {referencedBy: {id: 'target-3'}}, {referencedBy: {id: 'target-7', sourceField: 'reviewer'}},
+      ]}
+      const compiled = compileTypedBlockQuery(query, env.repo.propertySchemas, {projection: 'ids', limit: 5})
+      const check = async () => {
+        const plan = (await tx.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params]))
+          .map(row => row.detail)
+        expect(plan, plan.join('\n')).toContain('MULTI-INDEX OR')
+        expect(plan.filter(step => step.includes('idx_block_references_target (target_id=? AND workspace_id=?)'))).toHaveLength(2)
+        expect(plan.filter(step => step.includes('sqlite_autoindex_blocks_1 (id=?)'))).toHaveLength(2)
+        expect(ids(await tx.getAll<{id: string}>(compiled.sql, [...compiled.params])))
+          .toEqual(['source-3', 'source-7', 'source-517', 'source-774', 'source-1031'])
+      }
+      await check()
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute('ANALYZE main.block_references')
+      await check()
+    })
+  }, 20_000)
+
   it('ORs self-scoped and ancestor-scoped predicates inside an independently bounded query', async () => {
     await create({id: 'ancestor', properties: {status: 'ancestor-hit'}})
     await create({id: 'ancestor-match', parentId: 'ancestor', properties: {done: false}})

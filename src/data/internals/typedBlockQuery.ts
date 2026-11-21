@@ -360,22 +360,27 @@ const compileWhereClause = (
   }
 }
 
-const compileReferencedByExists = (
+const referenceTarget = (ref: TypedBlockQueryReferenceFilter): CompiledClause =>
+  ref.sourceField === undefined
+    ? {sql: 'br.target_id = ?', params: [ref.id]}
+    : {sql: 'br.target_id = ? AND br.source_field = ?', params: [ref.id, ref.sourceField]}
+
+const compileReferencedBy = (
   ref: TypedBlockQueryReferenceFilter,
-  sourceIdExpr: string,
+  sourceId: string,
+  alternativeWorkspace?: string,
 ): CompiledClause => {
-  const refClauses = [
-    `br.source_id = ${sourceIdExpr}`,
-    'br.target_id = ?',
-  ]
-  const params: unknown[] = [ref.id]
-  if (ref.sourceField !== undefined) {
-    refClauses.push('br.source_field = ?')
-    params.push(ref.sourceField)
+  const target = referenceTarget(ref)
+  // A self-scope alternative must expose the source ids to SQLite's multi-index OR planner.
+  if (alternativeWorkspace !== undefined) {
+    return {
+      sql: `${sourceId} IN (SELECT br.source_id FROM block_references br WHERE br.workspace_id = ? AND ${target.sql})`,
+      params: [alternativeWorkspace, ...target.params],
+    }
   }
   return {
-    sql: `EXISTS (SELECT 1 FROM block_references br WHERE ${refClauses.join(' AND ')})`,
-    params,
+    sql: `EXISTS (SELECT 1 FROM block_references br WHERE br.source_id = ${sourceId} AND ${target.sql})`,
+    params: target.params,
   }
 }
 
@@ -383,6 +388,7 @@ const compilePredicateAgainstRow = (
   predicate: BlockPredicate,
   rowAlias: string,
   context: WhereContext,
+  alternativeWorkspace?: string,
 ): CompiledClause => {
   const clauses: string[] = []
   const params: unknown[] = []
@@ -401,7 +407,7 @@ const compilePredicateAgainstRow = (
   }
 
   if (predicate.referencedBy !== undefined) {
-    const compiled = compileReferencedByExists(predicate.referencedBy, `${rowAlias}.id`)
+    const compiled = compileReferencedBy(predicate.referencedBy, `${rowAlias}.id`, alternativeWorkspace)
     clauses.push(compiled.sql)
     params.push(...compiled.params)
   }
@@ -412,26 +418,17 @@ const compilePredicateAgainstRow = (
   }
 }
 
-/** Compile a predicate against the result block `b` directly (self
- *  scope) or as an EXISTS over the ancestor_chain CTE rows that share
- *  `block_id = b.id` (ancestor scope, includes b itself).
- *
- *  Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
+/** Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
  *  also matches when any ancestor's own id IS X — Roam treats a parent
  *  block/page as an implicit reference target for everything it contains.
  *  Filtering by a parent name should match blocks living under that parent
  *  even when no ancestor sources an explicit reference. `sourceField`
  *  predicates target a specific reference channel and stay strict (the
  *  ancestor-is-itself case has no channel). */
-const compileScopedPredicate = (
+const compileAncestorPredicate = (
   predicate: BlockPredicate,
   context: WhereContext,
 ): CompiledClause => {
-  const scope = predicate.scope ?? 'self'
-  if (scope === 'self') {
-    return compilePredicateAgainstRow(predicate, 'b', context)
-  }
-
   const clauses: string[] = []
   const params: unknown[] = []
 
@@ -449,7 +446,7 @@ const compileScopedPredicate = (
   }
 
   if (predicate.referencedBy !== undefined) {
-    const refExists = compileReferencedByExists(predicate.referencedBy, 'anc.id')
+    const refExists = compileReferencedBy(predicate.referencedBy, 'anc.id')
     if (predicate.referencedBy.sourceField === undefined) {
       clauses.push(`(${refExists.sql} OR anc.id = ?)`)
       params.push(...refExists.params, predicate.referencedBy.id)
@@ -470,8 +467,12 @@ const compileScopedPredicate = (
   }
 }
 
-const compileAlternatives = (predicates: readonly BlockPredicate[], context: WhereContext): CompiledClause => {
-  const alternatives = predicates.map(predicate => compileScopedPredicate(predicate, context))
+const compileAlternatives = (
+  predicates: readonly BlockPredicate[], context: WhereContext, workspaceId: string,
+): CompiledClause => {
+  const alternatives = predicates.map(predicate => isSelfScope(predicate)
+    ? compilePredicateAgainstRow(predicate, 'b', context, workspaceId)
+    : compileAncestorPredicate(predicate, context))
   return {
     sql: alternatives.length ? `(${alternatives.map(clause => `(${clause.sql})`).join(' OR ')})` : '0',
     params: alternatives.flatMap(clause => clause.params),
@@ -620,17 +621,18 @@ const candidateSource = (
       FROM block_references br
       JOIN blocks b ON b.id = br.source_id${typeJoin}
     `.trim()
-    clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
-    params.push(normalized.workspaceId, normalized.referencedBy.id)
-    if (normalized.referencedBy.sourceField !== undefined) {
-      clauses.push('br.source_field = ?')
-      params.push(normalized.referencedBy.sourceField)
-    }
+    const target = referenceTarget(normalized.referencedBy)
+    clauses.push('br.workspace_id = ?', target.sql, 'b.deleted = 0')
+    params.push(normalized.workspaceId, ...target.params)
   } else {
     let index = ''
     if (normalized.parentId !== undefined) {
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
+    } else if (!types.length && normalized.anyOf?.length &&
+      normalized.anyOf.every(p => isSelfScope(p) && p.referencedBy)) {
+      // Before ANALYZE SQLite can scan the workspace index for a disjunction of indexed source-id lists.
+      index = ' INDEXED BY sqlite_autoindex_blocks_1'
     } else if (typeof normalized.order === 'object' && !types.length &&
       !normalized.where && predicateGroups(normalized).every(group => group.length === 0)) {
       // Arbitrary property sorts visit the workspace's live rows. Keep foreign workspaces off that path.
@@ -660,7 +662,7 @@ const candidateSource = (
   }
 
   if (normalized.anyOf !== undefined && !hasAncestorScope(normalized.anyOf)) {
-    const group = compileAlternatives(normalized.anyOf, context)
+    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
     clauses.push(group.sql)
     params.push(...group.params)
   }
@@ -779,20 +781,20 @@ export const compileTypedBlockQuery = (
   const filterClauses: string[] = []
 
   if (normalized.anyOf && hasAncestorScope(normalized.anyOf)) {
-    const group = compileAlternatives(normalized.anyOf, context)
+    const group = compileAlternatives(normalized.anyOf, context, normalized.workspaceId)
     filterClauses.push(group.sql)
     params.push(...group.params)
   }
   for (const predicate of matchPredicates) {
     if (isSelfScope(predicate)) continue
-    const compiled = compileScopedPredicate(predicate, context)
+    const compiled = compileAncestorPredicate(predicate, context)
     filterClauses.push(compiled.sql)
     params.push(...compiled.params)
   }
 
   for (const predicate of excludePredicates) {
     if (isSelfScope(predicate)) continue
-    const compiled = compileScopedPredicate(predicate, context)
+    const compiled = compileAncestorPredicate(predicate, context)
     // `IS NOT TRUE` for the same NULL-safety reason as the self-scope
     // exclude above. The ancestor predicate compiles to `EXISTS(...)`
     // (always 0/1, so `IS NOT TRUE` == `NOT` here), but keeping both
