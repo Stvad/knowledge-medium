@@ -1,1 +1,1 @@
-export{Qy as LazyBlockEntry}from"../../../chunks/app-opmw70Sq.js";
+export{Qy as LazyBlockEntry}from"../../../chunks/app-BM9E6qxs.js";

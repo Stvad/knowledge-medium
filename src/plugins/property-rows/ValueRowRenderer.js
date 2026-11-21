@@ -1,1 +1,1 @@
-export{So as propertyReadContentContribution}from"../../../chunks/app-opmw70Sq.js";
+export{So as propertyReadContentContribution}from"../../../chunks/app-BM9E6qxs.js";
