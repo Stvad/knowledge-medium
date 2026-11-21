@@ -1350,8 +1350,8 @@ export const snapshotsToChangeNotification = (
     else if (beforeLive && !afterLive && beforeParent !== null) {
       parentIds.add(beforeParent)
     }
-    // Moved (live both sides, parent changed): both sides update.
-    else if (beforeLive && afterLive && beforeParent !== afterParent) {
+    // Parent queries can select a workspace even when the parent id stays the same.
+    else if (beforeLive && afterLive && (beforeParent !== afterParent || entry.before?.workspaceId !== entry.after?.workspaceId)) {
       if (beforeParent !== null) parentIds.add(beforeParent)
       if (afterParent !== null) parentIds.add(afterParent)
     }

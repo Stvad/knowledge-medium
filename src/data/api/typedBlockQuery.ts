@@ -85,6 +85,10 @@ export interface TypedBlockQuery {
    *  currently-active one from silently mis-scoping when the user
    *  switches workspaces mid-flight. */
   readonly workspaceId: string
+  /** Restrict candidates to live direct children of this block. */
+  readonly parentId?: string
+  /** Omit recognized property fields and their direct value rows. */
+  readonly propertyChildren?: 'none'
   /** Contains any of these type ids. Empty/omitted means no type filter. */
   readonly types?: readonly string[]
   /** Self-scope shorthand: equivalent to a `match` entry with
@@ -106,9 +110,11 @@ export interface TypedBlockQuery {
    *  predicate shape as `match`. A predicate with no `id`, `referencedBy` or
    *  `where` entry is dropped here as in `match`, so it excludes nothing. */
   readonly exclude?: readonly BlockPredicate[]
-  /** Result ordering. Default `created-asc`. Backlinks panels use
-   *  `created-desc` to put newest sources first. */
-  readonly order?: 'created-asc' | 'created-desc'
+  /** Defaults to creation time ascending. Outline order requires a direct
+   *  parent. Scalar property order places missing and wrong-shaped values
+   *  last in either direction, with block id ascending as the tiebreaker. */
+  readonly order?: 'created-asc' | 'created-desc' | 'outline'
+    | {readonly property: string; readonly direction: 'asc' | 'desc'}
 }
 
 /** Historically the "post-default-resolution" shape used internally;

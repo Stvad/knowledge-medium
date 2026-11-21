@@ -234,15 +234,7 @@ const buildProbes = (targets: readonly number[]): Probe[] => [
   {name: 'manyAncestors', args: {ids: [pick(targets[4], seedIds), pick(targets[5], seedIds)]}},
   {name: 'byType', args: {workspaceId: WS, type: TYPE_POOL[0]}},
   {name: 'byType', args: {workspaceId: WS, type: TYPE_POOL[1]}},
-  // types.length > 1 routes `resolveTypedBlocks` through the compiled
-  // typed-block query instead of byType's SELECT_BLOCKS_BY_TYPE_SQL
-  // fast path (the `types.length === 1 && where === undefined && ...`
-  // guard, kernelQueries.ts L908-920) — a distinct code path with its
-  // own dep declarations (`collectTypedBlockAxisDeps`).
   {name: 'typedBlocks', args: {workspaceId: WS, types: [...TYPE_POOL]}},
-  // typedBlockIds has no fast-path shortcut (always compiles), so a
-  // single type here still exercises a different resolver body than
-  // both `byType` and `typedBlocks` above.
   {name: 'typedBlockIds', args: {workspaceId: WS, types: [TYPE_POOL[0]]}},
   {name: 'typedBlockCount', args: {workspaceId: WS, types: [TYPE_POOL[1]]}},
   // No wall-clock dependency — SELECT_RECENT_BLOCKS_SQL orders purely by
