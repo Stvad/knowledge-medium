@@ -203,17 +203,37 @@ describe('cell storage with an unavailable reference preset', () => {
     expect(await stored(owner)).toEqual({bag: replacement, rows: [], refs: [refRow]})
   })
 
-  it.each(['input', 'peek'] as const)('validates against the stored value after edits to the %s bag', async source => {
+  it.each(['unchanged', 'changed'])('owns a reused input bag with %s values', async kind => {
     await update(host, owner, {'sample:other': ['kept']})
-    const bag = {...original, 'sample:other': ['kept']}
+    const value = kind === 'unchanged' ? 'kept' : 'updated'
+    const bag: Record<string, unknown> = {...original, 'sample:other': [value]}
     await host.repo.tx(async tx => {
       await tx.update(owner, {content: 'first edit', properties: bag})
-      const edits: Record<string, unknown> = source === 'input' ? bag : tx.peek(owner)!.properties
-      const other = edits['sample:other'] as string[]
+      const other = bag['sample:other'] as string[]
       other.push('unwritten')
-      edits[seed.name] = targets[1]
-      await expect(tx.update(owner, {content: 'retargeted', properties: edits})).rejects.toMatchObject(refusal)
+      bag[seed.name] = targets[1]
+      await expect(tx.update(owner, {content: 'retargeted', properties: bag})).rejects.toMatchObject(refusal)
       await tx.update(owner, {content: 'independent edit'})
+    }, {scope: ChangeScope.BlockDefault})
+    await host.repo.awaitProcessors()
+    expect(await stored(owner)).toEqual({bag: {...original, 'sample:other': [value]}, rows: [], refs: [refRow]})
+  })
+
+  it('exposes one immutable peek snapshot per written version', async () => {
+    await host.repo.tx(async tx => {
+      const references = [{id: targets[0], alias: targets[0], sourceField: seed.name}]
+      await tx.update(owner, {references, properties: {...original, 'sample:other': ['kept']}})
+      const first = tx.peek(owner)!
+      expect(tx.peek(owner)).toBe(first)
+      expect(Object.isFrozen(references)).toBe(false)
+      expect(() => { first.properties[seed.name] = targets[1] }).toThrow(TypeError)
+      const other = first.properties['sample:other'] as string[]
+      expect(() => other.push('unwritten')).toThrow(TypeError)
+      await tx.update(owner, {content: 'independent edit'})
+      const second = tx.peek(owner)!
+      expect(second).not.toBe(first)
+      expect(second.content).toBe('independent edit')
+      expect(first.content).not.toBe(second.content)
     }, {scope: ChangeScope.BlockDefault})
     await host.repo.awaitProcessors()
     expect(await stored(owner)).toEqual({bag: {...original, 'sample:other': ['kept']}, rows: [], refs: [refRow]})

@@ -89,7 +89,7 @@ import {
   readHasLiveReferrer,
 } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
-import type { BlockCache } from '@/data/blockCache'
+import { deepFreeze, type BlockCache } from '@/data/blockCache'
 import {
   getResolvedProperty,
   isResolvableFieldDefinition,
@@ -501,11 +501,15 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
-    // Later writes use this row as their preimage. Own the caller's bag
-    // before validation so reusing it cannot change what was validated.
-    if (after.properties !== before?.properties) after.properties = cloneDeep(after.properties)
-    const names = changedPropertyNames(before?.properties ?? {}, after.properties)
-    if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
+    const previous = before?.properties ?? {}
+    const names = changedPropertyNames(previous, after.properties)
+    if (names.length === 0) {
+      after.properties = previous
+      return null
+    }
+    // Capture changed inputs before the first await. The next write uses this bag as its preimage.
+    after.properties = cloneDeep(after.properties)
+    if (this.ctx.propertyWritesAreSettled()) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
     const childSchemas = await this.isPropertyChildBackedWorkspace(after.workspaceId)
       ? new Map<string, ResolvedPropertySchema<unknown>>()
@@ -728,9 +732,11 @@ export class TxImpl implements Tx {
   }
 
   peek(id: string): BlockData | null {
-    const own = peekSnapshot(this.ctx.snapshots, id)
-    if (own !== undefined) return cloneDeep(own)
-    return this.ctx.cache.getSnapshot(id) ?? null
+    const entry = this.ctx.snapshots.get(id)
+    if (!entry) return this.ctx.cache.getSnapshot(id) ?? null
+    // Publish one immutable snapshot per version without freezing caller-owned values.
+    if (entry.after && !Object.isFrozen(entry.after)) entry.after = deepFreeze(cloneDeep(entry.after))
+    return entry.after
   }
 
   // ──── Lifecycle ────
