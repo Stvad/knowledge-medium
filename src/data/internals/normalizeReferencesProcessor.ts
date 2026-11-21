@@ -20,6 +20,7 @@ import {
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR,
+  REPROJECT_CELL_PROCESSOR,
 } from './propertyChildrenProcessor'
 import { MIGRATE_PROPERTY_DEFINITION_PROCESSOR } from './propertyDefinitionChangeProcessor'
 
@@ -92,6 +93,7 @@ export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
   DERIVE_REFERENCE_TARGET_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR,
+  REPROJECT_CELL_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
   // Runs LAST: it re-keys consuming-parent cells for a definition rename or
   // re-type, and the stale in-tx registry would make MATERIALIZE read the

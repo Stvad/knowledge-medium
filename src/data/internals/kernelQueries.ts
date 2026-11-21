@@ -48,6 +48,7 @@ import {
   NO_REGISTRY_RECOGNITION_PARAMS,
   NON_HIDDEN_CHILDREN_IDS_SQL,
   NON_HIDDEN_CHILDREN_SQL,
+  recognizedFieldRowSql,
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
@@ -999,6 +1000,51 @@ export const childrenQuery = defineQuery<
     const [sql, params] = childrenStatement(propertyChildren, 'rows', id, ctx)
     const rows = await ctx.db.getAll<BlockRow>(sql, params)
     return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+export interface PropertyRowsResult {
+  owner: BlockData | null
+  fields: Array<{field: BlockData; values: Array<BlockData & {hasChildren: boolean}>}>
+}
+
+/** One property's rows under its owner: every field row, duplicates included, with its value rows. */
+export const propertyRowsQuery = defineQuery<{ownerId: string; fieldId: string}, PropertyRowsResult>({
+  name: 'core.propertyRows',
+  argsSchema: z.object({ownerId: z.string(), fieldId: z.string()}).strict(),
+  resultSchema: {parse: input => input as PropertyRowsResult},
+  resolve: async ({ownerId, fieldId}, ctx) => {
+    ctx.depend({kind: 'row', id: ownerId})
+    ctx.depend({kind: 'row', id: fieldId})
+    ctx.depend({kind: 'parent-edge', parentId: ownerId})
+    const recognition = dependOnRecognitionParams(ctx)
+    const ownerRows = await ctx.db.getAll<BlockRow>(SELECT_BLOCK_BY_ID_SQL, [ownerId])
+    const owner = ctx.hydrateBlocks(asBlockRows(ownerRows))[0] ?? null
+    if (!owner) return {owner, fields: []}
+
+    const rows = await ctx.db.getAll<BlockRow>(`
+      SELECT blocks.* FROM blocks
+      WHERE blocks.parent_id = ? AND blocks.workspace_id = ? AND blocks.deleted = 0
+        AND blocks.reference_target_id = ? AND (${recognizedFieldRowSql('blocks')})
+      ORDER BY blocks.order_key, blocks.id
+    `, [ownerId, owner.workspaceId, fieldId, ...recognition])
+    const fields: PropertyRowsResult['fields'] = []
+    for (const field of ctx.hydrateBlocks(asBlockRows(rows))) {
+      ctx.depend({kind: 'parent-edge', parentId: field.id})
+      const values = await ctx.db.getAll<BlockRow & {has_children: number}>(`
+        SELECT blocks.*, EXISTS (
+          SELECT 1 FROM blocks nested
+          WHERE nested.parent_id = blocks.id AND nested.workspace_id = blocks.workspace_id AND nested.deleted = 0
+        ) AS has_children
+        FROM blocks WHERE parent_id = ? AND workspace_id = ? AND deleted = 0 AND is_field_form IS NOT 1
+        ORDER BY order_key, id
+      `, [field.id, owner.workspaceId])
+      fields.push({field, values: ctx.hydrateBlocks(asBlockRows(values)).map((value, index) => {
+        ctx.depend({kind: 'parent-edge', parentId: value.id})
+        return {...value, hasChildren: Boolean(values[index]!.has_children)}
+      })})
+    }
+    return {owner, fields}
   },
 })
 
@@ -2124,6 +2170,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   ancestorsQuery,
   manyAncestorsQuery,
   childrenQuery,
+  propertyRowsQuery,
   childIdsQuery,
   byTypeQuery,
   typedBlocksQuery,
@@ -2156,6 +2203,7 @@ declare module '@/data/api' {
     'core.ancestors': typeof ancestorsQuery
     'core.manyAncestors': typeof manyAncestorsQuery
     'core.children': typeof childrenQuery
+    'core.propertyRows': typeof propertyRowsQuery
     'core.childIds': typeof childIdsQuery
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery

@@ -101,13 +101,13 @@ describe('property rows created as blocks', () => {
     expect(result.valueId).toBeUndefined()
     expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
     expect(await repo.block('owner').get(tags)).toEqual(['saved'])
-    expect(await children(result.fieldRowId!)).toHaveLength(1)
+    expect(await children(result.fieldRowId)).toHaveLength(1)
     await repo.mutate.createChild({parentId: result.fieldRowId, content: 'new'})
     expect(await repo.block('owner').get(tags)).toEqual(['saved', 'new'])
-    expect(await children(result.fieldRowId!)).toHaveLength(2)
+    expect(await children(result.fieldRowId)).toHaveLength(2)
   })
 
-  it.each(['lagging member', 'duplicate fields without a cell'])('appends from live rows without changing existing members: %s', async setup => {
+  it.each(['lagging member', 'duplicate fields without a stored value'])('appends from live rows without losing a row or note: %s', async setup => {
     await repo.block('owner').set(tags, [setup === 'lagging member' ? 'a' : 'one'])
     const resolution = repo.propertySchemaResolverFor('ws').resolve(tags.name)
     if (resolution.status !== 'resolved') throw new Error('Missing definition')
@@ -119,7 +119,7 @@ describe('property rows created as blocks', () => {
           reference_target_id, is_field_form, deleted, created_at, updated_at, user_updated_at, created_by, updated_by)
          VALUES (?, 'ws', ?, ?, ?, '{}', ?, ?, 0, 1, 1, 1, 'user', 'user')`,
         [id, parentId, orderKey, content, fieldId, fieldId ? 1 : 0])
-      if (setup === 'duplicate fields without a cell') {
+      if (setup === 'duplicate fields without a stored value') {
         await insert('second-field', 'owner', 'a2', `::((${selected.schema.fieldId}))`, selected.schema.fieldId)
         await tx.execute("UPDATE blocks SET properties_json = '{}' WHERE id = 'owner'")
       }
@@ -128,7 +128,7 @@ describe('property rows created as blocks', () => {
       await insert('nested-note', 'arrived-member', 'a0', 'keep nested note')
     })
     const held = () => h.db.getAll<{id: string; deleted: number}>(
-      `SELECT * FROM blocks
+      `SELECT id, parent_id, content, properties_json, deleted FROM blocks
        WHERE id IN (?, ?, 'second-field', 'arrived-member', 'nested-note') ORDER BY id`, [selected.fieldRowId!, first.id])
     const before = await held()
     const count = (await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n
@@ -143,8 +143,15 @@ describe('property rows created as blocks', () => {
       return {...choice, valueId}
     })
 
-    expect(await held()).toEqual(before)
-    expect((await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n).toBe(count)
+    if (setup === 'lagging member') expect(await held()).toEqual(before)
+    else {
+      // Opening folds the duplicate field: its member and the member's note move, nothing is re-minted.
+      expect((await held()).find(row => row.id === 'second-field')?.deleted).toBe(1)
+      expect((await children(selected.fieldRowId)).map(row => row.id)).toContain('arrived-member')
+      expect((await children('arrived-member')).map(row => row.id)).toEqual(['nested-note'])
+    }
+    expect((await h.db.get<{n: number}>('SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0')).n)
+      .toBe(setup === 'lagging member' ? count : count - 1)
     expect(await repo.block('owner').get(tags)).toEqual(setup === 'lagging member' ? ['a', 'from other device', 'new'] : ['one', 'two', 'new'])
     expect((await children(target.fieldRowId)).at(-1)?.id).toBe(target.valueId)
     expect(repo.undoManager.depths(ChangeScope.BlockDefault).undo).toBe(1)
@@ -161,7 +168,8 @@ describe('property rows created as blocks', () => {
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
     await expect(choosePropertyField(repo.block(kind === 'missing owner' ? 'absent' : 'owner'), note,
       repo.block(kind === 'missing source' ? 'absent' : 'source'), '::', () => true)).rejects.toThrow(
-        kind === 'read-only' ? 'This workspace is read-only.' : kind === 'missing source' ? 'The input block changed.' : 'This block no longer supports properties in the outline.')
+        ({'read-only': 'This workspace is read-only.', 'missing source': 'The input block changed.', 'missing owner': 'does not exist',
+          'deleted owner': 'The property owner is missing or deleted.', cell: 'This workspace does not store properties as rows.'})[kind]!)
     if (kind === 'read-only') expect(spy).not.toHaveBeenCalled()
     spy.mockRestore()
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
@@ -181,13 +189,61 @@ describe('property rows created as blocks', () => {
     await expect(choosePropertyField(repo.block('owner'), note, repo.block('source'), '::', () => true)).rejects.toThrow('The input block changed.')
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
-  it.each([note, tags])('preserves a stored cell awaiting its field row: $name', async schema => {
+  it.each([
+    {schema: note, stored: 'stored'}, {schema: note, stored: ''},
+    {schema: tags, stored: ['stored', 'stored']}, {schema: tags, stored: []},
+  ])('materializes a stored value awaiting its field row: $schema.name $stored', async ({schema, stored}) => {
     await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
-      [JSON.stringify({[schema.name]: schema === tags ? ['stored'] : ''}), 'owner']))
+      [JSON.stringify({[schema.name]: stored, other: 'keep'}), 'owner']))
+    const live = () => h.db.getAll('SELECT id, content FROM blocks WHERE deleted = 0 ORDER BY id')
+    const before = await live()
+    repo.undoManager.clear()
+
+    const result = await choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)
+
+    expect(await h.db.getOptional('SELECT id FROM blocks WHERE id = ? AND deleted = 0', ['source'])).toBeNull()
+    expect((await children('owner')).map(row => row.id)).toEqual([result.fieldRowId])
+    const values = await children(result.fieldRowId)
+    expect(values.map(row => row.content)).toEqual(schema === tags ? stored : [stored])
+    expect(result.valueId).toBe(schema === tags ? undefined : values[0]!.id)
+    expect(JSON.parse((await h.db.get<{properties_json: string}>("SELECT properties_json FROM blocks WHERE id = 'owner'")).properties_json))
+      .toEqual({[schema.name]: stored, other: 'keep'})
+    await repo.undo()
+    expect(await live()).toEqual(before)
+  })
+
+  it.each([
+    {schema: note, stored: 'z', rows: [['x'], ['y']]},
+    {schema: tags, stored: ['a', 'b'], rows: [['a'], ['a']]},
+  ])('refuses to fold duplicate field rows that disagree with the stored value: $schema.name', async ({schema, stored, rows}) => {
+    const resolution = repo.propertySchemaResolverFor('ws').resolve(schema.name)
+    if (resolution.status !== 'resolved') throw new Error('Missing definition')
+    const definition = resolution.schema.fieldId
+    await h.db.writeTransaction(async tx => {
+      const insert = (id: string, parentId: string, content: string, fieldId: string | null = null) => tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          reference_target_id, is_field_form, deleted, created_at, updated_at, user_updated_at, created_by, updated_by)
+         VALUES (?, 'ws', ?, 'a1', ?, '{}', ?, ?, 0, 1, 1, 1, 'user', 'user')`,
+        [id, parentId, content, fieldId, fieldId ? 1 : 0])
+      for (const [index, values] of rows.entries()) {
+        await insert(`field-${index}`, 'owner', `::((${definition}))`, definition)
+        for (const value of values) await insert(`field-${index}-${value}`, `field-${index}`, value)
+      }
+      await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[schema.name]: stored}), 'owner'])
+    })
     const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
-    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/stored value/)
+    await expect(choosePropertyField(repo.block('owner'), schema, repo.block('source'), '::', () => true)).rejects.toThrow(/would change its stored value/)
     expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
   })
+
+  it('refuses a stored value that cannot be materialized unchanged, before touching the scaffold', async () => {
+    await h.db.writeTransaction(tx => tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[tags.name]: ['ok', 5]}), 'owner']))
+    const before = await h.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await expect(choosePropertyField(repo.block('owner'), tags, repo.block('source'), '::', () => true)).rejects.toThrow(/without changing it/)
+    expect(await h.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
+
   it('refuses stale definition scope before touching the scaffold', async () => {
     await getOrCreatePropertiesPage(repo, 'ws')
     const schema = await repo.userSchemas.addSchema({name: 'mutable', presetId: 'string'})
