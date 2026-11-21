@@ -21,7 +21,7 @@ import {actionContextsFacet, actionsFacet} from '@/extensions/core'
 import {defaultRenderersExtension} from '@/extensions/defaultRenderers'
 import {ActiveContextsProvider, useActiveContextsState, type ActiveContextsMap} from '@/shortcuts/ActiveContexts'
 import {defaultActionContextConfigs} from '@/shortcuts/defaultContexts'
-import {BlockContextProvider} from '@/context/block'
+import {BlockContextProvider, NestedBlockContextProvider} from '@/context/block'
 import {PropertyDisplayScopeContext} from '@/context/propertyDisplay'
 import {RepoContext} from '@/context/repo'
 import {BlockComponent} from '@/components/BlockComponent'
@@ -132,7 +132,7 @@ const ContextProbe = () => {
   return null
 }
 const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
-const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER) => render(
+const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER, disableEditorCompletions = false) => render(
   <RepoContext value={repo}>
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
@@ -142,7 +142,9 @@ const mount = (mode: 'all' | 'non-hidden' | 'none' = 'non-hidden', root = OWNER)
           <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: 'creation-test', scopeRootId: root}}>
             <GlobalShortcuts/>
             <PropertyDisplayScopeContext value={{childBacked: true, workspace: mode, panel: 'inherit'}}>
-              <BlockComponent blockId={root}/>
+              <NestedBlockContextProvider overrides={{disableEditorCompletions}}>
+                <BlockComponent blockId={root}/>
+              </NestedBlockContextProvider>
             </PropertyDisplayScopeContext>
           </BlockContextProvider>
         </Suspense>
@@ -359,6 +361,20 @@ describe('ordinary property creation in the outline', () => {
     await waitFor(() => expect(document.activeElement).toBe(document.querySelector(`[data-block-id="${valueId}"] .cm-content`)))
     expect(await repo.block(OWNER).get(list)).toEqual(['saved'])
   })
+
+  it('offers no native completion on a surface that disables it', async () => {
+    const id = await repo.mutate.createChild({parentId: OWNER, content: '::'})
+    mount('all', OWNER, true)
+    await act(async () => { await focusBlock(repo.block(PANEL), id, {edit: true, renderScopeId: 'creation-test'}) })
+    const view = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-block-id="${id}"] .cm-editor`)
+      expect(node).not.toBeNull()
+      return EditorView.findFromDOM(node!)!
+    })
+    act(() => { view.focus(); view.dispatch({selection: {anchor: 2}}) })
+    expect(view.state.doc.toString()).toBe('::')
+    act(() => { expect(startCompletion(view)).toBe(false) })
+  }, 20_000) // The seeded outline and editor mount took 1.3 s in isolation.
 
   it('opens native completion and an ordinary first child', async () => {
     const id = await repo.mutate.createChild({parentId: OWNER, content: ''})

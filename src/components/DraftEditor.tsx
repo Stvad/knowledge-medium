@@ -5,6 +5,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { EditorState, Transaction } from '@codemirror/state'
 import { history, historyKeymap, insertNewline } from '@codemirror/commands'
 import { useRepo } from '@/context/repo.js'
+import { useBlockContext } from '@/context/block.js'
 import type { Repo } from '@/data/repo.js'
 import type { FacetRuntime } from '@/facets/facet.js'
 import { readClipboardContent, type ClipboardContent } from '@/paste/clipboard.js'
@@ -16,7 +17,7 @@ import {
 } from '@/paste/operations.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
-import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { MARKDOWN_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 
 interface DraftEditorProps {
@@ -77,7 +78,8 @@ export const DraftEditor = ({
 }: DraftEditorProps) => {
   const repo = useRepo()
   const runtime = useAppRuntime()
-  // The extensions are built once per editor; they read the latest callbacks.
+  const {disableEditorCompletions} = useBlockContext()
+  // Stable extensions read the latest callbacks without rebuilding on each edit.
   const handlers = useRef({onChange, onSubmit, onCancel})
   useLayoutEffect(() => { handlers.current = {onChange, onSubmit, onCancel} })
   const stableOnChange = useCallback((next: string) => handlers.current.onChange(next), [])
@@ -110,7 +112,7 @@ export const DraftEditor = ({
       // owner made the draft read-only to submit it; dispatch ignores readOnly.
       EditorState.changeFilter.of(tr => !tr.startState.readOnly),
       ...createMinimalMarkdownConfig([
-        ...runtime.read(codeMirrorExtensionsFacet)({repo}),
+        ...runtime.read(codeMirrorExtensionsFacet)({repo, disableEditorCompletions}),
         // After the plugins', so an open completion takes Enter first. In a
         // block, Enter is the outline's split, which never reaches a draft.
         // eslint-disable-next-line react-hooks/refs -- read on a key press, never during render
@@ -123,7 +125,7 @@ export const DraftEditor = ({
         EditorView.contentAttributes.of({'aria-label': label, 'aria-multiline': 'true'}),
       ]),
     ]
-  }, [repo, runtime, label])
+  }, [repo, runtime, label, disableEditorCompletions])
 
   return (
     <div
@@ -138,7 +140,7 @@ export const DraftEditor = ({
         value={value}
         onChange={stableOnChange}
         extensions={extensions}
-        basicSetup={BLOCK_EDITOR_BASIC_SETUP}
+        basicSetup={MARKDOWN_EDITOR_BASIC_SETUP}
         indentWithTab={false}
         readOnly={readOnly}
         placeholder={placeholder}

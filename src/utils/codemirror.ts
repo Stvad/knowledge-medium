@@ -259,6 +259,12 @@ export const BLOCK_EDITOR_BASIC_SETUP = {
   completionKeymap: false,
 } as const satisfies BasicSetupOptions
 
+/** Markdown editors install completion through the app extension facet. */
+export const MARKDOWN_EDITOR_BASIC_SETUP = {
+  ...BLOCK_EDITOR_BASIC_SETUP,
+  autocompletion: false,
+} as const satisfies BasicSetupOptions
+
 /** Markdown syntax in the block editor is marked with STATIC classes and
  *  painted from the palette tokens in index.css (`.km-md-*`), so every theme
  *  reaches it — and so can an extension's stylesheet. @uiw's basicSetup

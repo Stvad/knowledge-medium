@@ -1,6 +1,6 @@
 /** Central autocompletion installer.
  *
- *  Calls `autocompletion()` exactly once per editor. No `override` —
+ *  Calls `autocompletion()` once per editor with completions enabled. No `override` —
  *  sources are collected from CodeMirror's `EditorState.languageData`
  *  facet (the `autocomplete` field on each data entry), which plugins
  *  contribute to via their own `codeMirrorExtensionsFacet` registration.
@@ -16,7 +16,7 @@ import {
 } from './codeMirrorExtensions.ts'
 import type { AppExtension } from '@/facets/facet.js'
 
-const editorAutocompleteContribution: CodeMirrorExtensionContribution = () => [
+const editorAutocompleteContribution: CodeMirrorExtensionContribution = ({disableEditorCompletions}) => disableEditorCompletions ? [] : [
   autocompletion({
     defaultKeymap: false,
     icons: false,

@@ -15,6 +15,7 @@ import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {defaultEditorInteractionExtension} from '@/editor/defaultInteractions'
 import {AppRuntimeContextProvider} from '@/extensions/runtimeContext'
+import {BlockContextProvider} from '@/context/block'
 import {referencesPlugin} from '@/plugins/references'
 import {supertagsPlugin} from '@/plugins/supertags'
 import {geoPlugin} from '@/plugins/geo'
@@ -93,8 +94,14 @@ describe('DraftEditor', () => {
     )
   }
 
-  const mount = async (): Promise<EditorView> => {
-    render(<AppRuntimeContextProvider value={repo.facetRuntime!}><Harness/></AppRuntimeContextProvider>)
+  const mount = async (disableEditorCompletions = false): Promise<EditorView> => {
+    render(
+      <AppRuntimeContextProvider value={repo.facetRuntime!}>
+        <BlockContextProvider initialValue={{disableEditorCompletions}}>
+          <Harness/>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
     const view = EditorView.findFromDOM(await screen.findByLabelText('New comment'))!
     act(() => { view.focus() })
     return view
@@ -127,6 +134,15 @@ describe('DraftEditor', () => {
     type(view, '@@Corn')
     act(() => { startCompletion(view) })
     await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Corner Cafe'))
+  })
+
+  it('leaves ordinary typing available in drafts on surfaces that disable completion', async () => {
+    const view = await mount(true)
+    type(view, '[[Laun')
+    expect(view.state.doc.toString()).toBe('[[Laun')
+    act(() => { expect(startCompletion(view)).toBe(false) })
+    press(view, {key: 'Enter'})
+    expect(view.state.doc.toString()).toBe('[[Laun\n')
   })
 
   it('submits on Mod+Enter, and makes a line break on Enter', async () => {

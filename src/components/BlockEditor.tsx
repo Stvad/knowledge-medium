@@ -41,7 +41,7 @@ export const BlockEditor = ({
   const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
-  const {editorTooltipParent} = blockContext
+  const {editorTooltipParent, disableEditorCompletions} = blockContext
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
     ? blockContext.renderScopeId
     : undefined
@@ -245,7 +245,11 @@ export const BlockEditor = ({
   // Every block editor gets keyboard-aware scrolling so the caret stays
   // above the on-screen keyboard (see keyboardAwareScroll). Prepended so
   // a caller-supplied extension can still override anything if it needs to.
-  const {extensions: providedExtensions, ...restCodeMirrorProps} = codeMirrorProps
+  const {extensions: providedExtensions, basicSetup, ...restCodeMirrorProps} = codeMirrorProps
+  const surfaceBasicSetup = useMemo(() => {
+    if (!disableEditorCompletions || basicSetup === false) return basicSetup
+    return {...(typeof basicSetup === 'object' ? basicSetup : {}), autocompletion: false}
+  }, [basicSetup, disableEditorCompletions])
   const mergedExtensions = useMemo<Extension[]>(
     // Publish this editor's content flush into the view so completion
     // sources can persist pending keystrokes at accept time (see
@@ -331,6 +335,7 @@ export const BlockEditor = ({
         })
       }}
       extensions={mergedExtensions}
+      basicSetup={surfaceBasicSetup}
       {...restCodeMirrorProps}
     />
   )
