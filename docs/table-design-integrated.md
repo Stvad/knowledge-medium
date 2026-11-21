@@ -65,7 +65,7 @@ Reading list             <- host block, table type; content is a free title
   - Field: `optional-ref` to a property definition (`targetTypes: ['property-schema']`; legal, with precedents: read). No field row at all means "the row's own content". A field row that doesn't resolve is an **error column** with read-only cells; it never falls back to row content.
   - Width: a number, written when a drag ends.
   - Content: an optional header label. Empty shows the definition's name.
-- **Row sources never return table machinery.** Field and value rows are excluded by the engine option in §5; view and column blocks by their types, in every row source, so another table's configuration never shows up as data rows or counts toward the cap.
+- **Row sources never return table machinery.** Field and value rows are excluded by the engine option in §5; view and column blocks by their types, in every row source (this needs a `types` term on predicates, so `exclude` can name them: §8), so another table's configuration never shows up as data rows or counts toward the cap.
 
 **Seeds.** v1 declares only what it uses: three types (table, view, column) and five properties (query, column field, column width, view sort column, view sort direction). Ids must be namespaced and **freeze when shipped**; naming is #363's open question (a markdown pipe table is already called a table in the UI). Hidden columns, multi-sort and an active-view pointer are not declared until a phase needs them. View and column blocks are created with `createTypedChild`.
 
@@ -240,6 +240,7 @@ Editable. In the Simulator: horizontal swipe scrolled the table, the frozen colu
 | Reactive lookup (owner, definition) → all field rows and value rows | kernel queries | small |
 | Parent predicate, `order`, `propertyChildren: 'none'`, `limit` on typed id queries | `typedBlockQuery.ts`, `kernelQueries.ts` | small to smallish each |
 | `anyOf` across predicates | `typedBlockQuery.ts` | medium |
+| A `types` term on predicates, so `exclude` can drop view and column blocks from every row source (today `types` exists only at the top level, as a positive filter) | `typedBlockQuery.ts` | small |
 | Queryable-fields seam (virtual fields with operators, SQL and dependencies), with `created`/`updated` as its first users | `typedBlockQuery.ts`, `facets.ts` | medium; contract undesigned |
 | The `::` field completion can be disabled per render surface | editor extensions | small |
 | A context can name its surface for spatial-navigation exclusions | `spatial-navigation` | small |
