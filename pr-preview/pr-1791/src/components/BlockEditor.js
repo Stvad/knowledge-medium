@@ -1,0 +1,1 @@
+export{Iz as BlockEditor}from"../../chunks/app-tF7kmgr9.js";

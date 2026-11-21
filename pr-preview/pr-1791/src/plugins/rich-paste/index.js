@@ -1,0 +1,1 @@
+export{Zx as richPastePlugin}from"../../../chunks/app-tF7kmgr9.js";

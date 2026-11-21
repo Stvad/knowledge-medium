@@ -1,0 +1,1 @@
+export{or as countCharacters,sr as countWords}from"../../../chunks/app-tF7kmgr9.js";

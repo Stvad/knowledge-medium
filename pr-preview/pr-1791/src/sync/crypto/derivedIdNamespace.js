@@ -1,0 +1,1 @@
+export{vct as deriveWorkspaceIdNamespace}from"../../../chunks/app-tF7kmgr9.js";

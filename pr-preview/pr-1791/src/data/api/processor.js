@@ -1,0 +1,1 @@
+export{wft as definePostCommitProcessor}from"../../../chunks/app-tF7kmgr9.js";

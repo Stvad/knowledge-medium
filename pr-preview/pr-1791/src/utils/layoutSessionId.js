@@ -1,0 +1,1 @@
+export{iot as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,aot as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,oot as __resetLayoutSessionIdForTesting,sot as getLayoutSessionId,cot as isInstalledAppDisplayMode,lot as readOrCreateLayoutSessionId}from"../../chunks/app-tF7kmgr9.js";

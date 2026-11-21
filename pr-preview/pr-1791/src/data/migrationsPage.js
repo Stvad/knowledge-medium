@@ -1,0 +1,1 @@
+export{bot as MIGRATIONS_PAGE_ALIAS,xot as getOrCreateMigrationsPage,Sot as migrationsPageBlockId,Cot as migrationsPageSpec}from"../../chunks/app-tF7kmgr9.js";

@@ -1,0 +1,1 @@
+export{vg as extensionApiCatalog,yg as extensionApiRuntimeExports}from"../../chunks/app-tF7kmgr9.js";

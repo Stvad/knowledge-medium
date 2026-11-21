@@ -1,0 +1,1 @@
+export{Qx as richPasteDecisionContribution}from"../../../chunks/app-tF7kmgr9.js";

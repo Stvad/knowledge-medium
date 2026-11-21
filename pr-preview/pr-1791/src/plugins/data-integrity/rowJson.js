@@ -1,0 +1,1 @@
+export{bc as parsePropertiesJson}from"../../../chunks/app-tF7kmgr9.js";

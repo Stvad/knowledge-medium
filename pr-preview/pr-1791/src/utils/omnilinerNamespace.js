@@ -1,0 +1,1 @@
+export{Kq as omnilinerNamespace}from"../../chunks/app-tF7kmgr9.js";

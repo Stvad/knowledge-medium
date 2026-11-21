@@ -1,0 +1,1 @@
+export{tn as staticAppExtensions}from"../../chunks/app-tF7kmgr9.js";

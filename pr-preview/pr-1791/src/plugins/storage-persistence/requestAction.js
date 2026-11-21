@@ -1,0 +1,1 @@
+export{Vc as requestPersistenceActionContribution}from"../../../chunks/app-tF7kmgr9.js";

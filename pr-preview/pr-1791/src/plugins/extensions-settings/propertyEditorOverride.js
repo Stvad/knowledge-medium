@@ -1,0 +1,1 @@
+export{Jr as extensionsOverridesUi}from"../../../chunks/app-tF7kmgr9.js";

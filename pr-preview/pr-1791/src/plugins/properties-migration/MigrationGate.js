@@ -1,0 +1,1 @@
+export{Jo as MigrationGate}from"../../../chunks/app-tF7kmgr9.js";
