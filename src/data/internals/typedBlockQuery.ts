@@ -288,13 +288,12 @@ const compileTargetTraversal = (
   }
 }
 
-const virtualOperator = (field: QueryableField, value: unknown): readonly [string, unknown] => {
-  const entries = isPlainOperatorObject(value) ? Object.entries(value) : [['eq', value] as const]
-  const entry = entries[0]
-  if (entries.length !== 1 || !entry || !Object.hasOwn(field.operators, entry[0])) {
-    throw new Error(`[queryBlocks] where.${field.name} requires one of: ${Object.keys(field.operators).join(', ')}`)
-  }
-  return entry
+export const virtualFieldFor = (name: string, context: WhereContext): QueryableField | undefined =>
+  context.properties.has(name) ? undefined : context.fields?.get(name)
+
+const fieldExpression = (field: QueryableField, alias: string): CompiledClause => {
+  const {sql, params} = field.value(alias)
+  return {sql: `(${sql})`, params}
 }
 
 const compileWhereClause = (
@@ -307,34 +306,21 @@ const compileWhereClause = (
   if (value === undefined) {
     throw new Error(`[queryBlocks] where.${name} is undefined; pass null to match unset values`)
   }
+  const field = virtualFieldFor(name, context)
   const schema = context.properties.get(name)
-  if (schema === undefined) {
-    const field = context.fields?.get(name)
-    if (field) {
-      const [operator, operand] = virtualOperator(field, value)
-      const compiled = field.operators[operator]!(rowAlias, operand)
-      return {sql: `(${compiled.sql})`, params: compiled.params}
-    }
-    throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
-  }
-  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
-  const extract = `json_extract(${cell})`
+  if (!field && !schema) throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema or queryable field`)
   const parsed = parseWhereValue(name, value)
-
-  // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
-  // they're orthogonal to the codec's encoding contract (and
-  // codec.where.encode rejects null/undefined by design).
-  if (parsed.kind === 'unset') {
-    return {sql: `${extract} IS NULL`, params: []}
-  }
-  if (parsed.kind === 'set') {
-    return {sql: `${extract} IS NOT NULL`, params: []}
+  const cell = `${rowAlias}.properties_json, ${inlineJsonPath(name)}`
+  const expr = field ? fieldExpression(field, rowAlias) : {sql: `json_extract(${cell})`, params: []}
+  if (parsed.kind === 'unset' || parsed.kind === 'set') {
+    return {sql: `${expr.sql} IS ${parsed.kind === 'set' ? 'NOT ' : ''}NULL`, params: expr.params}
   }
   if (parsed.kind === 'target') {
+    if (!schema) throw new Error(`[queryBlocks] where.${name}.target requires a reference property`)
     return compileTargetTraversal(name, parsed.inner, schema, rowAlias, context, aliasCounter)
   }
   if (parsed.kind === 'contains') {
-    const member = schema.codec.contains
+    const member = schema?.codec.contains
     if (!member || !Object.hasOwn(STORAGE_TEST, member.storage)) {
       throw new Error(`[queryBlocks] where.${name}.contains requires a codec with a contains capability`)
     }
@@ -347,16 +333,17 @@ const compileWhereClause = (
   }
   // The comparison stays its own AND term, in the indexed `json_extract`
   // spelling, so an expression index on the property still serves it.
-  const comparable = comparableCell(name, schema, cell)
+  const comparable = field ? {test: '', encode: field.encode} : comparableCell(name, schema, cell)
+  const guard = comparable.test && `${comparable.test} AND `
   if (parsed.kind === 'between') {
     return {
-      sql: `(${comparable.test} AND ${extract} BETWEEN ? AND ?)`,
-      params: [comparable.encode(parsed.lo), comparable.encode(parsed.hi)],
+      sql: `(${guard}${expr.sql} BETWEEN ? AND ?)`,
+      params: [...expr.params, comparable.encode(parsed.lo), comparable.encode(parsed.hi)],
     }
   }
   return {
-    sql: `(${comparable.test} AND ${extract} ${COMPARATOR_SQL[parsed.op]} ?)`,
-    params: [comparable.encode(parsed.operand)],
+    sql: `(${guard}${expr.sql} ${COMPARATOR_SQL[parsed.op]} ?)`,
+    params: [...expr.params, comparable.encode(parsed.operand)],
   }
 }
 
@@ -536,7 +523,7 @@ const boundsByWhere = (where: BlockPredicate['where'], context: WhereContext): b
   hasSelectiveProperty(where, context) || Object.entries(where ?? {}).some(([name, value]) => {
     if (context.properties.has(name)) return false
     const field = context.fields?.get(name)
-    return field?.boundingOperators?.includes(virtualOperator(field, value)[0]) === true
+    return field?.bounding === true && isSelectiveWhereValue(value)
   })
 
 /** Does this self-scope predicate actually bound the candidate set
@@ -731,25 +718,28 @@ export const ANCESTOR_CHAIN_CTE_SQL = `
   )
 `.trim()
 
-const resultOrderSql = (
-  query: ResolvedTypedBlockQuery,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-): string => {
+const resultOrder = (query: ResolvedTypedBlockQuery, context: WhereContext): CompiledClause => {
   const order = query.order
   if (order === 'outline') {
     if (query.parentId === undefined) throw new Error('[queryBlocks] outline order requires parentId')
-    return 'b.order_key, b.id'
+    return {sql: 'b.order_key, b.id', params: []}
   }
-  if (typeof order === 'object') {
-    const schema = schemas.get(order.property)
+  if (typeof order !== 'object') {
+    return {sql: `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`, params: []}
+  }
+  const field = virtualFieldFor(order.property, context)
+  let expr: CompiledClause
+  if (field) {
+    expr = fieldExpression(field, 'b')
+  } else {
     const cell = `b.properties_json, ${inlineJsonPath(order.property)}`
-    const {test, storage} = comparableCell(order.property, schema, cell, 'order')
-    const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
+    const {test, storage} = comparableCell(order.property, context.properties.get(order.property), cell, 'order')
     // SQLite NOCASE folds ASCII; accented letters retain code-point order.
     const collation = storage === 'text' ? ' COLLATE NOCASE' : ''
-    return `CASE WHEN ${test} THEN json_extract(${cell}) END${collation} ${direction} NULLS LAST, b.id`
+    expr = {sql: `CASE WHEN ${test} THEN json_extract(${cell}) END${collation}`, params: []}
   }
-  return `b.created_at ${order === 'created-desc' ? 'DESC' : 'ASC'}, b.id ASC`
+  const direction = order.direction === 'desc' ? 'DESC' : 'ASC'
+  return {sql: `${expr.sql} ${direction} NULLS LAST, b.id`, params: expr.params}
 }
 
 export const compileTypedBlockQuery = (
@@ -768,13 +758,19 @@ export const compileTypedBlockQuery = (
   const params = source.params
   const isCount = opts.projection === 'count'
   const select = opts.projection === 'ids' ? 'b.id AS id' : buildQualifiedBlockColumnsSql('b')
-  const suffix = isCount ? '' : `ORDER BY ${resultOrderSql(normalized, propertySchemas)}${opts.limit === undefined ? '' : ' LIMIT ?'}`
+  const finish = (sql: string): CompiledTypedBlockQuery => {
+    if (isCount) return {sql, params}
+    const order = resultOrder(normalized, context)
+    const ordered = `${sql} ORDER BY ${order.sql}`
+    return opts.limit === undefined
+      ? {sql: ordered, params: [...params, ...order.params]}
+      : {sql: `${ordered} LIMIT ?`, params: [...params, ...order.params, opts.limit]}
+  }
   if (!needsAncestorChain(normalized)) {
     const projection = isCount
       ? `COUNT(${source.distinct ? 'DISTINCT b.id' : '*'}) AS count`
       : `${source.distinct ? 'DISTINCT ' : ''}${select}`
-    if (!isCount && opts.limit !== undefined) params.push(opts.limit)
-    return {sql: `SELECT ${projection} ${source.sql} ${suffix}`, params}
+    return finish(`SELECT ${projection} ${source.sql}`)
   }
 
   // Outer WHERE — ancestor-scope predicates only.
@@ -804,14 +800,12 @@ export const compileTypedBlockQuery = (
     params.push(...compiled.params)
   }
 
-  if (!isCount && opts.limit !== undefined) params.push(opts.limit)
   const sql = `
     WITH RECURSIVE candidates AS (SELECT DISTINCT b.id ${source.sql}), ${ANCESTOR_CHAIN_CTE_SQL}
     SELECT ${isCount ? 'COUNT(*) AS count' : select}
     FROM candidates c
     CROSS JOIN blocks b ON b.id = c.id
     WHERE ${filterClauses.join(' AND ')}
-    ${suffix}
   `
-  return {sql, params}
+  return finish(sql)
 }

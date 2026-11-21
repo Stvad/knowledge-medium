@@ -16,8 +16,10 @@ import { typesProp } from '@/data/properties'
 import {
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_CHANNEL,
   typedBlocksLiveKey,
   typedBlocksStructureKey,
+  typedBlocksPropertyKey,
 } from '@/data/invalidation'
 import { definitionSeedsFacet, KERNEL_QUERYABLE_FIELDS, queryableFieldsFacet, typeSeedsFacet, type QueryableField } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
@@ -1528,17 +1530,13 @@ describe('typed query disjunctions and extended where operators', () => {
     const field = 'test:content'
     env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
       name: field,
-      operators: {
-        matches: (alias, operand) => {
-          if (typeof operand !== 'string') throw new TypeError('Expected text')
-          return {sql: alias + '.content = ?', params: [operand]}
-        },
-      },
+      value: alias => ({sql: `${alias}.content`, params: []}),
+      encode: operand => codecs.string.decode(operand),
       dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
     }])
     const literal = "it's ?"
     await create({id: 'row'})
-    const query = {workspaceId: WS, where: {[field]: {matches: literal}}}
+    const query = {workspaceId: WS, where: {[field]: {eq: literal}}}
     const handle = env.repo.query.typedBlockIds(query)
     expect(await handle.load()).toEqual([])
     const unsubscribe = handle.subscribe(() => {})
@@ -1552,12 +1550,45 @@ describe('typed query disjunctions and extended where operators', () => {
     }
   })
 
+  it('filters and orders on one bound virtual value and keeps missing values last', async () => {
+    const field = 'test:score'
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'scores', [{
+      name: field,
+      value: alias => ({sql: `json_extract(${alias}.properties_json, ?)`, params: ['$.priority']}),
+      encode: operand => codecs.number.decode(operand),
+      dependencies: [workspaceId => ({
+        kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL, key: typedBlocksPropertyKey(workspaceId, priorityProp.name),
+      })],
+    }])
+    await create({id: 'a-missing', types: ['entry']})
+    await create({id: 'higher', types: ['entry'], properties: {priority: 7}})
+    await create({id: 'lower', types: ['entry'], properties: {priority: 3}})
+    const base = {workspaceId: WS, types: ['entry']}
+    const ordered = (direction: 'asc' | 'desc') => ({...base, order: {property: field, direction}})
+    const ascending = env.repo.query.typedBlockIds(ordered('asc'))
+    expect(await ascending.load()).toEqual(['lower', 'higher', 'a-missing'])
+    expect(await env.repo.query.typedBlockIds(ordered('desc')).load()).toEqual(['higher', 'lower', 'a-missing'])
+    expect(await env.repo.query.typedBlockIds({
+      ...ordered('desc'), where: {[field]: {between: [3, 7]}}, limit: 1,
+    }).load()).toEqual(['higher'])
+    expect(await env.repo.query.typedBlockIds({...base, where: {[field]: {exists: true}}}).load()).toEqual(['higher', 'lower'])
+    expect(await env.repo.query.typedBlockIds({...base, where: {[field]: null}}).load()).toEqual(['a-missing'])
+    const off = ascending.subscribe(() => {})
+    try {
+      await env.repo.tx(tx => tx.setProperty('higher', priorityProp, 1), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(ascending.peek()).toEqual(['higher', 'lower', 'a-missing']))
+    } finally {
+      off()
+    }
+  })
+
   it('refreshes a cached query when its runtime field is replaced or removed', async () => {
     const field = 'test:chosen-row'
     const source = 'test'
     const chooseRow = (id: string): QueryableField => ({
       name: field,
-      operators: {eq: alias => ({sql: `${alias}.id = ?`, params: [id]})},
+      value: alias => ({sql: `${alias}.id = ?`, params: [id]}),
+      encode: Number,
       dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
     })
     await create({id: 'first'})
@@ -1582,7 +1613,8 @@ describe('typed query disjunctions and extended where operators', () => {
       expect(() => handle.read()).toThrow(field)
       env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
         name: field,
-        operators: {eq: () => ({sql: '1', params: []})},
+        value: () => ({sql: '1', params: []}),
+        encode: Number,
         dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
       }])
       await waitFor(() => expect(handle.peek()).toEqual(['row']))
@@ -1594,7 +1626,8 @@ describe('typed query disjunctions and extended where operators', () => {
   it('uses the requested workspace for scoped queryable fields', async () => {
     const field: QueryableField = {
       name: 'test:workspace-field',
-      operators: {eq: () => ({sql: '1', params: []})},
+      value: () => ({sql: '1', params: []}),
+      encode: Number,
       dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
     }
     env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [field])
@@ -1607,16 +1640,17 @@ describe('typed query disjunctions and extended where operators', () => {
     env.repo.setActiveWorkspaceId(OTHER_WS)
     await env.repo.whenPropertyDefinitionsReady(OTHER_WS)
     env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [
-      {...field, operators: {eq: () => ({sql: '0', params: []})}},
+      {...field, value: () => ({sql: '0', params: []})},
     ], {workspaceId: OTHER_WS})
     expect(await env.repo.query.typedBlockIds({workspaceId: OTHER_WS, where}).load()).toEqual([])
     expect(await env.repo.query.typedBlockIds({workspaceId: WS, where, limit: 1}).load()).toEqual(['in-a'])
   })
 
-  it('accepts an ancestor walk bounded by an explicitly selective virtual operator', async () => {
+  it('accepts an ancestor walk bounded by an explicitly selective virtual field', async () => {
     env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
-      name: 'test:row', boundingOperators: ['eq'],
-      operators: {eq: (alias, id) => ({sql: `${alias}.id = ?`, params: [id]})},
+      name: 'test:row', bounding: true,
+      value: alias => ({sql: `${alias}.id`, params: []}),
+      encode: operand => codecs.string.decode(operand),
       dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
     }])
     await create({id: 'parent'})
@@ -1629,7 +1663,8 @@ describe('typed query disjunctions and extended where operators', () => {
 
   it('keeps stored properties authoritative and virtual fields outside the ancestor bound', async () => {
     const virtual = {
-      operators: {eq: () => ({sql: '1', params: []})},
+      value: () => ({sql: '1', params: []}),
+      encode: Number,
       dependencies: [(workspaceId: string) => ({kind: 'workspace', workspaceId} as const)],
     } as const
     env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [
@@ -1642,7 +1677,7 @@ describe('typed query disjunctions and extended where operators', () => {
       workspaceId: WS, where: {'test:always': true}, match: [{scope: 'ancestor', id: 'first'}],
     }).load()).rejects.toThrow('require at least one candidate filter')
     await expect(env.repo.query.typedBlockIds({workspaceId: WS, where: {'test:always': {toString: 1}}}).load())
-      .rejects.toThrow('requires one of')
+      .rejects.toThrow('unknown operator')
   })
 
   it('filters created and user-facing updated timestamps as milliseconds, including the legacy fallback', async () => {

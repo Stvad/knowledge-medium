@@ -17,6 +17,7 @@ import type {
   BlockData,
   BlockReference,
   Dependency,
+  WhereValue,
   Tx,
 } from '@/data/api'
 import {
@@ -292,35 +293,24 @@ export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.n
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
-type QueryableFieldOperator = (alias: string, operand: unknown) => {
-  sql: string
-  params: readonly unknown[]
-}
-
 type QueryableFieldDependency = (workspaceId: string) => Dependency
 
-/** A predicate over the candidate block row. Operators validate operands and
- * bind them as SQL parameters. Dependencies cover every change that can
- * alter the predicate's result. */
+/** A trusted plugin SQL expression over one block. Return SQL NULL for a missing or malformed value. */
 export interface QueryableField {
   name: string
-  operators: Readonly<Record<string, QueryableFieldOperator>>
-  /** Operators whose successful predicates restrict the candidate set before an ancestor walk. */
-  boundingOperators?: readonly string[]
+  value: (alias: string) => {sql: string; params: readonly unknown[]}
+  encode: (operand: unknown) => WhereValue
+  /** A positive predicate on this field may bound an ancestor walk. */
+  bounding?: boolean
   dependencies: readonly [QueryableFieldDependency, ...QueryableFieldDependency[]]
 }
 
-const isQueryableField = (value: unknown): value is QueryableField => {
-  if (!isRecord(value) || typeof value.name !== 'string' || !value.name.trim()) return false
-  if (!isRecord(value.operators) || Array.isArray(value.operators)) return false
-  const operators = Object.entries(value.operators)
-  const bounds = value.boundingOperators
-  if (bounds !== undefined && (!isStringArray(bounds) || !bounds.every(op => Object.hasOwn(value.operators as object, op)))) return false
-  return operators.length > 0 &&
-    operators.every(([name, operator]) => name.trim() && typeof operator === 'function') &&
-    Array.isArray(value.dependencies) && value.dependencies.length > 0 &&
-    [...value.dependencies].every(dependency => typeof dependency === 'function')
-}
+const isQueryableField = (value: unknown): value is QueryableField =>
+  isRecord(value) && typeof value.name === 'string' && !!value.name.trim() &&
+  typeof value.value === 'function' && typeof value.encode === 'function' &&
+  (value.bounding === undefined || typeof value.bounding === 'boolean') &&
+  Array.isArray(value.dependencies) && value.dependencies.length > 0 &&
+  [...value.dependencies].every(dependency => typeof dependency === 'function')
 
 const queryableFieldsByName = keyedMapFacet<QueryableField>('data.queryable-fields', field => field.name)
 
@@ -346,32 +336,13 @@ const timestampOperand = (field: string, operand: unknown): number => {
   throw new TypeError(`Expected a timestamp operand for ${field}`)
 }
 
-const timestampField = (name: 'created' | 'updated', column: (alias: string) => string): QueryableField => {
-  const compare = (operator: string): QueryableFieldOperator => (alias, operand) => ({
-    sql: `${column(alias)} ${operator} ?`,
-    params: [timestampOperand(name, operand)],
-  })
-  return {
-    name,
-    operators: {
-      eq: compare('='),
-      lt: compare('<'),
-      lte: compare('<='),
-      gt: compare('>'),
-      gte: compare('>='),
-      between: (alias, operand) => {
-        if (!Array.isArray(operand) || operand.length !== 2) {
-          throw new TypeError(`Expected two timestamp operands for ${name}`)
-        }
-        return {
-          sql: `${column(alias)} BETWEEN ? AND ?`,
-          params: [timestampOperand(name, operand[0]), timestampOperand(name, operand[1])],
-        }
-      },
-    },
-    dependencies: [workspaceId => ({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, name)})],
-  }
-}
+// Timestamp-only filters follow workspace liveness; edit-time filters also wake on user edits in that workspace.
+const timestampField = (name: 'created' | 'updated', column: (alias: string) => string): QueryableField => ({
+  name,
+  value: alias => ({sql: column(alias), params: []}),
+  encode: operand => timestampOperand(name, operand),
+  dependencies: [workspaceId => ({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, name)})],
+})
 
 export const KERNEL_QUERYABLE_FIELDS: readonly QueryableField[] = [
   timestampField('created', alias => `${alias}.created_at`),

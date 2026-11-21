@@ -64,6 +64,7 @@ import {
   needsAncestorChain,
   type WhereContext,
   normalizeTypedBlockQuery,
+  virtualFieldFor,
   notPropertyRow,
   hasCandidateAxis,
   predicateGroups,
@@ -1108,6 +1109,16 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string, targetArms: readonly stri
   ${arm}`).join('')}
 `
 
+const dependOnField = (name: string, workspaceId: string, ctx: QueryCtx, context: WhereContext) => {
+  const field = virtualFieldFor(name, context)
+  if (field) {
+    for (const dependency of field.dependencies) ctx.depend(dependency(workspaceId))
+  } else {
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL, key: typedBlocksPropertyKey(workspaceId, name)})
+  }
+  return field
+}
+
 /** Subscribe to the property channels relevant to a single `where`
  *  map — every direct key, plus the inner keys reached through any
  *  `target` traversal. The inner keys live on other rows (the ref
@@ -1136,16 +1147,7 @@ const collectWhereDeps = (
 ): void => {
   if (where === undefined) return
   for (const [name, value] of Object.entries(where)) {
-    const field = !context.properties.has(name) && context.fields?.get(name)
-    if (field) {
-      for (const dependency of field.dependencies) ctx.depend(dependency(workspaceId))
-      continue
-    }
-    ctx.depend({
-      kind: 'plugin',
-      channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-      key: typedBlocksPropertyKey(workspaceId, name),
-    })
+    if (dependOnField(name, workspaceId, ctx, context)) continue
     if (value === null || typeof value !== 'object' || value instanceof Date || Array.isArray(value)) continue
     const entries = Object.entries(value as Record<string, unknown>)
     if (entries.length !== 1) continue
@@ -1249,10 +1251,7 @@ const collectTypedBlockAxisDeps = (
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, 'created')})
   }
   if (typeof normalized.order === 'object') {
-    ctx.depend({
-      kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-      key: typedBlocksPropertyKey(workspaceId, normalized.order.property),
-    })
+    dependOnField(normalized.order.property, workspaceId, ctx, context)
   }
   const ancestorTargetProps = new Set<string>()
   // Top-level `where` is self scope — not enumerable (see collectWhereDeps).
@@ -1378,7 +1377,7 @@ const prepareTypedBlockQuery = async (
   const usesRegistry = hasWhere || typeof normalized.order === 'object' || normalized.propertyChildren === 'none'
   if (usesRegistry) {
     ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_PROPERTY_SCHEMAS_KEY})
-    if (hasWhere) ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_VIRTUAL_FIELDS_KEY})
+    if (hasWhere || typeof normalized.order === 'object') ctx.depend({kind: 'plugin', channel: QUERY_SCHEMA_CHANNEL, key: QUERY_VIRTUAL_FIELDS_KEY})
     if (!workspaceSchemas) throw new Error('[queryBlocks] property registry unavailable for the requested workspace')
   }
   const schemas = workspaceSchemas ?? new Map<string, AnyPropertySchema>()

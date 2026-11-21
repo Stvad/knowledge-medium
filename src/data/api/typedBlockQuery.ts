@@ -117,7 +117,8 @@ export interface TypedBlockQuery {
    *  `where` entry is dropped here as in `match`, so it excludes nothing. */
   readonly exclude?: readonly BlockPredicate[]
   /** Defaults to creation time ascending. Outline order requires a direct
-   *  parent. Scalar property order places missing and wrong-shaped values
+   *  parent. A named order reads a comparable property or a virtual field.
+   *  Scalar property order places missing and wrong-shaped values
    *  last in either direction, with block id ascending as the tiebreaker. */
   readonly order?: 'created-asc' | 'created-desc' | 'outline'
     | {readonly property: string; readonly direction: 'asc' | 'desc'}

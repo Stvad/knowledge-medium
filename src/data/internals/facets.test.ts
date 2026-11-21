@@ -176,17 +176,17 @@ describe('setFacetRuntime + mutatorsFacet', () => {
 describe('queryableFieldsFacet', () => {
   const field: QueryableField = {
     name: 'plugin:score',
-    operators: {eq: (_alias, value) => ({sql: '1 = ?', params: [value]})},
+    value: () => ({sql: '1', params: []}),
+    encode: Number,
     dependencies: [workspaceId => ({kind: 'plugin', channel: 'scores', key: workspaceId})],
   }
 
   it('resolves a custom field by name and drops malformed contributions', () => {
     const invalid = [
       {...field, name: ''},
-      {...field, name: 'no-operators', operators: {}},
-      {...field, name: 'unknown-bound', boundingOperators: ['unsupported']},
-      {...field, name: 'blank-operator', operators: {' ': field.operators.eq}},
-      {...field, name: 'invalid-operator', operators: {eq: 'equals'}},
+      {...field, name: 'missing-value', value: undefined},
+      {...field, name: 'missing-encode', encode: undefined},
+      {...field, name: 'invalid-bound', bounding: 'true'},
       {...field, name: 'missing-dependencies', dependencies: undefined},
       {...field, name: 'empty-dependencies', dependencies: []},
       {...field, name: 'invalid-dependencies', dependencies: ['scores']},
@@ -217,25 +217,20 @@ describe('kernel queryable timestamps', () => {
   const [created, updated] = KERNEL_QUERYABLE_FIELDS
   const leapDay = Date.UTC(2024, 1, 29)
 
-  it('binds milliseconds, Dates and canonical strings as timestamp parameters', () => {
-    for (const operand of [leapDay, new Date(leapDay), '2024-02-29T00:00:00.000Z']) {
-      expect(created.operators.eq('candidate', operand)).toEqual({
-        sql: 'candidate.created_at = ?',
-        params: [leapDay],
-      })
+  it('encodes milliseconds, Dates and canonical strings as timestamp parameters', () => {
+    for (const field of [created, updated]) {
+      for (const operand of [leapDay, new Date(leapDay), '2024-02-29T00:00:00.000Z']) {
+        expect(field.encode(operand)).toBe(leapDay)
+      }
     }
-    expect(updated.operators.between('candidate', [leapDay, '2024-03-01T00:00:00.000Z'])).toEqual({
-      sql: 'coalesce(candidate.user_updated_at, candidate.updated_at) BETWEEN ? AND ?',
-      params: [leapDay, Date.UTC(2024, 2, 1)],
-    })
   })
 
-  it('rejects normalized calendar dates and invalid operands', () => {
-    for (const operand of [Infinity, new Date(NaN), '2023-02-29', '2024-02-30T00:00:00.000Z', '2024-2-9']) {
-      expect(() => created.operators.eq('candidate', operand)).toThrow('timestamp operand')
+  it('rejects date-only strings, normalized dates and invalid operands', () => {
+    for (const field of [created, updated]) {
+      for (const operand of [Infinity, new Date(NaN), '2024-02-29', '2024-02-30T00:00:00.000Z', '2024-2-9']) {
+        expect(() => field.encode(operand)).toThrow('timestamp operand')
+      }
     }
-    expect(() => updated.operators.between('candidate', [leapDay])).toThrow('two timestamp operands')
-    expect(() => updated.operators.between('candidate', [leapDay, '2024-02-30'])).toThrow('timestamp operand')
   })
 })
 
