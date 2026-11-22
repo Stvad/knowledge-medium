@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, CodecError, codecs, defineProperty, defineSameTxProcessor, propertyValue, type AnyPropertySchema, type BlockData, type PropertySchema, type Tx } from '@/data/api'
 import { keyAtStart, keysBetween } from './orderKey'
 import { propertyFieldContent } from './propertyChildren'
+import { keepsStoredValue } from './internals/propertyChildrenProcessor'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { contentReferencePrefillsFacet, projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
@@ -194,6 +195,28 @@ describe('awaitsReferenceTarget', () => {
     ['prose', refs, 'Name', null, false],
   ] as const)('%s', (_case, schema, content, referenceTargetId, expected) => {
     expect(awaitsReferenceTarget(schema, {content, referenceTargetId})).toBe(expected)
+  })
+})
+
+describe('keepsStoredValue', () => {
+  const refs = defineProperty('refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+  const ref = defineProperty('ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
+  const shape = defineProperty('shape', {codec: codecs.unsafeIdentity<string[]>(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+
+  it.each([
+    ['an absent key, by anything', refs, undefined, ['a'], true],
+    ['an absent key, by an unset', refs, undefined, undefined, true],
+    ['a list, by an unset', refs, ['a'], undefined, false],
+    ['a list, by a superset in another order', refs, ['a', 'b'], ['b', 'c', 'a'], true],
+    ['a list, by one missing a member', refs, ['a', 'b'], ['a'], false],
+    ['a list, by one with fewer copies', refs, ['a', 'a'], ['a'], false],
+    ['a scalar, by itself', ref, 'a', 'a', true],
+    ['a scalar, by another value', ref, 'a', 'b', false],
+    ['a scalar, by an unset', ref, 'a', undefined, false],
+    // Only a list's members are counted; any other array is one value.
+    ['an array scalar, by a superset', shape, ['a'], ['a', 'b'], false],
+  ] as const)('%s', (_case, schema, stored, projected, expected) => {
+    expect(keepsStoredValue(schema, stored, projected)).toBe(expected)
   })
 })
 
