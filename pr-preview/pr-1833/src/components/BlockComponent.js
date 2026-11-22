@@ -1,1 +1,1 @@
-export{QL as BlockChildren,$L as BlockComponent}from"../../chunks/app-T4CWas5t.js";
+export{QL as BlockChildren,$L as BlockComponent}from"../../chunks/app-BKvgOJ9b.js";

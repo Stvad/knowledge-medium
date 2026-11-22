@@ -1,1 +1,1 @@
-export{DZ as PLACES_UNDER_BLOCK_QUERY,OZ as placesUnderBlockQuery}from"../../../chunks/app-T4CWas5t.js";
+export{DZ as PLACES_UNDER_BLOCK_QUERY,OZ as placesUnderBlockQuery}from"../../../chunks/app-BKvgOJ9b.js";

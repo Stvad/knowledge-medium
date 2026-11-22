@@ -1,1 +1,1 @@
-export{k3 as powerSyncLogger}from"../../chunks/app-T4CWas5t.js";
+export{k3 as powerSyncLogger}from"../../chunks/app-BKvgOJ9b.js";

@@ -1,1 +1,1 @@
-export{CF as DEFAULT_TYPE_COLORS,wF as defaultTypeColor,TF as pickLeastUsedTypeColor}from"../../chunks/app-T4CWas5t.js";
+export{CF as DEFAULT_TYPE_COLORS,wF as defaultTypeColor,TF as pickLeastUsedTypeColor}from"../../chunks/app-BKvgOJ9b.js";
