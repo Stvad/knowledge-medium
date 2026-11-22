@@ -1,1 +1,1 @@
-export{pX as BATCH_SENTINEL_SQL,mX as createClientPowerSyncSchema,hX as initializeClientDatabase,gX as initializeClientSchema}from"../../../chunks/app-CLDK726F.js";
+export{pX as BATCH_SENTINEL_SQL,mX as createClientPowerSyncSchema,hX as initializeClientDatabase,gX as initializeClientSchema}from"../../../chunks/app-BJJy9Cyy.js";

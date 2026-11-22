@@ -1,1 +1,1 @@
-export{Rt as forgetWorkspaceFirstSync,zt as noteColdFirstSync,Bt as readWorkspaceFirstSync,Vt as recordWorkspaceFirstSync}from"../../chunks/app-CLDK726F.js";
+export{Rt as forgetWorkspaceFirstSync,zt as noteColdFirstSync,Bt as readWorkspaceFirstSync,Vt as recordWorkspaceFirstSync}from"../../chunks/app-BJJy9Cyy.js";

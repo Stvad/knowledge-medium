@@ -1,1 +1,1 @@
-export{JU as markdownExtensionsFacet,YU as resolveMarkdownRenderConfig}from"../../chunks/app-CLDK726F.js";
+export{JU as markdownExtensionsFacet,YU as resolveMarkdownRenderConfig}from"../../chunks/app-BJJy9Cyy.js";

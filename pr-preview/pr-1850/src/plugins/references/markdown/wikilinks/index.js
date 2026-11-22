@@ -1,1 +1,1 @@
-export{OS as wikilinkMarkdownExtension}from"../../../../../chunks/app-CLDK726F.js";
+export{OS as wikilinkMarkdownExtension}from"../../../../../chunks/app-BJJy9Cyy.js";

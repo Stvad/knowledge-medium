@@ -1,1 +1,1 @@
-export{hC as useIsReadOnly}from"../../chunks/app-CLDK726F.js";
+export{hC as useIsReadOnly}from"../../chunks/app-BJJy9Cyy.js";

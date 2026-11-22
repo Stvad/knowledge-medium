@@ -1,1 +1,1 @@
-export{M2 as DAILY_NOTE_TYPE,N2 as dailyNoteDateProp,P2 as dailyNoteType}from"../../../chunks/app-CLDK726F.js";
+export{M2 as DAILY_NOTE_TYPE,N2 as dailyNoteDateProp,P2 as dailyNoteType}from"../../../chunks/app-BJJy9Cyy.js";

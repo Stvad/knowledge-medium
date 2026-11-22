@@ -1,1 +1,1 @@
-export{GC as richPasteDecisionContribution}from"../../../chunks/app-CLDK726F.js";
+export{GC as richPasteDecisionContribution}from"../../../chunks/app-BJJy9Cyy.js";

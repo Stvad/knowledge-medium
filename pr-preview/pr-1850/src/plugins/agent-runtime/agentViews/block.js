@@ -1,1 +1,1 @@
-export{Py as buildBlockView,Fy as renderBlockView}from"../../../../chunks/app-CLDK726F.js";
+export{Py as buildBlockView,Fy as renderBlockView}from"../../../../chunks/app-BJJy9Cyy.js";

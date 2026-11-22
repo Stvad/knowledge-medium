@@ -1,1 +1,1 @@
-export{zb as DATA_MODEL_GUIDE,Bb as dataModelGuide}from"../../../chunks/app-CLDK726F.js";
+export{zb as DATA_MODEL_GUIDE,Bb as dataModelGuide}from"../../../chunks/app-BJJy9Cyy.js";

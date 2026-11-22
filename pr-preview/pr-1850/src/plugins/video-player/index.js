@@ -1,1 +1,1 @@
-export{KT as videoPlayerPlugin}from"../../../chunks/app-CLDK726F.js";
+export{KT as videoPlayerPlugin}from"../../../chunks/app-BJJy9Cyy.js";

@@ -1,1 +1,1 @@
-export{jut as aliasSeatNamespacesInTx,Mut as resolveAliasSeatNamespaces}from"../../chunks/app-CLDK726F.js";
+export{jut as aliasSeatNamespacesInTx,Mut as resolveAliasSeatNamespaces}from"../../chunks/app-BJJy9Cyy.js";

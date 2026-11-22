@@ -1,1 +1,1 @@
-export{lu as parsePropertiesJson}from"../../../chunks/app-CLDK726F.js";
+export{lu as parsePropertiesJson}from"../../../chunks/app-BJJy9Cyy.js";

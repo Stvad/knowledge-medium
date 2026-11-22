@@ -1,1 +1,1 @@
-export{Qf as blockTagsConfigUi}from"../../../chunks/app-CLDK726F.js";
+export{Qf as blockTagsConfigUi}from"../../../chunks/app-BJJy9Cyy.js";

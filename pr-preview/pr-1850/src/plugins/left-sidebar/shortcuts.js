@@ -1,1 +1,1 @@
-export{ek as getOrCreateShortcutsBlock,tk as journalShortcutBlockId,nk as shortcutsBlockId}from"../../../chunks/app-CLDK726F.js";
+export{ek as getOrCreateShortcutsBlock,tk as journalShortcutBlockId,nk as shortcutsBlockId}from"../../../chunks/app-BJJy9Cyy.js";
