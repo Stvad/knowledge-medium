@@ -1204,15 +1204,19 @@ describe('blocksSyncedObserver — a bulk load\'s search index', () => {
     ])
   })
 
-  it('builds in chunks, each clearing only the entries it indexed', async () => {
-    const ids = ['a', 'b', 'c', 'd', 'e']
-    for (const id of ids) {
+  it('builds in chunks, each clearing only the entries it indexed, rowids in arrival order', async () => {
+    // Not id order: FTS5 keys its doclists by rowid, and the per-row trigger
+    // hands rowids out as rows arrive.
+    const arrival = ['d', 'a', 'e', 'b', 'c']
+    for (const id of arrival) {
       await writeAsSync(syncBulkLoadScope(['ws']), INSERT_BLOCK_SQL,
         blockToRowParams(data({ id, workspaceId: 'ws', content: `para ${id}` })))
     }
     expect(await buildDeferredSearchIndex(env.db, 2)).toBe(5)
     expect(await owed()).toEqual([])
-    expect((await indexed()).map(row => row.block_id)).toEqual(ids)
+    expect((await env.db.getAll<{ block_id: string }>(
+      'SELECT block_id FROM blocks_fts ORDER BY rowid',
+    )).map(row => row.block_id)).toEqual(arrival)
   })
 
   it('still builds what committed windows deferred when a later step fails the drain', async () => {
