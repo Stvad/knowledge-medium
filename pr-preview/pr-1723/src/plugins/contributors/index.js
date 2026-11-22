@@ -1,1 +1,0 @@
-export{vm as contributorsPlugin}from"../../../chunks/app-BVhepZBS.js";

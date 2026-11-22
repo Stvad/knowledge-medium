@@ -1,1 +1,0 @@
-export{mh as extensionApiCatalog,hh as extensionApiRuntimeExports}from"../../chunks/app-BVhepZBS.js";

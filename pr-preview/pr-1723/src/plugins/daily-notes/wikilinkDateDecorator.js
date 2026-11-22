@@ -1,1 +1,0 @@
-export{Ik as dailyDateWikilinkDecorator}from"../../../chunks/app-BVhepZBS.js";

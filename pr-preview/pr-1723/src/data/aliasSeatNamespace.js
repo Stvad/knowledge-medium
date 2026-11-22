@@ -1,1 +1,0 @@
-export{fat as aliasSeatNamespacesInTx,pat as resolveAliasSeatNamespaces}from"../../chunks/app-BVhepZBS.js";

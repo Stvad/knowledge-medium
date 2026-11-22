@@ -1,1 +1,0 @@
-export{iv as blockInfoPlugin}from"../../../chunks/app-BVhepZBS.js";
