@@ -87,7 +87,7 @@ describe('turnIntoTable', () => {
     await repo.tx(tx => tx.setProperty('host', author, 'Someone'), options)
     const viewIds = await repo.query.typedBlockIds(viewQuery('host', workspaceId)).load()
     expect(viewIds).toHaveLength(1)
-    expect(await repo.query.typedBlockIds(rowQuery('host', workspaceId, viewIds)).load()).toEqual(['dune', 'emma'])
+    expect(await repo.query.typedBlockIds(rowQuery('host', workspaceId, null)).load()).toEqual(['dune', 'emma'])
   })
 
   it('refuses a property field row or value row, leaving the stored value alone', async () => {

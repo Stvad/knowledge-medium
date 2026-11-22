@@ -13,6 +13,8 @@ import { CallbackSet } from '@/utils/callbackSet'
 import { showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
 import { forgetCellEdit, openedCellEdit, peekValueOwner, reportRefusal } from './cellEdits'
+import { createQueryRow, rowBackfill } from './query/backfill'
+import type { QueryTerm } from './query/parse'
 
 export type GridCommand =
   | 'left' | 'right' | 'up' | 'down' | 'next' | 'previous'
@@ -58,6 +60,12 @@ export class GridController {
    *  moved on does not pull focus back into its cell. */
   private cursorMoves = 0
   private root: HTMLElement | null = null
+  /** The query's terms; null when the rows are the host's children. */
+  private queryTerms: readonly QueryTerm[] | null = null
+  /** Rows made here while a query is set, drawn for as long as the grid is
+   *  mounted whether or not they match. */
+  private created: readonly string[] = []
+  private readonly createdListeners = new CallbackSet('tables created rows')
 
   constructor(
     readonly host: Block,
@@ -82,6 +90,13 @@ export class GridController {
     showInfo(`This table shows at most ${ROW_CAP} rows. Add more in the outline.`)
     return true
   }
+
+  setQuery(terms: readonly QueryTerm[] | null) {
+    this.queryTerms = terms
+  }
+
+  readonly subscribeCreated = (listener: () => void) => this.createdListeners.add(listener)
+  readonly getCreated = () => this.created
 
   /** The cursor stays on its column, not its position, when columns are
    *  reordered, hidden or deleted. */
@@ -361,8 +376,10 @@ export class GridController {
       {scope: ChangeScope.BlockDefault, description: 'clear table cell'})
   }
 
-  /** A new row beside the focused one, under the host, editing its text. */
+  /** A new row beside the focused one, under the host, editing its text. A
+   *  query's rows live anywhere, so there it is a new row like "+ New row". */
   private async insertRow(row: number, side: 'below' | 'above'): Promise<void> {
+    if (this.queryTerms) return this.appendRow()
     const rowId = this.rowIds[row]
     const repo = this.host.repo
     if (!rowId || repo.isReadOnly || this.refuseRowPastCap()) return
@@ -379,12 +396,20 @@ export class GridController {
     return this.rowIds.length > 0 ? this.insertRow(0, 'above') : this.appendRow()
   }
 
-  /** A new last row, editing its text. */
+  /** A new last row, editing its text. Under a query it carries what the
+   *  query implies, so it matches when it can (`./query/backfill`). */
   async appendRow(): Promise<void> {
     const repo = this.host.repo
     if (repo.isReadOnly || this.refuseRowPastCap()) return
-    const id = await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
-    if (id) await this.editNewRow(id)
+    const id = this.queryTerms
+      ? await createQueryRow(repo, this.host.id, rowBackfill(this.queryTerms))
+      : await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
+    if (!id) return
+    if (this.queryTerms) {
+      this.created = [...this.created, id]
+      this.createdListeners.notify()
+    }
+    await this.editNewRow(id)
   }
 
   /** A new row has only its text to fill in, in the column that shows it. A

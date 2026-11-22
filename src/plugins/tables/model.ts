@@ -1,7 +1,8 @@
-import type { BlockData } from '@/data/api'
+import type { BlockData, TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle } from '@/hooks/block'
+import type { QueryClauses } from './query/parse'
 import { COLUMN_TYPE, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp } from './schema'
 
 /** Rows mount and stay mounted, so a table draws at most this many. */
@@ -42,12 +43,26 @@ export const useColumns = (host: Block, workspaceId: string, viewId: string): re
     workspaceId, parentId: viewId, types: [COLUMN_TYPE], order: 'outline', propertyChildren: 'none',
   }), {selector: blocks => blocks?.map(columnOf)})
 
-export const rowQuery = (hostId: string, workspaceId: string, viewIds: readonly string[]) => ({
-  workspaceId, parentId: hostId, order: 'outline' as const, propertyChildren: 'none' as const,
-  exclude: viewIds.map(id => ({id})), limit: ROW_CAP + 1,
-})
+/** No row source returns a table's own configuration, this table's or another's. */
+const NOT_TABLE_MACHINERY = {types: [VIEW_TYPE, COLUMN_TYPE]}
 
-/** Every child of the host except its view blocks and its own property rows,
- *  in outline order, one past the cap so the grid can say it stopped. */
-export const useRowIds = (host: Block, workspaceId: string, viewIds: readonly string[]): readonly string[] | undefined =>
-  useHandle(host.repo.query.typedBlockIds(rowQuery(host.id, workspaceId, viewIds)), {selector: ids => ids})
+/** Without a query, the host's children in outline order; with one, what it
+ *  selects, oldest first, never the host itself. Either way field and value
+ *  rows are left out, `order` replaces the default, and one id past the cap
+ *  comes back so the grid can say it stopped. */
+export const rowQuery = (
+  hostId: string, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
+): TypedBlockQuery & {limit: number} => query === null
+  ? {
+    workspaceId, parentId: hostId, order: order ?? 'outline', propertyChildren: 'none',
+    exclude: [NOT_TABLE_MACHINERY], limit: ROW_CAP + 1,
+  }
+  : {
+    workspaceId, ...query, order: order ?? 'created-asc', propertyChildren: 'none',
+    exclude: [...query.exclude ?? [], NOT_TABLE_MACHINERY, {id: hostId}], limit: ROW_CAP + 1,
+  }
+
+export const useRowIds = (
+  host: Block, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
+): readonly string[] | undefined =>
+  useHandle(host.repo.query.typedBlockIds(rowQuery(host.id, workspaceId, query, order)), {selector: ids => ids})
