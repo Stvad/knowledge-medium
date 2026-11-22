@@ -1,1 +1,0 @@
-export{xW as METADATA_ROW_GRID_STYLE,SW as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-By_g4h5K.js";

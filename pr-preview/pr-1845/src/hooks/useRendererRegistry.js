@@ -1,1 +1,0 @@
-export{IR as defaultRegistry,PR as refreshRendererRegistry,FR as useRenderer}from"../../chunks/app-By_g4h5K.js";

@@ -1,1 +1,0 @@
-export{G2 as pluginPrefsExtension,K2 as pluginUIStateExtension}from"../../chunks/app-By_g4h5K.js";

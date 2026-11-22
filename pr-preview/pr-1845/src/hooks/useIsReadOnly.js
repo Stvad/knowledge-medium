@@ -1,1 +1,0 @@
-export{sC as useIsReadOnly}from"../../chunks/app-By_g4h5K.js";

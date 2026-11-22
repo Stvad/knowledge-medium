@@ -1,1 +1,0 @@
-export{tv as extensionApiCatalog,nv as extensionApiRuntimeExports}from"../../chunks/app-By_g4h5K.js";

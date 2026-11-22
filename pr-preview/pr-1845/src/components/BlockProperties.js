@@ -1,1 +1,0 @@
-export{UU as BlockProperties}from"../../chunks/app-By_g4h5K.js";

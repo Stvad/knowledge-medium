@@ -1,1 +1,0 @@
-export{iv as extensionsOverridesProp,av as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-By_g4h5K.js";

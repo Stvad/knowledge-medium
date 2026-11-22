@@ -1,1 +1,0 @@
-"use client";export{zU as Collapsible,BU as CollapsibleContent,VU as CollapsibleTrigger}from"../../../chunks/app-By_g4h5K.js";
