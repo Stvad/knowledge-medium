@@ -12,7 +12,7 @@ import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
-import { forgetCellEdit, openedCellEdit, peekValueOwner, reportRefusal } from './cellEdits'
+import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
 import { createQueryRow, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
 
@@ -31,7 +31,20 @@ export interface GridColumn {
   readonly list: boolean
 }
 
-export const CELL_CONTROL_SELECTOR = '[data-property-value-row] :is(input, button, select, textarea)'
+/** A cell's inline control (checkbox, date, select): its scalar value's own,
+ *  never one in a list member's subtree, which is an outline block's. */
+export const CELL_CONTROL_SELECTOR = '[data-table-value] [data-property-value-row] :is(input, button, select, textarea)'
+
+/** How far below a row `rowOf` looks for it. */
+const MAX_ROW_DEPTH = 32
+
+/** A row's own cell at `column`, and a cell's own control: never those of a
+ *  table drawn inside it (under a list's member). */
+const ownCell = (row: HTMLElement, column: number) =>
+  [...row.querySelectorAll<HTMLElement>(`[data-table-col="${column}"]`)].find(cell => cell.closest('[data-table-row]') === row)
+
+const ownControl = (cell: HTMLElement) =>
+  [...cell.querySelectorAll<HTMLElement>(CELL_CONTROL_SELECTOR)].find(control => control.closest('[data-table-col]') === cell)
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
@@ -112,12 +125,29 @@ export class GridController {
     }
   }
 
-  /** The row index of a row block, or of the row a cell's value belongs to. */
+  /** The row index of a row block, or of the row whose cell draws this block:
+   *  its nearest ancestor that is a row. Read from the cache, which holds
+   *  every block a mounted row draws. */
   rowOf(blockId: string): number | undefined {
-    const direct = this.rowIndex.get(blockId)
-    if (direct !== undefined) return direct
-    const owner = peekValueOwner(this.host.repo, blockId)
-    return owner ? this.rowIndex.get(owner.ownerId) : undefined
+    const repo = this.host.repo
+    for (let id: string | null | undefined = blockId, depth = 0; id && depth < MAX_ROW_DEPTH; depth++) {
+      const row = this.rowIndex.get(id)
+      if (row !== undefined) return row
+      id = repo.block(id).peek()?.parentId
+    }
+    return undefined
+  }
+
+  /** Focus on a cell's field row, which the grid does not draw (an outline
+   *  verb lands there from a list's first member: up, delete, jump), moves
+   *  to its row at its column. */
+  leaveFieldRow(blockId: string) {
+    // Raw: finishing a draft may already have deleted the field row focus landed on.
+    const field = this.host.repo.block(blockId).peekRaw()
+    const row = field?.isFieldForm && field.parentId ? this.rowIndex.get(field.parentId) : undefined
+    if (row === undefined) return
+    const column = this.columns.findIndex(column => column.fieldId === field!.referenceTargetId)
+    this.focusRow(row, column >= 0 ? column : this.column)
   }
 
   get currentColumn() {
@@ -185,10 +215,10 @@ export class GridController {
   /** Scroll the cursor's cell clear of the frozen first column and the right edge. */
   private revealColumn(row: number) {
     const element = this.rowElement(row)
-    const cell = element?.querySelector<HTMLElement>(`[data-table-col="${this.column}"]`)
+    const cell = element && ownCell(element, this.column)
     const scroller = cell?.closest<HTMLElement>('[data-table-scroller]')
     if (!cell || !scroller) return
-    const frozen = this.column > 0 ? element!.querySelector('[data-table-col="0"]')?.getBoundingClientRect().width ?? 0 : 0
+    const frozen = this.column > 0 ? ownCell(element!, 0)?.getBoundingClientRect().width ?? 0 : 0
     const view = scroller.getBoundingClientRect()
     const box = cell.getBoundingClientRect()
     if (box.left < view.left + frozen) scroller.scrollLeft -= view.left + frozen - box.left
@@ -331,7 +361,8 @@ export class GridController {
     // The cell's control and kind are known only once its row is drawn.
     const element = this.rowElement(row)
     if (!element) return
-    const control = element.querySelector<HTMLElement>(`[data-table-col="${this.column}"] ${CELL_CONTROL_SELECTOR}`)
+    const cell = ownCell(element, this.column)
+    const control = cell && ownControl(cell)
     if (control) {
       control.focus()
       return
@@ -345,7 +376,7 @@ export class GridController {
       tx => openPropertyValue(tx, rowId, fieldId, initialText === undefined ? {} : {initialText}),
       {scope: ChangeScope.BlockDefault, description: 'edit table cell'},
     )
-    openedCellEdit(opened, this.renderScopeId)
+    openedCellEdit(opened, rowId, fieldId, this.renderScopeId)
     try {
       const value = repo.block(opened.valueId)
       await value.load()
