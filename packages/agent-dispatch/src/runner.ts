@@ -165,8 +165,6 @@ export const envForBilling = (
   scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
 ): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
-const SKILL_TOOL = 'Skill'
-
 /** The built-in tools among `allowedTools`, by name: `Bash(git *)` allows
  *  Bash. MCP tools come from --mcp-config, not --tools. */
 const builtInToolsAllowed = (allowedTools: readonly string[]): string[] => [
@@ -196,11 +194,10 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
   // anyway, so the offered set is the boundary. Offer only the built-ins the
   // allow list names: every request carries each one offered, skills included.
-  // Skills load through the Skill tool, which --disable-slash-commands
-  // withdraws even when --tools names it, so an allow list naming Skill
-  // drops the flag.
+  // Skill is unusable under --disable-slash-commands, so an allow list naming
+  // it drops the flag, which also lets a prompt starting with `/` run a command.
   const offeredTools = builtInToolsAllowed(options.allowedTools)
-  if (!offeredTools.includes(SKILL_TOOL)) args.push('--disable-slash-commands')
+  if (!offeredTools.includes('Skill')) args.push('--disable-slash-commands')
   args.push('--tools', offeredTools.join(','))
   if (options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))
