@@ -1,1 +1,0 @@
-export{UA as useAncestorCrumbs}from"../../chunks/app-BI3TRAy1.js";

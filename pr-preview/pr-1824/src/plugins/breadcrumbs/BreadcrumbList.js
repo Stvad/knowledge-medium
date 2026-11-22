@@ -1,1 +1,0 @@
-export{ID as BreadcrumbList}from"../../../chunks/app-BI3TRAy1.js";

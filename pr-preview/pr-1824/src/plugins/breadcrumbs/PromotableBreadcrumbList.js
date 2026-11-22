@@ -1,1 +1,0 @@
-export{MD as PromotableBreadcrumbList}from"../../../chunks/app-BI3TRAy1.js";

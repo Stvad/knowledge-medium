@@ -1,1 +1,0 @@
-export{qpt as defineQuery}from"../../../chunks/app-BI3TRAy1.js";

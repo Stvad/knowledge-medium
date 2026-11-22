@@ -1,1 +1,0 @@
-export{GF as BlockPasteShellDecorator,KF as blockPasteShellDecorator}from"../../chunks/app-BI3TRAy1.js";

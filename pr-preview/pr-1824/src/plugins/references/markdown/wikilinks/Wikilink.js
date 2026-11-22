@@ -1,1 +1,0 @@
-export{Mx as Wikilink}from"../../../../../chunks/app-BI3TRAy1.js";

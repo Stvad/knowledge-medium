@@ -1,1 +1,0 @@
-export{os as propertyRowsPlugin}from"../../../chunks/app-BI3TRAy1.js";

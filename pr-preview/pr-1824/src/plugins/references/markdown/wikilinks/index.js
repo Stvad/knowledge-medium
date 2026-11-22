@@ -1,1 +1,0 @@
-export{jx as wikilinkMarkdownExtension}from"../../../../../chunks/app-BI3TRAy1.js";

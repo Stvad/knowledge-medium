@@ -1,1 +1,0 @@
-export{pI as approveExtensionHere}from"../../chunks/app-BI3TRAy1.js";

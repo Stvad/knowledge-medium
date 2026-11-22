@@ -1,1 +1,0 @@
-export{Z0 as pluginPrefsExtension,Q0 as pluginUIStateExtension}from"../../chunks/app-BI3TRAy1.js";

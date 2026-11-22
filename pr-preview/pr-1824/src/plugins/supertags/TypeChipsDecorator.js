@@ -1,1 +1,0 @@
-export{rn as typeChipsDecoratorContribution}from"../../../chunks/app-BI3TRAy1.js";

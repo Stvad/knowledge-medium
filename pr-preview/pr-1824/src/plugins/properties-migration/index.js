@@ -1,1 +1,0 @@
-export{Us as migratePropertiesToBlocksAction,zs as propertiesMigrationPlugin}from"../../../chunks/app-BI3TRAy1.js";

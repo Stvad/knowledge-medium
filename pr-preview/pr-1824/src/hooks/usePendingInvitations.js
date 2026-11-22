@@ -1,1 +1,0 @@
-export{vk as usePendingInvitations}from"../../chunks/app-BI3TRAy1.js";

@@ -1,1 +1,0 @@
-export{ID as BreadcrumbList,ND as BreadcrumbRenderer,FD as Breadcrumbs,MD as PromotableBreadcrumbList,kD as breadcrumbRendererContribution,AD as breadcrumbsPlugin,PD as getBreadcrumbContentPreview,jD as usePromotableBreadcrumb}from"../../../chunks/app-BI3TRAy1.js";

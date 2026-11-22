@@ -1,1 +1,0 @@
-export{U9 as NAMES_IN_A_SENTENCE,W9 as describeNames,G9 as firstFew}from"../../chunks/app-BI3TRAy1.js";

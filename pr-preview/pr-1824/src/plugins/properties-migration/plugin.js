@@ -1,1 +1,0 @@
-export{zs as propertiesMigrationPlugin}from"../../../chunks/app-BI3TRAy1.js";

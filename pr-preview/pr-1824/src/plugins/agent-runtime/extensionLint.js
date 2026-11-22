@@ -1,1 +1,0 @@
-export{R_ as lintExtensionSource}from"../../../chunks/app-BI3TRAy1.js";

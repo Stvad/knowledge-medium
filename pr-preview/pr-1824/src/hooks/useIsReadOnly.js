@@ -1,1 +1,0 @@
-export{vS as useIsReadOnly}from"../../chunks/app-BI3TRAy1.js";

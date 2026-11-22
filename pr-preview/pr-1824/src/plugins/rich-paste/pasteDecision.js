@@ -1,1 +1,0 @@
-export{JS as richPasteDecisionContribution}from"../../../chunks/app-BI3TRAy1.js";

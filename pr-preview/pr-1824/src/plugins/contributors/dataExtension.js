@@ -1,1 +1,0 @@
-export{H1 as contributorsDataExtension}from"../../../chunks/app-BI3TRAy1.js";

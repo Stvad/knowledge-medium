@@ -1,1 +1,0 @@
-export{jD as usePromotableBreadcrumb}from"../../../chunks/app-BI3TRAy1.js";

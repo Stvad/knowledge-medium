@@ -1,1 +1,0 @@
-export{kt as bootstrapWorkspace}from"../../chunks/app-BI3TRAy1.js";

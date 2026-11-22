@@ -1,1 +1,0 @@
-export{d as holdScreenWakeLock}from"../../chunks/app-BI3TRAy1.js";

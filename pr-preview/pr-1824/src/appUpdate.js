@@ -1,1 +1,0 @@
-export{kI as appUpdate,AI as useAppUpdateAvailable}from"../chunks/app-BI3TRAy1.js";

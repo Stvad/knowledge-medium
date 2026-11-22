@@ -1,1 +1,0 @@
-export{UZ as matchCharTrigger}from"../../chunks/app-BI3TRAy1.js";

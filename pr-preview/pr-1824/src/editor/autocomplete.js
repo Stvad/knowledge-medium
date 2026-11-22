@@ -1,1 +1,0 @@
-export{tI as editorAutocompleteExtension}from"../../chunks/app-BI3TRAy1.js";

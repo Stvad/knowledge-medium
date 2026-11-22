@@ -1,1 +1,0 @@
-export{f7 as Block,p7 as requireLoadedBlock}from"../../chunks/app-BI3TRAy1.js";
