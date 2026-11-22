@@ -4,7 +4,7 @@
 > **Last verified against code:** 2026-11-21, master `fd7abbb9a51`. Row counts measured the
 > same day on the largest live workspace through the agent bridge's read verbs.
 
-Tracking bead: `km-j2hy`. Independent of the sharing design (PR #1790), which is where the
+Tracking issue: #1795. Independent of the sharing design (PR #1790), which is where the
 question came from.
 
 Every claim below is marked by how it was established: **read** (in the code or a document,
