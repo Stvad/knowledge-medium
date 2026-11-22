@@ -1,7 +1,7 @@
 import { base64 } from '@scure/base'
 import type { AddMediaResult } from '@knowledge-medium/agent-cli/protocol'
 import type { Repo } from '@/data/repo'
-import { CAPTURE_FAILURE_MESSAGE } from '@/plugins/attachments/assetUpload.js'
+import { CAPTURE_FAILURE_MESSAGE } from '@/plugins/attachments/mediaCapture.js'
 import type { AgentMedia } from './protocol.ts'
 import { agentTxOptions } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'

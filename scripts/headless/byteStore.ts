@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto'
 import {mkdir, readdir, readFile, rename, rm, stat, writeFile} from 'node:fs/promises'
 import {dirname, join} from 'node:path'
-import {assetPathSegments, decodeSegment, type ByteStore} from '@/plugins/attachments/byteStore'
+import {assetPathSegments, decodeSegment, workspacePathSegments, type ByteStore} from '@/plugins/attachments/byteStore'
 
 const isMissing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT'
 
@@ -26,7 +26,7 @@ export class FsByteStore implements ByteStore {
   }
 
   private workspace(userId: string, workspaceId: string) {
-    return dirname(this.object(userId, workspaceId, ''))
+    return join(this.root, ...workspacePathSegments(userId, workspaceId))
   }
 
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {

@@ -30,9 +30,9 @@ import { getByteStore } from './byteStore.js'
 import { withLock } from '@/utils/webLock.js'
 import { refreshUploadLaneStatus } from './uploadLaneStatus.js'
 import {
+  CAPTURE_FAILURE_MESSAGE,
   captureMediaFiles,
   type MediaCaptureDeps,
-  type MediaCaptureFailure,
   type MediaCaptureResult,
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
@@ -213,19 +213,6 @@ export const captureMediaFromFiles = async (
     ...captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) }),
     ...options,
   })
-}
-
-/** User-facing message per capture failure. `captureMediaFromFiles` returns failures
- *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
- *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
- *  it worked. */
-export const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
-  'no-user': 'Sign in to attach media.',
-  empty: 'That file is empty — nothing to attach.',
-  'too-large': 'That file is too large to attach.',
-  'unsupported-mime': 'That file type can’t be attached.',
-  'workspace-locked': 'Unlock this workspace to attach media.',
-  'no-content-key': 'Re-paste your workspace key to attach media.',
 }
 
 /** Toast the distinct failure reasons from a (possibly multi-file) capture. Call on

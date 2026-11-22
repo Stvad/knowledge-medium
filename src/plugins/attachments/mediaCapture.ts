@@ -131,6 +131,19 @@ export type MediaCaptureResult =
   | { readonly ok: true; readonly assetBlockId: string; readonly deduped: boolean }
   | { readonly ok: false; readonly reason: MediaCaptureFailure }
 
+/** User-facing message per capture failure. `captureMediaFromFiles` returns failures
+ *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
+ *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
+ *  it worked. */
+export const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
+  'no-user': 'Sign in to attach media.',
+  empty: 'That file is empty — nothing to attach.',
+  'too-large': 'That file is too large to attach.',
+  'unsupported-mime': 'That file type can’t be attached.',
+  'workspace-locked': 'Unlock this workspace to attach media.',
+  'no-content-key': 'Re-paste your workspace key to attach media.',
+}
+
 /** Capture ONE file. See the module header for the ordering contract. */
 export const captureMedia = async (
   request: MediaCaptureRequest,

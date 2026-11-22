@@ -170,16 +170,48 @@ const monotonicClock = (now: () => number): (() => number) => {
   }
 }
 
-/** In-memory store. Tests + the fallback when IndexedDB is unavailable (the queue
- *  then lives only for the page's lifetime — a reload loses un-uploaded intents,
- *  the same failure class IndexedDB eviction already allows, recovered by re-paste). */
-export class InMemoryByteUploadStore implements ByteUploadStore {
-  private readonly records = new Map<string, ByteUploadRecord>()
-  private readonly clock: () => number
+/** What every backend shares: the store clock and the record transitions, each a
+ *  read-modify-write through the backend's {@link mutate}, which leaves an absent
+ *  record absent. */
+abstract class TransitioningUploadStore {
+  protected readonly clock: () => number
 
   constructor(now: () => number = () => Date.now()) {
     this.clock = monotonicClock(now)
   }
+
+  protected abstract mutate(
+    userId: string,
+    assetBlockId: string,
+    fn: (r: ByteUploadRecord) => ByteUploadRecord,
+  ): Promise<void>
+
+  async promote(userId: string, assetBlockId: string): Promise<void> {
+    await this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
+  }
+
+  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
+    )
+  }
+
+  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
+    )
+  }
+
+  async requeue(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r => requeued(r, expectedStagedAt, this.clock))
+  }
+}
+
+/** In-memory store. Tests + the fallback when IndexedDB is unavailable (the queue
+ *  then lives only for the page's lifetime — a reload loses un-uploaded intents,
+ *  the same failure class IndexedDB eviction already allows, recovered by re-paste). */
+export class InMemoryByteUploadStore extends TransitioningUploadStore implements ByteUploadStore {
+  private readonly records = new Map<string, ByteUploadRecord>()
 
   async stage(input: StageInput): Promise<void> {
     this.records.set(uploadRecordId(input.userId, input.assetBlockId), stagedRecord(input, this.clock()))
@@ -203,34 +235,14 @@ export class InMemoryByteUploadStore implements ByteUploadStore {
     return count
   }
 
-  private mutate(
+  protected async mutate(
     userId: string,
     assetBlockId: string,
     fn: (r: ByteUploadRecord) => ByteUploadRecord,
-  ): void {
+  ): Promise<void> {
     const id = uploadRecordId(userId, assetBlockId)
     const existing = this.records.get(id)
     if (existing) this.records.set(id, fn(existing))
-  }
-
-  async promote(userId: string, assetBlockId: string): Promise<void> {
-    this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
-  }
-
-  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    this.mutate(userId, assetBlockId, r =>
-      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
-    )
-  }
-
-  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    this.mutate(userId, assetBlockId, r =>
-      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
-    )
-  }
-
-  async requeue(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    this.mutate(userId, assetBlockId, r => requeued(r, expectedStagedAt, this.clock))
   }
 
   async delete(userId: string, assetBlockId: string): Promise<void> {
@@ -252,13 +264,8 @@ const STORE_NAME = 'uploads'
  *  not the request's `onsuccess`, so a capture's `stage` is genuinely durable
  *  before we proceed to the block tx (the whole point of staging-before-commit) —
  *  the cached connection + commit fence come from the shared {@link IdbKeyedStore}. */
-export class IndexedDbByteUploadStore implements ByteUploadStore {
+export class IndexedDbByteUploadStore extends TransitioningUploadStore implements ByteUploadStore {
   private readonly idb = new IdbKeyedStore(UPLOAD_STORE_DB_NAME, STORE_NAME)
-  private readonly clock: () => number
-
-  constructor(now: () => number = () => Date.now()) {
-    this.clock = monotonicClock(now)
-  }
 
   async stage(input: StageInput): Promise<void> {
     const record = stagedRecord(input, this.clock())
@@ -293,7 +300,7 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
 
   /** Read-modify-write a single record inside one readwrite tx. A missing record
    *  is a no-op (a reaped/never-staged id mustn't crash the post-commit flip). */
-  private async mutate(
+  protected async mutate(
     userId: string,
     assetBlockId: string,
     fn: (r: ByteUploadRecord) => ByteUploadRecord,
@@ -303,26 +310,6 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
       const existing = await promisifyRequest(store.get(id) as IDBRequest<ByteUploadRecord | undefined>)
       if (existing) await promisifyRequest(store.put(fn(existing), id))
     })
-  }
-
-  async promote(userId: string, assetBlockId: string): Promise<void> {
-    await this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
-  }
-
-  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    await this.mutate(userId, assetBlockId, r =>
-      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
-    )
-  }
-
-  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    await this.mutate(userId, assetBlockId, r =>
-      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
-    )
-  }
-
-  async requeue(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    await this.mutate(userId, assetBlockId, r => requeued(r, expectedStagedAt, this.clock))
   }
 
   async delete(userId: string, assetBlockId: string): Promise<void> {
@@ -367,12 +354,11 @@ const SELECT_RECORD = `SELECT * FROM ${UPLOAD_QUEUE_TABLE} WHERE user_id = ? AND
 /** The queue as a table in a device's own SQLite database: each write commits before
  *  it resolves, and a read-modify-write is one transaction. For a client without
  *  IndexedDB whose database is durable (the headless host). */
-export class SqliteByteUploadStore implements ByteUploadStore {
-  private readonly clock: () => number
+export class SqliteByteUploadStore extends TransitioningUploadStore implements ByteUploadStore {
   private ready?: Promise<unknown>
 
-  constructor(private readonly db: QueueDb, now: () => number = () => Date.now()) {
-    this.clock = monotonicClock(now)
+  constructor(private readonly db: QueueDb, now?: () => number) {
+    super(now)
   }
 
   private table(): Promise<unknown> {
@@ -427,7 +413,7 @@ export class SqliteByteUploadStore implements ByteUploadStore {
     return n
   }
 
-  private async mutate(
+  protected async mutate(
     userId: string,
     assetBlockId: string,
     fn: (r: ByteUploadRecord) => ByteUploadRecord,
@@ -437,26 +423,6 @@ export class SqliteByteUploadStore implements ByteUploadStore {
       const row = await tx.getOptional<UploadQueueRow>(SELECT_RECORD, [userId, assetBlockId])
       if (row) await this.put(tx, fn(fromRow(row)))
     })
-  }
-
-  async promote(userId: string, assetBlockId: string): Promise<void> {
-    await this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
-  }
-
-  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    await this.mutate(userId, assetBlockId, r =>
-      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
-    )
-  }
-
-  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    await this.mutate(userId, assetBlockId, r =>
-      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
-    )
-  }
-
-  async requeue(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
-    await this.mutate(userId, assetBlockId, r => requeued(r, expectedStagedAt, this.clock))
   }
 
   async delete(userId: string, assetBlockId: string): Promise<void> {
