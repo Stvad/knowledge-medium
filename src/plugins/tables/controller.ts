@@ -13,6 +13,7 @@ import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
 import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
+import { takeTableStep } from './navigation'
 import { createQueryRow, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
 
@@ -277,6 +278,24 @@ export class GridController {
     }
   }
 
+  /** Up from the first row or Down from the last, with the row focused: the
+   *  step out of the grid (`./navigation`), taken here so it works with or
+   *  without vim, and never left to the outline, whose walk from a row lands
+   *  on blocks the grid does not draw. While the move to this row is still
+   *  committing the key is absorbed: a step written now would be overwritten
+   *  by that move. Where no drawn step can be found (the row not mounted, or
+   *  spatial navigation off), Up still reaches the host. */
+  private leaveRows(row: number, direction: 'up' | 'down'): true {
+    if (this.pendingRowId !== null) return true
+    const from = {block: this.host.repo.block(this.rowIds[row]!), uiStateBlock: this.uiStateBlock, renderScopeId: this.renderScopeId}
+    if (!takeTableStep(from, direction) && direction === 'up') this.focusHost()
+    return true
+  }
+
+  private focusHost() {
+    void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
+  }
+
   /** Run a grid command. Returns false when it does not apply, so the key
    *  falls through to whatever else binds it. */
   readonly command = (command: GridCommand, key?: string): boolean => {
@@ -296,12 +315,14 @@ export class GridController {
       }
       case 'up':
         if (row === 0) {
-          void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
+          if (inRowMode) return this.leaveRows(row, 'up')
+          this.focusHost()
           return true
         }
         this.focusRow(row - 1)
         return true
       case 'down':
+        if (row === this.rowIds.length - 1 && inRowMode) return this.leaveRows(row, 'down')
         this.focusRow(clamp(row + 1, this.rowIds.length - 1))
         return true
       case 'leave':

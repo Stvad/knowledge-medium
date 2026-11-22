@@ -28,6 +28,7 @@ import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
 import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
+import { TABLE_CHILDREN_ATTRIBUTE, TABLE_HOST_ATTRIBUTE } from './navigation'
 import { registerGrid, tableRenderScopeId } from './registry'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -526,13 +527,14 @@ const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, 
   const parentRenderScopeId = useBlockContext().renderScopeId ?? ''
   const renderScopeId = tableRenderScopeId(parentRenderScopeId, block.id)
   return (
-    <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls} className="tm-table-host">
+    <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}
+      frameProps={{[TABLE_HOST_ATTRIBUTE]: 'true'}}>
       <div className="block-body min-w-0 grow">
         <Content/>
         {Properties && <Properties/>}
         <BelowContent/>
         {/* The grid stands where the children would, so it collapses with them. */}
-        <CollapsibleContent>
+        <CollapsibleContent {...{[TABLE_CHILDREN_ATTRIBUTE]: 'true'}}>
           <QueryFields host={block}/>
           {workspaceId && <TableGrid key={renderScopeId} host={block} renderScopeId={renderScopeId}
             parentRenderScopeId={parentRenderScopeId} workspaceId={workspaceId}/>}
