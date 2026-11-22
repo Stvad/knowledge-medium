@@ -1,1 +1,1 @@
-export{Or as ExtractTypeDialog}from"../../../chunks/app-Bip36c0I.js";
+export{kr as ExtractTypeDialog}from"../../../chunks/app-DgRnkyUD.js";

@@ -1,1 +1,1 @@
-export{rc as describeOutcome,ic as migratePropertiesToBlocksAction}from"../../../chunks/app-Bip36c0I.js";
+export{ic as describeOutcome,ac as migratePropertiesToBlocksAction}from"../../../chunks/app-DgRnkyUD.js";

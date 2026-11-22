@@ -1,1 +1,1 @@
-export{IR as PanelRenderer}from"../../../chunks/app-Bip36c0I.js";
+export{LR as PanelRenderer}from"../../../chunks/app-DgRnkyUD.js";

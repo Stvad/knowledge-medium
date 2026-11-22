@@ -1,1 +1,1 @@
-export{TS as DRAGGING_ROW_ATTRIBUTE,ES as DRAG_ACTIVE_ATTRIBUTE,DS as createBlockDragController}from"../../../chunks/app-Bip36c0I.js";
+export{ES as DRAGGING_ROW_ATTRIBUTE,DS as DRAG_ACTIVE_ATTRIBUTE,OS as createBlockDragController}from"../../../chunks/app-DgRnkyUD.js";

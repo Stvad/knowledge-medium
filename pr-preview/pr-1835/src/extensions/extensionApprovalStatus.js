@@ -1,1 +1,1 @@
-export{kI as ExtensionApprovalStatusProvider,AI as ExtensionApprovalStatusStore,jI as useExtensionApprovalStatus,MI as useExtensionApprovalStatuses}from"../../chunks/app-Bip36c0I.js";
+export{AI as ExtensionApprovalStatusProvider,jI as ExtensionApprovalStatusStore,MI as useExtensionApprovalStatus,NI as useExtensionApprovalStatuses}from"../../chunks/app-DgRnkyUD.js";
