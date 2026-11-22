@@ -120,7 +120,13 @@ export const BREAK = /[\s"|()!=<>#^[\]]/
 const TERM_END = /[\s|()]/
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
 /** The one instant spelling the engine admits: `toISOString()` with a four-digit year. */
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+const INSTANT_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+/** An instant in that spelling that names a real moment: `Date` reads it back as itself. */
+const isInstant = (text: string): boolean => {
+  if (!INSTANT_SHAPE.test(text)) return false
+  const ms = Date.parse(text)
+  return Number.isFinite(ms) && new Date(ms).toISOString() === text
+}
 const NUMBER = /^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i
 // Sticky, so reading one at a position never copies the rest of the text.
 const LABELLED_BLOCK_REF = new RegExp(aliasedBlockRefSpanSource(UUID_RE_SOURCE), 'iy')
@@ -302,7 +308,7 @@ const capabilityValue = (capability: WhereCapability<unknown>, text: string): un
     switch (capability.storage) {
       case 'number': return NUMBER.test(text) && Number.isFinite(Number(text)) ? Number(text) : undefined
       case 'boolean': return text === 'true' ? true : text === 'false' ? false : undefined
-      case 'iso-date': return calendarDay(text) || INSTANT.test(text) ? isoOf(Date.parse(text)) : undefined
+      case 'iso-date': return calendarDay(text) || isInstant(text) ? isoOf(Date.parse(text)) : undefined
       case 'text': return text
     }
   })()
@@ -404,7 +410,7 @@ const readStructural = (reader: Reader, key: ReservedKey, negated: boolean, op: 
 const readFieldTerm = (reader: Reader, field: string, op: CompareOp, start: number): QueryTerm => {
   const operandStart = reader.i
   const text = reader.bareWord()
-  if (!calendarDay(text) && !INSTANT.test(text)) reader.fail(operandStart, `${field} takes a date like 2026-01-31 or an ISO instant`)
+  if (!calendarDay(text) && !isInstant(text)) reader.fail(operandStart, `${field} takes a date like 2026-01-31 or an ISO instant`)
   return {kind: 'field', field, op, operand: text, start, end: reader.i}
 }
 
@@ -554,39 +560,48 @@ const readItem = (reader: Reader, errors: QueryTermError[]): QueryTerm | undefin
 
 const UNBOUNDED_UNDER = 'under= needs another term that narrows the rows, such as a #type or a property value'
 
-const compile = (terms: readonly QueryTerm[], options: ParseOptions, errors: QueryTermError[]): {query: QueryClauses; kept: QueryTerm[]} => {
+/** The terms one query can hold: one `childof=`, one `|` group, and `under=`
+ *  only beside a term that bounds it, counted among the terms that stay. */
+const survivors = (terms: readonly QueryTerm[], errors: QueryTermError[]): QueryTerm[] => {
+  const kept: QueryTerm[] = []
+  let parent = false
+  let group = false
+  for (const term of terms) {
+    if (term.kind === 'childof' && parent) { errors.push({...term, message: 'Only one childof= per query'}); continue }
+    if (term.kind === 'anyOf' && group) { errors.push({...term, message: 'Only one | group per query'}); continue }
+    parent ||= term.kind === 'childof'
+    group ||= term.kind === 'anyOf'
+    kept.push(term)
+  }
+  if (kept.some(bounds)) return kept
+  return kept.filter(term => {
+    if (!hasUnder(term)) return true
+    errors.push({...term, message: UNBOUNDED_UNDER})
+    return false
+  })
+}
+
+const compile = (terms: readonly QueryTerm[], options: ParseOptions): QueryClauses => {
   let types: string[] | undefined
   let parentId: string | undefined
   let anyOf: BlockPredicate[] | undefined
   const match: BlockPredicate[] = []
   const exclude: BlockPredicate[] = []
-  const kept: QueryTerm[] = []
-  const bounded = terms.some(bounds)
   for (const term of terms) {
-    if (!bounded && hasUnder(term)) { errors.push({...term, message: UNBOUNDED_UNDER}); continue }
-    if (term.kind === 'childof') {
-      if (parentId !== undefined) { errors.push({...term, message: 'Only one childof= per query'}); continue }
-      parentId = term.target.id
-    } else if (term.kind === 'anyOf') {
-      if (anyOf) { errors.push({...term, message: 'Only one | group per query'}); continue }
-      anyOf = term.alternatives.map(alternative => placementOf(alternative, options).predicate)
-    } else if (term.kind === 'types' && !term.negated && types === undefined) {
-      types = term.types.map(type => type.id)
-    } else {
+    if (term.kind === 'childof') parentId = term.target.id
+    else if (term.kind === 'anyOf') anyOf = term.alternatives.map(alternative => placementOf(alternative, options).predicate)
+    else if (term.kind === 'types' && !term.negated && types === undefined) types = term.types.map(type => type.id)
+    else {
       const {to, predicate} = placementOf(term, options)
       ;(to === 'match' ? match : exclude).push(predicate)
     }
-    kept.push(term)
   }
   return {
-    query: {
-      ...(types ? {types} : {}),
-      ...(parentId !== undefined ? {parentId} : {}),
-      ...(match.length ? {match} : {}),
-      ...(anyOf ? {anyOf} : {}),
-      ...(exclude.length ? {exclude} : {}),
-    },
-    kept,
+    ...(types ? {types} : {}),
+    ...(parentId !== undefined ? {parentId} : {}),
+    ...(match.length ? {match} : {}),
+    ...(anyOf ? {anyOf} : {}),
+    ...(exclude.length ? {exclude} : {}),
   }
 }
 
@@ -605,7 +620,7 @@ export const parseQuery = (text: string, resolver: QueryResolver, options: Parse
     const item = readItem(reader, errors)
     if (item) terms.push(item)
   }
-  const {query, kept} = compile(terms, options, errors)
+  const kept = survivors(terms, errors)
   errors.sort((a, b) => a.start - b.start || a.end - b.end)
-  return {query, errors, terms: kept}
+  return {query: compile(kept, options), errors, terms: kept}
 }

@@ -91,7 +91,8 @@ const terms = fc.tuple(
 
 const TOKENS = ['#', '!', '=', '!=', '<', '<=', '>', '>=', '|', '(', ')', '"', '\\', '[[', ']]', '((', '))', '^', ' ', '\n',
   'status', 'open', 'label', 'rating', '3', 'Mary', '[[Mary]]', '[[Nobody]]', 'created', '2026-01-01', 'Book', 'under',
-  'childof', 'self', 'refs', 'f-status', 't-book', '0190a0c0-0000-7000-8000-00000000000a']
+  'childof', 'self', 'refs', 'f-status', 't-book', '0190a0c0-0000-7000-8000-00000000000a',
+  'due', 'scores', '2026-13-01T00:00:00.000Z', '9999-12-31', '2026-02-30']
 const noise = fc.array(fc.oneof(fc.constantFrom(...TOKENS), fc.string({maxLength: 3})), {maxLength: 20}).map(parts => parts.join(''))
 
 describe('query parser', () => {
