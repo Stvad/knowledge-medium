@@ -1,1 +1,1 @@
-export{xu as getChipAppearance,Su as getSyncIndicatorView}from"../../../chunks/app-81RuqYF5.js";
+export{xu as getChipAppearance,Su as getSyncIndicatorView}from"../../../chunks/app-Bip36c0I.js";

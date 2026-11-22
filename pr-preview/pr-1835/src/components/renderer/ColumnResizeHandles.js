@@ -1,1 +1,1 @@
-export{JR as ColumnResizeHandles,YR as MIN_COLUMN_REM}from"../../../chunks/app-81RuqYF5.js";
+export{JR as ColumnResizeHandles,YR as MIN_COLUMN_REM}from"../../../chunks/app-Bip36c0I.js";

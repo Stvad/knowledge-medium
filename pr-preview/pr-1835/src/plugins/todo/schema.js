@@ -1,1 +1,1 @@
-export{NY as TODO_TYPE,PY as statusProp,FY as todoType}from"../../../chunks/app-81RuqYF5.js";
+export{NY as TODO_TYPE,PY as statusProp,FY as todoType}from"../../../chunks/app-Bip36c0I.js";

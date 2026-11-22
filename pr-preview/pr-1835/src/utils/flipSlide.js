@@ -1,1 +1,1 @@
-export{KF as withRowSlide}from"../../chunks/app-81RuqYF5.js";
+export{KF as withRowSlide}from"../../chunks/app-Bip36c0I.js";

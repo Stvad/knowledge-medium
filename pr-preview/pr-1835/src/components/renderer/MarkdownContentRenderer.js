@@ -1,1 +1,1 @@
-export{BV as MarkdownContentRenderer}from"../../../chunks/app-81RuqYF5.js";
+export{BV as MarkdownContentRenderer}from"../../../chunks/app-Bip36c0I.js";

@@ -1,1 +1,1 @@
-export{Rf as collectTypeCandidates,zf as formatTypeCandidateReport}from"../../../chunks/app-81RuqYF5.js";
+export{Rf as collectTypeCandidates,zf as formatTypeCandidateReport}from"../../../chunks/app-Bip36c0I.js";

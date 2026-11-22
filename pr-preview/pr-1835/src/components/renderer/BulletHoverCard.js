@@ -1,1 +1,1 @@
-export{SB as BULLET_HOVER_CARD_ATTRIBUTE,CB as BulletHoverCard,wB as useBulletHover}from"../../../chunks/app-81RuqYF5.js";
+export{SB as BULLET_HOVER_CARD_ATTRIBUTE,CB as BulletHoverCard,wB as useBulletHover}from"../../../chunks/app-Bip36c0I.js";
