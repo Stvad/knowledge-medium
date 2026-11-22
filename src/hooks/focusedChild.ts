@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
+import type { Repo } from '@/data/repo'
+import { unlistedSiblingIndex } from '@/utils/selection'
 import type { BlockData, Handle } from '@/data/api'
 import type { AncestorsResult } from '@/data/internals/kernelQueries'
 import { useUIStateBlock } from '@/data/globalState'
@@ -96,9 +98,10 @@ class FocusedChildren {
   }
 
   /** The focused chain's rows that `listed` still shows under `parentId`
-   *  although the cache has them under another parent, space-separated. Any
-   *  render scope: the cache's parent is right in every panel. */
-  strays(parentId: string, listed: readonly string[]): string {
+   *  although the cache has them under another parent, space-separated. Gated
+   *  by scope as `child` is: a listing drops a row only where one places it. */
+  strays(parentId: string, renderScopeId: unknown, listed: readonly string[]): string {
+    if (!this.inScope(renderScopeId)) return ''
     let strays = ''
     for (const [rowParentId, row] of this.children) {
       if (rowParentId !== parentId && listed.includes(row.id)) strays += strays ? ` ${row.id}` : row.id
@@ -131,19 +134,37 @@ export const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockDat
   return useSyncExternalStore(store.subscribe, snapshot, snapshot)
 }
 
-/** `listed` without the focused chain's rows that have moved to another
- *  parent: the cache moves them in the same commit that `useFocusedChild`
- *  places them at their new parent, while this listing's own query is still
- *  reloading. Kept, the moved row would be drawn twice, with two editors. */
-export const useWithoutMovedFocusRows = (parent: Block, listed: string[]): string[] => {
+const useWithoutMovedFocusRows = (parent: Block, renderScopeId: unknown, queried: string[]): string[] => {
   const store = focusedChildren(useUIStateBlock())
-  const snapshot = useCallback(() => store.strays(parent.id, listed), [store, parent.id, listed])
+  const snapshot = useCallback(() => store.strays(parent.id, renderScopeId, queried),
+    [store, parent.id, renderScopeId, queried])
   const strays = useSyncExternalStore(store.subscribe, snapshot, snapshot)
   return useMemo(() => {
-    if (!strays) return listed
+    if (!strays) return queried
     const moved = new Set(strays.split(' '))
-    return listed.filter(id => !moved.has(id))
-  }, [listed, strays])
+    return queried.filter(id => !moved.has(id))
+  }, [queried, strays])
+}
+
+/** A listing of `parent`'s children where the focused chain sits where the
+ *  cache has it: `listed` is `queried` without the chain's rows the cache has
+ *  under another parent, and `childIds` adds the chain's row under `parent`.
+ *  The cache moves a row before any listing's query reloads, so both halves
+ *  must come from here, or a moved row is drawn twice or not at all. */
+export const useFocusPlacedChildIds = (parent: Block, renderScopeId: unknown, queried: string[]) => {
+  const focusedChild = useFocusedChild(parent, renderScopeId)
+  const listed = useWithoutMovedFocusRows(parent, renderScopeId, queried)
+  const childIds = useMemo(() => withFocusedChild(parent.repo, listed, focusedChild), [parent.repo, listed, focusedChild])
+  return {focusedChild, listed, childIds}
+}
+
+/** `childIds` with `focused` at its sibling position when the listing left it
+ *  out: the row the user is on is never unmounted under them, whatever tier it
+ *  turns into while they edit it. */
+export const withFocusedChild = (repo: Repo, childIds: string[], focused: BlockData | null): string[] => {
+  if (!focused || childIds.includes(focused.id)) return childIds
+  const at = unlistedSiblingIndex(repo, childIds, focused)
+  return [...childIds.slice(0, at), focused.id, ...childIds.slice(at)]
 }
 
 /** `undefined` while the focused chain is incomplete: retaining a temporary

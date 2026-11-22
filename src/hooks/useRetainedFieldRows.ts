@@ -1,16 +1,14 @@
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
-import type {Repo} from '@/data/repo.js'
 import {useChildIdsForMode, useHandle, usePropertyDisplayMode} from '@/hooks/block.js'
-import {useFocusedChild, useFocusWithin, useWithoutMovedFocusRows} from './focusedChild'
-import {unlistedSiblingIndex} from '@/utils/selection.js'
+import {useFocusPlacedChildIds, useFocusWithin, withFocusedChild} from './focusedChild'
 import {useState} from 'react'
 
 export const useRetainedFieldRows = (block: Block, renderScopeId: unknown) => {
   const mode = usePropertyDisplayMode(block)
-  const focusedChild = useFocusedChild(block, renderScopeId)
+  const queried = useChildIdsForMode(block, mode)
+  const {focusedChild, listed, childIds: placed} = useFocusPlacedChildIds(block, renderScopeId, queried)
   const focusWithin = useFocusWithin(block, renderScopeId)
-  const listed = useWithoutMovedFocusRows(block, useChildIdsForMode(block, mode))
   const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
   const [retainedFieldIds, setRetainedFieldIds] = useState<string[]>([])
   const observesAllChildren = placesUnlistedChild || retainedFieldIds.length > 0 || focusedChild?.isFieldForm === true
@@ -30,16 +28,7 @@ export const useRetainedFieldRows = (block: Block, renderScopeId: unknown) => {
     setRetainedFieldIds(nextRetainedIds)
   }
   const hasUnlistedChild = placesUnlistedChild || retainedRows.some(row => !listed.includes(row.id))
-  let childIds = withFocusedChild(block.repo, listed, focusedChild)
+  let childIds = placed
   for (const row of retainedRows) childIds = withFocusedChild(block.repo, childIds, row)
   return {childIds, hasUnlistedChild, mode}
-}
-
-/** `childIds` with the focused child at its sibling position when the property
- *  display mode left it out: the row the user is on is never unmounted under
- *  them, whatever tier it turns into while they edit it. */
-const withFocusedChild = (repo: Repo, childIds: string[], focused: BlockData | null): string[] => {
-  if (!focused || childIds.includes(focused.id)) return childIds
-  const at = unlistedSiblingIndex(repo, childIds, focused)
-  return [...childIds.slice(0, at), focused.id, ...childIds.slice(at)]
 }

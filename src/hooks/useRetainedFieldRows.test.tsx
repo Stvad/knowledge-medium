@@ -7,7 +7,7 @@ import type { Block } from '@/data/block'
 import { focusedBlockLocationProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { useWithoutMovedFocusRows } from './focusedChild'
+import { useFocusPlacedChildIds } from './focusedChild'
 import { useRetainedFieldRows } from './useRetainedFieldRows'
 
 const current = vi.hoisted(() => ({ui: undefined as Block | undefined}))
@@ -29,12 +29,16 @@ beforeEach(async () => {
   }, {scope: ChangeScope.BlockDefault})
   current.ui = repo.block('ui')
   await current.ui.load()
-  const ui = current.ui.peek()!
+  setFocus('b')
+})
+
+const setFocus = (blockId: string) => {
+  const ui = current.ui!.peek()!
   repo.cache.setSnapshot({...ui, properties: {
     ...ui.properties,
-    [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({blockId: 'b', renderScopeId: 'outline'}),
+    [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({blockId, renderScopeId: 'outline'}),
   }})
-})
+}
 
 /** What the indent's commit does before any listing's query reloads: the
  *  cache moves the row. Nothing here invalidates a childIds handle. */
@@ -43,12 +47,14 @@ const indentInCacheOnly = () => {
   repo.cache.setSnapshot({...b, parentId: 'a', orderKey: 'a0'})
 }
 
+const listings = (scope: string) => renderHook(() => ({
+  page: useRetainedFieldRows(repo.block('page'), scope),
+  a: useRetainedFieldRows(repo.block('a'), scope),
+}))
+
 describe('a focused row moved to another parent', () => {
   it('leaves its old listing in the same render that its new parent places it', async () => {
-    const {result} = renderHook(() => ({
-      page: useRetainedFieldRows(repo.block('page'), 'outline'),
-      a: useRetainedFieldRows(repo.block('a'), 'outline'),
-    }))
+    const {result} = listings('outline')
     await waitFor(() => expect(result.current.page.childIds).toEqual(['a', 'b']))
     expect(result.current.a.childIds).toEqual([])
 
@@ -60,29 +66,33 @@ describe('a focused row moved to another parent', () => {
     expect(result.current.page.childIds).toEqual(['a'])
   })
 
-  it('stays listed where the cache has it', async () => {
-    const {result} = renderHook(() => useWithoutMovedFocusRows(repo.block('a'), ['b']))
+  it('stays where its listing has it in another render scope, which places nothing', async () => {
+    const {result} = listings('embed')
+    await waitFor(() => expect(result.current.page.childIds).toEqual(['a', 'b']))
+
     act(indentInCacheOnly)
-    await waitFor(() => expect(repo.block('b').peek()?.parentId).toBe('a'))
-    expect(result.current).toEqual(['b'])
+
+    expect(result.current.page.childIds).toEqual(['a', 'b'])
+    expect(result.current.a.childIds).toEqual([])
+  })
+
+  it('stays listed where the cache has it', async () => {
+    const {result} = renderHook(() => useFocusPlacedChildIds(repo.block('a'), 'outline', ['b']))
+    expect(result.current.listed).toEqual([])
+    act(indentInCacheOnly)
+    expect(result.current.listed).toEqual(['b'])
   })
 
   it('does not rerender a listing that shows none of the focused chain when focus moves', async () => {
-    const listed: string[] = []
+    const listed = ['unrelated']
     let renders = 0
     renderHook(() => {
       renders++
-      return useWithoutMovedFocusRows(repo.block('a'), listed)
+      return useFocusPlacedChildIds(repo.block('a'), 'outline', listed)
     })
     await waitFor(() => expect(repo.block('b').peek()).toBeDefined())
     const before = renders
-    act(() => {
-      const ui = current.ui!.peek()!
-      repo.cache.setSnapshot({...ui, properties: {
-        ...ui.properties,
-        [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({blockId: 'a', renderScopeId: 'outline'}),
-      }})
-    })
+    act(() => setFocus('a'))
     await waitFor(() => expect(repo.block('a').peek()).toBeDefined())
     expect(renders).toBe(before)
   })
