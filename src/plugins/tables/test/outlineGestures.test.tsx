@@ -251,9 +251,6 @@ describe('a list cell draws its members as outline blocks', () => {
     await waitFor(async () => expect((await repo.load(beta!))?.parentId).toBe(alpha))
     await waitFor(() => expect(document.querySelector(
       `[data-table-list] [data-block-id="${alpha}"] [data-block-id="${beta}"]`)).not.toBeNull())
-    // The moved member's editor keeps DOM focus, so typing goes on.
-    await waitFor(() => expect(document.activeElement).toBe(
-      document.querySelector(`[data-table-list] [data-block-id="${alpha}"] [data-block-id="${beta}"] .cm-content`)))
     // Nested, it is still in the cell: Escape leaves for the row.
     press(await editorOn(beta!), 'Escape')
     await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))

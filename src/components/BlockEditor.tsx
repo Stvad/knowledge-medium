@@ -22,7 +22,6 @@ import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 import { registerPendingContentFlush } from '@/data/pendingEditorContent.js'
-import { trackEditorOccurrence } from '@/editor/editorOccurrences.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -126,8 +125,6 @@ export const BlockEditor = ({
   // editing" signal. The debounced content commit above may still be in
   // flight when this fires.
   useEffect(() => () => notifyBlockEditSettled(block.id), [block.id])
-  useLayoutEffect(() => editorView ? trackEditorOccurrence(block.id, renderScopeId, editorView) : undefined,
-    [block.id, editorView, renderScopeId])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return
