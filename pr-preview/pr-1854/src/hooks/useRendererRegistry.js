@@ -1,1 +1,1 @@
-export{hz as defaultRegistry,pz as refreshRendererRegistry,mz as useRenderer}from"../../chunks/app-BKUsP5s1.js";
+export{hz as defaultRegistry,pz as refreshRendererRegistry,mz as useRenderer}from"../../chunks/app-C6Jw2KqI.js";

@@ -1,1 +1,1 @@
-export{HP as shortcutHelpToggle}from"../../../chunks/app-BKUsP5s1.js";
+export{HP as shortcutHelpToggle}from"../../../chunks/app-C6Jw2KqI.js";

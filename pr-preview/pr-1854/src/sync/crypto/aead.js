@@ -1,1 +1,1 @@
-export{Dit as open,Oit as seal}from"../../../chunks/app-BKUsP5s1.js";
+export{Dit as open,Oit as seal}from"../../../chunks/app-C6Jw2KqI.js";

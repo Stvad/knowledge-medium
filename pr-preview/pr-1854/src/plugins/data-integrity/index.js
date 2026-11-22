@@ -1,1 +1,1 @@
-export{ru as dataIntegrityPlugin}from"../../../chunks/app-BKUsP5s1.js";
+export{ru as dataIntegrityPlugin}from"../../../chunks/app-C6Jw2KqI.js";
