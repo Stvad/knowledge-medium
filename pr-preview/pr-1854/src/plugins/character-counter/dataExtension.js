@@ -1,0 +1,1 @@
+export{P2 as characterCounterDataExtension}from"../../../chunks/app-DpsYxXSh.js";

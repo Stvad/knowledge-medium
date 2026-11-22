@@ -1,0 +1,1 @@
+export{pI as BlockEmbed}from"../../../chunks/app-DpsYxXSh.js";

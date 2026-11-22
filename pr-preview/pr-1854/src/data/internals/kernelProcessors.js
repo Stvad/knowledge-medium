@@ -1,0 +1,1 @@
+export{Get as KERNEL_PROCESSORS}from"../../../chunks/app-DpsYxXSh.js";

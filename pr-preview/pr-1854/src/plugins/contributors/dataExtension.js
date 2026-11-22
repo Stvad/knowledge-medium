@@ -1,0 +1,1 @@
+export{m2 as contributorsDataExtension}from"../../../chunks/app-DpsYxXSh.js";

@@ -1,0 +1,1 @@
+export{SR as dynamicExtensionsExtension}from"../../chunks/app-DpsYxXSh.js";

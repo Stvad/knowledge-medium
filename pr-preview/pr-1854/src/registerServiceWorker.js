@@ -1,0 +1,1 @@
+export{KL as checkForAppUpdate,qL as registerServiceWorker}from"../chunks/app-DpsYxXSh.js";

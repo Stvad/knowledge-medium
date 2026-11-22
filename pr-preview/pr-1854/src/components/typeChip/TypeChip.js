@@ -1,0 +1,1 @@
+export{SI as TypeChip}from"../../../chunks/app-DpsYxXSh.js";

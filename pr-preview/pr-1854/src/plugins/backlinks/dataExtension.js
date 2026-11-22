@@ -1,0 +1,1 @@
+export{G2 as backlinksDataExtension}from"../../../chunks/app-DpsYxXSh.js";

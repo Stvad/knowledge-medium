@@ -1,0 +1,1 @@
+export{sQ as htmlDocumentTypeSeed}from"../../../chunks/app-DpsYxXSh.js";

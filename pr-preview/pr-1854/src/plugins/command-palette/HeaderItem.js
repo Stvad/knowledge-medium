@@ -1,0 +1,1 @@
+export{bF as CommandPaletteHeaderItem}from"../../../chunks/app-DpsYxXSh.js";

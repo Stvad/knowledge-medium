@@ -1,0 +1,1 @@
+export{_lt as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,vlt as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,ylt as __resetLayoutSessionIdForTesting,blt as getLayoutSessionId,xlt as isInstalledAppDisplayMode,Slt as readOrCreateLayoutSessionId}from"../../chunks/app-DpsYxXSh.js";

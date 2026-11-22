@@ -1,0 +1,1 @@
+export{YP as useCommandPaletteActions}from"../../../chunks/app-DpsYxXSh.js";

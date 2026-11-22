@@ -1,0 +1,1 @@
+export{Dv as extensionsOverridesProp,Ov as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-DpsYxXSh.js";

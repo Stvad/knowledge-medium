@@ -1,0 +1,1 @@
+export{xW as BlockProperties}from"../../chunks/app-DpsYxXSh.js";

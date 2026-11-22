@@ -1,0 +1,1 @@
+export{C4 as pluginPrefsExtension,w4 as pluginUIStateExtension}from"../../chunks/app-DpsYxXSh.js";

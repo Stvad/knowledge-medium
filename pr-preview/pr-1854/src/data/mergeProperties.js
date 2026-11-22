@@ -1,0 +1,1 @@
+export{gnt as mergeProperties}from"../../chunks/app-DpsYxXSh.js";

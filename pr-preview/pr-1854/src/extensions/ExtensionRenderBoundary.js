@@ -1,0 +1,1 @@
+export{tU as ExtensionRenderBoundary}from"../../chunks/app-DpsYxXSh.js";

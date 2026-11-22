@@ -1,0 +1,1 @@
+export{jdt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DpsYxXSh.js";

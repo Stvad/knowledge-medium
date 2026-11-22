@@ -1,0 +1,1 @@
+export{FQ as geoDataExtension}from"../../../chunks/app-DpsYxXSh.js";

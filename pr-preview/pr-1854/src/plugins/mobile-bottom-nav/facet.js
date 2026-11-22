@@ -1,0 +1,1 @@
+export{UO as mobileBottomNavItemsFacet}from"../../../chunks/app-DpsYxXSh.js";
