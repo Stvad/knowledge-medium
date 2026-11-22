@@ -55,6 +55,7 @@ import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
+  blockReadContentDecoratorsFacet,
   BLOCK_BULLET_ATTRIBUTE,
   BLOCK_CONTENT_VIEW_ATTRIBUTE,
   blockContentSurfacePropsFacet,
@@ -663,74 +664,35 @@ export function DefaultBlockRenderer(
   const [gutterControls] = useState(createGutterControls)
   const isTopLevel = useIsFocalRender(block)
 
-  // The block's READ content, bare: the per-type read renderer in an error
-  // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
-  // The SINGLE definition of "what the read content is": the reference layout
-  // mounts it directly via the `RawContent` slot, AND it is the `primary`
-  // (display) slot of the edit dispatcher below — so the editable `Content` slot
-  // is literally chrome + edit-swap wrapped around this very node
-  // (`<Content><RawContent/></Content>` in read mode), not a parallel re-render of
-  // the same renderer. Built from `DefaultContentRenderer` (NOT the edit
-  // dispatcher), so a reference can never flip into an editor because the target
-  // is in edit mode elsewhere; it renders INLINE automatically inside a reference
-  // (the renderer derives inline from the `isReference` surface — no synthetic flag).
-  // Typed as a `FunctionComponent` (not `ComponentType`) so it's assignable both
-  // to the `RawContent` slot AND directly to the dispatcher's `primary`
-  // `BlockRenderer` slot below — no thunk needed.
+  const scopeRootId = blockContext.scopeRootId
+  const baseContext = useMemo<BlockResolveContext>(() => ({
+    block, repo, uiStateBlock, types, topLevelBlockId, scopeRootId, isTopLevel, blockContext,
+  }), [block, repo, uiStateBlock, types, topLevelBlockId, scopeRootId, isTopLevel, blockContext])
+  const decorateReadContent = runtime.read(blockReadContentDecoratorsFacet)
+  const ReadContentRenderer = useMemo(
+    () => decorateReadContent(baseContext, DefaultContentRenderer),
+    [baseContext, decorateReadContent, DefaultContentRenderer],
+  )
+
+  // References and the read side of edit-mode dispatch share this slot. Keep
+  // its identity independent of focus, selection and edits to the block text.
   const RawContentSlot = useMemo<FunctionComponent>(() => {
     return function BlockRawContentSlot() {
       return (
         <ErrorBoundary FallbackComponent={FallbackComponent}>
-          <DefaultContentRenderer block={block}/>
+          <ReadContentRenderer block={block}/>
         </ErrorBoundary>
       )
     }
-  }, [block, DefaultContentRenderer])
+  }, [block, ReadContentRenderer])
 
-  // Stable per-block resolver context — doesn't change on focus/edit/
-  // selection toggles, so facet resolvers and the components they
-  // produce keep stable identity. This is what stops the content
-  // decorators and gutter items from remounting on every click,
-  // and — because every slot below is a `useMemo` over this object, i.e.
-  // a React element TYPE — what stops the live editor being torn down and
-  // rebuilt from stale content mid-keystroke. Nothing an ordinary edit can
-  // change may be added here; see the invariant on `BlockResolveContext`.
-  const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
-    block,
-    repo,
-    uiStateBlock,
-    types,
-    topLevelBlockId,
-    scopeRootId,
-    isTopLevel,
-    blockContext,
+    ...baseContext,
     contentRenderers: [
-      // The display (read) slot IS `RawContent`: the edit dispatcher renders it in
-      // read mode (and the editor in edit mode), so the editable `Content` slot
-      // composes the same read node the reference layout mounts — one source of
-      // "the read content", not two.
-      {
-        id: 'primary',
-        renderer: RawContentSlot,
-      },
-      {
-        id: 'secondary',
-        renderer: EditContentRenderer,
-      },
+      {id: 'primary', renderer: RawContentSlot},
+      {id: 'secondary', renderer: EditContentRenderer},
     ],
-  }), [
-    block,
-    repo,
-    uiStateBlock,
-    types,
-    topLevelBlockId,
-    scopeRootId,
-    isTopLevel,
-    blockContext,
-    RawContentSlot,
-    EditContentRenderer,
-  ])
+  }), [baseContext, RawContentSlot, EditContentRenderer])
 
   // Only the layout is resolved eagerly — it decides which slots get mounted,
   // and each slot owns (and only then pays for) its own machinery: the gesture
@@ -764,7 +726,7 @@ export function DefaultBlockRenderer(
         () => resolveBlockContentRenderer(resolveContext).last,
         [resolveBlockContentRenderer],
       )
-      const baseContentRenderer = contentVariant?.render ?? DefaultContentRenderer
+      const baseContentRenderer = contentVariant?.render ?? RawContentSlot
       // Is this slot filled with other blocks' rows (a review backlog, a deck,
       // a recents list) rather than the block itself? Read from whoever CHOSE
       // the renderer, never from the resolved component — that is a wrapper as
@@ -820,7 +782,7 @@ export function DefaultBlockRenderer(
     }
   }, [
     block, resolveContext, runtime, isTopLevel,
-    DefaultContentRenderer, contentShowsOtherBlocks, contentContainerRef, gutterControls,
+    RawContentSlot, contentShowsOtherBlocks, contentContainerRef, gutterControls,
   ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {

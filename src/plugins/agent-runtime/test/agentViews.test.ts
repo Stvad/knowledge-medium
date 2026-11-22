@@ -1078,7 +1078,7 @@ describe('structural edge cases', () => {
 
   it('numbers backlinks by the positions consumed, a deleted one included', () => {
     const row = (id: string, position: number) => ({
-      id, content: `row ${id}`, cut: 0, types: [], properties: [], omittedProperties: 0,
+      id, content: `row ${id}`, cut: 0, types: [], properties: [], omittedProperties: 0, refs: [], omittedRefs: 0,
       position, parentId: null, breadcrumb: [], childCount: 0, viaProperties: [],
     })
     const text = renderBacklinksView({

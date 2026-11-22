@@ -52,11 +52,15 @@ import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_MOVES_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
   TYPED_BLOCKS_REFS_OF_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   TYPED_BLOCKS_TYPE_CHANNEL,
+  TYPED_BLOCKS_TIMESTAMP_CHANNEL,
+  typedBlocksTimestampKey,
   kernelAliasesKey,
   kernelContentKey,
   typedBlocksLabelKey,
@@ -210,6 +214,23 @@ export const emitKernelInvalidations = (
   const afterLive = !!snapshot.after && !snapshot.after.deleted
   const blockId = snapshot.after?.id ?? snapshot.before?.id ?? fallbackBlockId
 
+  // A field stamp classifies the row AND its children. A value can also move
+  // between two parents without changing its own stamp, type or properties.
+  const {before, after} = snapshot
+  const fieldChanged = (before?.isFieldForm || after?.isFieldForm) && (
+    before?.referenceTargetId !== after?.referenceTargetId ||
+    before?.isFieldForm !== after?.isFieldForm ||
+    before?.parentId !== after?.parentId ||
+    before?.workspaceId !== after?.workspaceId
+  )
+  if (fieldChanged || (beforeLive && afterLive && before?.parentId !== after?.parentId)) {
+    const channel = fieldChanged ? TYPED_BLOCKS_PROPERTY_ROWS_CHANNEL : TYPED_BLOCKS_MOVES_CHANNEL
+    if (before?.workspaceId) emit(channel, before.workspaceId)
+    if (after?.workspaceId && after.workspaceId !== before?.workspaceId) {
+      emit(channel, after.workspaceId)
+    }
+  }
+
   const emittedTypes = new Set<string>()
   const emittedProps = new Set<string>()
   const emittedRefTargets = new Set<string>()
@@ -313,6 +334,13 @@ export const emitKernelInvalidations = (
 
   if (snapshot.before?.parentId !== snapshot.after?.parentId) {
     emitStructure(workspaceId)
+  }
+
+  if (before?.createdAt !== after?.createdAt) {
+    emit(TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey(workspaceId, 'created'))
+  }
+  if (before?.userUpdatedAt !== after?.userUpdatedAt) {
+    emit(TYPED_BLOCKS_TIMESTAMP_CHANNEL, typedBlocksTimestampKey(workspaceId, 'updated'))
   }
 
   const beforeTypes = decodeTypes(snapshot.before?.properties)

@@ -22,6 +22,7 @@ import {
   caseInsensitiveVariants,
   replaceLiteralMatches,
 } from './search.ts'
+import { deriveReferenceColumns, sameTxReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor'
 import type {
   ApplyContentReplaceArgs,
   ApplyContentReplaceResult,
@@ -266,17 +267,9 @@ export const applyContentReplaceMutator = defineMutator<
       // value exactly as it would after.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null && !force) {
-        // The check is on the PROPOSED content, and asking it takes nothing
-        // but that string: `valueChildContentToEncoded` decodes a ref
-        // value by parsing the id out of its id-carrying span, so there is no
-        // derived column to project first (#443 group 3). It used to resolve
-        // `deriveReferenceColumns` here — an async alias lookup per candidate
-        // row — precisely because the decode trusted the column, and that
-        // made the guard agree with a decode that was itself wrong: a replace
-        // turning `((id))` into `[[SomeName]]` resolved to a non-null target,
-        // passed the guard, and PROJECT then wrote the WRONG id into the
-        // owner's cell. Now it reads as unparseable and is reported as a skip.
-        //
+        // Resolve the proposed text: the stored target belongs to the old text.
+        const derived = await deriveReferenceColumns(
+          replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx))
         // Decoding is NOT the whole question, and asking only it let #688
         // through here: `codecs.string` / `codecs.url` accept any string, so a
         // replace that turned a value into `::((id))` decoded fine, was
@@ -286,7 +279,7 @@ export const applyContentReplaceMutator = defineMutator<
         // refuses instead and offers "replace anyway" like every other skip.
         const unsafeToWrite = (() => {
           try {
-            valueChildContentToEncoded(schema, replaced.content)
+            valueChildContentToEncoded(schema, {content: replaced.content, referenceTargetId: derived.targetId})
           } catch {
             return true
           }

@@ -91,12 +91,14 @@ describe('askAgent', () => {
     const block = await createBlock('re-ask-activity', 'summarize this', {
       [AGENT_PROPS.status]: 'error',
       [AGENT_PROPS.activity]: 'km: search',
+      [AGENT_PROPS.activityAt]: 123_000,
     })
 
     await askAgent(block)
 
     const row = await block.load()
     expect(row!.properties[AGENT_PROPS.activity]).toBeUndefined()
+    expect(row!.properties[AGENT_PROPS.activityAt]).toBeUndefined()
   })
 
   it('clears a stale agent:cancel on requeue so the fresh run is not immediately aborted', async () => {

@@ -10,7 +10,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { AGENT_PROPS } from '@/plugins/agent-dispatch-companion/chipState'
 import {
   resolveAnalyzeTables,
   resolveLocalSchemaContributions,
@@ -30,6 +31,13 @@ beforeAll(async () => { shared = await createTestDb() })
 afterAll(async () => { await shared.cleanup() })
 
 describe('app boot composition', () => {
+  it('keeps every dispatch property seed registered after the app runtime replaces bootstrap data facets', () => {
+    const { repo } = createTestRepo({ db: shared.db })
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+    const names = runtime.read(definitionSeedsFacet).map(seed => seed.name)
+    expect(names).toEqual(expect.arrayContaining(Object.values(AGENT_PROPS)))
+  })
+
   it('composes the full production plugin set into a runtime that has contributions', () => {
     const { repo } = createTestRepo({ db: shared.db })
     const extensions = staticAppExtensions({ repo })

@@ -11,6 +11,9 @@ import type {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {staticDataExtensions} from '@/extensions/staticDataExtensions'
+import {agentDispatchCompanionDataExtension} from '@/plugins/agent-dispatch-companion/dataExtension'
+import {agentProtocolSeeds, agentActivityAtProp} from '@/plugins/agent-dispatch-companion/schema'
+import {definitionSeedsFacet} from '@/data/facets'
 import {createTestAgentContext} from '@/plugins/agent-runtime/test/createTestAgentContext'
 import type {AgentRuntimeContext} from '@/plugins/agent-runtime/protocol'
 import {attributionCreatorsProp, attributionEditorsProp} from '@/plugins/contributors/schema'
@@ -63,12 +66,12 @@ const memoryState = (): StateStore => ({
 })
 
 /** The daemon's wiring: one client carrying the agent's contributor. */
-const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult>) => {
+const engineFor = (runTask: (options: AgentRunOptions) => Promise<AgentRunResult>, target = 'claude') => {
   const client = withContributorId(inProcessClient(), agentId)
   return createEngine({
     config: parseConfig({
       workspaceId: WS,
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', settleMs: 0, streamReply: true}],
+      watchers: [{kind: 'backlinks', name: 'mentions', target, settleMs: 0, streamReply: true}],
     }),
     graph: createGraph(client),
     replies: createReplyWriter(client),
@@ -108,11 +111,27 @@ const result = (overrides: Partial<AgentRunResult>): AgentRunResult => ({
 })
 
 describe('dispatch attribution', () => {
+  it('accepts activity writes when the app has no activity timestamp seed', async () => {
+    context = createTestAgentContext(repo, WS, [
+      staticDataExtensions.filter(extension => extension !== agentDispatchCompanionDataExtension),
+      agentProtocolSeeds.filter(seed => seed !== agentActivityAtProp).map(seed => definitionSeedsFacet.of(seed)),
+    ])
+    expect(repo.propertySchemas.get(PROPS.activityAt)).toBeUndefined()
+    const graph = createGraph(inProcessClient())
+    await graph.setActivity(MENTION, 'km: comments', 123_000)
+    const row = await repo.load(MENTION)
+    expect(row?.properties).toMatchObject({[PROPS.activity]: 'km: comments', [PROPS.activityAt]: 123_000})
+    await graph.setTaskProps(MENTION, {status: 'done', activity: null, nowMs: 124_000})
+    expect((await repo.load(MENTION))?.properties).toMatchObject({
+      [PROPS.status]: 'done', [PROPS.activity]: '', [PROPS.activityAt]: 0,
+    })
+  })
+
   it('leaves the mentioning block\'s authors untouched through a whole run, and attributes the reply', async () => {
     expect(await attributionOf(MENTION)).toEqual({creators: [], editors: []})
     const engine = engineFor(async options => {
       options.onEvent?.({kind: 'session', sessionId: 'sess-1'})
-      options.onEvent?.({kind: 'activity', label: 'Reading the page'})
+      options.onEvent?.({kind: 'activity', label: 'Reading the page', stepId: 'read-page'})
       options.onEvent?.({kind: 'text', text: 'Half an answer'})
       // The progress writes land while the run is live, not only at its end.
       await vi.waitFor(async () => expect((await repo.load(MENTION))?.properties)
@@ -175,9 +194,81 @@ describe('dispatch attribution', () => {
   })
 })
 
+describe('a child-backed workspace', () => {
+  it('does not take the agent\'s own reply attribution, stored as property value blocks, for a mention', async () => {
+    await db.db.execute(
+      `INSERT OR REPLACE INTO workspaces (id, name, owner_user_id, create_time, update_time,
+         encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'ws', 'vlad', 1, 1, 'none', NULL, 'children')`, [WS])
+    // The watcher watches the agent's own contributor page, so every block the
+    // agent writes is attributed to the page it watches.
+    await repo.tx(async tx => {
+      await tx.update(MENTION, {content: `((${agentId})) summarize this`})
+    }, opts)
+    await repo.awaitProcessors()
+    const runTask = vi.fn(async () => result({resultText: 'The summary.'}))
+    const engine = engineFor(runTask, 'Claude agent')
+    await engine.tick()
+    await engine.drain()
+    await repo.awaitProcessors()
+    // The scenario reached the shape under test: the reply's attribution
+    // value block links the agent's contributor page as plain content.
+    const [reply] = await replyIds()
+    const valueLinks = await db.db.getAll<{id: string}>(
+      `SELECT v.id FROM blocks f JOIN blocks v ON v.parent_id = f.id
+         JOIN block_references r ON r.source_id = v.id AND r.target_id = ? AND r.source_field = ''
+        WHERE f.parent_id = ? AND f.is_field_form = 1 AND v.deleted = 0`, [agentId, reply])
+    expect(valueLinks.length).toBeGreaterThan(0)
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledOnce()
+  })
+
+  it('counts as a property value only an unmarked child of a field row that has an owner', async () => {
+    // Raw rows, so no processor re-derives the marks under test.
+    await db.db.writeTransaction(async tx => {
+      for (const [id, parentId, isFieldForm] of [
+        ['field', 'page', 1], ['value', 'field', null], ['nested-field', 'field', 1],
+        ['root-marked', null, 1], ['under-root-marked', 'root-marked', null], ['note-under-value', 'value', null],
+      ] as const) {
+        await tx.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+             created_at, updated_at, created_by, updated_by, deleted, reference_target_id, is_field_form)
+           VALUES (?, ?, ?, ?, '', '{}', '[]', 1, 1, 'vlad', 'vlad', 0, ?, ?)`,
+          [id, WS, parentId, `z-${id}`, CLAUDE, isFieldForm])
+      }
+    })
+
+    const found = await createGraph(inProcessClient()).propertyValueBlocks(
+      ['value', 'nested-field', 'under-root-marked', 'note-under-value', 'field', MENTION])
+
+    expect([...found]).toEqual(['value'])
+  })
+})
+
 describe('watcher memory against the app', () => {
   const memoryBlocks = () => db.db.getAll<{id: string, content: string}>(
     'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0', [CLAUDE])
+
+  const replyText = async () => (await db.db.getAll<{content: string}>(
+    `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
+    [MENTION],
+  )).map(row => row.content).join('\n')
+
+  /** One tick of a fresh engine whose run does `run`; the prompts it was given. */
+  const runOnce = async (run: (prompt: string) => Promise<void> = async () => {}) => {
+    const prompts: string[] = []
+    const engine = engineFor(async options => {
+      prompts.push(options.prompt)
+      await run(options.prompt)
+      return result({resultText: 'Done.'})
+    })
+    await engine.tick()
+    await engine.drain()
+    return prompts
+  }
 
   it('creates the memory block under the watched page once, off the undo stack and unattributed, and shows the run its entries', async () => {
     repo.undoManager.clear()
@@ -209,13 +300,7 @@ describe('watcher memory against the app', () => {
 
   it('uses a Memory block the person made under the watched page', async () => {
     const mine = await repo.mutate.createChild({parentId: CLAUDE, content: 'memory'})
-    const prompts: string[] = []
-    const engine = engineFor(async options => {
-      prompts.push(options.prompt)
-      return result({resultText: 'Done.'})
-    })
-    await engine.tick()
-    await engine.drain()
+    const prompts = await runOnce()
 
     expect((await memoryBlocks()).map(row => row.id)).toEqual([mine])
     expect(prompts[0]).toContain(`append_markdown with target ${mine}`)
@@ -265,19 +350,121 @@ describe('watcher memory against the app', () => {
   })
 
   it('says in the reply what a run saved to its memory', async () => {
-    const engine = engineFor(async options => {
-      const memoryId = /append_markdown with target (\S+)\./.exec(options.prompt)![1]
+    await runOnce(async prompt => {
+      const memoryId = /append_markdown with target (\S+)\./.exec(prompt)![1]
       await withContributorId(inProcessClient(), agentId).runCommand({type: 'append-markdown', target: memoryId, markdown: 'Prefers suggestions.'})
-      return result({resultText: 'Done.'})
     })
-    await engine.tick()
-    await engine.drain()
 
-    const reply = await db.db.getAll<{content: string}>(
-      `SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 AND json_extract(properties_json, '$."${PROPS.reply}"') = 1 ORDER BY order_key`,
-      [MENTION],
-    )
-    expect(reply.map(row => row.content).join('\n')).toMatch(/Memory changed during this run: saved \[Prefers suggestions\.\]\(\(\([0-9a-f-]+\)\)\)/)
+    expect(await replyText()).toMatch(/Memory changed during this run: saved \[Prefers suggestions\.\]\(\(\([0-9a-f-]+\)\)\)/)
+  })
+
+  describe('shared notes it embeds', () => {
+    const SHARED_PAGE = '3f2a9c1d-0000-4000-8000-0000000000e1'
+    const SHARED = '3f2a9c1d-0000-4000-8000-0000000000e2'
+    const SHARED_CHILD = '3f2a9c1d-0000-4000-8000-0000000000e3'
+    const FOREIGN = '3f2a9c1d-0000-4000-8000-0000000000f1'
+    const FOREIGN_CHILD = '3f2a9c1d-0000-4000-8000-0000000000f2'
+    const FOREIGN_NOTE = '3f2a9c1d-0000-4000-8000-0000000000f3'
+    const OWN_DEEP = '3f2a9c1d-0000-4000-8000-0000000000a1'
+
+    /** A `Shared` page with a note and a sub-note, and the watcher's memory
+     *  holding one note per given content. */
+    const seedMemory = async (...notes: string[]): Promise<string> => {
+      await repo.tx(async tx => {
+        await tx.create({id: SHARED_PAGE, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Shared',
+          properties: {[typesProp.name]: [PAGE_TYPE], [aliasesProp.name]: ['Shared']}})
+        await tx.create({id: SHARED, workspaceId: WS, parentId: SHARED_PAGE, orderKey: 'a0', content: 'Cite sources.'})
+        await tx.create({id: SHARED_CHILD, workspaceId: WS, parentId: SHARED, orderKey: 'a0', content: 'As links.'})
+      }, opts)
+      const memoryId = await repo.mutate.createChild({parentId: CLAUDE, content: 'Memory'})
+      for (const note of notes) await repo.mutate.createChild({parentId: memoryId, content: note})
+      await repo.awaitProcessors()
+      return memoryId
+    }
+
+    const edit = (id: string, content: string) => inProcessClient().runCommand({type: 'update-block', id, content})
+
+    it.each([
+      ['a block embed', `!((${SHARED}))`, SHARED],
+      ['a page embed', '![[Shared]]', SHARED_PAGE],
+    ])('shows the notes %s brings in as shared, and reports an edit made through one', async (_, embed, shownRoot) => {
+      await seedMemory(embed)
+      const prompts = await runOnce(async () => {
+        await edit(SHARED_CHILD, 'As links, never bare URLs.')
+      })
+
+      expect(prompts[0]).toContain(`^${shownRoot}`)
+      // The notes a page embed brings in, not just its title.
+      expect(prompts[0]).toContain(`Cite sources.  ^${SHARED}`)
+      expect(prompts[0]).toContain('↳ embedded; lives in:')
+      expect(prompts[0]).toMatch(/"↳ embedded; lives in: …" is a shared note/)
+      expect(await replyText()).toContain(`Memory changed during this run: edited [As links, never bare URLs.](((${SHARED_CHILD})))`)
+    })
+
+    it('reports no edit to a block of another workspace: embedded, under the memory block or under a shared note', async () => {
+      await repo.tx(async tx => {
+        await tx.create({id: FOREIGN, workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere.'})
+        await tx.create({id: FOREIGN_CHILD, workspaceId: 'ws-2', parentId: FOREIGN, orderKey: 'a0', content: 'Foreign child.'})
+        await tx.create({id: FOREIGN_NOTE, workspaceId: 'ws-2', parentId: FOREIGN, orderKey: 'a1', content: 'Foreign note.'})
+      }, {...opts, allowUnloadedWorkspace: true})
+      const memoryId = await seedMemory(`!((${FOREIGN}))`, `!((${SHARED}))`)
+      // Rows as sync applies them, verbatim: blocks of another workspace
+      // under the memory block and under a shared note.
+      await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [SHARED, FOREIGN_CHILD])
+      await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [memoryId, FOREIGN_NOTE])
+
+      await runOnce(async () => {
+        await db.db.execute('UPDATE blocks SET content = ? WHERE id IN (?, ?, ?)', ['Changed.', FOREIGN, FOREIGN_CHILD, FOREIGN_NOTE])
+        await edit(SHARED, 'Cite sources, always.')
+      })
+
+      expect((await repo.load(FOREIGN))?.content).toBe('Changed.')
+      expect(await replyText()).toMatch(new RegExp(
+        `^Memory changed during this run: edited \\[Cite sources, always\\.\\]\\(\\(\\(${SHARED}\\)\\)\\)$`, 'm'))
+    })
+
+    it.each([
+      ['inside a shared note', () => SHARED],
+      ['in the memory itself', (memoryId: string) => memoryId],
+    ])('leaves out its own reply when the mention is %s', async (_, parentOf) => {
+      const memoryId = await seedMemory('![[Shared]]')
+      await db.db.execute('UPDATE blocks SET parent_id = ? WHERE id = ?', [parentOf(memoryId), MENTION])
+      await runOnce()
+
+      const text = await replyText()
+      expect(text).toContain('Done.')
+      expect(text).not.toContain('Memory changed')
+    })
+
+    it('reports a note once when the memory embeds one of its own', async () => {
+      const memoryId = await seedMemory('Topic', `!((${OWN_DEEP}))`)
+      const [topic] = await repo.query['core.childIds']({id: memoryId}).load()
+      await repo.tx(async tx => {
+        const sub = await tx.create({workspaceId: WS, parentId: topic, orderKey: 'a0', content: 'Subtopic'})
+        await tx.create({id: OWN_DEEP, workspaceId: WS, parentId: sub, orderKey: 'a0', content: 'Deep note.'})
+      }, opts)
+
+      const prompts = await runOnce(async () => {
+        await edit(OWN_DEEP, 'Deep note, revised.')
+      })
+
+      // Shown as a row the embed brings in, so it is a shared note too.
+      expect(prompts[0]).toMatch(new RegExp(`Deep note\\.  \\^${OWN_DEEP}\\n\\s*↳ embedded`))
+      expect(await replyText()).toMatch(new RegExp(
+        `^Memory changed during this run: edited \\[Deep note, revised\\.\\]\\(\\(\\(${OWN_DEEP}\\)\\)\\)$`, 'm'))
+    })
+
+    it('reports an embed the run adds or removes as that note, not as the shared notes appearing or going', async () => {
+      const memoryId = await seedMemory(`!((${SHARED}))`)
+      const [embedRow] = await repo.query['core.childIds']({id: memoryId}).load()
+      await runOnce(async () => {
+        await inProcessClient().runCommand({type: 'delete-block', id: embedRow})
+        await inProcessClient().runCommand({type: 'append-markdown', target: memoryId, markdown: '![[Shared]]'})
+      })
+
+      const text = await replyText()
+      expect(text).toMatch(/Memory changed during this run: saved \[embedded Shared\]\(\(\([\w-]+\)\)\); removed "embedded block" \(`[\w-]+`\)$/m)
+    })
   })
 })
 
@@ -285,7 +472,7 @@ describe('dispatch writes and the person\'s undo stack', () => {
   it('keeps a run\'s writes off it, so undoing an edit made mid-run keeps the run done and its reply', async () => {
     repo.undoManager.clear()
     const engine = engineFor(async options => {
-      options.onEvent?.({kind: 'activity', label: 'Reading the page'})
+      options.onEvent?.({kind: 'activity', label: 'Reading the page', stepId: 'read-page'})
       options.onEvent?.({kind: 'text', text: 'Half an answer'})
       // The person keeps typing into the mention while the run is live.
       await repo.tx(async tx => { await tx.update(MENTION, {content: '[[claude]] summarize this, briefly'}) }, opts)

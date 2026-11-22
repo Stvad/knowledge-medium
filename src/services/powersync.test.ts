@@ -1,6 +1,7 @@
 import { type CrudEntry, UpdateType, type CrudTransaction, type CommonPowerSyncDatabase } from '@powersync/common'
 import { crudEntry } from '@/data/test/crudEntry'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const supabaseRef = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -444,32 +445,38 @@ describe('encryptUploadOps (encrypt-on-upload)', () => {
     })
   })
 
-  it('passes through an op missing workspace_id (cannot be e2ee-routed)', async () => {
-    const getCek: GetCek = async () => { throw new Error('getCek must not be called') }
-    const ops: CompactedBlockOperation[] = [patchOp('a', {content: 'x'})]
-    const out = await __encryptUploadOpsForTest(ops, () => 'e2ee', getCek)
-    expect(out).toEqual(ops)
+  describe.each([['create', create], ['patch', patchOp]] as const)('%s upload', (_, operation) => {
+    it.each([['missing', undefined], ['empty', '']] as const)(
+      'refuses a %s workspace_id before resolving its mode',
+      async (_, workspaceId) => {
+        const getMode = vi.fn<GetWorkspaceMode>(() => 'none')
+        await expect(__encryptUploadOpsForTest(
+          [operation('a', {content: 'x', workspace_id: workspaceId})], getMode, async () => null,
+        )).rejects.toThrow(/workspace_id/)
+        expect(getMode).not.toHaveBeenCalled()
+      },
+    )
   })
 })
 
 describe('uploadTransactionsWithFallback', () => {
-  it('applies encryptOps to the compacted batch before handing it to applyOperations', async () => {
+  it('sends the prepared batch to applyOperations', async () => {
     const {applyOperations, recordRejection} = collectCalls()
-    // encryptOps returns its own transformed ops; assert those exact ops are
+    // prepareOperations returns its own transformed ops; assert those exact ops are
     // what applyOperations receives (i.e. encryption sits in the pipeline).
     const sealed: CompactedBlockOperation[] = [
       {kind: 'create', id: 'b1', order: 0, payload: {id: 'b1', workspace_id: 'w', content: 'SEALED'}},
     ]
-    const encryptOps = vi.fn(async () => sealed)
+    const prepareOperations = vi.fn(async () => sealed)
     const tx = fakeTx(1, [crudEntry(1, UpdateType.PUT, 'blocks', 'b1', 1, {workspace_id: 'w', content: 'plain'})])
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, encryptOps},
+      {applyOperations, recordRejection, prepareOperations},
     )
 
-    expect(encryptOps).toHaveBeenCalledTimes(1)
+    expect(prepareOperations).toHaveBeenCalledTimes(1)
     expect(applyOperations.mock.calls[0]![1]).toBe(sealed)
   })
 
@@ -593,7 +600,7 @@ describe('uploadTransactionsWithFallback', () => {
 
   it('un-encryptable tx (missing e2ee key) does not jam the batch: drains the OK prefix, stops at it', async () => {
     // tx1 is plaintext (encryptable); tx2 is an e2ee workspace whose key is
-    // momentarily unavailable, so encryptOps throws for any batch containing it.
+    // momentarily unavailable, so prepareOperations throws for any batch containing it.
     // The guard must NOT abort the whole batch preflight: tx1 (the OK prefix)
     // drains, and we stop at tx2 (throw → PowerSync retries it once the key is
     // back). tx2 is NOT recorded as a rejection — a missing key is transient, so
@@ -605,7 +612,8 @@ describe('uploadTransactionsWithFallback', () => {
       crudEntry(2, UpdateType.PUT, 'blocks', 'b2', 2, {workspace_id: 'w-locked', content: 'B'}),
     ])
     const {applyOperations, recordRejection} = collectCalls()
-    const encryptOps = vi.fn(async (ops: readonly CompactedBlockOperation[]) => {
+    const prepareOperations = vi.fn(async (entries: readonly CrudEntry[]) => {
+      const ops = __compactBlockCrudEntriesForTest(entries)
       if (
         ops.some(
           o => o.kind !== 'delete' && (o.payload as {workspace_id?: string}).workspace_id === 'w-locked',
@@ -620,7 +628,7 @@ describe('uploadTransactionsWithFallback', () => {
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
         [tx1, tx2] as unknown as CrudTransaction[],
-        {applyOperations, recordRejection, encryptOps},
+        {applyOperations, recordRejection, prepareOperations},
       ),
     ).rejects.toThrow(/workspace key/)
 
@@ -929,6 +937,41 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
 
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
     expect(classifyUploadError(thrown)).toBe('ambiguous')
+  })
+
+  it('throws a named Error, so the upload status shows its message rather than "Non-Error rejection"', async () => {
+    // postgrest-js (non-throwing mode) hands every failure back as a PLAIN
+    // object with no `name`. PowerSync's worker serializes a thrown value without
+    // a string `name` as the generic "Non-Error rejection", discarding the
+    // message. This is the shape a request aborted by the upload deadline takes.
+    const aborted = {
+      message: 'TimeoutError: signal timed out',
+      details: '',
+      hint: 'Request was aborted (timeout or manual cancellation)',
+      code: '',
+    }
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: aborted, status: 0})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).toMatchObject({...aborted, name: 'PostgrestError', status: 0})
+    expect(classifyUploadError(thrown)).toBe('transient')
+  })
+
+  it('falls back to the whole body as the message when an error body has no string message', async () => {
+    // postgrest-js returns any JSON error body as is, e.g. a gateway's own shape.
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {error: 'upstream unavailable'}, status: 503})
+
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('upstream unavailable')
+    expect(classifyUploadError(thrown)).toBe('transient')
   })
 
   it('retries an ambiguous codeless 4xx across the budget, then quarantines it (#190)', async () => {
@@ -1272,6 +1315,64 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
     expect(inserts.map(c => c.params[0])).toEqual([1, 2]) // original_id = clientId
     expect(inserts.every(c => c.params[1] === 42)).toBe(true) // tx_id
   })
+
+  it('keeps a PostgREST error envelope in error_message, which the rejection dialog parses', async () => {
+    const fkViolation = {
+      message: 'insert or update on table "blocks" violates foreign key constraint',
+      details: 'Key (parent_id) is not present in table "blocks".',
+      hint: 'Create the parent first',
+      code: '23503',
+    }
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: fkViolation, status: 409})
+    const thrown = await __applyBlockPatchesRpcForTest([
+      {id: 'block-a', payload: {content: 'B'}},
+    ]).catch((err: unknown) => err)
+    const {db, calls} = collectWrites()
+    const tx = fakeTx(42, [crudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'B'})])
+
+    await __recordRejectionToTableForTest(db, tx as unknown as CrudTransaction, thrown)
+
+    const [, , , errorCode, errorMessage] = calls[1]!.params
+    expect(errorCode).toBe('23503')
+    expect(JSON.parse(errorMessage as string)).toMatchObject(fkViolation)
+  })
+})
+
+describe('uploadData — malformed workspace envelopes', () => {
+  let fixture: TestDb
+  beforeAll(async () => { fixture = await createTestDb() })
+  beforeEach(async () => {
+    await resetTestDb(fixture.db)
+    supabaseRef.rpc.mockReset().mockResolvedValue({data: null, error: null})
+  })
+  afterAll(async () => { await fixture.cleanup() })
+
+  it.each(['PUT', 'PATCH'])('quarantines the original %s transaction and drains the valid same-block edit behind it', async op => {
+    const malformed = {op, type: 'blocks', id: 'item', data: {content: 'preserve this', base_updated_at: 17}}
+    const sibling = {op: 'PATCH', type: 'blocks', id: 'sibling', data: {workspace_id: 'ws', content: 'same transaction'}}
+    // Two PATCHes for the same block compact across transactions: the later
+    // workspace_id must never legitimize the earlier envelope.
+    const valid = {op: 'PATCH', type: 'blocks', id: 'item', data: {workspace_id: 'ws', updated_at: 20}}
+    for (const [txId, row] of [[1, malformed], [1, sibling], [2, valid]] as const) {
+      await fixture.db.execute('INSERT INTO ps_crud (tx_id, data) VALUES (?, ?)', [txId, JSON.stringify(row)])
+    }
+    const original = await fixture.db.getAll<{original_id: number, tx_id: number, data: string}>(
+      'SELECT id AS original_id, tx_id, data FROM ps_crud WHERE tx_id = 1 ORDER BY id',
+    )
+    expect(original.map(row => JSON.parse(row.data))).toEqual([malformed, sibling])
+
+    const connector = createPowerSyncConnector({
+      dbFilename: 'upload-test', encryption: {getWorkspaceMode: () => 'none', getCek: async () => null},
+    })
+    await connector.uploadData(fixture.db)
+
+    const rejected = await fixture.db.getAll(
+      'SELECT original_id, tx_id, data, error_message FROM ps_crud_rejected ORDER BY original_id',
+    )
+    expect(rejected).toEqual(original.map(row => ({...row, error_message: expect.stringContaining('workspace_id')})))
+    expect(await fixture.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+    expect(supabaseRef.rpc.mock.calls).toEqual([['apply_block_patches', {patches: [{id: valid.id, ...valid.data}]}]])
+  })
 })
 
 describe('uploadData — one pass per database at a time', () => {
@@ -1316,15 +1417,16 @@ describe('uploadData — one pass per database at a time', () => {
     supabaseRef.rpc
       .mockReturnValueOnce(new Promise(resolve => { landFirst = () => resolve(landed) }))
       .mockResolvedValue(landed)
-    const {uploadData} = createPowerSyncConnector({dbFilename})
+    const encryption = {getWorkspaceMode: () => 'none' as const, getCek: async () => null}
+    const {uploadData} = createPowerSyncConnector({dbFilename, encryption})
 
-    enqueue(1, [patch(1, 'block-a', {content: 'it ', base_updated_at: 100}, 1)])
+    enqueue(1, [patch(1, 'block-a', {workspace_id: 'w', content: 'it ', base_updated_at: 100}, 1)])
     const abandonedPass = uploadData(database)
     await vi.waitFor(() => expect(sentPatches()).toHaveLength(1))
 
     // The SDK stopped waiting on that pass and starts another, with a later
     // edit queued behind the one still in flight.
-    enqueue(2, [patch(2, 'block-a', {content: 'it m', base_updated_at: 200}, 2)])
+    enqueue(2, [patch(2, 'block-a', {workspace_id: 'w', content: 'it m', base_updated_at: 200}, 2)])
     const nextPass = uploadData(database)
     await vi.waitFor(async () => {
       const {pending = []} = await navigator.locks.query()
@@ -1334,15 +1436,15 @@ describe('uploadData — one pass per database at a time', () => {
 
     // Another database's uploads are not behind it.
     const other = uploadQueue()
-    other.enqueue(3, [patch(3, 'block-b', {content: 'elsewhere'}, 3)])
-    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`}).uploadData(other.database)
+    other.enqueue(3, [patch(3, 'block-b', {workspace_id: 'w', content: 'elsewhere'}, 3)])
+    await createPowerSyncConnector({dbFilename: `${dbFilename}-other`, encryption}).uploadData(other.database)
 
     landFirst()
     await Promise.all([abandonedPass, nextPass])
     expect(sentPatches()).toEqual([
-      [{id: 'block-a', content: 'it ', base_updated_at: 100}],
-      [{id: 'block-b', content: 'elsewhere'}],
-      [{id: 'block-a', content: 'it m', base_updated_at: 200}],
+      [{id: 'block-a', workspace_id: 'w', content: 'it ', base_updated_at: 100}],
+      [{id: 'block-b', workspace_id: 'w', content: 'elsewhere'}],
+      [{id: 'block-a', workspace_id: 'w', content: 'it m', base_updated_at: 200}],
     ])
   })
 

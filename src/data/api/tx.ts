@@ -96,7 +96,8 @@ export interface Tx {
 
   /** Sync read: tx-private snapshots map first (own writes in this tx),
    *  then the shared (pre-tx) cache. Returns null if neither has it.
-   *  The shared cache is mutated only on commit walk (v4.24), so
+   *  Repeated peeks of the same written version return the same immutable
+   *  snapshot. The shared cache is mutated only on commit walk (v4.24), so
    *  outside-tx readers never observe in-flight tx state. */
   peek(id: string): BlockData | null
 
@@ -539,10 +540,9 @@ export interface Tx {
 
   /** Emit a same-tx domain event. Event processors registered for
    *  `name` run later in the same writeTransaction, after the user fn
-   *  returns and before commit. The tx must already have performed a
-   *  write so the event has a pinned workspace and rolls back with the
-   *  originating mutation. */
-  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void
+   *  returns and before commit. Supply a workspace for event-only transactions;
+   *  otherwise the event uses the workspace pinned by an earlier write. */
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>, workspaceId?: string): void
 
   readonly meta: TxMeta
 }

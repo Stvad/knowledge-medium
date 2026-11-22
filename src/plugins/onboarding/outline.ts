@@ -145,7 +145,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       },
       `Move a block one step up / down through the outline (it keeps its depth, hopping into the neighbouring parent at an edge): ${km.moveBlock}.`,
       'Or drag a block by its bullet and drop it anywhere. A line shows where it will land, and where the line starts shows the depth: further right nests it under the block above. `Esc` cancels mid-drag, and one undo puts it back. On touch, hold the bullet for half a second, then drag.',
-      `Delete a block: ${km.delete}. Deleting 20 or more blocks at once (nested ones count) asks first.`,
+      `Delete a block: ${km.delete}. Deleting 20 or more blocks at once asks first. Nested blocks count, and a property's field row counts when you select it directly.`,
       `Undo: ${km.undo}. Redo: ${km.redo}.`,
     ]),
 

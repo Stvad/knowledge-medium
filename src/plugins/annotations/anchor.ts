@@ -10,7 +10,8 @@
  *
  * - exact: the quote is at `quoteStart` and the windows on each side EQUAL the
  *   stored context. Equality, not "starts with", so a quote that began or
- *   ended the block must still do so. Every write requires exact.
+ *   ended the block must still do so. Capturing or rewriting an anchor requires
+ *   exact; suggestion acceptance can also relocate using its captured source.
  * - moved: the quote occurs elsewhere and its surroundings still agree with
  *   the stored context; shown, but flagged.
  * - stale: no occurrence qualifies.
@@ -20,7 +21,7 @@
  * that is the safe direction.
  */
 
-import { linkFormWrapperAround, parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser.js'
+import { isPageEmbed, linkFormWrapperAround, parseBlockRefs, parseReferences } from '@/plugins/references/referenceParser.js'
 
 /** Characters of context remembered on each side of a quote. */
 export const ANCHOR_CONTEXT_LENGTH = 16
@@ -102,7 +103,7 @@ const referenceSpans = (content: string): Span[] => [
   ...parseReferences(content).map(span => {
     const wrapper = linkFormWrapperAround(content, span)
     if (wrapper) return {startIndex: wrapper.image ? wrapper.start - 1 : wrapper.start, endIndex: wrapper.end}
-    return content[span.startIndex - 1] === '!' ? {...span, startIndex: span.startIndex - 1} : span
+    return isPageEmbed(content, span) ? {...span, startIndex: span.startIndex - 1} : span
   }),
   ...parseBlockRefs(content),
 ]

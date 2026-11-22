@@ -112,6 +112,59 @@ describe('scrubCodexEnv', () => {
 describe('createCodexJsonlParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('preserves MCP server labels and fallback tool names for active items', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    const fields = [
+      {tool: 'mcp__km__comments'},
+      {server: '', tool: 'mcp__km__comments'},
+      {server: 'km', toolName: 'comments'},
+      {server: 'km', tool: ''},
+      {server: 'km', tool: ['comments']},
+      {server: 'km'},
+      {server: 42, tool: 'mcp__km__comments'},
+      {name: 'mcp__km__comments'},
+      {},
+    ]
+    fields.forEach((fields, index) => parser.feed(line({type: 'item.started', item: {id: `step-${index}`, type: 'mcp_tool_call', ...fields}})))
+    expect(events.map(event => event.kind === 'activity' ? event.label : null)).toEqual([
+      'km: comments', 'km: comments', 'km: comments', 'km', 'km', 'km', 'km: comments', 'km: comments', 'Using a tool',
+    ])
+  })
+
+  it('does not start completed tool items and ignores invalid step ids', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    for (const id of [undefined, '', 42]) {
+      parser.feed(line({type: 'item.started', item: {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}}))
+      parser.feed(line({type: 'item.updated', item: {id, type: 'command_execution'}}))
+    }
+    parser.feed(line({type: 'item.completed', item: {id: 'tool-1', type: 'mcp_tool_call', server: 'km', tool: 'comments'}}))
+    parser.feed(line({type: 'item.completed', item: {id: 'tool-2', type: 'some_brand_new_type'}}))
+    expect(events).toEqual([
+      {kind: 'activity-end', stepId: 'tool-1'},
+    ])
+  })
+
+  it('preserves step ids across repeated reports and emits completion for each completed item', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    for (const id of ['tool-1', 'tool-2']) {
+      const item = {id, type: 'mcp_tool_call', server: 'km', tool: 'comments'}
+      for (const type of ['item.started', 'item.updated', 'item.completed']) {
+        parser.feed(line({type, item}))
+      }
+    }
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity-end', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity-end', stepId: 'tool-2'},
+    ])
+  })
+
   it('replays the REAL success transcript verbatim', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))
@@ -168,7 +221,7 @@ describe('createCodexJsonlParser', () => {
     expect(result.resultText).toBe('')
   })
 
-  it('tolerates unknown/unobserved item types without throwing', () => {
+  it('starts only known tool items while active, ignores reasoning, and ends completed tools', () => {
     const events: RunEvent[] = []
     const parser = createCodexJsonlParser(event => events.push(event))
 
@@ -176,24 +229,25 @@ describe('createCodexJsonlParser', () => {
       parser.feed(line({type: 'thread.started', thread_id: 't1'}))
       parser.feed(line({type: 'item.started', item: {id: 'item_1', type: 'reasoning'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_1', type: 'reasoning'}}))
+      parser.feed(line({type: 'item.started', item: {id: 'item_2', type: 'command_execution', command: 'ls'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_2', type: 'command_execution', command: 'ls'}}))
+      parser.feed(line({type: 'item.updated', item: {id: 'item_3', type: 'web_search', query: 'foo'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_3', type: 'web_search', query: 'foo'}}))
+      parser.feed(line({type: 'item.started', item: {id: 'item_4', type: 'mcp_tool_call', tool: 'mcp__km__search'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_4', type: 'mcp_tool_call', tool: 'mcp__km__search'}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_5', type: 'some_brand_new_type', whatever: true}}))
       parser.feed(line({type: 'item.completed', item: {id: 'item_6', type: 'agent_message', text: 'done'}}))
       parser.feed(line({type: 'turn.completed', usage: {}}))
     }).not.toThrow()
 
-    // Dedup is the ENGINE's job (see engine.ts's `lastActivity` gate) —
-    // the parser just emits, so item.started + item.completed for the
-    // SAME reasoning item both surface as an activity event here.
     expect(events).toEqual([
       {kind: 'session', sessionId: 't1'},
-      {kind: 'activity', label: 'Thinking'},
-      {kind: 'activity', label: 'Thinking'},
-      {kind: 'activity', label: 'Running a command'},
-      {kind: 'activity', label: 'Searching the web'},
-      {kind: 'activity', label: 'km: search'},
+      {kind: 'activity', label: 'Running a command', stepId: 'item_2'},
+      {kind: 'activity-end', stepId: 'item_2'},
+      {kind: 'activity', label: 'Searching the web', stepId: 'item_3'},
+      {kind: 'activity-end', stepId: 'item_3'},
+      {kind: 'activity', label: 'km: search', stepId: 'item_4'},
+      {kind: 'activity-end', stepId: 'item_4'},
       {kind: 'text', text: 'done'},
     ])
     expect(parser.finish()).toMatchObject({resultText: 'done', sawTurnCompleted: true, failed: false})

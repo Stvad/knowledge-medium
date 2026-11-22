@@ -1,15 +1,19 @@
+import {codeMirrorExtensionsFacet} from '@/editor/codeMirrorExtensions'
+import {propertyAutocomplete} from './autocomplete'
+import {propertyReferenceWarning} from './referenceWarning'
+import {valueAutocomplete} from './valueAutocomplete'
 /** Property rows in the outline (issue #1674): on a child-backed workspace a
  *  block's property field rows render in place as name/value rows, filtered by
  *  the property display mode (`@/data/propertyDisplayMode`), with commands and
  *  a bullet-menu entry for its workspace and block levels. */
 import type { BlockContextMenuItemsContribution } from '@/extensions/blockInteraction.js'
-import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
-import { actionsFacet, blockRenderersFacet } from '@/extensions/core.js'
+import { blockContextMenuItemsFacet, blockLayoutFacet, blockReadContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { blockSetting, cyclePropertyDisplayActions, propertyDisplayActions, setBlockPropertyDisplay } from './actions'
-import { FieldRowRenderer } from './FieldRowRenderer'
-import { ValueRowRenderer } from './ValueRowRenderer'
+import { fieldRowLayoutContribution } from './FieldRowRenderer'
+import { propertyReadContentContribution } from './ValueRowRenderer'
 
 const SOURCE = 'property-rows'
 
@@ -32,8 +36,11 @@ export const propertyRowsPlugin: AppExtension = systemToggle({
   name: 'Property rows',
   description: 'On a workspace whose properties are blocks, show a block\'s properties in the outline as name/value rows, with workspace and per-block display modes.',
 }).of([
-  blockRenderersFacet.of({id: 'propertyFieldRow', renderer: FieldRowRenderer}, {source: SOURCE}),
-  blockRenderersFacet.of({id: 'propertyValueRow', renderer: ValueRowRenderer}, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(propertyAutocomplete, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(propertyReferenceWarning, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(valueAutocomplete, {source: SOURCE}),
+  blockLayoutFacet.of(fieldRowLayoutContribution, {source: SOURCE, precedence: -100}),
+  blockReadContentDecoratorsFacet.of(propertyReadContentContribution, {source: SOURCE}),
   blockContextMenuItemsFacet.of(revealPropertiesMenuItem, {source: SOURCE}),
   propertyDisplayActions.map(action => actionsFacet.of(action, {source: SOURCE})),
   cyclePropertyDisplayActions.map(action => actionsFacet.of(action, {source: SOURCE, precedence: -100})),

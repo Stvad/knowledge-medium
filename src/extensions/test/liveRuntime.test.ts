@@ -31,12 +31,14 @@ describe('LiveRuntimeHandle', () => {
     handle.setRuntimeContributions(out, 'user-data', ['b'], {workspaceId: 'ws-b'})
     handle.setActiveWorkspaceId('ws-a')
     expect(handle.read(out)).toBe('a')
+    expect(handle.read(out, 'ws-b')).toBe('b')
 
     const second = resolveFacetRuntimeSync([])
     handle.setCurrent(second)
     expect(handle.read(out)).toBe('a')
     handle.setActiveWorkspaceId('ws-b')
     expect(handle.read(out)).toBe('b')
+    expect(handle.read(out, 'ws-a')).toBe('a')
   })
 
   it('re-points a forwarded onFacetChange subscription onto the new runtime', () => {

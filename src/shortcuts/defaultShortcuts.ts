@@ -15,6 +15,7 @@ import { Repo } from '@/data/repo'
 import { merge as mergeMutator, type SplitPlacement } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
+import { bothShowIndependentChildren, mergeUp } from './blockMergeGesture'
 import {
   nextVisibleBlock,
   previousVisibleBlock,
@@ -33,8 +34,7 @@ import {
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { applyOutlineGestureToGroupInTx, type OutlineGroupGesture } from '@/data/outlineGroupGestures.js'
 import { withRowSlide } from '@/utils/flipSlide.js'
-import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
-import { visibleChildIds } from '@/data/visibleChildren'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.js'
 import { selectionStateProp } from '@/data/properties'
 import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
@@ -102,22 +102,7 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { panelRenderScopeId } from '@/utils/renderScope.js'
-
-/** The Roam rule both merge gestures refuse on: `into` and `from` each show
- *  children of their own on `surface`, so folding one into the other would
- *  reconcile two child lists the user did not ask to combine. When `from` is
- *  `into`'s only child there is no independent list: `from`'s children take
- *  its slot. Counted on the drawn lists — a property row the surface shows is
- *  a child the user sees move. */
-const bothShowIndependentChildren = async (
-  {into, from}: {into: Block; from: Block},
-  surface: OutlineSurface,
-): Promise<boolean> => {
-  const fromChildIds = await visibleChildIds(from, surface.propertyDisplay)
-  if (fromChildIds.length === 0) return false
-  const intoChildIds = await visibleChildIds(into, surface.propertyDisplay)
-  return intoChildIds.some(childId => childId !== from.id)
-}
+import { grabSoftKeyboard } from '@/utils/softKeyboardGrab.js'
 
 const isMarkdownEditor = ({editorView}: CodeMirrorEditModeDependencies): boolean =>
   editorView.state.facet(language)?.name === markdownLanguage.name
@@ -486,6 +471,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.GLOBAL,
       icon: Plus,
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        // Before the first await: the new block's editor focuses after a
+        // database round trip, outside the tap's gesture, and iOS raises the
+        // keyboard only for a focus inside it. See grabSoftKeyboard.
+        if (!uiStateBlock.repo.isReadOnly) grabSoftKeyboard()
         await createNodeInActivePanelFromGlobalContext(uiStateBlock)
       },
     },
@@ -806,6 +795,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Split block at cursor',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => {
+        // The palette dispatches by id, so this guard belongs in the handler.
+        if (deps.disableBlockSplit) return
         const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
         if (!block || !editorView || !uiStateBlock) return
 
@@ -1089,41 +1080,16 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const prevVisible = await previousVisibleBlock(block, surface)
         if (!prevVisible || prevVisible.id === surface.scopeRootId) return
 
-        await Promise.all([block.load(), prevVisible.load()])
-        if (holdsSource(block) || holdsSource(prevVisible)) return
-        if (await bothShowIndependentChildren({into: prevVisible, from: block}, surface)) return
-
-        // Vestigial, and kept only because it costs nothing: every branch above
-        // awaits, so the event has finished dispatching by now and the browser
-        // default has already run — `move_up_from_cm_start` states that rule
-        // and calls preventDefault BEFORE its async hop for exactly this
-        // reason. There is nothing to suppress in any case: block editors pass
-        // `defaultKeymap: false`, so Backspace has no CodeMirror command, and
-        // native backspace at offset 0 of the editing host does nothing.
-        trigger.preventDefault()
-
-        const intoContentBefore = prevVisible.peek()?.content ?? ''
-        const joinOffset = intoContentBefore.length
-        const prevId = prevVisible.id
-
-        // A merge DESTROYS `from` (core.merge soft-deletes it), so it needs the
-        // same veto as an outright delete — otherwise Backspace at offset 0 of a
-        // guarded page merges it away while `Delete` on it is refused.
-        if (!await ensureDeletableThroughUi([block])) return
-
-        // Single tx: flush the editor's live content into `from` first so
-        // core.merge concatenates the latest text, then run the merge.
-        // tx.run sees writes from the same tx via SQL.
-        await repo.tx(async tx => {
-          await tx.update(block.id, {content: liveContent})
-          await tx.run(mergeMutator, {intoId: prevId, fromId: block.id})
-        }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
-
-        await uiStateBlock.set(editorSelection, {
-          blockId: prevId,
-          start: joinOffset,
+        await mergeUp({
+          from: block, into: prevVisible, liveContent, propertyDisplay: surface.propertyDisplay,
+          uiStateBlock, renderScopeId: deps.renderScopeId,
+          // Vestigial, and kept only because it costs nothing: the event has
+          // finished dispatching by now (every step above awaits), and block
+          // editors pass `defaultKeymap: false`, so Backspace at offset 0 has
+          // nothing to suppress. `move_up_from_cm_start` prevents BEFORE its
+          // async hop for exactly this reason.
+          onTaken: () => trigger.preventDefault(),
         })
-        await focusBlock(uiStateBlock, prevId, {edit: true, renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
         keys: 'Backspace',
@@ -1164,7 +1130,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         await Promise.all([block.load(), nextVisible.load()])
         if (holdsSource(block) || holdsSource(nextVisible)) return
-        if (await bothShowIndependentChildren({into: block, from: nextVisible}, surface)) return
+        if (await bothShowIndependentChildren({into: block, from: nextVisible}, surface.propertyDisplay)) return
 
         // Ask the deletion guards BEFORE any side effect — the merge destroys
         // `nextVisible`, so a guarded page must not be folded away. This has to

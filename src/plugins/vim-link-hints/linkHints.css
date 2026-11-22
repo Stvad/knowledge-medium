@@ -1,0 +1,14 @@
+a[data-vim-link-hint]::before {
+  content: attr(data-vim-link-hint) / "";
+  position: absolute;
+  z-index: 1;
+  transform: translate(calc(var(--vim-link-hint-depth, 0) * (100% + 1px) - 0.12em), -55%);
+  border-radius: var(--radius-sm);
+  padding: 0.08em 0.3em;
+  background: var(--color-muted);
+  color: var(--color-muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  font: 500 0.625rem/1.1 var(--font-mono);
+  pointer-events: none;
+  user-select: none;
+}

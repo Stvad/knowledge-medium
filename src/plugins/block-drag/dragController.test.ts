@@ -137,6 +137,15 @@ afterEach(() => {
 })
 
 describe('block drag controller', () => {
+  it('leaves a protected bullet press to the surface', () => {
+    bullet('a').parentElement!.setAttribute('data-no-block-gestures', '')
+
+    drag('a')
+
+    expect(clickReaches('a')).toBe(true)
+    expect(mocks.resolveDropTarget).not.toHaveBeenCalled()
+  })
+
   it('a press that moves less than the threshold stays a click', async () => {
     pointer('pointerdown', bullet('a'), 10, 10)
     pointer('pointermove', window, 12, 11)

@@ -69,6 +69,15 @@ export const getPropertyFieldTargetId = (
  *  stay fieldId-resolvable so their field rows keep classifying (§6). */
 export type IsPropertyFieldDefinition = (fieldId: string) => boolean
 
+// §9 selection: the bit + target pair (the JS twin of
+// SELECT_PROPERTY_FIELD_CHILD_SQL) — without the bit an unmarked
+// `((fieldId))` link row would be selected as the field row.
+export const fieldRowsForSchema = (
+  children: readonly BlockData[],
+  fieldId: string,
+): BlockData[] => children.filter(child =>
+  child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
+
 /** The flat §9 predicate, bit/column/definition half — the caller supplies
  *  only the flip gate. All three conditions here are content-intrinsic
  *  (recognition is move-proof at any non-root position): the marker bit,
@@ -201,7 +210,7 @@ const codecAcceptsNull = (codec: AnyCodec): boolean => {
  *  directly would read a list codec's whole-array grammar against one member's
  *  text: `["a","b"]` and the string `a` are both "not an array", so the errors
  *  are silent rather than loud. */
-const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
+export const valueChildCodec = (schema: AnyPropertySchema): AnyCodec =>
   memberCodecOf(schema.codec) ?? schema.codec
 
 /** The characters every reference span OPENS with. Escaping these is what
@@ -357,6 +366,12 @@ const enumReadingIsAmbiguous = (codec: AnyCodec, content: string): boolean => {
   return names(content) && names(read)
 }
 
+export const verbatimValueTextProblem = (content: string): 'lone-surrogate' | 'field-form' | undefined => {
+  if (hasLoneSurrogate(content)) return 'lone-surrogate'
+  if (parseExactReferenceBlockContent(content)?.fieldForm) return 'field-form'
+  return undefined
+}
+
 /** Would writing this text into a value row DESTROY the property's value?
  *  For write paths that set `content` directly rather than encoding a typed
  *  value — find-replace is the one caller. They bypass
@@ -396,8 +411,7 @@ export const contentLosesPropertyValue = (
   // Content naming no option at all needs nothing here — the caller's own
   // decode throws on it (`valueChildContentToEncoded`).
   if (codec.type === 'enum' && enumReadingIsAmbiguous(codec, content)) return true
-  return parseExactReferenceBlockContent(content)?.fieldForm === true
-    || hasLoneSurrogate(content)
+  return verbatimValueTextProblem(content) !== undefined
 }
 
 const unicodeEscape = (c: string): string =>
@@ -479,9 +493,20 @@ const encodedValueToContent = (codec: AnyCodec, encoded: unknown): string => {
   return serialized === undefined ? '' : grammarInertJson(serialized)
 }
 
+/** Named references require the target derived for this exact stored content.
+ * Proposed content must supply a freshly resolved target, never an old row's. */
+export type ValueChildContent = string | {
+  readonly content: string
+  readonly referenceTargetId?: string | null
+}
+
+const textOfValueChild = (value: ValueChildContent): string =>
+  typeof value === 'string' ? value : value.content
+
 const contentToEncodedValue = (
   codec: AnyCodec,
   content: string,
+  referenceTargetId?: string | null,
 ): unknown => {
   // Unwrap ONLY what `escapeContent` could have produced. Quote-wrapping alone
   // is not that signature: a person can type `"[[Page]]"` into a value row, and
@@ -503,44 +528,14 @@ const contentToEncodedValue = (
   }
   switch (codec.type) {
     case 'ref': {
-      // The gate is this content's FORM, never `reference_target_id`'s
-      // nullness (§9). The column is not the "is this a ref
-      // value" signal it looks like: `core.deriveReferenceTarget` stamps it
-      // for a whole-block `[[alias]]` too, and a `[[alias]]` nothing claims
-      // MINTS a seat and then resolves. So trusting any non-null target
-      // silently coerced prose typed into a ref property — `[[Mary]]`, or a
-      // typo'd `[[Marry]]` binding a fresh empty seat — into whatever that
-      // name pointed at, overwriting the id the property held.
-      //
-      // `isIdCarryingReference` is the same fragment `deriveReferenceColumns`
-      // branches on, and those forms resolve TEXTUALLY there — no lookup, no
-      // minting — so `exact.id` is exactly what the column would hold,
-      // computed from the same parser rather than as a second policy. Reading
-      // it here also means a row whose stamp hasn't landed yet (raw write,
-      // sync arrival before the derive seam) projects correctly instead of
-      // reading unset.
-      //
-      // Refusing a name row is the whole point: the row keeps its text and
-      // stays visible/fixable in the tree while the cell key reads unset.
-      // Refs are identity, and a ref property that silently followed a name
-      // would be a different feature. For a REQUIRED ref this clause is
-      // defence in depth — `codecs.ref`'s own `decode(undefined)` throws
-      // downstream anyway — but for `optionalRef` it is the only thing that
-      // refuses: `decode(undefined)` there returns undefined, which
-      // `firstProjectedFieldValue` reads as "nothing parsed", so it would
-      // stop scanning and skip a LATER value child that does name an id.
-      //
-      // `fieldForm` is refused because `::((id))` is a FIELD ROW (§7),
-      // machinery rather than a value. Reachable through find-replace, whose
-      // value guard asks this function whether the PROPOSED content still
-      // decodes — a replace that prepends `::` to a ref value would otherwise
-      // pass the guard, get written, leave the value set (the bit stamps
-      // same-tx), and drop the owner's key with no error.
       const exact = parseExactReferenceBlockContent(content)
-      if (!isIdCarryingReference(exact) || exact.fieldForm) {
-        throw new CodecError('id-carrying reference', content)
+      if (!exact || exact.fieldForm) {
+        throw new CodecError('whole-value reference', content)
       }
-      return exact.id
+      // ID forms remain readable before derivation (including sync arrival).
+      if (isIdCarryingReference(exact)) return exact.id
+      if (referenceTargetId == null) throw new CodecError('resolved named reference', content)
+      return referenceTargetId
     }
     case 'string':
     case 'url':
@@ -696,18 +691,11 @@ export const propertyCellValueRejection = (
   return null
 }
 
-/** Parse ONE value child's content back into its canonical encoded form, at
- *  {@link valueChildCodec} grain. Throws when the content cannot be
- *  interpreted under that codec.
- *
- *  A function of `content` ALONE — for every codec including `ref`, which
- *  parses the id out of the id-carrying span rather than reading the derived
- *  column (see the `ref` case). That makes this decode answerable about
- *  PROPOSED content, which is what find-replace's value guard needs, and
- *  independent of whether a row's stamp has landed yet. */
+/** Decode one scalar value or list member. ID references parse textually;
+ * named references use the row's derived target from ordinary alias resolution. */
 export const valueChildContentToEncoded = (
   schema: AnyPropertySchema,
-  content: string,
+  value: ValueChildContent,
 ): unknown => {
   const codec = valueChildCodec(schema)
   // {@link storedFormOf} owns the canonicalization AND, for `enum`, the
@@ -719,7 +707,8 @@ export const valueChildContentToEncoded = (
   // config edit fans out in the editing tx and the fan-out REFUSES rather than
   // writing, so the removal is rejected and the values stay. It costs where no
   // row edit fires to be refused: an option set that moves in CODE. #1097.
-  return storedFormOf(codec, contentToEncodedValue(codec, content))
+  return storedFormOf(codec, contentToEncodedValue(codec, textOfValueChild(value),
+    typeof value === 'string' ? undefined : value.referenceTargetId))
 }
 
 /** What a value child's stored text is worth under a DIFFERENT codec:
@@ -764,7 +753,7 @@ const spellingThatHolds = (
  *  codec can say. */
 const holdsUnder = (
   to: AnyPropertySchema,
-  content: string,
+  content: ValueChildContent,
   held: unknown,
 ): boolean => {
   try {
@@ -781,7 +770,7 @@ const holdsUnder = (
 const valueRoute = (
   from: AnyPropertySchema,
   to: AnyPropertySchema,
-  content: string,
+  content: ValueChildContent,
 ): ValueChildConversion => {
   let held: unknown
   try {
@@ -799,34 +788,19 @@ const valueRoute = (
   // being ADDED, an edit that changes no value and that a person reads as
   // harmless. Those rows drift to the plain spelling when their value is next
   // written, which is the only time the text needs to move.
-  if (holdsUnder(to, content, held)) return {outcome: 'converted', content}
+  if (holdsUnder(to, content, held)) return {outcome: 'converted', content: textOfValueChild(content)}
   const respelled = spellingThatHolds(to, held)
   if (respelled === null) return {outcome: 'unreadable'}
-  // DECLINED when re-spelling MINTS A REFERENCE the stored text did not carry:
-  // `codecs.ref().decode` accepts any string, so the string `Mary` re-spells to
-  // `((Mary))` — an identity nobody wrote, pointing at a seat that does not
-  // exist. Only the text route may produce a reference, because the `((id))`
-  // grammar in the TEXT is what says the person wrote one. Asked of the
-  // re-spelled text rather than of `to.codec.type`, which is an open string a
-  // plugin picks: any codec that spells a value as a reference span mints the
-  // same identity, whatever it calls itself.
-  // Gated on the STORED text already carrying a reference. ACCEPTED, not
-  // right: the alias form passes the gate and re-spells to `(([[Page]]))`, a
-  // span whose id is the eight characters `[[Page]]` rather than the block
-  // the alias resolves to — an identity nobody wrote, which is what the
-  // paragraph above exists to stop. Resolving it needs a lookup this pure
-  // function does not have, and declining instead refuses the re-type
-  // outright. #1073 decides which.
-  if (isWholeContentReference(respelled) && !isWholeContentReference(content)) {
-    return {outcome: 'unreadable'}
-  }
+  // A reference must come from the authored span, not an ID manufactured by
+  // encoding arbitrary text (including a name's bracket syntax) as an ID.
+  if (isWholeContentReference(respelled)) return textRoute(to, content)
   return {outcome: 'converted', content: respelled}
 }
 
 /** `content` re-read under `to`, as if it had just been typed into the row. */
 const textRoute = (
   to: AnyPropertySchema,
-  content: string,
+  content: ValueChildContent,
 ): ValueChildConversion => {
   let encoded: unknown
   try {
@@ -842,7 +816,7 @@ const textRoute = (
     // (`referenceBlockContentForId`) is fed an id the same parser canonicalized.
     // Keeping the stored text rather than throwing, because a throw here aborts
     // the caller's whole transaction over a row that already projects correctly.
-    return {outcome: 'converted', content}
+    return {outcome: 'converted', content: textOfValueChild(content)}
   }
 }
 
@@ -861,7 +835,7 @@ const textRoute = (
 export const convertValueChildContent = (
   from: AnyPropertySchema,
   to: AnyPropertySchema,
-  content: string,
+  content: ValueChildContent,
 ): ValueChildConversion => {
   const carried = valueRoute(from, to, content)
   if (carried.outcome === 'converted') return carried
@@ -997,7 +971,7 @@ export const encodedPropertyValueToChildContents = (
  */
 export const childContentsToEncodedPropertyValue = (
   schema: AnyPropertySchema,
-  contents: Iterable<string>,
+  contents: Iterable<ValueChildContent>,
 ): unknown | undefined => {
   if (memberCodecOf(schema.codec) === undefined) {
     // Invalid child text should not preserve a stale parent cell projection:
@@ -1019,7 +993,7 @@ export const childContentsToEncodedPropertyValue = (
  *  contents that decodes. The cell reads this one. */
 const firstDecodingValue = (
   schema: AnyPropertySchema,
-  contents: Iterable<string>,
+  contents: Iterable<ValueChildContent>,
 ): {readonly value: unknown} | undefined => {
   for (const content of contents) {
     try {
@@ -1052,9 +1026,13 @@ export const scalarValueRow = <T extends {readonly content: string}>(
   writing?: string,
 ): T | undefined => {
   return values.find(value => value.content === writing
-    || firstDecodingValue(schema, [value.content]) !== undefined)
+    || firstDecodingValue(schema, [value]) !== undefined)
     ?? (values.length === 1 ? values[0] : undefined)
 }
+
+export const scalarDuplicates = (
+  values: readonly BlockData[], primary: BlockData | undefined, content: string,
+): BlockData[] => values.filter(row => row !== primary && row.content === content)
 
 /** What a value row is, for comparison. `denotesValue` is false when the row's
  *  text does not decode: such a row denotes NOTHING, which is why its `key` is
@@ -1068,7 +1046,7 @@ export interface MemberKey {
 }
 
 export interface MemberKeys {
-  row: (row: Pick<BlockData, 'id' | 'content'>) => MemberKey
+  row: (row: Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null}) => MemberKey
   /** A DESIRED member's key, from the content the cell implies. Always a value
    *  key in practice — it came from the encoder — and the fallback is shaped so
    *  it can never equal a row key. */
@@ -1089,7 +1067,12 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
       content: content => `c${content}`,
     }
   }
-  const valueKey = (content: string): string | undefined => {
+  return decodedMemberKeysFor(schema)
+}
+
+/** A cell folds only rows that denote the same value. Unreadable copies keep independent identities. */
+export const decodedMemberKeysFor = (schema: AnyPropertySchema): MemberKeys => {
+  const valueKey = (content: ValueChildContent): string | undefined => {
     try {
       return `v${persistedJsonKey(valueChildContentToEncoded(schema, content))}`
     } catch {
@@ -1098,7 +1081,7 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
   }
   return {
     row: row => {
-      const key = valueKey(row.content)
+      const key = valueKey(row)
       return key === undefined
         ? {key: `r${row.id}`, denotesValue: false}
         : {key, denotesValue: true}
@@ -1133,23 +1116,31 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
 export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'content'>>(
   schema: AnyPropertySchema | null,
   perFieldRow: readonly (readonly T[])[],
+): T[] => unionFieldValues(perFieldRow, memberKeysFor(schema))
+
+export const unionFieldValues = <T extends Pick<BlockData, 'id' | 'content'>>(
+  perFieldRow: readonly (readonly T[])[],
+  keys: MemberKeys,
+  onDuplicate?: (copy: T, survivor: T) => void,
 ): T[] => {
-  const keys = memberKeysFor(schema)
   const unioned: T[] = []
-  const seen = new Set<string>()
+  const seen = new Map<string, T>()
   for (const values of perFieldRow) {
     // Each row is judged against the rows BEFORE it and never against itself,
     // which is what keeps within-row multiplicity a property of every row
     // rather than only the first: a later row's `[b, b]` is two members, and
     // marking `b` seen as we went folded the second into the first.
-    const rowKeys: string[] = []
+    const rowKeys = new Map<string, T>()
     for (const value of values) {
       const {key} = keys.row(value)
-      rowKeys.push(key)
-      if (seen.has(key)) continue
-      unioned.push(value)
+      const survivor = seen.get(key)
+      if (survivor) onDuplicate?.(value, survivor)
+      else {
+        unioned.push(value)
+        if (!rowKeys.has(key)) rowKeys.set(key, value)
+      }
     }
-    for (const key of rowKeys) seen.add(key)
+    for (const [key, row] of rowKeys) seen.set(key, row)
   }
   return unioned
 }
@@ -1180,6 +1171,10 @@ export const fieldRowValues = async (
   return groups.length === 0 ? null : groups
 }
 
+export const rowsProjectToValue = (
+  schema: AnyPropertySchema, rows: readonly ValueChildContent[], encoded: unknown,
+): boolean => jsonValuesEqual(childContentsToEncodedPropertyValue(schema, rows), encoded)
+
 /**
  * Does `encoded` come back UNCHANGED through the value-child machinery?
  *
@@ -1197,7 +1192,7 @@ export const valueSurvivesChildRoundTrip = (
 ): boolean => {
   try {
     const contents = encodedPropertyValueToChildContents(schema, encoded)
-    return jsonValuesEqual(childContentsToEncodedPropertyValue(schema, contents), encoded)
+    return !contents.some(hasLoneSurrogate) && rowsProjectToValue(schema, contents, encoded)
   } catch {
     return false
   }

@@ -8,30 +8,30 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@powersync/react'
 import { useRepo } from '@/context/repo.js'
 import { useSearchParam } from 'react-use'
 import { useIsLocalOnly } from '@/components/Login.js'
 import { remoteSyncEnabled } from '@/services/powersync.js'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.js'
-import { layoutWorkspaceChanged } from '@/utils/routing.js'
+import { hashOpeningWorkspace, layoutWorkspaceChanged } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
 import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
 import { WorkspaceKeyGate, workspaceGateDeps } from '@/components/workspace/WorkspaceKeyGate.js'
 import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher.js'
+import { WorkspaceSyncGate } from '@/components/workspace/WorkspaceSyncGate.js'
 import { useCloseOnServerE2ee } from '@/components/workspace/useCloseOnServerE2ee.js'
 import { useCloseOnKeyLoss } from '@/components/workspace/useCloseOnKeyLoss.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 import { getCurrentHash, getInitialLayout, preparedInitialHash } from '@/bootstrap/initialLayout.js'
 
-// `ready`: the workspace materialized and bootstrapped normally. `locked`: the
-// §6 gate intercepted before any bootstrap write — the workspace is e2ee
-// without its key, never-pinned (quarantine), or e2ee on the server while this
-// device's pin isn't — and App renders the WorkspaceKeyGate. `waiting`: access
-// can't be decided until the workspaces row replicates (opened by URL before
-// sync delivered encryption_mode/wk_canary); App shows a neutral loader and
-// re-resolves when the row lands.
+// `ready`: the workspace bootstrapped normally. `locked`: the §6 gate
+// intercepted before any bootstrap write — the workspace is e2ee without its
+// key, never-pinned (quarantine), or e2ee on the server while this device's pin
+// isn't — and App renders the WorkspaceKeyGate. `syncing`: this device has not
+// caught up on the workspace's first sync, or its row has not arrived so access
+// is undecided; App renders the WorkspaceSyncGate, which re-resolves when that
+// changes.
 interface HashSnapshot {
   hash: string
   version: number
@@ -74,16 +74,15 @@ const App = () => {
     [layoutSessionBlock, onLayoutHashChanged],
   )
 
-  // Reactive role tracking. The imperative setReadOnly inside
-  // resolveWorkspace handles the *initial* render (so the first paint
-  // already has the right flag). This effect handles role changes pushed by
-  // the server mid-session — e.g. an owner demoting an editor to viewer
-  // while they're online — without requiring a reload.
+  // Reactive role tracking. resolveInitialLayout sets the flag the first paint
+  // has (read-only while gated, the role once ready). This effect handles role
+  // changes pushed by the server mid-session — e.g. an owner demoting an editor
+  // to viewer while they're online — without requiring a reload.
   const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const activeRole = rolesByWorkspaceId.get(activeWorkspaceId)
   useEffect(() => {
-    // Don't override the gate/waiting read-only lock with the role-derived flag
-    // (an owner/editor of a *locked* workspace must stay read-only).
+    // Don't override a gate's read-only lock with the role-derived flag (an
+    // owner/editor of a gated workspace must stay read-only).
     if (initial.kind !== 'ready' || !activeRole) return
     repo.setReadOnly(activeRole === 'viewer')
   }, [initial.kind, activeRole, repo])
@@ -129,24 +128,34 @@ const App = () => {
     }
   }, [])
 
-  // Re-resolve the initial layout (bumping the version busts the cache) — used
-  // when a gate is resolved or a pending workspace row finally replicates.
-  // Keeps the snapshot's hash, not the URL's: after `resolveDefaultWorkspace`
-  // the URL still names the workspace just left.
-  const reResolve = useCallback(() => {
-    setHashSnapshot(current => ({hash: current.hash, version: current.version + 1}))
+  // Re-resolve at the hash `pick` derives from the snapshot's (bumping the
+  // version busts the cache). With `atVersion`, only while the snapshot is
+  // still at it: a gate opens at most once, and only for the resolve that
+  // rendered it — a gate hidden by a later resolve (Leave, Back) must not pull
+  // the user back.
+  const reResolveAt = useCallback((pick: (hash: string) => string, atVersion?: number) => {
+    setHashSnapshot(current => (atVersion !== undefined && current.version !== atVersion
+      ? current
+      : {hash: pick(current.hash), version: current.version + 1}))
   }, [])
-  // Re-resolve as if no workspace were named — the remembered one, else the
-  // personal one. For leaving a gated workspace just deleted.
-  const resolveDefaultWorkspace = useCallback(() => {
-    setHashSnapshot(current => ({hash: '', version: current.version + 1}))
-  }, [])
-  // Re-resolve an OPEN workspace at the URL, which projects its current layout.
-  // Not `reResolve`: same-workspace navigation never updates the snapshot, so
-  // its hash is the layout the workspace opened at.
-  const closeOpenWorkspace = useCallback(() => {
-    setHashSnapshot(current => ({hash: getCurrentHash(), version: current.version + 1}))
-  }, [])
+  // The snapshot's hash, not the URL's: after `resolveDefaultWorkspace` the URL
+  // still names the workspace just left. For the key gate once resolved.
+  const reResolve = useCallback(() => reResolveAt(hash => hash), [reResolveAt])
+  // As if no workspace were named — the remembered one, else the personal one.
+  // For leaving a gated workspace just deleted.
+  const resolveDefaultWorkspace = useCallback(() => reResolveAt(() => ''), [reResolveAt])
+  // The gated workspace BY ID: while gated nothing is remembered and the
+  // snapshot hash may be empty, which would resolve through the ensure-personal
+  // RPC — a throw offline.
+  const snapshotVersion = hashSnapshot.version
+  const openGatedWorkspace = useCallback(
+    () => reResolveAt(hash => hashOpeningWorkspace(hash, activeWorkspaceId), snapshotVersion),
+    [reResolveAt, activeWorkspaceId, snapshotVersion],
+  )
+  // An OPEN workspace at the URL, which projects its current layout. Not the
+  // snapshot's hash: same-workspace navigation never updates it, so it is the
+  // layout the workspace opened at.
+  const closeOpenWorkspace = useCallback(() => reResolveAt(getCurrentHash), [reResolveAt])
 
   // A workspace the server converts to e2ee while it's open here closes into
   // the gate: until this device's pin is upgraded it can't sync the workspace.
@@ -155,8 +164,20 @@ const App = () => {
   useCloseOnKeyLoss(repo, initial.kind === 'ready' ? initial : null, closeOpenWorkspace)
   const gateDeps = useMemo(() => workspaceGateDeps(repo, activeWorkspaceId), [repo, activeWorkspaceId])
 
-  if (initial.kind === 'waiting') {
-    return <WorkspaceSyncWaiting workspaceId={initial.workspaceId} onReady={reResolve}/>
+  if (initial.kind === 'syncing') {
+    return (
+      <WorkspaceSyncGate
+        // A fresh instance per resolve, so no repair or error state carries
+        // into the next. Defence in depth: `reResolveAt`'s version check is
+        // what confines a gate's open to the resolve that rendered it.
+        key={`${initial.workspaceId}:${snapshotVersion}`}
+        workspaceId={initial.workspaceId}
+        workspaceName={initial.workspaceName}
+        awaitingRow={initial.awaitingRow}
+        onReady={openGatedWorkspace}
+        footer={<WorkspaceSwitcher gate={{workspaceId: initial.workspaceId, onLeave: resolveDefaultWorkspace}}/>}
+      />
+    )
   }
 
   if (initial.kind === 'locked') {
@@ -170,11 +191,9 @@ const App = () => {
         workspaceName={initial.workspaceName ?? undefined}
         reason={initial.reason}
         canary={initial.canary}
-        // The gate drains the now-decryptable staged rows BEFORE this re-resolve,
-        // so the bootstrap getOrCreate*s no-op against the synced content rather
-        // than racing it. Re-entry mid-drain (footer, Back) races it instead,
-        // deliberately: those mints are stamp-0 and yield to the server's rows,
-        // as on any fresh device — resolution does not wait for the pass.
+        // The gate drains the now-decryptable staged rows before this
+        // re-resolve; re-entry mid-drain (footer, Back) lands in the sync gate,
+        // which holds bootstrap until the drain has applied them.
         deps={gateDeps}
         onResolved={reResolve}
         footer={<WorkspaceSwitcher gate={{workspaceId: initial.workspaceId, onLeave: resolveDefaultWorkspace}}/>}
@@ -190,33 +209,6 @@ const App = () => {
         </AppRuntimeProvider>
       </BlockContextProvider>
     </LayoutRootContext.Provider>
-  )
-}
-
-// Shown while a workspace's row hasn't replicated yet (opened by URL before
-// sync delivered encryption_mode/wk_canary). Reactively watches for the row and
-// re-resolves the layout the moment it lands — no bootstrap writes happen until
-// then, so we never write plaintext into a workspace that may turn out e2ee.
-function WorkspaceSyncWaiting({
-  workspaceId,
-  onReady,
-}: {
-  workspaceId: string
-  onReady: () => void
-}) {
-  const {data} = useQuery<{id: string}>(
-    'SELECT id FROM workspaces WHERE id = ? LIMIT 1',
-    [workspaceId],
-  )
-  const present = data.length > 0
-  useEffect(() => {
-    if (present) onReady()
-  }, [present, onReady])
-
-  return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <p className="text-sm text-muted-foreground">Loading workspace…</p>
-    </div>
   )
 }
 

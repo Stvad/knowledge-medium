@@ -16,6 +16,7 @@ import {
 import { AGENT_PROPS } from './chipState.ts'
 import {
   agentActivityProp,
+  agentActivityAtProp,
   agentAskedAtProp,
   agentAttemptsProp,
   agentCancelProp,
@@ -44,6 +45,7 @@ const REQUEUE_CLEARED_PROPS = [
   agentAttemptsProp,
   agentErrorProp,
   agentActivityProp,
+  agentActivityAtProp,
   // A retry starts clean: never inherit a stale Stop request (the daemon
   // clears agent:cancel on every terminal write, but drop it here too so
   // a re-queue can't hand a leftover flag to the fresh run).

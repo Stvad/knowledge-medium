@@ -73,6 +73,9 @@ export type TokenAudience = z.infer<typeof tokenAudienceSchema>
 
 // ---------- Command envelopes ----------
 
+/** Default wait for one browser bridge command, not an entire MCP tool call. */
+export const BRIDGE_COMMAND_TIMEOUT_MS = 60_000
+
 /**
  * Wire envelope for every command body POSTed to /runtime/commands: only
  * the `type` discriminator is mandatory, and the other keys pass through to
@@ -496,6 +499,19 @@ export const rematerializeWorkspaceCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const rejectedUploadsCommandSchema = z.looseObject({
+  type: z.literal('rejected-uploads'),
+  ...contributorField,
+  ...commandIdField,
+})
+
+export const retryRejectedUploadCommandSchema = z.looseObject({
+  type: z.literal('retry-rejected-upload'),
+  txId: z.number().int(),
+  ...contributorField,
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -656,6 +672,11 @@ const viewFields = {
   workspaceId: z.string().optional().describe(
     'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
     + 'focused tab), and is refused when no connected tab does.',
+  ),
+  expandRefs: z.boolean().optional().describe(
+    'Show what references display in the app (default true): each ((id)) is followed by a preview of its '
+    + "target's text, and subtree expands embeds (!((id)), ![[Page]]) into rows carrying the embedded "
+    + 'blocks\' own ids. false prints content only',
   ),
   ...formatField,
 }
@@ -1030,6 +1051,8 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
   rematerializeWorkspaceCommandSchema,
+  rejectedUploadsCommandSchema,
+  retryRejectedUploadCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -1092,6 +1115,8 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   auditPropertiesCommandSchema,
   runBackfillCommandSchema,
   rematerializeWorkspaceCommandSchema,
+  rejectedUploadsCommandSchema,
+  retryRejectedUploadCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -1291,12 +1316,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'disable-extension': {
     usage: 'kmagent disable-extension <id|label>',
-    description: 'Disable an installed extension by id or label (clears the synced intent; the device trust grant persists for a frictionless re-enable).',
+    description: 'Disable an installed extension by id or label. It clears the synced intent; the device trust grant persists for a frictionless re-enable.',
     readOnly: false,
   },
   'uninstall-extension': {
     usage: 'kmagent uninstall-extension <id|label>',
-    description: 'Uninstall an extension by id or label (deletes the block and revokes this device’s trust grant).',
+    description: 'Uninstall an extension by id or label. It deletes the block and revokes this device’s trust grant.',
     readOnly: false,
   },
   'audit-extension': {
@@ -1318,6 +1343,16 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent rematerialize-workspace [--workspace <id>] [--scope unapplied|all] [--wait <seconds>]',
     description: 'Re-run the sync drain over rows this device downloaded but never applied. It is the remedy for the durable materialization gap every one-way pass refuses on ("N synced row(s) of this workspace have not reached `blocks` on this device"). Those rows reached the drain, were not applied (workspace not unlocked, mode unresolved, a key-store read that failed, ciphertext that would not decode, or a speculative stamp-0 mint the seed could not vouch for), and had their queue entry consumed — so nothing re-delivers them and waiting never clears them. A DERIVATION pass over LOCAL state: it rebuilds this device\'s `blocks` from rows this device already downloaded, uploads nothing, needs no per-graph claim, does not clear the undo stack, and is safe to run on any device any number of times. `--scope unapplied` (default) re-delivers exactly the rows the refusal counts; `--scope all` re-judges every staged row of the workspace, which is what to use when the flag itself is suspect, at the cost of a full pass. Returns the exact `unappliedBefore`/`unappliedAfter` gap sizes plus the pass\'s own counts and `remainingGap` — the predicate re-asked. A pass that leaves rows unapplied has not failed: its `deferred` / `quarantined` counts say why. Neither is fixed by re-running ALONE — `deferred` needs the workspace materializable first (unlock it, or a key store that reads: a transient key-store failure defers too, and that one a re-run does fix), `quarantined` needs bytes that decode. `reflagged` is the count going the other way — at `--scope all`, a workspace that answers `defer` re-flags rows an earlier drain had cleared, so that scope CAN leave the gap larger (at `--scope unapplied` it is always 0, since every row in that set is flagged already). Two more things to know before running it: prefer a settled sync, because a re-pass can briefly write an older staged row over a local edit that is acked but not yet echoed back (the echo re-asserts it, so it self-heals unless the tab closes inside that window); and the pass occupies this device\'s materialization queue for its whole run, so no synced row reaches `blocks` until it finishes — seconds at `unapplied`, minutes at `all` on a large graph.',
     // Writes the local `blocks` table (never `blocks_synced`, never an upload).
+    readOnly: false,
+  },
+  'rejected-uploads': {
+    usage: 'kmagent rejected-uploads',
+    description: 'List uploads the server refused, by transaction. Oldest first: `txId`, the error, and per row its op, table, id, workspace and the columns it wrote (an RLS denial after a demotion, a missing parent). These rows are kept locally in `ps_crud_rejected` and nothing retries them on its own, so this device shows writes the server does not have; `health.rejectedUploads` counts the rows. Read the values with `sql` on `ps_crud_rejected`.',
+    readOnly: true,
+  },
+  'retry-rejected-upload': {
+    usage: 'kmagent retry-rejected-upload <txId>',
+    description: 'Requeue one rejected transaction whole. Its quarantine records go in the same write. Fix the cause first (restore the role, recreate the parent); a transaction the server refuses again goes back into quarantine. Retry oldest first, since a later edit can depend on an earlier create. Refuses, leaving the quarantine as it is, when a column it wrote has changed on this device since (a later edit here, or a download): sending either value would lose the other, so re-apply the edit by hand if it is still wanted. Also refuses while the upload queue holds a write to one of its rows (retry once it drains), and when a row is no longer in this device\'s blocks. The headless host serves it only while it can upload: open, configured writable, its member role editor or owner, and no stale-queue hold. A tab serves it without those checks.',
     readOnly: false,
   },
   'run-action': {

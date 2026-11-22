@@ -21,7 +21,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import {
-  __encryptUploadOpsForTest,
+  __prepareBlockUploadForTest,
   __runUploadLoopForTest,
   type CompactedBlockOperation,
 } from '@/services/powersync'
@@ -105,7 +105,7 @@ const uploadPass = () => {
   const pass = __runUploadLoopForTest(shared.db, {
     applyOperations: async (_db, ops) => { sent.push(...ops) },
     recordRejection: async (_db, _tx, err) => { throw new Error(`quarantined: ${String(err)}`) },
-    encryptOps: ops => __encryptUploadOpsForTest(ops, resolver.getUploadMode, resolver.getCek),
+    prepareOperations: entries => __prepareBlockUploadForTest(entries, resolver.getUploadMode, resolver.getCek),
   }, new Map())
   return {pass, sent}
 }
@@ -177,11 +177,10 @@ describe('an open encrypted workspace whose key record disappears', () => {
     expect(vi.mocked(bootstrapWorkspace).mock.lastCall?.[0].requestedHash).toBe(buildLayout(WS, ['page-b']))
   })
 
-  it('still locks on a real loss after an unreadable store recovered by the time it was checked', async () => {
+  it('still locks on a real loss after a missing record was back by the time it was checked', async () => {
     await openApp()
     vi.mocked(bootstrapWorkspace).mockResolvedValueOnce({id: 'reopened'} as unknown as Block)
-    const failure = new Error('IndexedDB connection lost')
-    vi.spyOn(getWorkspaceKeyStore(), 'get').mockRejectedValueOnce(failure).mockRejectedValueOnce(failure)
+    vi.spyOn(getWorkspaceKeyStore(), 'get').mockResolvedValueOnce(null)
     await act(async () => { await requireWorkspaceKeys(getWorkspaceKeyStore(), USER, WS).catch(() => {}) })
     // The re-resolve found the key and opened the workspace again: wait for that
     // layout to commit, then flush the effect that watches it.

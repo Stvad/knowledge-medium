@@ -37,20 +37,14 @@ import {
   resolveEditorOverride,
   type PropertyDefinitionRegistrySnapshot,
 } from '@/data/propertyDefinitionRegistry'
-import {isPropertyPanelHiddenProperty} from './visibility'
+import {isPropertyPickerName} from './visibility'
 
 export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
 const MAX_SUGGESTIONS = 8
 
-export interface AddPropertyArgs {
-  /** Existing registered schema the user picked from autocomplete (if any). */
-  adopted?: AnyPropertySchema
-  /** Property name. If `adopted` is set, this equals `adopted.name`. */
-  name: string
-  /** Preset id. If `adopted` is set, this equals `adopted.codec.type`. */
-  presetId: string
-}
+export type {PropertySchemaChoice as AddPropertyArgs} from '@/data/propertySchemaCreation'
+import type {PropertySchemaChoice as AddPropertyArgs} from '@/data/propertySchemaCreation'
 
 export interface ConfigureNewSchemaArgs {
   name: string
@@ -70,18 +64,26 @@ const filterSuggestions = (
   excludedNames: ReadonlySet<string>,
   filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
   definitions: PropertyDefinitionRegistrySnapshot | null,
+  preferredRank: ReadonlyMap<string, number>,
 ): readonly NameSuggestion[] => {
   const q = query.trim().toLowerCase()
   const out: NameSuggestion[] = []
   for (const schema of schemas.values()) {
     if (excludedNames.has(schema.name)) continue
-    if (isPropertyPanelHiddenProperty(schema.name, schemas, uis, definitions)) continue
+    if (!isPropertyPickerName(schema.name, schemas, uis, definitions)) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
-    if (out.length >= MAX_SUGGESTIONS) break
   }
-  return out.sort((a, b) => a.schema.name.localeCompare(b.schema.name))
+  // Rank every match before cutting to the visible few, so a preferred name
+  // is never lost to iteration order. The name typed exactly comes first:
+  // Enter commits the top suggestion.
+  const rank = (suggestion: NameSuggestion) =>
+    suggestion.schema.name.toLowerCase() === q ? -1
+      : preferredRank.get(suggestion.schema.name) ?? Number.MAX_SAFE_INTEGER
+  return out
+    .sort((a, b) => rank(a) - rank(b) || a.schema.name.localeCompare(b.schema.name))
+    .slice(0, MAX_SUGGESTIONS)
 }
 
 export interface PropertyPickerProps {
@@ -100,6 +102,9 @@ export interface PropertyPickerProps {
    *  works for names not in `usePropertySchemas` — the predicate only
    *  gates EXISTING suggestions, not what the user can type. */
   filterSchema?: (schema: AnyPropertySchema) => boolean
+  /** Names to suggest ahead of the rest, in this order (e.g. the properties a
+   *  table's rows already have). The others follow alphabetically. */
+  preferredNames?: ReadonlyArray<string>
   /** Placeholder text shown in the name input. */
   placeholder?: string
   /** Optional className overrides for the input shell. */
@@ -124,6 +129,7 @@ export function PropertyPicker({
   onConfigureNewSchema,
   excludedNames,
   filterSchema,
+  preferredNames,
   placeholder = 'Field',
   inputClassName,
   autoFocus = false,
@@ -161,6 +167,11 @@ export function PropertyPicker({
     [excludedNames],
   )
 
+  const preferredRank = useMemo(
+    () => new Map((preferredNames ?? []).map((name, index) => [name, index])),
+    [preferredNames],
+  )
+
   const preset = presets.get(presetId)
 
   const focusNameInput = useCallback(() => {
@@ -185,8 +196,9 @@ export function PropertyPicker({
       excludedNamesSet,
       filterSchema,
       propertyDefinitions,
+      preferredRank,
     ),
-    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions],
+    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions, preferredRank],
   )
 
   const reset = useCallback(() => {
@@ -203,7 +215,7 @@ export function PropertyPicker({
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
     const name = (adopted?.name ?? propertyName).trim()
     if (!name || submitting) return
-    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
+    if (!isPropertyPickerName(name, schemas, uis, propertyDefinitions)) return
     setSubmitting(true)
     try {
       await onAdd(adopted
@@ -223,7 +235,7 @@ export function PropertyPicker({
       return
     }
     if (submitting) return
-    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
+    if (!isPropertyPickerName(name, schemas, uis, propertyDefinitions)) return
     const schema = await onConfigureNewSchema({name, presetId})
     if (!schema) return
     void submit(schema)

@@ -7,6 +7,7 @@ import {
   type BlockData,
   type BlockReference,
 } from '@/data/api'
+import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 
 /** Normalizes a raw property-ref element the same way both call sites need:
  *  a string is trimmed, and an empty (or non-string) result means "no id"
@@ -87,5 +88,5 @@ export const isRetainableAbsentRef = (
   if (propertySchemas.has(ref.sourceField)) return false
   const afterValue = after.properties[ref.sourceField]
   if (afterValue === undefined) return false
-  return JSON.stringify(before?.properties[ref.sourceField]) === JSON.stringify(afterValue)
+  return jsonValuesEqual(before?.properties[ref.sourceField], afterValue)
 }

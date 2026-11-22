@@ -55,6 +55,20 @@ export const annotationQuoteSuffixProp = seedProperty({
   hidden: true,
 })
 
+/** The text against which a suggestion was selected. Relocation must preserve
+ *  its selected range outside the intervening change; a matching quote alone
+ *  could belong to a different occurrence. JSON encoding keeps this snapshot
+ *  out of reference rewriting when materialized as a property value block. */
+export const annotationSourceContentProp = seedProperty({
+  seedKey: 'system:annotations/property/source-content',
+  revision: 1,
+  name: 'annotation:sourceContent',
+  preset: 'optional-json',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
 /** `accepted` and `rejected` close an edit suggestion; `resolved` closes any
  *  thread. */
 export type ThreadStatus = 'open' | 'resolved' | 'accepted' | 'rejected'
@@ -106,6 +120,7 @@ export const anchorFieldValues = (anchor: RangeAnchor) => [
 export const annotationPropertySeeds = [
   annotationTargetProp, annotationQuoteStartProp, annotationQuotePrefixProp,
   annotationQuoteSuffixProp, annotationStatusProp, annotationReplacementProp,
+  annotationSourceContentProp,
 ] as const
 
 export const annotationThreadType = seedType({

@@ -128,6 +128,16 @@ export const agentActivityProp = seedProperty({
   hidden: true,
 })
 
+export const agentActivityAtProp = seedProperty({
+  seedKey: 'system:agent-dispatch-companion/property/activity-at',
+  revision: 1,
+  name: 'agent:activity-at',
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: scope,
+  hidden: true,
+})
+
 export const agentAskedAtProp = seedProperty({
   seedKey: 'system:agent-dispatch-companion/property/asked-at',
   revision: 1,
@@ -159,6 +169,7 @@ export const agentProtocolSeeds = [
   agentErrorProp,
   agentReplyProp,
   agentActivityProp,
+  agentActivityAtProp,
   agentAskedAtProp,
   agentCancelProp,
 ] as const

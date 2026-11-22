@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
+import { listRejectedUploads, retryRejectedUpload } from '@/data/rejectedUploads'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
 import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
@@ -93,7 +94,7 @@ import {
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref, userPageBlockId } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -566,8 +567,10 @@ const readExtensionOverrides = async (
   workspaceId: string,
 ): Promise<Overrides | null> => {
   try {
+    // This device's own intent, not `preferencesRootId`: the loader and
+    // `setExtensionEnabled` both use the acting user's page.
     // A copy: with nothing stored this is the schema's shared default.
-    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
+    return new Map(await readPluginPref(repo, userPageBlockId(workspaceId, repo.user.id), extensionsPrefsType, extensionsOverridesProp))
   } catch {
     return null
   }
@@ -1204,15 +1207,8 @@ const updateRuntimeBlock = async (
       : input.replaceProperties
         ? structuredClone(input.properties) as Record<string, unknown>
         : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
-    // Deliberately the RAW bag write, not the typed setProperty/setProperties:
-    // `input.properties` is arbitrary external JSON (raw-encoded values, often
-    // schema-less keys from agent extensions). The typed primitives would throw
-    // on an unresolvable schema or an undecodable value; the raw write + the
-    // same-tx MATERIALIZE processor instead reconciles the schema-backed,
-    // decodable subset into children (create/update, and delete-by-omission on
-    // a `replaceProperties` replace) and gracefully leaves the rest cell-only
-    // (MATERIALIZE skips keys it can't resolve/decode). Read-inside-tx above
-    // already closed the TOCTOU clobber this verb was once flagged for.
+    // Agent properties arrive encoded. Pass the bag to tx.update so the
+    // workspace's storage mode governs validation and child materialization.
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
@@ -2248,8 +2244,10 @@ export const createAgentRuntimeContext = ({
   repo,
   runtime,
   safeMode,
+  hostHealth,
 }: AgentRuntimeBridgeOptions): AgentRuntimeContext => {
   const context: AgentRuntimeContext = {
+    hostHealth,
     repo,
     db: repo.db,
     runtime,
@@ -2306,6 +2304,7 @@ export const executeCommand = async (
       repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
       runtime: context.runtime,
       safeMode: context.safeMode,
+      hostHealth: context.hostHealth,
     })
   }
   return executeAttributedCommand(command, context)
@@ -2329,7 +2328,7 @@ const executeAttributedCommand = async (
       return describeRuntimeSummary(context)
 
     case 'health':
-      return runHealthCommand(context.repo)
+      return runHealthCommand(context.repo, context.hostHealth)
 
     case 'describe-runtime':
       return describeRuntime(context, {
@@ -2627,6 +2626,12 @@ const executeAttributedCommand = async (
           ? undefined
           : requireString(command.scope, 'scope'),
       })
+
+    case 'rejected-uploads':
+      return listRejectedUploads(context.repo.db)
+
+    case 'retry-rejected-upload':
+      return retryRejectedUpload(context.repo.db, command.txId)
 
     case 'run-action':
     case 'action':
