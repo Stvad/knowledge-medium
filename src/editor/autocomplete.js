@@ -1,1 +1,1 @@
-export{WI as editorAutocompleteExtension}from"../../chunks/app-B01lqcBr.js";
+export{GI as editorAutocompleteExtension}from"../../chunks/app-DlWD6DWP.js";

@@ -1,1 +1,1 @@
-export{Io as fencedQuery,Lo as queryResolver,Ro as queryTextOf,zo as useQueryFieldId,Bo as useTableQuery}from"../../../../chunks/app-B01lqcBr.js";
+export{Lo as fencedQuery,Ro as queryResolver,zo as queryTextOf,Bo as useQueryFieldId,Vo as useTableQuery}from"../../../../chunks/app-DlWD6DWP.js";

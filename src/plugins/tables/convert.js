@@ -1,1 +1,1 @@
-export{zs as showTableAsOutline,Bs as turnIntoTable}from"../../../chunks/app-B01lqcBr.js";
+export{Bs as showTableAsOutline,Vs as turnIntoTable}from"../../../chunks/app-DlWD6DWP.js";
