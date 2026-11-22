@@ -190,10 +190,10 @@ it.each([
   const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
   const running = serve(id)
   try {
-    await vi.waitFor(() => expect(logged).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    await vi.waitFor(() => expect(logged).toHaveBeenCalledWith('Could not open workspace data', expect.objectContaining({
       message: expect.stringContaining('is not a user page'),
     })), {timeout: 10_000})
-    await expect(running.execute(groupedBacklinks.command)).rejects.toThrow('Could not open workspace data')
+    await expect(running.execute(groupedBacklinks.command)).rejects.toThrow(/^Headless gate closed:/)
   } finally {
     await running.stop()
   }
