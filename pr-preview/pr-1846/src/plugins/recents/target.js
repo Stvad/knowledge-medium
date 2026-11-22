@@ -1,1 +1,1 @@
-export{dj as openRecentsPage}from"../../../chunks/app-BrT2Advu.js";
+export{dj as openRecentsPage}from"../../../chunks/app-CtH5JoO7.js";

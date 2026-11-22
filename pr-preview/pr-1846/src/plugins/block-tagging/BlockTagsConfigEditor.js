@@ -1,1 +1,1 @@
-export{Yf as BlockTagsConfigEditor}from"../../../chunks/app-BrT2Advu.js";
+export{Yf as BlockTagsConfigEditor}from"../../../chunks/app-CtH5JoO7.js";

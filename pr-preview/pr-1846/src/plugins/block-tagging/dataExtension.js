@@ -1,1 +1,1 @@
-export{Zf as blockTaggingDataExtension}from"../../../chunks/app-BrT2Advu.js";
+export{Zf as blockTaggingDataExtension}from"../../../chunks/app-CtH5JoO7.js";
