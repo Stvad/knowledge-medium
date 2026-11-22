@@ -3,16 +3,20 @@
  *  Enter, Tab and Escape commit and move. An inline control (checkbox, date,
  *  select) takes the same three keys in its cell's own keydown, see
  *  `controlKeyCommand`. */
+import type { EditorView } from '@codemirror/view'
 import { Block } from '@/data/block'
+import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import { structuralEditPolicyForBlock, type StructuralEditPolicy } from '@/data/structuralEditPolicy'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import {
   ActionContextTypes,
-  type ActionConfig, type ActionContextConfig, type ActionContextType, type BaseShortcutDependencies,
+  type ActionConfig, type ActionContextConfig, type ActionContextType, type ActionTrigger, type BaseShortcutDependencies,
   type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi'
+import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 import { showInfo } from '@/utils/toast'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
@@ -24,20 +28,25 @@ export const GRID_CONTEXT_KEY = 'tablesGrid'
  *  the block it names takes the role. */
 export const ROW_CONTEXT_KEY = 'tablesRowId'
 export const CELL_CONTEXT_KEY = 'tablesCellId'
+/** The field row whose members a list cell draws. Unlike the two above it
+ *  names no single block: every block of the drawn members' subtree is one. */
+export const LIST_CONTEXT_KEY = 'tablesListId'
 
-export type TableRole = 'row' | 'cell'
+export type TableRole = 'row' | 'cell' | 'member'
 
 /** What the grid draws this block as, if anything. */
 export const tableRoleOf = (blockId: string, context: BlockContextType | undefined): TableRole | undefined => {
   if (!context || context.isReference || context.isBreadcrumb) return undefined
   if (context[CELL_CONTEXT_KEY] === blockId) return 'cell'
   if (context[ROW_CONTEXT_KEY] === blockId) return 'row'
+  if (context[LIST_CONTEXT_KEY] !== undefined) return 'member'
   return undefined
 }
 
 export const TABLE_ROW_CONTEXT = 'tables.row'
 export const TABLE_TYPING_CONTEXT = 'tables.row-typing'
 export const TABLE_EDIT_CONTEXT = 'tables.edit'
+export const TABLE_LIST_EDIT_CONTEXT = 'tables.list-edit'
 
 export interface GridDependencies extends BaseShortcutDependencies {
   /** Returns false when the command does not apply, so the key falls through. */
@@ -62,6 +71,7 @@ export const tableActionContexts: ActionContextConfig[] = [
   context(TABLE_TYPING_CONTEXT, 'Table row (typing)', {priority: 'default'}),
   // An editor is an editable target, which the default filter turns away.
   context(TABLE_EDIT_CONTEXT, 'Table cell editing', {eventFilter: () => true}),
+  context(TABLE_LIST_EDIT_CONTEXT, 'Table list editing', {eventFilter: () => true}),
 ]
 
 /** A key an open completion already handled is not the grid's. */
@@ -125,42 +135,50 @@ export const tableActions: ActionConfig[] = [
   gridAction(TABLE_ROW_CONTEXT, 'clear', ['Delete', 'Backspace']),
   gridAction(TABLE_TYPING_CONTEXT, 'open', [...PRINTABLE, ...PRINTABLE.map(key => `Shift+${key}`)], {passKey: true}),
   ...editKeys,
+  // A list's members are outline blocks: Enter, Tab and Backspace stay the outline's.
+  gridAction(TABLE_LIST_EDIT_CONTEXT, 'leave', 'Escape', {yieldToEditor: true}),
 ]
 
-/** Editing a cell or a row's text. Row mode is activated by the grid itself
- *  (`RowKeys`): a row that focus moved to may still be a lazy placeholder,
- *  with no shell to activate anything. */
+/** Editing a cell, a list member or a row's text. Row mode is activated by
+ *  the grid itself (`RowKeys`): a row that focus moved to may still be a lazy
+ *  placeholder, with no shell to activate anything. */
 export const tableShortcutActivation: ShortcutActivationContribution = activation => {
   if (!activation.inFocus || activation.isSelected) return null
   const grid = activation.blockContext?.[GRID_CONTEXT_KEY]
   if (!(grid instanceof GridController)) return null
-  return activation.surface === 'codemirror' && activation.inEditMode && tableRoleOf(activation.block.id, activation.blockContext)
-    ? [{context: TABLE_EDIT_CONTEXT, dependencies: {gridCommand: grid.command}}]
-    : null
+  if (activation.surface !== 'codemirror' || !activation.inEditMode) return null
+  const role = tableRoleOf(activation.block.id, activation.blockContext)
+  if (!role) return null
+  return [{context: role === 'member' ? TABLE_LIST_EDIT_CONTEXT : TABLE_EDIT_CONTEXT, dependencies: {gridCommand: grid.command}}]
 }
 
 /** The outline's verbs walk the outline around a block: on a row or a cell's
  *  value they would step into property rows or children the grid never draws,
  *  or create a block it never shows. On a grid's row or value the grid takes
  *  them instead, and a command that does not apply falls back to the verb. */
+type Applies = (deps: BaseShortcutDependencies, trigger: ActionTrigger) => boolean | Promise<boolean>
+
 const redirect = (
-  context: ActionContextType, actionId: string, command: GridCommand,
-  applies: (deps: BaseShortcutDependencies) => boolean = () => true,
+  context: ActionContextType, actionId: string, command: GridCommand, applies: Applies = () => true,
 ): ActionDispatchDecorator => ({
   actionId,
   context,
   wrap: (deps, trigger, next) => {
     const {block, renderScopeId} = deps as BlockShortcutDependencies
     const grid = gridDrawing(renderScopeId, block?.id)
-    if (!grid || !applies(deps) || !grid.command(command)) return next(deps, trigger)
+    if (!grid) return next(deps, trigger)
+    const decided = applies(deps, trigger)
+    if (typeof decided === 'boolean') return decided && grid.command(command) ? undefined : next(deps, trigger)
+    // Awaited, not returned: a decline turned into a resolved `false` would read as handled.
+    return decided.then(async taken => { if (!taken || !grid.command(command)) await next(deps, trigger) })
   },
 })
 
+type Edge = 'top' | 'bottom' | 'start' | 'end'
+
 /** The editor verbs act only at the editor's edge; inside, the key moves the
  *  caret. The same tests as the verbs they redirect. */
-const atEdge = (edge: 'top' | 'bottom' | 'start' | 'end') => (deps: BaseShortcutDependencies) => {
-  const view = (deps as CodeMirrorEditModeDependencies).editorView
-  if (!view) return false
+const atEditorEdge = (view: EditorView, edge: Edge) => {
   const selection = view.state.selection.main
   switch (edge) {
     case 'top': return isOnFirstVisualLine(view)
@@ -168,6 +186,50 @@ const atEdge = (edge: 'top' | 'bottom' | 'start' | 'end') => (deps: BaseShortcut
     case 'start': return selection.empty && selection.head === 0
     case 'end': return selection.empty && selection.head === view.state.doc.length
   }
+}
+
+/** Whether the outline's step from `block` past `edge` would leave what the
+ *  cell draws. A row's text and a scalar value are their own scope roots, so
+ *  any step leaves them. A list member steps within the list, except from its
+ *  first block upwards, where the outline's previous block is the field row,
+ *  which the cell does not draw, and from its last block downwards, where the
+ *  outline has nothing. */
+const leavesCell = async (block: Block, surface: OutlineSurface, edge: Edge): Promise<boolean> => {
+  if (block.id === surface.scopeRootId) return true
+  if (edge === 'top' || edge === 'start') return (await previousVisibleBlock(block, surface))?.id === surface.scopeRootId
+  return await nextVisibleBlock(block, surface) === null
+}
+
+/** At the editor's edge, and stepping out of the cell. The walk is async, so
+ *  the key's default is prevented first, as the outline's verbs do on the
+ *  same test: otherwise the caret moves before either handler runs. */
+const leavingAt = (edge: Edge): Applies => (deps, trigger) => {
+  const {block, editorView} = deps as CodeMirrorEditModeDependencies
+  const surface = outlineSurfaceOf(deps as CodeMirrorEditModeDependencies)
+  if (!block || !editorView || !atEditorEdge(editorView, edge)) return false
+  if (!surface || block.id === surface.scopeRootId) return true
+  trigger.preventDefault()
+  return leavesCell(block, surface, edge)
+}
+
+/** Backspace in an empty first member: the outline would delete it and edit
+ *  the field row above it, which the cell does not draw. The member is
+ *  deleted the same way, and the row takes focus, as Escape leaves a cell. */
+const emptyFirstMember: ActionDispatchDecorator = {
+  actionId: 'delete_empty_block_cm',
+  context: ActionContextTypes.EDIT_MODE_CM,
+  wrap: async (deps, trigger, next) => {
+    const {block, editorView, renderScopeId} = deps as CodeMirrorEditModeDependencies
+    const surface = outlineSurfaceOf(deps as CodeMirrorEditModeDependencies)
+    const grid = gridDrawing(renderScopeId, block?.id)
+    const row = block && grid?.rowOf(block.id)
+    if (!grid || row === undefined || !surface || !editorView || editorView.state.doc.length !== 0 ||
+      block.id === surface.scopeRootId || !await leavesCell(block, surface, 'start')) {
+      await next(deps, trigger)
+      return
+    }
+    if (await deleteBlockThroughUi(block)) grid.focusRow(row)
+  },
 }
 
 /** What a verb on a table host does instead of the outline's. */
@@ -228,10 +290,11 @@ export const tableOutlineVerbRedirects = [
   redirect(NORMAL, 'enter_edit_mode', 'open-start'),
   redirect(NORMAL, 'enter_edit_mode_at_end', 'open'),
   // Arrows at an editor's edge leave the cell the way row mode moves.
-  redirect(EDITING, 'move_up_from_cm_start', 'up', atEdge('top')),
-  redirect(EDITING, 'move_down_from_cm_end', 'down', atEdge('bottom')),
-  redirect(EDITING, 'move_left_from_cm_start', 'previous', atEdge('start')),
-  redirect(EDITING, 'move_right_from_cm_end', 'next', atEdge('end')),
+  redirect(EDITING, 'move_up_from_cm_start', 'up', leavingAt('top')),
+  redirect(EDITING, 'move_down_from_cm_end', 'down', leavingAt('bottom')),
+  redirect(EDITING, 'move_left_from_cm_start', 'previous', leavingAt('start')),
+  redirect(EDITING, 'move_right_from_cm_end', 'next', leavingAt('end')),
+  emptyFirstMember,
   onTableHost(NORMAL, 'create_block_below_and_edit', createsFirstChild('createBelowPlacement')),
   onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
   onTableHost(EDITING, 'split_block_cm', hostEnter),

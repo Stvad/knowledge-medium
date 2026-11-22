@@ -6,6 +6,7 @@ import { peekFocusedBlockLocation } from '@/data/properties'
 import { getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { peekValueOwner } from '../cellEdits'
 import { GridController, type GridColumn } from '../controller'
 import { turnIntoTable } from '../convert'
 import { tablesDataExtension } from '../dataExtension'
@@ -94,5 +95,20 @@ describe('GridController', () => {
     controller.setRows(rowIds, ROW_CAP)
     await controller.insertFirstRow()
     expect(await rowsOf('host')).toHaveLength(2)
+  })
+
+  // Defence in depth: a block under a member that is a reference is never
+  // read as a value of a property named by that reference.
+  it('reads a block nested under a reference member as no property value', async () => {
+    const {repo} = await setup(1)
+    await repo.tx(async tx => {
+      await tx.create({id: 'target', workspaceId, parentId: null, orderKey: 'b0', content: 'Target'})
+      await tx.create({id: 'ref-member', workspaceId, parentId: 'row-0', orderKey: 'a0', content: '((target))'})
+      await tx.stampReferenceTarget('ref-member', 'target', false)
+      await tx.create({id: 'nested', workspaceId, parentId: 'ref-member', orderKey: 'a0', content: 'note'})
+    }, options)
+    await Promise.all([repo.load('nested'), repo.load('ref-member')])
+    expect(repo.block('ref-member').peek()?.referenceTargetId).toBe('target')
+    expect(peekValueOwner(repo, 'nested')).toBeUndefined()
   })
 })

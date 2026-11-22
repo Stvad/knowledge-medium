@@ -1,0 +1,275 @@
+// @vitest-environment happy-dom
+import { Suspense, useEffect } from 'react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EditorView } from '@codemirror/view'
+import { ChangeScope, seedProperty, type User } from '@/data/api'
+import { definitionSeedsFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { editorSelection, focusBlock, isEditingProp, peekFocusedBlockLocation } from '@/data/properties'
+import type { Repo } from '@/data/repo'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core'
+import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
+import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
+import { ActiveContextsProvider, useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
+import { getDefaultActionGroups } from '@/shortcuts/defaultShortcuts'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
+import { ActionContextTypes } from '@/shortcuts/types'
+import { useActionContext } from '@/shortcuts/useActionContext'
+import { BlockContextProvider } from '@/context/block'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { RepoContext } from '@/context/repo'
+import { BlockComponent } from '@/components/BlockComponent'
+import { __resetLazyMountCachesForTesting } from '@/components/util/LazyViewportMount'
+import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountRegistry'
+import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import * as toast from '@/utils/toast'
+import { turnIntoTable } from '../convert'
+import { tablesPlugin } from '../index'
+import { tableRenderScopeId } from '../registry'
+
+const USER: User = {id: 'test-user', name: 'Test user'}
+vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
+
+const WS = 'tables-outline-gestures'
+const PANEL = 'panel'
+const HOST = 'host'
+const PARENT_SCOPE = 'tables-gestures'
+const SCOPE = tableRenderScopeId(PARENT_SCOPE, HOST)
+const tags = seedProperty({seedKey: 'test/property/tables-gesture-tags', revision: 1,
+  name: 'gesture:tags', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
+
+let db: TestDb
+let repo: Repo
+let runtime: FacetRuntime
+beforeAll(async () => { db = await createTestDb() })
+afterAll(async () => { await db.cleanup() })
+// happy-dom fires selectionchange inside CodeMirror's own update.
+const swallowSelectionChange = (event: Event) => event.stopImmediatePropagation()
+afterEach(async () => {
+  window.removeEventListener('selectionchange', swallowSelectionChange, true)
+  vi.restoreAllMocks()
+  cleanup()
+  // An unmounted cell editor finishes its edit on a timer; let it write before the reset.
+  await act(() => new Promise(resolve => setTimeout(resolve)))
+  vi.unstubAllGlobals()
+  __resetLazyMountRegistryForTesting()
+  __resetLazyMountCachesForTesting()
+})
+beforeEach(async () => {
+  window.addEventListener('selectionchange', swallowSelectionChange, true)
+  vi.stubGlobal('IntersectionObserver', undefined)
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false, media: query, addEventListener: () => {}, removeEventListener: () => {},
+    addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false,
+  }))
+  await resetTestDb(db.db)
+  await db.db.execute(
+    `INSERT INTO workspaces (id, name, owner_user_id, create_time, update_time,
+       encryption_mode, wk_canary, properties_migration)
+     VALUES (?, 'test', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
+  repo = createTestRepo({db: db.db, user: USER, newId: () => crypto.randomUUID()}).repo
+  const defaults = getDefaultActionGroups({repo})
+  runtime = resolveFacetRuntimeSync([
+    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
+    defaultRenderersExtension, plainOutlinerPlugin, defaultEditorInteractionExtension, tablesPlugin,
+    defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
+    [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions]
+      .map(action => actionsFacet.of(action)),
+    definitionSeedsFacet.of(tags, {source: 'test'}),
+  ])
+  repo.setFacetRuntime(runtime)
+  repo.setActiveWorkspaceId(WS)
+  await repo.tx(async tx => {
+    await tx.create({id: PANEL, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
+    await tx.create({id: HOST, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Table'})
+    await tx.create({id: 'row-0', workspaceId: WS, parentId: HOST, orderKey: 'a0', content: 'first'})
+    await tx.create({id: 'row-1', workspaceId: WS, parentId: HOST, orderKey: 'a1', content: 'second'})
+  }, {scope: ChangeScope.BlockDefault})
+  await waitFor(() => expect(repo.propertySchemas.has(tags.name)).toBe(true))
+  await repo.awaitSeedMaterialization()
+  await repo.block('row-0').set(tags, ['alpha', 'beta'])
+  await repo.awaitReprojections()
+  await turnIntoTable(repo, HOST)
+  repo.undoManager.clear()
+})
+
+let activeContexts: ActiveContextsMap = new Map()
+const ContextProbe = () => {
+  const contexts = useActiveContextsState()
+  useEffect(() => { activeContexts = contexts }, [contexts])
+  return null
+}
+const GlobalShortcuts = () => { useActionContext(ActionContextTypes.GLOBAL); return null }
+
+const mount = () => render(
+  <RepoContext value={repo}>
+    <AppRuntimeContextProvider value={runtime}>
+      <ActiveContextsProvider>
+        <HotkeyReconciler/>
+        <ContextProbe/>
+        <Suspense fallback={null}>
+          <BlockContextProvider initialValue={{panelId: PANEL, renderScopeId: PARENT_SCOPE, scopeRootId: HOST}}>
+            <GlobalShortcuts/>
+            <PropertyDisplayScopeContext value={{childBacked: true, workspace: 'non-hidden', panel: 'inherit'}}>
+              <BlockComponent blockId={HOST}/>
+            </PropertyDisplayScopeContext>
+          </BlockContextProvider>
+        </Suspense>
+      </ActiveContextsProvider>
+    </AppRuntimeContextProvider>
+  </RepoContext>,
+)
+
+const ui = () => repo.block(PANEL)
+
+/** The live (non-deleted) children of `parentId`, in order, as content. */
+const contentsUnder = async (parentId: string) => (await db.db.getAll<{content: string}>(
+  'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [parentId],
+)).map(row => row.content)
+
+const memberIds = async () => (await db.db.getAll<{id: string}>(
+  `SELECT value.id FROM blocks value JOIN blocks field ON field.id = value.parent_id
+    WHERE field.parent_id = 'row-0' AND field.is_field_form = 1 AND value.deleted = 0 AND field.deleted = 0
+    ORDER BY value.order_key, value.id`)).map(row => row.id)
+
+const fieldRowId = async () => (await db.db.get<{id: string}>(
+  "SELECT id FROM blocks WHERE parent_id = 'row-0' AND is_field_form = 1 AND deleted = 0")).id
+
+/** The editor the table shows on `blockId`, once its edit-mode keys are live. */
+const editorOn = async (blockId: string) => {
+  const view = await waitFor(() => {
+    const node = document.querySelector<HTMLElement>(`[data-table-grid] [data-block-id="${blockId}"] .cm-editor`)
+    expect(node).not.toBeNull()
+    return EditorView.findFromDOM(node!)!
+  })
+  await waitFor(() => expect((activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as {block?: {id: string}})?.block?.id).toBe(blockId))
+  return view
+}
+
+/** Open an editor on `blockId` in the table, with the caret at `at`. */
+const editAt = async (blockId: string, at: 'start' | 'end') => {
+  const length = (await repo.load(blockId))?.content.length ?? 0
+  await act(async () => {
+    await ui().set(editorSelection, {blockId, start: at === 'start' ? 0 : length})
+    await focusBlock(ui(), blockId, {edit: true, renderScopeId: SCOPE})
+  })
+  const view = await editorOn(blockId)
+  await waitFor(() => expect(view.state.selection.main.head).toBe(at === 'start' ? 0 : length))
+  return view
+}
+
+const press = (view: EditorView, key: string, options: {shiftKey?: boolean} = {}) => {
+  fireEvent.keyDown(view.contentDOM, {key, code: key, ...options})
+}
+
+const focused = () => peekFocusedBlockLocation(ui())
+
+describe('a list cell draws its members as outline blocks', () => {
+  it('shows each member with a bullet, not as a bare cell value', async () => {
+    mount()
+    const [alpha] = await waitFor(async () => {
+      const ids = await memberIds()
+      expect(document.querySelector(`[data-table-grid] [data-block-id="${ids[0]}"]`)).not.toBeNull()
+      return ids
+    })
+    const shell = document.querySelector(`[data-table-grid] [data-block-id="${alpha}"]`)!
+    expect(shell.closest('[data-table-value]')).toBeNull()
+    expect(shell.closest('[data-table-list]')).not.toBeNull()
+  })
+
+  it('Enter at the end of a member adds the next member, edited in the table', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    const view = await editAt(alpha!, 'end')
+    press(view, 'Enter')
+    await waitFor(async () => expect(await contentsUnder(await fieldRowId())).toEqual(['alpha', '', 'beta']))
+    const created = (await memberIds())[1]!
+    await waitFor(() => expect(focused()).toEqual({blockId: created, renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('Backspace on an empty member removes it and edits the member above', async () => {
+    const field = await fieldRowId()
+    const blank = await repo.mutate.createChild({parentId: field, content: '', position: {kind: 'last'}})
+    mount()
+    const [alpha, beta] = await memberIds()
+    const view = await editAt(blank!, 'start')
+    press(view, 'Backspace')
+    await waitFor(async () => expect(await memberIds()).toEqual([alpha, beta]))
+    await waitFor(() => expect(focused()).toEqual({blockId: beta, renderScopeId: SCOPE}))
+  })
+
+  it('Backspace on an empty first member removes it and returns to the row', async () => {
+    const field = await fieldRowId()
+    const blank = await repo.mutate.createChild({parentId: field, content: '', position: {kind: 'first'}})
+    mount()
+    const view = await editAt(blank!, 'start')
+    press(view, 'Backspace')
+    await waitFor(async () => expect(await contentsUnder(field)).toEqual(['alpha', 'beta']))
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+  })
+
+  it('Backspace at the start of a member merges it into the one above, with no refusal', async () => {
+    const error = vi.spyOn(toast, 'showError')
+    mount()
+    const [alpha, beta] = await memberIds()
+    const view = await editAt(beta!, 'start')
+    press(view, 'Backspace')
+    await waitFor(async () => expect(await memberIds()).toEqual([alpha]))
+    expect((await repo.load(alpha!))?.content).toBe('alphabeta')
+    await waitFor(() => expect(focused()?.blockId).toBe(alpha))
+    // The merged member's editor tears down after the merge; that is not a refused edit.
+    await act(async () => { await focusBlock(ui(), 'row-1', {renderScopeId: SCOPE}) })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('Tab nests a member under the one above, and the cell shows it', async () => {
+    mount()
+    const [alpha, beta] = await memberIds()
+    const view = await editAt(beta!, 'end')
+    press(view, 'Tab')
+    await waitFor(async () => expect((await repo.load(beta!))?.parentId).toBe(alpha))
+    await waitFor(() => expect(document.querySelector(
+      `[data-table-list] [data-block-id="${alpha}"] [data-block-id="${beta}"]`)).not.toBeNull())
+    // Nested, it is still in the cell: Escape leaves for the row.
+    press(await editorOn(beta!), 'Escape')
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+  })
+
+  it('Escape leaves the cell for its row', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    const view = await editAt(alpha!, 'end')
+    press(view, 'Escape')
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+  })
+
+  it('ArrowDown moves between members, and past the last member to the next row', async () => {
+    mount()
+    const [alpha, beta] = await memberIds()
+    let view = await editAt(alpha!, 'end')
+    press(view, 'ArrowDown')
+    await waitFor(() => expect(focused()).toEqual({blockId: beta, renderScopeId: SCOPE}))
+    // One line: ArrowDown leaves it wherever the step left the caret.
+    view = await editorOn(beta!)
+    press(view, 'ArrowDown')
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE}))
+  })
+
+  it('ArrowUp from the first member leaves the cell upwards, not onto the hidden field row', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    const view = await editAt(alpha!, 'start')
+    press(view, 'ArrowUp')
+    await waitFor(() => expect(focused()?.blockId).toBe(HOST))
+  })
+})

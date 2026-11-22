@@ -33,6 +33,9 @@ export interface GridColumn {
 
 export const CELL_CONTROL_SELECTOR = '[data-property-value-row] :is(input, button, select, textarea)'
 
+/** How deep under a list's member `rowOf` looks for the cell it is drawn in. */
+const MAX_CELL_DEPTH = 32
+
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
 export class GridController {
@@ -112,12 +115,20 @@ export class GridController {
     }
   }
 
-  /** The row index of a row block, or of the row a cell's value belongs to. */
+  /** The row index of a row block, or of the row a cell draws this block in:
+   *  a value, or any block nested under a list's member. Read from the cache,
+   *  which holds every block a mounted cell draws. */
   rowOf(blockId: string): number | undefined {
     const direct = this.rowIndex.get(blockId)
     if (direct !== undefined) return direct
-    const owner = peekValueOwner(this.host.repo, blockId)
-    return owner ? this.rowIndex.get(owner.ownerId) : undefined
+    const repo = this.host.repo
+    for (let id: string | null | undefined = blockId, depth = 0; id && depth < MAX_CELL_DEPTH; depth++) {
+      const owner = peekValueOwner(repo, id)
+      const row = owner && this.rowIndex.get(owner.ownerId)
+      if (row !== undefined) return row
+      id = repo.block(id).peek()?.parentId
+    }
+    return undefined
   }
 
   get currentColumn() {

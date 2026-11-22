@@ -2,7 +2,7 @@ import {
   createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode,
 } from 'react'
-import { BlockComponent } from '@/components/BlockComponent'
+import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
@@ -22,7 +22,7 @@ import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useActionContextActivations } from '@/shortcuts/useActionContext'
 import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './controller'
-import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
+import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, LIST_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
 import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
@@ -101,15 +101,45 @@ const CellValue = ({valueId, fieldRowId, schema}: {valueId: string; fieldRowId: 
   )
 }
 
+/** A list's members, drawn as the outline draws a field row's children: each
+ *  a bulleted block that splits, merges, nests and shows its own children. The
+ *  field row is the scope root and is not drawn, so the grid takes the keys
+ *  that would leave the members through it (`./keys`). `::` stays off: it
+ *  would turn a member itself into a field row. */
+const ListMembers = ({fieldRow, schema}: {fieldRow: Block; schema: AnyPropertySchema}) => {
+  const fieldRowId = fieldRow.id
+  const overrides = useMemo(() => ({
+    scopeRootId: fieldRowId,
+    surfaceName: CELL_SURFACE,
+    disablePropertyFieldCompletion: true,
+    disableBlockSplit: false,
+    [LIST_CONTEXT_KEY]: fieldRowId,
+  }), [fieldRowId])
+  const field = useMemo(() => ({id: fieldRowId, schema}), [fieldRowId, schema])
+  return (
+    <NestedBlockContextProvider overrides={overrides}>
+      <PropertyFieldRowContext value={field}>
+        <BlockChildren block={fieldRow}/>
+      </PropertyFieldRowContext>
+    </NestedBlockContextProvider>
+  )
+}
+
 const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; schema: AnyPropertySchema}) => {
   const cell = useHandle(row.repo.query.propertyRows({ownerId: row.id, fieldId}), {selector: rows => rows && {
     properties: rows.owner?.properties,
+    fieldRowIds: rows.fields.filter(({values}) => values.length > 0).map(({field}) => field.id),
     values: rows.fields.flatMap(({field, values}) =>
       values.map(value => ({id: value.id, fieldRowId: field.id, hasChildren: value.hasChildren}))),
   }})
   if (!cell) return null
   const {values} = cell
   if (values.length === 0) return <StoredValue properties={cell.properties} schema={schema}/>
+  if (memberCodecOf(schema.codec) !== undefined) return (
+    <div data-table-list="true" className="min-w-0">
+      {cell.fieldRowIds.map(id => <ListMembers key={id} fieldRow={row.repo.block(id)} schema={schema}/>)}
+    </div>
+  )
   const nested = values.some(value => value.hasChildren)
   return (
     <div className="flex min-w-0 flex-col">
@@ -121,8 +151,9 @@ const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; sche
   )
 }
 
+/** A list's members are blocks: a click on one is the block's own. */
 const isInteractive = (target: EventTarget) =>
-  target instanceof Element && target.closest('input, select, button, textarea, a, .cm-editor') !== null
+  target instanceof Element && target.closest('input, select, button, textarea, a, .cm-editor, [data-table-list]') !== null
 
 const isPlainKey = (event: KeyboardEvent) => !event.metaKey && !event.ctrlKey && !event.altKey
 

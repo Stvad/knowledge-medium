@@ -20,11 +20,12 @@ export const reportRefusal = (error: unknown) => {
   showError(error.message)
 }
 
-/** The owner and property of a value row, read from the cache: value → field row → owner. */
+/** The owner and property of a live value row, read from the cache: value → field row → owner. */
 export const peekValueOwner = (repo: Repo, valueId: string): {ownerId: string; fieldId: string} | undefined => {
-  const fieldRowId = repo.block(valueId).peek()?.parentId
-  const field = fieldRowId ? repo.block(fieldRowId).peek() : undefined
-  return field?.parentId && field.referenceTargetId ? {ownerId: field.parentId, fieldId: field.referenceTargetId} : undefined
+  const value = repo.block(valueId).peek()
+  const field = value?.parentId ? repo.block(value.parentId).peek() : undefined
+  return field?.isFieldForm && field.parentId && field.referenceTargetId
+    ? {ownerId: field.parentId, fieldId: field.referenceTargetId} : undefined
 }
 
 const opened = new Map<string, OpenedPropertyValue>()
@@ -55,6 +56,8 @@ export const cellEditorExtension: CodeMirrorExtensionContribution = context => {
         const key = editKey(block.id, renderScopeId)
         const edit = opened.get(key) ?? block.id
         opened.delete(key)
+        // A value the outline merged away, or nested under another member, is
+        // no longer an edit of this property.
         const owner = peekValueOwner(repo, block.id)
         if (!owner) return
         void repo.tx(tx => finishPropertyValueEdit(tx, owner.ownerId, owner.fieldId, edit, finalText),
