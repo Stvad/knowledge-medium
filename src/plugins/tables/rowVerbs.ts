@@ -5,8 +5,8 @@
  *  rows live anywhere. Where the host's own order is the drawn one, the
  *  outline's handler runs with the host as the scope root. */
 import type { Block } from '@/data/block'
+import { listingSurfaceOf } from '@/data/childrenView'
 import { editorSelection, focusBlock } from '@/data/properties'
-import { displayScopeOf } from '@/data/propertyDisplayMode'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import { requestEditorFocusIfEditing } from '@/shortcuts/blockActions'
 import { mergeUp } from '@/shortcuts/blockMergeGesture'
@@ -144,7 +144,7 @@ const mergeRowUp: ActionDispatchDecorator = {
       await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})
       return
     }
-    await mergeUp({from: block, into, liveContent, surface: {propertyDisplay: displayScopeOf(editDeps), renderScopeId}, uiStateBlock})
+    await mergeUp({from: block, into, liveContent, surface: listingSurfaceOf(editDeps), uiStateBlock})
   },
 }
 

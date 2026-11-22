@@ -1,7 +1,7 @@
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block'
 import type { LoaderHandle } from '@/data/internals/handleStore'
-import { childrenViewIn, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { childrenViewIn, displayScopeOf, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import { combineLastContributionResult, defineFacet, type OptionalContributionResult } from '@/facets/facet'
 
 /** Where a child list is drawn: what a children view may key its answer on. */
@@ -12,6 +12,15 @@ export interface ListingSurface {
   /** Root of the visible subtree the parent is drawn within. */
   readonly scopeRootId?: string
 }
+
+/** What a gesture's dependencies say about where its lists are drawn. The one
+ *  builder: a surface assembled by hand drops whichever field it forgets, and
+ *  a view keyed on that field then silently falls back to the default. */
+export const listingSurfaceOf = (carrier: Partial<ListingSurface>): ListingSurface => ({
+  propertyDisplay: displayScopeOf(carrier),
+  renderScopeId: carrier.renderScopeId,
+  scopeRootId: carrier.scopeRootId,
+})
 
 export interface ChildrenViewContext {
   parent: Block
@@ -32,7 +41,14 @@ export interface ChildrenView {
 export type ChildrenViewContribution = (ctx: ChildrenViewContext) => OptionalContributionResult<ChildrenView>
 
 /** The last contribution with an answer wins, by precedence; none answering
- *  leaves the property-display default ({@link propertyDisplayChildrenView}). */
+ *  leaves the property-display default ({@link propertyDisplayChildrenView}).
+ *  A view replaces the list outright: one that extends the default reads
+ *  `propertyDisplayChildrenView` itself.
+ *
+ *  Read-side only: the structural mutators (indent, outdent, move, paste's
+ *  placement) resolve their anchors on the property-display list inside the
+ *  transaction (`visibleChildrenOf`). A view whose list differs from that one
+ *  handles those verbs on its blocks itself. */
 export const childrenViewFacet = defineFacet<
   ChildrenViewContribution,
   (ctx: ChildrenViewContext) => ChildrenView | undefined

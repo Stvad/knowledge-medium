@@ -1,7 +1,7 @@
 import { Block } from './block'
 import type { SurfaceCarrier } from './outlineSurface'
 import { isCollapsedProp } from './properties.js'
-import { displayScopeOf } from './propertyDisplayMode'
+import { listingSurfaceOf } from './childrenView'
 import { visibleChildIds } from './visibleChildren'
 
 /**
@@ -113,9 +113,7 @@ export const structuralEditPolicyForBlock = async (
   carrier: SurfaceCarrier,
 ): Promise<StructuralEditPolicy> => {
   const data = block.peek() ?? await block.load()
-  const childIds = await visibleChildIds(block, {
-    propertyDisplay: displayScopeOf(carrier), renderScopeId: carrier.renderScopeId, scopeRootId: carrier.scopeRootId,
-  })
+  const childIds = await visibleChildIds(block, listingSurfaceOf(carrier))
   const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
   return resolveStructuralEditPolicy({
     blockId: block.id,

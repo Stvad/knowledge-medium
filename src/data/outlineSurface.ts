@@ -1,5 +1,4 @@
-import type { ListingSurface } from '@/data/childrenView'
-import { displayScopeOf } from '@/data/propertyDisplayMode'
+import { listingSurfaceOf, type ListingSurface } from '@/data/childrenView'
 
 /**
  * The surface a gesture ran in, as the outline walkers need it: where the
@@ -27,9 +26,8 @@ export type SurfaceCarrier = Partial<OutlineSurface>
 export const outlineSurfaceOf = (carrier: SurfaceCarrier): OutlineSurface | null =>
   carrier.scopeRootId
     ? {
+      ...listingSurfaceOf(carrier),
       scopeRootId: carrier.scopeRootId,
       scopeRootForcesOpen: carrier.scopeRootForcesOpen ?? true,
-      propertyDisplay: displayScopeOf(carrier),
-      renderScopeId: carrier.renderScopeId,
     }
     : null

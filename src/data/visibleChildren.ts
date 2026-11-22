@@ -24,15 +24,16 @@ export const visibleChildIds = async (
   surface: ListingSurface,
 ): Promise<string[]> => {
   const data = parent.peek() ?? await parent.load()
-  if (!data) return []
+  // A parent with no live row has no block setting and no type to answer for.
+  if (!data) return parent.repo.query.childIds({id: parent.id, propertyChildren: childrenViewIn(surface.propertyDisplay, null)}).load()
   const ctx = {parent, data, surface}
   return childrenViewFor(ctx).read(ctx).load()
 }
 
 /** The property-display view of {@link visibleChildIds} inside a transaction.
- *  A plugin's view is not consulted here: a transaction cannot read a query
- *  handle, so a gesture that walks a plugin's view resolves its anchors
- *  before the transaction. */
+ *  A plugin's view is not consulted here (a transaction cannot read a query
+ *  handle), so a gesture on a block a plugin's view lists differently is that
+ *  plugin's to handle (`childrenViewFacet`). */
 export const visibleChildrenOf = async (
   tx: Tx,
   parentId: string | null,
