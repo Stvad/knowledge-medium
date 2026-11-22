@@ -1,0 +1,1 @@
+export{Xw as videoPlayerMarkdownExtension}from"../../../chunks/app-dBKQiDIh.js";

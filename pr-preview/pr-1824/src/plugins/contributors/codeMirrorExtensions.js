@@ -1,0 +1,1 @@
+export{mg as contributorsCodeMirrorExtensions}from"../../../chunks/app-dBKQiDIh.js";

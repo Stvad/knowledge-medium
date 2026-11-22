@@ -1,0 +1,1 @@
+export{os as propertyRowsPlugin}from"../../../chunks/app-dBKQiDIh.js";

@@ -1,0 +1,1 @@
+export{Np as quotedInFooterContribution}from"../../../chunks/app-dBKQiDIh.js";

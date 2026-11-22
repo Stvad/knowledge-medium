@@ -1,0 +1,1 @@
+export{jp as annotationsPlugin}from"../../../chunks/app-dBKQiDIh.js";

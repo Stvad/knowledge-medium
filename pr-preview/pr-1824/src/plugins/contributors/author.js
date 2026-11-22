@@ -1,0 +1,1 @@
+export{tv as authorIdOf}from"../../../chunks/app-dBKQiDIh.js";

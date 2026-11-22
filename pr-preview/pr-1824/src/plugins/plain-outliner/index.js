@@ -1,0 +1,1 @@
+export{LD as plainOutlinerPlugin}from"../../../chunks/app-dBKQiDIh.js";

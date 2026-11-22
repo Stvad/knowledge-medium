@@ -1,0 +1,1 @@
+export{vI as appUpdatePromptExtension}from"../../../chunks/app-dBKQiDIh.js";

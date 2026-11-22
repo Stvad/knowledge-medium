@@ -1,0 +1,1 @@
+export{qS as richPastePlugin}from"../../../chunks/app-dBKQiDIh.js";
