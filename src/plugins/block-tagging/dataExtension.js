@@ -1,1 +1,1 @@
-export{Xf as blockTaggingDataExtension}from"../../../chunks/app-CwFJT_ra.js";
+export{Xf as blockTaggingDataExtension}from"../../../chunks/app-Vxiyk-Gc.js";

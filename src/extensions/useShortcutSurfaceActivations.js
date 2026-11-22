@@ -1,1 +1,1 @@
-export{FV as useShortcutSurfaceActivations}from"../../chunks/app-CwFJT_ra.js";
+export{FV as useShortcutSurfaceActivations}from"../../chunks/app-Vxiyk-Gc.js";

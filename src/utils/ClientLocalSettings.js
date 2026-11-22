@@ -1,1 +1,1 @@
-export{GL as ClientLocalSettings,KL as clientLocalSettings}from"../../chunks/app-CwFJT_ra.js";
+export{GL as ClientLocalSettings,KL as clientLocalSettings}from"../../chunks/app-Vxiyk-Gc.js";

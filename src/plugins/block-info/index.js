@@ -1,1 +1,1 @@
-export{ox as blockInfoPlugin}from"../../../chunks/app-CwFJT_ra.js";
+export{ox as blockInfoPlugin}from"../../../chunks/app-Vxiyk-Gc.js";

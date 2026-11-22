@@ -1,1 +1,1 @@
-export{Cm as annotationsPlugin}from"../../../chunks/app-CwFJT_ra.js";
+export{Cm as annotationsPlugin}from"../../../chunks/app-Vxiyk-Gc.js";

@@ -1,1 +1,1 @@
-export{OR as BlockChildren,kR as BlockComponent}from"../../chunks/app-CwFJT_ra.js";
+export{OR as BlockChildren,kR as BlockComponent}from"../../chunks/app-Vxiyk-Gc.js";

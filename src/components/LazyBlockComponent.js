@@ -1,1 +1,1 @@
-export{AR as LazyBlockComponent}from"../../chunks/app-CwFJT_ra.js";
+export{AR as LazyBlockComponent}from"../../chunks/app-Vxiyk-Gc.js";

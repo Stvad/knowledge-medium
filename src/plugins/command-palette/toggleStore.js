@@ -1,1 +1,1 @@
-export{XP as commandPaletteToggle}from"../../../chunks/app-CwFJT_ra.js";
+export{XP as commandPaletteToggle}from"../../../chunks/app-Vxiyk-Gc.js";

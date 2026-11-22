@@ -1,1 +1,1 @@
-export{_$ as dailyNotesDataExtension}from"../../../chunks/app-CwFJT_ra.js";
+export{_$ as dailyNotesDataExtension}from"../../../chunks/app-Vxiyk-Gc.js";

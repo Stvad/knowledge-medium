@@ -1,1 +1,1 @@
-export{LI as BlockPasteShellDecorator,RI as blockPasteShellDecorator}from"../../chunks/app-CwFJT_ra.js";
+export{LI as BlockPasteShellDecorator,RI as blockPasteShellDecorator}from"../../chunks/app-Vxiyk-Gc.js";

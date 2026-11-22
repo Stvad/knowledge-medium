@@ -1,1 +1,1 @@
-export{UC as attachmentsPlugin}from"../../../chunks/app-CwFJT_ra.js";
+export{UC as attachmentsPlugin}from"../../../chunks/app-Vxiyk-Gc.js";

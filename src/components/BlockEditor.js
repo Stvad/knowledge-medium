@@ -1,1 +1,1 @@
-export{OV as BlockEditor}from"../../chunks/app-CwFJT_ra.js";
+export{OV as BlockEditor}from"../../chunks/app-Vxiyk-Gc.js";

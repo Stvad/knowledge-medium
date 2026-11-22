@@ -1,1 +1,1 @@
-export{Vz as BlockTypeBlockRenderer,Hz as BlockTypeContentRenderer,Uz as writeBlockTypeLabel}from"../../../chunks/app-CwFJT_ra.js";
+export{Vz as BlockTypeBlockRenderer,Hz as BlockTypeContentRenderer,Uz as writeBlockTypeLabel}from"../../../chunks/app-Vxiyk-Gc.js";

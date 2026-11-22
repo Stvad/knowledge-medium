@@ -1,1 +1,1 @@
-export{GO as LeftSidebarHeaderItem}from"../../../chunks/app-CwFJT_ra.js";
+export{GO as LeftSidebarHeaderItem}from"../../../chunks/app-Vxiyk-Gc.js";
