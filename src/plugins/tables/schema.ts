@@ -60,7 +60,7 @@ export const TABLE_TYPE_SEEDS = [
   }),
   seedType({
     seedKey: 'system:tables/type/column',
-    revision: 2,
+    revision: 1,
     id: COLUMN_TYPE,
     label: 'Table column',
     description: 'A table column. Its field is the property it shows; with no field it shows the row’s own text.',

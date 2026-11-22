@@ -2,6 +2,7 @@
  *  declaration of a type, in one transaction, so each is one undo step; none
  *  touches a row or its values. */
 import { ChangeScope, propertyValue, type BlockData, type Tx } from '@/data/api'
+import { loadTypeIdsByBlock } from '@/data/blockTypeLookup'
 import { BLOCK_TYPE_TYPE, PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import { blockTypeLabelProp, blockTypePropertiesProp, hasBlockType } from '@/data/properties'
@@ -9,7 +10,9 @@ import { adoptOrCreatePropertySchema, type PropertySchemaChoice } from '@/data/p
 import type { Repo } from '@/data/repo'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { createTypedChild } from '@/data/typedRecords'
-import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi'
+import { showInfo } from '@/utils/toast'
+import { deleteBlock } from '@/data/mutators'
+import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
 import { COLUMN_TYPE, TABLE_TYPE, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp } from './schema'
 
 const options = (description: string) => ({scope: ChangeScope.BlockDefault, description})
@@ -36,17 +39,35 @@ export const moveColumn = async (
   })
 }
 
+/** Back to the automatic width. */
+export const clearColumnWidth = (repo: Repo, columnId: string): Promise<void> =>
+  repo.tx(tx => tx.unsetProperty(columnId, columnWidthProp), options('reset table column width'))
+
 /** A hidden column keeps its block, place and width. Showing it unsets the
  *  flag rather than storing `false`. */
 export const setColumnHidden = (repo: Repo, columnId: string, hidden: boolean): Promise<void> =>
   repo.tx(tx => hidden ? tx.setProperty(columnId, columnHiddenProp, true) : tx.unsetProperty(columnId, columnHiddenProp),
     options(hidden ? 'hide table column' : 'show table column'))
 
-/** Deletes the column block only: the rows' values stay where they are. */
-export const deleteColumn = (repo: Repo, columnId: string): Promise<boolean> => deleteBlockThroughUi(repo.block(columnId))
+export type ColumnDeletion = 'deleted' | 'refused' | 'nested'
+
+/** Deletes the column block and its own property rows; the rows' values stay
+ *  where they are. A column with anything else under it is refused, decided in
+ *  the deleting transaction: the grid never draws what is nested under a
+ *  column, so deleting it from the header would remove blocks the user cannot
+ *  see. The outline, which draws them, still deletes it. */
+export const deleteColumn = async (repo: Repo, columnId: string): Promise<ColumnDeletion> => {
+  if (!await ensureDeletableThroughUi([repo.block(columnId)])) return 'refused'
+  return repo.tx(async tx => {
+    if ((await tx.childrenOf(columnId, undefined, {propertyChildren: 'none'})).length > 0) return 'nested'
+    // The deletion guards ran above; the nested check needs this transaction.
+    await tx.run(deleteBlock, {id: columnId})
+    return 'deleted'
+  }, options('delete table column'))
+}
 
 /** A new column showing `fieldId` (null for the row's own text), last in the view. */
-export const addColumnInTx = (repo: Repo, tx: Tx, viewId: string, fieldId: string | null): Promise<string> =>
+const addColumnInTx = (repo: Repo, tx: Tx, viewId: string, fieldId: string | null): Promise<string> =>
   createTypedChild(repo, tx, {
     parentId: viewId, types: [COLUMN_TYPE], position: {kind: 'last'},
     properties: fieldId === null ? [] : [propertyValue(columnFieldProp, fieldId)],
@@ -61,7 +82,12 @@ export const addColumnForChoice = async (repo: Repo, viewId: string, choice: Pro
   const result = await adoptOrCreatePropertySchema(repo, choice, (tx, fieldId) => addColumnInTx(repo, tx, viewId, fieldId).then(() => {}))
   if (result.kind === 'created') return
   const fieldId = repo.userSchemas.getSchemaBlockId(result.schema.name)
-  if (fieldId) await addColumn(repo, viewId, fieldId)
+  // A column's field is a definition block, which a code-only property lacks.
+  if (!fieldId) {
+    showInfo(`“${result.schema.name}” has no definition block, so it cannot be a column.`)
+    return
+  }
+  await addColumn(repo, viewId, fieldId)
 }
 
 /** A type a user can declare properties on: a block-type block of their own.
@@ -87,9 +113,6 @@ export interface TypeTarget {
   readonly label: string
 }
 
-/** The query takes at most this many ids per call. */
-const TYPE_LOOKUP_CHUNK = 200
-
 /** The table's own machinery is never a row's type in the sense meant here. */
 const TABLE_TYPES = new Set([TABLE_TYPE, VIEW_TYPE, COLUMN_TYPE])
 
@@ -101,20 +124,9 @@ export const typeTargetsFor = async (
   repo: Repo, workspaceId: string, rowIds: readonly string[], fieldId: string,
 ): Promise<TypeTarget[]> => {
   if (rowIds.length === 0) return []
-  const chunks: string[][] = []
-  for (let start = 0; start < rowIds.length; start += TYPE_LOOKUP_CHUNK) {
-    chunks.push(rowIds.slice(start, start + TYPE_LOOKUP_CHUNK))
-  }
-  const assignments = (await Promise.all(chunks.map(blockIds =>
-    repo.query.blockTypesByIds({workspaceId, blockIds}).load()))).flat()
-  const typesByRow = new Map<string, Set<string>>()
-  for (const {blockId, type} of assignments) {
-    let types = typesByRow.get(blockId)
-    if (!types) typesByRow.set(blockId, types = new Set())
-    types.add(type)
-  }
-  const shared = [...typesByRow.get(rowIds[0]!) ?? []]
-    .filter(type => !TABLE_TYPES.has(type) && rowIds.every(id => typesByRow.get(id)?.has(type)))
+  const typesByRow = await loadTypeIdsByBlock(repo, workspaceId, rowIds)
+  const shared = (typesByRow.get(rowIds[0]!) ?? [])
+    .filter(type => !TABLE_TYPES.has(type) && rowIds.every(id => typesByRow.get(id)?.includes(type)))
   const targets: TypeTarget[] = []
   for (const typeId of shared) {
     const typeBlockId = repo.userTypes.getTypeBlockId(typeId)

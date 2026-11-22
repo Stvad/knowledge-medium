@@ -20,6 +20,8 @@ export type GridCommand =
 
 /** What the controller needs of a column. */
 export interface GridColumn {
+  /** The column block. */
+  readonly id: string
   /** The property definition, or null for the row's own text. */
   readonly fieldId: string | null
   readonly editable: boolean
@@ -33,7 +35,9 @@ const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.
 
 export class GridController {
   private rowIds: readonly string[] = []
-  private rowCount = 0
+  /** Undefined until the row query first answers: nothing is inserted against
+   *  a table whose rows (and so its first row and its count) are unknown. */
+  private rowCount: number | undefined
   private rowIndex = new Map<string, number>()
   private columns: readonly GridColumn[] = []
   private column = 0
@@ -70,16 +74,27 @@ export class GridController {
     this.rowIndex = new Map(rowIds.map((id, index) => [id, index]))
   }
 
-  /** Refuses, with a notice, a row the table would not draw. */
+  /** Refuses, with a notice, a row the table would not draw, and any row
+   *  before the rows have loaded. */
   private refuseRowPastCap(): boolean {
+    if (this.rowCount === undefined) return true
     if (canAddRow(this.rowCount)) return false
     showInfo(`This table shows at most ${ROW_CAP} rows. Add more in the outline.`)
     return true
   }
 
+  /** The cursor stays on its column, not its position, when columns are
+   *  reordered, hidden or deleted. */
   setColumns(columns: readonly GridColumn[]) {
+    const cursorId = this.columns[this.column]?.id
     this.columns = columns
-    if (this.column >= columns.length) this.setColumn(columns.length - 1)
+    const kept = cursorId === undefined ? -1 : columns.findIndex(column => column.id === cursorId)
+    if (kept >= 0 && kept !== this.column) {
+      this.column = kept
+      this.columnListeners.notify()
+    } else if (this.column >= columns.length) {
+      this.setColumn(columns.length - 1)
+    }
   }
 
   /** The row index of a row block, or of the row a cell's value belongs to. */
@@ -360,14 +375,8 @@ export class GridController {
   /** A new first row, editing its text: what the outline's "create below" makes
    *  on a block that shows its children. Placed above the first row rather than
    *  as the host's first child, so the view block stays first. */
-  async insertFirstRow(): Promise<void> {
-    const repo = this.host.repo
-    if (repo.isReadOnly || this.refuseRowPastCap()) return
-    const first = this.rowIds[0]
-    const id = first
-      ? await repo.mutate.createSiblingAbove({siblingId: first})
-      : await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
-    if (id) await this.editNewRow(id)
+  insertFirstRow(): Promise<void> {
+    return this.rowIds.length > 0 ? this.insertRow(0, 'above') : this.appendRow()
   }
 
   /** A new last row, editing its text. */

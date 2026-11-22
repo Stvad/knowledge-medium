@@ -4,7 +4,7 @@
  *  select) takes the same three keys in its cell's own keydown, see
  *  `controlKeyCommand`. */
 import { Block } from '@/data/block'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { structuralEditPolicyForBlock, type StructuralEditPolicy } from '@/data/structuralEditPolicy'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import {
@@ -13,6 +13,7 @@ import {
   type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
+import { showInfo } from '@/utils/toast'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
 import { gridDrawing, gridOfHost } from './registry'
@@ -169,27 +170,50 @@ const atEdge = (edge: 'top' | 'bottom' | 'start' | 'end') => (deps: BaseShortcut
   }
 }
 
-/** On a table host, the outline's "create below" (and "create above" at a scope
- *  root) makes a first child, which is the grid's first row, and focuses it in
- *  the host's own scope, where the grid does not draw it: no editor appears.
- *  The grid makes that row instead, focused where it draws it. Where the
- *  outline would make a sibling of the host, it still does. */
-const hostInsert = (
-  context: ActionContextType, actionId: string, placement: 'createBelowPlacement' | 'createAbovePlacement',
-  applies: (deps: BaseShortcutDependencies) => boolean = () => true,
+/** What a verb on a table host does instead of the outline's. */
+type HostVerb = 'grid-row' | 'refuse' | 'outline'
+
+/** On a table host, the outline's "create below" (and "create above" at a
+ *  scope root) makes a first child, which is the grid's first row, and
+ *  focuses it in the host's own scope, where the grid does not draw it: no
+ *  editor appears. The grid makes that row instead, focused where it draws it.
+ *  Where the outline would make a sibling of the host, or refuses the verb
+ *  itself, the outline's handler runs. `decide` mirrors the verb's own tests.
+ *  Accepted: a host whose grid is not mounted (collapsed, drawn as an embed's
+ *  or a backlink's root) falls through to the outline, which expands it. */
+const onTableHost = (
+  context: ActionContextType, actionId: string,
+  decide: (deps: BlockShortcutDependencies, policy: StructuralEditPolicy) => HostVerb,
 ): ActionDispatchDecorator => ({
   actionId,
   context,
   wrap: async (deps, trigger, next) => {
-    const {block, renderScopeId} = deps as BlockShortcutDependencies
-    const grid = block ? gridOfHost(renderScopeId ?? '', block.id) : undefined
-    if (!grid || !applies(deps) || (await structuralEditPolicyForBlock(block, deps))[placement] !== 'child-first') {
-      await next(deps, trigger)
-      return
-    }
-    await grid.insertFirstRow()
+    const blockDeps = deps as BlockShortcutDependencies
+    const {block, renderScopeId, scopeRootId} = blockDeps
+    // No scope root: an imperative dispatch, which the verbs themselves ignore.
+    const grid = block && scopeRootId ? gridOfHost(renderScopeId ?? '', block.id) : undefined
+    const verb = grid ? decide(blockDeps, await structuralEditPolicyForBlock(block, blockDeps)) : 'outline'
+    if (verb === 'grid-row') await grid!.insertFirstRow()
+    else if (verb === 'refuse') showInfo('Enter at the end of a table’s title adds a row; its title does not split.')
+    else await next(deps, trigger)
   },
 })
+
+const createsFirstChild = (placement: 'createBelowPlacement' | 'createAbovePlacement') =>
+  (_deps: BlockShortcutDependencies, policy: StructuralEditPolicy): HostVerb =>
+    policy[placement] === 'child-first' ? 'grid-row' : 'outline'
+
+/** Enter in the host's text, by `split_block_cm`'s own cases. At the end it
+ *  makes a first child when the policy says so. Mid-text at a scope root it
+ *  would split the text's tail into a first child: a row focused where it is
+ *  not drawn, so it is refused there. */
+const hostEnter = (deps: BlockShortcutDependencies, policy: StructuralEditPolicy): HostVerb => {
+  const {editorView, disableBlockSplit} = deps as CodeMirrorEditModeDependencies
+  if (!editorView || disableBlockSplit) return 'outline'
+  const atEnd = editorView.state.selection.main.head === editorView.state.doc.length
+  if (atEnd) return policy.createBelowPlacement === 'child-first' ? 'grid-row' : 'outline'
+  return policy.isScopeRoot ? 'refuse' : 'outline'
+}
 
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
@@ -208,8 +232,7 @@ export const tableOutlineVerbRedirects = [
   redirect(EDITING, 'move_down_from_cm_end', 'down', atEdge('bottom')),
   redirect(EDITING, 'move_left_from_cm_start', 'previous', atEdge('start')),
   redirect(EDITING, 'move_right_from_cm_end', 'next', atEdge('end')),
-  hostInsert(NORMAL, 'create_block_below_and_edit', 'createBelowPlacement'),
-  hostInsert(NORMAL, 'create_block_above_and_edit', 'createAbovePlacement'),
-  // Enter at the end of the host's text; mid-text it splits the host.
-  hostInsert(EDITING, 'split_block_cm', 'createBelowPlacement', atEdge('end')),
+  onTableHost(NORMAL, 'create_block_below_and_edit', createsFirstChild('createBelowPlacement')),
+  onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
+  onTableHost(EDITING, 'split_block_cm', hostEnter),
 ].map(decorator => actionDispatchWrap(decorator, {source: 'tables', precedence: 100}))

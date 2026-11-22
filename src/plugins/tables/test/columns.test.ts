@@ -116,13 +116,21 @@ describe('column gestures', () => {
   it('delete removes the column block only, and the rows keep their values', async () => {
     const {repo, viewId, titleId, authorId} = await setup()
     const before = await rowsSnapshot()
-    await deleteColumn(repo, authorId)
+    expect(await deleteColumn(repo, authorId)).toBe('deleted')
     expect((await childrenOf(viewId)).map(column => column.id)).toEqual([titleId])
     expect(await rowsSnapshot()).toEqual(before)
     expect((await propertiesOf('emma'))[author.name]).toBe('Austen')
 
     await repo.undo()
     expect((await childrenOf(viewId)).map(column => column.id)).toEqual([titleId, authorId])
+  })
+
+  it('delete refuses a column with blocks nested under it, writing nothing', async () => {
+    const {repo, viewId, titleId, authorId} = await setup()
+    await repo.tx(tx => tx.create({id: 'note', workspaceId, parentId: authorId, orderKey: 'z0', content: 'a note'}), options)
+    expect(await deleteColumn(repo, authorId)).toBe('nested')
+    expect((await childrenOf(viewId)).map(column => column.id)).toEqual([titleId, authorId])
+    expect((await childrenOf(authorId)).map(child => child.id)).toEqual(['note'])
   })
 
   it('add creates a last column showing the property', async () => {

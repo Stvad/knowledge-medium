@@ -37,7 +37,14 @@ interface TableState {
   editable: readonly boolean[]
   /** The first column that shows the row's own text, -1 for none. */
   contentColumn: number
-  template: CSSProperties
+}
+
+/** Set on the grid's root from the columns' widths; header and rows read them. */
+const TRACKS_VARIABLE = '--tables-tracks'
+const MIN_WIDTH_VARIABLE = '--tables-min-width'
+const GRID_TEMPLATE: CSSProperties = {
+  gridTemplateColumns: `var(${TRACKS_VARIABLE})`,
+  minWidth: `var(${MIN_WIDTH_VARIABLE})`,
 }
 
 const TableContext = createContext<TableState | null>(null)
@@ -182,7 +189,7 @@ const ValueCellBody = ({row, column, schema, editable}: {
 }
 
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
-  const {columns, schemas, editable, contentColumn, template} = useContext(TableContext)!
+  const {columns, schemas, editable, contentColumn} = useContext(TableContext)!
   return (
     <BlockFrame
       block={block} Header={Header} Shell={Shell} Controls={NoControls}
@@ -191,10 +198,10 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
     >
       {/* `.block-body` clips horizontal overflow: it must be as wide as the
           grid, so the overflow reaches the table's scroller. */}
-      <div className="block-body grow" style={{minWidth: template.minWidth}}>
+      <div className="block-body grow" style={{minWidth: GRID_TEMPLATE.minWidth}}>
         {/* The border is on the grid, not the frame: the frame is only as wide
             as the scroller, so a border there stops short once it scrolls. */}
-        <div className="grid border-b border-border" style={template}>
+        <div className="grid border-b border-border" style={GRID_TEMPLATE}>
           {columns.map((column, index) => (
             <Cell key={column.id} row={block} index={index} sticky={index === 0} isContent={index === contentColumn}>
               {column.fieldId === null
@@ -280,18 +287,19 @@ const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns:
     : resolveFieldDefinition(repo, definitions, workspaceId, column.fieldId)), [columns, definitions, repo, workspaceId])
   const names = useMemo(() => columns.map((column, index) => column.label ||
     (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
-  return {definitionsOf, names}
+  const schemas = useMemo(() => definitionsOf.map(definition => definition?.schema), [definitionsOf])
+  return {schemas, names}
 }
 
-type ColumnDefinition = ReturnType<typeof useColumnDefinitions>['definitionsOf'][number]
+type ColumnSchema = AnyPropertySchema | undefined
 
 /** Hidden columns are drawn nowhere but in the toolbar, which shows them again. */
 const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
   const viewId = props.viewIds[0]!
   const all = useColumns(props.host, props.workspaceId, viewId)
-  const {definitionsOf, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
+  const {schemas, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
   const split = useMemo(() => {
-    const shown = {columns: [] as TableColumn[], definitionsOf: [] as ColumnDefinition[], names: [] as string[]}
+    const shown = {columns: [] as TableColumn[], schemas: [] as ColumnSchema[], names: [] as string[]}
     const hidden = {columns: [] as TableColumn[], names: [] as string[]}
     ;(all ?? NO_COLUMNS).forEach((column, index) => {
       if (column.hidden) {
@@ -299,29 +307,29 @@ const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
         hidden.names.push(names[index]!)
       } else {
         shown.columns.push(column)
-        shown.definitionsOf.push(definitionsOf[index])
+        shown.schemas.push(schemas[index])
         shown.names.push(names[index]!)
       }
     })
     return {shown, hidden}
-  }, [all, definitionsOf, names])
+  }, [all, schemas, names])
   if (all === undefined) return null
   const toolbar = props.host.repo.isReadOnly ? null : <ColumnToolbar host={props.host} viewId={viewId}
     hidden={split.hidden.columns} hiddenNames={split.hidden.names}
     hasContentColumn={all.some(column => column.fieldId === null)}/>
   if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>
-  return <TableBody {...props} columns={split.shown.columns} definitionsOf={split.shown.definitionsOf}
+  return <TableBody {...props} columns={split.shown.columns} schemas={split.shown.schemas}
     names={split.shown.names} toolbar={toolbar}/>
 }
 
 const NoColumns = () => <p className="py-1 text-sm text-muted-foreground">This table shows no columns.</p>
 
 const TableBody = ({
-  host, renderScopeId, parentRenderScopeId, workspaceId, viewIds, columns, definitionsOf, names, toolbar,
+  host, renderScopeId, parentRenderScopeId, workspaceId, viewIds, columns, schemas, names, toolbar,
 }: GridProps & {
   viewIds: readonly string[]
   columns: readonly TableColumn[]
-  definitionsOf: readonly ColumnDefinition[]
+  schemas: readonly ColumnSchema[]
   names: readonly string[]
   toolbar: ReactNode
 }) => {
@@ -332,17 +340,17 @@ const TableBody = ({
   const {childBacked} = useContext(PropertyDisplayScopeContext)
   const rowIds = useRowIds(host, workspaceId, viewIds)
   const shown = useMemo(() => rowIds?.slice(0, ROW_CAP) ?? [], [rowIds])
-  const schemas = useMemo(() => definitionsOf.map(definition => definition?.schema), [definitionsOf])
   const editable = useMemo(() => columns.map((column, index) => !repo.isReadOnly &&
     (column.fieldId === null || (childBacked && isPropertyValueEditable(schemas[index])))),
   [childBacked, columns, repo.isReadOnly, schemas])
   const gridColumns = useMemo<GridColumn[]>(() => columns.map((column, index) => ({
+    id: column.id,
     fieldId: column.fieldId,
     editable: editable[index]!,
     list: schemas[index] !== undefined && memberCodecOf(schemas[index]!.codec) !== undefined,
   })), [columns, editable, schemas])
 
-  useLayoutEffect(() => { controller.setRows(shown, rowIds?.length ?? 0) }, [controller, rowIds, shown])
+  useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
@@ -351,44 +359,46 @@ const TableBody = ({
   // stays until the stored width arrives, so the column never jumps back to
   // its old width for the length of the write.
   const [resizing, setResizing] = useState<ResizePreview | null>(null)
-  if (resizing?.committed && columns.find(column => column.id === resizing.columnId)?.width === resizing.width) {
+  if (resizing && columns.find(column => column.id === resizing.columnId)?.width === resizing.width) {
     setResizing(null)
   }
   const laidOut = useMemo(() => resizing === null ? columns
     : columns.map(column => column.id === resizing.columnId ? {...column, width: resizing.width} : column),
   [columns, resizing])
-  const template = useMemo<CSSProperties>(() => ({
-    gridTemplateColumns: laidOut.map(columnTrack).join(' '),
-    minWidth: `${minWidth(laidOut)}px`,
-  }), [laidOut])
-  // The header and the rows scroll together, either way round: the header
-  // holds focusable controls, and focusing one scrolls the header on its own.
+  // The tracks reach the rows as CSS variables, so a resize restyles the root
+  // and re-renders no row.
+  const tracks = useMemo(() => ({
+    [TRACKS_VARIABLE]: laidOut.map(columnTrack).join(' '),
+    [MIN_WIDTH_VARIABLE]: `${minWidth(laidOut)}px`,
+  }) as CSSProperties, [laidOut])
+  // The rows' scroller drives the header. The header also scrolls on its own
+  // when a control in it takes focus; that one scroll is copied back.
   const header = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const syncHeader = (event: React.UIEvent<HTMLDivElement>) => {
     if (header.current) header.current.scrollLeft = event.currentTarget.scrollLeft
   }
-  const syncRows = (event: React.UIEvent<HTMLDivElement>) => {
-    if (scroller.current) scroller.current.scrollLeft = event.currentTarget.scrollLeft
-  }
+  const headerFocused = () => requestAnimationFrame(() => {
+    if (header.current && scroller.current) scroller.current.scrollLeft = header.current.scrollLeft
+  })
   const rootRef = useCallback((element: HTMLDivElement | null) => { controller.setRoot(element) }, [controller])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
-  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, template}),
-    [controller, columns, schemas, editable, contentColumn, template])
+  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn}),
+    [controller, columns, schemas, editable, contentColumn])
   const rowsOverrides = useMemo(() => ({
     isNestedSurface: true, layoutBoundary: false, renderScopeId,
     [GRID_CONTEXT_KEY]: controller,
   }), [controller, renderScopeId])
 
   return (
-    <div ref={rootRef} data-table-grid={gridId} className="my-1 text-sm">
+    <div ref={rootRef} data-table-grid={gridId} className="my-1 text-sm" style={tracks}>
       <CursorStyle gridId={gridId} controller={controller}/>
       <RowKeys controller={controller} rows={rowSet} renderScopeId={renderScopeId}/>
       {!childBacked && <p className="py-1 text-xs text-muted-foreground">
         Read-only: this workspace stores properties in the block, not as rows.
       </p>}
-      <ColumnHeaders host={host} workspaceId={workspaceId} columns={columns} names={names} template={template}
-        scrollRef={header} onScroll={syncRows} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}/>
+      <ColumnHeaders host={host} workspaceId={workspaceId} columns={columns} names={names} template={GRID_TEMPLATE}
+        scrollRef={header} onFocus={headerFocused} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}/>
       {/* The gesture marker sits on the scroller: horizontal touch panning
           needs the marked element to be the one that scrolls. */}
       <div ref={scroller} data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
