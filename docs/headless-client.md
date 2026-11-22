@@ -139,7 +139,7 @@ The read scope of the bridge token is the member account's local replica. The co
 **Workspace key.** Read once at start, before the host connects, from exactly one source the config names, and handed to the unlock flow, which zeroes its parsed copy; the string read is left to the garbage collector. **[read]** A key that cannot be read fails the boot before anything syncs.
 
 - `keyFile`: a file, resolved relative to the config, which must have mode 0600.
-- `keyCommand`: an argv array run without a shell, such as `["security", "find-generic-password", "-s", "km-headless", "-a", "<workspace-id>", "-w"]` for the macOS login keychain, or `op read` or `pass show` for those stores. Its trimmed stdout is the key. A nonzero exit, a signal, a run past 15 seconds, or empty output fails the boot; the message names the program (`argv[0]`) and how it ended, never its stdout or stderr. A bare program name resolves against the launching `PATH`, which under launchd is only the system directories, so give a store installed elsewhere by absolute path.
+- `keyCommand`: an argv array run without a shell, such as `["security", "find-generic-password", "-s", "knowledge-medium-headless", "-a", "<workspace-id>", "-w"]` for the macOS login keychain, or `op read` or `pass show` for those stores. Its trimmed stdout is the key. A nonzero exit, a signal, a run past 15 seconds, or empty output fails the boot; the message names the program (`argv[0]`) and how it ended, never its stdout or stderr. A bare program name resolves against the launching `PATH`, which under launchd is only the system directories, so give a store installed elsewhere by absolute path.
 
 A key command keeps the key out of a plaintext file at rest: off backups, file-sync folders and anything that sweeps the home directory. It does not keep it from the agents: any process running as the same OS user can run the same command. Only running the daemon as its own OS user does that, as the verb list below says.
 
@@ -226,11 +226,11 @@ Use a scratch graph and a dedicated member account. In the deployed browser app,
 From this checkout, use Node 26 and run `node scripts/ensure-deps.mjs`. Set `config` to the desired absolute path for a new config file. Copy the [example config](../scripts/headless/config.example.json) outside the checkout and set `workspaceId` to the scratch workspace ID. Paths in the config resolve relative to that file. For an encrypted run, either place the exported scratch key in the configured mode-0600 file, or on macOS store it in the login keychain and replace `keyFile` with `keyCommand`. Given `-w` with no value, `security` prompts for the password, so the key stays off the command line and out of shell history:
 
 ```sh
-security add-generic-password -s km-headless -a '<workspace-id>' -w
+security add-generic-password -s knowledge-medium-headless -a '<workspace-id>' -w
 ```
 
 ```json
-"keyCommand": ["security", "find-generic-password", "-s", "km-headless", "-a", "<workspace-id>", "-w"]
+"keyCommand": ["security", "find-generic-password", "-s", "knowledge-medium-headless", "-a", "<workspace-id>", "-w"]
 ```
 
 ```sh
