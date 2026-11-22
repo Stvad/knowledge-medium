@@ -1,0 +1,1 @@
+export{G9 as kernelDataExtension}from"../../chunks/app-DWgHJORi.js";

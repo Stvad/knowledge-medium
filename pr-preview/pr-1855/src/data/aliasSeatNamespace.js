@@ -1,0 +1,1 @@
+export{$ut as aliasSeatNamespacesInTx,edt as resolveAliasSeatNamespaces}from"../../chunks/app-DWgHJORi.js";

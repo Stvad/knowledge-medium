@@ -1,0 +1,1 @@
+export{gL as editorAutocompleteExtension}from"../../chunks/app-DWgHJORi.js";

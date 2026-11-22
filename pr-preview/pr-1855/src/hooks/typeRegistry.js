@@ -1,0 +1,1 @@
+export{VK as useTypes}from"../../chunks/app-DWgHJORi.js";

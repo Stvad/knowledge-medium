@@ -1,0 +1,1 @@
+export{G3 as defineVerbFacet}from"../../chunks/app-DWgHJORi.js";

@@ -1,0 +1,1 @@
+export{py as authorIdOf}from"../../../chunks/app-DWgHJORi.js";

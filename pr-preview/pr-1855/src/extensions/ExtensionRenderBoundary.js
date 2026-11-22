@@ -1,0 +1,1 @@
+export{ZH as ExtensionRenderBoundary}from"../../chunks/app-DWgHJORi.js";

@@ -1,0 +1,1 @@
+export{Ox as updateIndicatorPlugin}from"../../../chunks/app-DWgHJORi.js";

@@ -1,0 +1,1 @@
+export{Ej as BlockLink}from"../../../chunks/app-DWgHJORi.js";

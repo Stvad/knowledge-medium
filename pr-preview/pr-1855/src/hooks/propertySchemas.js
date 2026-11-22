@@ -1,0 +1,1 @@
+export{JJ as usePropertySchemas}from"../../chunks/app-DWgHJORi.js";

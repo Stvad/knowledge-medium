@@ -1,0 +1,1 @@
+export{gp as blockTaggingDataExtension}from"../../../chunks/app-DWgHJORi.js";

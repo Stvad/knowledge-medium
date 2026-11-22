@@ -1,0 +1,1 @@
+export{XO as plainOutlinerPlugin}from"../../../chunks/app-DWgHJORi.js";

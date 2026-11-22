@@ -1,0 +1,1 @@
+export{GO as PromotableBreadcrumbList}from"../../../chunks/app-DWgHJORi.js";

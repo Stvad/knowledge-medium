@@ -1,0 +1,1 @@
+export{Zc as propertiesMigrationPlugin}from"../../../chunks/app-DWgHJORi.js";

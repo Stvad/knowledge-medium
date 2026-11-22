@@ -1,0 +1,1 @@
+export{Vk as CreateWorkspaceDialog}from"../../../chunks/app-DWgHJORi.js";

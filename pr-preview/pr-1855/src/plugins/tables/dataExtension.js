@@ -1,0 +1,1 @@
+export{JX as tablesDataExtension}from"../../../chunks/app-DWgHJORi.js";

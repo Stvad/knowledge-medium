@@ -1,0 +1,1 @@
+export{NL as appUpdatePromptExtension}from"../../../chunks/app-DWgHJORi.js";

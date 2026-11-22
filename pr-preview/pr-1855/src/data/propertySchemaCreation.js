@@ -1,0 +1,1 @@
+export{$J as adoptOrCreatePropertySchema}from"../../chunks/app-DWgHJORi.js";

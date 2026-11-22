@@ -1,0 +1,1 @@
+export{K3 as agentRuntimeDataExtension}from"../../../chunks/app-DWgHJORi.js";

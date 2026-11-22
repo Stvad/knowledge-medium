@@ -1,0 +1,1 @@
+export{FY as SuspenseFallback}from"../../../chunks/app-DWgHJORi.js";
