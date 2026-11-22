@@ -1,1 +1,0 @@
-export{Fdt as deriveWorkspaceIdNamespace}from"../../../chunks/app-C6Jw2KqI.js";

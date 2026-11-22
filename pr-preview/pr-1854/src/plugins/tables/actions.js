@@ -1,1 +1,0 @@
-export{sc as tableConversionActions}from"../../../chunks/app-C6Jw2KqI.js";
