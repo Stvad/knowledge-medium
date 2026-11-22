@@ -77,7 +77,9 @@ export interface QueryTrigger {
   /** What is typed of the name, up to the cursor. */
   readonly query: string
   readonly negated: boolean
-  /** One side of a `|` group, where a negated or `childof=` term cannot stand. */
+  /** One side of a `|` group, where a negated or `childof=` term cannot stand. Judged from the text
+   *  before the term only: a term picked ahead of an existing `|` is left to the parser's own error,
+   *  rather than reading the operand after the cursor. */
   readonly alternative: boolean
   /** An operator already follows the name, so a pick adds none. */
   readonly operatorFollows: boolean
