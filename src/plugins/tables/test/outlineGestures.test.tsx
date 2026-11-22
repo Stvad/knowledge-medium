@@ -397,6 +397,22 @@ describe('a table nested in a list member', () => {
     expect(document.activeElement).not.toBe(control)
   })
 
+  it('opening a list cell opens a member, not a member’s own property control', async () => {
+    const [alpha, beta] = await memberIds()
+    await repo.block(alpha!).set(done, true)
+    await repo.awaitReprojections()
+    mount()
+    const control = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(
+        `[data-table-list] [data-block-id="${alpha}"] [data-property-value-row] :is(input, button, select)`)
+      expect(node).not.toBeNull()
+      return node!
+    })
+    await act(async () => { gridOfHost(PARENT_SCOPE, HOST)!.focusCell('row-0', 1, true) })
+    await waitFor(() => expect(focused()).toEqual({blockId: beta, renderScopeId: SCOPE}))
+    expect(document.activeElement).not.toBe(control)
+  })
+
   it('an inner table’s control belongs to the inner grid alone', async () => {
     const [alpha] = await memberIds()
     await repo.tx(async tx => {

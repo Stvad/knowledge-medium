@@ -31,7 +31,9 @@ export interface GridColumn {
   readonly list: boolean
 }
 
-export const CELL_CONTROL_SELECTOR = '[data-property-value-row] :is(input, button, select, textarea)'
+/** A cell's inline control (checkbox, date, select): its scalar value's own,
+ *  never one in a list member's subtree, which is an outline block's. */
+export const CELL_CONTROL_SELECTOR = '[data-table-value] [data-property-value-row] :is(input, button, select, textarea)'
 
 /** How far below a row `rowOf` looks for it. */
 const MAX_ROW_DEPTH = 32
