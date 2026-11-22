@@ -1,1 +1,1 @@
-export{tC as BLOCK_HOLD_GESTURE,nC as BLOCK_HOLD_RECOGNIZER_ID,rC as blockHoldRecognizer}from"../../../chunks/app-C9vuBKkH.js";
+export{nC as BLOCK_HOLD_GESTURE,rC as BLOCK_HOLD_RECOGNIZER_ID,iC as blockHoldRecognizer}from"../../../chunks/app-CLDK726F.js";

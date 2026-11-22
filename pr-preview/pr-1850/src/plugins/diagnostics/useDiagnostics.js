@@ -1,1 +1,1 @@
-export{Gu as aggregateDiagnostics,Ku as useDiagnostics}from"../../../chunks/app-C9vuBKkH.js";
+export{Ku as aggregateDiagnostics,qu as useDiagnostics}from"../../../chunks/app-CLDK726F.js";

@@ -1,1 +1,1 @@
-export{IR as LazyBlockComponent}from"../../chunks/app-C9vuBKkH.js";
+export{LR as LazyBlockComponent}from"../../chunks/app-CLDK726F.js";

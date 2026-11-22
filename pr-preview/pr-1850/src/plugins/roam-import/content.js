@@ -1,1 +1,1 @@
-export{vm as applyHeading,ym as collectContentRefUids,bm as rewriteRoamContent,xm as rewriteRoamHashtags}from"../../../chunks/app-C9vuBKkH.js";
+export{ym as applyHeading,bm as collectContentRefUids,xm as rewriteRoamContent,Sm as rewriteRoamHashtags}from"../../../chunks/app-CLDK726F.js";

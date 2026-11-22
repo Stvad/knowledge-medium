@@ -1,1 +1,1 @@
-export{zE as vimLinkHintsPlugin}from"../../../chunks/app-C9vuBKkH.js";
+export{BE as vimLinkHintsPlugin}from"../../../chunks/app-CLDK726F.js";
