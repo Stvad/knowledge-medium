@@ -247,6 +247,14 @@ export class GridController {
     }
   }
 
+  /** Up from the first row or Down from the last, with the row focused:
+   *  declines, so the outline's step takes it (`./navigation`). A key that
+   *  arrives while a move is still committing is absorbed instead: the step
+   *  would start from the row the store still names, not the one moved to. */
+  private leaveRows(): boolean {
+    return this.pendingRowId !== null
+  }
+
   /** Run a grid command. Returns false when it does not apply, so the key
    *  falls through to whatever else binds it. */
   readonly command = (command: GridCommand, key?: string): boolean => {
@@ -266,12 +274,14 @@ export class GridController {
       }
       case 'up':
         if (row === 0) {
+          if (inRowMode) return this.leaveRows()
           void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
           return true
         }
         this.focusRow(row - 1)
         return true
       case 'down':
+        if (row === this.rowIds.length - 1 && inRowMode) return this.leaveRows()
         this.focusRow(clamp(row + 1, this.rowIds.length - 1))
         return true
       case 'leave':

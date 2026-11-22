@@ -16,6 +16,7 @@ import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
 import { showInfo } from '@/utils/toast'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
+import { TABLE_VERTICAL_PRECEDENCE, tableVerticalSteps } from './navigation'
 import { gridDrawing, gridOfHost } from './registry'
 
 export const GRID_CONTEXT_KEY = 'tablesGrid'
@@ -236,3 +237,5 @@ export const tableOutlineVerbRedirects = [
   onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
   onTableHost(EDITING, 'split_block_cm', hostEnter),
 ].map(decorator => actionDispatchWrap(decorator, {source: 'tables', precedence: 100}))
+  .concat(tableVerticalSteps.map(decorator =>
+    actionDispatchWrap(decorator, {source: 'tables', precedence: TABLE_VERTICAL_PRECEDENCE})))
