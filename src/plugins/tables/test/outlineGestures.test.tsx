@@ -327,7 +327,7 @@ describe('the grid around a list cell', () => {
     // The pointer path dispatches the click's action with the clicked block's deps.
     const toggle = getEffectiveActions(runtime).find(action => action.id === TOGGLE_BLOCK_SELECTION_ACTION_ID)!
     const click = (blockId: string, renderScopeId: string) => act(async () => {
-      await invokeAction(runtime, {action: toggle, trigger: new MouseEvent('click', {ctrlKey: true}),
+      await invokeAction(runtime, {action: toggle, trigger: new PointerEvent('click', {ctrlKey: true}),
         deps: {block: repo.block(blockId), uiStateBlock: ui(), renderScopeId, scopeRootId: HOST} as never})
     })
     await click(alpha!, SCOPE)
