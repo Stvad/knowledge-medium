@@ -1,1 +1,0 @@
-export{KR as PropertyDisplayScope}from"../../../chunks/app-D-5Oz8CN.js";
