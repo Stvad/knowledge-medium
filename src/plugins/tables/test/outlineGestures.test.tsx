@@ -21,6 +21,9 @@ import { getDefaultActionGroups } from '@/shortcuts/defaultShortcuts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { runActionById } from '@/shortcuts/runAction'
+import { invokeAction } from '@/shortcuts/actionDispatch'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions'
+import { TOGGLE_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { BlockContextProvider } from '@/context/block'
 import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
@@ -317,6 +320,23 @@ describe('the grid around a list cell', () => {
     expect(ui().peekProperty(isEditingProp)).toBe(false)
   })
 
+  it('Ctrl-click starts no block selection on a member, as it does elsewhere', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    await waitFor(() => expect(document.querySelector(`[data-table-list] [data-block-id="${alpha}"]`)).not.toBeNull())
+    // The pointer path dispatches the click's action with the clicked block's deps.
+    const toggle = getEffectiveActions(runtime).find(action => action.id === TOGGLE_BLOCK_SELECTION_ACTION_ID)!
+    const click = (blockId: string, renderScopeId: string) => act(async () => {
+      await invokeAction(runtime, {action: toggle, trigger: new MouseEvent('click', {ctrlKey: true}),
+        deps: {block: repo.block(blockId), uiStateBlock: ui(), renderScopeId, scopeRootId: HOST} as never})
+    })
+    await click(alpha!, SCOPE)
+    expect(ui().peekProperty(selectionStateProp)?.selectedBlockIds ?? []).toEqual([])
+    // The same click outside the grid's scope selects.
+    await click(alpha!, PARENT_SCOPE)
+    expect(ui().peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([alpha])
+  })
+
   it('Shift+ArrowDown at the end of the last member starts no block selection', async () => {
     mount()
     const [, beta] = await memberIds()
@@ -352,6 +372,29 @@ describe('a table nested in a list member', () => {
     fireEvent.click(gamma)
     expect(reached).toBe(true)
     expect(focused()?.blockId).not.toBe('row-0')
+  })
+
+  it('opening the outer list cell opens a member, not the inner table’s control', async () => {
+    const [alpha] = await memberIds()
+    await repo.tx(async tx => {
+      await tx.create({id: 'inner', workspaceId: WS, parentId: alpha!, orderKey: 'a0', content: 'Inner'})
+      await tx.create({id: 'inner-row', workspaceId: WS, parentId: 'inner', orderKey: 'a0', content: 'inner row'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.block('inner-row').set(done, true)
+    await repo.awaitReprojections()
+    await turnIntoTable(repo, 'inner')
+    mount()
+    const control = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-table-row="inner-row"] ${CELL_CONTROL_SELECTOR}`)
+      expect(node).not.toBeNull()
+      return node!
+    })
+    const [, beta] = await memberIds()
+    await act(async () => { gridOfHost(PARENT_SCOPE, HOST)!.focusCell('row-0', 1, true) })
+    // A string list opens its last member.
+    await waitFor(() => expect(focused()).toEqual({blockId: beta, renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+    expect(document.activeElement).not.toBe(control)
   })
 
   it('an inner table’s control belongs to the inner grid alone', async () => {

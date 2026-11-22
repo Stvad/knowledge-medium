@@ -8,6 +8,7 @@ import { Block } from '@/data/block'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface'
 import { structuralEditPolicyForBlock, type StructuralEditPolicy } from '@/data/structuralEditPolicy'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction'
+import { EXTEND_BLOCK_SELECTION_ACTION_ID, TOGGLE_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import {
   ActionContextTypes,
@@ -223,9 +224,10 @@ const leavingAt = (edge: Edge): Applies => (deps, trigger) => {
 
 /** No block selection starts inside a grid. Block selection runs in the
  *  panel's own surface, whose walk follows the data tree: extended from a
- *  list member it reaches blocks the grid does not draw (a row's other
+ *  block the grid draws it reaches blocks it does not (a row's other
  *  properties, its children), which a selection's Delete would then remove.
- *  In an editor the key stays CodeMirror's own text selection. */
+ *  In an editor the key stays CodeMirror's own text selection. Every action
+ *  that starts one is listed in `SELECTION_STARTS`. */
 const noBlockSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
   actionId,
   context,
@@ -283,6 +285,18 @@ const hostEnter = (deps: BlockShortcutDependencies, policy: StructuralEditPolicy
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
 
+/** Shift+arrow in an editor and in normal mode, vim's selection start, and
+ *  Shift- and Ctrl/Cmd-click. */
+const SELECTION_STARTS: readonly (readonly [ActionContextType, string])[] = [
+  [EDITING, 'edit.cm.extend_selection_up'],
+  [EDITING, 'edit.cm.extend_selection_down'],
+  [NORMAL, 'extend_selection_up'],
+  [NORMAL, 'extend_selection_down'],
+  [NORMAL, 'select_focused_block_and_start_selection'],
+  [ActionContextTypes.BLOCK_POINTER, EXTEND_BLOCK_SELECTION_ACTION_ID],
+  [ActionContextTypes.BLOCK_POINTER, TOGGLE_BLOCK_SELECTION_ACTION_ID],
+]
+
 export const tableOutlineVerbRedirects = [
   redirect(NORMAL, 'move_down', 'down', crossing('bottom')),
   redirect(NORMAL, 'move_up', 'up', crossing('top')),
@@ -298,10 +312,7 @@ export const tableOutlineVerbRedirects = [
   redirect(EDITING, 'move_down_from_cm_end', 'down', leavingAt('bottom')),
   redirect(EDITING, 'move_left_from_cm_start', 'previous', leavingAt('start')),
   redirect(EDITING, 'move_right_from_cm_end', 'next', leavingAt('end')),
-  noBlockSelection(EDITING, 'edit.cm.extend_selection_up'),
-  noBlockSelection(EDITING, 'edit.cm.extend_selection_down'),
-  noBlockSelection(NORMAL, 'extend_selection_up'),
-  noBlockSelection(NORMAL, 'extend_selection_down'),
+  ...SELECTION_STARTS.map(([context, actionId]) => noBlockSelection(context, actionId)),
   onTableHost(NORMAL, 'create_block_below_and_edit', createsFirstChild('createBelowPlacement')),
   onTableHost(NORMAL, 'create_block_above_and_edit', createsFirstChild('createAbovePlacement')),
   onTableHost(EDITING, 'split_block_cm', hostEnter),

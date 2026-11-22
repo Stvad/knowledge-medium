@@ -36,6 +36,14 @@ export const CELL_CONTROL_SELECTOR = '[data-property-value-row] :is(input, butto
 /** How far below a row `rowOf` looks for it. */
 const MAX_ROW_DEPTH = 32
 
+/** A row's own cell at `column`, and a cell's own control: never those of a
+ *  table drawn inside it (under a list's member). */
+const ownCell = (row: HTMLElement, column: number) =>
+  [...row.querySelectorAll<HTMLElement>(`[data-table-col="${column}"]`)].find(cell => cell.closest('[data-table-row]') === row)
+
+const ownControl = (cell: HTMLElement) =>
+  [...cell.querySelectorAll<HTMLElement>(CELL_CONTROL_SELECTOR)].find(control => control.closest('[data-table-col]') === cell)
+
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
 export class GridController {
@@ -205,10 +213,10 @@ export class GridController {
   /** Scroll the cursor's cell clear of the frozen first column and the right edge. */
   private revealColumn(row: number) {
     const element = this.rowElement(row)
-    const cell = element?.querySelector<HTMLElement>(`[data-table-col="${this.column}"]`)
+    const cell = element && ownCell(element, this.column)
     const scroller = cell?.closest<HTMLElement>('[data-table-scroller]')
     if (!cell || !scroller) return
-    const frozen = this.column > 0 ? element!.querySelector('[data-table-col="0"]')?.getBoundingClientRect().width ?? 0 : 0
+    const frozen = this.column > 0 ? ownCell(element!, 0)?.getBoundingClientRect().width ?? 0 : 0
     const view = scroller.getBoundingClientRect()
     const box = cell.getBoundingClientRect()
     if (box.left < view.left + frozen) scroller.scrollLeft -= view.left + frozen - box.left
@@ -351,7 +359,8 @@ export class GridController {
     // The cell's control and kind are known only once its row is drawn.
     const element = this.rowElement(row)
     if (!element) return
-    const control = element.querySelector<HTMLElement>(`[data-table-col="${this.column}"] ${CELL_CONTROL_SELECTOR}`)
+    const cell = ownCell(element, this.column)
+    const control = cell && ownControl(cell)
     if (control) {
       control.focus()
       return
