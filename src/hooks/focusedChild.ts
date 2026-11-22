@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
 import type { BlockData, Handle } from '@/data/api'
 import type { AncestorsResult } from '@/data/internals/kernelQueries'
@@ -95,6 +95,17 @@ class FocusedChildren {
     return this.children.get(parentId) ?? null
   }
 
+  /** The focused chain's rows that `listed` still shows under `parentId`
+   *  although the cache has them under another parent, space-separated. Any
+   *  render scope: the cache's parent is right in every panel. */
+  strays(parentId: string, listed: readonly string[]): string {
+    let strays = ''
+    for (const [rowParentId, row] of this.children) {
+      if (rowParentId !== parentId && listed.includes(row.id)) strays += strays ? ` ${row.id}` : row.id
+    }
+    return strays
+  }
+
   within(parentId: string, renderScopeId: unknown): boolean | undefined {
     if (!this.location || !this.inScope(renderScopeId)) return false
     if (this.location.blockId === parentId || this.children.has(parentId)) return true
@@ -118,6 +129,21 @@ export const useFocusedChild = (parent: Block, renderScopeId: unknown): BlockDat
   const store = focusedChildren(useUIStateBlock())
   const snapshot = useCallback(() => store.child(parent.id, renderScopeId), [store, parent.id, renderScopeId])
   return useSyncExternalStore(store.subscribe, snapshot, snapshot)
+}
+
+/** `listed` without the focused chain's rows that have moved to another
+ *  parent: the cache moves them in the same commit that `useFocusedChild`
+ *  places them at their new parent, while this listing's own query is still
+ *  reloading. Kept, the moved row would be drawn twice, with two editors. */
+export const useWithoutMovedFocusRows = (parent: Block, listed: string[]): string[] => {
+  const store = focusedChildren(useUIStateBlock())
+  const snapshot = useCallback(() => store.strays(parent.id, listed), [store, parent.id, listed])
+  const strays = useSyncExternalStore(store.subscribe, snapshot, snapshot)
+  return useMemo(() => {
+    if (!strays) return listed
+    const moved = new Set(strays.split(' '))
+    return listed.filter(id => !moved.has(id))
+  }, [listed, strays])
 }
 
 /** `undefined` while the focused chain is incomplete: retaining a temporary

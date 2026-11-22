@@ -2,7 +2,7 @@ import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo.js'
 import {useChildIdsForMode, useHandle, usePropertyDisplayMode} from '@/hooks/block.js'
-import {useFocusedChild, useFocusWithin} from './focusedChild'
+import {useFocusedChild, useFocusWithin, useWithoutMovedFocusRows} from './focusedChild'
 import {unlistedSiblingIndex} from '@/utils/selection.js'
 import {useState} from 'react'
 
@@ -10,7 +10,7 @@ export const useRetainedFieldRows = (block: Block, renderScopeId: unknown) => {
   const mode = usePropertyDisplayMode(block)
   const focusedChild = useFocusedChild(block, renderScopeId)
   const focusWithin = useFocusWithin(block, renderScopeId)
-  const listed = useChildIdsForMode(block, mode)
+  const listed = useWithoutMovedFocusRows(block, useChildIdsForMode(block, mode))
   const placesUnlistedChild = focusedChild !== null && !listed.includes(focusedChild.id)
   const [retainedFieldIds, setRetainedFieldIds] = useState<string[]>([])
   const observesAllChildren = placesUnlistedChild || retainedFieldIds.length > 0 || focusedChild?.isFieldForm === true
