@@ -183,7 +183,9 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
       className="tm-table-row border-b border-border"
       frameProps={{'data-table-row': block.id}}
     >
-      <div className="block-body min-w-0 grow">
+      {/* `.block-body` clips horizontal overflow: it must be as wide as the
+          grid, so the overflow reaches the table's scroller. */}
+      <div className="block-body grow" style={{minWidth: template.minWidth}}>
         <div className="grid" style={template}>
           {columns.map((column, index) => (
             <Cell key={column.id} row={block} index={index} sticky={index === 0}>
@@ -263,9 +265,11 @@ const RowKeys = ({controller, rows, renderScopeId}: {
   const rowId = pending ?? focus?.blockId
   const onRow = panelActive && rowId !== undefined && rows.has(rowId) && (pending !== null || !focus?.editing)
   const dependencies = useMemo(() => ({gridCommand: controller.run, normalModeActive: controller.isNormalModeActive}), [controller])
-  useActionContextActivations(!inControl && onRow
+  // Stable, or every render would release and re-claim the contexts.
+  const activations = useMemo(() => !inControl && onRow
     ? [{context: TABLE_ROW_CONTEXT, dependencies}, {context: TABLE_TYPING_CONTEXT, dependencies}]
-    : [])
+    : [], [dependencies, inControl, onRow])
+  useActionContextActivations(activations)
   return null
 }
 
