@@ -2,7 +2,9 @@
  *  its first {@link VIEW_TYPE} child names the view, and that view's
  *  {@link COLUMN_TYPE} children are the columns, in sibling order. Every other
  *  child of the host is a row. A column with no field shows the row's own
- *  content; its block content is an optional header label. */
+ *  content; its block content is an optional header label. A hidden column
+ *  stays a column block, keeping its place and width, so showing it again
+ *  restores it. */
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 
@@ -29,7 +31,17 @@ export const columnWidthProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const TABLE_PROPERTY_SEEDS = [columnFieldProp, columnWidthProp] as const
+/** Absent ≡ shown. Showing a column unsets it rather than writing false. */
+export const columnHiddenProp = seedProperty({
+  seedKey: 'system:tables/property/column-hidden',
+  revision: 1,
+  name: 'tables:columnHidden',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const TABLE_PROPERTY_SEEDS = [columnFieldProp, columnWidthProp, columnHiddenProp] as const
 
 export const TABLE_TYPE_SEEDS = [
   seedType({
@@ -48,10 +60,10 @@ export const TABLE_TYPE_SEEDS = [
   }),
   seedType({
     seedKey: 'system:tables/type/column',
-    revision: 1,
+    revision: 2,
     id: COLUMN_TYPE,
     label: 'Table column',
     description: 'A table column. Its field is the property it shows; with no field it shows the row’s own text.',
-    properties: [columnFieldProp, columnWidthProp],
+    properties: [columnFieldProp, columnWidthProp, columnHiddenProp],
   }),
 ]
