@@ -110,12 +110,9 @@ const clickFrame = async (host: HostPage) => {
   await host.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
 }
 
-/** The frame the document itself runs in: the app's frame's only child. */
-const documentFrame = (host: HostPage) => {
-  const frame = host.page.frames().find(candidate => candidate.parentFrame()?.parentFrame() === host.page.mainFrame())
-  if (!frame) throw new Error('no document frame')
-  return frame
-}
+/** Resolve the document frame when each operation runs: Playwright can receive
+ *  a height report before its frame tree includes the reporting document. */
+const documentFrame = (host: HostPage) => host.page.frameLocator('#mount iframe').frameLocator('iframe')
 
 const frameHeight = (host: HostPage) =>
   host.page.locator('#mount iframe').evaluate(frame => frame.getBoundingClientRect().height)
@@ -528,7 +525,7 @@ describe.each(selectedEngines())('%s', engine => {
         addEventListener('message', event => { document.getElementById('box').style.height = event.data + 'px' })
       `)}`)
       await untilHeight(640)
-      await documentFrame(host).evaluate(() => window.postMessage(200, '*'))
+      await documentFrame(host).locator('html').evaluate(() => window.postMessage(200, '*'))
       await untilHeight(200)
     })
 
@@ -555,7 +552,7 @@ describe.each(selectedEngines())('%s', engine => {
           writes.count += records.length
         }).observe(frame, {attributes: true, attributeFilter: ['style']})
       })
-      await documentFrame(host).evaluate(type => {
+      await documentFrame(host).locator('html').evaluate((_root, type) => {
         let sent = 0
         const send = () => {
           window.parent.parent.postMessage(sent < 600 ? {type, height: 300 + (sent % 2)} : 'flood over', '*')
@@ -581,7 +578,7 @@ describe.each(selectedEngines())('%s', engine => {
     })
 
     const mountNested = (message: string) =>
-      documentFrame(host).evaluate(body => {
+      documentFrame(host).locator('html').evaluate((_root, body) => {
         const nested = document.createElement('iframe')
         // Out of flow, or the document would legitimately report a new height.
         nested.style.cssText = 'position:absolute;width:0;height:0;border:0'
@@ -609,7 +606,7 @@ describe.each(selectedEngines())('%s', engine => {
 
       // The same message from the window it should come from does move it, so
       // the assertion above is about the source and not about the message.
-      await documentFrame(host).evaluate(body => window.parent.parent.postMessage(JSON.parse(body), '*'), spoofed)
+      await documentFrame(host).locator('html').evaluate((_root, body) => window.parent.parent.postMessage(JSON.parse(body), '*'), spoofed)
       await untilHeight(777)
     })
   })
@@ -657,7 +654,7 @@ describe.each(selectedEngines())('%s', engine => {
 
     /** Through `Document.prototype`, as the frame script reads it: markup can
      *  stand a named element in for `document.body`. */
-    const bodyTexts = () => documentFrame(host).evaluate(() => {
+    const bodyTexts = () => documentFrame(host).locator('html').evaluate(() => {
       const body = Object.getOwnPropertyDescriptor(Document.prototype, 'body')!.get!.call(document) as HTMLElement
       const texts: string[] = []
       const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
@@ -692,7 +689,7 @@ describe.each(selectedEngines())('%s', engine => {
      *  `text[1]` of its first text node, or, with no `text`, its contents,
      *  which leaves both ends between nodes. */
     const select = (pick: {selector: string; index?: number; text?: [number, number]}) =>
-      documentFrame(host).evaluate(({selector, index = 0, text}) => {
+      documentFrame(host).locator('html').evaluate((_root, {selector, index = 0, text}) => {
         const element = document.querySelectorAll(selector)[index]
         const range = document.createRange()
         if (text) {
@@ -725,6 +722,16 @@ describe.each(selectedEngines())('%s', engine => {
       const range = rangeOfSelection(source, await latestSelection())
       return typeof range === 'string' ? null : source.slice(range.from, range.to)
     }
+
+    it('waits for the document when selection starts before mount', async () => {
+      expect(host.page.frames()).toHaveLength(1)
+      const source = '<p>one <b>same</b></p>'
+      const pendingSelection = select({selector: 'b', text: [1, 3]})
+
+      await mountHeld(host, source)
+      await pendingSelection
+      expect(sourceOf(source, await latestSelection())).toBe('am')
+    })
 
     it('reports a selection the source map places, with the digest the source map computes', async () => {
       const source = '<p>same</p><p>x <b>same</b> y</p>'
@@ -767,7 +774,7 @@ describe.each(selectedEngines())('%s', engine => {
       const source = '<p id="edited" contenteditable>same</p><p id="other">same</p>'
       await mountHeld(host, source)
       // What typing in the editable paragraph does to its text node.
-      await documentFrame(host).evaluate(() => { (document.getElementById('edited')!.firstChild as Text).data = 'different' })
+      await documentFrame(host).locator('html').evaluate(() => { (document.getElementById('edited')!.firstChild as Text).data = 'different' })
       await select({selector: '#other', text: [0, 4]})
       expect(await anchoredIn(source)).toBeNull()
     })
@@ -810,7 +817,7 @@ describe.each(selectedEngines())('%s', engine => {
       await host.page.evaluate(() => window.clearSelection())
       await vi.waitFor(async () => expect(await host.page.evaluate(() => window.selections.at(-1))).toBeNull(),
         {timeout: 5_000, interval: 25})
-      expect(await documentFrame(host).evaluate(() => getSelection()!.rangeCount)).toBe(0)
+      expect(await documentFrame(host).locator('html').evaluate(() => getSelection()!.rangeCount)).toBe(0)
     })
 
     // Spread over tasks: React already batches a burst inside one task.
@@ -825,7 +832,7 @@ describe.each(selectedEngines())('%s', engine => {
         }
         requestAnimationFrame(tick)
       })
-      await documentFrame(host).evaluate(type => {
+      await documentFrame(host).locator('html').evaluate((_root, type) => {
         let sent = 0
         const send = () => {
           const selection = {
@@ -870,7 +877,7 @@ describe.each(selectedEngines())('%s', engine => {
     })
 
     /** Each drawn range's text, and the id of the nearest element around it. */
-    const drawn = () => documentFrame(host).evaluate(() =>
+    const drawn = () => documentFrame(host).locator('html').evaluate(() =>
       [...CSS.highlights].flatMap(([name, highlight]) => [...highlight].map(range => ({
         name,
         text: range.toString(),
@@ -922,7 +929,7 @@ describe.each(selectedEngines())('%s', engine => {
       const source = '<p id="a">alpha</p><p id="b">beta</p>'
       await mountHeld(host, source)
       // What an edit, or the browser building other nodes, does: one more node ahead of the mark's.
-      await documentFrame(host).evaluate(() => {
+      await documentFrame(host).locator('html').evaluate(() => {
         const added = document.createElement('p')
         added.textContent = 'gamma'
         document.body.prepend(added)
