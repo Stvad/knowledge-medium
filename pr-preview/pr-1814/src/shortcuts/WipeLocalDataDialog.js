@@ -1,1 +1,1 @@
-export{IP as WipeLocalDataDialog}from"../../chunks/app-BAV3GX84.js";
+export{RP as WipeLocalDataDialog}from"../../chunks/app-Drjrxm7x.js";

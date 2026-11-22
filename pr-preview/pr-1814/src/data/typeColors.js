@@ -1,1 +1,1 @@
-export{bP as DEFAULT_TYPE_COLORS,xP as defaultTypeColor,SP as pickLeastUsedTypeColor}from"../../chunks/app-BAV3GX84.js";
+export{SP as DEFAULT_TYPE_COLORS,CP as defaultTypeColor,wP as pickLeastUsedTypeColor}from"../../chunks/app-Drjrxm7x.js";
