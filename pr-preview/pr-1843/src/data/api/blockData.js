@@ -1,1 +1,1 @@
-export{pgt as normalizeReferences}from"../../../chunks/app-I5VnnxUk.js";
+export{vgt as normalizeReferences}from"../../../chunks/app-xiHdS4ro.js";

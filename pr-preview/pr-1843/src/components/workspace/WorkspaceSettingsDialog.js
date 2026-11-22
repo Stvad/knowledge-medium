@@ -1,1 +1,1 @@
-export{uk as WorkspaceSettingsDialog}from"../../../chunks/app-I5VnnxUk.js";
+export{pk as WorkspaceSettingsDialog}from"../../../chunks/app-xiHdS4ro.js";

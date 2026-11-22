@@ -1,1 +1,1 @@
-export{YT as videoPlayerPlugin}from"../../../chunks/app-I5VnnxUk.js";
+export{QT as videoPlayerPlugin}from"../../../chunks/app-xiHdS4ro.js";

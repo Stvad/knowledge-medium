@@ -1,1 +1,1 @@
-export{jP as CommandPalette}from"../../../chunks/app-I5VnnxUk.js";
+export{PP as CommandPalette}from"../../../chunks/app-xiHdS4ro.js";
