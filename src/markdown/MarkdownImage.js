@@ -1,1 +1,1 @@
-export{qR as MarkdownImage}from"../../chunks/app-Vxiyk-Gc.js";
+export{QR as MarkdownImage}from"../../chunks/app-CBK1vqRz.js";

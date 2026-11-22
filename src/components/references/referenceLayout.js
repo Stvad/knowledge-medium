@@ -1,1 +1,1 @@
-export{BS as referenceLayoutContribution}from"../../../chunks/app-Vxiyk-Gc.js";
+export{WS as referenceLayoutContribution}from"../../../chunks/app-CBK1vqRz.js";

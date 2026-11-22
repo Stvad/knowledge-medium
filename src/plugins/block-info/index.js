@@ -1,1 +1,1 @@
-export{ox as blockInfoPlugin}from"../../../chunks/app-Vxiyk-Gc.js";
+export{ux as blockInfoPlugin}from"../../../chunks/app-CBK1vqRz.js";

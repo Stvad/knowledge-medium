@@ -1,1 +1,1 @@
-export{IE as LinkHints}from"../../../chunks/app-Vxiyk-Gc.js";
+export{BE as LinkHints}from"../../../chunks/app-CBK1vqRz.js";
