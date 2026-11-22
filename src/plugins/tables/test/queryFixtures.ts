@@ -30,12 +30,25 @@ export const MARY = '0190a0c0-0000-7000-8000-00000000000a'
 export const PROJECTS = '0190a0c0-0000-7000-8000-00000000000b'
 export const ALIASES: Readonly<Record<string, string>> = {Mary: MARY, Projects: PROJECTS}
 
+/** Plugin fields with their own operand rules, as `QueryableField.encode` declares them. */
+const scoreEncode = (operand: unknown) => {
+  if (typeof operand !== 'number' || !Number.isFinite(operand)) throw new TypeError('score takes a number')
+  return operand
+}
+const contentEncode = (operand: unknown) => {
+  if (typeof operand !== 'string') throw new TypeError('content takes text')
+  return operand
+}
+
 export const resolver: QueryResolver = {
   propertyByName: name => PROPERTIES.find(p => p.name === name),
   propertyById: id => PROPERTIES.find(p => p.fieldId === id),
   typeByLabel: label => TYPES.find(t => t.label.toLowerCase() === label.toLowerCase()),
   typeById: id => TYPES.find(t => t.id === id),
-  isField: name => name === 'created' || name === 'updated',
+  field: name => name === 'created' || name === 'updated' ? {kind: 'instant'}
+    : name === 'test:score' ? {kind: 'value', encode: scoreEncode}
+      : name === 'test:content' ? {kind: 'value', encode: contentEncode}
+        : undefined,
   blockIdByAlias: alias => ALIASES[alias],
 }
 

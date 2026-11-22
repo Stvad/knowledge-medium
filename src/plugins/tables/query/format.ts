@@ -16,7 +16,7 @@ export const formatTerm = (term: QueryTerm): string => {
     case 'types': return `${term.negated ? '!' : ''}${term.types.map(typeRef).join('|')}`
     case 'compare': return `${propertyKey(term.property)}${OP_TEXT[term.op]}${operandText(term.operand)}`
     case 'presence': return `${term.present ? '' : '!'}${propertyKey(term.property)}`
-    case 'field': return `${term.field}${OP_TEXT[term.op]}${term.operand}`
+    case 'field': return `${term.field}${OP_TEXT[term.op]}${word(term.operand)}`
     case 'refs': case 'childof': case 'under': return `${term.kind}=${term.target.spelling}`
     case 'anyOf': return term.alternatives.map(formatTerm).join(' | ')
   }

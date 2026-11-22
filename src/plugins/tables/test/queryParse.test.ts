@@ -64,6 +64,34 @@ describe('parseQuery terms', () => {
   })
 })
 
+describe('parseQuery plugin fields', () => {
+  it.each([
+    {text: 'test:score>3', where: {'test:score': {gt: 3}}},
+    {text: 'test:score=0.5', where: {'test:score': {eq: 0.5}}},
+    {text: 'test:content=hello', where: {'test:content': {eq: 'hello'}}},
+    {text: 'test:content="two words"', where: {'test:content': {eq: 'two words'}}},
+    {text: 'test:content=2026-01-05', where: {'test:content': {eq: '2026-01-05'}}},
+    {text: 'test:content=42', where: {'test:content': {eq: '42'}}},
+  ])('$text compares through the field\'s own encoder', ({text, where}) => {
+    const result = parse(text)
+    expect(result.errors).toEqual([])
+    expect(result.query).toEqual({match: [{where}]})
+  })
+
+  it.each([
+    {text: 'test:score>many', message: '"many" is not a value of test:score'},
+    {text: 'test:score', message: 'test:score is a field; compare it with a value, as in test:score=x'},
+  ])('$text', ({text, message}) => {
+    expect(parse(text).errors.map(error => error.message)).toEqual([message])
+  })
+
+  it('saves a value field operand so it reads back', () => {
+    const saved = formatQuery(parse('test:content="a b"').terms)
+    expect(saved).toBe('test:content="a b"')
+    expect(parse(saved).query).toEqual({match: [{where: {'test:content': {eq: 'a b'}}}]})
+  })
+})
+
 describe('parseQuery dates', () => {
   // localDayStart is UTC+2: the local day 2026-01-05 runs from 2026-01-04T22:00Z to 2026-01-05T22:00Z.
   const start = day('2026-01-04T22:00:00.000Z')
@@ -144,7 +172,7 @@ describe('parseQuery errors', () => {
   })
 
   it.each(['label=x', 'label^f-label=x', 'other^f-label=x'])('names a property named like a field as ambiguous: %s', text => {
-    const shadowed = {...resolver, isField: (name: string) => name === 'label'}
+    const shadowed = {...resolver, field: (name: string) => name === 'label' ? {kind: 'instant' as const} : undefined}
     expect(parseQuery(text, shadowed).errors.map(error => error.message))
       .toEqual(['label is both a property and a field; rename the property to query it'])
   })
