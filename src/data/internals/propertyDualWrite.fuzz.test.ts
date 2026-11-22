@@ -726,8 +726,14 @@ type Ev = {cls: 'E' | 'R'; value: unknown; wrote: boolean}
  *  only through MATERIALIZE's NET diff, so raw writes that land back on the
  *  tx-start value claim nothing — the key is then the children's. */
 const claimsIntent = (evs: readonly Ev[], startValue: unknown): boolean =>
-  evs.some(ev => ev.cls === 'E' && ev.wrote)
-  || (evs.some(ev => ev.cls === 'R' && ev.wrote) && !sameValue(evs.at(-1)!.value, startValue))
+  evs.some(ev => ev.cls === 'E' && ev.wrote) || rawMovedCell(evs, startValue)
+
+/** Whether the tx's raw writes reach the children: MATERIALIZE diffs the bag
+ *  the WRITERS left against the tx-start bag. Read it from the writes, not the
+ *  committed cell — PROJECT may move the cell afterwards (a revived owner's
+ *  live field rows win), and that move is no cell write. */
+const rawMovedCell = (evs: readonly Ev[], startValue: unknown): boolean =>
+  evs.some(ev => ev.cls === 'R' && ev.wrote) && !sameValue(evs.at(-1)!.value, startValue)
 
 interface TxLog {
   /** owner → cell key → cell writes, in order. */
@@ -1473,9 +1479,7 @@ const runBatch = async (
     for (const [name, evs] of byName) {
       if (log.childPairs.has(pairKey(ownerId, lookups.resolveNameSchema(name)!.fieldId))) continue
       const eager = lastEagerWrite(evs) >= 0 && !orderBlind(evs)
-      // A raw bag write reaches the children only through MATERIALIZE's net
-      // diff, so it converges only when the tx's final cell moved.
-      const raw = evs.some(ev => ev.cls === 'R') && !sameValue(startBags.get(ownerId)?.[name], bagOf(owner)[name])
+      const raw = rawMovedCell(evs, startBags.get(ownerId)?.[name])
       if (!eager && !raw) continue
       let names = converged.get(ownerId)
       if (!names) converged.set(ownerId, names = new Set())

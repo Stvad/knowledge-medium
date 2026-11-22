@@ -12,11 +12,13 @@ import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {startReadGate} from './gate'
-import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
+import {clearSyncState, drainStaged, hasMarker, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
-import {ANALYZE_OPTIMIZE_SQL} from '@/data/internals/clientSchema'
+import {ANALYZE_OPTIMIZE_SQL, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, RECONCILE_RESCAN_MARKER_PREFIX} from '@/data/internals/clientSchema'
+import {Repo} from '@/data/repo'
+import type {SyncDrainStats} from '@/data/internals/syncObserver/observer'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {statusProp} from '@/plugins/todo/schema'
 import {serveDatabase} from './host'
@@ -68,11 +70,37 @@ function start(config: HeadlessConfig, connect: NonNullable<Parameters<typeof se
   }
 }
 
-const plaintext = (): HeadlessConfig => ({mode: 'plaintext', workspaceId, profile: 'fixture', stateDir: fixture.dir})
+const plaintext = (): Extract<HeadlessConfig, {mode: 'plaintext'}> => ({mode: 'plaintext', workspaceId, profile: 'fixture', stateDir: fixture.dir})
 const writable = () => ({...plaintext(), writable: true})
 
+it('fails an encrypted boot on a refused key command before connecting', async () => {
+  const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
+  const config: HeadlessConfig = {...plaintext(), mode: 'e2ee', keyCommand: [process.execPath, '-e', 'process.exitCode = 2']}
+  await expect(serveDatabase(fixture.db, config, user, new AbortController().signal, connect))
+    .rejects.toThrow(`Key command ${process.execPath} exited with status 2`)
+  expect(connect).not.toHaveBeenCalled()
+})
+
+it('stops an encrypted boot aborted while its key command runs, before connecting', async () => {
+  const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
+  const config: HeadlessConfig = {...plaintext(), mode: 'e2ee', keyCommand: [process.execPath, '-e', 'process.stdout.write("key")']}
+  const controller = new AbortController()
+  const run = serveDatabase(fixture.db, config, user, controller.signal, connect)
+  controller.abort(new Error('stopped'))
+  await expect(run).rejects.toThrow('stopped')
+  expect(connect).not.toHaveBeenCalled()
+})
+
 // This database boot took 0.36–1.45 s in the focused run.
-it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes or returning device secrets', async mode => {
+it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes, returning device secrets or re-materializing it', async mode => {
+  const repos = vi.spyOn(Repo.prototype, 'setActiveWorkspaceId')
+  // Whether the cold note had landed when the observer started draining.
+  const notedAtObserverStart: Promise<boolean>[] = []
+  const startObserver = Repo.prototype.startSyncObserver
+  vi.spyOn(Repo.prototype, 'startSyncObserver').mockImplementation(function (this: Repo, ...args) {
+    notedAtObserverStart.push(hasMarker(fixture.db, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, workspaceId))
+    return startObserver.apply(this, args)
+  })
   const config = plaintext()
   const key = await mintWorkspaceKey(workspaceId)
   const keyFile = join(fixture.dir, 'fixture-key')
@@ -103,10 +131,18 @@ it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download wi
     await deliver([{...block, data: {...data, updated_at: 2, user_updated_at: 2}}])
     await vi.waitFor(async () => expect(await fixture.db.getOptional('SELECT 1 FROM row_events WHERE block_id = ?', [id])).toBeTruthy())
     await assertReadSurface(host.execute, id, {deviceValue, workspaceKey: key.displayed})
+    // The open's one-time reconcile rescan has run to completion.
+    await vi.waitFor(async () => expect(await hasMarker(fixture.db, RECONCILE_RESCAN_MARKER_PREFIX, workspaceId)).toBe(true))
   } finally {
     await host.stop()
   }
   expect(await fixture.db.get('SELECT count(*) AS n FROM ps_crud')).toEqual({n: 0})
+  // ...without rewriting `blocks` from staging: the queue drain already applied every row.
+  const drains: SyncDrainStats['source'][] = []
+  ;(repos.mock.contexts[0] as Repo).onSyncDrainStats(stats => drains.push(stats.source))
+  expect(drains).toContain('queue')
+  expect(drains).not.toContain('workspace')
+  expect(await Promise.all(notedAtObserverStart)).toEqual([true])
 }, 20_000)
 
 // This database boot took 0.21 s in the focused run.

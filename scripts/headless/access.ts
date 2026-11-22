@@ -1,14 +1,17 @@
-import {open} from 'node:fs/promises'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {getModePin, setModePin} from '@/sync/keys/modePin'
 import {unlockWorkspaceWithKey} from '@/sync/keys/flows/unlockWorkspaceWithKey'
 import {resolveWorkspaceEntry, type GateWorkspace} from '@/sync/keys/resolveWorkspaceEntry'
-import type {HeadlessConfig} from './config'
+
+/** The configured mode, with the workspace key already read for e2ee. */
+export type DeviceAccess =
+  | {workspaceId: string, mode: 'plaintext'}
+  | {workspaceId: string, mode: 'e2ee', key: string}
 
 export async function openDeviceWorkspace(
-  config: HeadlessConfig, userId: string, row: GateWorkspace,
+  access: DeviceAccess, userId: string, row: GateWorkspace,
 ): Promise<void> {
-  const {workspaceId, mode} = config
+  const {workspaceId, mode} = access
   const resolveEntry = () => resolveWorkspaceEntry(userId, workspaceId, async () => row)
   const entry = await resolveEntry()
   const lock = entry.kind === 'locked' ? entry.reason : entry.kind
@@ -17,9 +20,9 @@ export async function openDeviceWorkspace(
   if (entry.kind === 'locked') {
     if (entry.reason === 'quarantine') {
       setModePin(userId, workspaceId, 'plaintext')
-    } else if (config.mode === 'e2ee' && (entry.reason === 'key-required' ||
+    } else if (access.mode === 'e2ee' && (entry.reason === 'key-required' ||
       (entry.reason === 'server-e2ee' && getModePin(userId, workspaceId) === null))) {
-      await unlockFromFile(config, userId, entry.canary)
+      await unlockWithKey(access, userId, entry.canary)
     } else {
       throw new Error(`Workspace locked: ${entry.reason}`)
     }
@@ -29,19 +32,12 @@ export async function openDeviceWorkspace(
   }
 }
 
-async function unlockFromFile(
-  config: Extract<HeadlessConfig, {mode: 'e2ee'}>, userId: string, canary: string | null,
+async function unlockWithKey(
+  access: Extract<DeviceAccess, {mode: 'e2ee'}>, userId: string, canary: string | null,
 ): Promise<void> {
   if (!canary) throw new Error('Encrypted workspace is missing its key canary')
-  const handle = await open(config.keyFile, 'r')
-  try {
-    if (((await handle.stat()).mode & 0o777) !== 0o600) throw new Error('Key file must have mode 0600')
-    const result = await unlockWorkspaceWithKey({
-      userId, workspaceId: config.workspaceId, canary, pastedKey: (await handle.readFile('utf8')).trim(),
-      keyStore: getWorkspaceKeyStore(),
-    })
-    if (!result.ok) throw new Error(`Workspace key refused: ${result.reason}`)
-  } finally {
-    await handle.close()
-  }
+  const result = await unlockWorkspaceWithKey({
+    userId, workspaceId: access.workspaceId, canary, pastedKey: access.key, keyStore: getWorkspaceKeyStore(),
+  })
+  if (!result.ok) throw new Error(`Workspace key refused: ${result.reason}`)
 }

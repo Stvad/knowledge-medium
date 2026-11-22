@@ -66,7 +66,7 @@ export const stagingCiphertextParams = (
 
 /**
  * Single-window queue drain — mirrors `drainQueueOnce`'s per-window core
- * (`../observer.ts:186-220`): read the pending `blocks_synced_changes`
+ * in `../observer.ts`: read the pending `blocks_synced_changes`
  * queue ordered by seq, dedup to latest-op-per-id, run
  * `materializeStagingRows` over the whole window, then
  * `DELETE ... WHERE seq <= maxSeq` to consume it. Returns `null` when the

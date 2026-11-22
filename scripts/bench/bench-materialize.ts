@@ -43,8 +43,10 @@ const parseArgs = (argv: string[]) => {
   const randomIds = argv.includes('--random-ids')
   const rebuildDerived = argv.includes('--rebuild-derived')
   const dropIndexes = argv.includes('--drop-indexes')
+  const bulkLoad = argv.includes('--bulk-load')
+  const perRowFts = argv.includes('--per-row-fts')
   const cacheKb = argv.includes('--cache-kb') ? value('--cache-kb', NaN) : undefined
-  const options: VariantOptions = {window, modes, scenarios, dropTriggers, dropIndexes, rebuildDerived, randomIds, cacheKb}
+  const options: VariantOptions = {window, modes, scenarios, dropTriggers, dropIndexes, rebuildDerived, randomIds, cacheKb, bulkLoad, perRowFts}
   validateVariantOptions({...options, records, reps})
   return {records, reps, workflow, options}
 }
@@ -61,6 +63,7 @@ const printMetric = (
   console.log(JSON.stringify({
     scenario, mode, records, windowSize, windows: Math.ceil(records / windowSize), ...extra,
     wallMs: round(result.wallMs), phase1Ms: round(metrics.phase1ElapsedMs),
+    ...(metrics.deferredIndexMs ? {deferredIndexMs: round(metrics.deferredIndexMs)} : {}),
     writeTransactionMs: round(metrics.txElapsedMs), keyCalls: metrics.keyCalls,
     keyLookupMs: round(metrics.keyElapsedMs),
     dbCalls: Object.fromEntries(Object.entries(metrics.calls)

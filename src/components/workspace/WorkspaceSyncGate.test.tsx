@@ -18,15 +18,18 @@ import {
   clearSyncState,
   drainStaged,
   hasFirstSyncMarker,
+  hasMarker,
   insertWorkspaceRow,
   serverWorkspace,
   stagedBlock as stagedBlockIn,
   syncServer,
   testWorkspaceRow,
 } from '@/data/test/syncCheckpoint'
-import { noKey } from '@/data/internals/syncObserver/test/harness'
 import type { Materializability } from '@/sync/transform'
 import { WorkspaceSyncGate } from './WorkspaceSyncGate'
+import { RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, syncBulkLoadScope } from '@/data/internals/clientSchema'
+import { INSERT_BLOCK_SQL, noKey } from '@/data/internals/syncObserver/test/harness'
+import { blockToRowParams } from '@/data/blockSchema'
 
 const backlog = vi.hoisted(() => {
   let value = 0
@@ -99,6 +102,11 @@ describe('WorkspaceSyncGate', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
+  it('notes a workspace this device holds nothing of as a cold first sync', async () => {
+    renderGate({awaitingRow: true, onReady: vi.fn()})
+    await vi.waitFor(async () => expect(await hasMarker(shared.db, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, WS)).toBe(true))
+  })
+
   it('does not open on status changes while the workspace is not caught up', async () => {
     await deliver([serverWorkspace(workspaceRow), stagedBlock('b1')])
     const asks = vi.spyOn(repo, 'workspaceViewGap')
@@ -123,6 +131,30 @@ describe('WorkspaceSyncGate', () => {
     await drainStaged(shared.db)
     await deliver([serverWorkspace(workspaceRow)])
 
+    await vi.waitFor(() => expect(onReady).toHaveBeenCalled())
+  })
+
+  it('shows the deferred search index being built, and opens once it is', async () => {
+    await deliver([serverWorkspace(workspaceRow)])
+    // Rows a bulk window inserted and whose build has not run: the state the
+    // gate meets between a drain's last window and its build.
+    await shared.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [syncBulkLoadScope([WS])])
+      await tx.execute(INSERT_BLOCK_SQL, blockToRowParams({
+        id: 'b1', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'para', properties: {}, references: [],
+        createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'u', updatedBy: 'u', deleted: false,
+      }))
+      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+    })
+    const onReady = vi.fn()
+    renderGate({onReady})
+    expect(await screen.findByText('Building the search index')).toBeTruthy()
+    expect(onReady).not.toHaveBeenCalled()
+
+    // The gate's own kick reaches an observer, whose drain ends with the build.
+    withObserver()
+    cleanup()
+    renderGate({onReady})
     await vi.waitFor(() => expect(onReady).toHaveBeenCalled())
   })
 

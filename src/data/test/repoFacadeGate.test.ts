@@ -118,6 +118,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitDeferredWork: 'awaits the drainers above; assigns no Repo fields',
   cancelDelayedProcessors: 'clears timers on a shared job object',
   drainSyncWorkspace: 'reads this.syncObserver through the chain; never assigns it',
+  drainForRecovery: 'private; reads this.syncObserver through the chain; never assigns it',
   rematerializeWorkspace: 'reads this.syncObserver + two queries; assigns no Repo fields',
   workspaceUnappliedCount: 'read — one query; assigns no Repo fields',
   workspaceUnappliedExactCount: 'read — one query; assigns no Repo fields',

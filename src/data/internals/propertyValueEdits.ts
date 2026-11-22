@@ -279,6 +279,8 @@ export const finishPropertyValueEdit = async (
   const row = rows.values.find(value => value.id === id)
   if (!row) {
     if (finalText !== '') throw new PropertyEditRefusedError('resolve-in-outline', 'The edited row no longer belongs to this property.')
+    // The draft was deleted while blank: the field it created goes with it, so an unset property stays unset.
+    if (typeof edit !== 'string') await removeDraftField(tx, rows, edit)
     return
   }
   assertValueText(finalText)
@@ -296,6 +298,13 @@ export const finishPropertyValueEdit = async (
   await deleteSubtreeAnnouncedInTx(tx, id)
   const {field} = rows.fields[0]!
   if (edit.draftFieldId === field.id && !await carriesData(tx, field)) await deleteSubtreeAnnouncedInTx(tx, field.id)
+  requestProjection(tx, rows)
+}
+
+const removeDraftField = async (tx: Tx, rows: PropertyRows, edit: OpenedPropertyValue) => {
+  const draft = rows.fields.find(({field}) => field.id === edit.draftFieldId)
+  if (!draft || await carriesData(tx, draft.field)) return
+  await deleteSubtreeAnnouncedInTx(tx, draft.field.id)
   requestProjection(tx, rows)
 }
 

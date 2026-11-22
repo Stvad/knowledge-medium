@@ -63,6 +63,17 @@ describe('buildClaudeArgs', () => {
       .toEqual(['--tools', 'WebSearch,Bash,Read'])
   })
 
+  it('keeps skills and slash commands off while the allow list leaves Skill out', () => {
+    const args = buildClaudeArgs({...baseOptions, allowedTools: ['mcp__km__search', 'Bash', 'Read']})
+    expect(args).toContain('--disable-slash-commands')
+  })
+
+  it('lets a run whose allow list names Skill load skills', () => {
+    const args = buildClaudeArgs({...baseOptions, allowedTools: ['mcp__km__search', 'Bash', 'Skill']})
+    expect(args).not.toContain('--disable-slash-commands')
+    expect(args[args.indexOf('--tools') + 1]).toBe('Bash,Skill')
+  })
+
   describe('in a workspace', () => {
     const workspace = {root: '/ws/notes-agent', allowedDomains: []}
     const args = buildClaudeArgs({

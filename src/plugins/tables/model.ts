@@ -1,7 +1,8 @@
-import type { BlockData } from '@/data/api'
+import type { BlockData, TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle } from '@/hooks/block'
+import type { QueryClauses } from './query/parse'
 import { COLUMN_TYPE, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp } from './schema'
 
 /** Rows mount and stay mounted, so a table draws at most this many. */
@@ -42,12 +43,36 @@ export const useColumns = (host: Block, workspaceId: string, viewId: string): re
     workspaceId, parentId: viewId, types: [COLUMN_TYPE], order: 'outline', propertyChildren: 'none',
   }), {selector: blocks => blocks?.map(columnOf)})
 
-export const rowQuery = (hostId: string, workspaceId: string, viewIds: readonly string[]) => ({
-  workspaceId, parentId: hostId, order: 'outline' as const, propertyChildren: 'none' as const,
-  exclude: viewIds.map(id => ({id})), limit: ROW_CAP + 1,
+/** No row source returns a table's own configuration, this table's or another's. */
+const NOT_TABLE_MACHINERY = {types: [VIEW_TYPE, COLUMN_TYPE]}
+
+/** Without a query, the host's children in outline order; with one, what it
+ *  selects, oldest first, never the host itself. Either way field and value
+ *  rows are left out, `order` replaces the default, and one id past the cap
+ *  comes back so the grid can say it stopped. */
+export const rowQuery = (
+  hostId: string, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
+): TypedBlockQuery & {limit: number} => ({
+  workspaceId, propertyChildren: 'none', limit: ROW_CAP + 1,
+  ...query === null
+    ? {parentId: hostId, order: order ?? 'outline', exclude: [NOT_TABLE_MACHINERY]}
+    : {...query, order: order ?? 'created-asc', exclude: [...query.exclude ?? [], NOT_TABLE_MACHINERY, {id: hostId}]},
 })
 
-/** Every child of the host except its view blocks and its own property rows,
- *  in outline order, one past the cap so the grid can say it stopped. */
-export const useRowIds = (host: Block, workspaceId: string, viewIds: readonly string[]): readonly string[] | undefined =>
-  useHandle(host.repo.query.typedBlockIds(rowQuery(host.id, workspaceId, viewIds)), {selector: ids => ids})
+export const useRowIds = (
+  host: Block, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
+): readonly string[] | undefined =>
+  useHandle(host.repo.query.typedBlockIds(rowQuery(host.id, workspaceId, query, order)), {selector: ids => ids})
+
+/** The property names held by the rows the table's source selects, most
+ *  common first: what a new column most likely shows. Read once. */
+export const rowPropertyNames = async (
+  host: Block, workspaceId: string, query: QueryClauses | null,
+): Promise<string[]> => {
+  const rows = await host.repo.queryBlocks(rowQuery(host.id, workspaceId, query))
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    for (const name of Object.keys(row.properties)) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return [...counts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b)).map(([name]) => name)
+}

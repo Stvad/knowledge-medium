@@ -111,6 +111,7 @@ import {
   RECORD_KEYED_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
   SELECT_REPROJECT_REF_MARKERS_SQL,
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_KEYED_MARKER_SQL,
 } from './internals/clientSchema'
@@ -1427,14 +1428,23 @@ export class Repo {
 
   /** Re-materialize all staged rows after workspace unlock/verification.
    *  Read every row: legacy shadows can incorrectly have `needs_apply = 0`.
-   *  A pass with no deferred/quarantined rows also satisfies one-time recovery.
    *  Returns the pass's report, or null when no observer is running. */
   async drainSyncWorkspace(
     workspaceId: string,
     onProgress?: RematerializeProgressListener,
   ): Promise<RematerializeReport | null> {
+    return this.drainForRecovery(workspaceId, 'all', onProgress)
+  }
+
+  /** A pass with no deferred or quarantined rows also retires the one-time
+   *  reconcile rescan. */
+  private async drainForRecovery(
+    workspaceId: string,
+    scope: RematerializeScope,
+    onProgress?: RematerializeProgressListener,
+  ): Promise<RematerializeReport | null> {
     if (!this.syncObserver) return null
-    const report = await this.syncObserver.drainWorkspace(workspaceId, 'all', onProgress)
+    const report = await this.syncObserver.drainWorkspace(workspaceId, scope, onProgress)
     if (report.deferred === 0 && report.quarantined === 0) {
       await this.db.execute(RECORD_KEYED_MARKER_SQL, [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`])
     }
@@ -4818,9 +4828,10 @@ export class Repo {
    * that skip-staled the server's authoritative row under an *old* reconcile
    * gate consumed its `blocks_synced_changes` entry, so a normal queue-driven
    * drain never re-evaluates it — the shadow persists across reloads. This
-   * re-runs the materialization for the workspace via `drainSyncWorkspace`,
-   * which re-reads `blocks_synced` DIRECTLY (bypassing the consumed queue) and
-   * re-applies the gate, un-shadowing the server's value on disk.
+   * re-runs the materialization for the workspace straight from
+   * `blocks_synced` (bypassing the consumed queue) and re-applies the gate,
+   * un-shadowing the server's value on disk. It reads every staged row, or only
+   * the flagged ones under {@link RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}.
    *
    * No special mode is needed anymore: with server-enforced `updated_at`
    * monotonicity, the sole gate already lets the server win on any
@@ -4848,8 +4859,11 @@ export class Repo {
     const key = `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`
     const done = await this.db.getOptional<{key: string}>(SELECT_KEYED_MARKER_SQL, [key])
     if (done) return
+    const flagsTrusted = await this.db.getOptional<{key: string}>(
+      SELECT_KEYED_MARKER_SQL, [`${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${workspaceId}`],
+    )
     try {
-      await this.drainSyncWorkspace(workspaceId)
+      await this.drainForRecovery(workspaceId, flagsTrusted ? 'unapplied' : 'all')
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[reconcileRescan] workspace ${workspaceId} failed (will retry next open): ${reason}`)

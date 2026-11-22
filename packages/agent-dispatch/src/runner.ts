@@ -219,9 +219,12 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // --allowedTools only pre-approves: an offered tool that needs no approval
   // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
   // anyway, so the offered set is the boundary. Offer only the built-ins the
-  // allow list names, and no skills: every request carries each one offered.
+  // allow list names: every request carries each one offered, skills included.
+  // Skill is unusable under --disable-slash-commands, so an allow list naming
+  // it drops the flag, which also lets a prompt starting with `/` run a command.
   const offered = builtInToolsAllowed([...options.allowedTools, ...(workspace ? WORKSPACE_TOOLS : [])])
-  args.push('--disable-slash-commands', '--tools', offered.join(','))
+  if (!offered.includes('Skill')) args.push('--disable-slash-commands')
+  args.push('--tools', offered.join(','))
   // A workspace's grants ride in its settings document instead (workspace.ts).
   const allowedTools = workspace
     ? options.allowedTools.filter(rule => SINGLE_RULE.test(rule) && !WORKSPACE_APPROVED_TOOLS.includes(ruleTool(rule)))

@@ -46,6 +46,8 @@ export interface SyncDrainRecordFields {
   writeMs: number
   invalidateMs: number
   bookkeepingMs: number
+  deferredIndexEntries: number
+  deferredIndexMs: number
 }
 
 export type SyncDrainRecordData = SyncRecordHeader & { kind: 'drain' } & SyncDrainRecordFields
@@ -135,6 +137,8 @@ export const buildDrainRecord = (
   writeMs: Math.round(stats.writeMs),
   invalidateMs: Math.round(stats.invalidateMs),
   bookkeepingMs: Math.round(stats.bookkeepingMs),
+  deferredIndexEntries: stats.deferredIndexEntries,
+  deferredIndexMs: Math.round(stats.deferredIndexMs),
 })
 
 /** Pure: tracker output -> storable record. Unobserved phases stay absent. */

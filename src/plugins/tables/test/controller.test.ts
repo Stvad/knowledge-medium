@@ -6,6 +6,7 @@ import { peekFocusedBlockLocation } from '@/data/properties'
 import { getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { peekValueOwner } from '../cellEdits'
 import { GridController, type GridColumn } from '../controller'
 import { turnIntoTable } from '../convert'
 import { tablesDataExtension } from '../dataExtension'
@@ -94,5 +95,61 @@ describe('GridController', () => {
     controller.setRows(rowIds, ROW_CAP)
     await controller.insertFirstRow()
     expect(await rowsOf('host')).toHaveLength(2)
+  })
+
+  // Defence in depth: a block under a member that is a reference is never
+  // read as a value of a property named by that reference.
+  it('reads a block nested under a reference member as no property value', async () => {
+    const {repo} = await setup(1)
+    await repo.tx(async tx => {
+      await tx.create({id: 'target', workspaceId, parentId: null, orderKey: 'b0', content: 'Target'})
+      await tx.create({id: 'ref-member', workspaceId, parentId: 'row-0', orderKey: 'a0', content: '((target))'})
+      await tx.stampReferenceTarget('ref-member', 'target', false)
+      await tx.create({id: 'nested', workspaceId, parentId: 'ref-member', orderKey: 'a0', content: 'note'})
+    }, options)
+    await Promise.all([repo.load('nested'), repo.load('ref-member')])
+    expect(repo.block('ref-member').peek()?.referenceTargetId).toBe('target')
+    expect(peekValueOwner(repo, 'nested')).toBeUndefined()
+  })
+
+  describe('row gestures a query or a sort decides', () => {
+    const parentOf = async (id: string) => (await db.db.get<{parent_id: string}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id
+
+    it('nests no rows under a query', async () => {
+      const {controller, rowIds} = await setup(2)
+      controller.setRows(rowIds, rowIds.length)
+      controller.setQuery([{kind: 'property', text: 'x'} as never])
+      await controller.nestRow(rowIds[1]!)
+      expect(await parentOf(rowIds[1]!)).toBe('host')
+    })
+
+    it('nests a row under the row drawn above it, not the view', async () => {
+      const {controller, rowIds} = await setup(2)
+      controller.setRows(rowIds, rowIds.length)
+      await controller.nestRow(rowIds[0]!)
+      expect(await parentOf(rowIds[0]!)).toBe('host')
+      await controller.nestRow(rowIds[1]!)
+      expect(await parentOf(rowIds[1]!)).toBe(rowIds[0])
+    })
+
+    it('moves no rows when sorted or under a query', async () => {
+      const {controller, rowIds} = await setup(2)
+      controller.setRows(rowIds, rowIds.length)
+      controller.setSorted(true)
+      await controller.moveRow(rowIds[1]!, -1)
+      expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
+      controller.setSorted(false)
+      controller.setQuery([{kind: 'property', text: 'x'} as never])
+      await controller.moveRow(rowIds[1]!, -1)
+      expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
+    })
+  })
+
+  it('lists a row’s children without one it also draws as a row', async () => {
+    const {repo, controller, rowIds} = await setup(1)
+    const note = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'note'})
+    const alsoRow = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'also a row'})
+    controller.setRows([rowIds[0]!, alsoRow!], 2)
+    expect(await controller.childIdsOf(rowIds[0]!)).toEqual([note])
   })
 })

@@ -10,7 +10,8 @@ import { Explanation, GateCard } from '@/components/workspace/keyUi'
 import { ProgressRow, SyncProgress } from '@/components/workspace/SyncProgress'
 import { useRepo } from '@/context/repo'
 import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog'
-import { readWorkspaceFirstSync, recordWorkspaceFirstSync, type WorkspaceFirstSync } from '@/data/workspaceFirstSync'
+import { noteColdFirstSync, readWorkspaceFirstSync, recordWorkspaceFirstSync, type WorkspaceFirstSync } from '@/data/workspaceFirstSync'
+import { DEFERRED_SEARCH_INDEX_GAP_REASON } from '@/data/internals/syncObserver/reconcile'
 
 interface Props {
   workspaceId: string
@@ -43,6 +44,8 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
   const rowLanded = rows.length > 0
   const [repair, setRepair] = useState<Repair>({kind: 'idle'})
   const [drainError, setDrainError] = useState<string | null>(null)
+  // The drain's last step after a bulk load, which moves no backlog.
+  const [indexing, setIndexing] = useState(false)
   const [asks, setAsks] = useState(0)
   const askAgain = () => setAsks(n => n + 1)
 
@@ -53,6 +56,12 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
   const kicking = useRef<Promise<void> | null>(null)
   // A bulk load while the gate is up — see `BlocksSyncedObserver.holdBulkLoad`.
   useEffect(() => repo.holdBulkSyncLoad(workspaceId), [repo, workspaceId])
+  // Must land before the drain applies any of this workspace's rows; once one
+  // has, it records nothing.
+  useEffect(() => {
+    noteColdFirstSync(repo.db, workspaceId)
+      .catch((err: unknown) => console.warn('[WorkspaceSyncGate] cold first-sync note failed', err))
+  }, [repo, workspaceId])
 
   const kickDrain = useCallback((): Promise<void> => {
     kicking.current ??= repo.flushSyncObserver().then(
@@ -69,6 +78,7 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
     }
     /** Acts on one answer; true when it is waiting on the drain alone. */
     const settle = (state: WorkspaceFirstSync): boolean => {
+      setIndexing(state.kind === 'pending' && state.gap?.reason === DEFERRED_SEARCH_INDEX_GAP_REASON)
       if (state.kind !== 'pending') {
         onReady()
         return false
@@ -114,6 +124,7 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
       </Explanation>
       <SyncProgress showConnection>
         {repair.kind === 'running' && <ProgressRow label="Re-applying downloaded rows" detail={null}/>}
+        {indexing && <ProgressRow label="Building the search index" detail={null}/>}
       </SyncProgress>
       {drainError && <p className="text-sm text-destructive">Applying synced changes failed: {drainError}</p>}
       {repair.kind === 'failed' && (

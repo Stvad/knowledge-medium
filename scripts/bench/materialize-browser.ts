@@ -72,6 +72,7 @@ export async function runBrowserMaterializeBench(
     scenarios: o.scenarios ?? ['initial', 'echo-repass'],
     dropTriggers: o.dropTriggers ?? [], dropIndexes: o.dropIndexes ?? false,
     rebuildDerived: o.rebuildDerived ?? false, randomIds: o.randomIds ?? false, cacheKb: o.cacheKb,
+    bulkLoad: o.bulkLoad ?? false, perRowFts: o.perRowFts ?? false,
   }
   validateVariantOptions({...options, records: count, reps})
   console.info('loading benchmark core')
@@ -100,7 +101,7 @@ export async function runBrowserMaterializeBench(
         await tx.execute('DELETE FROM blocks_synced_changes')
         await tx.execute('DELETE FROM row_events')
         // Not left to the delete triggers: a variant may have dropped them.
-        const derived = ['block_aliases', 'block_references', 'block_types', 'blocks_fts', 'blocks_fts_rowids']
+        const derived = ['block_aliases', 'block_references', 'block_types', 'blocks_fts', 'blocks_fts_rowids', 'blocks_fts_owed']
         const present = await tx.getAll<{name: string}>(
           `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${derived.map(() => '?').join(', ')})`, derived,
         )
@@ -110,7 +111,7 @@ export async function runBrowserMaterializeBench(
         if (sample < 0) return
         const record = {mode, scenario, repetition: sample, ...result, metrics: {...result.metrics, sql: [...result.metrics.sql]}, validation, extra}
         samples.push(record)
-        console.info('sample', JSON.stringify({mode, scenario, repetition: sample, wallMs: result.wallMs, phase1Ms: result.metrics.phase1ElapsedMs, txMs: result.metrics.txElapsedMs, keyCalls: result.metrics.keyCalls, keyMs: result.metrics.keyElapsedMs, sql: result.metrics.calls, validation, extra}))
+        console.info('sample', JSON.stringify({mode, scenario, repetition: sample, wallMs: result.wallMs, phase1Ms: result.metrics.phase1ElapsedMs, deferredIndexMs: result.metrics.deferredIndexMs, txMs: result.metrics.txElapsedMs, keyCalls: result.metrics.keyCalls, keyMs: result.metrics.keyElapsedMs, sql: result.metrics.calls, validation, extra}))
       },
     }, reps)
     return {

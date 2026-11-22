@@ -57,6 +57,7 @@ import {
 } from './invalidate.js'
 import { WORKSPACE_UNAPPLIED_IDS_SQL } from './reconcile.js'
 import { createSyncGrowthAnalyzeOwer } from './analyzeOwedOnGrowth.js'
+import { buildDeferredSearchIndex } from '@/data/internals/clientSchema.js'
 
 /** Drain-throttle window (ms) — coalesces sync-burst arrivals into one batched
  *  drain. */
@@ -125,6 +126,12 @@ export interface SyncDrainStats {
   /** Around the windows: reading and consuming `blocks_synced_changes` (or a
    *  workspace pass's id read), and the ANALYZE-owed check after each one. */
   readonly bookkeepingMs: number
+  /** The search index bulk windows deferred, built at the drain's end
+   *  (`buildDeferredSearchIndex`): owed entries cleared — tombstones, empty
+   *  rows and since-deleted rows included, so not a count of rows indexed —
+   *  and the build's wall time. */
+  readonly deferredIndexEntries: number
+  readonly deferredIndexMs: number
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
@@ -251,8 +258,9 @@ export interface BlocksSyncedObserver {
   isRematerializingWorkspace(workspaceId: string): boolean
   /** Treat `workspaceId`'s deliveries as a bulk load until the returned release
    *  is called: no 'create' event for the rows inserted into it
-   *  (`syncBulkLoadScope`), and bulk-sized windows for the whole drain, since
-   *  windows are not per workspace.
+   *  (`syncBulkLoadScope`), their search indexing deferred to one build at the
+   *  end of the drain (`blocks_fts_insert_deferred`), and bulk-sized windows
+   *  for the whole drain, since windows are not per workspace.
    *
    *  For a gate, which renders INSTEAD of the app: with no editor or plugin
    *  mounted nothing is waiting on the write lock, and what its workspace
@@ -394,6 +402,13 @@ export const startBlocksSyncedObserver = (
     await runCycleScan(outcome.snapshots)
   }
 
+  /** Could `blocks_fts_owed` hold anything this observer has not built? True
+   *  at start, for a debt left by an earlier process; then only once a bulk
+   *  window of its own commits. Decided here rather than by reading the table,
+   *  so a drain with no bulk window pays nothing for the build. Efficiency
+   *  only: an unconditional build finds nothing owed and changes no outcome. */
+  let mayOweIndex = true
+
   /** Materialize one bounded window + run its invalidation. The shared per-window
    *  step of both drain paths (queue-driven {@link drainQueueOnce} and
    *  workspace-rescan {@link materializeWorkspace}); they differ only in where
@@ -403,7 +418,9 @@ export const startBlocksSyncedObserver = (
     upserted: readonly string[],
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds: [...new Set([...bulkHolds].map(hold => hold.workspaceId))] })
+    const bulkLoadWorkspaceIds = [...new Set([...bulkHolds].map(hold => hold.workspaceId))]
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds })
+    if (bulkLoadWorkspaceIds.length > 0) mayOweIndex = true
     // Counted as soon as the window has committed: a failure in the steps
     // below does not undo it.
     meter.windows++
@@ -427,6 +444,23 @@ export const startBlocksSyncedObserver = (
     return outcome
   }
 
+  /** Index what bulk windows deferred. Every drain ends with it, so a drain
+   *  that resolves has left nothing owed, and one whose build throws rejects
+   *  like a failed window and retries on the next flush. */
+  const buildDeferredIndex = async (meter: Mutable<SyncDrainStats>): Promise<void> => {
+    if (!mayOweIndex) return
+    mayOweIndex = false
+    const startedAt = performance.now()
+    try {
+      meter.deferredIndexEntries += await buildDeferredSearchIndex(db)
+    } catch (err) {
+      mayOweIndex = true
+      throw err
+    } finally {
+      meter.deferredIndexMs += performance.now() - startedAt
+    }
+  }
+
   /** Run one drain under a meter and report it — on every exit, since a drain
    *  that throws or is torn down mid-backlog still did the work it measured. */
   const metered = async <T>(
@@ -437,19 +471,29 @@ export const startBlocksSyncedObserver = (
       source, completed: false, endedAtMs: 0, wallMs: 0, windows: 0, rows: 0,
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
       readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
+      deferredIndexEntries: 0, deferredIndexMs: 0,
     }
     const startedAt = performance.now()
     // Per drain, not per observer: each drain's first window delivers at once.
     invalidationsDeliveredAt = -Infinity
     try {
-      const result = await drain(meter)
+      let result: T
+      try {
+        result = await drain(meter)
+      } catch (err) {
+        // The windows that committed before the failure still owe their
+        // index, and a failed drain schedules no later flush to build it.
+        if (!isDisposedMidDrain(err)) await buildDeferredIndex(meter).catch(onError)
+        throw err
+      }
+      await buildDeferredIndex(meter)
       meter.completed = true
       return result
     } finally {
       // Whatever the last windows held back: their rows are committed, so the
       // queries over them are stale however the drain ended.
       try { deliverInvalidations() } catch (err) { onError(err) }
-      if (meter.windows > 0) {
+      if (meter.windows > 0 || meter.deferredIndexEntries > 0) {
         meter.wallMs = performance.now() - startedAt
         meter.endedAtMs = Date.now()
         // Guarded here rather than trusted: a throw from a `finally` would
