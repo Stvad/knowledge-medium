@@ -1,1 +1,1 @@
-export{Nx as blockrefCompletionSource}from"../../chunks/app-DhEn_mNe.js";
+export{Vx as blockrefCompletionSource}from"../../chunks/app-C8zDBlNi.js";

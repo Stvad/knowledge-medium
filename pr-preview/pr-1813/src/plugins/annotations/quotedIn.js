@@ -1,1 +1,1 @@
-export{wp as quotedInFooterContribution}from"../../../chunks/app-DhEn_mNe.js";
+export{Mp as quotedInFooterContribution}from"../../../chunks/app-C8zDBlNi.js";

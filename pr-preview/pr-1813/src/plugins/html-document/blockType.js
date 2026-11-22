@@ -1,1 +1,1 @@
-export{OX as htmlDocumentTypeSeed}from"../../../chunks/app-DhEn_mNe.js";
+export{PX as htmlDocumentTypeSeed}from"../../../chunks/app-C8zDBlNi.js";
