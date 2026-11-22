@@ -405,7 +405,8 @@ export const startBlocksSyncedObserver = (
   /** Could `blocks_fts_owed` hold anything this observer has not built? True
    *  at start, for a debt left by an earlier process; then only once a bulk
    *  window of its own commits. Decided here rather than by reading the table,
-   *  so a drain with no bulk window pays nothing for the build. */
+   *  so a drain with no bulk window pays nothing for the build. Efficiency
+   *  only: an unconditional build finds nothing owed and changes no outcome. */
   let mayOweIndex = true
 
   /** Materialize one bounded window + run its invalidation. The shared per-window
