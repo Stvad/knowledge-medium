@@ -1,1 +1,1 @@
-export{BU as defineVariant,VU as defineVariantFacet}from"../../chunks/app-BJJy9Cyy.js";
+export{GU as defineVariant,KU as defineVariantFacet}from"../../chunks/app-CpoYG35o.js";

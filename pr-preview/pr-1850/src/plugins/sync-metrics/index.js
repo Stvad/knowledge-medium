@@ -1,1 +1,1 @@
-export{Oa as syncMetricsPlugin}from"../../../chunks/app-BJJy9Cyy.js";
+export{Oa as syncMetricsPlugin}from"../../../chunks/app-CpoYG35o.js";

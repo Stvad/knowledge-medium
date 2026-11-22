@@ -1,1 +1,1 @@
-export{wq as applyKeybindingOverrides}from"../../chunks/app-BJJy9Cyy.js";
+export{kq as applyKeybindingOverrides}from"../../chunks/app-CpoYG35o.js";

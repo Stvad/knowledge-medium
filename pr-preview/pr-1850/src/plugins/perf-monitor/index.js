@@ -1,1 +1,1 @@
-export{oi as perfMonitorPlugin}from"../../../chunks/app-BJJy9Cyy.js";
+export{oi as perfMonitorPlugin}from"../../../chunks/app-CpoYG35o.js";

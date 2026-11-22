@@ -1,1 +1,1 @@
-export{hr as WOLF_THEME_ID,gr as applyWolfTheme,_r as syncWolfTheme}from"../../../chunks/app-BJJy9Cyy.js";
+export{hr as WOLF_THEME_ID,gr as applyWolfTheme,_r as syncWolfTheme}from"../../../chunks/app-CpoYG35o.js";

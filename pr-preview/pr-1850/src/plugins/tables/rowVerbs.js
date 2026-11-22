@@ -1,1 +1,1 @@
-export{Ps as tableRowVerbs}from"../../../chunks/app-BJJy9Cyy.js";
+export{Rs as tableRowVerbs}from"../../../chunks/app-CpoYG35o.js";

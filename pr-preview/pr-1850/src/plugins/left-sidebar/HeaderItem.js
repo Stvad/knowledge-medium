@@ -1,1 +1,1 @@
-export{XO as LeftSidebarHeaderItem}from"../../../chunks/app-BJJy9Cyy.js";
+export{tk as LeftSidebarHeaderItem}from"../../../chunks/app-CpoYG35o.js";

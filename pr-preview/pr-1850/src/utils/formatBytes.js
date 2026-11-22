@@ -1,1 +1,1 @@
-export{V8 as formatBytes}from"../../chunks/app-BJJy9Cyy.js";
+export{K8 as formatBytes}from"../../chunks/app-CpoYG35o.js";

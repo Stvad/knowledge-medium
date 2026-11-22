@@ -1,1 +1,1 @@
-export{DS as remarkReferenceOccurrences}from"../../../../chunks/app-BJJy9Cyy.js";
+export{jS as remarkReferenceOccurrences}from"../../../../chunks/app-CpoYG35o.js";
