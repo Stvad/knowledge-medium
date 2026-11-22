@@ -1,1 +1,0 @@
-export{ght as defineQuery}from"../../../chunks/app-CFXmVGzj.js";

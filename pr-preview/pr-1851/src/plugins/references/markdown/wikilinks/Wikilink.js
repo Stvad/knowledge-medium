@@ -1,1 +1,0 @@
-export{NS as Wikilink}from"../../../../../chunks/app-CFXmVGzj.js";

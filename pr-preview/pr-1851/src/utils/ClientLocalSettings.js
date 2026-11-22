@@ -1,1 +1,0 @@
-export{rR as ClientLocalSettings,iR as clientLocalSettings}from"../../chunks/app-CFXmVGzj.js";

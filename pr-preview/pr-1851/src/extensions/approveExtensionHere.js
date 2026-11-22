@@ -1,1 +1,0 @@
-export{_L as approveExtensionHere}from"../../chunks/app-CFXmVGzj.js";

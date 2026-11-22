@@ -1,1 +1,0 @@
-export{c4 as pluginPrefsExtension,l4 as pluginUIStateExtension}from"../../chunks/app-CFXmVGzj.js";

@@ -1,1 +1,0 @@
-export{SM as Label}from"../../../chunks/app-CFXmVGzj.js";

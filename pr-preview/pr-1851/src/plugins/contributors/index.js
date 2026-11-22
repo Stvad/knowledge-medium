@@ -1,1 +1,0 @@
-export{m_ as contributorsPlugin}from"../../../chunks/app-CFXmVGzj.js";

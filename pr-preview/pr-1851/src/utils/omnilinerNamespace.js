@@ -1,1 +1,0 @@
-export{XY as omnilinerNamespace}from"../../chunks/app-CFXmVGzj.js";

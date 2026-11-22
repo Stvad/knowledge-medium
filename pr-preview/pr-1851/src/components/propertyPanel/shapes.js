@@ -1,1 +1,0 @@
-export{VJ as propertyShapeLabel}from"../../../chunks/app-CFXmVGzj.js";

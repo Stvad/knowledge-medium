@@ -1,1 +1,0 @@
-export{sc as propertyRowsPlugin}from"../../../chunks/app-CFXmVGzj.js";

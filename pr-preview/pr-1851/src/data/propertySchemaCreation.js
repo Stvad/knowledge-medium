@@ -1,1 +1,0 @@
-export{HJ as adoptOrCreatePropertySchema}from"../../chunks/app-CFXmVGzj.js";

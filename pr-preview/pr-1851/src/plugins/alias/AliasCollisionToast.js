@@ -1,1 +1,0 @@
-export{WC as AliasCollisionToast}from"../../../chunks/app-CFXmVGzj.js";

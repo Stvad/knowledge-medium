@@ -1,1 +1,0 @@
-export{D8 as FacetBridge}from"../../chunks/app-CFXmVGzj.js";

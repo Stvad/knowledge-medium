@@ -1,1 +1,0 @@
-export{LJ as usePropertySchemas}from"../../chunks/app-CFXmVGzj.js";

@@ -1,1 +1,0 @@
-export{YI as BlockPasteShellDecorator,XI as blockPasteShellDecorator}from"../../chunks/app-CFXmVGzj.js";

@@ -1,1 +1,0 @@
-export{GZ as htmlDocumentDataExtension}from"../../../chunks/app-CFXmVGzj.js";

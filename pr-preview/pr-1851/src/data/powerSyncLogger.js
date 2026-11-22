@@ -1,1 +1,0 @@
-export{C6 as powerSyncLogger}from"../../chunks/app-CFXmVGzj.js";

@@ -1,1 +1,0 @@
-export{Hv as BLOCK_HISTORY_CONTENT_CHARS,Uv as LISTED_PROPERTY_NAMES,Wv as MAX_LISTED_CHANGES,Gv as blockHistory,Kv as recentChanges}from"../../../chunks/app-CFXmVGzj.js";

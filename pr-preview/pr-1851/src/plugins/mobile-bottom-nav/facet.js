@@ -1,1 +1,0 @@
-export{OO as mobileBottomNavItemsFacet}from"../../../chunks/app-CFXmVGzj.js";

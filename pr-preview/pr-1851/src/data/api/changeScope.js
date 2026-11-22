@@ -1,1 +1,0 @@
-export{lgt as CHANGE_SCOPE_POLICIES,ugt as ChangeScope,dgt as isChangeScope,fgt as policyForScope,pgt as scopeAllowedInReadOnly,mgt as scopeIsUndoable,hgt as scopePoliciesEquivalent,ggt as scopeUploadsToServer,_gt as sourceForScope}from"../../../chunks/app-CFXmVGzj.js";
