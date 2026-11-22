@@ -1,1 +1,1 @@
-export{NI as appUpdatePromptExtension}from"../../../chunks/app-aHEj679w.js";
+export{NI as appUpdatePromptExtension}from"../../../chunks/app-BKQtxhN5.js";
