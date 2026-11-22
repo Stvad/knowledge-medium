@@ -1,1 +1,1 @@
-export{Zf as blockTagsConfigUi}from"../../../chunks/app-DrLuVBtw.js";
+export{np as blockTagsConfigUi}from"../../../chunks/app-Cfv8gWmJ.js";

@@ -1,1 +1,1 @@
-export{GC as convertClipboardHtml}from"../../../chunks/app-DrLuVBtw.js";
+export{XC as convertClipboardHtml}from"../../../chunks/app-Cfv8gWmJ.js";

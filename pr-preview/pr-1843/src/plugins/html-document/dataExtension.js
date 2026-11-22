@@ -1,1 +1,1 @@
-export{FZ as htmlDocumentDataExtension}from"../../../chunks/app-DrLuVBtw.js";
+export{BZ as htmlDocumentDataExtension}from"../../../chunks/app-Cfv8gWmJ.js";

@@ -1,1 +1,1 @@
-export{DP as CommandPalette}from"../../../chunks/app-DrLuVBtw.js";
+export{MP as CommandPalette}from"../../../chunks/app-Cfv8gWmJ.js";

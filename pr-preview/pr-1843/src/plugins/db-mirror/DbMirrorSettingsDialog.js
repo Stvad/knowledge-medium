@@ -1,1 +1,1 @@
-export{nl as DbMirrorSettingsDialog}from"../../../chunks/app-DrLuVBtw.js";
+export{sl as DbMirrorSettingsDialog}from"../../../chunks/app-Cfv8gWmJ.js";

@@ -1,1 +1,1 @@
-export{OP as useCommandPaletteActions}from"../../../chunks/app-DrLuVBtw.js";
+export{NP as useCommandPaletteActions}from"../../../chunks/app-Cfv8gWmJ.js";
