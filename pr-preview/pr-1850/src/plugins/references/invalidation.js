@@ -1,1 +1,1 @@
-export{UX as REFERENCES_TARGET_INVALIDATION_CHANNEL,WX as referencesInvalidationRule}from"../../../chunks/app-BtX2RBb9.js";
+export{UX as REFERENCES_TARGET_INVALIDATION_CHANNEL,WX as referencesInvalidationRule}from"../../../chunks/app-C9vuBKkH.js";

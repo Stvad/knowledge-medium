@@ -1,1 +1,1 @@
-export{Qet as agree,$et as pluralize}from"../../chunks/app-BtX2RBb9.js";
+export{Qet as agree,$et as pluralize}from"../../chunks/app-C9vuBKkH.js";

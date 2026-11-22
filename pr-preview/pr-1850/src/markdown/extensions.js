@@ -1,1 +1,1 @@
-export{GU as markdownExtensionsFacet,KU as resolveMarkdownRenderConfig}from"../../chunks/app-BtX2RBb9.js";
+export{GU as markdownExtensionsFacet,KU as resolveMarkdownRenderConfig}from"../../chunks/app-C9vuBKkH.js";
