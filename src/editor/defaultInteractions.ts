@@ -41,6 +41,7 @@ export const codeMirrorEditModeActivation: ShortcutActivationContribution = cont
     dependencies: {
       block: context.block,
       editorView: context.editorView,
+      disableBlockSplit: context.blockContext?.disableBlockSplit,
       ...(renderScopeId ? {renderScopeId} : {}),
     },
   }]

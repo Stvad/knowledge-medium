@@ -69,6 +69,15 @@ export const getPropertyFieldTargetId = (
  *  stay fieldId-resolvable so their field rows keep classifying (§6). */
 export type IsPropertyFieldDefinition = (fieldId: string) => boolean
 
+// §9 selection: the bit + target pair (the JS twin of
+// SELECT_PROPERTY_FIELD_CHILD_SQL) — without the bit an unmarked
+// `((fieldId))` link row would be selected as the field row.
+export const fieldRowsForSchema = (
+  children: readonly BlockData[],
+  fieldId: string,
+): BlockData[] => children.filter(child =>
+  child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
+
 /** The flat §9 predicate, bit/column/definition half — the caller supplies
  *  only the flip gate. All three conditions here are content-intrinsic
  *  (recognition is move-proof at any non-root position): the marker bit,
@@ -357,6 +366,12 @@ const enumReadingIsAmbiguous = (codec: AnyCodec, content: string): boolean => {
   return names(content) && names(read)
 }
 
+export const verbatimValueTextProblem = (content: string): 'lone-surrogate' | 'field-form' | undefined => {
+  if (hasLoneSurrogate(content)) return 'lone-surrogate'
+  if (parseExactReferenceBlockContent(content)?.fieldForm) return 'field-form'
+  return undefined
+}
+
 /** Would writing this text into a value row DESTROY the property's value?
  *  For write paths that set `content` directly rather than encoding a typed
  *  value — find-replace is the one caller. They bypass
@@ -396,8 +411,7 @@ export const contentLosesPropertyValue = (
   // Content naming no option at all needs nothing here — the caller's own
   // decode throws on it (`valueChildContentToEncoded`).
   if (codec.type === 'enum' && enumReadingIsAmbiguous(codec, content)) return true
-  return parseExactReferenceBlockContent(content)?.fieldForm === true
-    || hasLoneSurrogate(content)
+  return verbatimValueTextProblem(content) !== undefined
 }
 
 const unicodeEscape = (c: string): string =>
@@ -1016,6 +1030,10 @@ export const scalarValueRow = <T extends {readonly content: string}>(
     ?? (values.length === 1 ? values[0] : undefined)
 }
 
+export const scalarDuplicates = (
+  values: readonly BlockData[], primary: BlockData | undefined, content: string,
+): BlockData[] => values.filter(row => row !== primary && row.content === content)
+
 /** What a value row is, for comparison. `denotesValue` is false when the row's
  *  text does not decode: such a row denotes NOTHING, which is why its `key` is
  *  its own identity and equal to nothing — not even to another row carrying the
@@ -1049,6 +1067,11 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
       content: content => `c${content}`,
     }
   }
+  return decodedMemberKeysFor(schema)
+}
+
+/** A cell folds only rows that denote the same value. Unreadable copies keep independent identities. */
+export const decodedMemberKeysFor = (schema: AnyPropertySchema): MemberKeys => {
   const valueKey = (content: ValueChildContent): string | undefined => {
     try {
       return `v${persistedJsonKey(valueChildContentToEncoded(schema, content))}`
@@ -1093,23 +1116,31 @@ export const memberKeysFor = (schema: AnyPropertySchema | null): MemberKeys => {
 export const unionValuesAcrossFieldRows = <T extends Pick<BlockData, 'id' | 'content'>>(
   schema: AnyPropertySchema | null,
   perFieldRow: readonly (readonly T[])[],
+): T[] => unionFieldValues(perFieldRow, memberKeysFor(schema))
+
+export const unionFieldValues = <T extends Pick<BlockData, 'id' | 'content'>>(
+  perFieldRow: readonly (readonly T[])[],
+  keys: MemberKeys,
+  onDuplicate?: (copy: T, survivor: T) => void,
 ): T[] => {
-  const keys = memberKeysFor(schema)
   const unioned: T[] = []
-  const seen = new Set<string>()
+  const seen = new Map<string, T>()
   for (const values of perFieldRow) {
     // Each row is judged against the rows BEFORE it and never against itself,
     // which is what keeps within-row multiplicity a property of every row
     // rather than only the first: a later row's `[b, b]` is two members, and
     // marking `b` seen as we went folded the second into the first.
-    const rowKeys: string[] = []
+    const rowKeys = new Map<string, T>()
     for (const value of values) {
       const {key} = keys.row(value)
-      rowKeys.push(key)
-      if (seen.has(key)) continue
-      unioned.push(value)
+      const survivor = seen.get(key)
+      if (survivor) onDuplicate?.(value, survivor)
+      else {
+        unioned.push(value)
+        if (!rowKeys.has(key)) rowKeys.set(key, value)
+      }
     }
-    for (const key of rowKeys) seen.add(key)
+    for (const [key, row] of rowKeys) seen.set(key, row)
   }
   return unioned
 }
@@ -1140,6 +1171,10 @@ export const fieldRowValues = async (
   return groups.length === 0 ? null : groups
 }
 
+export const rowsProjectToValue = (
+  schema: AnyPropertySchema, rows: readonly ValueChildContent[], encoded: unknown,
+): boolean => jsonValuesEqual(childContentsToEncodedPropertyValue(schema, rows), encoded)
+
 /**
  * Does `encoded` come back UNCHANGED through the value-child machinery?
  *
@@ -1157,7 +1192,7 @@ export const valueSurvivesChildRoundTrip = (
 ): boolean => {
   try {
     const contents = encodedPropertyValueToChildContents(schema, encoded)
-    return jsonValuesEqual(childContentsToEncodedPropertyValue(schema, contents), encoded)
+    return !contents.some(hasLoneSurrogate) && rowsProjectToValue(schema, contents, encoded)
   } catch {
     return false
   }

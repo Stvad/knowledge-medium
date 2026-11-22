@@ -13,6 +13,7 @@ import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent
 import { normalizeProfileName } from '@knowledge-medium/agent-cli/client'
 import { WATCH_EVENTS_MAX_SETTLE_MS, WATCH_EVENTS_MAX_TABLES } from '@knowledge-medium/agent-cli/protocol'
 import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
+import { instanceName } from './instance.js'
 
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
@@ -271,6 +272,11 @@ export type Watcher = BacklinksWatcher | QueryWatcher
 const workspaceIdRequired = 'workspaceId is required: the id of the workspace this daemon acts on. List yours with `kmagent --profile <profile> sql all "SELECT id, name FROM workspaces"`.'
 
 const rawConfigSchema = z.strictObject({
+  /** Names this daemon among the daemons on one machine: its pidfile, state
+   *  file, generated MCP config and push registration are named after it
+   *  (instance.ts). Unset keeps the original names; set it on every config
+   *  beyond the first. */
+  instance: z.string().max(64).regex(/^[A-Za-z0-9_.-]+$/, 'instance may only contain letters, numbers, underscores, dots, and dashes').optional(),
   /** kmagent token profile the daemon pairs under. Keep it dedicated
    *  (not "default") so its access can be revoked independently.
    *  Validated here with the bridge client's own rules — an invalid
@@ -336,7 +342,8 @@ const rawConfigSchema = z.strictObject({
    *  ambient session runs (watchers with delivery: 'channel' post here). */
   channelPort: z.number().int().positive().default(8790),
   /** State file for query-watcher cursors (backlink watchers keep
-   *  their state as block properties in the graph itself). */
+   *  their state as block properties in the graph itself). Unset, it is
+   *  the instance's (instance.ts). */
   statePath: z.string().optional(),
   /** Names must be unique across the whole config: cursors, baselines,
    *  and in-flight run keys are all keyed by watcher name, so even a
@@ -377,13 +384,12 @@ const rawConfigSchema = z.strictObject({
 export const defaultConfigPath = () =>
   path.join(agentRuntimeConfigDir(), 'agent-dispatch.json')
 
-export const defaultStatePath = () =>
-  path.join(agentRuntimeConfigDir(), 'agent-dispatch-state.json')
-
-/** Where watchers' workspaces live, apart from the config directory, which holds the
- *  bridge tokens. macOS only (daemon.ts). */
-export const defaultWorkspacesDir = () =>
-  path.join(os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch', 'workspaces')
+/** Where an instance's watchers keep their workspaces (instance.ts names instances),
+ *  apart from the config directory, which holds the bridge tokens. macOS only (daemon.ts). */
+export const defaultWorkspacesDir = (instance: string | undefined) => path.join(
+  os.homedir(), 'Library', 'Application Support', 'km-agent-dispatch',
+  ...(instance === undefined ? [] : [instanceName(instance)]), 'workspaces',
+)
 
 /** One path component, never `.` or `..`. */
 const FOLDER_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/
@@ -403,7 +409,7 @@ const duplicateWatcherName = (watchers: RawWatcher[]): string | null => {
   return null
 }
 
-const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
+const toActiveWatcher = (rawWatcher: RawWatcher, instance: string | undefined): Watcher => {
   const {disabled, ...watcher} = rawWatcher
   void disabled
   const runner = watcher.runner
@@ -415,7 +421,7 @@ const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
       : {
           ...runner,
           cwd,
-          workspace: runner.workspace && {...runner.workspace, root: path.join(defaultWorkspacesDir(), watcher.name)},
+          workspace: runner.workspace && {...runner.workspace, root: path.join(defaultWorkspacesDir(instance), watcher.name)},
         },
   }
 }
@@ -430,7 +436,7 @@ export const configSchema = rawConfigSchema.transform(config => {
      *  only active watchers in `watchers`. */
     configuredWatcherCount: config.watchers.length,
     statePath: config.statePath ? expandHome(config.statePath) : config.statePath,
-    watchers: activeWatchers.map(toActiveWatcher),
+    watchers: activeWatchers.map(watcher => toActiveWatcher(watcher, config.instance)),
   }
 })
 

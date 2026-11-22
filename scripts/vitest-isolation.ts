@@ -11,6 +11,7 @@ const NON_NODE_ENVIRONMENT = /@(?:vitest|jest)-environment\s+(?!node\b)/
 
 // Files no rule catches, each with why it cannot share a worker.
 export const ISOLATED_FILES: Readonly<Record<string, string>> = {
+  'scripts/headless/host.test.ts': 'the host imports the eval nodeShims and owns the process-wide watcher registry',
   'scripts/agent-eval/fixtureGraph.test.ts': 'nodeShims installs localStorage, window and document, which later node files must not inherit',
 }
 

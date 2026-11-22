@@ -808,6 +808,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Split block at cursor',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => {
+        // The palette dispatches by id, so this guard belongs in the handler.
+        if (deps.disableBlockSplit) return
         const {block, editorView, uiStateBlock, scopeRootId, propertyDisplay} = deps
         if (!block || !editorView || !uiStateBlock) return
 

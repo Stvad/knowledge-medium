@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import {configSchema, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
+import {configSchema, defaultWorkspacesDir, MAX_RUN_TIMEOUT_MS, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
   it('refuses the retired quietMs rather than ignoring a meaning that changed', () => {
@@ -300,6 +300,15 @@ describe('parseConfig', () => {
       expect(runner).toMatchObject({workspace: {root: path.join(base, 'notes-agent'), allowedDomains: []}})
     })
 
+    it('gives a named instance\'s watchers workspaces of their own', () => {
+      const config = parseConfig({
+        workspaceId: 'ws-test', instance: 'host',
+        watchers: [{kind: 'backlinks', name: 'notes-agent', target: 'claude', runner: {executor: 'claude', workspace: {}}}],
+      })
+      expect(config.watchers[0].runner).toMatchObject({workspace: {root: path.join(defaultWorkspacesDir('host'), 'notes-agent')}})
+      expect(defaultWorkspacesDir('host')).not.toBe(defaultWorkspacesDir(undefined))
+    })
+
     it('keeps the hosts Bash may reach', () => {
       expect(withRunner({workspace: {allowedDomains: ['pypi.org']}}).watchers[0].runner)
         .toMatchObject({workspace: {allowedDomains: ['pypi.org']}})
@@ -351,5 +360,13 @@ describe('parseConfig', () => {
       }],
     })
     expect(config.watchers[0]).toMatchObject({kind: 'query', params: ['inbox-id']})
+  })
+
+  it('names a second daemon on the machine by its instance, refusing a name that is not a plain file-name part', () => {
+    expect(parseConfig({workspaceId: 'ws-test'}).instance).toBeUndefined()
+    expect(parseConfig({workspaceId: 'ws-test', instance: 'host'}).instance).toBe('host')
+    expect(() => parseConfig({workspaceId: 'ws-test', instance: '../host'})).toThrow(/instance/)
+    expect(() => parseConfig({workspaceId: 'ws-test', instance: ''})).toThrow(/instance/)
+    expect(() => parseConfig({workspaceId: 'ws-test', instance: 'x'.repeat(65)})).toThrow(/instance/)
   })
 })

@@ -7,7 +7,7 @@
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api'
 import {createChild, move} from '@/data/mutators'
 import {hasBlockType} from '@/data/properties'
-import {parseExactReferenceBlockContent} from '@/data/referenceBlock'
+import {verbatimValueTextProblem} from '@/data/propertyChildren'
 import type {Repo} from '@/data/repo'
 import {createTypedChild} from '@/data/typedRecords'
 import {safeDecodeRowProperty} from '@/data/rowProperty'
@@ -102,8 +102,9 @@ export const assertQuotable = (anchor: RangeAnchor): void => {
   if (anchor.quoteStart !== undefined && !(Number.isInteger(anchor.quoteStart) && anchor.quoteStart >= 0)) {
     throw new InvalidQuoteError(`quoteStart ${anchor.quoteStart} is not a position in the text.`)
   }
-  if (hasLoneSurrogate(anchor.quote)) throw new InvalidQuoteError('The quote cuts a character in half.')
-  if (parseExactReferenceBlockContent(anchor.quote)?.fieldForm) {
+  const problem = verbatimValueTextProblem(anchor.quote)
+  if (problem === 'lone-surrogate') throw new InvalidQuoteError('The quote cuts a character in half.')
+  if (problem === 'field-form') {
     throw new InvalidQuoteError('A property field marker can\u2019t be quoted on its own.')
   }
 }

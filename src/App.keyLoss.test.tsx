@@ -21,7 +21,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import {
-  __encryptUploadOpsForTest,
+  __prepareBlockUploadForTest,
   __runUploadLoopForTest,
   type CompactedBlockOperation,
 } from '@/services/powersync'
@@ -105,7 +105,7 @@ const uploadPass = () => {
   const pass = __runUploadLoopForTest(shared.db, {
     applyOperations: async (_db, ops) => { sent.push(...ops) },
     recordRejection: async (_db, _tx, err) => { throw new Error(`quarantined: ${String(err)}`) },
-    encryptOps: ops => __encryptUploadOpsForTest(ops, resolver.getUploadMode, resolver.getCek),
+    prepareOperations: entries => __prepareBlockUploadForTest(entries, resolver.getUploadMode, resolver.getCek),
   }, new Map())
   return {pass, sent}
 }

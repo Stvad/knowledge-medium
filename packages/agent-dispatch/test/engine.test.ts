@@ -178,7 +178,7 @@ const engineWith = (deps: Partial<EngineDeps> & {graph: Graph & ReplyWriter}) =>
   })
 
 describe('workspace watchers', () => {
-  const root = path.join(defaultWorkspacesDir(), 'mentions')
+  const root = path.join(defaultWorkspacesDir(undefined), 'mentions')
   const workspaceConfig = (watcher: Record<string, unknown> = {}) => parseConfig({
     workspaceId: 'ws-test',
     watchers: [{
@@ -2237,7 +2237,7 @@ describe('query watcher lifecycle', () => {
     await engine.tick()
     await engine.drain()
 
-    const root = path.join(defaultWorkspacesDir(), 'inbox')
+    const root = path.join(defaultWorkspacesDir(undefined), 'inbox')
     expect(runTask.mock.calls[0][0]).toMatchObject({cwd: root, workspace: {root, allowedDomains: []}})
   })
 

@@ -34,12 +34,22 @@ export const fieldRowDefinition = (
   if (!data) return undefined
   if (!isPropertyFieldInstance(data, repoFieldDefinitionTest(repo, data.workspaceId))) return undefined
   const fieldId = data.referenceTargetId!
-  const resolution = repo.propertySchemaResolverFor(data.workspaceId).resolveField(fieldId)
-  if (resolution.status === 'resolved') {
-    return {fieldId, name: resolution.schema.name, schema: resolution.schema}
-  }
-  const name = definitions?.definitionsByFieldId.get(fieldId)?.name ?? fieldId
-  return {fieldId, name, schema: undefined}
+  const {name, schema} = resolveFieldDefinition(repo, definitions, data.workspaceId, fieldId)
+  return {fieldId, name: name ?? fieldId, schema}
+}
+
+/** A definition's schema when this device can build one, and its name when the
+ *  registry knows it. `definitions` is passed in for the same reason as in
+ *  {@link fieldRowDefinition}: a render that calls this must depend on it. */
+export const resolveFieldDefinition = (
+  repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+  fieldId: string,
+): {name: string | undefined; schema: AnyPropertySchema | undefined} => {
+  const resolution = repo.propertySchemaResolverFor(workspaceId).resolveField(fieldId)
+  if (resolution.status === 'resolved') return {name: resolution.schema.name, schema: resolution.schema}
+  return {name: definitions?.definitionsByFieldId.get(fieldId)?.name, schema: undefined}
 }
 
 /** A scalar control edits one row; list controls edit the whole list and

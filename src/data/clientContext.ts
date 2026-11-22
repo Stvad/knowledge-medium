@@ -37,8 +37,17 @@ import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import type { User } from '@/data/api/user.js'
 import { CallbackSet } from '@/utils/callbackSet'
 
+/** A user page this client reads preferences from in place of its own
+ *  user's, for one workspace. Reads only: preference writes always go to the
+ *  acting user's own page. */
+export interface PreferencesPage {
+  workspaceId: string
+  userPageId: string
+}
+
 export interface ClientContextOptions {
   user: User
+  preferencesPage?: PreferencesPage
 }
 
 /** A same-workspace app route as the session router sees it: the clean
@@ -87,6 +96,8 @@ export interface LayoutSessionRouter {
  */
 export interface ClientContextReader {
   readonly user: User
+  /** Resolved by `preferencesRootId` (`stateBlocks.ts`); read nowhere else. */
+  readonly preferencesPage: PreferencesPage | null
   readonly activeWorkspaceId: string | null
   readonly activeLayoutSessionId: string
   /** The per-device BASE session id (the no-override fallback). Only for
@@ -174,6 +185,8 @@ export class ClientContext implements ClientContextReader {
    *  commit pipeline (via `repo.tx`). */
   readonly user: User
 
+  readonly preferencesPage: PreferencesPage | null
+
   private _activeWorkspaceId: string | null = null
   /** `null` means "no override" — `activeLayoutSessionId` falls back to
    *  the per-device base id. */
@@ -229,6 +242,7 @@ export class ClientContext implements ClientContextReader {
 
   constructor(opts: ClientContextOptions) {
     this.user = opts.user
+    this.preferencesPage = opts.preferencesPage ?? null
   }
 
   onActingAsChange(listener: () => void): () => void {

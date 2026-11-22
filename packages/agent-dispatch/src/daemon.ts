@@ -18,12 +18,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
 import {
-  agentRuntimeConfigDir,
   bridgeUrl as resolveBridgeUrl,
   isLocalBridgeUrl,
   loadContributorSelection,
 } from '@knowledge-medium/agent-cli/config'
-import { defaultStatePath, loadConfig, watcherWorkspace, type DaemonConfig } from './config.js'
+import { loadConfig, watcherWorkspace, type DaemonConfig } from './config.js'
+import { instanceFiles, workspaceMcpConfigFile, type InstanceFiles } from './instance.js'
 import { cloudProviderSwitch } from './workspace.js'
 import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
@@ -49,8 +49,9 @@ const parseArgs = (argv: string[]) => {
   return args
 }
 
-// Single-instance lock — see pidfile.ts for the takeover semantics.
-const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid')
+/** Set once the config names this daemon's instance; until then it holds
+ *  no pidfile to release. */
+let files: InstanceFiles | null = null
 
 /** Generated --mcp-config for spawned claude runs: the dispatch km
  *  server, bound to the daemon's own profile, with watcher targets
@@ -59,8 +60,8 @@ const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid
  *  claude's tool search: every run uses them, so deferring them only
  *  costs each run a lookup turn. */
 const writeMcpConfig = async (
-  config: DaemonConfig, contributorId: string | null, fileName: string, mediaRoot?: string,
-): Promise<string> => {
+  config: DaemonConfig, contributorId: string | null, configPath: string, mediaRoot?: string,
+): Promise<void> => {
   const serverDef = buildMcpServerDef(config, contributorId, mediaRoot)
   const mcpConfig = {
     mcpServers: {
@@ -73,10 +74,8 @@ const writeMcpConfig = async (
     },
   }
 
-  const configPath = path.join(agentRuntimeConfigDir(), fileName)
   await fs.mkdir(path.dirname(configPath), {recursive: true})
   await fs.writeFile(configPath, `${JSON.stringify(mcpConfig, null, 2)}\n`)
-  return configPath
 }
 
 const main = async () => {
@@ -113,7 +112,9 @@ const main = async () => {
     process.exit(0)
   }
 
-  await acquirePidfile({file: pidfilePath()})
+  files = instanceFiles(config.instance)
+  // Single-instance lock — see pidfile.ts for the takeover semantics.
+  await acquirePidfile({file: files.pidfile})
 
   // Say — up front and every start — what these runs bill to, so an
   // accidental usage-based-billing setup is visible, not silent.
@@ -168,12 +169,12 @@ const main = async () => {
   if (config.watchers.length === 0) {
     log('no active watchers (all configured watchers are disabled) — clearing push registration and stopping')
     try {
-      await clearPushRegistration(client)
+      await clearPushRegistration(client, config.instance)
       log('push: watch-events registration cleared')
     } catch (error) {
       log(`push: could not clear watch-events registration (${errorMessage(error)})`)
     }
-    await releasePidfile({file: pidfilePath()})
+    await releasePidfile({file: files.pidfile})
     return
   }
   // Defence in depth: active watcher attribution was checked before startup.
@@ -193,7 +194,7 @@ const main = async () => {
     } catch (error) {
       if (args.once) {
         process.stderr.write(`bridge/pairing not ready: ${errorMessage(error)}\n`)
-        await releasePidfile({file: pidfilePath()})
+        await releasePidfile({file: files.pidfile})
         process.exit(1)
       }
       if (!bridgeStartAttempted && !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(resolveBridgeUrl())) {
@@ -213,16 +214,17 @@ const main = async () => {
     }
   }
 
-  const mcpConfigPath = await writeMcpConfig(config, contributorId, 'agent-dispatch-mcp.json')
+  const mcpConfigPath = files.mcpConfig
+  await writeMcpConfig(config, contributorId, mcpConfigPath)
   log(`mcp config: ${mcpConfigPath}`)
   // A workspace watcher's server reads media files under its own root, so it gets its own config.
   const workspaceMcpConfigPaths = new Map<string, string>()
   for (const watcher of config.watchers) {
     const root = watcherWorkspace(watcher)?.root
     if (root === undefined) continue
-    workspaceMcpConfigPaths.set(watcher.name, await writeMcpConfig(
-      config, contributorId, `agent-dispatch-mcp-${encodeURIComponent(watcher.name)}.json`, root,
-    ))
+    const configPath = workspaceMcpConfigFile(files, watcher.name)
+    await writeMcpConfig(config, contributorId, configPath, root)
+    workspaceMcpConfigPaths.set(watcher.name, configPath)
     log(`[${watcher.name}] workspace: ${root}`)
   }
   const mcpServerDef = buildMcpServerDef(config, contributorId)
@@ -237,7 +239,7 @@ const main = async () => {
     config,
     graph,
     replies: createReplyWriter(client),
-    state: createStateStore(config.statePath ?? defaultStatePath()),
+    state: createStateStore(config.statePath ?? files.state),
     runTask: options => options.executor === 'codex'
       ? runCodex({
         codexBin: config.codexBin,
@@ -303,12 +305,12 @@ const main = async () => {
   }
 
   await engine.drain()
-  await releasePidfile({file: pidfilePath()})
+  await releasePidfile({file: files.pidfile})
   log('stopped')
 }
 
 main().catch(async error => {
   process.stderr.write(`${errorMessage(error)}\n`)
-  await releasePidfile({file: pidfilePath()})
+  if (files) await releasePidfile({file: files.pidfile})
   process.exit(1)
 })

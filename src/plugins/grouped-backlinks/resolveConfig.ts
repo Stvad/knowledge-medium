@@ -1,5 +1,5 @@
 import type { Repo } from '@/data/repo'
-import { readPluginPref } from '@/data/stateBlocks.js'
+import { preferencesRootId, readPluginPref } from '@/data/stateBlocks.js'
 import {
   EMPTY_GROUPED_BACKLINKS_CONFIG,
   groupedBacklinksDefaultsProp,
@@ -39,7 +39,7 @@ export const resolveGroupedBacklinksConfig = async (
   }
   if (spec === 'none') return EMPTY_GROUPED_BACKLINKS_CONFIG
 
-  const defaults = await readPluginPref(repo, workspaceId, repo.user, groupedBacklinksPrefsType, groupedBacklinksDefaultsProp)
+  const defaults = await readPluginPref(repo, preferencesRootId(repo, workspaceId), groupedBacklinksPrefsType, groupedBacklinksDefaultsProp)
   const blockData = await repo.load(blockId)
   const overrides = selectGroupedBacklinksOverrides(blockData)
   return mergeGroupedBacklinksConfig(defaults, overrides)

@@ -87,14 +87,17 @@ vi.mock('@/components/workspace/WorkspaceSwitcher.js', () => ({
   },
 }))
 
-// The real sync gate, with the `onReady` each instance was handed recorded, so a
-// test can call a gate's open after a later resolve has hidden it.
+// The real sync gate, with each distinct `onReady` a mounted gate holds
+// recorded, so a test can call a gate's open after a later resolve has hidden
+// it. Recorded at commit, not render: React may render a gate it then discards,
+// with an `onReady` no mounted gate ever holds.
 const syncGates = vi.hoisted(() => ({onReady: [] as Array<() => void>}))
 vi.mock('@/components/workspace/WorkspaceSyncGate.js', async importOriginal => {
   const actual = await importOriginal<typeof import('@/components/workspace/WorkspaceSyncGate')>()
+  const {useEffect} = await vi.importActual<typeof import('react')>('react')
   return {
     WorkspaceSyncGate: (props: import('react').ComponentProps<typeof actual.WorkspaceSyncGate>) => {
-      if (syncGates.onReady.at(-1) !== props.onReady) syncGates.onReady.push(props.onReady)
+      useEffect(() => { syncGates.onReady.push(props.onReady) }, [props.onReady])
       return <actual.WorkspaceSyncGate {...props}/>
     },
   }
@@ -302,6 +305,7 @@ describe('App / LayoutRootContext provision', () => {
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
     await renderSyncedApp()
     await screen.findByRole('heading', {name: /opening/i})
+    await vi.waitFor(() => expect(syncGates.onReady).toHaveLength(1))
     const [open] = syncGates.onReady
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})
     await act(async () => open!())
@@ -317,6 +321,7 @@ describe('App / LayoutRootContext provision', () => {
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'waiting'})
     await renderSyncedApp()
     await screen.findByRole('heading', {name: /opening/i})
+    await vi.waitFor(() => expect(syncGates.onReady).toHaveLength(1))
     const [open] = syncGates.onReady
     vi.mocked(resolveWorkspace).mockResolvedValueOnce({id: 'ws-2', freshlyCreated: false})
     vi.mocked(resolveWorkspaceEntry).mockResolvedValue({kind: 'ready'})

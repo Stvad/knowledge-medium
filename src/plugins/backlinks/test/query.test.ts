@@ -152,6 +152,16 @@ describe('backlinksDataExtension query', () => {
     })
   })
 
+  it('stores a predicate type term as the query normalizes it', () => {
+    expect(backlinksFilterProp.codec.encode({
+      include: [{scope: 'ancestor', types: [' b', 'a', 'a']}],
+      exclude: [{types: ['c'], where: {status: 'done'}}, {types: [' ', '']}],
+    })).toEqual({
+      include: [{scope: 'ancestor', types: ['a', 'b']}],
+      exclude: [{types: ['c'], where: {status: 'done'}}],
+    })
+  })
+
   it('applies daily note defaults only to daily-note block data', () => {
     const dailyNoteData = {
       properties: {[typesProp.name]: typesProp.codec.encode([DAILY_NOTE_TYPE])},

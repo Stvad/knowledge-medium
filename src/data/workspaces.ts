@@ -456,7 +456,7 @@ const SELECT_LOCAL_WORKSPACES_SQL = `
   ORDER BY create_time ASC, id ASC
 `
 
-const SELECT_LOCAL_WORKSPACE_BY_ID_SQL = `
+export const SELECT_LOCAL_WORKSPACE_BY_ID_SQL = `
   SELECT id, name, owner_user_id, create_time, update_time, encryption_mode,
          wk_canary, properties_migration
   FROM workspaces

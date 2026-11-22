@@ -58,6 +58,7 @@ import {
   projectedPropertyDefinitionsFacet,
   projectedTypeDefinitionsFacet,
   queriesFacet,
+  queryableFieldsFacet,
   sameTxProcessorsFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
@@ -109,6 +110,7 @@ export interface FacetBridgeTarget {
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
   applyQueries(queries: Map<string, AnyQuery>): void
+  invalidateQueryableFields(): void
   /** Defer a ref-typed-property reprojection for the names whose ref-ness
    *  changed in this swap (off the cold-start critical path). */
   scheduleReprojection(
@@ -438,6 +440,11 @@ export class FacetBridge {
           target.applyPropertyEditorOverrides(rt.read(propertyEditorOverridesFacet))
           this.propertyEditorOverridesListeners.notify()
         },
+      },
+      {
+        id: 'queryableFields',
+        inputs: [queryableFieldsFacet as Facet<unknown, unknown>],
+        run: () => { target.invalidateQueryableFields() },
       },
       {
         id: 'queries',

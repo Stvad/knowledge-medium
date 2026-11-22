@@ -24,13 +24,15 @@ interface DividerHandleProps {
   onReset: () => void
   label: string
   title: string
-  /** Where the strip goes; it is `DIVIDER_HANDLE_WIDTH_PX` wide. */
+  /** Where the strip goes. */
   style: CSSProperties
+  /** Its width in px, `DIVIDER_HANDLE_WIDTH_PX` unless a finger needs more. */
+  width?: number
 }
 
 /** A vertical drag strip, transparent until hovered: the one pointer protocol
  *  for dragging a divider (capture, threshold, release, cancel). */
-export function DividerHandle({drag, onReset, label, title, style}: DividerHandleProps) {
+export function DividerHandle({drag, onReset, label, title, style, width = DIVIDER_HANDLE_WIDTH_PX}: DividerHandleProps) {
   const press = useRef<{pointerId: number; x: number; moved: boolean} | null>(null)
   const finish = (then: () => void) => (event: {pointerId: number}) => {
     const current = press.current
@@ -65,7 +67,7 @@ export function DividerHandle({drag, onReset, label, title, style}: DividerHandl
       onLostPointerCapture={finish(drag.onCancel)}
       onDoubleClick={onReset}
       className="group absolute z-20 flex cursor-col-resize touch-none justify-center"
-      style={{...style, width: DIVIDER_HANDLE_WIDTH_PX}}
+      style={{...style, width}}
     >
       <div className="h-full w-px bg-transparent transition-colors group-hover:bg-ring group-active:bg-ring"/>
     </div>

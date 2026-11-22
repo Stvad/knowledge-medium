@@ -96,7 +96,8 @@ export interface Tx {
 
   /** Sync read: tx-private snapshots map first (own writes in this tx),
    *  then the shared (pre-tx) cache. Returns null if neither has it.
-   *  The shared cache is mutated only on commit walk (v4.24), so
+   *  Repeated peeks of the same written version return the same immutable
+   *  snapshot. The shared cache is mutated only on commit walk (v4.24), so
    *  outside-tx readers never observe in-flight tx state. */
   peek(id: string): BlockData | null
 
