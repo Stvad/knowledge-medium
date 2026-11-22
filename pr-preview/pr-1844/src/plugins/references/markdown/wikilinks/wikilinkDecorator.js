@@ -1,1 +1,1 @@
-export{XM as isWikilinkDisplayParts,ZM as resolveWikilinkDisplay,QM as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-DLyKVrm8.js";
+export{XM as isWikilinkDisplayParts,ZM as resolveWikilinkDisplay,QM as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-BaDTmYNp.js";

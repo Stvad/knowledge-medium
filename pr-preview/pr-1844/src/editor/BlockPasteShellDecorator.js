@@ -1,1 +1,1 @@
-export{II as BlockPasteShellDecorator,LI as blockPasteShellDecorator}from"../../chunks/app-DLyKVrm8.js";
+export{II as BlockPasteShellDecorator,LI as blockPasteShellDecorator}from"../../chunks/app-BaDTmYNp.js";

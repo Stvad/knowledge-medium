@@ -1,1 +1,1 @@
-export{GU as BlockProperties}from"../../chunks/app-DLyKVrm8.js";
+export{KU as BlockProperties}from"../../chunks/app-BaDTmYNp.js";

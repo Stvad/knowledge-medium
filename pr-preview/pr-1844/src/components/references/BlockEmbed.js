@@ -1,1 +1,1 @@
-export{VF as BlockEmbed}from"../../../chunks/app-DLyKVrm8.js";
+export{VF as BlockEmbed}from"../../../chunks/app-BaDTmYNp.js";

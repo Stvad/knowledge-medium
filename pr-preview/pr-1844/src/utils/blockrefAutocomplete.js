@@ -1,1 +1,1 @@
-export{NS as blockrefCompletionSource}from"../../chunks/app-DLyKVrm8.js";
+export{NS as blockrefCompletionSource}from"../../chunks/app-BaDTmYNp.js";

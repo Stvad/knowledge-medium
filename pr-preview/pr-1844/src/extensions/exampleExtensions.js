@@ -1,1 +1,1 @@
-export{wI as exampleExtensions,TI as insertExampleExtensionsUnder}from"../../chunks/app-DLyKVrm8.js";
+export{wI as exampleExtensions,TI as insertExampleExtensionsUnder}from"../../chunks/app-BaDTmYNp.js";

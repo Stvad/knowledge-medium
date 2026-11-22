@@ -1,1 +1,1 @@
-export{CP as useCommandPaletteActions}from"../../../chunks/app-DLyKVrm8.js";
+export{CP as useCommandPaletteActions}from"../../../chunks/app-BaDTmYNp.js";

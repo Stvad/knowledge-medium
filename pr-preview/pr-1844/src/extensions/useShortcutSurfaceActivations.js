@@ -1,1 +1,1 @@
-export{MV as useShortcutSurfaceActivations}from"../../chunks/app-DLyKVrm8.js";
+export{NV as useShortcutSurfaceActivations}from"../../chunks/app-BaDTmYNp.js";

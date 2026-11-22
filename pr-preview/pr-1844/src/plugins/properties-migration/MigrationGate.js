@@ -1,1 +1,1 @@
-export{jc as MigrationGate}from"../../../chunks/app-DLyKVrm8.js";
+export{jc as MigrationGate}from"../../../chunks/app-BaDTmYNp.js";

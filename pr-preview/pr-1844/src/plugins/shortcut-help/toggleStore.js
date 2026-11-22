@@ -1,1 +1,1 @@
-export{hP as shortcutHelpToggle}from"../../../chunks/app-DLyKVrm8.js";
+export{hP as shortcutHelpToggle}from"../../../chunks/app-BaDTmYNp.js";

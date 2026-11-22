@@ -1,1 +1,1 @@
-export{vut as getOrCreatePropertiesPage,yut as propertiesPageBlockId,but as propertiesPageSpec}from"../../chunks/app-DLyKVrm8.js";
+export{yut as getOrCreatePropertiesPage,but as propertiesPageBlockId,xut as propertiesPageSpec}from"../../chunks/app-BaDTmYNp.js";

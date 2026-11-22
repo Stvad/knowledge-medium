@@ -1,1 +1,1 @@
-export{TV as BlockEditor}from"../../chunks/app-DLyKVrm8.js";
+export{TV as BlockEditor}from"../../chunks/app-BaDTmYNp.js";

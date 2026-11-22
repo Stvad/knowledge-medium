@@ -1,1 +1,1 @@
-export{Zs as propertyRowsPlugin}from"../../../chunks/app-DLyKVrm8.js";
+export{Zs as propertyRowsPlugin}from"../../../chunks/app-BaDTmYNp.js";

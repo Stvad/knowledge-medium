@@ -1,1 +1,1 @@
-export{ax as blockInfoPlugin}from"../../../chunks/app-DLyKVrm8.js";
+export{ax as blockInfoPlugin}from"../../../chunks/app-BaDTmYNp.js";

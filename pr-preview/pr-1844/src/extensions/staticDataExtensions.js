@@ -1,1 +1,1 @@
-export{sX as staticDataExtensions}from"../../chunks/app-DLyKVrm8.js";
+export{cX as staticDataExtensions}from"../../chunks/app-BaDTmYNp.js";

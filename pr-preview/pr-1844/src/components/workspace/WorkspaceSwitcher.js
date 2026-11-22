@@ -1,1 +1,1 @@
-export{ek as WorkspaceSwitcher}from"../../../chunks/app-DLyKVrm8.js";
+export{ek as WorkspaceSwitcher}from"../../../chunks/app-BaDTmYNp.js";

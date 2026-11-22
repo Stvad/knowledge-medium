@@ -1,1 +1,1 @@
-export{FR as BlockLoadingPlaceholder}from"../../chunks/app-DLyKVrm8.js";
+export{FR as BlockLoadingPlaceholder}from"../../chunks/app-BaDTmYNp.js";

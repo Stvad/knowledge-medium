@@ -1,1 +1,1 @@
-export{eR as extensionDisplayName,tR as extensionName,nR as userExtensionShellToggle,rR as userExtensionToggle}from"../../chunks/app-DLyKVrm8.js";
+export{eR as extensionDisplayName,tR as extensionName,nR as userExtensionShellToggle,rR as userExtensionToggle}from"../../chunks/app-BaDTmYNp.js";

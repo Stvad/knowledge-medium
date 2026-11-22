@@ -1,1 +1,1 @@
-export{JP as CommandPaletteHeaderItem}from"../../../chunks/app-DLyKVrm8.js";
+export{JP as CommandPaletteHeaderItem}from"../../../chunks/app-BaDTmYNp.js";

@@ -1,1 +1,1 @@
-export{Pc as migratePropertiesToBlocksAction,Ac as propertiesMigrationPlugin}from"../../../chunks/app-DLyKVrm8.js";
+export{Pc as migratePropertiesToBlocksAction,Ac as propertiesMigrationPlugin}from"../../../chunks/app-BaDTmYNp.js";

@@ -1,1 +1,1 @@
-export{jO as blockEditingContentRenderer}from"../../../chunks/app-DLyKVrm8.js";
+export{jO as blockEditingContentRenderer}from"../../../chunks/app-BaDTmYNp.js";

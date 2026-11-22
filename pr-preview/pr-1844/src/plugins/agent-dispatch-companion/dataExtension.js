@@ -1,1 +1,1 @@
-export{S3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DLyKVrm8.js";
+export{C3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BaDTmYNp.js";
