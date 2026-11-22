@@ -1,1 +1,1 @@
-export{kx as useBacklinks}from"../../../chunks/app-BpND7Qxz.js";
+export{kx as useBacklinks}from"../../../chunks/app-DeOMtgw0.js";

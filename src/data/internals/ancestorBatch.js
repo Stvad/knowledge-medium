@@ -1,1 +1,1 @@
-export{eat as ancestorWalk}from"../../../chunks/app-BpND7Qxz.js";
+export{eat as ancestorWalk}from"../../../chunks/app-DeOMtgw0.js";

@@ -1,1 +1,1 @@
-export{zlt as DerivedIdNamespaceUnavailableError,Blt as derivedIdNamespaceInTx,Vlt as resolveDerivedIdNamespace}from"../../chunks/app-BpND7Qxz.js";
+export{zlt as DerivedIdNamespaceUnavailableError,Blt as derivedIdNamespaceInTx,Vlt as resolveDerivedIdNamespace}from"../../chunks/app-DeOMtgw0.js";
