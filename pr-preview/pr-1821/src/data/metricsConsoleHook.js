@@ -1,1 +1,1 @@
-export{wF as ensureMetricsConsoleHook}from"../../chunks/app-CLmWkfm9.js";
+export{wF as ensureMetricsConsoleHook}from"../../chunks/app-C1xECUnF.js";

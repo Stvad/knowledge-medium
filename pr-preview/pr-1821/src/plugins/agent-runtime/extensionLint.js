@@ -1,1 +1,1 @@
-export{R_ as lintExtensionSource}from"../../../chunks/app-CLmWkfm9.js";
+export{R_ as lintExtensionSource}from"../../../chunks/app-C1xECUnF.js";

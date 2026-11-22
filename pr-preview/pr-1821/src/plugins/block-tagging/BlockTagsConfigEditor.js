@@ -1,1 +1,1 @@
-export{nf as BlockTagsConfigEditor}from"../../../chunks/app-CLmWkfm9.js";
+export{nf as BlockTagsConfigEditor}from"../../../chunks/app-C1xECUnF.js";

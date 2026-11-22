@@ -1,1 +1,1 @@
-export{XP as BlockEmbed}from"../../../chunks/app-CLmWkfm9.js";
+export{XP as BlockEmbed}from"../../../chunks/app-C1xECUnF.js";
