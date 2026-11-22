@@ -1,1 +1,1 @@
-export{hF as kernelPropertyUiExtension,gF as typesPropertyUi,_F as typesPropertyUiExtension}from"../../../chunks/app-CwA-1EMf.js";
+export{hF as kernelPropertyUiExtension,gF as typesPropertyUi,_F as typesPropertyUiExtension}from"../../../chunks/app-DRS2ZlKP.js";

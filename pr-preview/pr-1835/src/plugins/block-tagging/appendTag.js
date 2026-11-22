@@ -1,1 +1,1 @@
-export{pf as appendTagToBlocks,mf as appendTagToContent}from"../../../chunks/app-CwA-1EMf.js";
+export{pf as appendTagToBlocks,mf as appendTagToContent}from"../../../chunks/app-DRS2ZlKP.js";

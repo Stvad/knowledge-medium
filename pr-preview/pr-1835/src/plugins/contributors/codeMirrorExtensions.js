@@ -1,1 +1,1 @@
-export{kg as contributorsCodeMirrorExtensions}from"../../../chunks/app-CwA-1EMf.js";
+export{kg as contributorsCodeMirrorExtensions}from"../../../chunks/app-DRS2ZlKP.js";

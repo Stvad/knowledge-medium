@@ -1,1 +1,1 @@
-export{yf as blockTaggingDataExtension}from"../../../chunks/app-CwA-1EMf.js";
+export{yf as blockTaggingDataExtension}from"../../../chunks/app-DRS2ZlKP.js";

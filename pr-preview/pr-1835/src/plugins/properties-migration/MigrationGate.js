@@ -1,1 +1,1 @@
-export{tc as MigrationGate}from"../../../chunks/app-CwA-1EMf.js";
+export{tc as MigrationGate}from"../../../chunks/app-DRS2ZlKP.js";

@@ -1,1 +1,1 @@
-export{EZ as PLACES_UNDER_BLOCK_QUERY,DZ as placesUnderBlockQuery}from"../../../chunks/app-CwA-1EMf.js";
+export{EZ as PLACES_UNDER_BLOCK_QUERY,DZ as placesUnderBlockQuery}from"../../../chunks/app-DRS2ZlKP.js";
