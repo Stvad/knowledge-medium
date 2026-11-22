@@ -1,1 +1,1 @@
-export{sX as staticDataExtensions}from"../../chunks/app-D3pwnspo.js";
+export{sX as staticDataExtensions}from"../../chunks/app-CdWCRFxQ.js";

@@ -1,1 +1,1 @@
-export{TH as ExtensionRenderBoundary}from"../../chunks/app-D3pwnspo.js";
+export{TH as ExtensionRenderBoundary}from"../../chunks/app-CdWCRFxQ.js";

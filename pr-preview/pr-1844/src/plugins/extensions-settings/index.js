@@ -1,1 +1,1 @@
-export{ov as extensionsOverridesProp,sv as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-D3pwnspo.js";
+export{ov as extensionsOverridesProp,sv as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-CdWCRFxQ.js";

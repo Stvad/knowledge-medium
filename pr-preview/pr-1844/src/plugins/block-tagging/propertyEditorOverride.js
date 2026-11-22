@@ -1,1 +1,1 @@
-export{Kf as blockTagsConfigUi}from"../../../chunks/app-D3pwnspo.js";
+export{Kf as blockTagsConfigUi}from"../../../chunks/app-CdWCRFxQ.js";

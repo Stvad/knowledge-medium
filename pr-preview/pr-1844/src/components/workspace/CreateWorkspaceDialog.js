@@ -1,1 +1,1 @@
-export{yk as CreateWorkspaceDialog}from"../../../chunks/app-D3pwnspo.js";
+export{yk as CreateWorkspaceDialog}from"../../../chunks/app-CdWCRFxQ.js";

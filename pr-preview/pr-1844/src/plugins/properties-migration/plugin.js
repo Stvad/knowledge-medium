@@ -1,1 +1,1 @@
-export{Ac as propertiesMigrationPlugin}from"../../../chunks/app-D3pwnspo.js";
+export{Ac as propertiesMigrationPlugin}from"../../../chunks/app-CdWCRFxQ.js";

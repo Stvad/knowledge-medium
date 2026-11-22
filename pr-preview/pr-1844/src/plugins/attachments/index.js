@@ -1,1 +1,1 @@
-export{HC as attachmentsPlugin}from"../../../chunks/app-D3pwnspo.js";
+export{HC as attachmentsPlugin}from"../../../chunks/app-CdWCRFxQ.js";

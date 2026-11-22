@@ -1,1 +1,1 @@
-export{SS as wikilinkMarkdownExtension}from"../../../../../chunks/app-D3pwnspo.js";
+export{SS as wikilinkMarkdownExtension}from"../../../../../chunks/app-CdWCRFxQ.js";

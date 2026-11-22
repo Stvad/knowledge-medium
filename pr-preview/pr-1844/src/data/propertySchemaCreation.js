@@ -1,1 +1,1 @@
-export{DJ as adoptOrCreatePropertySchema}from"../../chunks/app-D3pwnspo.js";
+export{DJ as adoptOrCreatePropertySchema}from"../../chunks/app-CdWCRFxQ.js";

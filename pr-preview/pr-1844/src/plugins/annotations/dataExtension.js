@@ -1,1 +1,1 @@
-export{P$ as annotationsDataExtension}from"../../../chunks/app-D3pwnspo.js";
+export{P$ as annotationsDataExtension}from"../../../chunks/app-CdWCRFxQ.js";

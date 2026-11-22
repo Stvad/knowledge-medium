@@ -1,1 +1,1 @@
-export{RC as richPastePlugin}from"../../../chunks/app-D3pwnspo.js";
+export{RC as richPastePlugin}from"../../../chunks/app-CdWCRFxQ.js";

@@ -1,1 +1,1 @@
-export{WL as ClientLocalSettings,GL as clientLocalSettings}from"../../chunks/app-D3pwnspo.js";
+export{WL as ClientLocalSettings,GL as clientLocalSettings}from"../../chunks/app-CdWCRFxQ.js";

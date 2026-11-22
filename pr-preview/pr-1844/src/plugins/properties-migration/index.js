@@ -1,1 +1,1 @@
-export{Pc as migratePropertiesToBlocksAction,Ac as propertiesMigrationPlugin}from"../../../chunks/app-D3pwnspo.js";
+export{Pc as migratePropertiesToBlocksAction,Ac as propertiesMigrationPlugin}from"../../../chunks/app-CdWCRFxQ.js";

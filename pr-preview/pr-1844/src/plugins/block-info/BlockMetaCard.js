@@ -1,1 +1,1 @@
-export{ox as BlockMetaCard}from"../../../chunks/app-D3pwnspo.js";
+export{ox as BlockMetaCard}from"../../../chunks/app-CdWCRFxQ.js";

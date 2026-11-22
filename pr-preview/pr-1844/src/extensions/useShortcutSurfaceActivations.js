@@ -1,1 +1,1 @@
-export{MV as useShortcutSurfaceActivations}from"../../chunks/app-D3pwnspo.js";
+export{MV as useShortcutSurfaceActivations}from"../../chunks/app-CdWCRFxQ.js";

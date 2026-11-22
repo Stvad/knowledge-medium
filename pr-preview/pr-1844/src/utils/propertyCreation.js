@@ -1,1 +1,1 @@
-export{iV as canConvertEmptyChildBlockToProperty,aV as convertEmptyChildBlockToProperty}from"../../chunks/app-D3pwnspo.js";
+export{iV as canConvertEmptyChildBlockToProperty,aV as convertEmptyChildBlockToProperty}from"../../chunks/app-CdWCRFxQ.js";

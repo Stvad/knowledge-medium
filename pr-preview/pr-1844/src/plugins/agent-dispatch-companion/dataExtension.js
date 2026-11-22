@@ -1,1 +1,1 @@
-export{S3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-D3pwnspo.js";
+export{S3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CdWCRFxQ.js";

@@ -1,1 +1,1 @@
-export{dM as Label}from"../../../chunks/app-D3pwnspo.js";
+export{dM as Label}from"../../../chunks/app-CdWCRFxQ.js";

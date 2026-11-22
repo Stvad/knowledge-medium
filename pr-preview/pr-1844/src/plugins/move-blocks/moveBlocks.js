@@ -1,1 +1,1 @@
-export{bC as moveBlocksTo}from"../../../chunks/app-D3pwnspo.js";
+export{bC as moveBlocksTo}from"../../../chunks/app-CdWCRFxQ.js";

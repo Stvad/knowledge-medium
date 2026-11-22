@@ -1,1 +1,1 @@
-export{rv as extensionApiCatalog,iv as extensionApiRuntimeExports}from"../../chunks/app-D3pwnspo.js";
+export{rv as extensionApiCatalog,iv as extensionApiRuntimeExports}from"../../chunks/app-CdWCRFxQ.js";

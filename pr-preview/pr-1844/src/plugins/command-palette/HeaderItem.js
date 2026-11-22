@@ -1,1 +1,1 @@
-export{JP as CommandPaletteHeaderItem}from"../../../chunks/app-D3pwnspo.js";
+export{JP as CommandPaletteHeaderItem}from"../../../chunks/app-CdWCRFxQ.js";

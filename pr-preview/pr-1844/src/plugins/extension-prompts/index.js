@@ -1,1 +1,1 @@
-export{YI as ExtensionPromptSurface,XI as extensionPromptsExtension}from"../../../chunks/app-D3pwnspo.js";
+export{YI as ExtensionPromptSurface,XI as extensionPromptsExtension}from"../../../chunks/app-CdWCRFxQ.js";

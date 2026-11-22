@@ -1,1 +1,1 @@
-export{bS as referencesMarkdownExtension}from"../../../../chunks/app-D3pwnspo.js";
+export{bS as referencesMarkdownExtension}from"../../../../chunks/app-CdWCRFxQ.js";

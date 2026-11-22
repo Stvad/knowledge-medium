@@ -1,1 +1,1 @@
-export{SP as CommandPalette}from"../../../chunks/app-D3pwnspo.js";
+export{SP as CommandPalette}from"../../../chunks/app-CdWCRFxQ.js";

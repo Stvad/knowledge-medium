@@ -1,1 +1,1 @@
-export{GU as BlockProperties}from"../../chunks/app-D3pwnspo.js";
+export{GU as BlockProperties}from"../../chunks/app-CdWCRFxQ.js";

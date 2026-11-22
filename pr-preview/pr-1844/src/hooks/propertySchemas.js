@@ -1,1 +1,1 @@
-export{SJ as usePropertySchemas}from"../../chunks/app-D3pwnspo.js";
+export{SJ as usePropertySchemas}from"../../chunks/app-CdWCRFxQ.js";

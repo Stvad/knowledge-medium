@@ -1,1 +1,1 @@
-export{ru as parsePropertiesJson}from"../../../chunks/app-D3pwnspo.js";
+export{ru as parsePropertiesJson}from"../../../chunks/app-CdWCRFxQ.js";

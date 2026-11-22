@@ -1,1 +1,1 @@
-export{Jr as extensionsDataExtension}from"../../../chunks/app-D3pwnspo.js";
+export{Jr as extensionsDataExtension}from"../../../chunks/app-CdWCRFxQ.js";

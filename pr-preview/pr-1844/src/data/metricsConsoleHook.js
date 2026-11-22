@@ -1,1 +1,1 @@
-export{hI as ensureMetricsConsoleHook}from"../../chunks/app-D3pwnspo.js";
+export{hI as ensureMetricsConsoleHook}from"../../chunks/app-CdWCRFxQ.js";

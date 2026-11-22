@@ -1,1 +1,1 @@
-export{wI as exampleExtensions,TI as insertExampleExtensionsUnder}from"../../chunks/app-D3pwnspo.js";
+export{wI as exampleExtensions,TI as insertExampleExtensionsUnder}from"../../chunks/app-CdWCRFxQ.js";

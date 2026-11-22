@@ -1,1 +1,1 @@
-export{FR as BlockLoadingPlaceholder}from"../../chunks/app-D3pwnspo.js";
+export{FR as BlockLoadingPlaceholder}from"../../chunks/app-CdWCRFxQ.js";

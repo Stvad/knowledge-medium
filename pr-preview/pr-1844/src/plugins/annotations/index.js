@@ -1,1 +1,1 @@
-export{Sm as annotationsPlugin}from"../../../chunks/app-D3pwnspo.js";
+export{Sm as annotationsPlugin}from"../../../chunks/app-CdWCRFxQ.js";

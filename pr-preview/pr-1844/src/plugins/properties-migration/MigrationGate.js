@@ -1,1 +1,1 @@
-export{jc as MigrationGate}from"../../../chunks/app-D3pwnspo.js";
+export{jc as MigrationGate}from"../../../chunks/app-CdWCRFxQ.js";
