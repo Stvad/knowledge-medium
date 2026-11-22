@@ -1,10 +1,10 @@
 /** Completion inside a table's query. The query property's value is the query
- *  text, so its editor is a `literalDocument`: the generic char triggers (`#`
- *  types, `@` mentions, `@@` places) stand down there, and this source offers
- *  query text instead. `#` offers the workspace's types and a word starting a
- *  term offers its property and field keys; accepting one inserts query text
- *  and writes nothing else, so a pick can never tag the value block or mint a
- *  type.
+ *  text, so the `#` type tag is off in its editor (`typeTagsOff`) and this
+ *  source offers query text instead: `#` offers the workspace's types and a
+ *  word starting a term offers its property and field keys. Accepting one
+ *  inserts query text and writes nothing else, so a pick can never tag the
+ *  value block or mint a type. `@` and `@@` stay on: they insert a `[[link]]`,
+ *  which is a query operand.
  *
  *  A pick inserts the name alone where the parser reads it back as the picked
  *  definition, for readable text; where it would not (a second type with the
@@ -20,7 +20,7 @@ import { propertyEditorOverridesFacet, queryableFieldsFacet } from '@/data/facet
 import type { Repo } from '@/data/repo'
 import type { CodeMirrorExtensionContribution } from '@/editor/codeMirrorExtensions'
 import { acceptCompletionInsert } from '@/editor/contentFlush'
-import { literalDocument } from '@/editor/syntaxContext'
+import { typeTagsOff } from '@/plugins/supertags/typeAutocomplete'
 import { queryProp } from '../schema'
 import { propertyKey, propertyName, typeName, typeRef } from './format'
 import {
@@ -225,5 +225,5 @@ const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => co
 export const queryCompletionExtension: CodeMirrorExtensionContribution = ({repo, block, propertyValueSchema}) => {
   if (!block || propertyValueSchema?.name !== queryProp.name) return []
   const source = queryCompletionSource(repo, block)
-  return [literalDocument.of(true), EditorState.languageData.of(() => [{autocomplete: source}])]
+  return [typeTagsOff.of(true), EditorState.languageData.of(() => [{autocomplete: source}])]
 }

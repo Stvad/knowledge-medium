@@ -30,7 +30,7 @@
 import { startCompletion } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
 import { matchBareAt, matchPlaceTrigger } from '@/editor/atTrigger'
-import { isLiteralTextAt } from '@/editor/syntaxContext'
+import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { acceptCompletionInsert } from '@/editor/contentFlush'
 import type {
   Completion,
@@ -211,16 +211,16 @@ export const placeCompletionSource = (
     // `@word` is also what literal spans look like (`@decorator` /
     // `@media` in code, `user@host` in a URL) — and with the dropdown
     // open, Enter accepts a candidate and replaces that text, so both
-    // branches check `isLiteralTextAt` once they matched. The
+    // branches check `isInsideLiteralMarkdown` once they matched. The
     // pending-candidates path above stays ungated: it re-opens a
     // dropdown the pick flow itself stashed.
     const match = matchPlaceTrigger(lineText, inLinePos)
     if (!match) {
       const bare = matchBareAt(lineText, inLinePos)
-      if (!bare || isLiteralTextAt(state, pos)) return null
+      if (!bare || isInsideLiteralMarkdown(state, pos)) return null
       return {from: line.from + bare.from, to: pos, filter: false, options: [handOffToPlaces]}
     }
-    if (isLiteralTextAt(state, pos)) return null
+    if (isInsideLiteralMarkdown(state, pos)) return null
 
     const candidates = await options.getCandidates(match.query)
     if (candidates.length === 0 && !explicit) return null
