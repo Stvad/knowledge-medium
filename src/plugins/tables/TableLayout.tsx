@@ -486,7 +486,7 @@ const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, 
   const parentRenderScopeId = useBlockContext().renderScopeId ?? ''
   const renderScopeId = tableRenderScopeId(parentRenderScopeId, block.id)
   return (
-    <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls} className="tm-table-host"
+    <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls}
       frameProps={{[TABLE_HOST_ATTRIBUTE]: 'true'}}>
       <div className="block-body min-w-0 grow">
         <Content/>
