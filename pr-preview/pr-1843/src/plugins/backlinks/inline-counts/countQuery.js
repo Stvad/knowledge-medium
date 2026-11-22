@@ -1,1 +1,1 @@
-export{z2 as BACKLINKS_COUNT_FOR_BLOCK_QUERY,B2 as backlinksCountForBlockQuery}from"../../../../chunks/app-Db_uraK-.js";
+export{z2 as BACKLINKS_COUNT_FOR_BLOCK_QUERY,B2 as backlinksCountForBlockQuery}from"../../../../chunks/app-I5VnnxUk.js";

@@ -1,1 +1,1 @@
-export{IJ as adoptOrCreatePropertySchema}from"../../chunks/app-Db_uraK-.js";
+export{IJ as adoptOrCreatePropertySchema}from"../../chunks/app-I5VnnxUk.js";

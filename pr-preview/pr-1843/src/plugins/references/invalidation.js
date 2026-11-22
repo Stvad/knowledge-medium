@@ -1,1 +1,1 @@
-export{GX as REFERENCES_TARGET_INVALIDATION_CHANNEL,KX as referencesInvalidationRule}from"../../../chunks/app-Db_uraK-.js";
+export{GX as REFERENCES_TARGET_INVALIDATION_CHANNEL,KX as referencesInvalidationRule}from"../../../chunks/app-I5VnnxUk.js";

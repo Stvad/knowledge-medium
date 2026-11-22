@@ -1,1 +1,1 @@
-export{XF as BlockEmbed}from"../../../chunks/app-Db_uraK-.js";
+export{XF as BlockEmbed}from"../../../chunks/app-I5VnnxUk.js";

@@ -1,1 +1,1 @@
-export{rF as CommandPaletteHeaderItem}from"../../../chunks/app-Db_uraK-.js";
+export{rF as CommandPaletteHeaderItem}from"../../../chunks/app-I5VnnxUk.js";

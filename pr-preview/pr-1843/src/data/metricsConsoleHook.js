@@ -1,1 +1,1 @@
-export{wI as ensureMetricsConsoleHook}from"../../chunks/app-Db_uraK-.js";
+export{wI as ensureMetricsConsoleHook}from"../../chunks/app-I5VnnxUk.js";

@@ -1,1 +1,1 @@
-export{Dit as parsePropertyDefinitionMetadata,Oit as propertySchemaOriginForSeedKey}from"../../chunks/app-Db_uraK-.js";
+export{Dit as parsePropertyDefinitionMetadata,Oit as propertySchemaOriginForSeedKey}from"../../chunks/app-I5VnnxUk.js";

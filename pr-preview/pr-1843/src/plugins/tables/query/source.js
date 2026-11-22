@@ -1,1 +1,1 @@
-export{ys as fencedQuery,bs as queryResolver,xs as queryTextOf,Ss as useQueryFieldId,Cs as useTableQuery}from"../../../../chunks/app-Db_uraK-.js";
+export{ys as fencedQuery,bs as queryResolver,xs as queryTextOf,Ss as useQueryFieldId,Cs as useTableQuery}from"../../../../chunks/app-I5VnnxUk.js";
