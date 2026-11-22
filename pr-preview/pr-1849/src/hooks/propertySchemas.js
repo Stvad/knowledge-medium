@@ -1,0 +1,1 @@
+export{xJ as usePropertySchemas}from"../../chunks/app-BEUVW9-0.js";

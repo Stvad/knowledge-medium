@@ -1,0 +1,1 @@
+export{CO as getBreadcrumbContentPreview}from"../../../chunks/app-BEUVW9-0.js";

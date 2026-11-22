@@ -1,0 +1,1 @@
+export{Gf as BlockTagsConfigEditor}from"../../../chunks/app-BEUVW9-0.js";

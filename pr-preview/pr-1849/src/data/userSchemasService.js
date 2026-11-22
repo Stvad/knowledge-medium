@@ -1,0 +1,1 @@
+export{ott as USER_SCHEMAS_PROJECTOR_ID,stt as UserSchemasService,ctt as buildSchemaOrNull,ltt as decodePresetConfig,utt as definitionSchema,dtt as isRegistrablePropertyName,ftt as propertySchemaNameRejection,ptt as tryBuildSchema,mtt as userSchemasProjector}from"../../chunks/app-BEUVW9-0.js";

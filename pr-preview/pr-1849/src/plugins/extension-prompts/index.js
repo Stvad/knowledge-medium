@@ -1,0 +1,1 @@
+export{qI as ExtensionPromptSurface,JI as extensionPromptsExtension}from"../../../chunks/app-BEUVW9-0.js";

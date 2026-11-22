@@ -1,0 +1,1 @@
+export{IC as richPastePlugin}from"../../../chunks/app-BEUVW9-0.js";

@@ -1,0 +1,1 @@
+export{SO as BreadcrumbRenderer}from"../../../chunks/app-BEUVW9-0.js";

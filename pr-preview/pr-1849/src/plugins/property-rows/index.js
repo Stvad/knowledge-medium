@@ -1,0 +1,1 @@
+export{Ys as propertyRowsPlugin}from"../../../chunks/app-BEUVW9-0.js";

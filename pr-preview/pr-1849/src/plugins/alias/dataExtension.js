@@ -1,0 +1,1 @@
+export{R4 as aliasDataExtension}from"../../../chunks/app-BEUVW9-0.js";

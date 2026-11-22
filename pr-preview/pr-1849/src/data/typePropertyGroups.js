@@ -1,0 +1,1 @@
+export{hW as typePropertyGroups}from"../../chunks/app-BEUVW9-0.js";

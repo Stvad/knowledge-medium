@@ -1,0 +1,1 @@
+export{ngt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-BEUVW9-0.js";

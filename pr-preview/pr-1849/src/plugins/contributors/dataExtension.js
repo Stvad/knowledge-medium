@@ -1,0 +1,1 @@
+export{L0 as contributorsDataExtension}from"../../../chunks/app-BEUVW9-0.js";

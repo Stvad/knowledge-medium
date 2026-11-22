@@ -1,0 +1,1 @@
+export{MB as useIsMobile,NB as usePointerCoarse}from"../../chunks/app-BEUVW9-0.js";

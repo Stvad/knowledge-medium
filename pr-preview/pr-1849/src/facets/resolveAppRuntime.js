@@ -1,0 +1,1 @@
+export{WL as resolveAppRuntime,GL as resolveAppRuntimeSync}from"../../chunks/app-BEUVW9-0.js";

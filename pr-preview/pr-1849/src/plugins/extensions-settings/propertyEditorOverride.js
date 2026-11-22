@@ -1,0 +1,1 @@
+export{Yr as extensionsOverridesUi}from"../../../chunks/app-BEUVW9-0.js";

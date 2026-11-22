@@ -1,0 +1,1 @@
+export{PR as BlockLoadingPlaceholder}from"../../chunks/app-BEUVW9-0.js";

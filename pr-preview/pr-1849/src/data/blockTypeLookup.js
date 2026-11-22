@@ -1,0 +1,1 @@
+export{B9 as loadTypeIdsByBlock}from"../../chunks/app-BEUVW9-0.js";

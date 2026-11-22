@@ -1,0 +1,1 @@
+export{jb as DATA_MODEL_GUIDE,Mb as dataModelGuide}from"../../../chunks/app-BEUVW9-0.js";

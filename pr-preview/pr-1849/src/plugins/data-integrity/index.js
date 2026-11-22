@@ -1,0 +1,1 @@
+export{Pl as dataIntegrityPlugin}from"../../../chunks/app-BEUVW9-0.js";

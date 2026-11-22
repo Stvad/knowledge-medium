@@ -1,0 +1,1 @@
+export{vL as appUpdate,yL as useAppUpdateAvailable}from"../chunks/app-BEUVW9-0.js";

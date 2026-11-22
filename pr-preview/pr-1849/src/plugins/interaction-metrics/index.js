@@ -1,0 +1,1 @@
+export{fa as interactionMetricsPlugin}from"../../../chunks/app-BEUVW9-0.js";

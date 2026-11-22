@@ -1,0 +1,1 @@
+export{Bct as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Vct as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Hct as __resetLayoutSessionIdForTesting,Uct as getLayoutSessionId,Wct as isInstalledAppDisplayMode,Gct as readOrCreateLayoutSessionId}from"../../chunks/app-BEUVW9-0.js";

@@ -1,0 +1,1 @@
+export{SI as exampleExtensions,CI as insertExampleExtensionsUnder}from"../../chunks/app-BEUVW9-0.js";

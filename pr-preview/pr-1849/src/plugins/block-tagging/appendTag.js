@@ -1,0 +1,1 @@
+export{Vf as appendTagToBlocks,Hf as appendTagToContent}from"../../../chunks/app-BEUVW9-0.js";

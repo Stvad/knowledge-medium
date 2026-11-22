@@ -1,0 +1,1 @@
+export{Zu as appVersion}from"../chunks/app-BEUVW9-0.js";

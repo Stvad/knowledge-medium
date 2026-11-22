@@ -1,0 +1,1 @@
+export{DR as LazyBlockComponent}from"../../chunks/app-BEUVW9-0.js";

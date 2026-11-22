@@ -1,0 +1,1 @@
+export{XF as DEFAULT_TYPE_COLORS,ZF as defaultTypeColor,QF as pickLeastUsedTypeColor}from"../../chunks/app-BEUVW9-0.js";

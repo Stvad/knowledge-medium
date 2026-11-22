@@ -1,0 +1,1 @@
+export{Ket as NAMES_IN_A_SENTENCE,qet as describeNames,Jet as firstFew}from"../../chunks/app-BEUVW9-0.js";

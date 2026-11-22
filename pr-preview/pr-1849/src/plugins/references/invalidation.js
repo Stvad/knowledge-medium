@@ -1,0 +1,1 @@
+export{FX as REFERENCES_TARGET_INVALIDATION_CHANNEL,IX as referencesInvalidationRule}from"../../../chunks/app-BEUVW9-0.js";

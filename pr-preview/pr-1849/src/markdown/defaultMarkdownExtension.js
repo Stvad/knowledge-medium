@@ -1,0 +1,1 @@
+export{BR as gfmMarkdownExtension,VR as isExternalHref}from"../../chunks/app-BEUVW9-0.js";

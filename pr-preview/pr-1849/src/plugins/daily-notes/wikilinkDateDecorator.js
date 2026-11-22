@@ -1,0 +1,1 @@
+export{KM as dailyDateWikilinkDecorator}from"../../../chunks/app-BEUVW9-0.js";

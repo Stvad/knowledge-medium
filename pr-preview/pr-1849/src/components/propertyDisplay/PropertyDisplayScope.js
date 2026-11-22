@@ -1,0 +1,1 @@
+export{bz as PropertyDisplayScope}from"../../../chunks/app-BEUVW9-0.js";

@@ -1,0 +1,1 @@
+export{jL as dispatchPointerAction,ML as setPointerActionDispatcher}from"../../chunks/app-BEUVW9-0.js";

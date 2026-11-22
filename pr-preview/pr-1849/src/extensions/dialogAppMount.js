@@ -1,0 +1,1 @@
+export{KR as DialogHost,qR as dialogAppMountExtension}from"../../chunks/app-BEUVW9-0.js";

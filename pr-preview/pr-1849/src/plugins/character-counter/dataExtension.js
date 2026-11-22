@@ -1,0 +1,1 @@
+export{r2 as characterCounterDataExtension}from"../../../chunks/app-BEUVW9-0.js";

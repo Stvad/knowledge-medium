@@ -1,0 +1,1 @@
+export{YI as extensionPromptDiagnosticContribution,XI as extensionPromptDiagnosticSource}from"../../../chunks/app-BEUVW9-0.js";

@@ -1,0 +1,1 @@
+export{Ok as MAX_OBJECT_BYTES,kk as encodeBytes,Ak as encodedSize,jk as fitsObjectLimit,Mk as verifyObjectBytes}from"../../chunks/app-BEUVW9-0.js";

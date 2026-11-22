@@ -1,0 +1,1 @@
+export{xq as isIOS,Sq as isMacPlatform}from"../../chunks/app-BEUVW9-0.js";

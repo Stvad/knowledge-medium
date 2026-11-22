@@ -1,0 +1,1 @@
+export{cY as SuspenseFallback}from"../../../chunks/app-BEUVW9-0.js";
