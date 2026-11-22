@@ -1,1 +1,1 @@
-export{GT as videoPlayerPlugin}from"../../../chunks/app-w4KX0ukw.js";
+export{GT as videoPlayerPlugin}from"../../../chunks/app-DuNp8WQV.js";

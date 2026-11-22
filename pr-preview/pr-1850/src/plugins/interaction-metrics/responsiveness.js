@@ -1,1 +1,1 @@
-export{ga as ResponsivenessTotals,_a as SLOW_MS,va as observeResponsiveness}from"../../../chunks/app-w4KX0ukw.js";
+export{ga as ResponsivenessTotals,_a as SLOW_MS,va as observeResponsiveness}from"../../../chunks/app-DuNp8WQV.js";

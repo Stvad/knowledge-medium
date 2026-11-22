@@ -1,1 +1,1 @@
-export{XF as kernelPropertyUiExtension,ZF as typesPropertyUi,QF as typesPropertyUiExtension}from"../../../chunks/app-w4KX0ukw.js";
+export{XF as kernelPropertyUiExtension,ZF as typesPropertyUi,QF as typesPropertyUiExtension}from"../../../chunks/app-DuNp8WQV.js";

@@ -1,1 +1,1 @@
-export{gX as TODO_TYPE,_X as statusProp,vX as todoType}from"../../../chunks/app-w4KX0ukw.js";
+export{gX as TODO_TYPE,_X as statusProp,vX as todoType}from"../../../chunks/app-DuNp8WQV.js";
