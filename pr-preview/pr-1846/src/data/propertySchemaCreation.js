@@ -1,1 +1,0 @@
-export{FJ as adoptOrCreatePropertySchema}from"../../chunks/app-D5c-_AVG.js";

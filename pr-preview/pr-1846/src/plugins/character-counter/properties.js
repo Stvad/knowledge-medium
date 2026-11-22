@@ -1,1 +1,0 @@
-export{v2 as RAW_CHARACTER_COUNT_PROFILE_ID,y2 as WORDS_COUNT_PROFILE_ID,b2 as charLimitProp,x2 as charProfileProp,S2 as charScopeProp}from"../../../chunks/app-D5c-_AVG.js";

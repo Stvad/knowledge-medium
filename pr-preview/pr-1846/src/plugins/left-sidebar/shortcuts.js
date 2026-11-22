@@ -1,1 +1,0 @@
-export{ek as getOrCreateShortcutsBlock,tk as journalShortcutBlockId,nk as shortcutsBlockId}from"../../../chunks/app-D5c-_AVG.js";

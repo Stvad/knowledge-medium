@@ -1,1 +1,0 @@
-export{CO as mobileBottomNavItemsFacet}from"../../../chunks/app-D5c-_AVG.js";

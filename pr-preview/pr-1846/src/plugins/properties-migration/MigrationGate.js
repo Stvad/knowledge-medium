@@ -1,1 +1,0 @@
-export{Ic as MigrationGate}from"../../../chunks/app-D5c-_AVG.js";

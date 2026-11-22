@@ -1,1 +1,0 @@
-export{Co as tablesPlugin}from"../../../chunks/app-D5c-_AVG.js";

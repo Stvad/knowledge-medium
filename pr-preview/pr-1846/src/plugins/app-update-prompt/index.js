@@ -1,1 +1,0 @@
-export{hL as appUpdatePromptExtension}from"../../../chunks/app-D5c-_AVG.js";

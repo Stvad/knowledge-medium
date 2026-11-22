@@ -1,1 +1,0 @@
-export{Fc as propertiesMigrationPlugin}from"../../../chunks/app-D5c-_AVG.js";

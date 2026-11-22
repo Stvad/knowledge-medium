@@ -1,1 +1,0 @@
-export{qC as attachmentsPlugin}from"../../../chunks/app-D5c-_AVG.js";

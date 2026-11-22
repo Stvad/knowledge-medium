@@ -1,1 +1,0 @@
-export{K3 as SYNCED_TABLES,q3 as syncedWriteTarget,J3 as writeTargets}from"../../chunks/app-D5c-_AVG.js";

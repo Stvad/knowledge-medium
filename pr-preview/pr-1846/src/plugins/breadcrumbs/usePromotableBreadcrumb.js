@@ -1,1 +1,0 @@
-export{OO as usePromotableBreadcrumb}from"../../../chunks/app-D5c-_AVG.js";

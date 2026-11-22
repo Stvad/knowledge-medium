@@ -1,1 +1,0 @@
-export{C2 as backlinksDataExtension}from"../../../chunks/app-D5c-_AVG.js";

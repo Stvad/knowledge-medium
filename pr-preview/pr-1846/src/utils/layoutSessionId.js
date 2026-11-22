@@ -1,1 +1,0 @@
-export{Yct as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Xct as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Zct as __resetLayoutSessionIdForTesting,Qct as getLayoutSessionId,$ct as isInstalledAppDisplayMode,elt as readOrCreateLayoutSessionId}from"../../chunks/app-D5c-_AVG.js";

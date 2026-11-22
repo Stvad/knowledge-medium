@@ -1,1 +1,0 @@
-export{oR as extensionDisplayName,sR as extensionName,cR as userExtensionShellToggle,lR as userExtensionToggle}from"../../chunks/app-D5c-_AVG.js";

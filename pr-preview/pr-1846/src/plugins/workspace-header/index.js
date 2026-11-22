@@ -1,1 +1,0 @@
-export{RO as WorkspaceSwitcherSidebarSection,zO as pendingInvitationsHeaderItem,BO as workspaceHeaderPlugin,VO as workspaceSwitcherSidebarSection}from"../../../chunks/app-D5c-_AVG.js";

@@ -1,1 +1,0 @@
-export{PJ as propertyShapeLabel}from"../../../chunks/app-D5c-_AVG.js";

@@ -1,1 +1,0 @@
-export{zc as migratePropertiesToBlocksAction,Fc as propertiesMigrationPlugin}from"../../../chunks/app-D5c-_AVG.js";

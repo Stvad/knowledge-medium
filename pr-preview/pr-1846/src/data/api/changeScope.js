@@ -1,1 +1,0 @@
-export{ngt as CHANGE_SCOPE_POLICIES,rgt as ChangeScope,igt as isChangeScope,agt as policyForScope,ogt as scopeAllowedInReadOnly,sgt as scopeIsUndoable,cgt as scopePoliciesEquivalent,lgt as scopeUploadsToServer,ugt as sourceForScope}from"../../../chunks/app-D5c-_AVG.js";

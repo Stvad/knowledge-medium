@@ -1,1 +1,0 @@
-export{OJ as floatingAnchorFromRect,kJ as useAnchoredFloating}from"../../../chunks/app-D5c-_AVG.js";

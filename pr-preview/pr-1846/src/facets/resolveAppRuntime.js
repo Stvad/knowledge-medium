@@ -1,1 +1,0 @@
-export{QL as resolveAppRuntime,$L as resolveAppRuntimeSync}from"../../chunks/app-D5c-_AVG.js";

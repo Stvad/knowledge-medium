@@ -1,1 +1,0 @@
-export{ux as blockInfoPlugin}from"../../../chunks/app-D5c-_AVG.js";

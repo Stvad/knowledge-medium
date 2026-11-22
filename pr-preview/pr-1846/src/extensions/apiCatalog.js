@@ -1,1 +1,0 @@
-export{cv as extensionApiCatalog,lv as extensionApiRuntimeExports}from"../../chunks/app-D5c-_AVG.js";

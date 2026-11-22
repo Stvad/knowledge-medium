@@ -1,1 +1,0 @@
-export{id as appVersion}from"../chunks/app-D5c-_AVG.js";

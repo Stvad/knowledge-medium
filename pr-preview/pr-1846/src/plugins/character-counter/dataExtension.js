@@ -1,1 +1,0 @@
-export{f2 as characterCounterDataExtension}from"../../../chunks/app-D5c-_AVG.js";

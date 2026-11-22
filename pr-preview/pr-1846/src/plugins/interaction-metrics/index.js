@@ -1,1 +1,0 @@
-export{fa as interactionMetricsPlugin}from"../../../chunks/app-D5c-_AVG.js";

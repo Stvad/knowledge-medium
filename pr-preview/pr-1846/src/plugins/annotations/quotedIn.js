@@ -1,1 +1,0 @@
-export{km as quotedInFooterContribution}from"../../../chunks/app-D5c-_AVG.js";

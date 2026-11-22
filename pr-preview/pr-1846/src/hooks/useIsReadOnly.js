@@ -1,1 +1,0 @@
-export{mC as useIsReadOnly}from"../../chunks/app-D5c-_AVG.js";

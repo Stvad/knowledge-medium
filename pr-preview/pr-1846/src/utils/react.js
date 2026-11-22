@@ -1,1 +1,0 @@
-export{VB as useIsMobile,HB as usePointerCoarse}from"../../chunks/app-D5c-_AVG.js";

@@ -1,1 +1,0 @@
-export{AJ as usePropertySchemas}from"../../chunks/app-D5c-_AVG.js";

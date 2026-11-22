@@ -1,1 +1,0 @@
-export{HI as BlockPasteShellDecorator,UI as blockPasteShellDecorator}from"../../chunks/app-D5c-_AVG.js";

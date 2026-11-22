@@ -1,1 +1,0 @@
-export{mj as openRecentsPage}from"../../../chunks/app-D5c-_AVG.js";

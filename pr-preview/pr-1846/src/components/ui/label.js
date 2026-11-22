@@ -1,1 +1,0 @@
-export{_M as Label}from"../../../chunks/app-D5c-_AVG.js";

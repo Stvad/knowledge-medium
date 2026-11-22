@@ -1,1 +1,0 @@
-export{wL as checkForAppUpdate,TL as registerServiceWorker}from"../chunks/app-D5c-_AVG.js";

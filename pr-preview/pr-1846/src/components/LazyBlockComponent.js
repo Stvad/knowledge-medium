@@ -1,1 +1,0 @@
-export{FR as LazyBlockComponent}from"../../chunks/app-D5c-_AVG.js";

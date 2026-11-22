@@ -1,1 +1,0 @@
-export{eF as CommandPaletteHeaderItem}from"../../../chunks/app-D5c-_AVG.js";

@@ -1,1 +1,0 @@
-export{hX as staticDataExtensions}from"../../chunks/app-D5c-_AVG.js";

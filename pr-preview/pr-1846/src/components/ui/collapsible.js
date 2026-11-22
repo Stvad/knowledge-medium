@@ -1,1 +1,0 @@
-"use client";export{YU as Collapsible,XU as CollapsibleContent,ZU as CollapsibleTrigger}from"../../../chunks/app-D5c-_AVG.js";

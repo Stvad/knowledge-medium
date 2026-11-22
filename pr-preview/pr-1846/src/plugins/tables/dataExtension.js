@@ -1,1 +1,0 @@
-export{AX as tablesDataExtension}from"../../../chunks/app-D5c-_AVG.js";

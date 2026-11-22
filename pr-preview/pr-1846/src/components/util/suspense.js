@@ -1,1 +1,0 @@
-export{_Y as SuspenseFallback}from"../../../chunks/app-D5c-_AVG.js";

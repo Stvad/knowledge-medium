@@ -1,1 +1,0 @@
-export{Uk as BINARY_ENVELOPE_MAGIC,Wk as BINARY_ENVELOPE_MIN_BYTES,Gk as BINARY_ENVELOPE_OVERHEAD_BYTES,Kk as BINARY_MAGIC_BYTES,qk as decodeBinaryEnvelope,Jk as encodeBinaryEnvelope,Yk as hasBinaryEnvelopeMagic}from"../../../chunks/app-D5c-_AVG.js";
