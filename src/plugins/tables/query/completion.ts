@@ -6,10 +6,11 @@
  *  value block or mint a type. Outside the fence the value is an ordinary
  *  block, `#` included.
  *
- *  A pick inserts the name alone where the parser resolves that name to the
- *  picked definition, for readable text; where it would not (a second type
- *  with the same label, a property named like a structural key) it inserts the
- *  saved form, `#label^typeId` or `name^fieldId`. */
+ *  A pick inserts the name alone where the parser reads it back as the picked
+ *  definition, for readable text; where it would not (a second type with the
+ *  same label, a property named like a structural key, a quoted name standing
+ *  alone, which is a text search) it inserts the saved form, `#label^typeId` or
+ *  `name^fieldId`. */
 import type { CompletionSource } from '@codemirror/autocomplete'
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
@@ -25,7 +26,8 @@ import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { queryProp } from '../schema'
 import { propertyKey, propertyName, typeName, typeRef } from './format'
 import {
-  BREAK, RESERVED_KEYS, closingQuote, isPropertyAndField, isReservedKey, takesOperand, type QueryResolver, type QueryType,
+  BREAK, RESERVED_KEYS, closingQuote, isPropertyAndField, parseQuery, takesOperand,
+  type QueryResolver, type QueryTerm, type QueryType,
 } from './parse'
 import { queryResolver } from './source'
 
@@ -135,6 +137,12 @@ const ranked = <T,>(items: readonly T[], labelOf: (item: T) => string, query: st
     .map(({item}) => item)
 }
 
+/** The name alone where the parser reads it back as the picked definition, else the saved form. */
+const nameOrSaved = (bare: string, saved: string, resolver: QueryResolver, picked: (term: QueryTerm) => boolean = () => true): string => {
+  const [term] = parseQuery(bare, resolver).terms
+  return term && picked(term) ? bare : saved
+}
+
 const typeCompletions = (types: readonly OfferedType[], query: string, resolver: QueryResolver): QueryCompletion[] => {
   const picks = ranked(types, type => type.label, query, type => type.plumbing).slice(0, RESULT_CAP)
   // Types sharing a label are told apart by their ids.
@@ -142,7 +150,7 @@ const typeCompletions = (types: readonly OfferedType[], query: string, resolver:
   return picks.map(type => ({
     label: type.label,
     detail: shared(type) ? type.id : 'type',
-    insert: resolver.typeByLabel(type.label)?.id === type.id ? typeName(type) : typeRef(type),
+    insert: nameOrSaved(typeName(type), typeRef(type), resolver, term => term.kind === 'types' && term.types[0]?.id === type.id),
   }))
 }
 
@@ -152,7 +160,9 @@ const keyCompletions = (trigger: QueryTrigger, vocabulary: QueryVocabulary, reso
   for (const name of vocabulary.propertyNames) {
     const property = resolver.propertyByName(name)
     if (!property || isPropertyAndField(resolver, name)) continue
-    const key = isReservedKey(name) ? propertyKey(property) : propertyName(property)
+    // The property is the parser's own lookup of this name, so a bare name that parses names it; one
+    // that does not is a quoted name alone (a text search) or a structural key.
+    const key = nameOrSaved(propertyName(property), propertyKey(property), resolver)
     keys.push({label: name, detail: 'property', insert: key + operator(takesOperand(property.schema))})
   }
   // A negated key can only test a property's presence.

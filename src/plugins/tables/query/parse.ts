@@ -117,7 +117,7 @@ export interface ParsedQuery {
  *  these names through its saved form, `under^fieldId`. */
 export const RESERVED_KEYS = ['refs', 'childof', 'under'] as const
 type ReservedKey = typeof RESERVED_KEYS[number]
-export const isReservedKey = (name: string): name is ReservedKey => (RESERVED_KEYS as readonly string[]).includes(name)
+const isReservedKey = (name: string): name is ReservedKey => (RESERVED_KEYS as readonly string[]).includes(name)
 
 const OPS: ReadonlyArray<readonly [string, CompareOp]> = [
   ['!=', 'ne'], ['<=', 'lte'], ['>=', 'gte'], ['=', 'eq'], ['<', 'lt'], ['>', 'gt'],

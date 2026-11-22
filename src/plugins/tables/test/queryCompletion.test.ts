@@ -28,6 +28,7 @@ const user = (name: string, codec: AnyPropertySchema['codec']) =>
   defineProperty(name, {codec, defaultValue: undefined, changeScope: ChangeScope.BlockDefault}) as AnyPropertySchema
 const PROPERTIES = [
   user('status', codecs.string), user('stash', codecs.unsafeIdentity<unknown>()), user('created', codecs.string), user('under', codecs.string),
+  user('due date', codecs.string), user('my flag', codecs.unsafeIdentity<unknown>()),
 ]
 const fieldIdOf = (name: string) => `def-${name}`
 
@@ -165,7 +166,7 @@ describe('completion inside the query fence', () => {
     // `u` matches the field `updated` and the structural key `under` too.
     const view = await editor(valueId, fencedQuery('!u‸'), true)
     const [result] = await answers(view)
-    expect(result!.options.map(o => [o.label, o.detail])).toEqual([['under', 'property'], ['status', 'property']])
+    expect(result!.options.map(o => [o.label, o.detail])).toEqual([['under', 'property'], ['due date', 'property'], ['status', 'property']])
     accept(view, result!, result!.options.find(o => o.label === 'status')!)
     const doc = view.state.doc.toString()
     expect(doc).toBe(fencedQuery('!status'))
@@ -223,6 +224,22 @@ describe('completion inside the query fence', () => {
     const labels = result!.options.map(o => o.label)
     expect(labels).toContain('Panel stack')
     expect(labels.indexOf('Zeta')).toBeLessThan(labels.indexOf('Panel stack'))
+  })
+
+  it('addresses a name needing quotes by its id wherever the quoted name alone would be a text search', async () => {
+    for (const [typed, picked, insert] of [
+      ['!due‸', 'due date', `!"due date"^"${fieldIdOf('due date')}"`],
+      ['my‸', 'my flag', `"my flag"^"${fieldIdOf('my flag')}"`],
+      ['due‸', 'due date', `"due date"^"${fieldIdOf('due date')}"=`],
+    ] as const) {
+      const view = await editor(valueId, fencedQuery(typed), true)
+      const [result] = await answers(view)
+      accept(view, result!, result!.options.find(o => o.label === picked)!)
+      const text = queryTextOf(view.state.doc.toString())
+      expect(text).toBe(insert)
+      const parsed = parseQuery(text.endsWith('=') ? `${text}x` : text, resolver())
+      expect(parsed.errors).toEqual([])
+    }
   })
 
   it('reads the whole query before the cursor: a quote opened on an earlier line is still open', async () => {
