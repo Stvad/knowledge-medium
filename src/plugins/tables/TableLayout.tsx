@@ -186,13 +186,15 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
   return (
     <BlockFrame
       block={block} Header={Header} Shell={Shell} Controls={NoControls}
-      className="tm-table-row border-b border-border"
+      className="tm-table-row"
       frameProps={{'data-table-row': block.id}}
     >
       {/* `.block-body` clips horizontal overflow: it must be as wide as the
           grid, so the overflow reaches the table's scroller. */}
       <div className="block-body grow" style={{minWidth: template.minWidth}}>
-        <div className="grid" style={template}>
+        {/* The border is on the grid, not the frame: the frame is only as wide
+            as the scroller, so a border there stops short once it scrolls. */}
+        <div className="grid border-b border-border" style={template}>
           {columns.map((column, index) => (
             <Cell key={column.id} row={block} index={index} sticky={index === 0} isContent={index === contentColumn}>
               {column.fieldId === null
