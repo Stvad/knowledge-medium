@@ -1,0 +1,1 @@
+export{rL as dynamicExtensionsExtension}from"../../chunks/app-BhUmt56C.js";

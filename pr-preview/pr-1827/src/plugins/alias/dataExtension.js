@@ -1,0 +1,1 @@
+export{U2 as aliasDataExtension}from"../../../chunks/app-BhUmt56C.js";

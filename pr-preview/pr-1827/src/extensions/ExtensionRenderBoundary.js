@@ -1,0 +1,1 @@
+export{PV as ExtensionRenderBoundary}from"../../chunks/app-BhUmt56C.js";

@@ -1,0 +1,1 @@
+export{mb as blockInfoPlugin}from"../../../chunks/app-BhUmt56C.js";

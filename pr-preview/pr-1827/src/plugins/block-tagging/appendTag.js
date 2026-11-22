@@ -1,0 +1,1 @@
+export{Qd as appendTagToBlocks,$d as appendTagToContent}from"../../../chunks/app-BhUmt56C.js";

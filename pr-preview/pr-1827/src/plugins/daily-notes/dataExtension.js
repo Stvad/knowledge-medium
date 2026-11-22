@@ -1,0 +1,1 @@
+export{vQ as dailyNotesDataExtension}from"../../../chunks/app-BhUmt56C.js";

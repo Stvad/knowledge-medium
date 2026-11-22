@@ -1,0 +1,1 @@
+export{g6 as FacetBridge}from"../../chunks/app-BhUmt56C.js";

@@ -1,0 +1,1 @@
+export{Mx as Wikilink}from"../../../../../chunks/app-BhUmt56C.js";

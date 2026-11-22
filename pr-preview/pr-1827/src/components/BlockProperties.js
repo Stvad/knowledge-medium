@@ -1,0 +1,1 @@
+export{eU as BlockProperties}from"../../chunks/app-BhUmt56C.js";

@@ -1,0 +1,1 @@
+export{kI as appUpdate,AI as useAppUpdateAvailable}from"../chunks/app-BhUmt56C.js";

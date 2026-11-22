@@ -1,0 +1,1 @@
+export{qpt as defineQuery}from"../../../chunks/app-BhUmt56C.js";

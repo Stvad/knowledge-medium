@@ -1,0 +1,1 @@
+export{tmt as definePostCommitProcessor}from"../../../chunks/app-BhUmt56C.js";

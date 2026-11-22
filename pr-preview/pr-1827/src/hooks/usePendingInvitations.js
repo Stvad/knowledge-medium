@@ -1,0 +1,1 @@
+export{vk as usePendingInvitations}from"../../chunks/app-BhUmt56C.js";

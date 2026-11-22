@@ -1,0 +1,1 @@
+export{WL as BlockLoadingPlaceholder}from"../../chunks/app-BhUmt56C.js";

@@ -1,0 +1,1 @@
+export{RQ as annotationsDataExtension}from"../../../chunks/app-BhUmt56C.js";

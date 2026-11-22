@@ -1,0 +1,1 @@
+export{gb as updateIndicatorPlugin}from"../../../chunks/app-BhUmt56C.js";

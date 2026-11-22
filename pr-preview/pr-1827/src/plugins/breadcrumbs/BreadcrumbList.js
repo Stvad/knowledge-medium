@@ -1,0 +1,1 @@
+export{ID as BreadcrumbList}from"../../../chunks/app-BhUmt56C.js";
