@@ -58,6 +58,22 @@ describe('buildClaudeArgs', () => {
     expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2))
       .toEqual(['--tools', 'WebSearch,Bash,Read'])
   })
+
+  it('keeps skills and slash commands off while the allow list leaves Skill out', () => {
+    const args = buildClaudeArgs({...baseOptions, allowedTools: ['mcp__km__search', 'Bash', 'Read']})
+    expect(args).toContain('--disable-slash-commands')
+  })
+
+  it('lets a run whose allow list names Skill load skills', () => {
+    for (const rule of ['Skill', 'Skill(build-app)']) {
+      const args = buildClaudeArgs({...baseOptions, allowedTools: ['mcp__km__search', 'Bash', rule]})
+      expect(args).not.toContain('--disable-slash-commands')
+      expect(args.slice(args.indexOf('--tools'))).toEqual([
+        '--tools', 'Bash,Skill',
+        '--allowedTools', `mcp__km__search,Bash,${rule}`,
+      ])
+    }
+  })
 })
 
 describe('formatRunUsage', () => {
