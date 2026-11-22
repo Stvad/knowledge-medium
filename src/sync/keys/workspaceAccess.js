@@ -1,1 +1,1 @@
-export{Nt as decideWorkspaceEntry,Pt as resolveWorkspaceAccess}from"../../../chunks/app-BUz3uq3s.js";
+export{Nt as decideWorkspaceEntry,Pt as resolveWorkspaceAccess}from"../../../chunks/app-BYMQWZoI.js";

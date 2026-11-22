@@ -1,1 +1,1 @@
-export{yN as commandPaletteToggle}from"../../../chunks/app-BUz3uq3s.js";
+export{iP as commandPaletteToggle}from"../../../chunks/app-BYMQWZoI.js";

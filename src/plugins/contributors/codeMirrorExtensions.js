@@ -1,1 +1,1 @@
-export{kh as contributorsCodeMirrorExtensions}from"../../../chunks/app-BUz3uq3s.js";
+export{mg as contributorsCodeMirrorExtensions}from"../../../chunks/app-BYMQWZoI.js";

@@ -1,1 +1,1 @@
-export{$t as AppRuntimeProvider}from"../../chunks/app-BUz3uq3s.js";
+export{$t as AppRuntimeProvider}from"../../chunks/app-BYMQWZoI.js";

@@ -1,1 +1,1 @@
-export{ai as perfMonitorPlugin}from"../../../chunks/app-BUz3uq3s.js";
+export{ai as perfMonitorPlugin}from"../../../chunks/app-BYMQWZoI.js";

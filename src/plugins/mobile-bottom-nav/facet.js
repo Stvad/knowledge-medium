@@ -1,1 +1,1 @@
-export{VE as mobileBottomNavItemsFacet}from"../../../chunks/app-BUz3uq3s.js";
+export{ED as mobileBottomNavItemsFacet}from"../../../chunks/app-BYMQWZoI.js";
