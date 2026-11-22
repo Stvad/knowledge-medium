@@ -1,1 +1,0 @@
-export{I7 as Block,L7 as requireLoadedBlock}from"../../chunks/app-BKvgOJ9b.js";

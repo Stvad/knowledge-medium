@@ -1,1 +1,0 @@
-export{en as AppRuntimeProvider}from"../../chunks/app-BKvgOJ9b.js";
