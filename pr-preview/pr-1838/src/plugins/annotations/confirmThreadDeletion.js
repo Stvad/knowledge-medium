@@ -1,1 +1,1 @@
-export{Vh as confirmThreadDeletion}from"../../../chunks/app-NB06hHs5.js";
+export{Zh as confirmThreadDeletion}from"../../../chunks/app-hFI-T6Iq.js";

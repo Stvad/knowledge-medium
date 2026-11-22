@@ -1,1 +1,1 @@
-export{Nmt as defineQuery}from"../../../chunks/app-NB06hHs5.js";
+export{Umt as defineQuery}from"../../../chunks/app-hFI-T6Iq.js";
