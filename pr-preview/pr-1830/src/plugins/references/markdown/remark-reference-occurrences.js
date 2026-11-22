@@ -1,1 +1,1 @@
-export{Gx as remarkReferenceOccurrences}from"../../../../chunks/app-73APFI-e.js";
+export{Kx as remarkReferenceOccurrences}from"../../../../chunks/app-nVeEnPIV.js";

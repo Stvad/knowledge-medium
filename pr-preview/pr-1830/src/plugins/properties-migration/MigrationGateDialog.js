@@ -1,1 +1,1 @@
-export{nc as MigrationGateDialog}from"../../../chunks/app-73APFI-e.js";
+export{rc as MigrationGateDialog}from"../../../chunks/app-nVeEnPIV.js";

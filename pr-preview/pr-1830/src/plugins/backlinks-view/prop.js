@@ -1,1 +1,1 @@
-export{tx as DEFAULT_BACKLINKS_VIEW_ID,nx as FLAT_BACKLINKS_VIEW_ID,rx as GROUPED_BACKLINKS_VIEW_ID,ix as backlinksViewProp,ax as defaultBacklinksViewIdForBlock}from"../../../chunks/app-73APFI-e.js";
+export{nx as DEFAULT_BACKLINKS_VIEW_ID,rx as FLAT_BACKLINKS_VIEW_ID,ix as GROUPED_BACKLINKS_VIEW_ID,ax as backlinksViewProp,ox as defaultBacklinksViewIdForBlock}from"../../../chunks/app-nVeEnPIV.js";
