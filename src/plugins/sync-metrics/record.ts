@@ -46,7 +46,7 @@ export interface SyncDrainRecordFields {
   writeMs: number
   invalidateMs: number
   bookkeepingMs: number
-  deferredIndexRows: number
+  deferredIndexEntries: number
   deferredIndexMs: number
 }
 
@@ -137,7 +137,7 @@ export const buildDrainRecord = (
   writeMs: Math.round(stats.writeMs),
   invalidateMs: Math.round(stats.invalidateMs),
   bookkeepingMs: Math.round(stats.bookkeepingMs),
-  deferredIndexRows: stats.deferredIndexRows,
+  deferredIndexEntries: stats.deferredIndexEntries,
   deferredIndexMs: Math.round(stats.deferredIndexMs),
 })
 

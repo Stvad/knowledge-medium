@@ -126,10 +126,11 @@ export interface SyncDrainStats {
   /** Around the windows: reading and consuming `blocks_synced_changes` (or a
    *  workspace pass's id read), and the ANALYZE-owed check after each one. */
   readonly bookkeepingMs: number
-  /** The search index the drain's bulk windows deferred, built once after the
-   *  last of them (`buildDeferredSearchIndex`): owed entries cleared, and its
-   *  wall time. */
-  readonly deferredIndexRows: number
+  /** The search index bulk windows deferred, built at the drain's end
+   *  (`buildDeferredSearchIndex`): owed entries cleared — tombstones, empty
+   *  rows and since-deleted rows included, so not a count of rows indexed —
+   *  and the build's wall time. */
+  readonly deferredIndexEntries: number
   readonly deferredIndexMs: number
 }
 
@@ -434,6 +435,19 @@ export const startBlocksSyncedObserver = (
     return outcome
   }
 
+  /** Index what bulk windows deferred. Every drain ends with it, so a drain
+   *  that resolves has left nothing owed — its own windows' debt or one an
+   *  earlier drain left — and one whose build throws rejects like a failed
+   *  window and retries on the next flush. */
+  const buildDeferredIndex = async (meter: Mutable<SyncDrainStats>): Promise<void> => {
+    const startedAt = performance.now()
+    try {
+      meter.deferredIndexEntries += await buildDeferredSearchIndex(db)
+    } finally {
+      meter.deferredIndexMs += performance.now() - startedAt
+    }
+  }
+
   /** Run one drain under a meter and report it — on every exit, since a drain
    *  that throws or is torn down mid-backlog still did the work it measured. */
   const metered = async <T>(
@@ -444,20 +458,29 @@ export const startBlocksSyncedObserver = (
       source, completed: false, endedAtMs: 0, wallMs: 0, windows: 0, rows: 0,
       applied: 0, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
       readMs: 0, decodeMs: 0, writeMs: 0, invalidateMs: 0, bookkeepingMs: 0,
-      deferredIndexRows: 0, deferredIndexMs: 0,
+      deferredIndexEntries: 0, deferredIndexMs: 0,
     }
     const startedAt = performance.now()
     // Per drain, not per observer: each drain's first window delivers at once.
     invalidationsDeliveredAt = -Infinity
     try {
-      const result = await drain(meter)
+      let result: T
+      try {
+        result = await drain(meter)
+      } catch (err) {
+        // The windows that committed before the failure still owe their
+        // index, and a failed drain schedules no later flush to build it.
+        if (!isDisposedMidDrain(err)) await buildDeferredIndex(meter).catch(onError)
+        throw err
+      }
+      await buildDeferredIndex(meter)
       meter.completed = true
       return result
     } finally {
       // Whatever the last windows held back: their rows are committed, so the
       // queries over them are stale however the drain ended.
       try { deliverInvalidations() } catch (err) { onError(err) }
-      if (meter.windows > 0) {
+      if (meter.windows > 0 || meter.deferredIndexEntries > 0) {
         meter.wallMs = performance.now() - startedAt
         meter.endedAtMs = Date.now()
         // Guarded here rather than trusted: a throw from a `finally` would
@@ -467,22 +490,7 @@ export const startBlocksSyncedObserver = (
     }
   }
 
-  /** After a drain's last window: index what its bulk windows deferred. Part
-   *  of the drain, so a drain that resolves has left nothing owed, and one
-   *  whose build throws rejects like any failed window and retries on the next
-   *  flush. */
-  const buildDeferredIndex = async (meter: Mutable<SyncDrainStats>): Promise<void> => {
-    const startedAt = performance.now()
-    meter.deferredIndexRows += await buildDeferredSearchIndex(db)
-    meter.deferredIndexMs += performance.now() - startedAt
-  }
-
   const drainQueueOnce = (): Promise<void> => metered('queue', async meter => {
-    await drainQueueWindows(meter)
-    await buildDeferredIndex(meter)
-  })
-
-  const drainQueueWindows = async (meter: Mutable<SyncDrainStats>): Promise<void> => {
     for (;;) {
       if (disposed) throw disposedMidDrain()
       const chunk = windowSize()
@@ -518,7 +526,7 @@ export const startBlocksSyncedObserver = (
       // empty read. (Rows arriving after this still re-trigger via onChange.)
       if (rows.length < chunk) return
     }
-  }
+  })
 
   const materializeWorkspace = (
     workspaceId: string,
@@ -557,7 +565,6 @@ export const startBlocksSyncedObserver = (
       totals.resolved += outcome.resolved.length
       totals.reflagged += outcome.reflagged.length
     }
-    await buildDeferredIndex(meter)
     return { scope, scanned: ids.length, ...totals }
   })
 

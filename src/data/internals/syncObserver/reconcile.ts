@@ -25,7 +25,6 @@ import {
 } from '@/sync/transform.js'
 import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
 import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
-import { SELECT_ANY_BLOCKS_FTS_OWED_SQL } from '@/data/internals/clientSchema.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {
@@ -216,6 +215,10 @@ const NOT_QUEUED = 'NOT EXISTS (SELECT 1 FROM blocks_synced_changes c WHERE c.id
  * row, and rows held by the `hasPendingUpload` skip, since excluding those
  * would mean reading `ps_crud` per call).
  *
+ * It also reports the search index a bulk load deferred (`blocks_fts_owed`):
+ * the drain resolves only once that is built, so it is the tail of the same
+ * in-flight work.
+ *
  * SCOPE — this reads the QUEUE, so it cannot see
  * `observer.materializeWorkspace`, which rewrites `blocks` straight from
  * `blocks_synced` and stages nothing; a null answer means no QUEUED work,
@@ -241,6 +244,8 @@ export const STAGED_VIEW_GAP_SQL = `
         OR s.id IS NULL
         OR b.id IS NULL
         OR NOT ${blocksReflectsStagedSql('b', 's')}
+    UNION ALL
+    SELECT 'indexing' AS why FROM (SELECT 1 FROM blocks_fts_owed LIMIT 1)
   ) LIMIT 1`
 
 /** How many staged rows the benign-echo probe examines per call.
@@ -293,7 +298,7 @@ export const viewGapReadsOver = (reader: {
 /**
  * Is synced data still on its way into `blocks`, and why — the IN-FLIGHT half
  * of a view gap, as {@link STAGED_VIEW_GAP_SQL} sees it. Null when nothing is
- * staged.
+ * staged and no search index is owed.
  *
  * Takes its reader rather than a handle, because it is asked from both sides
  * of the write lock: `Repo.syncViewGap` asks it on the Repo's connection, and
@@ -311,13 +316,13 @@ export const stagedViewGapReason = async (
     return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
       + 'so this device is behind on materializing them into `blocks`'
   }
-  if (staged !== null) return 'synced rows are still draining into `blocks`'
-  // The tail of the same drain: it resolves only once this is built.
-  if (await reader.getOptional(SELECT_ANY_BLOCKS_FTS_OWED_SQL) !== null) {
-    return 'the search index for rows synced in bulk is still being built'
-  }
-  return null
+  if (staged?.why === 'indexing') return DEFERRED_SEARCH_INDEX_GAP_REASON
+  return staged !== null ? 'synced rows are still draining into `blocks`' : null
 }
+
+/** {@link stagedViewGapReason}'s answer while only the deferred search index
+ *  is outstanding — exported for the gate's progress row. */
+export const DEFERRED_SEARCH_INDEX_GAP_REASON = 'the search index for rows synced in bulk is still being built'
 
 /**
  * How many downloaded rows remain flagged for local verification?

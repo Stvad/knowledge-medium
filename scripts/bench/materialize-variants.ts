@@ -36,7 +36,7 @@ export interface VariantOptions {
   rebuildDerived: boolean
   randomIds: boolean
   /** Run the production bulk hold (`runMaterializePass`'s `bulkLoad`). */
-  bulkLoad?: boolean
+  bulkLoad: boolean
   /** Total page cache across connections, KiB; undefined leaves the runner's default. */
   cacheKb?: number
 }

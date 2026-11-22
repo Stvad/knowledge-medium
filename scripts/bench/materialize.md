@@ -330,7 +330,7 @@ queries name one with `INDEXED BY`, which SQLite refuses at prepare time when
 the index is missing (one of them, the alias re-derive drain, is scheduled
 during a first drain).
 
-The build at the device's scale, on Node (better-sqlite3, the M2 Max, 256 MB
+The build at the device's scale, on Node (better-sqlite3, a 12-core laptop, 256 MB
 cache as production sets it), rows seeded under the bulk scope with the
 fixture's content shape: 150,000 owed rows build in 1.8 s, 1,200,000 in 26.4 s
 (82,500 and 45,500 rows/s; the file is 1.0 GB at 1.2M). Chromium took about

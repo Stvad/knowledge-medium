@@ -19,7 +19,7 @@ import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams, blockToSyncedRowParams } fro
 import { buildDeferredSearchIndex, syncBulkLoadScope } from '@/data/internals/clientSchema'
 import { initializeClientDatabase } from '@/data/internals/initializeClientDatabase'
 import { resetTestDb } from '@/data/test/createTestDb'
-import { viewGapReadsOver } from './reconcile.js'
+import { DEFERRED_SEARCH_INDEX_GAP_REASON, stagedViewGapReason } from './reconcile.js'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -52,6 +52,15 @@ const unapplied = async (workspaceId: string): Promise<string[]> =>
     'SELECT id FROM blocks_synced WHERE workspace_id = ? AND needs_apply = 1 ORDER BY id',
     [workspaceId],
   )).map(row => row.id)
+
+/** One statement in a sync-applied transaction (source NULL) carrying `scope`,
+ *  as an observer window writes — `syncBulkLoadScope` for a bulk one. */
+const writeAsSync = (scope: string | null, sql: string, params: unknown[] = []) =>
+  env.db.writeTransaction(async (tx) => {
+    await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [scope])
+    await tx.execute(sql, params)
+    await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+  })
 
 const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> => {
   const t0 = Date.now()
@@ -1026,11 +1035,7 @@ describe('blocksSyncedObserver — a bulk load\'s change log', () => {
     await observer.flush()
     release()
 
-    const stamp = (scope: string | null, set: string) => env.db.writeTransaction(async (tx) => {
-      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [scope])
-      await tx.execute(`UPDATE blocks SET ${set} WHERE id = 'bulk'`)
-      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
-    })
+    const stamp = (scope: string | null, set: string) => writeAsSync(scope, `UPDATE blocks SET ${set} WHERE id = 'bulk'`)
     await stamp(syncBulkLoadScope(['ws']), `reference_target_id = 't1'`)
     expect(await events()).toEqual([])
     // Outside a bulk load the same stamp is an event, as it always was.
@@ -1130,19 +1135,18 @@ describe('blocksSyncedObserver — a bulk load\'s search index', () => {
     await observer.flush()
     release()
     observer.dispose()
-    return { state: await derivedState(), indexedAfterDrain: seen.reduce((n, s) => n + s.deferredIndexRows, 0) }
+    return { state: await derivedState(), deferredEntries: seen.reduce((n, s) => n + s.deferredIndexEntries, 0) }
   }
 
   it('leaves blocks and everything derived from it as a drain without the hold does', async () => {
     const live = await drainArrivals(false)
-    expect(live.indexedAfterDrain).toBe(0)
+    expect(live.deferredEntries).toBe(0)
     await resetTestDb(env.db)
     const bulk = await drainArrivals(true)
     // The deferral engaged — every 'ws' insert of the first round — so the
     // equality below is the build's doing, not the per-row trigger's.
-    expect(bulk.indexedAfterDrain).toBe(6)
+    expect(bulk.deferredEntries).toBe(6)
     expect(bulk.state).toEqual(live.state)
-    expect(bulk.state.owed).toEqual([])
     expect(bulk.state.hits.length).toBeGreaterThan(0)
   })
 
@@ -1152,12 +1156,12 @@ describe('blocksSyncedObserver — a bulk load\'s search index', () => {
     await drainStagingWindowOnce(env.db, { getMaterializability: constMat('copy'), getCek: noKey }, { bulkLoadWorkspaceIds: ['ws'] })
     expect(await owed()).toEqual(['held'])
     expect(await indexed()).toEqual([{ block_id: 'other', workspace_id: 'ws-other', content: 'para other' }])
-    expect(await viewGapReadsOver(env.db).stagedSyncViewGap()).toMatch(/search index/)
+    expect(await stagedViewGapReason(env.db)).toBe(DEFERRED_SEARCH_INDEX_GAP_REASON)
 
     expect(await buildDeferredSearchIndex(env.db)).toBe(1)
     expect(await owed()).toEqual([])
     expect((await indexed()).map(row => row.block_id)).toEqual(['held', 'other'])
-    expect(await viewGapReadsOver(env.db).stagedSyncViewGap()).toBeNull()
+    expect(await stagedViewGapReason(env.db)).toBeNull()
   })
 
   it('indexes the workspace pass a hold covers before the pass resolves', async () => {
@@ -1176,21 +1180,16 @@ describe('blocksSyncedObserver — a bulk load\'s search index', () => {
   })
 
   it('builds each owed row as it is now, not as it was inserted', async () => {
-    const asSync = (scope: string | null, sql: string, params: unknown[] = []) => env.db.writeTransaction(async (tx) => {
-      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [scope])
-      await tx.execute(sql, params)
-      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
-    })
     const bulk = syncBulkLoadScope(['ws'])
     for (const id of ['edited', 'tombstoned', 'removed', 'reinserted']) {
-      await asSync(bulk, INSERT_BLOCK_SQL, blockToRowParams(data({ id, workspaceId: 'ws', content: `para ${id}` })))
+      await writeAsSync(bulk, INSERT_BLOCK_SQL, blockToRowParams(data({ id, workspaceId: 'ws', content: `para ${id}` })))
     }
     // Changes after the deferred insert, before the build. The edit is indexed
     // by `blocks_fts_update`, so the build must not index it a second time.
-    await asSync(null, `UPDATE blocks SET content = 'para edited v2' WHERE id = 'edited'`)
-    await asSync(null, `UPDATE blocks SET deleted = 1 WHERE id = 'tombstoned'`)
-    await asSync(null, `DELETE FROM blocks WHERE id IN ('removed', 'reinserted')`)
-    await asSync(bulk, INSERT_BLOCK_SQL, blockToRowParams(data({ id: 'reinserted', workspaceId: 'ws', content: 'para again' })))
+    await writeAsSync(null, `UPDATE blocks SET content = 'para edited v2' WHERE id = 'edited'`)
+    await writeAsSync(null, `UPDATE blocks SET deleted = 1 WHERE id = 'tombstoned'`)
+    await writeAsSync(null, `DELETE FROM blocks WHERE id IN ('removed', 'reinserted')`)
+    await writeAsSync(bulk, INSERT_BLOCK_SQL, blockToRowParams(data({ id: 'reinserted', workspaceId: 'ws', content: 'para again' })))
     expect(await owed()).toEqual(['edited', 'reinserted', 'reinserted', 'removed', 'tombstoned'])
 
     expect(await buildDeferredSearchIndex(env.db)).toBe(5)
@@ -1205,14 +1204,42 @@ describe('blocksSyncedObserver — a bulk load\'s search index', () => {
     ])
   })
 
+  it('builds in chunks, each clearing only the entries it indexed', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    for (const id of ids) {
+      await writeAsSync(syncBulkLoadScope(['ws']), INSERT_BLOCK_SQL,
+        blockToRowParams(data({ id, workspaceId: 'ws', content: `para ${id}` })))
+    }
+    expect(await buildDeferredSearchIndex(env.db, 2)).toBe(5)
+    expect(await owed()).toEqual([])
+    expect((await indexed()).map(row => row.block_id)).toEqual(ids)
+  })
+
+  it('still builds what committed windows deferred when a later step fails the drain', async () => {
+    let failing = false
+    const { observer } = start({
+      getMaterializability: constMat('copy'), bulkDrainChunkSize: 1,
+      onError: () => {},
+      getInvalidationRules: () => { if (failing) throw new Error('boom'); return [] },
+    })
+    await observer.flush()
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'b1', workspaceId: 'ws', content: 'para one' }))
+    await put(data({ id: 'b2', workspaceId: 'ws', content: 'para two' }))
+    failing = true
+    // Window 1 commits b1, then its invalidation throws.
+    await expect(observer.flush()).rejects.toThrow('boom')
+    release()
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'para one' }])
+    expect(await owed()).toEqual([])
+    expect(await indexed()).toEqual([{ block_id: 'b1', workspace_id: 'ws', content: 'para one' }])
+  })
+
   it('pays a debt a dead process left, at the next boot, before anything reads', async () => {
     // A committed bulk window whose drain never reached its build: the state
     // a crash leaves, written by hand.
-    await env.db.writeTransaction(async (tx) => {
-      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [syncBulkLoadScope(['ws'])])
-      await tx.execute(INSERT_BLOCK_SQL, blockToRowParams(data({ id: 'orphan', workspaceId: 'ws', content: 'para orphan' })))
-      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
-    })
+    await writeAsSync(syncBulkLoadScope(['ws']), INSERT_BLOCK_SQL,
+      blockToRowParams(data({ id: 'orphan', workspaceId: 'ws', content: 'para orphan' })))
     expect(await owed()).toEqual(['orphan'])
     expect(await indexed()).toEqual([])
 

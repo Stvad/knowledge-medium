@@ -1022,6 +1022,13 @@ export const CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL = `
 // (`blocks_fts_insert_deferred`).
 // ============================================================================
 
+/** Which `blocks` rows `blocks_fts` holds — every writer of the index uses it,
+ *  so the per-row triggers and the set-based builds cannot disagree. */
+const searchIndexedRowSql = (alias?: string): string => {
+  const prefix = alias ? `${alias}.` : ''
+  return `${prefix}deleted = 0 AND ${prefix}content != ''`
+}
+
 const blocksFtsInsertSql = (rowRef: 'NEW') => `
       INSERT INTO blocks_fts_rowids (block_id)
       SELECT ${rowRef}.id
@@ -1032,8 +1039,7 @@ const blocksFtsInsertSql = (rowRef: 'NEW') => `
       SELECT fts_rowid, ${rowRef}.content, ${rowRef}.workspace_id, ${rowRef}.id
       FROM blocks_fts_rowids
       WHERE block_id = ${rowRef}.id
-        AND ${rowRef}.deleted = 0
-        AND ${rowRef}.content != '';
+        AND ${searchIndexedRowSql(rowRef)};
 `.trim()
 
 export const CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL = `
@@ -1048,7 +1054,11 @@ export const CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL = `
 /** The other half of `blocks_fts_insert`'s WHEN: a bulk load's insert is
  *  recorded as owed, in the statement that inserts it, so no committed row can
  *  be missing from the index without a `blocks_fts_owed` entry naming it.
- *  {@link buildDeferredSearchIndex} pays the debt. */
+ *  {@link buildDeferredSearchIndex} pays the debt.
+ *
+ *  Accepted on a downgrade: a build that predates this trigger keeps it
+ *  (recreating only the triggers it knows), never builds what is owed, and
+ *  its gate does not wait for it; re-upgrading builds it at boot. */
 export const CREATE_BLOCKS_FTS_INSERT_DEFERRED_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_fts_insert_deferred
   AFTER INSERT ON blocks
@@ -1193,7 +1203,7 @@ export const BACKFILL_BLOCKS_FTS_ROWIDS_SQL = `
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
   SELECT id
   FROM blocks
-  WHERE deleted = 0 AND content != ''
+  WHERE ${searchIndexedRowSql()}
 `
 
 export const BACKFILL_BLOCKS_FTS_SQL = `
@@ -1201,8 +1211,7 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
   SELECT r.fts_rowid, b.content, b.workspace_id, b.id
   FROM blocks b
   JOIN blocks_fts_rowids r ON r.block_id = b.id
-  WHERE b.deleted = 0
-    AND b.content != ''
+  WHERE ${searchIndexedRowSql('b')}
     AND NOT EXISTS (
       SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid
     )
@@ -1210,29 +1219,41 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
 
 export const SELECT_ANY_BLOCKS_FTS_OWED_SQL = `SELECT 1 FROM blocks_fts_owed LIMIT 1`
 
+/** The owed entries one build chunk covers: the oldest `?`, as the rowid
+ *  bound every statement of the chunk binds. Entries recorded after it read
+ *  this get higher rowids and wait for a later chunk. */
+const SELECT_OWED_CHUNK_BOUND_SQL = `
+  SELECT max(rowid) AS upTo FROM (SELECT rowid FROM blocks_fts_owed ORDER BY rowid LIMIT ?)
+`
+
 /** The owed half of {@link BACKFILL_BLOCKS_FTS_ROWIDS_SQL}. Every owed row
  *  that still exists gets a rowid, tombstones included, as
  *  `blocks_fts_insert` gives one. */
-export const BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL = `
+const BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL = `
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
   SELECT id FROM blocks
-  WHERE id IN (SELECT block_id FROM blocks_fts_owed)
+  WHERE id IN (SELECT block_id FROM blocks_fts_owed WHERE rowid <= ?)
   ORDER BY id
 `
 
-export const BUILD_OWED_BLOCKS_FTS_SQL = `
+const BUILD_OWED_BLOCKS_FTS_SQL = `
   INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
   SELECT r.fts_rowid, b.content, b.workspace_id, b.id
   FROM blocks_fts_rowids r
   JOIN blocks b ON b.id = r.block_id
-  WHERE r.block_id IN (SELECT block_id FROM blocks_fts_owed)
-    AND b.deleted = 0
-    AND b.content != ''
+  WHERE r.block_id IN (SELECT block_id FROM blocks_fts_owed WHERE rowid <= ?)
+    AND ${searchIndexedRowSql('b')}
     AND NOT EXISTS (SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid)
   ORDER BY r.fts_rowid
 `
 
-export const CLEAR_BLOCKS_FTS_OWED_SQL = `DELETE FROM blocks_fts_owed`
+const CLEAR_BLOCKS_FTS_OWED_CHUNK_SQL = `DELETE FROM blocks_fts_owed WHERE rowid <= ?`
+
+/** Owed entries per build transaction. Bounds how long one build holds the
+ *  write lock and how much one transaction writes, and makes a long build's
+ *  progress survive a reload. */
+export const DEFERRED_SEARCH_INDEX_CHUNK = 50_000
+
 
 // ============================================================================
 // ANALYZE / planner stats. wa-sqlite has no automatic ANALYZE. The sharp edge
@@ -1619,32 +1640,41 @@ export const backfillBlocksFtsIfEmpty = async (
 }
 
 /** Index every row a bulk load deferred (`blocks_fts_insert_deferred`) and
- *  clear the record of the debt, in one transaction so the clear can only
- *  commit with the rows it vouches for. Returns how many owed entries it
- *  cleared; 0 costs one empty read.
+ *  clear the record of the debt, a chunk of the oldest entries per
+ *  transaction, so each clear commits with the rows it vouches for. Returns how
+ *  many owed entries it cleared; 0 costs one empty read.
  *
  *  Reads each owed row as it is NOW: one updated since its insert was indexed
  *  by `blocks_fts_update` (hence the `NOT EXISTS`), one deleted is skipped.
- *  The rowid map is filled in id order, so its unique index is appended to
- *  rather than probed at random.
+ *  Each chunk fills the rowid map in id order, so its unique index takes
+ *  sorted runs rather than random probes.
  *
- *  Two callers, for two exits: the sync observer at the end of each drain, and
- *  client bootstrap, for a process that died with the debt outstanding.
- *
- *  One transaction however large the debt, accepted: a first sync's build holds
- *  the write lock for tens of seconds (`scripts/bench/materialize.md`), and a
- *  hold vouches that nothing is waiting on it. */
-export const buildDeferredSearchIndex = async (db: {
-  getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
-  writeTransaction: <T>(fn: (tx: {execute: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<T>) => Promise<T>
-}): Promise<number> => {
-  if (await db.getOptional(SELECT_ANY_BLOCKS_FTS_OWED_SQL) === null) return 0
-  return db.writeTransaction(async tx => {
-    await tx.execute(BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL)
-    await tx.execute(BUILD_OWED_BLOCKS_FTS_SQL)
-    const cleared = await tx.execute(CLEAR_BLOCKS_FTS_OWED_SQL) as {rowsAffected?: number} | undefined
-    return cleared?.rowsAffected ?? 0
-  })
+ *  Two callers: the sync observer, at the end of each drain, and client
+ *  bootstrap, for a process that died with the debt outstanding. */
+export const buildDeferredSearchIndex = async (
+  db: {
+    getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
+    writeTransaction: <T>(fn: (tx: {
+      execute: (sql: string, params?: unknown[]) => Promise<unknown>
+      getOptional: <R>(sql: string, params?: unknown[]) => Promise<R | null>
+    }) => Promise<T>) => Promise<T>
+  },
+  chunkSize: number = DEFERRED_SEARCH_INDEX_CHUNK,
+): Promise<number> => {
+  let cleared = 0
+  while (await db.getOptional(SELECT_ANY_BLOCKS_FTS_OWED_SQL) !== null) {
+    cleared += await db.writeTransaction(async tx => {
+      const bound = await tx.getOptional<{upTo: number | null}>(SELECT_OWED_CHUNK_BOUND_SQL, [chunkSize])
+      const upTo = bound?.upTo ?? null
+      // Another build cleared it between the probe and the lock.
+      if (upTo === null) return 0
+      await tx.execute(BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL, [upTo])
+      await tx.execute(BUILD_OWED_BLOCKS_FTS_SQL, [upTo])
+      const result = await tx.execute(CLEAR_BLOCKS_FTS_OWED_CHUNK_SQL, [upTo]) as {rowsAffected?: number} | undefined
+      return result?.rowsAffected ?? 0
+    })
+  }
+  return cleared
 }
 
 export const grandfatherWorkspaceFirstSync = async (

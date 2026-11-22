@@ -178,8 +178,11 @@ export const initializeClientDatabase = async (
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
   // Before anything can search: a process that died mid bulk load left rows
-  // the index does not hold yet.
-  await buildDeferredSearchIndex(powerSyncDb)
+  // the index does not hold yet. Not fatal: the sync observer's first drain
+  // retries it, and until then the view gap holds the gates and one-way passes.
+  await buildDeferredSearchIndex(powerSyncDb).catch((error: unknown) => {
+    console.error('[clientSchema] building the deferred search index failed; the sync observer retries it', error)
+  })
   await grandfatherWorkspaceFirstSync(backfillDb)
   const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
   await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
