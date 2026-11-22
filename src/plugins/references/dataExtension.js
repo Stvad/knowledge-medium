@@ -1,1 +1,1 @@
-export{UX as referencesDataExtension}from"../../../chunks/app-CBK1vqRz.js";
+export{XX as referencesDataExtension}from"../../../chunks/app-DYHvCRzI.js";
