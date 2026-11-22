@@ -435,6 +435,16 @@ describe('the outline’s verbs between rows', () => {
     expect(await rowsUnderHost()).toEqual(['row-1', 'row-0'])
   })
 
+  it('an empty row whose children are collapsed merges them up, never deletes them', async () => {
+    const child = await repo.mutate.createChild({parentId: 'row-1', content: 'kept', position: {kind: 'last'}})
+    await repo.block('row-1').set(isCollapsedProp, true)
+    await repo.block('row-1').setContent('')
+    mount()
+    press(await editAt('row-1', 'start'), 'Backspace')
+    await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-0']))
+    expect((await repo.load(child!))?.parentId).toBe('row-0')
+  })
+
   it('a row whose only property is its collapse flag still merges', async () => {
     await repo.block('row-1').set(isCollapsedProp, false)
     expect(repo.block('row-1').peek()?.properties).toHaveProperty(isCollapsedProp.name)

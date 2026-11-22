@@ -136,7 +136,8 @@ const mergeRowUp: ActionDispatchDecorator = {
     const intoData = into.peek()
     if (intoData && (hasBlockType(intoData, VIEW_TYPE) || hasBlockType(intoData, COLUMN_TYPE))) return
     const liveContent = editorView!.state.doc.toString()
-    if (liveContent === '' && (await grid.drawnChildIds(block.id)).length === 0) {
+    // Every child counts, collapsed or not: deleting the row would delete them.
+    if (liveContent === '' && (await grid.childIdsOf(block.id)).length === 0) {
       if (!await deleteBlockThroughUi(block)) return
       await uiStateBlock.set(editorSelection, {blockId: into.id, start: intoData?.content.length ?? 0})
       await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})

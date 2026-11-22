@@ -170,8 +170,14 @@ export class GridController {
   async drawnChildIds(rowId: string): Promise<string[]> {
     const row = this.host.repo.block(rowId)
     await row.load()
-    return row.peekProperty(isCollapsedProp) ?? false ? []
-      : row.repo.query.childIds({id: rowId, propertyChildren: 'none'}).load()
+    return row.peekProperty(isCollapsedProp) ?? false ? [] : this.childIdsOf(rowId)
+  }
+
+  /** A row's children, shown or collapsed, less its property rows and any it
+   *  is drawn beside as a row of its own (`RowNotes` draws the same list). */
+  async childIdsOf(rowId: string): Promise<string[]> {
+    const ids = await this.host.repo.query.childIds({id: rowId, propertyChildren: 'none'}).load()
+    return ids.filter(id => !this.rowIndex.has(id))
   }
 
   /** The last block a row draws: its last child as the outline draws it
@@ -318,10 +324,11 @@ export class GridController {
     const cell = element && ownCell(element, this.column)
     const scroller = cell?.closest<HTMLElement>('[data-table-scroller]')
     if (!cell || !scroller) return
-    const frozen = this.column > 0 ? ownCell(element!, 0)?.getBoundingClientRect().width ?? 0 : 0
     const view = scroller.getBoundingClientRect()
+    // The frozen first column's right edge: it sticks beside the row's frozen controls.
+    const frozenRight = this.column > 0 ? ownCell(element!, 0)?.getBoundingClientRect().right ?? view.left : view.left
     const box = cell.getBoundingClientRect()
-    if (box.left < view.left + frozen) scroller.scrollLeft -= view.left + frozen - box.left
+    if (box.left < frozenRight) scroller.scrollLeft -= frozenRight - box.left
     else if (box.right > view.right) scroller.scrollLeft += box.right - view.right
   }
 

@@ -233,7 +233,8 @@ const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the tabl
 /** A row's children as the outline draws them, minus what the grid draws
  *  elsewhere in the same scope, where a second occurrence would have a second
  *  editor: its property rows (its cells), and a child a query also selects as
- *  a row. The outline's own listing keeps a focused field row, which editing
+ *  a row (`GridController.childIdsOf`, the same list for the grid's walks).
+ *  The outline's own listing keeps a focused field row, which editing
  *  a list member makes the row's focused child. Accepted: a deeper descendant
  *  a query also selects is drawn both as a row and under its ancestor. */
 const RowNotes = ({row}: {row: Block}) => {

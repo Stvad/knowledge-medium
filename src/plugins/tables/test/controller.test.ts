@@ -144,4 +144,12 @@ describe('GridController', () => {
       expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
     })
   })
+
+  it('lists a row’s children without one it also draws as a row', async () => {
+    const {repo, controller, rowIds} = await setup(1)
+    const note = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'note'})
+    const alsoRow = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'also a row'})
+    controller.setRows([rowIds[0]!, alsoRow!], 2)
+    expect(await controller.childIdsOf(rowIds[0]!)).toEqual([note])
+  })
 })
