@@ -68,6 +68,7 @@ import {
   virtualFieldFor,
   notPropertyRow,
   hasCandidateAxis,
+  hasIndexedMembershipTerm,
   predicateGroups,
   inlineJsonPath,
   listMembersSql,
@@ -1256,6 +1257,13 @@ const collectReferenceFilterDeps = (
   }
 }
 
+/** Keyed by workspace and type, so any block gaining or losing the type wakes the handle; per-row deps would cost the ids projection its point. */
+const dependOnTypes = (types: readonly string[], workspaceId: string, ctx: QueryCtx): void => {
+  for (const type of types) {
+    ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, type)})
+  }
+}
+
 const collectPredicateDeps = (
   predicates: readonly BlockPredicate[],
   workspaceId: string,
@@ -1271,6 +1279,8 @@ const collectPredicateDeps = (
       predicate.scope === 'ancestor' ? ancestorTargetProps : null,
       context,
     )
+    // Ancestor scope too: an ancestor gaining the type fires the same channel.
+    dependOnTypes(predicate.types ?? [], workspaceId, ctx)
     if (predicate.referencedBy !== undefined) {
       collectReferenceFilterDeps(predicate.referencedBy, workspaceId, ctx, {
         includeImplicitAncestorStructure: predicate.scope === 'ancestor',
@@ -1285,13 +1295,7 @@ const collectTypedBlockAxisDeps = (
   context: WhereContext,
 ): ReadonlySet<string> => {
   const {workspaceId, types = [], referencedBy} = normalized
-  for (const t of types) {
-    ctx.depend({
-      kind: 'plugin',
-      channel: TYPED_BLOCKS_TYPE_CHANNEL,
-      key: typedBlocksTypeKey(workspaceId, t),
-    })
-  }
+  dependOnTypes(types, workspaceId, ctx)
   if (normalized.parentId !== undefined) ctx.depend({kind: 'parent-edge', parentId: normalized.parentId})
   if (normalized.order === 'created-asc' || normalized.order === 'created-desc') {
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TIMESTAMP_CHANNEL, key: typedBlocksTimestampKey(workspaceId, 'created')})
@@ -1321,8 +1325,8 @@ const collectTypedBlockAxisDeps = (
   //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
   //     don't need live: matching rows must set `foo='bar'` to
   //     match, which fires the foo property channel.)
-  const hasEntrySignal = (p: BlockPredicate) =>
-    p.scope !== 'ancestor' && (p.referencedBy !== undefined || hasSelectiveProperty(p.where, context))
+  const hasEntrySignal = (p: BlockPredicate) => p.scope !== 'ancestor' &&
+    (hasIndexedMembershipTerm(p) || hasSelectiveProperty(p.where, context))
   if (!hasCandidateAxis(normalized, hasEntrySignal)) {
     ctx.depend({
       kind: 'plugin',
@@ -1487,6 +1491,7 @@ export const resolveTypedBlockIds = async (
  *    - `referencedBy.id + sourceField` → `typedBlocks.referenceField` channel
  *    - per name in any `match`/`exclude` predicate's `where` → `typedBlocks.property`
  *    - per `referencedBy` in any `match`/`exclude` predicate → reference channels
+ *    - per type in any predicate's `types` (either scope) → `typedBlocks.type`
  *    - any ancestor-scope predicate → row deps on every walked ancestor id
  *    - no filter at all           → `typedBlocks.live` channel
  *

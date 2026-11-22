@@ -1795,3 +1795,221 @@ describe('typed query disjunctions and extended where operators', () => {
     await expect(env.repo.queryBlocks({workspaceId: WS, where: {[name]: {contains: 7}}})).rejects.toThrow()
   })
 })
+
+describe('predicate types term', () => {
+  const VIEW = 'test:view'
+  const COLUMN = 'test:column'
+  const setTypes = (id: string, types: readonly string[]) =>
+    env.repo.tx(tx => tx.setProperty(id, typesProp, [...types]), {scope: ChangeScope.BlockDefault})
+
+  const seedTable = async () => {
+    await create({id: 'row-a', types: ['row']})
+    await create({id: 'row-view', types: ['row', VIEW]})
+    await create({id: 'row-b', types: ['row', 'other']})
+    await create({id: 'row-column', types: ['row', COLUMN]})
+    await create({id: 'plain'})
+    await create({id: 'view', types: [VIEW]})
+  }
+
+  it('excludes exactly the blocks carrying any of the named types', async () => {
+    await seedTable()
+    const exclude = [{types: [VIEW, COLUMN]}]
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude}).load())
+      .toEqual(['row-a', 'row-b'])
+    // An untyped block has no membership row, so it is not excluded.
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, exclude}).load())
+      .toEqual(['row-a', 'row-b', 'plain'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude, limit: 1}).load())
+      .toEqual(['row-a'])
+    expect(await env.repo.query.typedBlockCount({workspaceId: WS, types: ['row'], exclude}).load()).toBe(2)
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['row'], exclude}).load()))
+      .toEqual(['row-a', 'row-b'])
+    // Ids are trimmed like the top-level filter's.
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [{types: [` ${VIEW} `, COLUMN]}]}).load())
+      .toEqual(['row-a', 'row-b'])
+  })
+
+  it('matches any of the named types and ANDs with the predicate’s other terms', async () => {
+    await seedTable()
+    await create({id: 'open-view', types: [VIEW], properties: {status: 'open'}})
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, match: [{types: [VIEW, COLUMN]}]}).load())
+      .toEqual(['row-view', 'row-column', 'view', 'open-view'])
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, match: [{types: [VIEW], where: {status: 'open'}}],
+    }).load()).toEqual(['open-view'])
+  })
+
+  it('accepts a type as an anyOf alternative', async () => {
+    await seedTable()
+    await create({id: 'open', properties: {status: 'open'}})
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, anyOf: [{types: [COLUMN]}, {where: {status: 'open'}}],
+    }).load()).toEqual(['row-column', 'open'])
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, types: ['row'], anyOf: [{types: [VIEW]}, {types: [` ${COLUMN}`]}],
+    }).load()).toEqual(['row-view', 'row-column'])
+  })
+
+  it('treats an empty or blank types list as no type term', async () => {
+    await seedTable()
+    const all = ['row-a', 'row-view', 'row-b', 'row-column', 'plain', 'view']
+    for (const types of [[], ['  ']]) {
+      expect(await env.repo.query.typedBlockIds({workspaceId: WS, exclude: [{types}]}).load()).toEqual(all)
+      expect(await env.repo.query.typedBlockIds({workspaceId: WS, match: [{types}]}).load()).toEqual(all)
+      // An unconstrained alternative matches every candidate.
+      expect(await env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types}, {types: [VIEW]}]}).load())
+        .toEqual(all)
+    }
+  })
+
+  it('keeps foreign-workspace blocks out of every predicate position', async () => {
+    await seedTable()
+    await create({id: 'foreign-view', workspaceId: OTHER_WS, types: ['row', VIEW]})
+    await create({id: 'foreign-row', workspaceId: OTHER_WS, types: ['row']})
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, match: [{types: [VIEW]}]}).load())
+      .toEqual(['row-view', 'view'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types: [VIEW]}]}).load())
+      .toEqual(['row-view', 'view'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [{types: [VIEW]}]}).load())
+      .toEqual(['row-a', 'row-b', 'row-column'])
+  })
+
+  it('matches a type on the block or any ancestor in ancestor scope', async () => {
+    await create({id: 'table', types: [VIEW]})
+    await create({id: 'inside', parentId: 'table', types: ['row']})
+    await create({id: 'deeper', parentId: 'inside', types: ['row']})
+    await create({id: 'outside', types: ['row']})
+    const ancestor = {scope: 'ancestor', types: [VIEW]} as const
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], match: [ancestor]}).load())
+      .toEqual(['inside', 'deeper'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [ancestor]}).load())
+      .toEqual(['outside'])
+    // A self-scope type term bounds the ancestor walk on its own.
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, match: [{types: ['row']}, ancestor],
+    }).load()).toEqual(['inside', 'deeper'])
+    await expect(env.repo.query.typedBlockIds({workspaceId: WS, match: [ancestor]}).load())
+      .rejects.toThrow(/bound the recursive walk/)
+  })
+
+  it('wakes a mounted ids handle when a block gains or loses an excluded type, and stays quiet otherwise', async () => {
+    await seedTable()
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [{types: [VIEW, COLUMN]}]})
+    expect(await handle.load()).toEqual(['row-a', 'row-b'])
+    const off = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('row-a', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+      await create({id: 'unrelated', types: ['other']})
+      await setTypes('plain', ['other'])
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+
+      await setTypes('row-a', ['row', COLUMN])
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before + 1)
+      await waitFor(() => expect(handle.peek()).toEqual(['row-b']))
+      await setTypes('row-view', ['row'])
+      await waitFor(() => expect(handle.peek()).toEqual(['row-view', 'row-b']))
+    } finally {
+      off()
+    }
+  })
+
+  it('wakes ancestor-scoped ids and counts when an ancestor gains or loses the type', async () => {
+    await create({id: 'parent'})
+    await create({id: 'inside', parentId: 'parent', types: ['row']})
+    await create({id: 'outside', types: ['row']})
+    const query = {workspaceId: WS, types: ['row'], exclude: [{scope: 'ancestor', types: [VIEW]}]} as const
+    const handle = env.repo.query.typedBlockIds(query)
+    const count = env.repo.query.typedBlockCount(query)
+    expect(await handle.load()).toEqual(['inside', 'outside'])
+    expect(await count.load()).toBe(2)
+    const offs = [handle.subscribe(() => {}), count.subscribe(() => {})]
+    try {
+      await setTypes('parent', [VIEW])
+      await waitFor(() => expect(handle.peek()).toEqual(['outside']))
+      await waitFor(() => expect(count.peek()).toBe(1))
+      await setTypes('parent', [])
+      await waitFor(() => expect(handle.peek()).toEqual(['inside', 'outside']))
+      await waitFor(() => expect(count.peek()).toBe(2))
+    } finally {
+      offs.forEach(off => off())
+    }
+  })
+
+  it('answers an empty anyOf with no rows on every forced-index path', async () => {
+    await create({id: 'parent'})
+    await create({id: 'child', parentId: 'parent', properties: {status: 'open'}})
+    for (const query of [
+      {workspaceId: WS, parentId: 'parent', anyOf: []},
+      {workspaceId: WS, anyOf: [], order: {property: statusProp.name, direction: 'asc'}},
+    ] as const) {
+      expect(await env.repo.query.typedBlockIds(query).load()).toEqual([])
+    }
+  })
+
+  it('wakes a type alternative for a new matching block but not for an unrelated create', async () => {
+    await create({id: 'open', properties: {status: 'open'}})
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types: [VIEW]}, {where: {status: 'open'}}]})
+    expect(await handle.load()).toEqual(['open'])
+    const off = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await create({id: 'unrelated', types: ['other']})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+      await create({id: 'view', types: [VIEW]})
+      await waitFor(() => expect(handle.peek()).toEqual(['open', 'view']))
+    } finally {
+      off()
+    }
+  })
+
+  it('drives a limited, type-bounded exclusion from the type index before and after ANALYZE', async () => {
+    await env.h.db.writeTransaction(async tx => {
+      // Drop statistics an earlier fixture left behind; `ANALYZE sqlite_schema` reloads the emptied table.
+      // Analyzing the empty tables first creates `sqlite_stat1` when the file runs alone.
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute(`DELETE FROM sqlite_stat1 WHERE tbl IN ('blocks', 'block_types')`)
+      await tx.execute('ANALYZE sqlite_schema')
+      await tx.execute(`
+        WITH RECURSIVE nums(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM nums WHERE n < 9999)
+        INSERT INTO blocks (id, workspace_id, order_key, properties_json, created_at, updated_at, created_by, updated_by)
+        SELECT 'b-' || n, CASE WHEN n % 10 = 0 THEN ? ELSE ? END, 'a', CASE
+                 WHEN n % 50 = 1 THEN json_object('types', json_array('row', ?))
+                 WHEN n % 7 = 0 THEN json_object('types', json_array('row'))
+                 WHEN n % 3 = 0 THEN json_object('types', json_array(?))
+                 ELSE '{}'
+               END, n, n, 'user', 'user'
+        FROM nums
+      `, [OTHER_WS, WS, VIEW, COLUMN])
+      const query = {workspaceId: WS, types: ['row'], exclude: [{types: [VIEW, COLUMN]}]}
+      const compiled = compileTypedBlockQuery(query, {properties: new Map()}, {projection: 'ids', limit: 20})
+      const readPlan = async (sql: string, params: readonly unknown[]) => (await tx.getAll<{detail: string}>(
+        `EXPLAIN QUERY PLAN ${sql}`, [...params],
+      )).map(row => row.detail)
+      const alternatives = compileTypedBlockQuery(
+        {workspaceId: WS, anyOf: [{types: [VIEW]}, {types: [COLUMN]}]}, {properties: new Map()}, {projection: 'ids', limit: 20},
+      )
+      const assertPlan = async () => {
+        const plan = await readPlan(compiled.sql, compiled.params)
+        expect(plan[0]).toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
+        expect(plan[1]).toBe('SEARCH b USING INDEX sqlite_autoindex_blocks_1 (id=?)')
+        const alternativesPlan = await readPlan(alternatives.sql, alternatives.params)
+        expect(alternativesPlan[0]).toBe('MULTI-INDEX OR')
+        for (const detail of [...plan, ...alternativesPlan]) expect(detail).not.toMatch(/^SCAN|idx_blocks_workspace/)
+      }
+      await assertPlan()
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute('ANALYZE main.block_types')
+      await assertPlan()
+      // Table queries omit property rows. That clause tips the stat-free planner to the
+      // workspace index, as it does for any exclusion; with statistics it takes the type index.
+      const withoutPropertyRows = compileTypedBlockQuery(
+        {...query, propertyChildren: 'none'}, {properties: new Map()}, {projection: 'ids', limit: 20},
+      )
+      expect((await readPlan(withoutPropertyRows.sql, withoutPropertyRows.params))[0])
+        .toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
+      const rows = await tx.getAll<{id: string}>(compiled.sql, [...compiled.params])
+      expect(rows).toHaveLength(20)
+    })
+  })
+})

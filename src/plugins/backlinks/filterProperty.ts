@@ -1,6 +1,8 @@
 import {
   ChangeScope,
   definePresetCore,
+  normalizeTypeIds,
+  predicateHasConstraints,
   seedProperty,
   type BlockPredicate,
   type Codec,
@@ -25,6 +27,7 @@ const parsePredicate = (value: unknown): BlockPredicate | null => {
   const out: {
     scope?: 'self' | 'ancestor'
     id?: string
+    types?: readonly string[]
     where?: Readonly<Record<string, unknown>>
     referencedBy?: {id: string; sourceField?: string}
   } = {}
@@ -33,6 +36,10 @@ const parsePredicate = (value: unknown): BlockPredicate | null => {
   }
   if (typeof value.id === 'string') {
     out.id = value.id
+  }
+  if (Array.isArray(value.types) && value.types.every(type => typeof type === 'string')) {
+    const types = normalizeTypeIds(value.types)
+    if (types.length > 0) out.types = types
   }
   if (isObjectRecord(value.where) && Object.keys(value.where).length > 0) {
     out.where = value.where
@@ -44,7 +51,7 @@ const parsePredicate = (value: unknown): BlockPredicate | null => {
     }
     out.referencedBy = ref
   }
-  return out.where || out.referencedBy || out.id ? out : null
+  return predicateHasConstraints(out) ? out : null
 }
 
 const parsePredicateList = (value: unknown): BlockPredicate[] => {

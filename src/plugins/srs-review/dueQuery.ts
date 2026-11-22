@@ -66,12 +66,8 @@ export const buildDueCardsQuery = ({
  *    page, but ENROLLING a block is only ever triggered by a tag on the
  *    block itself. Ancestor scope here would enqueue every bullet under a
  *    tagged page — answers, prose, scratch notes — as a new card.
- *  - No type filter, because the predicate language has no "does NOT carry
- *    type X" primitive (`types` is positive-only; `exclude` predicates
- *    carry `where`/`referencedBy`/`id`, and the types property is a list,
- *    so no `where` operator expresses non-membership). The tag narrows the
- *    scan to `block_references`; `selectNewCards` applies the type test to
- *    that result.
+ *  - No type filter: the tag narrows the scan to `block_references`, and
+ *    `selectNewCards` applies the type test to that result.
  *
  *  An absent `tagBlockId` (the untagged "all due" deck, or a tag whose page
  *  doesn't exist) targets `UNRESOLVED_TAG_ID`, so the query matches nothing:
