@@ -1,5 +1,5 @@
 // @vitest-environment node
-/** The query slice against a real workspace: the query read from its fence,
+/** The query slice against a real workspace: the query read from its value,
  *  rows created with what the query implies, the row source's exclusions, and
  *  the view's sort. */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -17,7 +17,7 @@ import { rowQuery, type TableColumn } from '../model'
 import { createQueryRow, rowBackfill } from '../query/backfill'
 import { parseQuery } from '../query/parse'
 import { openQueryValue } from '../query/queryValue'
-import { fencedQuery, queryResolver, queryTextOf } from '../query/source'
+import { queryResolver } from '../query/source'
 import { COLUMN_TYPE, VIEW_TYPE, queryProp } from '../schema'
 import { nextSort, sortOrder, writeSort } from '../sort'
 
@@ -71,26 +71,6 @@ beforeEach(async () => {
 const parse = (text: string) =>
   parseQuery(text, queryResolver(repo, workspaceId, repo.propertyDefinitions, repo.types, new Map()), {selfId: 'host'})
 const rows = (text: string) => repo.query.typedBlockIds(rowQuery('host', workspaceId, parse(text).query)).load()
-
-describe('queryTextOf', () => {
-  it.each([
-    ['```query\n#book status=open\n```', '#book status=open'],
-    ['~~~\na=1\nb=2\n~~~\n', 'a=1\nb=2'],
-    ['````query\na=1\n````', 'a=1'],
-    ['```query\na=1', 'a=1'],
-    ['a=1 b=2', 'a=1 b=2'],
-    ['```query\n```', ''],
-    ['~~~\n~~~', ''],
-    ['```query\n\n```', ''],
-    ['```query\na=1\n```  \n', 'a=1'],
-  ])('%j', (value, text) => {
-    expect(queryTextOf(value)).toBe(text)
-  })
-
-  it('reads back what fencedQuery writes', () => {
-    expect(queryTextOf(fencedQuery('publish=article'))).toBe('publish=article')
-  })
-})
 
 describe('a new row in a query table', () => {
   const QUERY = `#page publish=article rank=3 due=2026-01-05 tags=x owner=((${OWNER})) state!=done rank>1 childof=((${PARENT}))`
@@ -199,9 +179,9 @@ describe('openQueryValue', () => {
     `SELECT v.content FROM blocks f JOIN blocks v ON v.parent_id = f.id
       WHERE f.parent_id = 'host' AND f.is_field_form = 1 AND f.deleted = 0 AND v.deleted = 0`)
 
-  it('gives a host with no query an empty fence', async () => {
+  it('gives a host with no query an empty value', async () => {
     await openQueryValue(repo, 'host', await queryFieldId())
-    expect(await valueContents()).toEqual([{content: fencedQuery('')}])
+    expect(await valueContents()).toEqual([{content: ''}])
   })
 
   it('opens a value the host already holds without rewriting it, projected or not', async () => {
@@ -209,7 +189,7 @@ describe('openQueryValue', () => {
     // Raw rows: a value whose projection has not run yet, as after sync arrival.
     await db.db.writeTransaction(async tx => {
       for (const [id, parent, content, fieldForm] of [
-        ['query-field', 'host', `::((${fieldId}))`, 1], ['query-value', 'query-field', fencedQuery('keep=me'), null],
+        ['query-field', 'host', `::((${fieldId}))`, 1], ['query-value', 'query-field', 'keep=me', null],
       ] as const) {
         await tx.execute(
           `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
@@ -219,7 +199,7 @@ describe('openQueryValue', () => {
       }
     })
     expect(await openQueryValue(repo, 'host', fieldId)).toBe('query-value')
-    expect(await valueContents()).toEqual([{content: fencedQuery('keep=me')}])
+    expect(await valueContents()).toEqual([{content: 'keep=me'}])
   })
 })
 
