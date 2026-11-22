@@ -1,1 +1,1 @@
-export{Rut as hasSupabaseAuthConfig,zut as isAuthCallbackUrl,But as readPersistedSession,Vut as sessionUserToAppUser,Hut as supabase}from"../../chunks/app-CClycd_4.js";
+export{Rut as hasSupabaseAuthConfig,zut as isAuthCallbackUrl,But as readPersistedSession,Vut as sessionUserToAppUser,Hut as supabase}from"../../chunks/app-DO2nCr4f.js";

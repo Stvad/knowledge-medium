@@ -1,1 +1,1 @@
-export{VC as moveBlocksTo}from"../../../chunks/app-CClycd_4.js";
+export{VC as moveBlocksTo}from"../../../chunks/app-DO2nCr4f.js";
