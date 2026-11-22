@@ -1,1 +1,1 @@
-export{IX as preferredSpanReplacement}from"../../../chunks/app-PoOtsjvq.js";
+export{IX as preferredSpanReplacement}from"../../../chunks/app-C-Tv0Su_.js";

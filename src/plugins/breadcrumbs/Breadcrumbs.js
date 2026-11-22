@@ -1,1 +1,1 @@
-export{XD as Breadcrumbs}from"../../../chunks/app-PoOtsjvq.js";
+export{XD as Breadcrumbs}from"../../../chunks/app-C-Tv0Su_.js";
