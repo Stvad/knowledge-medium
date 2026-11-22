@@ -357,9 +357,15 @@ const TableBody = ({
     gridTemplateColumns: laidOut.map(columnTrack).join(' '),
     minWidth: `${minWidth(laidOut)}px`,
   }), [laidOut])
+  // The header and the rows scroll together, either way round: the header
+  // holds focusable controls, and focusing one scrolls the header on its own.
   const header = useRef<HTMLDivElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
   const syncHeader = (event: React.UIEvent<HTMLDivElement>) => {
     if (header.current) header.current.scrollLeft = event.currentTarget.scrollLeft
+  }
+  const syncRows = (event: React.UIEvent<HTMLDivElement>) => {
+    if (scroller.current) scroller.current.scrollLeft = event.currentTarget.scrollLeft
   }
   const rootRef = useCallback((element: HTMLDivElement | null) => { controller.setRoot(element) }, [controller])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
@@ -378,10 +384,10 @@ const TableBody = ({
         Read-only: this workspace stores properties in the block, not as rows.
       </p>}
       <ColumnHeaders host={host} workspaceId={workspaceId} columns={columns} names={names} template={template}
-        scrollRef={header} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}/>
+        scrollRef={header} onScroll={syncRows} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}/>
       {/* The gesture marker sits on the scroller: horizontal touch panning
           needs the marked element to be the one that scrolls. */}
-      <div data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
+      <div ref={scroller} data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
         className="overflow-x-auto overflow-y-hidden" onScroll={syncHeader}>
         <TableContext value={table}>
           <NestedBlockContextProvider overrides={rowsOverrides}>

@@ -1,7 +1,7 @@
 /** The column headers and the column gestures they carry: drag a header's
  *  edge to resize, drag the header to reorder, and its menu to hide, delete
  *  or add the property to a type. Every gesture writes once, when it ends. */
-import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type Ref } from 'react'
+import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type Ref, type UIEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { PropertyPicker } from '@/components/propertyPanel/PropertyPicker'
 import {
@@ -48,41 +48,43 @@ interface HeaderProps {
   names: readonly string[]
   template: CSSProperties
   scrollRef: Ref<HTMLDivElement>
+  onScroll: (event: UIEvent<HTMLDivElement>) => void
   rowIds: readonly string[]
   editable: boolean
   onResizePreview: (preview: ResizePreview | null) => void
 }
 
 export const ColumnHeaders = ({
-  host, workspaceId, columns, names, template, scrollRef, rowIds, editable, onResizePreview,
+  host, workspaceId, columns, names, template, scrollRef, onScroll, rowIds, editable, onResizePreview,
 }: HeaderProps) => {
   const rowRef = useRef<HTMLDivElement>(null)
   /** The dragged column and where its drop indicator stands, in px from the row's left edge. */
   const [drag, setDrag] = useState<{columnId: string; indicator: number} | null>(null)
   const cells = () => [...rowRef.current?.querySelectorAll<HTMLElement>(':scope > [role="columnheader"]') ?? []]
 
-  /** Drag a header to reorder. A press that never travels is left alone. */
+  /** Drag a header to reorder. A press that never travels is left alone. The
+   *  window listens, so a pointer that leaves the header before it counts as a
+   *  drag is still followed. */
   const startReorder = (event: ReactPointerEvent<HTMLElement>, columnId: string) => {
     if (!editable || event.button !== 0) return
-    const handle = event.currentTarget
     const pointerId = event.pointerId
     const startX = event.clientX
     let slot: number | null = null
     const move = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return
       if (slot === null && Math.abs(moveEvent.clientX - startX) < DRAG_THRESHOLD) return
-      if (slot === null) handle.setPointerCapture(pointerId)
+      moveEvent.preventDefault()
       const headers = cells()
       slot = dropSlot(headers, moveEvent.clientX)
       setDrag({columnId, indicator: indicatorLeft(headers, rowRef.current!, slot)})
     }
-    const end = (endEvent: PointerEvent) => {
+    const finish = (endEvent: PointerEvent, drop: boolean) => {
       if (endEvent.pointerId !== pointerId) return
-      handle.removeEventListener('pointermove', move)
-      handle.removeEventListener('pointerup', end)
-      handle.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
       setDrag(null)
-      if (slot === null) return
+      if (!drop || slot === null) return
       const from = columns.findIndex(column => column.id === columnId)
       // Its own slot, or the one just after it, is where it already is.
       if (slot === from || slot === from + 1) return
@@ -91,17 +93,15 @@ export const ColumnHeaders = ({
         : {side: 'after' as const, columnId: columns[columns.length - 1]!.id}
       void moveColumn(host.repo, columnId, anchor).catch(report('column move'))
     }
-    const cancel = (cancelEvent: PointerEvent) => {
-      slot = null
-      end(cancelEvent)
-    }
-    handle.addEventListener('pointermove', move)
-    handle.addEventListener('pointerup', end)
-    handle.addEventListener('pointercancel', cancel)
+    const up = (upEvent: PointerEvent) => finish(upEvent, true)
+    const cancel = (cancelEvent: PointerEvent) => finish(cancelEvent, false)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
   }
 
   return (
-    <div ref={scrollRef} {...noGestures} className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
+    <div ref={scrollRef} onScroll={onScroll} {...noGestures} className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
       <div ref={rowRef} role="row" className="relative grid text-sm font-medium" style={template}>
         {columns.map((column, index) => (
           <div key={column.id} role="columnheader" data-table-column={column.id}
