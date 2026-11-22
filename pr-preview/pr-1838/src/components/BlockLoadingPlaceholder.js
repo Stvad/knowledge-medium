@@ -1,0 +1,1 @@
+export{xR as BlockLoadingPlaceholder}from"../../chunks/app-NB06hHs5.js";

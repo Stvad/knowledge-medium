@@ -1,0 +1,1 @@
+export{Xlt as getOrCreatePropertiesPage,Zlt as propertiesPageBlockId,Qlt as propertiesPageSpec}from"../../chunks/app-NB06hHs5.js";

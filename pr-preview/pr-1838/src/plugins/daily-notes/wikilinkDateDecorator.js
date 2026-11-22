@@ -1,0 +1,1 @@
+export{PM as dailyDateWikilinkDecorator}from"../../../chunks/app-NB06hHs5.js";

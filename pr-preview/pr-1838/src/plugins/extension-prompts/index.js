@@ -1,0 +1,1 @@
+export{FI as ExtensionPromptSurface,II as extensionPromptsExtension}from"../../../chunks/app-NB06hHs5.js";

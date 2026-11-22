@@ -1,0 +1,1 @@
+export{DF as BlockEmbed}from"../../../chunks/app-NB06hHs5.js";

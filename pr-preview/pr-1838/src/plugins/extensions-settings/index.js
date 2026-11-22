@@ -1,0 +1,1 @@
+export{K_ as extensionsOverridesProp,q_ as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-NB06hHs5.js";

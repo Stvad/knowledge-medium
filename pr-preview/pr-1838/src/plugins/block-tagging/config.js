@@ -1,0 +1,1 @@
+export{If as blockTaggingPrefsType,Lf as blockTagsConfigCodec,Rf as blockTagsConfigPresetCore,zf as blockTagsConfigProp,Bf as isValidTagName,Vf as normalizeBlockTagsConfig,Hf as selectableTagNames,Uf as tagNameIssue}from"../../../chunks/app-NB06hHs5.js";

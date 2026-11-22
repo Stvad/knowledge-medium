@@ -1,0 +1,1 @@
+export{AL as ClientLocalSettings,jL as clientLocalSettings}from"../../chunks/app-NB06hHs5.js";

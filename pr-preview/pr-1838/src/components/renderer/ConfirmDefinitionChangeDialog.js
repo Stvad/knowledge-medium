@@ -1,0 +1,1 @@
+export{VR as ConfirmDefinitionChangeDialog}from"../../../chunks/app-NB06hHs5.js";

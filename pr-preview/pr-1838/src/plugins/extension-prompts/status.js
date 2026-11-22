@@ -1,0 +1,1 @@
+export{LI as extensionPromptDiagnosticContribution,RI as extensionPromptDiagnosticSource}from"../../../chunks/app-NB06hHs5.js";

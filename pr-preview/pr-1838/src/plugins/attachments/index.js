@@ -1,0 +1,1 @@
+export{OC as attachmentsPlugin}from"../../../chunks/app-NB06hHs5.js";

@@ -1,0 +1,1 @@
+export{Ul as parsePropertiesJson}from"../../../chunks/app-NB06hHs5.js";

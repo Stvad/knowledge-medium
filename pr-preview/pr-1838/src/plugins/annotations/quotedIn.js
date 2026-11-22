@@ -1,0 +1,1 @@
+export{um as quotedInFooterContribution}from"../../../chunks/app-NB06hHs5.js";

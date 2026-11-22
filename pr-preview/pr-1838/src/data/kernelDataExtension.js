@@ -1,0 +1,1 @@
+export{Z7 as kernelDataExtension}from"../../chunks/app-NB06hHs5.js";

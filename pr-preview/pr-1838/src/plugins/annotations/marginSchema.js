@@ -1,0 +1,1 @@
+export{Q1 as annotationMarginOpenProp,$1 as annotationMarginShareProp}from"../../../chunks/app-NB06hHs5.js";

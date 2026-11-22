@@ -1,0 +1,1 @@
+export{gc as propertiesMigrationPlugin}from"../../../chunks/app-NB06hHs5.js";

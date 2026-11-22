@@ -1,0 +1,1 @@
+export{pJ as adoptOrCreatePropertySchema}from"../../chunks/app-NB06hHs5.js";

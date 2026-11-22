@@ -1,0 +1,1 @@
+export{wR as defaultRegistry,TR as defaultRendererContributions,ER as defaultRenderersExtension}from"../../chunks/app-NB06hHs5.js";

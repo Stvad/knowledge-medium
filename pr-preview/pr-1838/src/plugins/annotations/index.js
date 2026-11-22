@@ -1,0 +1,1 @@
+export{cm as annotationsPlugin}from"../../../chunks/app-NB06hHs5.js";

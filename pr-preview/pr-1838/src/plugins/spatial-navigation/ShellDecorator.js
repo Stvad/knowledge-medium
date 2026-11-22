@@ -1,0 +1,1 @@
+export{UE as SpatialNavigationShellDecorator}from"../../../chunks/app-NB06hHs5.js";
