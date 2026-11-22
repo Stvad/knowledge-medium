@@ -1,1 +1,0 @@
-export{G8 as TypeTagger,K8 as applyTypeTagInTx}from"../../chunks/app-BIrUxSFq.js";

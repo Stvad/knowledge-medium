@@ -1,1 +1,0 @@
-export{Wut as getOrCreatePropertiesPage,Gut as propertiesPageBlockId,Kut as propertiesPageSpec}from"../../chunks/app-BIrUxSFq.js";

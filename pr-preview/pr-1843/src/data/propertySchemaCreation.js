@@ -1,1 +1,0 @@
-export{$J as adoptOrCreatePropertySchema}from"../../chunks/app-BIrUxSFq.js";

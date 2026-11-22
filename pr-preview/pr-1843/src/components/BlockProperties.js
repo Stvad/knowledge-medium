@@ -1,1 +1,0 @@
-export{_W as BlockProperties}from"../../chunks/app-BIrUxSFq.js";

@@ -1,1 +1,0 @@
-export{KI as exampleExtensions,qI as insertExampleExtensionsUnder}from"../../chunks/app-BIrUxSFq.js";

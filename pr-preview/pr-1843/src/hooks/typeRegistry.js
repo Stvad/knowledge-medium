@@ -1,1 +1,0 @@
-export{VK as useTypes}from"../../chunks/app-BIrUxSFq.js";

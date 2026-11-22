@@ -1,1 +1,0 @@
-export{YO as BreadcrumbList}from"../../../chunks/app-BIrUxSFq.js";

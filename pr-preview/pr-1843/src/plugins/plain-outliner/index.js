@@ -1,1 +1,0 @@
-export{XO as plainOutlinerPlugin}from"../../../chunks/app-BIrUxSFq.js";

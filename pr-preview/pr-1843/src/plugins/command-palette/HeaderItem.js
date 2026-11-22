@@ -1,1 +1,0 @@
-export{gF as CommandPaletteHeaderItem}from"../../../chunks/app-BIrUxSFq.js";

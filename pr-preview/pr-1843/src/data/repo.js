@@ -1,1 +1,0 @@
-export{I8 as Repo}from"../../chunks/app-BIrUxSFq.js";

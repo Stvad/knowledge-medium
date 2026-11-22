@@ -1,1 +1,0 @@
-export{KO as BreadcrumbRenderer}from"../../../chunks/app-BIrUxSFq.js";

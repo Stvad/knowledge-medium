@@ -1,1 +1,0 @@
-export{sX as omnilinerNamespace}from"../../chunks/app-BIrUxSFq.js";

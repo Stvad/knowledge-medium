@@ -1,1 +1,0 @@
-export{Fx as backlinksViewPlugin}from"../../../chunks/app-BIrUxSFq.js";

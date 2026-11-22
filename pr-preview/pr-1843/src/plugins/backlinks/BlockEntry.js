@@ -1,1 +1,0 @@
-export{cS as LazyBlockEntry}from"../../../chunks/app-BIrUxSFq.js";

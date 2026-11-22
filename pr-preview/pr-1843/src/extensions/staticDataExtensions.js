@@ -1,1 +1,0 @@
-export{NX as staticDataExtensions}from"../../chunks/app-BIrUxSFq.js";

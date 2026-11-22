@@ -1,1 +1,0 @@
-export{pet as loadTypeIdsByBlock}from"../../chunks/app-BIrUxSFq.js";

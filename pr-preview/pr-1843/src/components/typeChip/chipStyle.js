@@ -1,1 +1,0 @@
-export{yI as chipStyle}from"../../../chunks/app-BIrUxSFq.js";

@@ -1,1 +1,0 @@
-export{K3 as agentRuntimeDataExtension}from"../../../chunks/app-BIrUxSFq.js";

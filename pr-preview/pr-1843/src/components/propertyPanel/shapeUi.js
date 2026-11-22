@@ -1,1 +1,0 @@
-export{XJ as PropertyShapeButton,ZJ as PropertyShapeGlyph}from"../../../chunks/app-BIrUxSFq.js";

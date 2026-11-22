@@ -1,1 +1,0 @@
-export{wR as extensionDisplayName,TR as extensionName,ER as userExtensionShellToggle,DR as userExtensionToggle}from"../../chunks/app-BIrUxSFq.js";

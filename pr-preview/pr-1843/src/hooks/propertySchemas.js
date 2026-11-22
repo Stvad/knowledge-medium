@@ -1,1 +1,0 @@
-export{JJ as usePropertySchemas}from"../../chunks/app-BIrUxSFq.js";

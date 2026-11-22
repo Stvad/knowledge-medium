@@ -1,1 +1,0 @@
-export{AP as openKeybindingsSettingsAction}from"../../../chunks/app-BIrUxSFq.js";

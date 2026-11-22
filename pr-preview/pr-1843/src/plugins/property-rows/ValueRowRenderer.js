@@ -1,1 +1,0 @@
-export{yc as propertyReadContentContribution}from"../../../chunks/app-BIrUxSFq.js";

@@ -1,1 +1,0 @@
-export{jQ as geoDataExtension}from"../../../chunks/app-BIrUxSFq.js";

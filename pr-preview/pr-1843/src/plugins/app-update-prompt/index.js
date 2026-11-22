@@ -1,1 +1,0 @@
-export{NL as appUpdatePromptExtension}from"../../../chunks/app-BIrUxSFq.js";
