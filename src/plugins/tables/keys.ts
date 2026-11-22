@@ -9,8 +9,9 @@ import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/ac
 import {
   ActionContextTypes,
   type ActionConfig, type ActionContextConfig, type ActionContextType, type BaseShortcutDependencies,
-  type BlockShortcutDependencies,
+  type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
+import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
 import { gridDrawing } from './registry'
@@ -140,15 +141,32 @@ export const tableShortcutActivation: ShortcutActivationContribution = activatio
  *  value they would step into property rows or children the grid never draws,
  *  or create a block it never shows. On a grid's row or value the grid takes
  *  them instead, and a command that does not apply falls back to the verb. */
-const redirect = (context: ActionContextType, actionId: string, command: GridCommand): ActionDispatchDecorator => ({
+const redirect = (
+  context: ActionContextType, actionId: string, command: GridCommand,
+  applies: (deps: BaseShortcutDependencies) => boolean = () => true,
+): ActionDispatchDecorator => ({
   actionId,
   context,
   wrap: (deps, trigger, next) => {
     const {block, renderScopeId} = deps as BlockShortcutDependencies
     const grid = gridDrawing(renderScopeId, block?.id)
-    if (!grid || !grid.command(command)) return next(deps, trigger)
+    if (!grid || !applies(deps) || !grid.command(command)) return next(deps, trigger)
   },
 })
+
+/** The editor verbs act only at the editor's edge; inside, the key moves the
+ *  caret. The same tests as the verbs they redirect. */
+const atEdge = (edge: 'top' | 'bottom' | 'start' | 'end') => (deps: BaseShortcutDependencies) => {
+  const view = (deps as CodeMirrorEditModeDependencies).editorView
+  if (!view) return false
+  const selection = view.state.selection.main
+  switch (edge) {
+    case 'top': return isOnFirstVisualLine(view)
+    case 'bottom': return isOnLastVisualLine(view)
+    case 'start': return selection.empty && selection.head === 0
+    case 'end': return selection.empty && selection.head === view.state.doc.length
+  }
+}
 
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
@@ -163,8 +181,8 @@ export const tableOutlineVerbRedirects = [
   redirect(NORMAL, 'enter_edit_mode', 'open-start'),
   redirect(NORMAL, 'enter_edit_mode_at_end', 'open'),
   // Arrows at an editor's edge leave the cell the way row mode moves.
-  redirect(EDITING, 'move_up_from_cm_start', 'up'),
-  redirect(EDITING, 'move_down_from_cm_end', 'down'),
-  redirect(EDITING, 'move_left_from_cm_start', 'previous'),
-  redirect(EDITING, 'move_right_from_cm_end', 'next'),
+  redirect(EDITING, 'move_up_from_cm_start', 'up', atEdge('top')),
+  redirect(EDITING, 'move_down_from_cm_end', 'down', atEdge('bottom')),
+  redirect(EDITING, 'move_left_from_cm_start', 'previous', atEdge('start')),
+  redirect(EDITING, 'move_right_from_cm_end', 'next', atEdge('end')),
 ].map(decorator => actionDispatchWrap(decorator, {source: 'tables', precedence: 100}))
