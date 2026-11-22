@@ -1,1 +1,0 @@
-export{C3 as FacetBridge}from"../../chunks/app-Drjrxm7x.js";

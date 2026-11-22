@@ -1,1 +1,0 @@
-export{vN as CommandPaletteHeaderItem}from"../../../chunks/app-Drjrxm7x.js";

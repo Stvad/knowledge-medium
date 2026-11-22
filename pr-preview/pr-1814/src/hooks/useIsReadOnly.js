@@ -1,1 +1,0 @@
-export{Nx as useIsReadOnly}from"../../chunks/app-Drjrxm7x.js";

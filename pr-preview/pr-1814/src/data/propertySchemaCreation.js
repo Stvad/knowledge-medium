@@ -1,1 +1,0 @@
-export{ZK as adoptOrCreatePropertySchema}from"../../chunks/app-Drjrxm7x.js";

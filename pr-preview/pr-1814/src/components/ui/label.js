@@ -1,1 +1,0 @@
-export{FA as Label}from"../../../chunks/app-Drjrxm7x.js";

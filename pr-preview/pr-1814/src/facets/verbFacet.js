@@ -1,1 +1,0 @@
-export{A2 as defineVerbFacet}from"../../chunks/app-Drjrxm7x.js";

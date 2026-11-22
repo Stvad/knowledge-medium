@@ -1,1 +1,0 @@
-export{Ak as useMinuteClock}from"../../chunks/app-Drjrxm7x.js";

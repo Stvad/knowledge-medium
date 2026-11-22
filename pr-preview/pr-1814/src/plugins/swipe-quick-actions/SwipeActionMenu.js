@@ -1,1 +1,0 @@
-export{kN as SwipeActionMenu}from"../../../chunks/app-Drjrxm7x.js";

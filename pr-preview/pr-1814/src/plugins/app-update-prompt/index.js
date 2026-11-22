@@ -1,1 +1,0 @@
-export{NF as appUpdatePromptExtension}from"../../../chunks/app-Drjrxm7x.js";

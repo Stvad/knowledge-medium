@@ -1,1 +1,0 @@
-export{yF as ExtensionPromptSurface,bF as extensionPromptsExtension}from"../../../chunks/app-Drjrxm7x.js";

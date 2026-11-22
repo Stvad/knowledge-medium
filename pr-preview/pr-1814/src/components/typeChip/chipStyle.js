@@ -1,1 +1,0 @@
-export{xP as chipStyle}from"../../../chunks/app-Drjrxm7x.js";

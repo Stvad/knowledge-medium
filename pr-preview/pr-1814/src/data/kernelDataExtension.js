@@ -1,1 +1,0 @@
-export{S5 as kernelDataExtension}from"../../chunks/app-Drjrxm7x.js";

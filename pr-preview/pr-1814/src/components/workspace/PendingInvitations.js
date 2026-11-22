@@ -1,1 +1,0 @@
-export{MO as PendingInvitations}from"../../../chunks/app-Drjrxm7x.js";

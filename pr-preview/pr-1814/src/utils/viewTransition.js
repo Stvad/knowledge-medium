@@ -1,1 +1,0 @@
-export{QG as withMoveTransition}from"../../chunks/app-Drjrxm7x.js";

@@ -1,1 +1,0 @@
-export{gF as editorAutocompleteExtension}from"../../chunks/app-Drjrxm7x.js";

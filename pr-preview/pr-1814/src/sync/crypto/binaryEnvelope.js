@@ -1,1 +1,0 @@
-export{sO as BINARY_ENVELOPE_MAGIC,cO as BINARY_ENVELOPE_MIN_BYTES,lO as BINARY_ENVELOPE_OVERHEAD_BYTES,uO as BINARY_MAGIC_BYTES,dO as decodeBinaryEnvelope,fO as encodeBinaryEnvelope,pO as hasBinaryEnvelopeMagic}from"../../../chunks/app-Drjrxm7x.js";

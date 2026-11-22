@@ -1,1 +1,0 @@
-export{vh as HIGHLIGHT_CLASS,yh as MOVED_HIGHLIGHT_CLASS,bh as SUGGESTION_HIGHLIGHT_CLASS,xh as coveringStyle,Sh as highlightClasses,Ch as highlightField,wh as highlightRange,Th as highlightRanges,Eh as threadHighlights,Dh as threadHighlightsContribution}from"../../../chunks/app-Drjrxm7x.js";

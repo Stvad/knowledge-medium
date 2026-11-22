@@ -1,1 +1,0 @@
-export{Dc as parsePropertiesJson}from"../../../chunks/app-Drjrxm7x.js";

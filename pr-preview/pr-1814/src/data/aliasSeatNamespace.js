@@ -1,1 +1,0 @@
-export{Sct as aliasSeatNamespacesInTx,Cct as resolveAliasSeatNamespaces}from"../../chunks/app-Drjrxm7x.js";

@@ -1,1 +1,0 @@
-export{VW as copyBlockIdsToClipboard,HW as copyBlockToClipboard,UW as copySelectedBlocksToClipboard,WW as cutBlockIdsToClipboard,GW as serializeBlock,KW as serializeSelectedBlocks,qW as writeTextToClipboard}from"../../chunks/app-Drjrxm7x.js";

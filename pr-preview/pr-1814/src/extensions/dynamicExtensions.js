@@ -1,1 +1,0 @@
-export{vI as dynamicExtensionsExtension}from"../../chunks/app-Drjrxm7x.js";

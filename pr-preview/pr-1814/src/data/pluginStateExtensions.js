@@ -1,1 +1,0 @@
-export{i0 as pluginPrefsExtension,a0 as pluginUIStateExtension}from"../../chunks/app-Drjrxm7x.js";

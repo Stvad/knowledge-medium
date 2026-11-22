@@ -1,1 +1,0 @@
-export{ky as blockInfoPlugin}from"../../../chunks/app-Drjrxm7x.js";
