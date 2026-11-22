@@ -15,11 +15,14 @@ import {
   BLOCK_STORAGE_COLUMNS, BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import {
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
+  RECORD_KEYED_MARKER_SQL,
   RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL,
   STAGING_NEEDS_APPLY_SEEDED_MARKER_KEY,
   ensureStagingNeedsApplyColumn,
 } from '@/data/internals/clientSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { hasMarker } from '@/data/test/syncCheckpoint'
 import type { BlockData } from '@/data/api'
 import { SEALED_COLUMNS } from '@/sync/transform'
 
@@ -189,6 +192,14 @@ describe('ensureStagingNeedsApplyColumn', () => {
     await ensureStagingNeedsApplyColumn(sharedDb.db)
 
     expect(await unapplied()).toEqual([])
+  })
+
+  it('forgets which workspaces had trusted flags, since the seed clears flags no drain judged', async () => {
+    await sharedDb.db.execute(RECORD_KEYED_MARKER_SQL, [`${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${WS}`])
+
+    await ensureStagingNeedsApplyColumn(sharedDb.db)
+
+    expect(await hasMarker(sharedDb.db, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, WS)).toBe(false)
   })
 
   it('does not re-seed once the marker is recorded', async () => {

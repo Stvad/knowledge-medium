@@ -112,6 +112,8 @@ export const insertWorkspaceRow = (db: PowerSyncDatabase, id: string, ownerUserI
 export const drainStaged = (db: PowerSyncDatabase, materializability: Materializability = 'copy') =>
   drainStagingWindowOnce(db, {getMaterializability: constMat(materializability), getCek: noKey})
 
-export const hasFirstSyncMarker = async (db: PowerSyncDatabase, workspaceId: string): Promise<boolean> =>
-  (await db.getOptional('SELECT 1 FROM client_schema_state WHERE key = ?',
-    [`${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}${workspaceId}`])) !== null
+export const hasMarker = async (db: PowerSyncDatabase, prefix: string, workspaceId: string): Promise<boolean> =>
+  (await db.getOptional('SELECT 1 FROM client_schema_state WHERE key = ?', [`${prefix}${workspaceId}`])) !== null
+
+export const hasFirstSyncMarker = (db: PowerSyncDatabase, workspaceId: string): Promise<boolean> =>
+  hasMarker(db, WORKSPACE_FIRST_SYNC_MARKER_PREFIX, workspaceId)
