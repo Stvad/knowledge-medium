@@ -1,0 +1,1 @@
+export{WK as usePropertySchemas}from"../../chunks/app-BAV3GX84.js";

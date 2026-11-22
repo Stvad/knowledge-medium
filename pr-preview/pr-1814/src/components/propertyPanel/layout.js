@@ -1,0 +1,1 @@
+export{GH as METADATA_ROW_GRID_STYLE,KH as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-BAV3GX84.js";

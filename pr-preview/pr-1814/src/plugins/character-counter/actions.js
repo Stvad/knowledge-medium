@@ -1,0 +1,1 @@
+export{lr as addWordCounterAction,ur as counterActions}from"../../../chunks/app-BAV3GX84.js";

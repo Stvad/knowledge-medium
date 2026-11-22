@@ -1,0 +1,1 @@
+export{Iy as backlinksViewPlugin}from"../../../chunks/app-BAV3GX84.js";

@@ -1,0 +1,1 @@
+export{eB as useShortcutSurfaceActivations}from"../../chunks/app-BAV3GX84.js";

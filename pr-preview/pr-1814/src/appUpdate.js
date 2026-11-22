@@ -1,0 +1,1 @@
+export{HF as appUpdate,UF as useAppUpdateAvailable}from"../chunks/app-BAV3GX84.js";

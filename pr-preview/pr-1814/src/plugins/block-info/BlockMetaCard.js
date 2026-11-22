@@ -1,0 +1,1 @@
+export{Oy as BlockMetaCard}from"../../../chunks/app-BAV3GX84.js";

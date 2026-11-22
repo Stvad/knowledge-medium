@@ -1,0 +1,1 @@
+export{jC as useAssetObjectUrl}from"../../../chunks/app-BAV3GX84.js";

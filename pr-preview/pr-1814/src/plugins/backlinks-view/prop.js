@@ -1,0 +1,1 @@
+export{$y as DEFAULT_BACKLINKS_VIEW_ID,eb as FLAT_BACKLINKS_VIEW_ID,tb as GROUPED_BACKLINKS_VIEW_ID,nb as backlinksViewProp,rb as defaultBacklinksViewIdForBlock}from"../../../chunks/app-BAV3GX84.js";

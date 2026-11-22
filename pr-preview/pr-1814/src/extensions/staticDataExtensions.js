@@ -1,0 +1,1 @@
+export{jJ as staticDataExtensions}from"../../chunks/app-BAV3GX84.js";

@@ -1,0 +1,1 @@
+export{QK as appRuntimeUpdateEvent,$K as refreshAppRuntime}from"../../chunks/app-BAV3GX84.js";

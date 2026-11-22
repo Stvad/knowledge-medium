@@ -1,0 +1,1 @@
+export{mn as htmlDocumentPlugin}from"../../../chunks/app-BAV3GX84.js";

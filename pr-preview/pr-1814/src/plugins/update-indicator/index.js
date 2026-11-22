@@ -1,0 +1,1 @@
+export{ky as updateIndicatorPlugin}from"../../../chunks/app-BAV3GX84.js";

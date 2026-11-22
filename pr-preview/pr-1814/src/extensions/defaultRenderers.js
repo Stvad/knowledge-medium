@@ -1,0 +1,1 @@
+export{oL as defaultRegistry,sL as defaultRendererContributions,cL as defaultRenderersExtension}from"../../chunks/app-BAV3GX84.js";

@@ -1,0 +1,1 @@
+export{XE as plainOutlinerPlugin}from"../../../chunks/app-BAV3GX84.js";

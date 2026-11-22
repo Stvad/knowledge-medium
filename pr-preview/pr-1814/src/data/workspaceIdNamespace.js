@@ -1,0 +1,1 @@
+export{wct as DerivedIdNamespaceUnavailableError,Tct as derivedIdNamespaceInTx,Ect as resolveDerivedIdNamespace}from"../../chunks/app-BAV3GX84.js";

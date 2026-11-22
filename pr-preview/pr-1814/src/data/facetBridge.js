@@ -1,0 +1,1 @@
+export{C3 as FacetBridge}from"../../chunks/app-BAV3GX84.js";

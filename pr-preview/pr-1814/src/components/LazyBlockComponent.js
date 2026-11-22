@@ -1,0 +1,1 @@
+export{ZI as LazyBlockComponent}from"../../chunks/app-BAV3GX84.js";

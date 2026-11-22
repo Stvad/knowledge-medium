@@ -1,0 +1,1 @@
+export{Gb as Wikilink}from"../../../../../chunks/app-BAV3GX84.js";

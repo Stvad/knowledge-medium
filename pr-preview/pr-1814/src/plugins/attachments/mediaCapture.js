@@ -1,0 +1,1 @@
+export{hC as DEFAULT_MAX_CAPTURE_BYTES,gC as captureMedia,_C as mediaBlockId}from"../../../chunks/app-BAV3GX84.js";

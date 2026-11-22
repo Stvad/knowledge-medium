@@ -1,0 +1,1 @@
+export{WG as isIOS,GG as isMacPlatform}from"../../chunks/app-BAV3GX84.js";

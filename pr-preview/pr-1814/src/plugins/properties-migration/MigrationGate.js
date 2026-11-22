@@ -1,0 +1,1 @@
+export{ts as MigrationGate}from"../../../chunks/app-BAV3GX84.js";

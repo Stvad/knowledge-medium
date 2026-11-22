@@ -1,0 +1,1 @@
+export{iF as BlockPasteShellDecorator,aF as blockPasteShellDecorator}from"../../chunks/app-BAV3GX84.js";

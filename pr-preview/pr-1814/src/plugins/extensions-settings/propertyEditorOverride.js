@@ -1,0 +1,1 @@
+export{Jr as extensionsOverridesUi}from"../../../chunks/app-BAV3GX84.js";

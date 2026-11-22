@@ -1,0 +1,1 @@
+export{ii as openExtensionsSettingsAction}from"../../../chunks/app-BAV3GX84.js";

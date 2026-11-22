@@ -1,0 +1,1 @@
+export{GM as useCommandPaletteActions}from"../../../chunks/app-BAV3GX84.js";

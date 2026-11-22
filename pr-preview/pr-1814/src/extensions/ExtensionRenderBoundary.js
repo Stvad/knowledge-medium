@@ -1,0 +1,1 @@
+export{qB as ExtensionRenderBoundary}from"../../chunks/app-BAV3GX84.js";

@@ -1,0 +1,1 @@
+export{Lot as deviceSurface,Rot as getClientId,zot as getDeviceLabel,Bot as isClientIdPersistent,Vot as resetClientIdCache}from"../../chunks/app-BAV3GX84.js";

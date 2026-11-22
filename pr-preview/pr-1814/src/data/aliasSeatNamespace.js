@@ -1,0 +1,1 @@
+export{Sct as aliasSeatNamespacesInTx,Cct as resolveAliasSeatNamespaces}from"../../chunks/app-BAV3GX84.js";

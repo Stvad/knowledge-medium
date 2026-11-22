@@ -1,0 +1,1 @@
+export{gI as dynamicExtensionsExtension}from"../../chunks/app-BAV3GX84.js";

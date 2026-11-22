@@ -1,0 +1,1 @@
+export{Cl as appVersion}from"../chunks/app-BAV3GX84.js";

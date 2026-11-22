@@ -1,0 +1,1 @@
+export{vP as TypeChip}from"../../../chunks/app-BAV3GX84.js";

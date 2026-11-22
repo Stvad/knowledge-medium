@@ -1,0 +1,1 @@
+export{RE as MobileBottomNavButton}from"../../../chunks/app-BAV3GX84.js";

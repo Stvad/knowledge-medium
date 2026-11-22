@@ -1,0 +1,1 @@
+export{Tg as extensionApiCatalog,Eg as extensionApiRuntimeExports}from"../../chunks/app-BAV3GX84.js";

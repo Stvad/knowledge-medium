@@ -1,0 +1,1 @@
+export{VY as htmlDocumentDataExtension}from"../../../chunks/app-BAV3GX84.js";

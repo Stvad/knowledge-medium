@@ -1,0 +1,1 @@
+export{Mf as resolveDailyPage}from"../../../chunks/app-BAV3GX84.js";

@@ -1,0 +1,1 @@
+export{Zg as lintExtensionSource}from"../../../chunks/app-BAV3GX84.js";

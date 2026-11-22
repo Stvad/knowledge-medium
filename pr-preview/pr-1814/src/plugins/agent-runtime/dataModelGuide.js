@@ -1,0 +1,1 @@
+export{ty as DATA_MODEL_GUIDE,ny as dataModelGuide}from"../../../chunks/app-BAV3GX84.js";

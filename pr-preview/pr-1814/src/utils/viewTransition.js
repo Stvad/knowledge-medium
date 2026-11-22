@@ -1,0 +1,1 @@
+export{XG as withMoveTransition}from"../../chunks/app-BAV3GX84.js";
