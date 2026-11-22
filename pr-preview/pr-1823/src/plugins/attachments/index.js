@@ -1,1 +1,0 @@
-export{fC as attachmentsPlugin}from"../../../chunks/app-BKQtxhN5.js";

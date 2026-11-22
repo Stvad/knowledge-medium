@@ -1,1 +1,0 @@
-export{YV as ExtensionRenderBoundary}from"../../chunks/app-BKQtxhN5.js";

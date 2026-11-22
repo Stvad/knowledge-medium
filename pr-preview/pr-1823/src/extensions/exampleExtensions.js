@@ -1,1 +1,0 @@
-export{JF as exampleExtensions,YF as insertExampleExtensionsUnder}from"../../chunks/app-BKQtxhN5.js";

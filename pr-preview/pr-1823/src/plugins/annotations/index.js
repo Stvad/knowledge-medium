@@ -1,1 +1,0 @@
-export{Kp as annotationsPlugin}from"../../../chunks/app-BKQtxhN5.js";

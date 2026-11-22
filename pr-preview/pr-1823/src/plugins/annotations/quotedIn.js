@@ -1,1 +1,0 @@
-export{Jp as quotedInFooterContribution}from"../../../chunks/app-BKQtxhN5.js";

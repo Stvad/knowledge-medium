@@ -1,1 +1,0 @@
-export{k3 as instrumentAdapter}from"../../../chunks/app-BKQtxhN5.js";

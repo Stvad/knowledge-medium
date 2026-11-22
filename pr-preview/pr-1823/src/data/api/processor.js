@@ -1,1 +1,0 @@
-export{vmt as definePostCommitProcessor}from"../../../chunks/app-BKQtxhN5.js";

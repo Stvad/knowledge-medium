@@ -1,1 +1,0 @@
-export{QD as plainOutlinerPlugin}from"../../../chunks/app-BKQtxhN5.js";

@@ -1,1 +1,0 @@
-export{Fj as Label}from"../../../chunks/app-BKQtxhN5.js";

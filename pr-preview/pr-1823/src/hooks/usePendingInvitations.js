@@ -1,1 +1,0 @@
-export{Nk as usePendingInvitations}from"../../chunks/app-BKQtxhN5.js";
