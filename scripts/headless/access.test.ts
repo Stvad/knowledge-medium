@@ -11,7 +11,7 @@ const workspaceId = 'scratch'
 let key: string
 let encryptedRow: GateWorkspace
 const plaintextRow: GateWorkspace = {name: null, wkCanary: null, encryptionMode: 'none'}
-const config = (mode: DeviceAccess['mode']): DeviceAccess =>
+const access = (mode: DeviceAccess['mode']): DeviceAccess =>
   mode === 'e2ee' ? {workspaceId, mode, key} : {workspaceId, mode}
 const pin = () => getModePin(user, workspaceId)
 const entry = (row: GateWorkspace) => resolveWorkspaceEntry(user, workspaceId, async () => row)
@@ -33,7 +33,7 @@ describe('workspace access', () => {
   it.each(['server-e2ee', 'key-required'] as const)('unlocks %s with the validated key', async reason => {
     if (reason === 'key-required') setModePin(user, workspaceId, 'e2ee')
     expect(await entry(encryptedRow)).toMatchObject({kind: 'locked', reason})
-    await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
+    await openDeviceWorkspace(access('e2ee'), user, encryptedRow)
     expect(pin()).toBe('e2ee')
     expect(await keys()).not.toBeNull()
     expect(await entry(encryptedRow)).toEqual({kind: 'ready'})
@@ -41,10 +41,10 @@ describe('workspace access', () => {
 
   it('pins a quarantined plaintext workspace and reopens it without writing again', async () => {
     expect(await entry(plaintextRow)).toMatchObject({kind: 'locked', reason: 'quarantine'})
-    await openDeviceWorkspace(config('plaintext'), user, plaintextRow)
+    await openDeviceWorkspace(access('plaintext'), user, plaintextRow)
     expect(pin()).toBe('plaintext')
     const write = vi.spyOn(localStorage, 'setItem')
-    await openDeviceWorkspace(config('plaintext'), user, plaintextRow)
+    await openDeviceWorkspace(access('plaintext'), user, plaintextRow)
     expect(write).not.toHaveBeenCalled()
   })
 
@@ -55,30 +55,30 @@ describe('workspace access', () => {
     const row = reported === 'e2ee' ? encryptedRow : plaintextRow
     expect(await entry(row)).toMatchObject({kind: 'locked', reason})
     const write = vi.spyOn(localStorage, 'setItem')
-    await expect(openDeviceWorkspace(config(mode), user, row)).rejects.toThrow(`Configured ${mode}, workspace reports ${reported}`)
+    await expect(openDeviceWorkspace(access(mode), user, row)).rejects.toThrow(`Configured ${mode}, workspace reports ${reported}`)
     expect(write).not.toHaveBeenCalled()
     expect(pin()).toBeNull()
     expect(await keys()).toBeNull()
   })
 
   it('refuses a reported downgrade even with an unlocked key and matching encrypted pin', async () => {
-    await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
+    await openDeviceWorkspace(access('e2ee'), user, encryptedRow)
     expect(await entry(plaintextRow)).toEqual({kind: 'ready'})
-    await expect(openDeviceWorkspace(config('e2ee'), user, plaintextRow)).rejects.toThrow('Configured e2ee, workspace reports none')
+    await expect(openDeviceWorkspace(access('e2ee'), user, plaintextRow)).rejects.toThrow('Configured e2ee, workspace reports none')
     expect(pin()).toBe('e2ee')
   })
 
   it('refuses key-required for plaintext without downgrading the encrypted pin', async () => {
     setModePin(user, workspaceId, 'e2ee')
     expect(await entry(plaintextRow)).toMatchObject({kind: 'locked', reason: 'key-required'})
-    await expect(openDeviceWorkspace(config('plaintext'), user, plaintextRow)).rejects.toThrow('key-required')
+    await expect(openDeviceWorkspace(access('plaintext'), user, plaintextRow)).rejects.toThrow('key-required')
     expect(pin()).toBe('e2ee')
   })
 
   it('requires an operator for a server-e2ee conversion under an existing plaintext pin', async () => {
     setModePin(user, workspaceId, 'plaintext')
     expect(await entry(encryptedRow)).toMatchObject({kind: 'locked', reason: 'server-e2ee'})
-    await expect(openDeviceWorkspace(config('e2ee'), user, encryptedRow)).rejects.toThrow('Workspace locked: server-e2ee')
+    await expect(openDeviceWorkspace(access('e2ee'), user, encryptedRow)).rejects.toThrow('Workspace locked: server-e2ee')
     expect(pin()).toBe('plaintext')
     expect(await keys()).toBeNull()
   })
@@ -87,41 +87,41 @@ describe('workspace access', () => {
     writePinUpgradeMarker(user, workspaceId)
     const row = mode === 'e2ee' ? encryptedRow : plaintextRow
     expect(await entry(row)).toMatchObject({kind: 'locked', reason: 'finishing-upgrade'})
-    await expect(openDeviceWorkspace(config(mode), user, row)).rejects.toThrow('finishing-upgrade')
+    await expect(openDeviceWorkspace(access(mode), user, row)).rejects.toThrow('finishing-upgrade')
     expect(pin()).toBeNull()
   })
 
   it('validates the key against the workspace canary before the first pin', async () => {
     key = (await mintWorkspaceKey(workspaceId)).displayed
-    await expect(openDeviceWorkspace(config('e2ee'), user, encryptedRow)).rejects.toThrow('invalid-key')
+    await expect(openDeviceWorkspace(access('e2ee'), user, encryptedRow)).rejects.toThrow('invalid-key')
     expect(pin()).toBeNull()
     expect(await keys()).toBeNull()
   })
 
   it('refuses a first unlock with a missing canary', async () => {
-    await expect(openDeviceWorkspace(config('e2ee'), user, {...encryptedRow, wkCanary: null}))
+    await expect(openDeviceWorkspace(access('e2ee'), user, {...encryptedRow, wkCanary: null}))
       .rejects.toThrow('missing its key canary')
     expect(pin()).toBeNull()
   })
 
   it('refuses when the pin is correct but the unlocked key cannot be read back', async () => {
     vi.spyOn(getWorkspaceKeyStore(), 'put').mockResolvedValue(undefined)
-    await expect(openDeviceWorkspace(config('e2ee'), user, encryptedRow)).rejects.toThrow('not ready')
+    await expect(openDeviceWorkspace(access('e2ee'), user, encryptedRow)).rejects.toThrow('not ready')
     expect(pin()).toBe('e2ee')
     expect(await entry(encryptedRow)).toMatchObject({kind: 'locked', reason: 'key-required'})
   })
 
   it('refuses plaintext when the gate reports ready using an encrypted pin and key', async () => {
-    await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
+    await openDeviceWorkspace(access('e2ee'), user, encryptedRow)
     expect(await entry(plaintextRow)).toEqual({kind: 'ready'})
-    await expect(openDeviceWorkspace(config('plaintext'), user, plaintextRow)).rejects.toThrow('configured mode pin')
+    await expect(openDeviceWorkspace(access('plaintext'), user, plaintextRow)).rejects.toThrow('configured mode pin')
     expect(pin()).toBe('e2ee')
   })
 
   it('reopens an already-unlocked encrypted workspace without using the key again', async () => {
-    await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
+    await openDeviceWorkspace(access('e2ee'), user, encryptedRow)
     key = (await mintWorkspaceKey(workspaceId)).displayed
-    await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
+    await openDeviceWorkspace(access('e2ee'), user, encryptedRow)
     expect(await keys()).not.toBeNull()
   })
 })

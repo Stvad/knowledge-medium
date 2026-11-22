@@ -1,8 +1,10 @@
 import {execFile, type ExecFileException} from 'node:child_process'
 import {open} from 'node:fs/promises'
+import {promisify} from 'node:util'
 import type {KeySource} from './config'
 
 const KEY_COMMAND_TIMEOUT_MS = 15_000
+const execFileAsync = promisify(execFile)
 
 /** The `kmp-wk-1:` string, for the unlock flow, which zeroes its parsed copy. */
 export const readWorkspaceKey = (source: KeySource, timeoutMs = KEY_COMMAND_TIMEOUT_MS): Promise<string> =>
@@ -21,12 +23,11 @@ async function readKeyFile(path: string): Promise<string> {
 /** Errors name argv[0] and how it ended, never its output: stdout is the key,
  *  and stderr of a secret store may echo it. */
 async function runKeyCommand([program, ...args]: readonly string[], timeoutMs: number): Promise<string> {
-  const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(program, args, {
-      timeout: timeoutMs, killSignal: 'SIGKILL', encoding: 'utf8',
-    }, (error, out) => error
-      ? reject(new Error(`Key command ${program} ${describeFailure(error, timeoutMs)}`))
-      : resolve(out))
+  const run = execFileAsync(program, args, {timeout: timeoutMs, killSignal: 'SIGKILL'})
+  // execFile ignores `stdio`; an open stdin would hold a prompting store until the timeout.
+  run.child.stdin?.end()
+  const {stdout} = await run.catch((error: ExecFileException) => {
+    throw new Error(`Key command ${program} ${describeFailure(error, timeoutMs)}`)
   })
   const key = stdout.trim()
   if (!key) throw new Error(`Key command ${program} printed no key`)
@@ -34,8 +35,8 @@ async function runKeyCommand([program, ...args]: readonly string[], timeoutMs: n
 }
 
 function describeFailure(error: ExecFileException, timeoutMs: number): string {
-  if (error.killed) return `timed out after ${timeoutMs}ms`
   if (typeof error.code === 'number') return `exited with status ${error.code}`
+  if (error.killed) return `timed out after ${timeoutMs}ms`
   if (error.signal) return `was killed by ${error.signal}`
   return `could not run (${error.code ?? 'unknown error'})`
 }

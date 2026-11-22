@@ -18,7 +18,7 @@ const e2eeConfig = z.strictObject({
   ...common, mode: z.literal('e2ee'),
   keyFile: z.string().trim().min(1).optional(),
   /** argv, run without a shell; its stdout is the key. */
-  keyCommand: z.tuple([z.string().min(1)], z.string()).optional(),
+  keyCommand: z.tuple([z.string().trim().min(1)], z.string()).optional(),
 }).refine(config => (config.keyFile === undefined) !== (config.keyCommand === undefined), {
   message: 'Set exactly one of keyFile or keyCommand',
 })
@@ -37,5 +37,10 @@ export const readConfig = async (file: string): Promise<HeadlessConfig> => {
   const config = configSchema.parse(JSON.parse(await readFile(file, 'utf8'))) as HeadlessConfig
   config.stateDir = resolve(dirname(file), config.stateDir)
   if (config.mode === 'e2ee' && config.keyFile !== undefined) config.keyFile = resolve(dirname(file), config.keyFile)
+  // A program path, like keyFile, is relative to the config; a bare name still searches PATH.
+  if (config.mode === 'e2ee' && config.keyCommand?.[0].includes('/')) {
+    const [program, ...args] = config.keyCommand
+    config.keyCommand = [resolve(dirname(file), program), ...args]
+  }
   return config
 }

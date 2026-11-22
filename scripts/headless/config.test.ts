@@ -33,13 +33,15 @@ it('resolves a key file beside the config and keeps a key command as given', asy
   const config = await read({...common, mode: 'e2ee', keyCommand: command})
   expect(config).toMatchObject({keyCommand: command})
   expect(config).not.toHaveProperty('keyFile')
+  await expect(read({...common, mode: 'e2ee', keyCommand: ['./get-key', './arg']}))
+    .resolves.toMatchObject({keyCommand: [join(dir, 'get-key'), './arg']})
 })
 
 it.each([
   ['both key sources', {keyFile: 'workspace.key', keyCommand: command}, 'exactly one of keyFile or keyCommand'],
   ['neither key source', {}, 'exactly one of keyFile or keyCommand'],
   ['an empty key command', {keyCommand: []}, '"keyCommand"'],
-  ['an empty program name', {keyCommand: ['']}, '"keyCommand"'],
+  ['an empty program name', {keyCommand: [' ']}, '"keyCommand"'],
 ])('refuses an encrypted config with %s', async (_, source, message) => {
   await expect(read({...common, mode: 'e2ee', ...source})).rejects.toThrow(message)
 })

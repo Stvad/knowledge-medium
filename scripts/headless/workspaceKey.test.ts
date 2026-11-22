@@ -58,6 +58,11 @@ describe('workspace key from a command', () => {
     await expect(fromCommand(command, 200)).rejects.toThrow(`Key command ${process.execPath} timed out after 200ms`)
   })
 
+  it('gives the command no stdin, so a prompt fails instead of waiting', async () => {
+    const command = await script('reads-stdin', `process.stdin.resume().on('end', () => { process.exitCode = 5 })`)
+    await expect(fromCommand(command, 5_000)).rejects.toThrow(`Key command ${process.execPath} exited with status 5`)
+  })
+
   it('names the signal that killed a command', async () => {
     const command = await script('killed', `process.kill(process.pid, 'SIGKILL')`)
     await expect(fromCommand(command)).rejects.toThrow(`Key command ${process.execPath} was killed by SIGKILL`)

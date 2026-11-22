@@ -50,6 +50,7 @@ export async function serveDatabase(
   const access: DeviceAccess = config.mode === 'e2ee'
     ? {workspaceId, mode: 'e2ee', key: await readWorkspaceKey(config)}
     : {workspaceId, mode: 'plaintext'}
+  signal.throwIfAborted()
   await db.waitForReady()
   const baseline = db.currentStatus.lastSyncedAt?.getTime()
   let analyzeCheck!: AnalyzeCheck
