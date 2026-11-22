@@ -1,1 +1,1 @@
-export{My as UpdateIndicator}from"../../../chunks/app-C76FqX8A.js";
+export{My as UpdateIndicator}from"../../../chunks/app-CD_XDRX4.js";

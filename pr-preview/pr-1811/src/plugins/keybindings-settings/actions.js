@@ -1,1 +1,1 @@
-export{MM as openKeybindingsSettingsAction}from"../../../chunks/app-C76FqX8A.js";
+export{MM as openKeybindingsSettingsAction}from"../../../chunks/app-CD_XDRX4.js";

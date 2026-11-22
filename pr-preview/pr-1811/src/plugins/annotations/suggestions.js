@@ -1,1 +1,1 @@
-export{bp as acceptSuggestion,xp as appliedContent,Sp as rejectSuggestion}from"../../../chunks/app-C76FqX8A.js";
+export{bp as acceptSuggestion,xp as appliedContent,Sp as rejectSuggestion}from"../../../chunks/app-CD_XDRX4.js";

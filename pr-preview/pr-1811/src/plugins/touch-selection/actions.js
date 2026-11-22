@@ -1,1 +1,1 @@
-export{vx as selectHeldBlockAction,yx as toggleTappedBlockAction}from"../../../chunks/app-C76FqX8A.js";
+export{vx as selectHeldBlockAction,yx as toggleTappedBlockAction}from"../../../chunks/app-CD_XDRX4.js";
