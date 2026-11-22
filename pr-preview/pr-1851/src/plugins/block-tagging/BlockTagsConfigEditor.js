@@ -1,1 +1,1 @@
-export{Qf as BlockTagsConfigEditor}from"../../../chunks/app-YyICAhjD.js";
+export{rp as BlockTagsConfigEditor}from"../../../chunks/app-CFXmVGzj.js";
