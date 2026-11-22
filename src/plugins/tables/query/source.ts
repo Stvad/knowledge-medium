@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import type { TypeContribution } from '@/data/api'
 import type { Block } from '@/data/block'
-import { queryableFieldsFacet } from '@/data/facets'
+import { KERNEL_QUERYABLE_FIELDS, queryableFieldsFacet } from '@/data/facets'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 import type { Repo } from '@/data/repo'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
@@ -62,7 +62,15 @@ export const queryResolver = (
       const type = types.get(id)
       return type && {id: type.id, label: labelOf(type)}
     },
-    isField: name => fields?.has(name) === true,
+    field: name => {
+      const field = fields?.get(name)
+      if (!field) return undefined
+      // The kernel's timestamps take instants, and a date names a local day; any
+      // other field's own encoder decides its operand.
+      return KERNEL_QUERYABLE_FIELDS.some(kernel => kernel.encode === field.encode)
+        ? {kind: 'instant'}
+        : {kind: 'value', encode: field.encode}
+    },
     blockIdByAlias: alias => aliases.get(alias),
   }
 }

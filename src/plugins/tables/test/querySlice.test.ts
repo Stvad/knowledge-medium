@@ -4,7 +4,7 @@
  *  the view's sort. */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
-import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { projectedPropertyDefinitionsFacet, queryableFieldsFacet } from '@/data/facets'
 import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { getBlockTypes } from '@/data/properties'
 import type { Repo } from '@/data/repo'
@@ -220,5 +220,20 @@ describe('openQueryValue', () => {
     })
     expect(await openQueryValue(repo, 'host', fieldId)).toBe('query-value')
     expect(await valueContents()).toEqual([{content: fencedQuery('keep=me')}])
+  })
+})
+
+describe('queryResolver fields', () => {
+  it('tells the kernel timestamps from a plugin field with its own encoder', () => {
+    const encode = (operand: unknown) => codecs.number.decode(operand)
+    repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+      name: 'test:score', value: alias => ({sql: `${alias}.created_at`, params: []}), encode,
+      dependencies: [ws => ({kind: 'workspace', workspaceId: ws})],
+    }], {workspaceId})
+    const resolver = queryResolver(repo, workspaceId, repo.propertyDefinitions, repo.types, new Map())
+    expect(resolver.field('created')).toEqual({kind: 'instant'})
+    expect(resolver.field('updated')).toEqual({kind: 'instant'})
+    expect(resolver.field('test:score')).toEqual({kind: 'value', encode})
+    expect(resolver.field('nope')).toBeUndefined()
   })
 })
