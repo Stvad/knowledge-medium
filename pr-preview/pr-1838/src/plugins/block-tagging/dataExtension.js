@@ -1,1 +1,0 @@
-export{Kf as blockTaggingDataExtension}from"../../../chunks/app-of-M_6eT.js";

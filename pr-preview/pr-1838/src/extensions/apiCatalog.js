@@ -1,1 +1,0 @@
-export{ev as extensionApiCatalog,tv as extensionApiRuntimeExports}from"../../chunks/app-of-M_6eT.js";

@@ -1,1 +1,0 @@
-export{kn as HtmlFrame}from"../../../chunks/app-of-M_6eT.js";

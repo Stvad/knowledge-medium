@@ -1,1 +1,0 @@
-export{Xu as appVersion}from"../chunks/app-of-M_6eT.js";

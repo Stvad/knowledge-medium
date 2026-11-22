@@ -1,1 +1,0 @@
-export{Co as tablesPlugin}from"../../../chunks/app-of-M_6eT.js";

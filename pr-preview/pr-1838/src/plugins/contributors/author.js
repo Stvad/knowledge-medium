@@ -1,1 +1,0 @@
-export{Uv as authorIdOf}from"../../../chunks/app-of-M_6eT.js";

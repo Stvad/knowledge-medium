@@ -1,1 +1,0 @@
-export{F0 as contributorsDataExtension}from"../../../chunks/app-of-M_6eT.js";

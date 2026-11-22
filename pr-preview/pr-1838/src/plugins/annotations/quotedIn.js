@@ -1,1 +1,0 @@
-export{xm as quotedInFooterContribution}from"../../../chunks/app-of-M_6eT.js";

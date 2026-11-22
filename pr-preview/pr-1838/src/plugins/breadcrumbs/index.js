@@ -1,1 +1,0 @@
-export{wO as BreadcrumbList,xO as BreadcrumbRenderer,CO as Breadcrumbs,bO as PromotableBreadcrumbList,_O as breadcrumbRendererContribution,vO as breadcrumbsPlugin,SO as getBreadcrumbContentPreview,yO as usePromotableBreadcrumb}from"../../../chunks/app-of-M_6eT.js";

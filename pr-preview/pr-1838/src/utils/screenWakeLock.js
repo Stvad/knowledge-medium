@@ -1,1 +1,0 @@
-export{d as holdScreenWakeLock}from"../../chunks/app-of-M_6eT.js";

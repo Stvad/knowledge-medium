@@ -1,1 +1,0 @@
-export{oA as usePendingInvitations}from"../../chunks/app-of-M_6eT.js";

@@ -1,1 +1,0 @@
-export{oL as appUpdatePromptExtension}from"../../../chunks/app-of-M_6eT.js";

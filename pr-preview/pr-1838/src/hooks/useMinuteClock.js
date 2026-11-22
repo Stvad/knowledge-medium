@@ -1,1 +1,0 @@
-export{rj as useMinuteClock}from"../../chunks/app-of-M_6eT.js";

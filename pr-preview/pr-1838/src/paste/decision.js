@@ -1,1 +1,0 @@
-export{fV as defaultPasteDecision,pV as pasteDecisionVerb}from"../../chunks/app-of-M_6eT.js";

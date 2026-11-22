@@ -1,1 +1,0 @@
-export{CI as resolveStructuralEditPolicy,wI as structuralEditPolicyForBlock}from"../../chunks/app-of-M_6eT.js";

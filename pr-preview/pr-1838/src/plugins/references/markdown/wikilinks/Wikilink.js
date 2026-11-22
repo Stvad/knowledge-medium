@@ -1,1 +1,0 @@
-export{bS as Wikilink}from"../../../../../chunks/app-of-M_6eT.js";

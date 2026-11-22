@@ -1,1 +1,0 @@
-export{xJ as PropertyShapeButton,SJ as PropertyShapeGlyph}from"../../../chunks/app-of-M_6eT.js";

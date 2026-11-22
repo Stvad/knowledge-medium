@@ -1,1 +1,0 @@
-export{cM as Label}from"../../../chunks/app-of-M_6eT.js";

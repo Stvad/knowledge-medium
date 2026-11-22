@@ -1,1 +1,0 @@
-export{GL as dynamicExtensionsExtension}from"../../chunks/app-of-M_6eT.js";

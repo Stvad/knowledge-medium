@@ -1,1 +1,0 @@
-export{Uz as ConfirmBulkDeleteDialog}from"../../chunks/app-of-M_6eT.js";

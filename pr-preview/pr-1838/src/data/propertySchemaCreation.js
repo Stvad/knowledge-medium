@@ -1,1 +1,0 @@
-export{wJ as adoptOrCreatePropertySchema}from"../../chunks/app-of-M_6eT.js";

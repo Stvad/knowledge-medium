@@ -1,1 +1,0 @@
-export{SO as getBreadcrumbContentPreview}from"../../../chunks/app-of-M_6eT.js";

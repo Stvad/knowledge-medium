@@ -1,1 +1,0 @@
-export{yO as usePromotableBreadcrumb}from"../../../chunks/app-of-M_6eT.js";

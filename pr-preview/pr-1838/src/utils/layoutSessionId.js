@@ -1,1 +1,0 @@
-export{Nct as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Pct as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Fct as __resetLayoutSessionIdForTesting,Ict as getLayoutSessionId,Lct as isInstalledAppDisplayMode,Rct as readOrCreateLayoutSessionId}from"../../chunks/app-of-M_6eT.js";

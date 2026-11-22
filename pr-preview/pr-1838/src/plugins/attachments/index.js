@@ -1,1 +1,0 @@
-export{zC as attachmentsPlugin}from"../../../chunks/app-of-M_6eT.js";

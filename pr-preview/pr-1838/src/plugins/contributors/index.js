@@ -1,1 +1,0 @@
-export{t_ as contributorsPlugin}from"../../../chunks/app-of-M_6eT.js";

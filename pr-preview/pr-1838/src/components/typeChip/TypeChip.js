@@ -1,1 +1,0 @@
-export{qF as TypeChip}from"../../../chunks/app-of-M_6eT.js";

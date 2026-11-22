@@ -1,1 +1,0 @@
-export{$E as spatialNavigationShellDecorator}from"../../../chunks/app-of-M_6eT.js";

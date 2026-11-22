@@ -1,1 +1,0 @@
-export{Uf as blockTagsConfigUi}from"../../../chunks/app-of-M_6eT.js";

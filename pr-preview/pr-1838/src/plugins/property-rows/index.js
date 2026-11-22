@@ -1,1 +1,0 @@
-export{Js as propertyRowsPlugin}from"../../../chunks/app-of-M_6eT.js";

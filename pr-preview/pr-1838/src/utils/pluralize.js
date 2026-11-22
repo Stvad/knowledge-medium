@@ -1,1 +1,0 @@
-export{Ret as agree,zet as pluralize}from"../../chunks/app-of-M_6eT.js";

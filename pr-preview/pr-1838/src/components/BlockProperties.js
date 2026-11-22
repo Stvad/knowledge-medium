@@ -1,1 +1,0 @@
-export{HU as BlockProperties}from"../../chunks/app-of-M_6eT.js";

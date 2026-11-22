@@ -1,1 +1,0 @@
-export{Ntt as mergeProperties}from"../../chunks/app-of-M_6eT.js";

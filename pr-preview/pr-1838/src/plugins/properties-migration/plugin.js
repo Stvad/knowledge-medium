@@ -1,1 +1,0 @@
-export{Dc as propertiesMigrationPlugin}from"../../../chunks/app-of-M_6eT.js";
