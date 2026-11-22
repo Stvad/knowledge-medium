@@ -1,1 +1,0 @@
-export{k6 as cn}from"../../chunks/app-CCQxzGq5.js";

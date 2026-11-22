@@ -1,1 +1,0 @@
-export{WU as declarationOnlyDefinitionForName,GU as declarationOnlyStatusText}from"../../../chunks/app-CCQxzGq5.js";

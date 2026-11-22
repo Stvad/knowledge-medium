@@ -1,1 +1,0 @@
-export{AA as useMinuteClock}from"../../chunks/app-CCQxzGq5.js";

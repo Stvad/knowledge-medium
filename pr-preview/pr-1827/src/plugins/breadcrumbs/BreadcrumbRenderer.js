@@ -1,1 +1,0 @@
-export{JD as BreadcrumbRenderer}from"../../../chunks/app-CCQxzGq5.js";

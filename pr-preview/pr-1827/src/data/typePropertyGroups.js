@@ -1,1 +1,0 @@
-export{BU as typePropertyGroups}from"../../chunks/app-CCQxzGq5.js";

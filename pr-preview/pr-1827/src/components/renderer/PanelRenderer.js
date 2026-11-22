@@ -1,1 +1,0 @@
-export{IR as PanelRenderer}from"../../../chunks/app-CCQxzGq5.js";
