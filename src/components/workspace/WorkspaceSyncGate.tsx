@@ -53,8 +53,8 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
   const kicking = useRef<Promise<void> | null>(null)
   // A bulk load while the gate is up — see `BlocksSyncedObserver.holdBulkLoad`.
   useEffect(() => repo.holdBulkSyncLoad(workspaceId), [repo, workspaceId])
-  // Reached without an access gate's drain on a device that kept its pin and
-  // key but not its database, where nothing else records it.
+  // Must land before the drain applies any of this workspace's rows; once one
+  // has, it records nothing.
   useEffect(() => {
     noteColdFirstSync(repo.db, workspaceId)
       .catch((err: unknown) => console.warn('[WorkspaceSyncGate] cold first-sync note failed', err))

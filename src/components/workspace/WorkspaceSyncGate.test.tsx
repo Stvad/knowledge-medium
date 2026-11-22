@@ -18,6 +18,7 @@ import {
   clearSyncState,
   drainStaged,
   hasFirstSyncMarker,
+  hasMarker,
   insertWorkspaceRow,
   serverWorkspace,
   stagedBlock as stagedBlockIn,
@@ -102,9 +103,7 @@ describe('WorkspaceSyncGate', () => {
 
   it('notes a workspace this device holds nothing of as a cold first sync', async () => {
     renderGate({awaitingRow: true, onReady: vi.fn()})
-    await vi.waitFor(async () => expect(await shared.db.getOptional(
-      'SELECT 1 FROM client_schema_state WHERE key = ?', [`${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${WS}`],
-    )).toBeTruthy())
+    await vi.waitFor(async () => expect(await hasMarker(shared.db, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, WS)).toBe(true))
   })
 
   it('does not open on status changes while the workspace is not caught up', async () => {

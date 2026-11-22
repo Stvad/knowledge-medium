@@ -1428,7 +1428,6 @@ export class Repo {
 
   /** Re-materialize all staged rows after workspace unlock/verification.
    *  Read every row: legacy shadows can incorrectly have `needs_apply = 0`.
-   *  A pass with no deferred/quarantined rows also satisfies one-time recovery.
    *  Returns the pass's report, or null when no observer is running. */
   async drainSyncWorkspace(
     workspaceId: string,
@@ -1437,6 +1436,8 @@ export class Repo {
     return this.drainForRecovery(workspaceId, 'all', onProgress)
   }
 
+  /** A pass with no deferred or quarantined rows also retires the one-time
+   *  reconcile rescan. */
   private async drainForRecovery(
     workspaceId: string,
     scope: RematerializeScope,
@@ -4829,10 +4830,8 @@ export class Repo {
    * drain never re-evaluates it — the shadow persists across reloads. This
    * re-runs the materialization for the workspace straight from
    * `blocks_synced` (bypassing the consumed queue) and re-applies the gate,
-   * un-shadowing the server's value on disk. It reads every staged row, except
-   * in a workspace that had no cleared flag when its first sync began here
-   * (`noteColdFirstSync`): every flag there is a drain's own judgment, so it
-   * reads the flagged rows only, and after a complete drain that is none.
+   * un-shadowing the server's value on disk. It reads every staged row, or only
+   * the flagged ones under {@link RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}.
    *
    * No special mode is needed anymore: with server-enforced `updated_at`
    * monotonicity, the sole gate already lets the server win on any
@@ -4860,8 +4859,6 @@ export class Repo {
     const key = `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`
     const done = await this.db.getOptional<{key: string}>(SELECT_KEYED_MARKER_SQL, [key])
     if (done) return
-    // 'unapplied' still re-judges every row a drain deferred; it skips only
-    // rows whose cleared flag this device's own drain set.
     const flagsTrusted = await this.db.getOptional<{key: string}>(
       SELECT_KEYED_MARKER_SQL, [`${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${workspaceId}`],
     )

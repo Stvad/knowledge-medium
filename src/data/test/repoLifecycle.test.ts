@@ -55,6 +55,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {kernelDataExtension} from '@/data/kernelDataExtension'
 import {BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams} from '@/data/blockSchema'
 import {noteColdFirstSync} from '@/data/workspaceFirstSync'
+import {makeBlockData} from '@/data/test/factories'
 import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
 import { ClientContext, type ClientContextReader } from '../clientContext'
@@ -722,15 +723,18 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('recovers stranded staging rows even when their apply flag is incorrectly clear', async () => {
-    const staged: BlockData = {
-      id: 'stranded', workspaceId: 'ws-1', parentId: null, orderKey: 'a0',
-      content: 'Recovered from staging', properties: {}, references: [],
-      createdAt: 1, updatedAt: 1000, userUpdatedAt: 1000, createdBy: 'peer', updatedBy: 'peer', deleted: false,
-    }
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(staged))
-    await env.h.db.execute('UPDATE blocks_synced SET needs_apply = 0 WHERE id = ?', [staged.id])
+  const stagedRow = (id: string): BlockData =>
+    makeBlockData({id, workspaceId: 'ws-1', content: `staged ${id}`, createdAt: 1, updatedAt: 1000, userUpdatedAt: 1000})
+  /** Staged, flagged and out of the queue: the shape a deferred row is left in. */
+  const stageUnqueued = async (row: BlockData) => {
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(row))
     await env.h.db.execute('DELETE FROM blocks_synced_changes')
+  }
+
+  it('recovers stranded staging rows even when their apply flag is incorrectly clear', async () => {
+    const staged = stagedRow('stranded')
+    await stageUnqueued(staged)
+    await env.h.db.execute('UPDATE blocks_synced SET needs_apply = 0 WHERE id = ?', [staged.id])
     const observer = env.repo.startSyncObserver()
     const scan = vi.spyOn(observer, 'drainWorkspace')
     const report = await env.repo.drainSyncWorkspace(staged.workspaceId)
@@ -741,17 +745,6 @@ describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
     await settle(env.repo)
     expect(scan).toHaveBeenCalledTimes(1)
   })
-
-  const stagedRow = (id: string): BlockData => ({
-    id, workspaceId: 'ws-1', parentId: null, orderKey: 'a0',
-    content: `staged ${id}`, properties: {}, references: [],
-    createdAt: 1, updatedAt: 1000, userUpdatedAt: 1000, createdBy: 'peer', updatedBy: 'peer', deleted: false,
-  })
-  /** Staged, flagged and out of the queue: the shape a deferred row is left in. */
-  const stageUnqueued = async (row: BlockData) => {
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(row))
-    await env.h.db.execute('DELETE FROM blocks_synced_changes')
-  }
 
   it('reads only the flagged rows of a workspace noted cold, and still applies one a drain deferred', async () => {
     await noteColdFirstSync(env.h.db, 'ws-1')

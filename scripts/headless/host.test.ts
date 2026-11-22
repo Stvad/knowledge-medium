@@ -12,11 +12,11 @@ import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import {startReadGate} from './gate'
-import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
+import {clearSyncState, drainStaged, hasMarker, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
-import {ANALYZE_OPTIMIZE_SQL, RECONCILE_RESCAN_MARKER_PREFIX} from '@/data/internals/clientSchema'
+import {ANALYZE_OPTIMIZE_SQL, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, RECONCILE_RESCAN_MARKER_PREFIX} from '@/data/internals/clientSchema'
 import {Repo} from '@/data/repo'
 import type {SyncDrainStats} from '@/data/internals/syncObserver/observer'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
@@ -76,6 +76,13 @@ const writable = () => ({...plaintext(), writable: true})
 // This database boot took 0.36–1.45 s in the focused run.
 it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes, returning device secrets or re-materializing it', async mode => {
   const repos = vi.spyOn(Repo.prototype, 'setActiveWorkspaceId')
+  // Whether the cold note had landed when the observer started draining.
+  const notedAtObserverStart: Promise<boolean>[] = []
+  const startObserver = Repo.prototype.startSyncObserver
+  vi.spyOn(Repo.prototype, 'startSyncObserver').mockImplementation(function (this: Repo, ...args) {
+    notedAtObserverStart.push(hasMarker(fixture.db, RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, workspaceId))
+    return startObserver.apply(this, args)
+  })
   const config = plaintext()
   const key = await mintWorkspaceKey(workspaceId)
   const keyFile = join(fixture.dir, 'fixture-key')
@@ -107,9 +114,7 @@ it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download wi
     await vi.waitFor(async () => expect(await fixture.db.getOptional('SELECT 1 FROM row_events WHERE block_id = ?', [id])).toBeTruthy())
     await assertReadSurface(host.execute, id, {deviceValue, workspaceKey: key.displayed})
     // The open's one-time reconcile rescan has run to completion.
-    await vi.waitFor(async () => expect(await fixture.db.getOptional(
-      'SELECT 1 FROM client_schema_state WHERE key = ?', [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`],
-    )).toBeTruthy())
+    await vi.waitFor(async () => expect(await hasMarker(fixture.db, RECONCILE_RESCAN_MARKER_PREFIX, workspaceId)).toBe(true))
   } finally {
     await host.stop()
   }
@@ -119,6 +124,7 @@ it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download wi
   ;(repos.mock.contexts[0] as Repo).onSyncDrainStats(stats => drains.push(stats.source))
   expect(drains).toContain('queue')
   expect(drains).not.toContain('workspace')
+  expect(await Promise.all(notedAtObserverStart)).toEqual([true])
 }, 20_000)
 
 // This database boot took 0.21 s in the focused run.

@@ -1298,29 +1298,41 @@ export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
  *  client. */
 export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
 
-/** Per-workspace: every `needs_apply` flag this device holds for the workspace
- *  is a drain's own judgment, so its one-time reconcile rescan may read only the
- *  flagged rows instead of every staged row. Keyed
- *  `reconcile_rescan_flags_trusted_v1:<workspaceId>`; recorded by
- *  {@link RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL}. */
+/** Per-workspace, keyed `reconcile_rescan_flags_trusted_v1:<workspaceId>`: the
+ *  one-time reconcile rescan may read only the workspace's flagged rows (scope
+ *  'unapplied') instead of every staged row.
+ *
+ *  Sound because the two scopes differ only on rows whose `needs_apply` flag is
+ *  cleared, and a cleared flag is the one thing a legacy device can have wrong
+ *  (a shadow an old-gate drain skipped, a row the upgrade seed cleared).
+ *  {@link RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL} records it only while no
+ *  staged row of the workspace has one; from then on every flag is set by a
+ *  delivery and cleared by a drain that judged the row. A deferred row stays
+ *  flagged, so the narrow pass still re-judges it. The upgrade seed is the one
+ *  other writer that clears flags, so it forgets these markers
+ *  ({@link FORGET_RECONCILE_FLAGS_TRUSTED_SQL}).
+ *
+ *  Accepted, each costing at most a heal the repeating full pass used to give
+ *  by accident: a row a pending-upload skip cleared whose upload is then
+ *  rejected; a row still queued when the narrow pass reads its ids, which
+ *  defers afterwards (it stays flagged, and the durable gap counts it); and, in
+ *  a tab, a workspace that drained in the background before any gate mounted
+ *  for it, which is not noted and keeps the full pass. */
 export const RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX = 'reconcile_rescan_flags_trusted_v1:'
 
-/** Records {@link RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX} for a workspace none
- *  of whose staged rows has a cleared flag. The narrow rescan differs from the
- *  full one only on cleared flags, and a cleared flag is the one thing a legacy
- *  device can have wrong (a shadow an old-gate drain skipped, a row the upgrade
- *  seed cleared). With none present, every flag from here on is set by a
- *  delivery and cleared only by a drain that judged the row.
- *
- *  One statement, so the check and the write cannot be split by a drain window.
- *  The reconcile-marker term is cost only, not correctness: a workspace whose
- *  rescan is done never reads this marker, and the term spares it the staging
- *  scan. Params: flags-trusted key, reconcile key, workspace id. */
+/** The check and the write are one statement, so a drain window cannot land
+ *  between them. The reconcile-marker term is cost only: it spares a workspace
+ *  whose rescan is done a scan of `blocks_synced`, which no index serves.
+ *  Params: flags-trusted key, reconcile key, workspace id. */
 export const RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL = `
   INSERT OR IGNORE INTO client_schema_state (key, completed_at)
   SELECT ?, strftime('%s', 'now') * 1000
    WHERE NOT EXISTS (SELECT 1 FROM client_schema_state WHERE key = ?)
      AND NOT EXISTS (SELECT 1 FROM blocks_synced WHERE workspace_id = ? AND needs_apply = 0)
+`
+
+export const FORGET_RECONCILE_FLAGS_TRUSTED_SQL = `
+  DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}%'
 `
 
 /** Per-workspace: this device has caught up on the workspace's first sync, so
@@ -1642,6 +1654,7 @@ export const ensureStagingNeedsApplyColumn = async (
   // pass refuses for the life of the install. The marker retries instead.
   if (await isMarkerSet(db, SELECT_STAGING_NEEDS_APPLY_SEEDED_SQL)) return
   await db.execute(SEED_STAGING_NEEDS_APPLY_SQL)
+  await db.execute(FORGET_RECONCILE_FLAGS_TRUSTED_SQL)
   await db.execute(RECORD_STAGING_NEEDS_APPLY_SEEDED_SQL)
 }
 
