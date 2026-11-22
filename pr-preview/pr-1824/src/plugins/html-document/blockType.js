@@ -1,1 +1,1 @@
-export{FX as htmlDocumentTypeSeed}from"../../../chunks/app-dBKQiDIh.js";
+export{FX as htmlDocumentTypeSeed}from"../../../chunks/app-BI3TRAy1.js";

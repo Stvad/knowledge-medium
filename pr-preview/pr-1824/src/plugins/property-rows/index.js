@@ -1,1 +1,1 @@
-export{os as propertyRowsPlugin}from"../../../chunks/app-dBKQiDIh.js";
+export{os as propertyRowsPlugin}from"../../../chunks/app-BI3TRAy1.js";

@@ -1,1 +1,1 @@
-export{qL as defaultRegistry,GL as refreshRendererRegistry,KL as useRenderer}from"../../chunks/app-dBKQiDIh.js";
+export{qL as defaultRegistry,GL as refreshRendererRegistry,KL as useRenderer}from"../../chunks/app-BI3TRAy1.js";

@@ -1,1 +1,1 @@
-export{HI as dispatchPointerAction,UI as setPointerActionDispatcher}from"../../chunks/app-dBKQiDIh.js";
+export{HI as dispatchPointerAction,UI as setPointerActionDispatcher}from"../../chunks/app-BI3TRAy1.js";

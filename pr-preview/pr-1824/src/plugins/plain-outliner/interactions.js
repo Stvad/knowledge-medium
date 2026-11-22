@@ -1,1 +1,1 @@
-export{BD as blockEditingContentRenderer}from"../../../chunks/app-dBKQiDIh.js";
+export{BD as blockEditingContentRenderer}from"../../../chunks/app-BI3TRAy1.js";

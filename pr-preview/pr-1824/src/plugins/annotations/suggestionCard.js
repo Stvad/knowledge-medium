@@ -1,1 +1,1 @@
-export{tm as SuggestionActions,nm as SuggestionText,rm as isAccepted,im as showsAnchorState}from"../../../chunks/app-dBKQiDIh.js";
+export{tm as SuggestionActions,nm as SuggestionText,rm as isAccepted,im as showsAnchorState}from"../../../chunks/app-BI3TRAy1.js";
