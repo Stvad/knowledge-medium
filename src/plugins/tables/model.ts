@@ -64,8 +64,8 @@ export const useRowIds = (
 ): readonly string[] | undefined =>
   useHandle(host.repo.query.typedBlockIds(rowQuery(host.id, workspaceId, query, order)), {selector: ids => ids})
 
-/** The property names the table's rows hold, most common first: what a new
- *  column most likely shows. Read once, from the same rows the grid draws. */
+/** The property names held by the rows the table's source selects, most
+ *  common first: what a new column most likely shows. Read once. */
 export const rowPropertyNames = async (
   host: Block, workspaceId: string, query: QueryClauses | null,
 ): Promise<string[]> => {
