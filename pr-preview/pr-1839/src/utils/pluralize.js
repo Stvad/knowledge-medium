@@ -1,1 +1,0 @@
-export{Uet as agree,Wet as pluralize}from"../../chunks/app-DnlJ__Aw.js";

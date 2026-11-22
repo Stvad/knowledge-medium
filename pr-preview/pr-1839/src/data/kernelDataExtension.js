@@ -1,1 +1,0 @@
-export{g9 as kernelDataExtension}from"../../chunks/app-DnlJ__Aw.js";

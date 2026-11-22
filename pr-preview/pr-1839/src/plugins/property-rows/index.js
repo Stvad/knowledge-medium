@@ -1,1 +1,0 @@
-export{Ys as propertyRowsPlugin}from"../../../chunks/app-DnlJ__Aw.js";

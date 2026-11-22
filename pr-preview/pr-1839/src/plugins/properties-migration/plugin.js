@@ -1,1 +1,0 @@
-export{Oc as propertiesMigrationPlugin}from"../../../chunks/app-DnlJ__Aw.js";

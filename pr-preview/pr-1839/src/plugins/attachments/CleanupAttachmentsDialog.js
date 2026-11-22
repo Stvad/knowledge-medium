@@ -1,1 +1,0 @@
-export{WC as CleanupAttachmentsDialog}from"../../../chunks/app-DnlJ__Aw.js";

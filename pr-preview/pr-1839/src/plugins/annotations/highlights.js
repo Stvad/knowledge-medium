@@ -1,1 +1,0 @@
-export{Kg as HIGHLIGHT_CLASS,qg as MOVED_HIGHLIGHT_CLASS,Jg as SUGGESTION_HIGHLIGHT_CLASS,Yg as coveringStyle,Xg as highlightClasses,Zg as highlightField,Qg as highlightRange,$g as highlightRanges,e_ as threadHighlights,t_ as threadHighlightsContribution}from"../../../chunks/app-DnlJ__Aw.js";

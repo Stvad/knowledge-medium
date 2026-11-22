@@ -1,1 +1,0 @@
-export{gL as checkForAppUpdate,_L as registerServiceWorker}from"../chunks/app-DnlJ__Aw.js";

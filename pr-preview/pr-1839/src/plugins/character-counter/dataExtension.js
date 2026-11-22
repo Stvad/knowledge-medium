@@ -1,1 +1,0 @@
-export{n2 as characterCounterDataExtension}from"../../../chunks/app-DnlJ__Aw.js";

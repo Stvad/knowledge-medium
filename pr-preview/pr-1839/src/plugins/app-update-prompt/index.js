@@ -1,1 +1,0 @@
-export{sL as appUpdatePromptExtension}from"../../../chunks/app-DnlJ__Aw.js";

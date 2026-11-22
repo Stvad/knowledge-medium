@@ -1,1 +1,0 @@
-export{zE as COLEMAK_KEYBINDINGS_PLUGIN_ID,BE as colemakKeybindingsPlugin,VE as colemakMovementKeybindingOverrides}from"../../../chunks/app-DnlJ__Aw.js";

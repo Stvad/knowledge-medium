@@ -1,1 +1,0 @@
-export{bJ as usePropertySchemas}from"../../chunks/app-DnlJ__Aw.js";

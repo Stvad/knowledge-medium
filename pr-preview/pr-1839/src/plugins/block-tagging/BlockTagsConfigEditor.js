@@ -1,1 +1,0 @@
-export{Gf as BlockTagsConfigEditor}from"../../../chunks/app-DnlJ__Aw.js";

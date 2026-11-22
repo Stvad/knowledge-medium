@@ -1,1 +1,0 @@
-export{iF as SWIPE_QUICK_ACTIONS_GESTURE_ID,aF as SWIPE_TRIGGER_PX,oF as swipeRecognizer}from"../../../chunks/app-DnlJ__Aw.js";

@@ -1,1 +1,0 @@
-export{UU as BlockProperties}from"../../chunks/app-DnlJ__Aw.js";

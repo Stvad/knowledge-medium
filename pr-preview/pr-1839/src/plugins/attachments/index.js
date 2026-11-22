@@ -1,1 +1,0 @@
-export{BC as attachmentsPlugin}from"../../../chunks/app-DnlJ__Aw.js";

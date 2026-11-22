@@ -1,1 +1,0 @@
-export{IR as defaultRegistry,LR as defaultRendererContributions,RR as defaultRenderersExtension}from"../../chunks/app-DnlJ__Aw.js";

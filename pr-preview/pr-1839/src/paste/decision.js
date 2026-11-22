@@ -1,1 +1,0 @@
-export{pV as defaultPasteDecision,mV as pasteDecisionVerb}from"../../chunks/app-DnlJ__Aw.js";

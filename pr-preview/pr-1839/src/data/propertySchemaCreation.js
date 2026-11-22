@@ -1,1 +1,0 @@
-export{TJ as adoptOrCreatePropertySchema}from"../../chunks/app-DnlJ__Aw.js";

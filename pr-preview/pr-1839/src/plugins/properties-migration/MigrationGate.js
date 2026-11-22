@@ -1,1 +1,0 @@
-export{kc as MigrationGate}from"../../../chunks/app-DnlJ__Aw.js";

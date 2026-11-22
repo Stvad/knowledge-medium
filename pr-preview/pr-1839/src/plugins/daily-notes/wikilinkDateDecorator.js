@@ -1,1 +1,0 @@
-export{KM as dailyDateWikilinkDecorator}from"../../../chunks/app-DnlJ__Aw.js";

@@ -1,1 +1,0 @@
-export{tv as extensionApiCatalog,nv as extensionApiRuntimeExports}from"../../chunks/app-DnlJ__Aw.js";

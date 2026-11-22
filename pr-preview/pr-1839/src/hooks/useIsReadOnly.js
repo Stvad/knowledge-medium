@@ -1,1 +1,0 @@
-export{sC as useIsReadOnly}from"../../chunks/app-DnlJ__Aw.js";

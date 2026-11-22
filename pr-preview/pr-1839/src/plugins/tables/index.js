@@ -1,1 +1,0 @@
-export{Co as tablesPlugin}from"../../../chunks/app-DnlJ__Aw.js";

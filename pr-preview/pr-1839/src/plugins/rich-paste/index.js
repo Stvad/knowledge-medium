@@ -1,1 +1,0 @@
-export{IC as richPastePlugin}from"../../../chunks/app-DnlJ__Aw.js";

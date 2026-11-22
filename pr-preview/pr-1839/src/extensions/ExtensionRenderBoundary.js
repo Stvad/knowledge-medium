@@ -1,1 +1,0 @@
-export{CH as ExtensionRenderBoundary}from"../../chunks/app-DnlJ__Aw.js";

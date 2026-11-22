@@ -1,1 +1,0 @@
-export{KP as CommandPaletteHeaderItem}from"../../../chunks/app-DnlJ__Aw.js";

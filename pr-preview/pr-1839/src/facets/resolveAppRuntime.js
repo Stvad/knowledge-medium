@@ -1,1 +1,0 @@
-export{WL as resolveAppRuntime,GL as resolveAppRuntimeSync}from"../../chunks/app-DnlJ__Aw.js";

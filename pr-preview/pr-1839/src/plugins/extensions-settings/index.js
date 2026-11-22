@@ -1,1 +1,0 @@
-export{iv as extensionsOverridesProp,av as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-DnlJ__Aw.js";

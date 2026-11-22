@@ -1,1 +1,0 @@
-export{u0 as annotationMarginOpenProp,d0 as annotationMarginShareProp}from"../../../chunks/app-DnlJ__Aw.js";
