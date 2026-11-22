@@ -1,1 +1,1 @@
-export{kO as WorkspaceSwitcherSidebarSection,AO as pendingInvitationsHeaderItem,jO as workspaceHeaderPlugin,MO as workspaceSwitcherSidebarSection}from"../../../chunks/app-CUWXVka6.js";
+export{kO as WorkspaceSwitcherSidebarSection,AO as pendingInvitationsHeaderItem,jO as workspaceHeaderPlugin,MO as workspaceSwitcherSidebarSection}from"../../../chunks/app-FBYlNW-N.js";

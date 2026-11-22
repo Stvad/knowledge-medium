@@ -1,1 +1,1 @@
-export{GS as selectHeldBlockAction,KS as toggleTappedBlockAction}from"../../../chunks/app-CUWXVka6.js";
+export{GS as selectHeldBlockAction,KS as toggleTappedBlockAction}from"../../../chunks/app-FBYlNW-N.js";

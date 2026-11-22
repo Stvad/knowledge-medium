@@ -1,1 +1,1 @@
-export{ru as createUserActivity,iu as userActivity}from"../../chunks/app-CUWXVka6.js";
+export{ru as createUserActivity,iu as userActivity}from"../../chunks/app-FBYlNW-N.js";
