@@ -1,1 +1,1 @@
-export{zF as ensureMetricsConsoleHook}from"../../chunks/app-DRS2ZlKP.js";
+export{zF as ensureMetricsConsoleHook}from"../../chunks/app-B66-HSlB.js";

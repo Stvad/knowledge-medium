@@ -1,1 +1,1 @@
-export{Lg as agentDispatchCompanionPlugin}from"../../../chunks/app-DRS2ZlKP.js";
+export{Lg as agentDispatchCompanionPlugin}from"../../../chunks/app-B66-HSlB.js";

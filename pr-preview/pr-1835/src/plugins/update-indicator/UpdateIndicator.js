@@ -1,1 +1,1 @@
-export{Mb as UpdateIndicator}from"../../../chunks/app-DRS2ZlKP.js";
+export{Mb as UpdateIndicator}from"../../../chunks/app-B66-HSlB.js";

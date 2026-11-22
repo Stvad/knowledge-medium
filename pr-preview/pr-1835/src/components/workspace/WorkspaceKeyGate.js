@@ -1,1 +1,1 @@
-export{Vt as WorkspaceKeyGate,Ht as workspaceGateDeps}from"../../../chunks/app-DRS2ZlKP.js";
+export{Vt as WorkspaceKeyGate,Ht as workspaceGateDeps}from"../../../chunks/app-B66-HSlB.js";

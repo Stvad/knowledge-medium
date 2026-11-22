@@ -1,1 +1,1 @@
-export{Zit as ReadBatcher,Qit as readBatcherPerDb}from"../../../chunks/app-DRS2ZlKP.js";
+export{Zit as ReadBatcher,Qit as readBatcherPerDb}from"../../../chunks/app-B66-HSlB.js";

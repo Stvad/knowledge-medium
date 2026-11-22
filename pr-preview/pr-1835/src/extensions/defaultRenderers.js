@@ -1,1 +1,1 @@
-export{cR as defaultRegistry,lR as defaultRendererContributions,uR as defaultRenderersExtension}from"../../chunks/app-DRS2ZlKP.js";
+export{cR as defaultRegistry,lR as defaultRendererContributions,uR as defaultRenderersExtension}from"../../chunks/app-B66-HSlB.js";

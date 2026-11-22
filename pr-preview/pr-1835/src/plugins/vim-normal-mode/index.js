@@ -1,1 +1,1 @@
-export{JT as vimNormalModeInteractionExtension,YT as vimNormalModePlugin}from"../../../chunks/app-DRS2ZlKP.js";
+export{JT as vimNormalModeInteractionExtension,YT as vimNormalModePlugin}from"../../../chunks/app-B66-HSlB.js";

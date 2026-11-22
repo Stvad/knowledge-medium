@@ -1,1 +1,1 @@
-export{KI as kernelPageDeletionGuard}from"../../chunks/app-DRS2ZlKP.js";
+export{KI as kernelPageDeletionGuard}from"../../chunks/app-B66-HSlB.js";

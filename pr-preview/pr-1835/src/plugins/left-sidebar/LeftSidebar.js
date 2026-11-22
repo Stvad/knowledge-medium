@@ -1,1 +1,1 @@
-export{hO as LeftSidebar,gO as LeftSidebarCoreSection,_O as LeftSidebarShortcutsSection}from"../../../chunks/app-DRS2ZlKP.js";
+export{hO as LeftSidebar,gO as LeftSidebarCoreSection,_O as LeftSidebarShortcutsSection}from"../../../chunks/app-B66-HSlB.js";

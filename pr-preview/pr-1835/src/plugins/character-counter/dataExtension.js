@@ -1,1 +1,1 @@
-export{w0 as characterCounterDataExtension}from"../../../chunks/app-DRS2ZlKP.js";
+export{w0 as characterCounterDataExtension}from"../../../chunks/app-B66-HSlB.js";
