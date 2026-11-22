@@ -1,1 +1,1 @@
-export{BR as CodeMirrorExtensionBlockRenderer,VR as ExtensionEditor}from"../../../chunks/app-DpIf-VCN.js";
+export{BR as CodeMirrorExtensionBlockRenderer,VR as ExtensionEditor}from"../../../chunks/app-B1afHoXo.js";

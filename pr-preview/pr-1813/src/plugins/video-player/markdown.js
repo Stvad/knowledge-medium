@@ -1,1 +1,1 @@
-export{Xw as videoPlayerMarkdownExtension}from"../../../chunks/app-DpIf-VCN.js";
+export{Xw as videoPlayerMarkdownExtension}from"../../../chunks/app-B1afHoXo.js";

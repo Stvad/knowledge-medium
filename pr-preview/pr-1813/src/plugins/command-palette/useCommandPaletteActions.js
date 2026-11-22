@@ -1,1 +1,1 @@
-export{MN as useCommandPaletteActions}from"../../../chunks/app-DpIf-VCN.js";
+export{MN as useCommandPaletteActions}from"../../../chunks/app-B1afHoXo.js";

@@ -1,1 +1,1 @@
-export{JI as useOverrides}from"../../chunks/app-DpIf-VCN.js";
+export{JI as useOverrides}from"../../chunks/app-B1afHoXo.js";

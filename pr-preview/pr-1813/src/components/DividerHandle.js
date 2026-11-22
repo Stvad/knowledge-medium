@@ -1,1 +1,1 @@
-export{FR as DIVIDER_HANDLE_WIDTH_PX,IR as DividerHandle}from"../../chunks/app-DpIf-VCN.js";
+export{FR as DIVIDER_HANDLE_WIDTH_PX,IR as DividerHandle}from"../../chunks/app-B1afHoXo.js";

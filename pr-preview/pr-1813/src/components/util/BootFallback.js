@@ -1,1 +1,1 @@
-export{_J as BootFallback}from"../../../chunks/app-DpIf-VCN.js";
+export{_J as BootFallback}from"../../../chunks/app-B1afHoXo.js";

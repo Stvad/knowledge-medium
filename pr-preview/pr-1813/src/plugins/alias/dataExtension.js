@@ -1,1 +1,1 @@
-export{U2 as aliasDataExtension}from"../../../chunks/app-DpIf-VCN.js";
+export{U2 as aliasDataExtension}from"../../../chunks/app-B1afHoXo.js";

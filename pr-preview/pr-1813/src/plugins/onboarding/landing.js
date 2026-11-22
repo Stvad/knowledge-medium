@@ -1,1 +1,1 @@
-export{MT as onboardingLanding}from"../../../chunks/app-DpIf-VCN.js";
+export{MT as onboardingLanding}from"../../../chunks/app-B1afHoXo.js";

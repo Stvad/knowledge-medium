@@ -1,1 +1,1 @@
-export{xX as mergeReferrers,SX as wikilinkSourcesByContent}from"../../../chunks/app-DpIf-VCN.js";
+export{xX as mergeReferrers,SX as wikilinkSourcesByContent}from"../../../chunks/app-B1afHoXo.js";

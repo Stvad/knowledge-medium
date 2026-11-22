@@ -1,1 +1,1 @@
-export{$I as ClientLocalSettings,eL as clientLocalSettings}from"../../chunks/app-DpIf-VCN.js";
+export{$I as ClientLocalSettings,eL as clientLocalSettings}from"../../chunks/app-B1afHoXo.js";

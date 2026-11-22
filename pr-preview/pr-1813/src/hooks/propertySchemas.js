@@ -1,1 +1,1 @@
-export{jq as usePropertySchemas}from"../../chunks/app-DpIf-VCN.js";
+export{jq as usePropertySchemas}from"../../chunks/app-B1afHoXo.js";

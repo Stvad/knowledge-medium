@@ -1,1 +1,1 @@
-export{tf as blockTagsConfigUi}from"../../../chunks/app-DpIf-VCN.js";
+export{tf as blockTagsConfigUi}from"../../../chunks/app-B1afHoXo.js";

@@ -1,1 +1,1 @@
-export{$r as ExtensionsSettings}from"../../../chunks/app-DpIf-VCN.js";
+export{$r as ExtensionsSettings}from"../../../chunks/app-B1afHoXo.js";

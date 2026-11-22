@@ -1,1 +1,1 @@
-export{dR as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,fR as openExtensionsSettings}from"../../chunks/app-DpIf-VCN.js";
+export{dR as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,fR as openExtensionsSettings}from"../../chunks/app-B1afHoXo.js";

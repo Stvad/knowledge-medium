@@ -1,1 +1,1 @@
-export{vM as DailyNotePicker}from"../../../chunks/app-DpIf-VCN.js";
+export{vM as DailyNotePicker}from"../../../chunks/app-B1afHoXo.js";

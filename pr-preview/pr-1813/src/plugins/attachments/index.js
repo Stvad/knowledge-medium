@@ -1,1 +1,1 @@
-export{ZS as attachmentsPlugin}from"../../../chunks/app-DpIf-VCN.js";
+export{ZS as attachmentsPlugin}from"../../../chunks/app-B1afHoXo.js";

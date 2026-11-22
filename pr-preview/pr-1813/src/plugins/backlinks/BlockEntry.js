@@ -1,1 +1,1 @@
-export{Xb as LazyBlockEntry}from"../../../chunks/app-DpIf-VCN.js";
+export{Xb as LazyBlockEntry}from"../../../chunks/app-B1afHoXo.js";

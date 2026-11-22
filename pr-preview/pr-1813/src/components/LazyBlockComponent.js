@@ -1,1 +1,1 @@
-export{RL as LazyBlockComponent}from"../../chunks/app-DpIf-VCN.js";
+export{RL as LazyBlockComponent}from"../../chunks/app-B1afHoXo.js";

@@ -1,1 +1,1 @@
-export{jp as annotationsPlugin}from"../../../chunks/app-DpIf-VCN.js";
+export{jp as annotationsPlugin}from"../../../chunks/app-B1afHoXo.js";

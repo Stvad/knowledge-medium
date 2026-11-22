@@ -1,1 +1,1 @@
-export{rP as CommandPaletteHeaderItem}from"../../../chunks/app-DpIf-VCN.js";
+export{rP as CommandPaletteHeaderItem}from"../../../chunks/app-B1afHoXo.js";

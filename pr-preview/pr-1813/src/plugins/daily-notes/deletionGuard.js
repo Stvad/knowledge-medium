@@ -1,1 +1,1 @@
-export{mM as dailyNotesDeletionGuard}from"../../../chunks/app-DpIf-VCN.js";
+export{mM as dailyNotesDeletionGuard}from"../../../chunks/app-B1afHoXo.js";

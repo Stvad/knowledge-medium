@@ -1,1 +1,1 @@
-export{MO as importPastedWorkspaceKey,NO as openCanaryWithPastedKey}from"../../../../chunks/app-DpIf-VCN.js";
+export{MO as importPastedWorkspaceKey,NO as openCanaryWithPastedKey}from"../../../../chunks/app-B1afHoXo.js";

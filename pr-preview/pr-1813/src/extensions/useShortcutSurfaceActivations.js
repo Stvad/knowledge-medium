@@ -1,1 +1,1 @@
-export{VB as useShortcutSurfaceActivations}from"../../chunks/app-DpIf-VCN.js";
+export{VB as useShortcutSurfaceActivations}from"../../chunks/app-B1afHoXo.js";

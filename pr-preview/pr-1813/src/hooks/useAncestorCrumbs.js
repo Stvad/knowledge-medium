@@ -1,1 +1,1 @@
-export{UA as useAncestorCrumbs}from"../../chunks/app-DpIf-VCN.js";
+export{UA as useAncestorCrumbs}from"../../chunks/app-B1afHoXo.js";

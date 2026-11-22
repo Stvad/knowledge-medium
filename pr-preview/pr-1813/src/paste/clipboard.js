@@ -1,1 +1,1 @@
-export{EB as editorPasteRequest,DB as isBlankContent,OB as readClipboardContent,kB as shellPasteRequest}from"../../chunks/app-DpIf-VCN.js";
+export{EB as editorPasteRequest,DB as isBlankContent,OB as readClipboardContent,kB as shellPasteRequest}from"../../chunks/app-B1afHoXo.js";

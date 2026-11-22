@@ -1,1 +1,1 @@
-export{Hz as useIsMobile,Uz as usePointerCoarse}from"../../chunks/app-DpIf-VCN.js";
+export{Hz as useIsMobile,Uz as usePointerCoarse}from"../../chunks/app-B1afHoXo.js";

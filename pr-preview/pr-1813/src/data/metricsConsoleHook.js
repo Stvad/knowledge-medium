@@ -1,1 +1,1 @@
-export{wF as ensureMetricsConsoleHook}from"../../chunks/app-DpIf-VCN.js";
+export{wF as ensureMetricsConsoleHook}from"../../chunks/app-B1afHoXo.js";

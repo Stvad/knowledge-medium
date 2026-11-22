@@ -1,1 +1,1 @@
-export{gb as updateIndicatorPlugin}from"../../../chunks/app-DpIf-VCN.js";
+export{gb as updateIndicatorPlugin}from"../../../chunks/app-B1afHoXo.js";

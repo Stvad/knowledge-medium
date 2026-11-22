@@ -1,1 +1,1 @@
-export{R_ as lintExtensionSource}from"../../../chunks/app-DpIf-VCN.js";
+export{R_ as lintExtensionSource}from"../../../chunks/app-B1afHoXo.js";

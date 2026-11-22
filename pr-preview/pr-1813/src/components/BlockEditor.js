@@ -1,1 +1,1 @@
-export{PB as BlockEditor}from"../../chunks/app-DpIf-VCN.js";
+export{PB as BlockEditor}from"../../chunks/app-B1afHoXo.js";

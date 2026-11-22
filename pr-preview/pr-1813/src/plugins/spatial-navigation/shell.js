@@ -1,1 +1,1 @@
-export{dE as spatialNavigationShellDecorator}from"../../../chunks/app-DpIf-VCN.js";
+export{dE as spatialNavigationShellDecorator}from"../../../chunks/app-B1afHoXo.js";

@@ -1,1 +1,1 @@
-export{kx as referencesMarkdownExtension}from"../../../../chunks/app-DpIf-VCN.js";
+export{kx as referencesMarkdownExtension}from"../../../../chunks/app-B1afHoXo.js";

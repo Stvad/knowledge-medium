@@ -1,1 +1,1 @@
-export{Bs as MigrationGate}from"../../../chunks/app-DpIf-VCN.js";
+export{Bs as MigrationGate}from"../../../chunks/app-B1afHoXo.js";

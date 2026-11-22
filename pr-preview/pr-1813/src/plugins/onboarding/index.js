@@ -1,1 +1,1 @@
-export{sN as EXTENSIONS_PAGE_TITLE,cN as TUTORIAL_DEFAULT_TITLE,lN as TUTORIAL_VIM_TITLE,TT as onboardingPlugin,oN as seedTutorial}from"../../../chunks/app-DpIf-VCN.js";
+export{sN as EXTENSIONS_PAGE_TITLE,cN as TUTORIAL_DEFAULT_TITLE,lN as TUTORIAL_VIM_TITLE,TT as onboardingPlugin,oN as seedTutorial}from"../../../chunks/app-B1afHoXo.js";

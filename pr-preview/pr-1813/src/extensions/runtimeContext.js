@@ -1,1 +1,1 @@
-export{Lq as AppRuntimeContextProvider,Rq as useAppRuntime}from"../../chunks/app-DpIf-VCN.js";
+export{Lq as AppRuntimeContextProvider,Rq as useAppRuntime}from"../../chunks/app-B1afHoXo.js";

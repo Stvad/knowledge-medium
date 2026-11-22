@@ -1,1 +1,1 @@
-export{zr as keybindingsSettingsDataExtension}from"../../../chunks/app-DpIf-VCN.js";
+export{zr as keybindingsSettingsDataExtension}from"../../../chunks/app-B1afHoXo.js";

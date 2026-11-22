@@ -1,1 +1,1 @@
-export{f7 as Block,p7 as requireLoadedBlock}from"../../chunks/app-DpIf-VCN.js";
+export{f7 as Block,p7 as requireLoadedBlock}from"../../chunks/app-B1afHoXo.js";

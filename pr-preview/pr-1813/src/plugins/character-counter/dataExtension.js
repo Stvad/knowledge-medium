@@ -1,1 +1,1 @@
-export{c0 as characterCounterDataExtension}from"../../../chunks/app-DpIf-VCN.js";
+export{c0 as characterCounterDataExtension}from"../../../chunks/app-B1afHoXo.js";

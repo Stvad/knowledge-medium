@@ -1,1 +1,1 @@
-export{iI as ExtensionPromptSurface,aI as extensionPromptsExtension}from"../../../chunks/app-DpIf-VCN.js";
+export{iI as ExtensionPromptSurface,aI as extensionPromptsExtension}from"../../../chunks/app-B1afHoXo.js";
