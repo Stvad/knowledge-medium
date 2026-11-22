@@ -6,11 +6,11 @@ import { EditorView } from '@codemirror/view'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { editorSelection, focusBlock, isEditingProp, peekFocusedBlockLocation } from '@/data/properties'
+import { editorSelection, focusBlock, isEditingProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
+import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
@@ -20,6 +20,7 @@ import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { getDefaultActionGroups } from '@/shortcuts/defaultShortcuts'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
 import { ActionContextTypes } from '@/shortcuts/types'
+import { runActionById } from '@/shortcuts/runAction'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { BlockContextProvider } from '@/context/block'
 import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
@@ -30,10 +31,11 @@ import { __resetLazyMountRegistryForTesting } from '@/components/util/lazyMountR
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import * as toast from '@/utils/toast'
 import { turnIntoTable } from '../convert'
 import { tablesPlugin } from '../index'
-import { tableRenderScopeId } from '../registry'
+import { gridOfHost, tableRenderScopeId } from '../registry'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
 vi.mock('@/components/Login.tsx', () => ({useUser: () => USER}))
@@ -49,6 +51,19 @@ const tags = seedProperty({seedKey: 'test/property/tables-gesture-tags', revisio
 let db: TestDb
 let repo: Repo
 let runtime: FacetRuntime
+const configureRuntime = (...extra: AppExtension[]) => {
+  const defaults = getDefaultActionGroups({repo})
+  runtime = resolveFacetRuntimeSync([
+    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
+    defaultRenderersExtension, plainOutlinerPlugin, defaultEditorInteractionExtension, tablesPlugin,
+    defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
+    [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions]
+      .map(action => actionsFacet.of(action)),
+    definitionSeedsFacet.of(tags, {source: 'test'}),
+    ...extra,
+  ])
+  repo.setFacetRuntime(runtime)
+}
 beforeAll(async () => { db = await createTestDb() })
 afterAll(async () => { await db.cleanup() })
 // happy-dom fires selectionchange inside CodeMirror's own update.
@@ -76,16 +91,7 @@ beforeEach(async () => {
        encryption_mode, wk_canary, properties_migration)
      VALUES (?, 'test', ?, 1, 1, 'none', NULL, 'children')`, [WS, USER.id])
   repo = createTestRepo({db: db.db, user: USER, newId: () => crypto.randomUUID()}).repo
-  const defaults = getDefaultActionGroups({repo})
-  runtime = resolveFacetRuntimeSync([
-    kernelDataExtension, kernelPropertyUiExtension, kernelValuePresetsExtension,
-    defaultRenderersExtension, plainOutlinerPlugin, defaultEditorInteractionExtension, tablesPlugin,
-    defaultActionContextConfigs.map(config => actionContextsFacet.of(config, {source: 'test'})),
-    [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions]
-      .map(action => actionsFacet.of(action)),
-    definitionSeedsFacet.of(tags, {source: 'test'}),
-  ])
-  repo.setFacetRuntime(runtime)
+  configureRuntime()
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: PANEL, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
@@ -139,6 +145,11 @@ const memberIds = async () => (await db.db.getAll<{id: string}>(
   `SELECT value.id FROM blocks value JOIN blocks field ON field.id = value.parent_id
     WHERE field.parent_id = 'row-0' AND field.is_field_form = 1 AND value.deleted = 0 AND field.deleted = 0
     ORDER BY value.order_key, value.id`)).map(row => row.id)
+
+/** The host's rows: its children that are neither its view nor a field row. */
+const rowsUnderHost = async () => (await db.db.getAll<{id: string}>(
+  `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 AND is_field_form IS NOT 1
+     AND properties_json NOT LIKE '%tables:view%' ORDER BY order_key, id`, [HOST])).map(row => row.id)
 
 const fieldRowId = async () => (await db.db.get<{id: string}>(
   "SELECT id FROM blocks WHERE parent_id = 'row-0' AND is_field_form = 1 AND deleted = 0")).id
@@ -271,5 +282,91 @@ describe('a list cell draws its members as outline blocks', () => {
     const view = await editAt(alpha!, 'start')
     press(view, 'ArrowUp')
     await waitFor(() => expect(focused()?.blockId).toBe(HOST))
+  })
+})
+
+describe('the grid around a list cell', () => {
+  it('Backspace in an empty new member of an unset list leaves the list unset', async () => {
+    mount()
+    await waitFor(() => expect(document.querySelector('[data-table-row="row-1"]')).not.toBeNull())
+    await act(async () => { gridOfHost(PARENT_SCOPE, HOST)!.focusCell('row-1', 1, true) })
+    const draft = await waitFor(async () => {
+      const id = (await db.db.getAll<{id: string}>(
+        `SELECT value.id FROM blocks value JOIN blocks field ON field.id = value.parent_id
+          WHERE field.parent_id = 'row-1' AND field.is_field_form = 1 AND value.deleted = 0`))[0]?.id
+      expect(id).toBeDefined()
+      return id!
+    })
+    press(await editorOn(draft), 'Backspace')
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE}))
+    await waitFor(async () => expect(await db.db.getAll(
+      "SELECT id FROM blocks WHERE parent_id = 'row-1' AND is_field_form = 1 AND deleted = 0")).toEqual([]))
+    expect(repo.block('row-1').peek()?.properties).not.toHaveProperty(tags.name)
+  })
+
+  it('focus an outline verb puts on a cell’s field row goes to its row', async () => {
+    mount()
+    const field = await fieldRowId()
+    await waitFor(() => expect(document.querySelector('[data-table-list]')).not.toBeNull())
+    await act(async () => { await focusBlock(ui(), field, {edit: true, renderScopeId: SCOPE}) })
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-0', renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(false)
+  })
+
+  it('Shift+ArrowDown at the end of the last member starts no block selection', async () => {
+    mount()
+    const [, beta] = await memberIds()
+    const view = await editAt(beta!, 'end')
+    press(view, 'ArrowDown', {shiftKey: true})
+    // The base action would have selected `beta` and left edit mode by now.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(ui().peekProperty(selectionStateProp)?.selectedBlockIds ?? []).toEqual([])
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+  })
+})
+
+describe('normal mode on a list member', () => {
+  // Without spatial navigation: its vertical move walks the laid-out DOM, which
+  // happy-dom does not lay out. The browser check covers it.
+  beforeEach(() => configureRuntime(vimNormalModePlugin({repo})))
+
+  /** Focus `blockId` in the table without editing it, and run vim's `actionId` on it through
+   *  the dispatch path (with every wrap), as its key would. */
+  const normalRun = async (blockId: string, actionId: string) => {
+    await act(async () => { await focusBlock(ui(), blockId, {renderScopeId: SCOPE}) })
+    await waitFor(() => expect((activeContexts.get(ActionContextTypes.NORMAL_MODE) as {block?: {id: string}})?.block?.id).toBe(blockId))
+    await act(async () => { await runActionById(actionId, new KeyboardEvent('keydown')) })
+  }
+
+  it('down moves to the next member, and from the last member to the next row', async () => {
+    mount()
+    const [alpha, beta] = await memberIds()
+    await normalRun(alpha!, 'move_down')
+    await waitFor(() => expect(focused()).toEqual({blockId: beta, renderScopeId: SCOPE}))
+    await normalRun(beta!, 'move_down')
+    await waitFor(() => expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE}))
+  })
+
+  it('up from the first member leaves the cell for the row above', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    await normalRun(alpha!, 'move_up')
+    await waitFor(() => expect(focused()?.blockId).toBe(HOST))
+  })
+
+  it('create-below adds a member below, not a row', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    await normalRun(alpha!, 'create_block_below_and_edit')
+    await waitFor(async () => expect(await contentsUnder(await fieldRowId())).toEqual(['alpha', '', 'beta']))
+    expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
+  })
+
+  it('enter-edit edits the member itself', async () => {
+    mount()
+    const [alpha] = await memberIds()
+    await normalRun(alpha!, 'enter_edit_mode')
+    await waitFor(() => expect(ui().peekProperty(isEditingProp)).toBe(true))
+    expect(focused()).toEqual({blockId: alpha, renderScopeId: SCOPE})
   })
 })

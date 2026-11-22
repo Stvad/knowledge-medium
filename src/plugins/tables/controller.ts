@@ -12,7 +12,7 @@ import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
-import { forgetCellEdit, openedCellEdit, peekValueOwner, reportRefusal } from './cellEdits'
+import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
 import { createQueryRow, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
 
@@ -33,8 +33,8 @@ export interface GridColumn {
 
 export const CELL_CONTROL_SELECTOR = '[data-property-value-row] :is(input, button, select, textarea)'
 
-/** How deep under a list's member `rowOf` looks for the cell it is drawn in. */
-const MAX_CELL_DEPTH = 32
+/** How far below a row `rowOf` looks for it. */
+const MAX_ROW_DEPTH = 32
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
@@ -115,20 +115,29 @@ export class GridController {
     }
   }
 
-  /** The row index of a row block, or of the row a cell draws this block in:
-   *  a value, or any block nested under a list's member. Read from the cache,
-   *  which holds every block a mounted cell draws. */
+  /** The row index of a row block, or of the row whose cell draws this block:
+   *  its nearest ancestor that is a row. Read from the cache, which holds
+   *  every block a mounted row draws. */
   rowOf(blockId: string): number | undefined {
-    const direct = this.rowIndex.get(blockId)
-    if (direct !== undefined) return direct
     const repo = this.host.repo
-    for (let id: string | null | undefined = blockId, depth = 0; id && depth < MAX_CELL_DEPTH; depth++) {
-      const owner = peekValueOwner(repo, id)
-      const row = owner && this.rowIndex.get(owner.ownerId)
+    for (let id: string | null | undefined = blockId, depth = 0; id && depth < MAX_ROW_DEPTH; depth++) {
+      const row = this.rowIndex.get(id)
       if (row !== undefined) return row
       id = repo.block(id).peek()?.parentId
     }
     return undefined
+  }
+
+  /** Focus on a cell's field row, which the grid does not draw (an outline
+   *  verb lands there from a list's first member: up, delete, jump), moves
+   *  to its row at its column. */
+  leaveFieldRow(blockId: string) {
+    // Raw: finishing a draft may already have deleted the field row focus landed on.
+    const field = this.host.repo.block(blockId).peekRaw()
+    const row = field?.isFieldForm && field.parentId ? this.rowIndex.get(field.parentId) : undefined
+    if (row === undefined) return
+    const column = this.columns.findIndex(column => column.fieldId === field!.referenceTargetId)
+    this.focusRow(row, column >= 0 ? column : this.column)
   }
 
   get currentColumn() {
@@ -356,7 +365,7 @@ export class GridController {
       tx => openPropertyValue(tx, rowId, fieldId, initialText === undefined ? {} : {initialText}),
       {scope: ChangeScope.BlockDefault, description: 'edit table cell'},
     )
-    openedCellEdit(opened, this.renderScopeId)
+    openedCellEdit(opened, rowId, fieldId, this.renderScopeId)
     try {
       const value = repo.block(opened.valueId)
       await value.load()
