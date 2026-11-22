@@ -1,1 +1,1 @@
-export{ZF as resolveStructuralEditPolicy,QF as structuralEditPolicyForBlock}from"../../chunks/app-CD9DKIdQ.js";
+export{ZF as resolveStructuralEditPolicy,QF as structuralEditPolicyForBlock}from"../../chunks/app-BNfV4Mnr.js";

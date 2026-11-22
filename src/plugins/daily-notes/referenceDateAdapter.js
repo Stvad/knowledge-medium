@@ -1,1 +1,1 @@
-export{wM as referenceDateAdapter,TM as replaceSingleDateReferenceContent,EM as singleDateReferenceMatch}from"../../../chunks/app-CD9DKIdQ.js";
+export{wM as referenceDateAdapter,TM as replaceSingleDateReferenceContent,EM as singleDateReferenceMatch}from"../../../chunks/app-BNfV4Mnr.js";

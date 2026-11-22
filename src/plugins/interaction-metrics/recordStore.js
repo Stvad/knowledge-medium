@@ -1,1 +1,1 @@
-export{eo as appendClientRecord,to as clientGroupId,no as clientSeriesQuery,ro as updateClientRecord}from"../../../chunks/app-CD9DKIdQ.js";
+export{eo as appendClientRecord,to as clientGroupId,no as clientSeriesQuery,ro as updateClientRecord}from"../../../chunks/app-BNfV4Mnr.js";

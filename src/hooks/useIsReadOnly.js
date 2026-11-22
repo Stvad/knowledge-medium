@@ -1,1 +1,1 @@
-export{PS as useIsReadOnly}from"../../chunks/app-CD9DKIdQ.js";
+export{PS as useIsReadOnly}from"../../chunks/app-BNfV4Mnr.js";

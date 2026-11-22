@@ -1,1 +1,1 @@
-export{LJ as closePowerSyncDbIfOpen,RJ as ensurePowerSyncReady,zJ as getActiveSyncResolver,BJ as getActiveUserId,VJ as getPowerSyncDb,HJ as isRemoteSyncActive,UJ as syncObserverDepsFor,WJ as syncResolverForUser,GJ as webDatabaseOptions}from"../../chunks/app-CD9DKIdQ.js";
+export{LJ as closePowerSyncDbIfOpen,RJ as ensurePowerSyncReady,zJ as getActiveSyncResolver,BJ as getActiveUserId,VJ as getPowerSyncDb,HJ as isRemoteSyncActive,UJ as syncObserverDepsFor,WJ as syncResolverForUser,GJ as webDatabaseOptions}from"../../chunks/app-BNfV4Mnr.js";

@@ -1,1 +1,1 @@
-export{BG as useTypes}from"../../chunks/app-CD9DKIdQ.js";
+export{BG as useTypes}from"../../chunks/app-BNfV4Mnr.js";
