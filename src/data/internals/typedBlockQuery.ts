@@ -420,45 +420,38 @@ const compileTypesTerm = (
     }
 }
 
+/** The terms of one predicate against `rowAlias`, ANDed, in a fixed order. Each
+ *  scope renders `referencedBy` its own way; every other term is shared. */
+const compilePredicateTerms = (
+  predicate: BlockPredicate,
+  rowAlias: string,
+  context: WhereContext,
+  referencedBy: (ref: TypedBlockQueryReferenceFilter) => CompiledClause,
+  alternativeWorkspace?: string,
+): CompiledClause => {
+  const terms: CompiledClause[] = []
+  if (predicate.id !== undefined) terms.push({sql: `${rowAlias}.id = ?`, params: [predicate.id]})
+  if (predicate.types?.length) terms.push(compileTypesTerm(predicate.types, `${rowAlias}.id`, alternativeWorkspace))
+  for (const [name, value] of Object.entries(predicate.where ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    terms.push(compileWhereClause(name, value, rowAlias, context))
+  }
+  if (predicate.referencedBy !== undefined) terms.push(referencedBy(predicate.referencedBy))
+  return {
+    sql: terms.length === 0 ? '1' : terms.map(term => term.sql).join(' AND '),
+    params: terms.flatMap(term => term.params),
+  }
+}
+
 const compilePredicateAgainstRow = (
   predicate: BlockPredicate,
   rowAlias: string,
   context: WhereContext,
   alternativeWorkspace?: string,
-): CompiledClause => {
-  const clauses: string[] = []
-  const params: unknown[] = []
-
-  if (predicate.id !== undefined) {
-    clauses.push(`${rowAlias}.id = ?`)
-    params.push(predicate.id)
-  }
-
-  if (predicate.types?.length) {
-    const compiled = compileTypesTerm(predicate.types, `${rowAlias}.id`, alternativeWorkspace)
-    clauses.push(compiled.sql)
-    params.push(...compiled.params)
-  }
-
-  if (predicate.where !== undefined) {
-    for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, rowAlias, context)
-      clauses.push(compiled.sql)
-      params.push(...compiled.params)
-    }
-  }
-
-  if (predicate.referencedBy !== undefined) {
-    const compiled = compileReferencedBy(predicate.referencedBy, `${rowAlias}.id`, alternativeWorkspace)
-    clauses.push(compiled.sql)
-    params.push(...compiled.params)
-  }
-
-  return {
-    sql: clauses.length === 0 ? '1' : clauses.join(' AND '),
-    params,
-  }
-}
+): CompiledClause => compilePredicateTerms(
+  predicate, rowAlias, context,
+  ref => compileReferencedBy(ref, `${rowAlias}.id`, alternativeWorkspace),
+  alternativeWorkspace,
+)
 
 /** Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
  *  also matches when any ancestor's own id IS X — Roam treats a parent
@@ -467,51 +460,25 @@ const compilePredicateAgainstRow = (
  *  even when no ancestor sources an explicit reference. `sourceField`
  *  predicates target a specific reference channel and stay strict (the
  *  ancestor-is-itself case has no channel). */
+const ancestorReferencedBy = (ref: TypedBlockQueryReferenceFilter): CompiledClause => {
+  const refExists = compileReferencedBy(ref, 'anc.id')
+  return ref.sourceField === undefined
+    ? {sql: `(${refExists.sql} OR anc.id = ?)`, params: [...refExists.params, ref.id]}
+    : refExists
+}
+
 const compileAncestorPredicate = (
   predicate: BlockPredicate,
   context: WhereContext,
 ): CompiledClause => {
-  const clauses: string[] = []
-  const params: unknown[] = []
-
-  if (predicate.id !== undefined) {
-    clauses.push('anc.id = ?')
-    params.push(predicate.id)
-  }
-
-  if (predicate.types?.length) {
-    const compiled = compileTypesTerm(predicate.types, 'anc.id')
-    clauses.push(compiled.sql)
-    params.push(...compiled.params)
-  }
-
-  if (predicate.where !== undefined) {
-    for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, 'anc', context)
-      clauses.push(compiled.sql)
-      params.push(...compiled.params)
-    }
-  }
-
-  if (predicate.referencedBy !== undefined) {
-    const refExists = compileReferencedBy(predicate.referencedBy, 'anc.id')
-    if (predicate.referencedBy.sourceField === undefined) {
-      clauses.push(`(${refExists.sql} OR anc.id = ?)`)
-      params.push(...refExists.params, predicate.referencedBy.id)
-    } else {
-      clauses.push(refExists.sql)
-      params.push(...refExists.params)
-    }
-  }
-
-  const inner = clauses.length === 0 ? '1' : clauses.join(' AND ')
+  const inner = compilePredicateTerms(predicate, 'anc', context, ancestorReferencedBy)
   return {
     sql: `EXISTS (
       SELECT 1 FROM ancestor_chain ac
       JOIN blocks anc ON anc.id = ac.anc_id
-      WHERE ac.block_id = b.id AND ${inner}
+      WHERE ac.block_id = b.id AND ${inner.sql}
     )`,
-    params,
+    params: inner.params,
   }
 }
 
@@ -588,15 +555,17 @@ const boundsByWhere = (where: BlockPredicate['where'], context: WhereContext): b
     return field?.bounding === true && isSelectiveWhereValue(value)
   })
 
+/** A term answered from a source-id index (`block_references`, `block_types`):
+ *  it bounds a walk, signals a new row's entry, and can drive a disjunction. */
+export const hasIndexedMembershipTerm = (predicate: BlockPredicate): boolean =>
+  predicate.referencedBy !== undefined || (predicate.types?.length ?? 0) > 0
+
 /** Does this self-scope predicate actually bound the candidate set
  *  (vs. just match-anything)? Used by the ancestor-walk safety gate
  *  — a predicate that matches every row provides no candidate
  *  bounding even though it's "set". */
 const selfPredicateNarrows = (predicate: BlockPredicate, context: WhereContext): boolean =>
-  predicate.id !== undefined ||
-  predicate.referencedBy !== undefined ||
-  (predicate.types?.length ?? 0) > 0 ||
-  boundsByWhere(predicate.where, context)
+  predicate.id !== undefined || hasIndexedMembershipTerm(predicate) || boundsByWhere(predicate.where, context)
 
 /** Bounding the SQL walk and receiving a new-row signal count different predicates. */
 export const hasCandidateAxis = (
@@ -683,7 +652,7 @@ const candidateSource = (
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
     } else if (!types.length && normalized.anyOf?.length &&
-      normalized.anyOf.every(p => isSelfScope(p) && (p.referencedBy || p.types?.length))) {
+      normalized.anyOf.every(p => isSelfScope(p) && hasIndexedMembershipTerm(p))) {
       // Before ANALYZE SQLite can scan the workspace index for a disjunction of indexed source-id lists.
       index = ' INDEXED BY sqlite_autoindex_blocks_1'
     } else if (typeof normalized.order === 'object' && !types.length &&

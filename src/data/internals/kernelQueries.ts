@@ -68,6 +68,7 @@ import {
   virtualFieldFor,
   notPropertyRow,
   hasCandidateAxis,
+  hasIndexedMembershipTerm,
   predicateGroups,
   inlineJsonPath,
   listMembersSql,
@@ -1325,7 +1326,7 @@ const collectTypedBlockAxisDeps = (
   //     don't need live: matching rows must set `foo='bar'` to
   //     match, which fires the foo property channel.)
   const hasEntrySignal = (p: BlockPredicate) => p.scope !== 'ancestor' &&
-    (p.referencedBy !== undefined || (p.types?.length ?? 0) > 0 || hasSelectiveProperty(p.where, context))
+    (hasIndexedMembershipTerm(p) || hasSelectiveProperty(p.where, context))
   if (!hasCandidateAxis(normalized, hasEntrySignal)) {
     ctx.depend({
       kind: 'plugin',
