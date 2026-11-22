@@ -8,7 +8,7 @@ import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
-import { memberCodecOf, type AnyPropertySchema, type BlockData } from '@/data/api'
+import { memberCodecOf, type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
@@ -25,6 +25,9 @@ import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './contro
 import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
 import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
+import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
+import { useTableQuery, type TableQuery } from './query/source'
+import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { registerGrid, tableRenderScopeId } from './registry'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -37,6 +40,8 @@ interface TableState {
   editable: readonly boolean[]
   /** The first column that shows the row's own text, -1 for none. */
   contentColumn: number
+  /** Rows made here that the query does not select. */
+  unmatched: ReadonlySet<string>
 }
 
 /** Set on the grid's root from the columns' widths; header and rows read them. */
@@ -188,13 +193,16 @@ const ValueCellBody = ({row, column, schema, editable}: {
   return <EditableCell row={row} fieldId={column.fieldId!} schema={schema}/>
 }
 
+const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
+
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
-  const {columns, schemas, editable, contentColumn} = useContext(TableContext)!
+  const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
+  const outside = unmatched.has(block.id)
   return (
     <BlockFrame
       block={block} Header={Header} Shell={Shell} Controls={NoControls}
-      className="tm-table-row"
-      frameProps={{'data-table-row': block.id}}
+      className={outside ? 'tm-table-row opacity-60' : 'tm-table-row'}
+      frameProps={{'data-table-row': block.id, ...(outside ? {'data-table-unmatched': 'true', title: UNMATCHED_TITLE} : {})}}
     >
       {/* `.block-body` clips horizontal overflow: it must be as wide as the
           grid, so the overflow reaches the table's scroller. */}
@@ -271,14 +279,17 @@ interface GridProps {
  *  never flashes as empty. */
 const TableGrid = (props: GridProps) => {
   const viewIds = useViewIds(props.host, props.workspaceId)
-  if (viewIds === undefined) return null
+  const query = useTableQuery(props.host, props.workspaceId)
+  if (viewIds === undefined || query === undefined) return null
   if (viewIds.length === 0) return <p className="py-1 text-sm text-muted-foreground">
     This table has no view. Show it as an outline and turn it into a table again to add one.
   </p>
-  return <TableView {...props} viewIds={viewIds}/>
+  return <TableView {...props} viewIds={viewIds} query={query}/>
 }
 
 const NO_COLUMNS: readonly TableColumn[] = []
+const NO_ROWS: readonly string[] = []
+const NO_UNMATCHED: ReadonlySet<string> = new Set()
 
 /** What each column shows: its property definition, and its header name. */
 const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns: readonly TableColumn[]) => {
@@ -294,10 +305,13 @@ const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns:
 type ColumnSchema = AnyPropertySchema | undefined
 
 /** Hidden columns are drawn nowhere but in the toolbar, which shows them again. */
-const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
+const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQuery | null}) => {
   const viewId = props.viewIds[0]!
   const all = useColumns(props.host, props.workspaceId, viewId)
   const {schemas, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
+  const sort = useViewSort(props.host.repo.block(viewId))
+  const fieldNames = useQueryableFieldNames(props.host.repo, props.workspaceId)
+  const order = useMemo(() => sortOrder(sort, all ?? NO_COLUMNS, schemas, fieldNames), [all, fieldNames, schemas, sort])
   const split = useMemo(() => {
     const shown = {columns: [] as TableColumn[], schemas: [] as ColumnSchema[], names: [] as string[]}
     const hidden = {columns: [] as TableColumn[], names: [] as string[]}
@@ -319,26 +333,46 @@ const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
     hasContentColumn={all.some(column => column.fieldId === null)}/>
   if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>
   return <TableBody {...props} columns={split.shown.columns} schemas={split.shown.schemas}
-    names={split.shown.names} toolbar={toolbar}/>
+    names={split.shown.names} toolbar={toolbar} viewId={viewId} sort={sort} order={order}/>
 }
 
 const NoColumns = () => <p className="py-1 text-sm text-muted-foreground">This table shows no columns.</p>
 
 const TableBody = ({
-  host, renderScopeId, parentRenderScopeId, workspaceId, viewIds, columns, schemas, names, toolbar,
+  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, viewIds, sort, order,
 }: GridProps & {
+  query: TableQuery | null
   viewIds: readonly string[]
   columns: readonly TableColumn[]
   schemas: readonly ColumnSchema[]
   names: readonly string[]
   toolbar: ReactNode
+  viewId: string
+  sort: ViewSort | undefined
+  order: TypedBlockQuery['order'] | undefined
 }) => {
   const uiStateBlock = useUIStateBlock()
   const repo = host.repo
   const [controller] = useState(() => new GridController(host, uiStateBlock, renderScopeId, parentRenderScopeId))
   const gridId = useId()
   const {childBacked} = useContext(PropertyDisplayScopeContext)
-  const rowIds = useRowIds(host, workspaceId, viewIds)
+  const selected = useRowIds(host, workspaceId, query?.clauses ?? null, order)
+  const liveCreated = useLiveRows(repo, useSyncExternalStore(controller.subscribeCreated, controller.getCreated))
+  const created = query ? liveCreated : NO_ROWS
+  // While a cell or row is being edited the query's answer is held, so an edit
+  // that stops a row matching does not pull it out from under the editor.
+  const editing = useEditingIn(uiStateBlock, renderScopeId)
+  const held = useHeldWhile(selected, query !== null && editing)
+  const rowIds = useMemo(() => {
+    if (!held || created.length === 0) return held
+    const listed = new Set(held)
+    return [...held, ...created.filter(id => !listed.has(id))]
+  }, [created, held])
+  const unmatched = useMemo(() => {
+    if (created.length === 0) return NO_UNMATCHED
+    const live = new Set(selected ?? [])
+    return new Set(created.filter(id => !live.has(id)))
+  }, [created, selected])
   const shown = useMemo(() => rowIds?.slice(0, ROW_CAP) ?? [], [rowIds])
   const editable = useMemo(() => columns.map((column, index) => !repo.isReadOnly &&
     (column.fieldId === null || (childBacked && isPropertyValueEditable(schemas[index])))),
@@ -351,6 +385,7 @@ const TableBody = ({
   })), [columns, editable, schemas])
 
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
+  useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
@@ -383,8 +418,13 @@ const TableBody = ({
   })
   const rootRef = useCallback((element: HTMLDivElement | null) => { controller.setRoot(element) }, [controller])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
-  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn}),
-    [controller, columns, schemas, editable, contentColumn])
+  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched}),
+    [controller, columns, schemas, editable, contentColumn, unmatched])
+  const fieldNames = useQueryableFieldNames(repo, workspaceId)
+  const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
+  const onSort = useCallback((next: ViewSort | undefined) => {
+    void writeSort(repo, viewId, next).catch(error => console.error('[tables] sort failed', error))
+  }, [repo, viewId])
   const rowsOverrides = useMemo(() => ({
     isNestedSurface: true, layoutBoundary: false, renderScopeId,
     [GRID_CONTEXT_KEY]: controller,
@@ -397,8 +437,10 @@ const TableBody = ({
       {!childBacked && <p className="py-1 text-xs text-muted-foreground">
         Read-only: this workspace stores properties in the block, not as rows.
       </p>}
+      {query && <QueryErrors query={query}/>}
       <ColumnHeaders host={host} workspaceId={workspaceId} columns={columns} names={names} template={GRID_TEMPLATE}
-        scrollRef={header} onFocus={headerFocused} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}/>
+        scrollRef={header} onFocus={headerFocused} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}
+        sort={sort} sortable={sortable} onSort={onSort}/>
       {/* The gesture marker sits on the scroller: horizontal touch panning
           needs the marked element to be the one that scrolls. */}
       <div ref={scroller} data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
@@ -410,14 +452,16 @@ const TableBody = ({
         </TableContext>
       </div>
       {rowIds && rowIds.length > ROW_CAP && <p className="py-1 text-xs text-muted-foreground">
-        Showing the first {ROW_CAP} rows.
+        Showing the first {ROW_CAP} rows.{query ? ' Narrow the query to see the rest.' : ''}
       </p>}
       <div className="flex flex-wrap items-center">
         {!repo.isReadOnly && rowIds && canAddRow(rowIds.length) &&
           <button type="button" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
             onClick={() => { void controller.appendRow() }}>+ New row</button>}
+        {!repo.isReadOnly && !query && childBacked && <AddQueryButton host={host} parentRenderScopeId={parentRenderScopeId}/>}
         {toolbar}
       </div>
+      {query && <OutsideQuery host={host} viewIds={viewIds} rows={shown}/>}
     </div>
   )
 }
@@ -448,6 +492,7 @@ const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, 
         <BelowContent/>
         {/* The grid stands where the children would, so it collapses with them. */}
         <CollapsibleContent>
+          <QueryFields host={block}/>
           {workspaceId && <TableGrid key={renderScopeId} host={block} renderScopeId={renderScopeId}
             parentRenderScopeId={parentRenderScopeId} workspaceId={workspaceId}/>}
         </CollapsibleContent>

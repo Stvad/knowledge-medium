@@ -340,6 +340,17 @@ const operandProblem = (property: QueryProperty, text: string): string => {
   }
 }
 
+/** The stored value a positive `=` term names, which a new row is given so the
+ *  query selects it; undefined for any other term. */
+export const impliedValue = (term: QueryTerm): unknown => {
+  if (term.kind !== 'compare' || term.op !== 'eq') return undefined
+  const {schema} = term.property
+  if (term.operand.kind === 'ref') return isRefListCodec(schema.codec) ? [term.operand.id] : term.operand.id
+  const capability = operandCapability(schema)
+  const value = capability && capabilityValue(capability, term.operand.value)
+  return value === undefined || schema.codec.where ? value : [value]
+}
+
 const operatorValue = (op: CompareOp, value: unknown): Record<string, unknown> =>
   op === 'ne' ? {eq: value} : {[op]: value}
 

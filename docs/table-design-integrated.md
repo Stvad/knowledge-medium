@@ -1,7 +1,7 @@
 # Tables: integrated design
 
-> **Status:** partly built. §10 steps 1–3 and 6 are done (step 3, the smallest table, in #1813; step 6, the column gestures, after it); the rest is proposed. Supersedes `docs/table-views-design.html` where the two differ (§1 lists how).
-> **Last verified against code:** 2026-11-21, the `src/plugins/tables/` slice of #1813 for §7 and §10 step 3, and the column gestures for §6 and §10 step 6 (both measured in headless Chromium, dev build); the rest by reading master @ `a6cc683289c`. See §12.
+> **Status:** partly built. §10 steps 1–4 and 6 are done (step 3, the smallest table, in #1813; step 6, the column gestures, after it; step 4, query and sort, after that); the rest is proposed. Supersedes `docs/table-views-design.html` where the two differ (§1 lists how).
+> **Last verified against code:** 2026-11-22, the `src/plugins/tables/` slice of #1813 for §7 and §10 step 3, the column gestures for §6 and §10 step 6, and the query slice for §5 and §10 step 4 (all measured in headless Chromium, dev build); the rest by reading master @ `a6cc683289c`. See §12.
 
 Rev 2, 2026-11-21. Merges the Table Views design (`docs/table-views-design.html`, PR #363, rev 3) with a grid-library spike and research done outside the repo. Rev 2 folds in one review round (three reviewers reading master); §13 says what changed.
 
@@ -68,7 +68,7 @@ Reading list             <- host block, table type; content is a free title
   - Hidden: a boolean, `tables:columnHidden`. Absent means shown; showing a column unsets it rather than storing `false` (decision below).
 - **Row sources never return table machinery.** Field and value rows are excluded by the engine option in §5; view and column blocks by their types, in every row source (this needs a `types` term on predicates, so `exclude` can name them: §8), so another table's configuration never shows up as data rows or counts toward the cap.
 
-**Seeds.** v1 declares only what it uses: three types (table, view, column) and six properties (query, column field, column width, column hidden, view sort column, view sort direction). Ids must be namespaced and **freeze when shipped**; naming is #363's open question (a markdown pipe table is already called a table in the UI). Multi-sort and an active-view pointer are not declared until a phase needs them. View and column blocks are created with `createTypedChild`. Shipped so far: the three types, `tables:columnField`, `tables:columnWidth` and `tables:columnHidden` (all in `seedIdentityLedger.ts`). The column type seed declares `tables:columnHidden` at revision 1: the seed materializer creates and restores definition blocks but never rewrites a payload, so a workspace whose column type block was materialized before keeps listing two properties there. Nothing reads the flag through the type's declaration.
+**Seeds.** v1 declares only what it uses: three types (table, view, column) and six properties (query, column field, column width, column hidden, view sort column, view sort direction). Ids must be namespaced and **freeze when shipped**; naming is #363's open question (a markdown pipe table is already called a table in the UI). Multi-sort and an active-view pointer are not declared until a phase needs them. View and column blocks are created with `createTypedChild`. Shipped so far: the three types and all six properties, `tables:columnField`, `tables:columnWidth`, `tables:columnHidden`, `tables:query` (string), `tables:viewSortColumn` (optional ref to a column block) and `tables:viewSortDirection` (`asc`/`desc`) (all in `seedIdentityLedger.ts`). The view type seed does not list the sort properties, for the same reason as below. The column type seed declares `tables:columnHidden` at revision 1: the seed materializer creates and restores definition blocks but never rewrites a payload, so a workspace whose column type block was materialized before keeps listing two properties there. Nothing reads the flag through the type's declaration.
 
 ### How a hidden column is stored (decided 2026-11-21)
 
@@ -182,10 +182,26 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 **As built (#1803, `src/plugins/tables/query/`).** `parseQuery(text, resolver)` returns the `TypedBlockQuery` clauses, the terms, and per-term errors with spans; `formatQuery(terms)` writes the saved form. Where it departs from the paragraph above:
 
 - **Scalar terms do not go through `resolvePropertyFilter`.** The parser reads the codec's `where` storage itself: number and date properties take every comparator, text, enum and boolean take `=` and `!=`, a list with `contains` takes `=`/`!=` on a member, and a reference takes `=`/`!=` against `[[page]]`, `((id))` or `[label](((id)))`. The adapter's operand parsing serves a form (empty `=` is unset, anything but `true` is `false`, ancestor scope) and would have needed three exceptions. Operands are checked with the codec's own `where.encode`, so an off-menu enum value is a term error.
+- **Queryable fields.** The resolver says how each takes an operand: the kernel's `created`/`updated` take instants (a date is the local day); any other field's own encoder decides, the operand tried as text, then as a number.
 - **A date property's date-only operand is its UTC day**, because the date editor stores a picked day as UTC midnight. `created`/`updated` use the local day, as decided above.
 - **Shape of the output.** Every property term is its own `match` entry (two terms on one property cannot collide in a `where` map). The first positive type term is the top-level `types`, where the planner bounds the scan; later ones are `match` entries. `!=` and `!#type` are `exclude` entries, so an unset value matches `!=`. One `|` group per query (the engine has one `anyOf`); a negated or `childof=` term cannot be one side of `|`.
 - **Not supported, each a term error:** text search (`"vendor"`), nested groups and AND inside a group, relative dates (`today-30d`), and `#[[Type]]`, since a wikilink in the query is a real reference (#1819) and would mint a page. A multi-word type is `#"Reading list"`.
 - **Saved form:** `name^fieldId` and `#label^typeId`, ids authoritative. References stay as written: they are ordinary references inside the fence, so a rename rewrites them.
+
+### As built (§10 step 4)
+
+Measured in headless Chromium against a dev build, asserting stored values (24 checks, two consecutive clean runs; the earlier slices' key and gesture scripts pass too, with the one change below).
+
+- **Where the query is edited.** The host's own field rows were drawn nowhere in table mode: the grid stands where the children would. The query's field rows are now drawn above the grid, in the host's own scope, exactly as the outline draws a field row, so the query is an ordinary value block. **Departure:** "+ Query" below the grid writes `tables:query` with an empty fence and opens its value for editing; with no field row on screen there was nothing else to click. The host's other properties are still not drawn in table mode (#1837).
+- **Completion inside the fence.** Typing `#` inside the query's fence opened no type completion (measured); `[[` completion stays on, and a link in the query is a real reference, so a rename rewrites it (#1819).
+- **Rows.** `typedBlockIds` with the parsed clauses, `propertyChildren: 'none'`, `limit` 301, oldest first unless sorted, and `exclude: [{types: [view, column]}, {id: host}]`: no table's machinery, and never the table itself. Without a query the rows are the host's children, now also excluded by type rather than by the view ids. **A query none of whose terms compiled selects nothing** (`anyOf: []`) beside its errors: the empty clause set would otherwise list the whole workspace. Past the cap the notice says to narrow the query.
+- **Term errors** are listed above the grid, each with the text of its term; the other terms still run.
+- **Children not selected** by the query are listed below the grid as ordinary outline (§3), every one, lazily mounted as the outline mounts them.
+- **New rows** go last under the host, or under the parent a `childof=` term names, with a type from each positive type term, and the value of each `=` term (one per property), in one transaction and one undo step. Ranges, `!=`, presence, `under=` and or-groups back-fill nothing. **Departure:** under a query, Enter and vim `o`/`O` on a row make a new row the same way rather than a sibling: the row's siblings are wherever the row lives, not under the table.
+- **Rows created here** are a list on the grid's controller. They are drawn after the query's rows for as long as the grid is mounted (until deleted), dimmed with a title saying the query does not select them when it does not.
+- **The editing freeze** holds the query's answer while a block in the table's render scope is being edited (a cell, or a row's text). Only under a query: the children of the host do not leave by an edit, and a held list would put a new sibling at the end. Row expansion is not built, so its subtree's scope is not covered yet.
+- **Alias lookups** for `[[page]]` terms are live (`useHandles` over `core.aliasLookup`), so a page created or renamed while the query is shown resolves without an edit. While an edited query's new aliases resolve, the last parsed query stands: going back to loading would unmount the grid and drop the rows made in it (measured: with the old behaviour a created row vanished on such an edit).
+- **"+ Query"** opens a query value the host already holds without rewriting it, even when its projection has not landed; only a new draft gets the empty fence.
 
 ### While editing
 
@@ -195,7 +211,7 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 
 ## 6. Views and columns
 
-- **Sort.** A header click writes the view's sort column and direction. Undoable, synced.
+- **Sort.** A header click writes the view's sort column and direction. Undoable, synced. As built: a click (a press that never becomes a drag) cycles ascending, descending, unsorted, one transaction each; an arrow on the header and `aria-sort` show it. The column menu has "Sort ascending", "Sort descending" and "Remove sort", the keyboard path. Only scalar columns sort (§5), and not a property named like a queryable field (`created`), which the engine refuses to order by; a click on another header does nothing. This changes the column gestures' "a click on a header writes nothing": on a sortable column it now writes the sort.
 - **No tweak layer.** #363 adds a second synced layer of unsaved tweaks plus "save view". For one user that is a second place for the same setting. Add it when two people share a view and ask.
 - **Add column.** Creates a column block and puts the cursor in its field value. The native reference autocomplete, filtered to property definitions by `targetTypes`, is the picker (reasoned from the read autocomplete). Creating a new property goes through `adoptOrCreatePropertySchema`.
 - **Initial columns.** For a type-backed query, the type's declared properties at creation. After that columns are explicit; #363's live "union of present fields" default is dropped.
@@ -293,7 +309,7 @@ Everything else is in the tables plugin.
 1. **Risk check, throwaway.** Done 2026-11-21; its results are folded into §7 and §12.
 2. **Core seams** (§8).
 3. **Smallest table.** Done 2026-11-21 in #1813: children as rows, one view, column blocks, cells, the three key modes, the guards, "Turn into table" and "Show table as outline" (the latter removes the type; the per-block toggle of §3 is not built). No sort, no query, no row expansion. It departed from §7 in six places, recorded there: row mode activated by the grid, focus writes coalesced, the control mode in the cell's keydown, the header outside the scroller, typing only with vim off, and rows as scope roots.
-4. **Query and sort.** Parser onto `TypedBlockQuery`, query bar, term errors, new-row back-fill, the editing freeze.
+4. **Query and sort.** Done 2026-11-22: the parser (#1803, §5 "Query text"), the query as a fenced value on the host, term errors, sort, new-row back-fill, rows created here, the editing freeze (§5 "As built"). Not built: the "show more" past the cap, a query type term as an "Add to #type" candidate.
 5. **Range.** Select, copy, paste, clear, then fill.
 6. **Columns.** Done 2026-11-21: resize, reorder, hide and show, delete, add column, "add to #type" (§6, "Column gestures"), and inserts on the host (#1815, §7 Guards).
 7. **Later.** Named views, grouping, column summaries (SQL aggregates), the remaining engine terms, windowed virtualization, touch range selection, per-column formulas (a closed interpreter, never `eval`).
@@ -313,7 +329,7 @@ The risk check (§10 step 1) measured the focus model, scope-root cells, the inl
 
 - Why a first arrow sent with no gap after a click is sometimes lost.
 - With `cursor-follows-scroll` on, the committed cursor ended away from the grid's row after a 340-key backlog; with it off it ended right (measured once each way; #1812).
-- A real table query; a 5000-row grid of real blocks.
+- A real table query on the real graph (measured only on a dev workspace of 13 blocks); a 5000-row grid of real blocks; the compiled `publish=article` itself on the real graph. A stand-in for its scan (`json_extract(properties_json, '$.publish')` over all 1.14M live blocks, `LIMIT 301`) took about 0.5 s over the bridge's own round trip (measured once, through the agent bridge, whose tab may be throttled); the compiled query adds the workspace, property-row and exclusion tests, and re-runs on every write to `publish`. A term with no type or reference to bound it scans the workspace.
 - IME, focus restoration after reload, reference and list columns, reference-value completion, a read-only (`cell`) workspace, an embedded table, one table in two panels.
 - A release build, a real phone, production bundle size.
 - What `updated` means for a row: decided in #1796, a user edit of a value row moves the owner's edit time; not yet exercised through a table query.

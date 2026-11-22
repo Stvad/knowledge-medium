@@ -41,7 +41,44 @@ export const columnHiddenProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const TABLE_PROPERTY_SEEDS = [columnFieldProp, columnWidthProp, columnHiddenProp] as const
+/** The table's query, on the host: its value block holds the query text in a
+ *  code fence. Unset means the rows are the host's children. */
+export const queryProp = seedProperty({
+  seedKey: 'system:tables/property/query',
+  revision: 1,
+  name: 'tables:query',
+  preset: 'string',
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** On a view: the column its rows sort by. Unset means no sort. */
+export const viewSortColumnProp = seedProperty({
+  seedKey: 'system:tables/property/view-sort-column',
+  revision: 1,
+  name: 'tables:viewSortColumn',
+  preset: 'optional-ref',
+  config: {targetTypes: [COLUMN_TYPE]},
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const SORT_DIRECTIONS = ['asc', 'desc'] as const
+export type SortDirection = typeof SORT_DIRECTIONS[number]
+
+export const viewSortDirectionProp = seedProperty({
+  seedKey: 'system:tables/property/view-sort-direction',
+  revision: 1,
+  name: 'tables:viewSortDirection',
+  preset: 'strict-enum',
+  config: {options: SORT_DIRECTIONS.map(value => ({value, label: value === 'asc' ? 'Ascending' : 'Descending'}))},
+  defaultValue: 'asc',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const TABLE_PROPERTY_SEEDS = [
+  columnFieldProp, columnWidthProp, columnHiddenProp, queryProp, viewSortColumnProp, viewSortDirectionProp,
+] as const
 
 export const TABLE_TYPE_SEEDS = [
   seedType({

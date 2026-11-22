@@ -1,6 +1,7 @@
-/** The column headers and the column gestures they carry: drag a header's
- *  edge to resize, drag the header to reorder, and its menu to hide, delete
- *  or add the property to a type. Every gesture writes once, when it ends. */
+/** The column headers and the column gestures they carry: click a header to
+ *  sort by it, drag its edge to resize, drag the header to reorder, and its
+ *  menu to hide, delete or add the property to a type. Every gesture writes
+ *  once, when it ends. */
 import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type Ref } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { DividerHandle, type DividerDrag } from '@/components/DividerHandle'
@@ -18,6 +19,7 @@ import {
   resizeColumn, setColumnHidden, typeTargetsFor, type ColumnDeletion, type TypeTarget,
 } from './columns'
 import type { TableColumn } from './model'
+import { nextSort, type ViewSort } from './sort'
 
 /** A pointer that travels less than this is a click, not a drag. */
 const DRAG_THRESHOLD = 5
@@ -81,10 +83,17 @@ interface HeaderProps {
   rowIds: readonly string[]
   editable: boolean
   onResizePreview: (preview: ResizePreview | null) => void
+  sort: ViewSort | undefined
+  /** Per column: does its property sort in SQL? */
+  sortable: readonly boolean[]
+  /** Writes the view's sort; undefined unsorts. */
+  onSort: (sort: ViewSort | undefined) => void
 }
 
+const SORT_ARIA = {asc: 'ascending', desc: 'descending'} as const
+
 export const ColumnHeaders = ({
-  host, workspaceId, columns, names, template, scrollRef, onFocus, rowIds, editable, onResizePreview,
+  host, workspaceId, columns, names, template, scrollRef, onFocus, rowIds, editable, onResizePreview, sort, sortable, onSort,
 }: HeaderProps) => {
   const rowRef = useRef<HTMLDivElement>(null)
   /** The dragged column and where its drop indicator stands, in px from the row's left edge. */
@@ -117,6 +126,11 @@ export const ColumnHeaders = ({
       press.current = null
       setDrag(null)
       const row = rowRef.current
+      // A press that never travelled is a click: it sorts.
+      if (drop && current.slot === null) {
+        if (sortable[columns.findIndex(column => column.id === current.columnId)]) onSort(nextSort(sort, current.columnId))
+        return
+      }
       if (!drop || current.slot === null || !row) return
       const anchor = dropAnchor(headerCells(row), current.columnId, current.slot)
       if (anchor) void moveColumn(host.repo, current.columnId, anchor).catch(report('column move'))
@@ -129,6 +143,7 @@ export const ColumnHeaders = ({
       <div ref={rowRef} role="row" className="relative grid text-sm font-medium" style={template}>
         {columns.map((column, index) => (
           <div key={column.id} role="columnheader" data-table-column={column.id}
+            aria-sort={sort?.columnId === column.id ? SORT_ARIA[sort.direction] : undefined}
             // The frozen header sits above the other columns' resize strips (z-20).
             className={`group relative flex min-w-0 items-center border-r border-border ${index === 0 ? 'sticky left-0 z-30 bg-background' : ''} ${drag?.columnId === column.id ? 'opacity-50' : ''}`}>
             <span data-table-column-drag="true"
@@ -139,9 +154,11 @@ export const ColumnHeaders = ({
               onPointerCancel={event => reorder.end(event, false)}
               onLostPointerCapture={event => reorder.end(event, false)}>
               {names[index]}
+              {sort?.columnId === column.id && <span data-table-sort={sort.direction} aria-hidden="true"
+                className="ml-1 text-muted-foreground">{sort.direction === 'asc' ? '↑' : '↓'}</span>}
             </span>
             {editable && <ColumnMenu host={host} workspaceId={workspaceId} column={column} name={names[index]!}
-              rowIds={rowIds}/>}
+              rowIds={rowIds} sort={sortable[index] ? sort : null} onSort={onSort}/>}
             {editable && <ResizeHandle host={host} column={column} name={names[index]!} onPreview={onResizePreview}
               measure={() => rowRef.current?.querySelector(`:scope > [data-table-column="${CSS.escape(column.id)}"]`)
                 ?.getBoundingClientRect().width}/>}
@@ -208,8 +225,11 @@ const refusalNotice = (result: ColumnDeletion) => {
   if (result === 'nested') showInfo('This column has blocks nested under it. Show the table as an outline to move or delete them.')
 }
 
-const ColumnMenu = ({host, workspaceId, column, name, rowIds}: {
+const ColumnMenu = ({host, workspaceId, column, name, rowIds, sort, onSort}: {
   host: Block; workspaceId: string; column: TableColumn; name: string; rowIds: readonly string[]
+  /** The view's sort; null when this column cannot sort. */
+  sort: ViewSort | undefined | null
+  onSort: (sort: ViewSort | undefined) => void
 }) => {
   const [types, setTypes] = useState<readonly TypeTarget[]>([])
   const [open, setOpen] = useMenuOpen()
@@ -232,6 +252,12 @@ const ColumnMenu = ({host, workspaceId, column, name, rowIds}: {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
+        {sort !== null && <>
+          <DropdownMenuItem onSelect={() => onSort({columnId: column.id, direction: 'asc'})}>Sort ascending</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onSort({columnId: column.id, direction: 'desc'})}>Sort descending</DropdownMenuItem>
+          {sort?.columnId === column.id && <DropdownMenuItem onSelect={() => onSort(undefined)}>Remove sort</DropdownMenuItem>}
+          <DropdownMenuSeparator/>
+        </>}
         <DropdownMenuItem onSelect={() => { void setColumnHidden(repo, column.id, true).catch(report('column hide')) }}>
           Hide column
         </DropdownMenuItem>
