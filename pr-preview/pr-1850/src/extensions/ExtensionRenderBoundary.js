@@ -1,1 +1,0 @@
-export{BH as ExtensionRenderBoundary}from"../../chunks/app-CpoYG35o.js";

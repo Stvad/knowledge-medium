@@ -1,1 +1,0 @@
-export{XR as BlockLoadingPlaceholder}from"../../chunks/app-CpoYG35o.js";

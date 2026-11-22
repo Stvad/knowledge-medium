@@ -1,1 +1,0 @@
-export{$A as DEFAULT_THEME_ID_DARK,ej as DEFAULT_THEME_ID_LIGHT,RA as defaultThemeContributions,LA as defaultThemesPlugin}from"../../../chunks/app-CpoYG35o.js";

@@ -1,1 +1,0 @@
-export{T2 as RAW_CHARACTER_COUNT_PROFILE_ID,E2 as WORDS_COUNT_PROFILE_ID,D2 as charLimitProp,O2 as charProfileProp,k2 as charScopeProp}from"../../../chunks/app-CpoYG35o.js";

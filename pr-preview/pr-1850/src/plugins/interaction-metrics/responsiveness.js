@@ -1,1 +1,0 @@
-export{ga as ResponsivenessTotals,_a as SLOW_MS,va as observeResponsiveness}from"../../../chunks/app-CpoYG35o.js";

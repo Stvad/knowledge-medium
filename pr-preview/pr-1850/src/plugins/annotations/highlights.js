@@ -1,1 +1,0 @@
-export{i_ as HIGHLIGHT_CLASS,a_ as MOVED_HIGHLIGHT_CLASS,o_ as SUGGESTION_HIGHLIGHT_CLASS,s_ as coveringStyle,c_ as highlightClasses,l_ as highlightField,u_ as highlightRange,d_ as highlightRanges,f_ as threadHighlights,p_ as threadHighlightsContribution}from"../../../chunks/app-CpoYG35o.js";

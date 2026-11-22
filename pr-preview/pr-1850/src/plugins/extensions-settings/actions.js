@@ -1,1 +1,0 @@
-export{ai as openExtensionsSettingsAction}from"../../../chunks/app-CpoYG35o.js";

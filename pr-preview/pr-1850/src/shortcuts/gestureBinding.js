@@ -1,1 +1,0 @@
-export{WL as gestureBindingDescriptor,GL as matchesGestureEvent}from"../../chunks/app-CpoYG35o.js";

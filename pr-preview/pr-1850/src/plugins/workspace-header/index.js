@@ -1,1 +1,0 @@
-export{UO as WorkspaceSwitcherSidebarSection,WO as pendingInvitationsHeaderItem,GO as workspaceHeaderPlugin,KO as workspaceSwitcherSidebarSection}from"../../../chunks/app-CpoYG35o.js";

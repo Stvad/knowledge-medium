@@ -1,1 +1,0 @@
-export{G2 as BACKLINKS_COUNT_FOR_BLOCK_QUERY,K2 as backlinksCountForBlockQuery}from"../../../../chunks/app-CpoYG35o.js";
