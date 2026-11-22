@@ -317,9 +317,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/childrenView.js',
-    description: 'childrenViewFacet — for a layout that draws a block\'s children its own way (a grid, a board): declare the list it draws, and the outline walkers, the structural edit policy and Backspace-merge walk that list instead of the property-display one. A contribution gets the parent, its row and the surface (render scope, scope root, property display) and returns a ChildrenView whose read is a query handle of drawn child ids, or nothing to leave the default. Read-side only: indent, outdent, move and paste still place against the property-display list, so a view that lists differently handles those verbs on its blocks itself.',
-    exports: ['childrenViewFacet', 'listingSurfaceOf', 'propertyDisplayChildrenView'],
-    types: ['ChildrenView', 'ChildrenViewContext', 'ChildrenViewContribution', 'ListingSurface'],
+    description: 'childrenViewFacet — a layout that draws a block\'s children its own way declares that list, and the walkers, edit policy and Backspace-merge walk it. Read-side only: indent, outdent, move and paste still use the property-display list.',
+    exports: ['childrenViewFacet', 'propertyDisplayChildrenView'],
+    types: ['ChildrenView', 'ChildrenViewContext', 'ListingSurface'],
   },
   {
     category: 'data',
