@@ -1,1 +1,0 @@
-export{Pc as migratePropertiesToBlocksAction,Ac as propertiesMigrationPlugin}from"../../../chunks/app-C5i7mp-R.js";

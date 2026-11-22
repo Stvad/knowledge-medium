@@ -1,1 +1,0 @@
-export{qet as NAMES_IN_A_SENTENCE,Jet as describeNames,Yet as firstFew}from"../../chunks/app-C5i7mp-R.js";

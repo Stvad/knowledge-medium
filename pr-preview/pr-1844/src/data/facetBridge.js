@@ -1,1 +1,0 @@
-export{f8 as FacetBridge}from"../../chunks/app-C5i7mp-R.js";

@@ -1,1 +1,0 @@
-export{ei as ExtensionsSettings}from"../../../chunks/app-C5i7mp-R.js";

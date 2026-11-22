@@ -1,1 +1,0 @@
-export{YI as ExtensionPromptSurface,XI as extensionPromptsExtension}from"../../../chunks/app-C5i7mp-R.js";

@@ -1,1 +1,0 @@
-export{wO as BreadcrumbRenderer}from"../../../chunks/app-C5i7mp-R.js";

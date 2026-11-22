@@ -1,1 +1,0 @@
-export{ov as extensionsOverridesProp,sv as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-C5i7mp-R.js";

@@ -1,1 +1,0 @@
-export{nn as staticAppExtensions}from"../../chunks/app-C5i7mp-R.js";

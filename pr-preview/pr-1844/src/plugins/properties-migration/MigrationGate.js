@@ -1,1 +1,0 @@
-export{jc as MigrationGate}from"../../../chunks/app-C5i7mp-R.js";
