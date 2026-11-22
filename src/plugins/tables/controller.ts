@@ -250,12 +250,20 @@ export class GridController {
 
   /** Up from the first row or Down from the last, with the row focused: the
    *  step out of the grid (`./navigation`), taken here so it works with or
-   *  without vim. Never left to the outline, whose walk from a row lands on
-   *  blocks the grid does not draw: a row not mounted yet takes no step. */
+   *  without vim, and never left to the outline, whose walk from a row lands
+   *  on blocks the grid does not draw. While the move to this row is still
+   *  committing the key is absorbed: a step written now would be overwritten
+   *  by that move. Where no drawn step can be found (the row not mounted, or
+   *  spatial navigation off), Up still reaches the host. */
   private leaveRows(row: number, direction: 'up' | 'down'): true {
+    if (this.pendingRowId !== null) return true
     const from = {block: this.host.repo.block(this.rowIds[row]!), uiStateBlock: this.uiStateBlock, renderScopeId: this.renderScopeId}
-    takeTableStep(from, direction)
+    if (!takeTableStep(from, direction) && direction === 'up') this.focusHost()
     return true
+  }
+
+  private focusHost() {
+    void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
   }
 
   /** Run a grid command. Returns false when it does not apply, so the key
@@ -278,7 +286,7 @@ export class GridController {
       case 'up':
         if (row === 0) {
           if (inRowMode) return this.leaveRows(row, 'up')
-          void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
+          this.focusHost()
           return true
         }
         this.focusRow(row - 1)

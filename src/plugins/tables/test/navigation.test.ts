@@ -288,12 +288,12 @@ describe('Up and Down around a table', () => {
     await expectFocus('after', PAGE)
   })
 
-  it('the grid keeps a key at its edge when the row it moved to is not mounted', async () => {
-    drawPanel({rows: ['row-0', 'row-1']})
-    await focusBlock(panel, 'row-1', {renderScopeId: TABLE})
+  it('with no drawn step to take (spatial navigation off), the grid’s Up at its first row still reaches the host', async () => {
+    await focusBlock(panel, 'row-0', {renderScopeId: TABLE})
+    expect(controller.command('up')).toBe(true)
+    await expectFocus('host', PAGE)
+    await focusBlock(panel, 'row-2', {renderScopeId: TABLE})
     expect(controller.command('down')).toBe(true)
-    expect(controller.command('down')).toBe(true)
-    await waitFor(() => expect(controller.getPendingRow()).toBeNull())
-    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({blockId: 'row-2', renderScopeId: TABLE})
+    await expectFocus('row-2', TABLE)
   })
 })
