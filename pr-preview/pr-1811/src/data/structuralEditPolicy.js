@@ -1,1 +1,0 @@
-export{XP as resolveStructuralEditPolicy,ZP as structuralEditPolicyForBlock}from"../../chunks/app-CD_XDRX4.js";

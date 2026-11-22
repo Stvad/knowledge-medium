@@ -1,1 +1,0 @@
-export{Nx as useIsReadOnly}from"../../chunks/app-CD_XDRX4.js";

@@ -1,1 +1,0 @@
-export{vN as CommandPaletteHeaderItem}from"../../../chunks/app-CD_XDRX4.js";

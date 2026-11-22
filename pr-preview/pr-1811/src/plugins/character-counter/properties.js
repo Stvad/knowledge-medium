@@ -1,1 +1,0 @@
-export{x1 as RAW_CHARACTER_COUNT_PROFILE_ID,S1 as WORDS_COUNT_PROFILE_ID,C1 as charLimitProp,w1 as charProfileProp,T1 as charScopeProp}from"../../../chunks/app-CD_XDRX4.js";

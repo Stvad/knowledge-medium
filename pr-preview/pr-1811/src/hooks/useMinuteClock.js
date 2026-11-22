@@ -1,1 +1,0 @@
-export{Ak as useMinuteClock}from"../../chunks/app-CD_XDRX4.js";

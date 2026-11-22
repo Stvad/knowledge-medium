@@ -1,1 +1,0 @@
-export{is as migratePropertiesToBlocksAction,es as propertiesMigrationPlugin}from"../../../chunks/app-CD_XDRX4.js";

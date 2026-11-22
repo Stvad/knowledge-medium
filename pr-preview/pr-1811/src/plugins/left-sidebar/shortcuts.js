@@ -1,1 +1,0 @@
-export{vD as getOrCreateShortcutsBlock,yD as journalShortcutBlockId,bD as shortcutsBlockId}from"../../../chunks/app-CD_XDRX4.js";

@@ -1,1 +1,0 @@
-export{Tm as confirmThreadDeletion}from"../../../chunks/app-CD_XDRX4.js";

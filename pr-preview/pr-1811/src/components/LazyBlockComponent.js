@@ -1,1 +1,0 @@
-export{$I as LazyBlockComponent}from"../../chunks/app-CD_XDRX4.js";

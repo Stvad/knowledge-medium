@@ -1,1 +1,0 @@
-export{WF as appUpdate,GF as useAppUpdateAvailable}from"../chunks/app-CD_XDRX4.js";

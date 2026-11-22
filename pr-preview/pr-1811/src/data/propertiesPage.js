@@ -1,1 +1,0 @@
-export{vct as getOrCreatePropertiesPage,yct as propertiesPageBlockId,bct as propertiesPageSpec}from"../../chunks/app-CD_XDRX4.js";

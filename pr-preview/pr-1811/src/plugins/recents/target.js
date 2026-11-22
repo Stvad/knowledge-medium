@@ -1,1 +1,0 @@
-export{Mk as openRecentsPage}from"../../../chunks/app-CD_XDRX4.js";

@@ -1,1 +1,0 @@
-export{JP as exampleExtensions,YP as insertExampleExtensionsUnder}from"../../chunks/app-CD_XDRX4.js";

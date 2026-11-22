@@ -1,1 +1,0 @@
-export{xD as isLeftSidebarSectionContribution,SD as leftSidebarSectionsFacet}from"../../../chunks/app-CD_XDRX4.js";

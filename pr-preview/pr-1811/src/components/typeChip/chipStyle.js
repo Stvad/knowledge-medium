@@ -1,1 +1,0 @@
-export{xP as chipStyle}from"../../../chunks/app-CD_XDRX4.js";

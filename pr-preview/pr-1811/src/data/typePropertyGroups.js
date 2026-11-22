@@ -1,1 +1,0 @@
-export{BH as typePropertyGroups}from"../../chunks/app-CD_XDRX4.js";

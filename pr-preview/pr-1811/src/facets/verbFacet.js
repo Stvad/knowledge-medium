@@ -1,1 +1,0 @@
-export{k2 as defineVerbFacet}from"../../chunks/app-CD_XDRX4.js";

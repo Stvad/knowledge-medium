@@ -1,1 +1,0 @@
-export{Gy as backlinksPlugin}from"../../../chunks/app-CD_XDRX4.js";

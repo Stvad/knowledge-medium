@@ -1,1 +1,0 @@
-export{KK as usePropertySchemas}from"../../chunks/app-CD_XDRX4.js";

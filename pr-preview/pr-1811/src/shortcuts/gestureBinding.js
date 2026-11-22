@@ -1,1 +1,0 @@
-export{tI as gestureBindingDescriptor,nI as matchesGestureEvent}from"../../chunks/app-CD_XDRX4.js";

@@ -1,1 +1,0 @@
-export{Dg as extensionApiCatalog,Og as extensionApiRuntimeExports}from"../../chunks/app-CD_XDRX4.js";

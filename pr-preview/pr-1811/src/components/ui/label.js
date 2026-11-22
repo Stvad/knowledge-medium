@@ -1,1 +1,0 @@
-export{FA as Label}from"../../../chunks/app-CD_XDRX4.js";

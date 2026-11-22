@@ -1,1 +1,0 @@
-export{BE as MobileBottomNavButton}from"../../../chunks/app-CD_XDRX4.js";

@@ -1,1 +1,0 @@
-export{WH as declarationOnlyDefinitionForName,GH as declarationOnlyStatusText}from"../../../chunks/app-CD_XDRX4.js";

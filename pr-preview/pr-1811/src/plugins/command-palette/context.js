@@ -1,1 +1,0 @@
-export{$M as COMMAND_PALETTE_ACTION_ID,eN as COMMAND_PALETTE_CONTEXT,tN as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,nN as commandPaletteActionContext}from"../../../chunks/app-CD_XDRX4.js";

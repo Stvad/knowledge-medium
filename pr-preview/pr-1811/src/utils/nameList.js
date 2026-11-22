@@ -1,1 +1,0 @@
-export{Y7 as NAMES_IN_A_SENTENCE,X7 as describeNames,Z7 as firstFew}from"../../chunks/app-CD_XDRX4.js";

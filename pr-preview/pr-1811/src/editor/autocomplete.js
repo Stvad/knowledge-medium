@@ -1,1 +1,0 @@
-export{gF as editorAutocompleteExtension}from"../../chunks/app-CD_XDRX4.js";

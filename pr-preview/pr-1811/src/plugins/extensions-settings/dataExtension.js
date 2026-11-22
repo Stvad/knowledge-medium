@@ -1,1 +1,0 @@
-export{qr as extensionsDataExtension}from"../../../chunks/app-CD_XDRX4.js";

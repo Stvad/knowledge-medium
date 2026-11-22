@@ -1,1 +1,0 @@
-export{XK as propertyShapeLabel}from"../../../chunks/app-CD_XDRX4.js";

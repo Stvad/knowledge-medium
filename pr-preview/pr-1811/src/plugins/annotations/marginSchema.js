@@ -1,1 +1,0 @@
-export{C$ as annotationMarginOpenProp,w$ as annotationMarginShareProp}from"../../../chunks/app-CD_XDRX4.js";

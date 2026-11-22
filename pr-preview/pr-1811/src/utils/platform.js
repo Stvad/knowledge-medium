@@ -1,1 +1,0 @@
-export{KG as isIOS,qG as isMacPlatform}from"../../chunks/app-CD_XDRX4.js";

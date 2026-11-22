@@ -1,1 +1,0 @@
-export{VY as htmlDocumentDataExtension}from"../../../chunks/app-CD_XDRX4.js";

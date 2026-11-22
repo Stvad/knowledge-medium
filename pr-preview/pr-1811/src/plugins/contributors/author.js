@@ -1,1 +1,0 @@
-export{g_ as authorIdOf}from"../../../chunks/app-CD_XDRX4.js";

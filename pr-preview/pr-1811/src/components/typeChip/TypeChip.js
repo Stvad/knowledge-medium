@@ -1,1 +1,0 @@
-export{bP as TypeChip}from"../../../chunks/app-CD_XDRX4.js";

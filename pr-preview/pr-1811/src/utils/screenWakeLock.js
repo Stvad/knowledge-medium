@@ -1,1 +1,0 @@
-export{d as holdScreenWakeLock}from"../../chunks/app-CD_XDRX4.js";

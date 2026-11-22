@@ -1,1 +1,0 @@
-export{dP as BlockEmbed}from"../../../chunks/app-CD_XDRX4.js";

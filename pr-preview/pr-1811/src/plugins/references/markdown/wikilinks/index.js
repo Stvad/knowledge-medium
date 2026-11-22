@@ -1,1 +1,0 @@
-export{Kb as wikilinkMarkdownExtension}from"../../../../../chunks/app-CD_XDRX4.js";

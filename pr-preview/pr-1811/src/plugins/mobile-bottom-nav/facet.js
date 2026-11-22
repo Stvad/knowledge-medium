@@ -1,1 +1,0 @@
-export{VE as mobileBottomNavItemsFacet}from"../../../chunks/app-CD_XDRX4.js";

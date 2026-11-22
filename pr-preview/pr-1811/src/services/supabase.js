@@ -1,1 +1,0 @@
-export{act as hasSupabaseAuthConfig,oct as isAuthCallbackUrl,sct as readPersistedSession,cct as sessionUserToAppUser,lct as supabase}from"../../chunks/app-CD_XDRX4.js";

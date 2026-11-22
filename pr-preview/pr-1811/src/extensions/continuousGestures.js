@@ -1,1 +1,0 @@
-export{xR as GESTURE_ACTIVE,SR as GESTURE_CANCEL,CR as GESTURE_IDLE,wR as NO_BLOCK_GESTURES_ATTRIBUTE,TR as TOUCH_HOLD_MS,ER as TOUCH_SLOP_PX,DR as allowsBlockGestures,OR as continuousGestureRecognizersFacet,kR as createBlockGestureController,AR as enabledTouchAction,jR as suppressNextClick,MR as unionTouchAction,NR as useContinuousGestures}from"../../chunks/app-CD_XDRX4.js";

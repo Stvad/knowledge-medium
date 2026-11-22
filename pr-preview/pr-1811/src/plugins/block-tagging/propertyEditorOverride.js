@@ -1,1 +1,0 @@
-export{gd as blockTagsConfigUi}from"../../../chunks/app-CD_XDRX4.js";

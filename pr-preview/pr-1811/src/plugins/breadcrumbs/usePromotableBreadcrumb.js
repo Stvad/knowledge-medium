@@ -1,1 +1,0 @@
-export{KE as usePromotableBreadcrumb}from"../../../chunks/app-CD_XDRX4.js";

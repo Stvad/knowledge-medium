@@ -1,1 +1,0 @@
-export{vj as dailyDateWikilinkDecorator}from"../../../chunks/app-CD_XDRX4.js";

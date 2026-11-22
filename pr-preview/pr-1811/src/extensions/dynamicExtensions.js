@@ -1,1 +1,0 @@
-export{vI as dynamicExtensionsExtension}from"../../chunks/app-CD_XDRX4.js";

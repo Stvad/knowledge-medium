@@ -1,1 +1,0 @@
-export{Dc as parsePropertiesJson}from"../../../chunks/app-CD_XDRX4.js";

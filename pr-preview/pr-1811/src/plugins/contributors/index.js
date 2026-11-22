@@ -1,1 +1,0 @@
-export{Oh as contributorsPlugin}from"../../../chunks/app-CD_XDRX4.js";

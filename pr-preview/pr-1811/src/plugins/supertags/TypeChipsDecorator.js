@@ -1,1 +1,0 @@
-export{rn as typeChipsDecoratorContribution}from"../../../chunks/app-CD_XDRX4.js";

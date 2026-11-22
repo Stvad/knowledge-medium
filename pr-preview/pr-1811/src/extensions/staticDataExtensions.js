@@ -1,1 +1,0 @@
-export{jJ as staticDataExtensions}from"../../chunks/app-CD_XDRX4.js";

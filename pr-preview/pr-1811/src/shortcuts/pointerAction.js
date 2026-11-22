@@ -1,1 +1,0 @@
-export{rI as dispatchPointerAction,iI as setPointerActionDispatcher}from"../../chunks/app-CD_XDRX4.js";

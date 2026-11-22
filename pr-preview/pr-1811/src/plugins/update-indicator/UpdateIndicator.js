@@ -1,1 +1,0 @@
-export{My as UpdateIndicator}from"../../../chunks/app-CD_XDRX4.js";

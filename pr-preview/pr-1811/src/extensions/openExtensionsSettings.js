@@ -1,1 +1,0 @@
-export{EL as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,DL as openExtensionsSettings}from"../../chunks/app-CD_XDRX4.js";

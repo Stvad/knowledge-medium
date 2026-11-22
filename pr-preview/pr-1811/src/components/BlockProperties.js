@@ -1,1 +1,0 @@
-export{hH as BlockProperties}from"../../chunks/app-CD_XDRX4.js";

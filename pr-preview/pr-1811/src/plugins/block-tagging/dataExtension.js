@@ -1,1 +1,0 @@
-export{yd as blockTaggingDataExtension}from"../../../chunks/app-CD_XDRX4.js";

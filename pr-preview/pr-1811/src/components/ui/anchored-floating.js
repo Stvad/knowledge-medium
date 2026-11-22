@@ -1,1 +1,0 @@
-export{WK as floatingAnchorFromRect,GK as useAnchoredFloating}from"../../../chunks/app-CD_XDRX4.js";

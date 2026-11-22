@@ -1,1 +1,0 @@
-export{WD as createEncryptedWorkspace}from"../../../../chunks/app-CD_XDRX4.js";

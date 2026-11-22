@@ -1,1 +1,0 @@
-export{gI as resolveAppRuntime,_I as resolveAppRuntimeSync}from"../../chunks/app-CD_XDRX4.js";

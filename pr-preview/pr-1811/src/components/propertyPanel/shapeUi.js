@@ -1,1 +1,0 @@
-export{JK as PropertyShapeButton,YK as PropertyShapeGlyph}from"../../../chunks/app-CD_XDRX4.js";

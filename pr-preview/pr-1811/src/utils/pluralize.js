@@ -1,1 +1,0 @@
-export{q7 as agree,J7 as pluralize}from"../../chunks/app-CD_XDRX4.js";

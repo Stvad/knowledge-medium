@@ -1,1 +1,0 @@
-export{_d as BlockTagsConfigEditor}from"../../../chunks/app-CD_XDRX4.js";

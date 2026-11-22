@@ -1,1 +1,0 @@
-export{rz as useIsMobile,iz as usePointerCoarse}from"../../chunks/app-CD_XDRX4.js";

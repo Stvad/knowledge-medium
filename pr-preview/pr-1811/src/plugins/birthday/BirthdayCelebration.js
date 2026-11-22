@@ -1,1 +1,0 @@
-export{fr as BirthdayCelebration}from"../../../chunks/app-CD_XDRX4.js";

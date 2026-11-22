@@ -1,1 +1,0 @@
-export{$g as lintExtensionSource}from"../../../chunks/app-CD_XDRX4.js";

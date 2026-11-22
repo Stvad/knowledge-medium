@@ -1,1 +1,0 @@
-export{QG as withMoveTransition}from"../../chunks/app-CD_XDRX4.js";

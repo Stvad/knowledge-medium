@@ -1,1 +1,0 @@
-export{x5 as kernelDataExtension}from"../../chunks/app-CD_XDRX4.js";

@@ -1,1 +1,0 @@
-export{h1 as characterCounterDataExtension}from"../../../chunks/app-CD_XDRX4.js";

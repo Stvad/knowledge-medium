@@ -1,1 +1,0 @@
-export{XX as matchCharTrigger}from"../../chunks/app-CD_XDRX4.js";

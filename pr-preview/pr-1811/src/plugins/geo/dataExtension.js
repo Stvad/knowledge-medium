@@ -1,1 +1,0 @@
-export{gX as geoDataExtension}from"../../../chunks/app-CD_XDRX4.js";

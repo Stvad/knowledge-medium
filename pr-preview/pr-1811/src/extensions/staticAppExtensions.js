@@ -1,1 +1,0 @@
-export{tn as staticAppExtensions}from"../../chunks/app-CD_XDRX4.js";
