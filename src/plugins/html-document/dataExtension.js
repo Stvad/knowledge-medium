@@ -1,1 +1,1 @@
-export{VY as htmlDocumentDataExtension}from"../../../chunks/app-C_sgHRic.js";
+export{VY as htmlDocumentDataExtension}from"../../../chunks/app-Cn0VZ6Vh.js";

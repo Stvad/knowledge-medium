@@ -1,1 +1,1 @@
-export{YK as adoptOrCreatePropertySchema}from"../../chunks/app-C_sgHRic.js";
+export{ZK as adoptOrCreatePropertySchema}from"../../chunks/app-Cn0VZ6Vh.js";
