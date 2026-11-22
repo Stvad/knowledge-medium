@@ -1914,6 +1914,39 @@ describe('predicate types term', () => {
     }
   })
 
+  it('wakes ancestor-scoped ids and counts when an ancestor gains or loses the type', async () => {
+    await create({id: 'parent'})
+    await create({id: 'inside', parentId: 'parent', types: ['row']})
+    await create({id: 'outside', types: ['row']})
+    const query = {workspaceId: WS, types: ['row'], exclude: [{scope: 'ancestor', types: [VIEW]}]} as const
+    const handle = env.repo.query.typedBlockIds(query)
+    const count = env.repo.query.typedBlockCount(query)
+    expect(await handle.load()).toEqual(['inside', 'outside'])
+    expect(await count.load()).toBe(2)
+    const offs = [handle.subscribe(() => {}), count.subscribe(() => {})]
+    try {
+      await setTypes('parent', [VIEW])
+      await waitFor(() => expect(handle.peek()).toEqual(['outside']))
+      await waitFor(() => expect(count.peek()).toBe(1))
+      await setTypes('parent', [])
+      await waitFor(() => expect(handle.peek()).toEqual(['inside', 'outside']))
+      await waitFor(() => expect(count.peek()).toBe(2))
+    } finally {
+      offs.forEach(off => off())
+    }
+  })
+
+  it('answers an empty anyOf with no rows on every forced-index path', async () => {
+    await create({id: 'parent'})
+    await create({id: 'child', parentId: 'parent', properties: {status: 'open'}})
+    for (const query of [
+      {workspaceId: WS, parentId: 'parent', anyOf: []},
+      {workspaceId: WS, anyOf: [], order: {property: statusProp.name, direction: 'asc'}},
+    ] as const) {
+      expect(await env.repo.query.typedBlockIds(query).load()).toEqual([])
+    }
+  })
+
   it('wakes a type alternative for a new matching block but not for an unrelated create', async () => {
     await create({id: 'open', properties: {status: 'open'}})
     const handle = env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types: [VIEW]}, {where: {status: 'open'}}]})
@@ -1930,7 +1963,6 @@ describe('predicate types term', () => {
     }
   })
 
-  // Seeding and analyzing the fixture takes well under a second.
   it('drives a limited, type-bounded exclusion from the type index before and after ANALYZE', async () => {
     await env.h.db.writeTransaction(async tx => {
       // Drop statistics an earlier fixture left behind; `ANALYZE sqlite_schema` reloads the emptied table.
@@ -1969,8 +2001,15 @@ describe('predicate types term', () => {
       await tx.execute('ANALYZE main.blocks')
       await tx.execute('ANALYZE main.block_types')
       await assertPlan()
+      // Table queries omit property rows. That clause tips the stat-free planner to the
+      // workspace index, as it does for any exclusion; with statistics it takes the type index.
+      const withoutPropertyRows = compileTypedBlockQuery(
+        {...query, propertyChildren: 'none'}, {properties: new Map()}, {projection: 'ids', limit: 20},
+      )
+      expect((await readPlan(withoutPropertyRows.sql, withoutPropertyRows.params))[0])
+        .toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
       const rows = await tx.getAll<{id: string}>(compiled.sql, [...compiled.params])
       expect(rows).toHaveLength(20)
     })
-  }, 20_000)
+  })
 })

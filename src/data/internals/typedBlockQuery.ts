@@ -677,7 +677,9 @@ const candidateSource = (
     params.push(normalized.workspaceId, ...target.params)
   } else {
     let index = ''
-    if (normalized.parentId !== undefined) {
+    if (normalized.anyOf?.length === 0) {
+      // The group compiles to `0`, which SQLite plans with no index; forcing one leaves it no plan at all.
+    } else if (normalized.parentId !== undefined) {
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
     } else if (!types.length && normalized.anyOf?.length &&

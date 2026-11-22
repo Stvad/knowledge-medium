@@ -1256,6 +1256,7 @@ const collectReferenceFilterDeps = (
   }
 }
 
+/** Keyed by workspace and type, so any block gaining or losing the type wakes the handle; per-row deps would cost the ids projection its point. */
 const dependOnTypes = (types: readonly string[], workspaceId: string, ctx: QueryCtx): void => {
   for (const type of types) {
     ctx.depend({kind: 'plugin', channel: TYPED_BLOCKS_TYPE_CHANNEL, key: typedBlocksTypeKey(workspaceId, type)})
@@ -1489,6 +1490,7 @@ export const resolveTypedBlockIds = async (
  *    - `referencedBy.id + sourceField` → `typedBlocks.referenceField` channel
  *    - per name in any `match`/`exclude` predicate's `where` → `typedBlocks.property`
  *    - per `referencedBy` in any `match`/`exclude` predicate → reference channels
+ *    - per type in any predicate's `types` (either scope) → `typedBlocks.type`
  *    - any ancestor-scope predicate → row deps on every walked ancestor id
  *    - no filter at all           → `typedBlocks.live` channel
  *

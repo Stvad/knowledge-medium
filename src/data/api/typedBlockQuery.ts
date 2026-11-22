@@ -75,8 +75,10 @@ export type WhereOperator =
  *  the `WhereOperator` doc for the operand contract.
  *
  *  `types`: contains any of these type ids. Blank ids are ignored, and an
- *  empty list is no type term, as at the top level. Here it is probed per
- *  candidate; the top-level `types` is what bounds the scan. */
+ *  empty list is no type term, as at the top level. In `match` and `exclude`
+ *  it is probed per candidate, so a positive type set that should bound the
+ *  scan belongs in the top-level `types` or in `anyOf` alternatives, which
+ *  the planner drives from the type index. */
 export interface BlockPredicate {
   readonly scope?: 'self' | 'ancestor'
   readonly id?: string
