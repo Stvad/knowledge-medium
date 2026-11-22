@@ -1,1 +1,1 @@
-export{GI as appUpdate,KI as useAppUpdateAvailable}from"../chunks/app-BNfV4Mnr.js";
+export{_L as appUpdate,vL as useAppUpdateAvailable}from"../chunks/app-CUWXVka6.js";

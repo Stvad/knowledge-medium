@@ -1,1 +1,1 @@
-export{j0 as RAW_CHARACTER_COUNT_PROFILE_ID,M0 as WORDS_COUNT_PROFILE_ID,N0 as charLimitProp,P0 as charProfileProp,F0 as charScopeProp}from"../../../chunks/app-BNfV4Mnr.js";
+export{s2 as RAW_CHARACTER_COUNT_PROFILE_ID,c2 as WORDS_COUNT_PROFILE_ID,l2 as charLimitProp,u2 as charProfileProp,d2 as charScopeProp}from"../../../chunks/app-CUWXVka6.js";

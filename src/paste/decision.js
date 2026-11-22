@@ -1,1 +1,1 @@
-export{BB as defaultPasteDecision,VB as pasteDecisionVerb}from"../../chunks/app-BNfV4Mnr.js";
+export{fV as defaultPasteDecision,pV as pasteDecisionVerb}from"../../chunks/app-CUWXVka6.js";
