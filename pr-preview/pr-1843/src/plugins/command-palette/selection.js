@@ -1,1 +1,1 @@
-export{IP as captureSelection,LP as restoreSelection,RP as withSelection}from"../../../chunks/app-xiHdS4ro.js";
+export{KP as captureSelection,qP as restoreSelection,JP as withSelection}from"../../../chunks/app-BIrUxSFq.js";

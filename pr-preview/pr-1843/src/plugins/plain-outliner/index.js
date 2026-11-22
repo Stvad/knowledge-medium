@@ -1,1 +1,1 @@
-export{BO as plainOutlinerPlugin}from"../../../chunks/app-xiHdS4ro.js";
+export{XO as plainOutlinerPlugin}from"../../../chunks/app-BIrUxSFq.js";

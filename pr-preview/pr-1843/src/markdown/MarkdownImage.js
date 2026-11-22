@@ -1,1 +1,1 @@
-export{iz as MarkdownImage}from"../../chunks/app-xiHdS4ro.js";
+export{gz as MarkdownImage}from"../../chunks/app-BIrUxSFq.js";

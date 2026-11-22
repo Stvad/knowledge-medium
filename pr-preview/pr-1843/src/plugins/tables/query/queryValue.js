@@ -1,1 +1,1 @@
-export{Bs as openQueryValue}from"../../../../chunks/app-xiHdS4ro.js";
+export{Ys as openQueryValue}from"../../../../chunks/app-BIrUxSFq.js";

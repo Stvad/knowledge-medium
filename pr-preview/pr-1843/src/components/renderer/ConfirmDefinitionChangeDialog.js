@@ -1,1 +1,1 @@
-export{hz as ConfirmDefinitionChangeDialog}from"../../../chunks/app-xiHdS4ro.js";
+export{Dz as ConfirmDefinitionChangeDialog}from"../../../chunks/app-BIrUxSFq.js";

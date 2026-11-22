@@ -1,1 +1,1 @@
-export{tet as loadTypeIdsByBlock}from"../../chunks/app-xiHdS4ro.js";
+export{pet as loadTypeIdsByBlock}from"../../chunks/app-BIrUxSFq.js";
