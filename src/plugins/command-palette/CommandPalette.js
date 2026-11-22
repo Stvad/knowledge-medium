@@ -1,1 +1,1 @@
-export{NP as CommandPalette}from"../../../chunks/app-DYHvCRzI.js";
+export{WP as CommandPalette}from"../../../chunks/app-Bfy_C_ZT.js";

@@ -1,1 +1,1 @@
-export{Vc as MigrationGate}from"../../../chunks/app-DYHvCRzI.js";
+export{Qc as MigrationGate}from"../../../chunks/app-Bfy_C_ZT.js";

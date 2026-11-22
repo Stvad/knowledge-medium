@@ -1,1 +1,1 @@
-export{Xr as ExtensionsOverridesEditor}from"../../../chunks/app-DYHvCRzI.js";
+export{Hr as ExtensionsOverridesEditor}from"../../../chunks/app-Bfy_C_ZT.js";

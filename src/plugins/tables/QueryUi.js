@@ -1,1 +1,1 @@
-export{Mo as AddQueryButton,No as OutsideQuery,Po as QueryErrors,Fo as QueryFields,Io as useEditingIn,Lo as useHeldWhile,Ro as useLiveRows,zo as useOutsideQueryIds}from"../../../chunks/app-DYHvCRzI.js";
+export{ks as AddQueryButton,As as OutsideQuery,js as QueryErrors,Ms as QueryFields,Ns as queryPropertyUi,Ps as useEditingIn,Fs as useHeldWhile,Is as useLiveRows,Ls as useOutsideQueryIds}from"../../../chunks/app-Bfy_C_ZT.js";

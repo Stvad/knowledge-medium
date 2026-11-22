@@ -1,1 +1,1 @@
-export{fr as birthdayPlugin}from"../../../chunks/app-DYHvCRzI.js";
+export{ir as birthdayPlugin}from"../../../chunks/app-Bfy_C_ZT.js";
