@@ -247,6 +247,11 @@ export type Watcher = BacklinksWatcher | QueryWatcher
 const workspaceIdRequired = 'workspaceId is required: the id of the workspace this daemon acts on. List yours with `kmagent --profile <profile> sql all "SELECT id, name FROM workspaces"`.'
 
 const rawConfigSchema = z.strictObject({
+  /** Names this daemon among the daemons on one machine: its pidfile, state
+   *  file, generated MCP config and push registration are named after it
+   *  (instance.ts). Unset keeps the original names; set it on every config
+   *  beyond the first. */
+  instance: z.string().max(64).regex(/^[A-Za-z0-9_.-]+$/, 'instance may only contain letters, numbers, underscores, dots, and dashes').optional(),
   /** kmagent token profile the daemon pairs under. Keep it dedicated
    *  (not "default") so its access can be revoked independently.
    *  Validated here with the bridge client's own rules — an invalid
@@ -312,7 +317,8 @@ const rawConfigSchema = z.strictObject({
    *  ambient session runs (watchers with delivery: 'channel' post here). */
   channelPort: z.number().int().positive().default(8790),
   /** State file for query-watcher cursors (backlink watchers keep
-   *  their state as block properties in the graph itself). */
+   *  their state as block properties in the graph itself). Unset, it is
+   *  the instance's (instance.ts). */
   statePath: z.string().optional(),
   /** Names must be unique across the whole config: cursors, baselines,
    *  and in-flight run keys are all keyed by watcher name, so even a
@@ -340,9 +346,6 @@ const rawConfigSchema = z.strictObject({
 
 export const defaultConfigPath = () =>
   path.join(agentRuntimeConfigDir(), 'agent-dispatch.json')
-
-export const defaultStatePath = () =>
-  path.join(agentRuntimeConfigDir(), 'agent-dispatch-state.json')
 
 const expandHome = (value: string) =>
   value === '~' || value.startsWith('~/')

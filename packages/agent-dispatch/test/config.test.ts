@@ -305,4 +305,12 @@ describe('parseConfig', () => {
     })
     expect(config.watchers[0]).toMatchObject({kind: 'query', params: ['inbox-id']})
   })
+
+  it('names a second daemon on the machine by its instance, refusing a name that is not a plain file-name part', () => {
+    expect(parseConfig({workspaceId: 'ws-test'}).instance).toBeUndefined()
+    expect(parseConfig({workspaceId: 'ws-test', instance: 'host'}).instance).toBe('host')
+    expect(() => parseConfig({workspaceId: 'ws-test', instance: '../host'})).toThrow(/instance/)
+    expect(() => parseConfig({workspaceId: 'ws-test', instance: ''})).toThrow(/instance/)
+    expect(() => parseConfig({workspaceId: 'ws-test', instance: 'x'.repeat(65)})).toThrow(/instance/)
+  })
 })
