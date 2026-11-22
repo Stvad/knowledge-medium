@@ -1,1 +1,1 @@
-export{FN as keybindingOverridesProp,IN as keybindingsPrefsType,Rr as keybindingsSettingsPlugin}from"../../../chunks/app-DVsAz0At.js";
+export{NP as keybindingOverridesProp,PP as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-Be2qh85V.js";

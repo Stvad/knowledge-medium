@@ -1,1 +1,1 @@
-export{dx as LazyBlockEntry}from"../../../chunks/app-DVsAz0At.js";
+export{cS as LazyBlockEntry}from"../../../chunks/app-Be2qh85V.js";

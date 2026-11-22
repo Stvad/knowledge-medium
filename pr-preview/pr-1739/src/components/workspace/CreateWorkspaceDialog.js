@@ -1,1 +1,1 @@
-export{UO as CreateWorkspaceDialog}from"../../../chunks/app-DVsAz0At.js";
+export{Vk as CreateWorkspaceDialog}from"../../../chunks/app-Be2qh85V.js";
