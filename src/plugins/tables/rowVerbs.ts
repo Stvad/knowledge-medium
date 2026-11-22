@@ -5,7 +5,7 @@
  *  rows live anywhere. Where the host's own order is the drawn one, the
  *  outline's handler runs with the host as the scope root. */
 import type { Block } from '@/data/block'
-import { editorSelection, focusBlock, hasBlockType } from '@/data/properties'
+import { editorSelection, focusBlock } from '@/data/properties'
 import { displayScopeOf } from '@/data/propertyDisplayMode'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import { requestEditorFocusIfEditing } from '@/shortcuts/blockActions'
@@ -18,7 +18,6 @@ import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi'
 import { showInfo } from '@/utils/toast'
 import type { GridController } from './controller'
 import { gridDrawing } from './registry'
-import { COLUMN_TYPE, VIEW_TYPE } from './schema'
 
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
@@ -111,11 +110,11 @@ const carriesValues = (row: Block): boolean => {
 }
 
 /** Backspace at the start of a row's text: the row merges into the last block
- *  drawn above it, by the outline's own merge and its refusals. An empty row
- *  with nothing under it is deleted. Refused: under a query (the row above
- *  may be on another page), for a row carrying property values (they would
- *  fold into another block), and into a table's view or column block (a
- *  nested table's machinery, which the outline's walk reaches). */
+ *  drawn above it (`GridController.lastDrawnIn`: a nested table's title, never
+ *  its machinery), by the outline's own merge and its refusals. An empty row
+ *  with nothing under it is deleted. Refused: under a query (the row above may
+ *  be on another page), and for a row carrying property values (they would
+ *  fold into another block). */
 const mergeRowUp: ActionDispatchDecorator = {
   actionId: 'delete_empty_block_cm',
   context: EDITING,
@@ -137,7 +136,6 @@ const mergeRowUp: ActionDispatchDecorator = {
     }
     const into = await grid.lastDrawnIn(aboveId)
     const intoData = into.peek()
-    if (intoData && (hasBlockType(intoData, VIEW_TYPE) || hasBlockType(intoData, COLUMN_TYPE))) return
     const liveContent = editorView!.state.doc.toString()
     // Every child counts, collapsed or not: deleting the row would delete them.
     if (liveContent === '' && (await grid.childIdsOf(block.id)).length === 0) {

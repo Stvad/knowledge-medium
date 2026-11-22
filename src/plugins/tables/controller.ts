@@ -8,13 +8,14 @@ import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
-import { editorSelection, focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { editorSelection, focusBlock, hasBlockType, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import { getLastVisibleDescendant } from '@/utils/selection'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
+import { TABLE_TYPE } from './schema'
 import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
 import { createQueryRow, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
@@ -48,6 +49,20 @@ const ownCell = (row: HTMLElement, column: number) =>
 
 const ownControl = (cell: HTMLElement) =>
   [...cell.querySelectorAll<HTMLElement>(CELL_CONTROL_SELECTOR)].find(control => control.closest('[data-table-col]') === cell)
+
+/** The outermost table host between `block` and its ancestor `rowId`. The
+ *  outline's walk follows a table host's data tree (its view, its columns,
+ *  rows it draws in a scope of its own), none of which is drawn where the
+ *  walk started: the host's own title is the last thing drawn there. */
+const outermostTableOnPath = (block: Block, rowId: string): Block | undefined => {
+  let found: Block | undefined
+  for (let current: Block | undefined = block; current && current.id !== rowId;) {
+    const data = current.peek()
+    if (data && hasBlockType(data, TABLE_TYPE)) found = current
+    current = data?.parentId ? current.repo.block(data.parentId) : undefined
+  }
+  return found
+}
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
@@ -185,8 +200,10 @@ export class GridController {
   async lastDrawnIn(rowId: string): Promise<Block> {
     const repo = this.host.repo
     const lastChild = (await this.drawnChildIds(rowId)).at(-1)
-    return lastChild ? getLastVisibleDescendant(repo.block(lastChild),
-      {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope}) : repo.block(rowId)
+    if (!lastChild) return repo.block(rowId)
+    const deepest = await getLastVisibleDescendant(repo.block(lastChild),
+      {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope})
+    return outermostTableOnPath(deepest, rowId) ?? deepest
   }
 
   /** ArrowDown from a row's text: its first drawn child, edited from its

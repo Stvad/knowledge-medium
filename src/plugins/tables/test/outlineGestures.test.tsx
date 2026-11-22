@@ -502,11 +502,24 @@ describe('the outline’s verbs between rows', () => {
     return id!
   }))
 
-  it('merges no row into a nested table’s column block', () => refusedMerge(async () => {
+  it('merges a row into a nested table’s title, never its machinery', async () => {
     const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
     await turnIntoTable(repo, id!)
-    return id!
-  }))
+    mount()
+    press(await editAt('row-1', 'start'), 'Backspace')
+    await waitFor(async () => expect(await contentOf(id!)).toBe('Nestedsecond'))
+    await waitFor(() => expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE}))
+  })
+
+  it('ArrowUp from a row’s text edits a nested table’s title above it, not its rows', async () => {
+    const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
+    await repo.mutate.createChild({parentId: id!, content: 'inner row', position: {kind: 'last'}})
+    await turnIntoTable(repo, id!)
+    mount()
+    press(await editAt('row-1', 'start'), 'ArrowUp')
+    await waitFor(() => expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+  })
 
   it('merges no row with children into a collapsed row above with children', () => refusedMerge(async () => {
     const above = await repo.mutate.createChild({parentId: 'row-0', content: 'n0', position: {kind: 'last'}})
