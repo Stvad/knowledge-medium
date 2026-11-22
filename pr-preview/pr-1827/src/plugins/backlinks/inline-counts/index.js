@@ -1,1 +1,1 @@
-export{jb as inlineBacklinkCountsExtension}from"../../../../chunks/app-BhUmt56C.js";
+export{jb as inlineBacklinkCountsExtension}from"../../../../chunks/app-CLw8falt.js";
