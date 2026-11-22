@@ -1,1 +1,1 @@
-export{Vx as LazyBlockEntry}from"../../../chunks/app-CUkDBXnm.js";
+export{Vx as LazyBlockEntry}from"../../../chunks/app-DLyKVrm8.js";

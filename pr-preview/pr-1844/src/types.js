@@ -1,1 +1,1 @@
-export{Odt as isChildBackedPropertiesWorkspace}from"../chunks/app-CUkDBXnm.js";
+export{Odt as isChildBackedPropertiesWorkspace}from"../chunks/app-DLyKVrm8.js";

@@ -1,1 +1,1 @@
-export{kn as HtmlFrame}from"../../../chunks/app-CUkDBXnm.js";
+export{kn as HtmlFrame}from"../../../chunks/app-DLyKVrm8.js";

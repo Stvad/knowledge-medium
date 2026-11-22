@@ -1,1 +1,1 @@
-export{igt as normalizeReferences}from"../../../chunks/app-CUkDBXnm.js";
+export{igt as normalizeReferences}from"../../../chunks/app-DLyKVrm8.js";

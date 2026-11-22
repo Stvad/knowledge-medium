@@ -1,1 +1,1 @@
-export{KI as editorAutocompleteExtension}from"../../chunks/app-CUkDBXnm.js";
+export{KI as editorAutocompleteExtension}from"../../chunks/app-DLyKVrm8.js";

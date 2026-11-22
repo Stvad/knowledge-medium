@@ -1,1 +1,1 @@
-export{FX as referencesDataExtension}from"../../../chunks/app-CUkDBXnm.js";
+export{FX as referencesDataExtension}from"../../../chunks/app-DLyKVrm8.js";
