@@ -1,1 +1,1 @@
-export{PI as exampleExtensions,FI as insertExampleExtensionsUnder}from"../../chunks/app-Cfv8gWmJ.js";
+export{NI as exampleExtensions,PI as insertExampleExtensionsUnder}from"../../chunks/app-Db_uraK-.js";

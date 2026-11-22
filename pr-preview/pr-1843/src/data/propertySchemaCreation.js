@@ -1,1 +1,1 @@
-export{LJ as adoptOrCreatePropertySchema}from"../../chunks/app-Cfv8gWmJ.js";
+export{IJ as adoptOrCreatePropertySchema}from"../../chunks/app-Db_uraK-.js";

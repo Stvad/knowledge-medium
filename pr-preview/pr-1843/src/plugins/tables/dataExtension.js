@@ -1,1 +1,1 @@
-export{MX as tablesDataExtension}from"../../../chunks/app-Cfv8gWmJ.js";
+export{jX as tablesDataExtension}from"../../../chunks/app-Db_uraK-.js";
