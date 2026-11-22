@@ -5,7 +5,7 @@
  *
  * Positional records/reps/output are kept for old invocations; flags override them:
  *   --records N --reps N --out FILE --browser webkit|chromium --vfs coop-sync|write-ahead
- *   --window N --random-ids --drop-triggers a,b --drop-indexes --rebuild-derived --bulk-load
+ *   --window N --random-ids --drop-triggers a,b --drop-indexes --rebuild-derived --bulk-load --per-row-fts
  *   --cache-kb N (total page cache, split across connections as production does)
  *   --modes none,e2ee --scenarios initial,echo-repass --timeout-min N
  * `write-ahead` is Chromium-only (production's VFS there: one writer + one reader).
@@ -46,7 +46,8 @@ const benchOptions = {
   modes: list(flag['--modes']), scenarios: list(flag['--scenarios']),
   dropTriggers: list(flag['--drop-triggers']),
   dropIndexes: flag['--drop-indexes'] === true, rebuildDerived: flag['--rebuild-derived'] === true,
-  randomIds: flag['--random-ids'] === true, bulkLoad: flag['--bulk-load'] === true, cacheKb: num(flag['--cache-kb'], undefined),
+  randomIds: flag['--random-ids'] === true, bulkLoad: flag['--bulk-load'] === true,
+  perRowFts: flag['--per-row-fts'] === true, cacheKb: num(flag['--cache-kb'], undefined),
 }
 await mkdir(dirname(outputPath), {recursive: true})
 const server = await createServer({

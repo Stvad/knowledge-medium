@@ -72,7 +72,7 @@ export async function runBrowserMaterializeBench(
     scenarios: o.scenarios ?? ['initial', 'echo-repass'],
     dropTriggers: o.dropTriggers ?? [], dropIndexes: o.dropIndexes ?? false,
     rebuildDerived: o.rebuildDerived ?? false, randomIds: o.randomIds ?? false, cacheKb: o.cacheKb,
-    bulkLoad: o.bulkLoad ?? false,
+    bulkLoad: o.bulkLoad ?? false, perRowFts: o.perRowFts ?? false,
   }
   validateVariantOptions({...options, records: count, reps})
   console.info('loading benchmark core')

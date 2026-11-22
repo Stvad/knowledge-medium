@@ -44,8 +44,9 @@ const parseArgs = (argv: string[]) => {
   const rebuildDerived = argv.includes('--rebuild-derived')
   const dropIndexes = argv.includes('--drop-indexes')
   const bulkLoad = argv.includes('--bulk-load')
+  const perRowFts = argv.includes('--per-row-fts')
   const cacheKb = argv.includes('--cache-kb') ? value('--cache-kb', NaN) : undefined
-  const options: VariantOptions = {window, modes, scenarios, dropTriggers, dropIndexes, rebuildDerived, randomIds, cacheKb, bulkLoad}
+  const options: VariantOptions = {window, modes, scenarios, dropTriggers, dropIndexes, rebuildDerived, randomIds, cacheKb, bulkLoad, perRowFts}
   validateVariantOptions({...options, records, reps})
   return {records, reps, workflow, options}
 }

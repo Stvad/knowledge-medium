@@ -402,6 +402,12 @@ export const startBlocksSyncedObserver = (
     await runCycleScan(outcome.snapshots)
   }
 
+  /** Could `blocks_fts_owed` hold anything this observer has not built? True
+   *  at start, for a debt left by an earlier process; then only once a bulk
+   *  window of its own commits. Decided here rather than by reading the table,
+   *  so a drain with no bulk window pays nothing for the build. */
+  let mayOweIndex = true
+
   /** Materialize one bounded window + run its invalidation. The shared per-window
    *  step of both drain paths (queue-driven {@link drainQueueOnce} and
    *  workspace-rescan {@link materializeWorkspace}); they differ only in where
@@ -411,7 +417,9 @@ export const startBlocksSyncedObserver = (
     upserted: readonly string[],
     removed: readonly string[],
   ): Promise<MaterializeOutcome> => {
-    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds: [...new Set([...bulkHolds].map(hold => hold.workspaceId))] })
+    const bulkLoadWorkspaceIds = [...new Set([...bulkHolds].map(hold => hold.workspaceId))]
+    const outcome = await materializeStagingRows(db, { upserted, removed }, deps, { bulkLoadWorkspaceIds })
+    if (bulkLoadWorkspaceIds.length > 0) mayOweIndex = true
     // Counted as soon as the window has committed: a failure in the steps
     // below does not undo it.
     meter.windows++
@@ -436,13 +444,17 @@ export const startBlocksSyncedObserver = (
   }
 
   /** Index what bulk windows deferred. Every drain ends with it, so a drain
-   *  that resolves has left nothing owed — its own windows' debt or one an
-   *  earlier drain left — and one whose build throws rejects like a failed
-   *  window and retries on the next flush. */
+   *  that resolves has left nothing owed, and one whose build throws rejects
+   *  like a failed window and retries on the next flush. */
   const buildDeferredIndex = async (meter: Mutable<SyncDrainStats>): Promise<void> => {
+    if (!mayOweIndex) return
+    mayOweIndex = false
     const startedAt = performance.now()
     try {
       meter.deferredIndexEntries += await buildDeferredSearchIndex(db)
+    } catch (err) {
+      mayOweIndex = true
+      throw err
     } finally {
       meter.deferredIndexMs += performance.now() - startedAt
     }

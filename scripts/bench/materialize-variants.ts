@@ -9,6 +9,7 @@ import {
   BACKFILL_BLOCK_TYPES_SQL,
   BACKFILL_BLOCKS_FTS_ROWIDS_SQL,
   BACKFILL_BLOCKS_FTS_SQL,
+  CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,
 } from '@/data/internals/clientSchema'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline'
 import type { MaterializeFixture } from './materialize-fixture'
@@ -37,6 +38,9 @@ export interface VariantOptions {
   randomIds: boolean
   /** Run the production bulk hold (`runMaterializePass`'s `bulkLoad`). */
   bulkLoad: boolean
+  /** With `bulkLoad`: index every insert per row, as the hold did before the
+   *  search index was deferred — the baseline for that change. */
+  perRowFts: boolean
   /** Total page cache across connections, KiB; undefined leaves the runner's default. */
   cacheKb?: number
 }
@@ -50,6 +54,7 @@ export const validateVariantOptions = (o: VariantOptions & {records: number; rep
   for (const m of o.modes) if (m !== 'none' && m !== 'e2ee') throw new Error(`unknown mode ${m}`)
   for (const sc of o.scenarios) if (sc !== 'initial' && sc !== 'echo-repass') throw new Error(`unknown scenario ${sc}`)
   for (const t of o.dropTriggers) if (!/^\w+$/.test(t)) throw new Error(`bad trigger name ${t}`)
+  if (o.perRowFts && !o.bulkLoad) throw new Error('--per-row-fts needs --bulk-load')
   if (o.cacheKb !== undefined && (!Number.isInteger(o.cacheKb) || o.cacheKb < 1)) {
     throw new Error('--cache-kb must be a positive integer')
   }
@@ -57,6 +62,12 @@ export const validateVariantOptions = (o: VariantOptions & {records: number; rep
 
 export const dropTriggerList = async (db: PowerSyncDb, names: string[]) => {
   for (const name of names) await db.execute(`DROP TRIGGER IF EXISTS ${name}`)
+}
+
+/** `--per-row-fts`: `blocks_fts_insert` without its bulk-load WHEN, and no deferral. */
+export const restorePerRowFts = async (db: PowerSyncDb) => {
+  await dropTriggerList(db, ['blocks_fts_insert', 'blocks_fts_insert_deferred'])
+  await db.execute(CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL.replace(/WHEN NOT [\s\S]*?(?=\n\s*BEGIN)/, ''))
 }
 
 export interface DroppedIndex { name: string; sql: string }
@@ -162,6 +173,7 @@ export const variantInfoOf = (o: VariantOptions): Record<string, unknown> => ({
   ...(o.dropTriggers.length ? {droppedTriggers: o.dropTriggers} : {}),
   ...(o.dropIndexes ? {droppedIndexes: true} : {}),
   ...(o.bulkLoad ? {bulkLoad: true} : {}),
+  ...(o.perRowFts ? {perRowFts: true} : {}),
   ...(o.cacheKb !== undefined ? {cacheKb: o.cacheKb} : {}),
   // Alias references resolve through block_aliases, which blocks_alias_insert fills; without it
   // reference_target_id/is_field_form are legitimately not derived, so skip only that validation.
@@ -174,6 +186,7 @@ export const runVariantSamples = async (env: VariantEnv, reps: number) => {
   const skipDerivedReferenceChecks = options.dropTriggers.includes('blocks_alias_insert')
   const variantInfo = variantInfoOf(options)
   await dropTriggerList(db, options.dropTriggers)
+  if (options.perRowFts) await restorePerRowFts(db)
   const indexes = options.dropIndexes ? await listBlocksIndexes(db) : []
   for (const mode of options.modes) {
     for (const scenario of options.scenarios) {

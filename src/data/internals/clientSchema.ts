@@ -1217,8 +1217,6 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-export const SELECT_ANY_BLOCKS_FTS_OWED_SQL = `SELECT 1 FROM blocks_fts_owed LIMIT 1`
-
 /** The owed entries one build chunk covers: the oldest `?`, as the rowid
  *  bound every statement of the chunk binds. Entries recorded after it read
  *  this get higher rowids and wait for a later chunk. On the clear the bound
@@ -1246,7 +1244,7 @@ const BUILD_OWED_BLOCKS_FTS_SQL = `
   WHERE r.block_id IN (SELECT block_id FROM blocks_fts_owed WHERE rowid <= ?)
     AND ${searchIndexedRowSql('b')}
     AND NOT EXISTS (SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid)
-  ORDER BY r.fts_rowid
+  ORDER BY b.id
 `
 
 const CLEAR_BLOCKS_FTS_OWED_CHUNK_SQL = `DELETE FROM blocks_fts_owed WHERE rowid <= ?`
@@ -1644,18 +1642,22 @@ export const backfillBlocksFtsIfEmpty = async (
 /** Index every row a bulk load deferred (`blocks_fts_insert_deferred`) and
  *  clear the record of the debt, a chunk of the oldest entries per
  *  transaction, so each clear commits with the rows it vouches for. Returns how
- *  many owed entries it cleared; 0 costs one empty read.
+ *  many owed entries it cleared; with nothing owed it is one write transaction
+ *  holding one empty read.
  *
  *  Reads each owed row as it is NOW: one updated since its insert was indexed
  *  by `blocks_fts_update` (hence the `NOT EXISTS`), one deleted is skipped.
  *  Each chunk fills the rowid map in id order, so its unique index takes
- *  sorted runs rather than random probes.
+ *  sorted runs rather than random probes, and `ORDER BY b.id` then hands FTS5
+ *  ascending rowids without a sort.
+ *
+ *  Every read is inside the write transaction: a reader connection can lag
+ *  the writer, and an owed table read there as empty would skip the build.
  *
  *  Two callers: the sync observer, at the end of each drain, and client
  *  bootstrap, for a process that died with the debt outstanding. */
 export const buildDeferredSearchIndex = async (
   db: {
-    getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
     writeTransaction: <T>(fn: (tx: {
       execute: (sql: string, params?: unknown[]) => Promise<unknown>
       getOptional: <R>(sql: string, params?: unknown[]) => Promise<R | null>
@@ -1664,19 +1666,19 @@ export const buildDeferredSearchIndex = async (
   chunkSize: number = DEFERRED_SEARCH_INDEX_CHUNK,
 ): Promise<number> => {
   let cleared = 0
-  while (await db.getOptional(SELECT_ANY_BLOCKS_FTS_OWED_SQL) !== null) {
-    cleared += await db.writeTransaction(async tx => {
+  for (;;) {
+    const chunk = await db.writeTransaction(async tx => {
       const bound = await tx.getOptional<{upTo: number | null}>(SELECT_OWED_CHUNK_BOUND_SQL, [chunkSize])
       const upTo = bound?.upTo ?? null
-      // Another build cleared it between the probe and the lock.
-      if (upTo === null) return 0
+      if (upTo === null) return null
       await tx.execute(BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL, [upTo])
       await tx.execute(BUILD_OWED_BLOCKS_FTS_SQL, [upTo])
       const result = await tx.execute(CLEAR_BLOCKS_FTS_OWED_CHUNK_SQL, [upTo]) as {rowsAffected?: number} | undefined
       return result?.rowsAffected ?? 0
     })
+    if (chunk === null) return cleared
+    cleared += chunk
   }
-  return cleared
 }
 
 export const grandfatherWorkspaceFirstSync = async (
