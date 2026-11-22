@@ -4,6 +4,7 @@
  *  select) takes the same three keys in its cell's own keydown, see
  *  `controlKeyCommand`. */
 import { Block } from '@/data/block'
+import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import {
@@ -14,7 +15,7 @@ import {
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
-import { gridDrawing } from './registry'
+import { gridDrawing, gridOfHost } from './registry'
 
 export const GRID_CONTEXT_KEY = 'tablesGrid'
 /** The id of the row, or of the cell's value, whose context this is. A context
@@ -168,6 +169,28 @@ const atEdge = (edge: 'top' | 'bottom' | 'start' | 'end') => (deps: BaseShortcut
   }
 }
 
+/** On a table host, the outline's "create below" (and "create above" at a scope
+ *  root) makes a first child, which is the grid's first row, and focuses it in
+ *  the host's own scope, where the grid does not draw it: no editor appears.
+ *  The grid makes that row instead, focused where it draws it. Where the
+ *  outline would make a sibling of the host, it still does. */
+const hostInsert = (
+  context: ActionContextType, actionId: string, placement: 'createBelowPlacement' | 'createAbovePlacement',
+  applies: (deps: BaseShortcutDependencies) => boolean = () => true,
+): ActionDispatchDecorator => ({
+  actionId,
+  context,
+  wrap: async (deps, trigger, next) => {
+    const {block, renderScopeId} = deps as BlockShortcutDependencies
+    const grid = block ? gridOfHost(renderScopeId ?? '', block.id) : undefined
+    if (!grid || !applies(deps) || (await structuralEditPolicyForBlock(block, deps))[placement] !== 'child-first') {
+      await next(deps, trigger)
+      return
+    }
+    await grid.insertFirstRow()
+  },
+})
+
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
 
@@ -185,4 +208,8 @@ export const tableOutlineVerbRedirects = [
   redirect(EDITING, 'move_down_from_cm_end', 'down', atEdge('bottom')),
   redirect(EDITING, 'move_left_from_cm_start', 'previous', atEdge('start')),
   redirect(EDITING, 'move_right_from_cm_end', 'next', atEdge('end')),
+  hostInsert(NORMAL, 'create_block_below_and_edit', 'createBelowPlacement'),
+  hostInsert(NORMAL, 'create_block_above_and_edit', 'createAbovePlacement'),
+  // Enter at the end of the host's text; mid-text it splits the host.
+  hostInsert(EDITING, 'split_block_cm', 'createBelowPlacement', atEdge('end')),
 ].map(decorator => actionDispatchWrap(decorator, {source: 'tables', precedence: 100}))

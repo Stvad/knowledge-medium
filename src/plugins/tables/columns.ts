@@ -1,13 +1,15 @@
 /** Column gestures. Each writes only the view's column blocks, or the
  *  declaration of a type, in one transaction, so each is one undo step; none
  *  touches a row or its values. */
-import { ChangeScope, propertyValue, type BlockData } from '@/data/api'
+import { ChangeScope, propertyValue, type BlockData, type Tx } from '@/data/api'
 import { BLOCK_TYPE_TYPE, PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import { blockTypeLabelProp, blockTypePropertiesProp, hasBlockType } from '@/data/properties'
+import { adoptOrCreatePropertySchema, type PropertySchemaChoice } from '@/data/propertySchemaCreation'
 import type { Repo } from '@/data/repo'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { createTypedChild } from '@/data/typedRecords'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi'
 import { COLUMN_TYPE, TABLE_TYPE, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp } from './schema'
 
 const options = (description: string) => ({scope: ChangeScope.BlockDefault, description})
@@ -15,9 +17,11 @@ const options = (description: string) => ({scope: ChangeScope.BlockDefault, desc
 /** Narrower than this, a header has no room for its name or its handles. */
 export const MIN_COLUMN_WIDTH = 48
 
+/** The width a drag to `width` stores. */
+export const columnWidthFor = (width: number): number => Math.max(MIN_COLUMN_WIDTH, Math.round(width))
+
 export const resizeColumn = (repo: Repo, columnId: string, width: number): Promise<void> =>
-  repo.tx(tx => tx.setProperty(columnId, columnWidthProp, Math.max(MIN_COLUMN_WIDTH, Math.round(width))),
-    options('resize table column'))
+  repo.tx(tx => tx.setProperty(columnId, columnWidthProp, columnWidthFor(width)), options('resize table column'))
 
 /** Sibling order among the view's column blocks is column order, so a
  *  reorder is one move beside another column of the same view. */
@@ -39,14 +43,26 @@ export const setColumnHidden = (repo: Repo, columnId: string, hidden: boolean): 
     options(hidden ? 'hide table column' : 'show table column'))
 
 /** Deletes the column block only: the rows' values stay where they are. */
-export const deleteColumn = (repo: Repo, columnId: string): Promise<void> => repo.mutate.delete({id: columnId})
+export const deleteColumn = (repo: Repo, columnId: string): Promise<boolean> => deleteBlockThroughUi(repo.block(columnId))
 
 /** A new column showing `fieldId` (null for the row's own text), last in the view. */
-export const addColumn = (repo: Repo, viewId: string, fieldId: string | null): Promise<string> => repo.tx(tx =>
+export const addColumnInTx = (repo: Repo, tx: Tx, viewId: string, fieldId: string | null): Promise<string> =>
   createTypedChild(repo, tx, {
     parentId: viewId, types: [COLUMN_TYPE], position: {kind: 'last'},
     properties: fieldId === null ? [] : [propertyValue(columnFieldProp, fieldId)],
-  }), options('add table column'))
+  })
+
+export const addColumn = (repo: Repo, viewId: string, fieldId: string | null): Promise<string> =>
+  repo.tx(tx => addColumnInTx(repo, tx, viewId, fieldId), options('add table column'))
+
+/** A column for a property picked by name. A new property is created in the
+ *  same transaction as its column, so one undo removes both. */
+export const addColumnForChoice = async (repo: Repo, viewId: string, choice: PropertySchemaChoice): Promise<void> => {
+  const result = await adoptOrCreatePropertySchema(repo, choice, (tx, fieldId) => addColumnInTx(repo, tx, viewId, fieldId).then(() => {}))
+  if (result.kind === 'created') return
+  const fieldId = repo.userSchemas.getSchemaBlockId(result.schema.name)
+  if (fieldId) await addColumn(repo, viewId, fieldId)
+}
 
 /** A type a user can declare properties on: a block-type block of their own.
  *  A code-owned type's block is a mirror of its seed and stays read-only. */

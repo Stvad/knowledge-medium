@@ -12,9 +12,7 @@ import type { CodeMirrorExtensionContribution } from '@/editor/codeMirrorExtensi
 import { surfaceOfRenderScopeId } from '@/utils/renderScope'
 import type { Repo } from '@/data/repo'
 import { showError } from '@/utils/toast'
-import { isGridMounted } from './registry'
-
-export const TABLE_SURFACE = 'tables'
+import { TABLE_SURFACE, isGridMounted } from './registry'
 
 /** Show a refusal to the user; any other error is a real failure and propagates. */
 export const reportRefusal = (error: unknown) => {

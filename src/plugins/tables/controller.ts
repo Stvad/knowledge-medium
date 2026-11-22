@@ -357,6 +357,19 @@ export class GridController {
     if (id) await this.editNewRow(id)
   }
 
+  /** A new first row, editing its text: what the outline's "create below" makes
+   *  on a block that shows its children. Placed above the first row rather than
+   *  as the host's first child, so the view block stays first. */
+  async insertFirstRow(): Promise<void> {
+    const repo = this.host.repo
+    if (repo.isReadOnly || this.refuseRowPastCap()) return
+    const first = this.rowIds[0]
+    const id = first
+      ? await repo.mutate.createSiblingAbove({siblingId: first})
+      : await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
+    if (id) await this.editNewRow(id)
+  }
+
   /** A new last row, editing its text. */
   async appendRow(): Promise<void> {
     const repo = this.host.repo

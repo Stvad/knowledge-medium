@@ -21,12 +21,11 @@ import { resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/proper
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useActionContextActivations } from '@/shortcuts/useActionContext'
-import { surfaceRenderScopeId } from '@/utils/renderScope'
-import { TABLE_SURFACE } from './cellEdits'
 import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './controller'
 import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
+import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
-import { registerGrid } from './registry'
+import { registerGrid, tableRenderScopeId } from './registry'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
 export const CELL_SURFACE = 'tables.cell'
@@ -222,23 +221,6 @@ const CursorStyle = ({gridId, controller}: {gridId: string; controller: GridCont
 }`}</style>
 }
 
-const ColumnHeaders = ({names, template, scrollRef}: {
-  names: readonly string[]
-  template: CSSProperties
-  scrollRef: React.Ref<HTMLDivElement>
-}) => (
-  <div ref={scrollRef} className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
-    <div role="row" className="grid text-sm font-medium" style={template}>
-      {names.map((name, index) => (
-        <div key={index} role="columnheader"
-          className={`truncate border-r border-border px-2 py-1 ${index === 0 ? 'sticky left-0 z-[1] bg-background' : ''}`}>
-          {name}
-        </div>
-      ))}
-    </div>
-  </div>
-)
-
 /** Row mode, activated from focus state rather than by the row's shell, so
  *  keys keep working while the row focus moved to mounts. The row a focus
  *  write is still committing to counts as focused. Typing opens a cell only
@@ -285,29 +267,67 @@ const TableGrid = (props: GridProps) => {
   return <TableView {...props} viewIds={viewIds}/>
 }
 
-const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
-  const columns = useColumns(props.host, props.workspaceId, props.viewIds[0]!)
-  if (columns === undefined) return null
-  if (columns.length === 0) return <NoColumns/>
-  return <TableBody {...props} columns={columns}/>
+const NO_COLUMNS: readonly TableColumn[] = []
+
+/** What each column shows: its property definition, and its header name. */
+const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns: readonly TableColumn[]) => {
+  const definitions = usePropertyDefinitions(repo)
+  const definitionsOf = useMemo(() => columns.map(column => column.fieldId === null ? undefined
+    : resolveFieldDefinition(repo, definitions, workspaceId, column.fieldId)), [columns, definitions, repo, workspaceId])
+  const names = useMemo(() => columns.map((column, index) => column.label ||
+    (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
+  return {definitionsOf, names}
 }
 
-const NoColumns = () =>
-  <p className="py-1 text-sm text-muted-foreground">This table has no columns yet. Show it as an outline to add some.</p>
+type ColumnDefinition = ReturnType<typeof useColumnDefinitions>['definitionsOf'][number]
 
-const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewIds, columns}: GridProps & {
-  viewIds: readonly string[]; columns: readonly TableColumn[]
+/** Hidden columns are drawn nowhere but in the toolbar, which shows them again. */
+const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
+  const viewId = props.viewIds[0]!
+  const all = useColumns(props.host, props.workspaceId, viewId)
+  const {definitionsOf, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
+  const split = useMemo(() => {
+    const shown = {columns: [] as TableColumn[], definitionsOf: [] as ColumnDefinition[], names: [] as string[]}
+    const hidden = {columns: [] as TableColumn[], names: [] as string[]}
+    ;(all ?? NO_COLUMNS).forEach((column, index) => {
+      if (column.hidden) {
+        hidden.columns.push(column)
+        hidden.names.push(names[index]!)
+      } else {
+        shown.columns.push(column)
+        shown.definitionsOf.push(definitionsOf[index])
+        shown.names.push(names[index]!)
+      }
+    })
+    return {shown, hidden}
+  }, [all, definitionsOf, names])
+  if (all === undefined) return null
+  const toolbar = props.host.repo.isReadOnly ? null : <ColumnToolbar host={props.host} viewId={viewId}
+    hidden={split.hidden.columns} hiddenNames={split.hidden.names}
+    hasContentColumn={all.some(column => column.fieldId === null)}/>
+  if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>
+  return <TableBody {...props} columns={split.shown.columns} definitionsOf={split.shown.definitionsOf}
+    names={split.shown.names} toolbar={toolbar}/>
+}
+
+const NoColumns = () => <p className="py-1 text-sm text-muted-foreground">This table shows no columns.</p>
+
+const TableBody = ({
+  host, renderScopeId, parentRenderScopeId, workspaceId, viewIds, columns, definitionsOf, names, toolbar,
+}: GridProps & {
+  viewIds: readonly string[]
+  columns: readonly TableColumn[]
+  definitionsOf: readonly ColumnDefinition[]
+  names: readonly string[]
+  toolbar: ReactNode
 }) => {
   const uiStateBlock = useUIStateBlock()
   const repo = host.repo
   const [controller] = useState(() => new GridController(host, uiStateBlock, renderScopeId, parentRenderScopeId))
   const gridId = useId()
   const {childBacked} = useContext(PropertyDisplayScopeContext)
-  const definitions = usePropertyDefinitions(repo)
   const rowIds = useRowIds(host, workspaceId, viewIds)
   const shown = useMemo(() => rowIds?.slice(0, ROW_CAP) ?? [], [rowIds])
-  const definitionsOf = useMemo(() => columns.map(column => column.fieldId === null ? undefined
-    : resolveFieldDefinition(repo, definitions, workspaceId, column.fieldId)), [columns, definitions, repo, workspaceId])
   const schemas = useMemo(() => definitionsOf.map(definition => definition?.schema), [definitionsOf])
   const editable = useMemo(() => columns.map((column, index) => !repo.isReadOnly &&
     (column.fieldId === null || (childBacked && isPropertyValueEditable(schemas[index])))),
@@ -317,18 +337,26 @@ const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewI
     editable: editable[index]!,
     list: schemas[index] !== undefined && memberCodecOf(schemas[index]!.codec) !== undefined,
   })), [columns, editable, schemas])
-  const names = useMemo(() => columns.map((column, index) => column.label ||
-    (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
 
   useLayoutEffect(() => { controller.setRows(shown, rowIds?.length ?? 0) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
   const rowSet = useMemo(() => new Set(shown), [shown])
+  // A resize shows live and is stored once, when the drag ends. The preview
+  // stays until the stored width arrives, so the column never jumps back to
+  // its old width for the length of the write.
+  const [resizing, setResizing] = useState<ResizePreview | null>(null)
+  if (resizing?.committed && columns.find(column => column.id === resizing.columnId)?.width === resizing.width) {
+    setResizing(null)
+  }
+  const laidOut = useMemo(() => resizing === null ? columns
+    : columns.map(column => column.id === resizing.columnId ? {...column, width: resizing.width} : column),
+  [columns, resizing])
   const template = useMemo<CSSProperties>(() => ({
-    gridTemplateColumns: columns.map(columnTrack).join(' '),
-    minWidth: `${minWidth(columns)}px`,
-  }), [columns])
+    gridTemplateColumns: laidOut.map(columnTrack).join(' '),
+    minWidth: `${minWidth(laidOut)}px`,
+  }), [laidOut])
   const header = useRef<HTMLDivElement>(null)
   const syncHeader = (event: React.UIEvent<HTMLDivElement>) => {
     if (header.current) header.current.scrollLeft = event.currentTarget.scrollLeft
@@ -349,7 +377,8 @@ const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewI
       {!childBacked && <p className="py-1 text-xs text-muted-foreground">
         Read-only: this workspace stores properties in the block, not as rows.
       </p>}
-      <ColumnHeaders names={names} template={template} scrollRef={header}/>
+      <ColumnHeaders host={host} workspaceId={workspaceId} columns={columns} names={names} template={template}
+        scrollRef={header} rowIds={shown} editable={!repo.isReadOnly} onResizePreview={setResizing}/>
       {/* The gesture marker sits on the scroller: horizontal touch panning
           needs the marked element to be the one that scrolls. */}
       <div data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
@@ -363,9 +392,12 @@ const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewI
       {rowIds && rowIds.length > ROW_CAP && <p className="py-1 text-xs text-muted-foreground">
         Showing the first {ROW_CAP} rows.
       </p>}
-      {!repo.isReadOnly && rowIds && canAddRow(rowIds.length) &&
-        <button type="button" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-          onClick={() => { void controller.appendRow() }}>+ New row</button>}
+      <div className="flex flex-wrap items-center">
+        {!repo.isReadOnly && rowIds && canAddRow(rowIds.length) &&
+          <button type="button" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => { void controller.appendRow() }}>+ New row</button>}
+        {toolbar}
+      </div>
     </div>
   )
 }
@@ -387,7 +419,7 @@ const TableRow = ({id, renderScopeId}: {id: string; renderScopeId: string}) => {
 const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, Properties, BelowContent, Footer}) => {
   const workspaceId = useWorkspaceId(block)
   const parentRenderScopeId = useBlockContext().renderScopeId ?? ''
-  const renderScopeId = surfaceRenderScopeId(TABLE_SURFACE, parentRenderScopeId, block.id)
+  const renderScopeId = tableRenderScopeId(parentRenderScopeId, block.id)
   return (
     <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls} className="tm-table-host">
       <div className="block-body min-w-0 grow">
