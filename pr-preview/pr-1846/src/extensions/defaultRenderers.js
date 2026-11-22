@@ -1,0 +1,1 @@
+export{BR as defaultRegistry,VR as defaultRendererContributions,HR as defaultRenderersExtension}from"../../chunks/app-C3XWOd6H.js";

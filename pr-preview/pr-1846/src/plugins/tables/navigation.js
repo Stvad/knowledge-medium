@@ -1,0 +1,1 @@
+export{vs as TABLE_CHILDREN_ATTRIBUTE,ys as TABLE_HOST_ATTRIBUTE,bs as TABLE_VERTICAL_PRECEDENCE,xs as tableVerticalSteps}from"../../../chunks/app-C3XWOd6H.js";

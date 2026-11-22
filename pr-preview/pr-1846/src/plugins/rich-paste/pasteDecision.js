@@ -1,0 +1,1 @@
+export{VC as richPasteDecisionContribution}from"../../../chunks/app-C3XWOd6H.js";

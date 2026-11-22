@@ -1,0 +1,1 @@
+export{ZI as ExtensionPromptSurface,QI as extensionPromptsExtension}from"../../../chunks/app-C3XWOd6H.js";

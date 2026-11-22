@@ -1,0 +1,1 @@
+"use client";export{UB as Dialog,WB as DialogClose,GB as DialogContent,KB as DialogDescription,qB as DialogFooter,JB as DialogHeader,YB as DialogOverlay,XB as DialogPortal,ZB as DialogTitle,QB as DialogTrigger}from"../../../chunks/app-C3XWOd6H.js";

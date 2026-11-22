@@ -1,0 +1,1 @@
+export{XP as CommandPaletteHeaderItem}from"../../../chunks/app-C3XWOd6H.js";

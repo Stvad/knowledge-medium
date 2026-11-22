@@ -1,0 +1,1 @@
+export{UF as BlockEmbed}from"../../../chunks/app-C3XWOd6H.js";

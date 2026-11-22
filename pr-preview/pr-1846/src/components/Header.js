@@ -1,0 +1,1 @@
+export{ez as Header}from"../../chunks/app-C3XWOd6H.js";

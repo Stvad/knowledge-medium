@@ -1,0 +1,1 @@
+export{QF as TypeChip}from"../../../chunks/app-C3XWOd6H.js";

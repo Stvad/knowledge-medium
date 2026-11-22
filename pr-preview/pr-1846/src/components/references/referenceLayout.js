@@ -1,0 +1,1 @@
+export{VS as referenceLayoutContribution}from"../../../chunks/app-C3XWOd6H.js";

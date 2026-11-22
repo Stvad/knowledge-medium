@@ -1,0 +1,1 @@
+export{Yet as NAMES_IN_A_SENTENCE,Xet as describeNames,Zet as firstFew}from"../../chunks/app-C3XWOd6H.js";

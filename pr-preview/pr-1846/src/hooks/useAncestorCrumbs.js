@@ -1,0 +1,1 @@
+export{Ij as useAncestorCrumbs}from"../../chunks/app-C3XWOd6H.js";

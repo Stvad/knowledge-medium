@@ -1,0 +1,1 @@
+export{Ux as LazyBlockEntry}from"../../../chunks/app-C3XWOd6H.js";

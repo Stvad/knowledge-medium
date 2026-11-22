@@ -1,0 +1,1 @@
+export{PV as useShortcutSurfaceActivations}from"../../chunks/app-C3XWOd6H.js";
