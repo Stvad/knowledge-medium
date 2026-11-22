@@ -8,7 +8,7 @@ import { blockTypePropertiesProp, typesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
-  MIN_COLUMN_WIDTH, addColumn, addPropertyToType, deleteColumn, moveColumn, resizeColumn, setColumnHidden,
+  MIN_COLUMN_WIDTH, addColumn, addColumnForChoice, addPropertyToType, deleteColumn, moveColumn, resizeColumn, setColumnHidden,
 } from '../columns'
 import { turnIntoTable } from '../convert'
 import { rowPropertyNames } from '../model'
@@ -74,6 +74,18 @@ const setup = async () => {
 }
 
 describe('column gestures', () => {
+  it('adding a property the view already shows adds no column; a hidden one is shown again', async () => {
+    const {repo, viewId, authorId} = await setup()
+    const choice = {name: author.name, presetId: 'string'}
+    await addColumnForChoice(repo, viewId, choice)
+    expect((await childrenOf(viewId)).map(column => column.id)).toHaveLength(2)
+
+    await setColumnHidden(repo, authorId, true)
+    await addColumnForChoice(repo, viewId, choice)
+    expect((await childrenOf(viewId)).map(column => column.id)).toHaveLength(2)
+    expect(columnHiddenProp.name in await propertiesOf(authorId)).toBe(false)
+  })
+
   it('suggests the rows’ own properties for a new column, the most common first', async () => {
     const {repo} = await setup()
     // Alphabetically ahead of the author, but on one row of two. Only the

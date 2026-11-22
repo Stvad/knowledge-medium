@@ -76,8 +76,11 @@ const filterSuggestions = (
     out.push({schema, preset: presets.get(schema.codec.type)})
   }
   // Rank every match before cutting to the visible few, so a preferred name
-  // is never lost to iteration order.
-  const rank = (suggestion: NameSuggestion) => preferredRank.get(suggestion.schema.name) ?? Infinity
+  // is never lost to iteration order. The name typed exactly comes first:
+  // Enter commits the top suggestion.
+  const rank = (suggestion: NameSuggestion) =>
+    suggestion.schema.name.toLowerCase() === q ? -1
+      : preferredRank.get(suggestion.schema.name) ?? Number.MAX_SAFE_INTEGER
   return out
     .sort((a, b) => rank(a) - rank(b) || a.schema.name.localeCompare(b.schema.name))
     .slice(0, MAX_SUGGESTIONS)

@@ -8,7 +8,7 @@ import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import { blockTypeLabelProp, blockTypePropertiesProp, hasBlockType } from '@/data/properties'
 import { adoptOrCreatePropertySchema, type PropertySchemaChoice } from '@/data/propertySchemaCreation'
 import type { Repo } from '@/data/repo'
-import { decodeRowProperty } from '@/data/rowProperty'
+import { decodeRowProperty, safeDecodeRowProperty } from '@/data/rowProperty'
 import { createTypedChild } from '@/data/typedRecords'
 import { showInfo } from '@/utils/toast'
 import { deleteBlock } from '@/data/mutators'
@@ -87,7 +87,20 @@ export const addColumnForChoice = async (repo: Repo, viewId: string, choice: Pro
     showInfo(`“${result.schema.name}” has no definition block, so it cannot be a column.`)
     return
   }
-  await addColumn(repo, viewId, fieldId)
+  const outcome = await repo.tx(async tx => {
+    // One column per property: picking one the view has shows it instead.
+    const columns = await tx.childrenOf(viewId, undefined, {propertyChildren: 'none'})
+    const same = columns.find(column =>
+      hasBlockType(column, COLUMN_TYPE) && safeDecodeRowProperty(column, columnFieldProp) === fieldId)
+    if (!same) {
+      await addColumnInTx(repo, tx, viewId, fieldId)
+      return 'added'
+    }
+    if (safeDecodeRowProperty(same, columnHiddenProp) !== true) return 'present'
+    await tx.unsetProperty(same.id, columnHiddenProp)
+    return 'shown'
+  }, options('add table column'))
+  if (outcome === 'present') showInfo(`The table already has a “${result.schema.name}” column.`)
 }
 
 /** A type a user can declare properties on: a block-type block of their own.

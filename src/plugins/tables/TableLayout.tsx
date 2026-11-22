@@ -194,7 +194,8 @@ const ValueCellBody = ({row, column, schema, editable}: {
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
 /** A row keeps its bullet, so it opens, opens in the sidebar and has its menu
- *  as any block does; no expand control, since the grid draws no children. */
+ *  as any block does; no expand control, since the grid draws no children.
+ *  The header's `ROW_BULLET_GUTTER` matches the bullet's width. */
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Bullet, Content}) => {
   const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)

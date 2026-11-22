@@ -140,8 +140,8 @@ export const ColumnHeaders = ({
 
   return (
     <div ref={scrollRef} onFocus={onFocus} {...headerSurface}
-      className={`sticky top-0 z-[2] overflow-hidden border-b border-border bg-background ${ROW_BULLET_GUTTER}`}>
-      <div ref={rowRef} role="row" className="relative grid text-sm font-medium" style={template}>
+      className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
+      <div ref={rowRef} role="row" className={`relative grid text-sm font-medium ${ROW_BULLET_GUTTER}`} style={template}>
         {columns.map((column, index) => (
           <div key={column.id} role="columnheader" data-table-column={column.id}
             aria-sort={sort?.columnId === column.id ? SORT_ARIA[sort.direction] : undefined}
@@ -277,10 +277,11 @@ const ColumnMenu = ({host, workspaceId, column, name, rowIds, sort, onSort}: {
   )
 }
 
-/** Where a row's bullet stands (its 20px link and the frame's 4px gap), so the
- *  header's columns line up with the rows'. Padding, not a margin: it scrolls
- *  with the header as the rows' bullets scroll with them. */
-const ROW_BULLET_GUTTER = 'pl-6'
+/** Where a row's bullet stands (its 20px link and the frame's 4px gap, see
+ *  `TableRowLayout`), so the header's columns line up with the rows'. A margin
+ *  on the row, not padding on the scroller: a scroller's padding moves where
+ *  the frozen first column sticks, and the rows' scroller has none. */
+const ROW_BULLET_GUTTER = 'ml-6'
 
 /** Below the grid: add a column, and show the hidden ones again. */
 export const ColumnToolbar = ({host, workspaceId, query, viewId, columnNames, hidden, hiddenNames, hasContentColumn}: {
@@ -296,11 +297,15 @@ export const ColumnToolbar = ({host, workspaceId, query, viewId, columnNames, hi
 }) => {
   const [adding, setAdding] = useState(0)
   const [rowNames, setRowNames] = useState<readonly string[]>([])
+  const loading = useRef(false)
   const startAdding = () => {
+    if (loading.current) return
+    loading.current = true
     // The picker opens once the rows' names are in, so its list does not reorder under the cursor.
     void rowPropertyNames(host, workspaceId, query)
       .catch(error => { console.error('[tables] row property names failed', error); return [] })
       .then(names => {
+        loading.current = false
         setRowNames(names)
         setAdding(key => key + 1)
       })
