@@ -1,1 +1,0 @@
-export{_I as editorAutocompleteExtension}from"../../chunks/app-nVeEnPIV.js";

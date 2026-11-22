@@ -1,1 +1,0 @@
-"use client";export{fU as Collapsible,pU as CollapsibleContent,mU as CollapsibleTrigger}from"../../../chunks/app-nVeEnPIV.js";

@@ -1,1 +1,0 @@
-export{lC as richPastePlugin}from"../../../chunks/app-nVeEnPIV.js";

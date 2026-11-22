@@ -1,1 +1,0 @@
-export{E0 as CHAR_COUNTER_TYPE,j0 as RAW_CHARACTER_COUNT_PROFILE_ID,M0 as WORDS_COUNT_PROFILE_ID,k0 as WORD_COUNTER_TYPE,lr as charCountDisplay,N0 as charLimitProp,P0 as charProfileProp,F0 as charScopeProp,tr as characterCountProfilesFacet,Xn as characterCounterPlugin,ar as textCountProfile}from"../../../chunks/app-nVeEnPIV.js";

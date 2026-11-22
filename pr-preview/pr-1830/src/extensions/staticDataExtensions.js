@@ -1,1 +1,0 @@
-export{MY as staticDataExtensions}from"../../chunks/app-nVeEnPIV.js";

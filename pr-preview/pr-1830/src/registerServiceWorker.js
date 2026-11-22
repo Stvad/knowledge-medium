@@ -1,1 +1,0 @@
-export{UI as checkForAppUpdate,WI as registerServiceWorker}from"../chunks/app-nVeEnPIV.js";

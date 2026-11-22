@@ -1,1 +1,0 @@
-export{xF as TypeChip}from"../../../chunks/app-nVeEnPIV.js";

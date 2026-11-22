@@ -1,1 +1,0 @@
-export{vf as BlockTagsConfigEditor}from"../../../chunks/app-nVeEnPIV.js";

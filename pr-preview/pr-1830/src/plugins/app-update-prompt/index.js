@@ -1,1 +1,0 @@
-export{PI as appUpdatePromptExtension}from"../../../chunks/app-nVeEnPIV.js";

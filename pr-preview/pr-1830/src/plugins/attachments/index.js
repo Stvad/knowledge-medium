@@ -1,1 +1,0 @@
-export{pC as attachmentsPlugin}from"../../../chunks/app-nVeEnPIV.js";

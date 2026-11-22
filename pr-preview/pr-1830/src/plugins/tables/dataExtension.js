@@ -1,1 +1,0 @@
-export{qY as tablesDataExtension}from"../../../chunks/app-nVeEnPIV.js";

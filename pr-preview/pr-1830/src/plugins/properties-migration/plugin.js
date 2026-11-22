@@ -1,1 +1,0 @@
-export{tc as propertiesMigrationPlugin}from"../../../chunks/app-nVeEnPIV.js";

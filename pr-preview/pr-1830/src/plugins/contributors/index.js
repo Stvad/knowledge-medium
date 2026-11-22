@@ -1,1 +1,0 @@
-export{kg as contributorsPlugin}from"../../../chunks/app-nVeEnPIV.js";
