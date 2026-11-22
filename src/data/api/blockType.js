@@ -1,1 +1,1 @@
-export{igt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-DlWD6DWP.js";
+export{ogt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-CwFJT_ra.js";

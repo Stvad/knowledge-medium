@@ -1,1 +1,1 @@
-export{eg as confirmThreadDeletion}from"../../../chunks/app-DlWD6DWP.js";
+export{ng as confirmThreadDeletion}from"../../../chunks/app-CwFJT_ra.js";

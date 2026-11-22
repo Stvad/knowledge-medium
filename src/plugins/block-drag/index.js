@@ -1,1 +1,1 @@
-export{QS as blockDragPlugin}from"../../../chunks/app-DlWD6DWP.js";
+export{eC as blockDragPlugin}from"../../../chunks/app-CwFJT_ra.js";

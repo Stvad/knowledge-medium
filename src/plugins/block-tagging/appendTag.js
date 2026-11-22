@@ -1,1 +1,1 @@
-export{Hf as appendTagToBlocks,Uf as appendTagToContent}from"../../../chunks/app-DlWD6DWP.js";
+export{Wf as appendTagToBlocks,Gf as appendTagToContent}from"../../../chunks/app-CwFJT_ra.js";

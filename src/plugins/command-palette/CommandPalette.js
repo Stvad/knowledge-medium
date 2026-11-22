@@ -1,1 +1,1 @@
-export{xP as CommandPalette}from"../../../chunks/app-DlWD6DWP.js";
+export{CP as CommandPalette}from"../../../chunks/app-CwFJT_ra.js";
