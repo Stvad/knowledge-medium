@@ -19,7 +19,7 @@ import {
   resizeColumn, setColumnHidden, typeTargetsFor, type ColumnDeletion, type TypeTarget,
 } from './columns'
 import type { TableColumn } from './model'
-import type { ViewSort } from './sort'
+import { nextSort, type ViewSort } from './sort'
 
 /** A pointer that travels less than this is a click, not a drag. */
 const DRAG_THRESHOLD = 5
@@ -86,8 +86,8 @@ interface HeaderProps {
   sort: ViewSort | undefined
   /** Per column: does its property sort in SQL? */
   sortable: readonly boolean[]
-  /** A click on a sortable header: the next sort for that column. */
-  onSort: (columnId: string) => void
+  /** Writes the view's sort; undefined unsorts. */
+  onSort: (sort: ViewSort | undefined) => void
 }
 
 const SORT_ARIA = {asc: 'ascending', desc: 'descending'} as const
@@ -128,7 +128,7 @@ export const ColumnHeaders = ({
       const row = rowRef.current
       // A press that never travelled is a click: it sorts.
       if (drop && current.slot === null) {
-        if (sortable[columns.findIndex(column => column.id === current.columnId)]) onSort(current.columnId)
+        if (sortable[columns.findIndex(column => column.id === current.columnId)]) onSort(nextSort(sort, current.columnId))
         return
       }
       if (!drop || current.slot === null || !row) return
@@ -158,7 +158,7 @@ export const ColumnHeaders = ({
                 className="ml-1 text-muted-foreground">{sort.direction === 'asc' ? '↑' : '↓'}</span>}
             </span>
             {editable && <ColumnMenu host={host} workspaceId={workspaceId} column={column} name={names[index]!}
-              rowIds={rowIds}/>}
+              rowIds={rowIds} sort={sortable[index] ? sort : null} onSort={onSort}/>}
             {editable && <ResizeHandle host={host} column={column} name={names[index]!} onPreview={onResizePreview}
               measure={() => rowRef.current?.querySelector(`:scope > [data-table-column="${CSS.escape(column.id)}"]`)
                 ?.getBoundingClientRect().width}/>}
@@ -225,8 +225,11 @@ const refusalNotice = (result: ColumnDeletion) => {
   if (result === 'nested') showInfo('This column has blocks nested under it. Show the table as an outline to move or delete them.')
 }
 
-const ColumnMenu = ({host, workspaceId, column, name, rowIds}: {
+const ColumnMenu = ({host, workspaceId, column, name, rowIds, sort, onSort}: {
   host: Block; workspaceId: string; column: TableColumn; name: string; rowIds: readonly string[]
+  /** The view's sort; null when this column cannot sort. */
+  sort: ViewSort | undefined | null
+  onSort: (sort: ViewSort | undefined) => void
 }) => {
   const [types, setTypes] = useState<readonly TypeTarget[]>([])
   const [open, setOpen] = useMenuOpen()
@@ -249,6 +252,12 @@ const ColumnMenu = ({host, workspaceId, column, name, rowIds}: {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
+        {sort !== null && <>
+          <DropdownMenuItem onSelect={() => onSort({columnId: column.id, direction: 'asc'})}>Sort ascending</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onSort({columnId: column.id, direction: 'desc'})}>Sort descending</DropdownMenuItem>
+          {sort?.columnId === column.id && <DropdownMenuItem onSelect={() => onSort(undefined)}>Remove sort</DropdownMenuItem>}
+          <DropdownMenuSeparator/>
+        </>}
         <DropdownMenuItem onSelect={() => { void setColumnHidden(repo, column.id, true).catch(report('column hide')) }}>
           Hide column
         </DropdownMenuItem>

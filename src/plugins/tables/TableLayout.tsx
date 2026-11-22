@@ -7,12 +7,12 @@ import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
-import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
-import { ChangeScope, memberCodecOf, type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
+import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
+import { memberCodecOf, type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
-import { isPropertyValueEditable, openPropertyValue } from '@/data/internals/propertyValueEdits'
-import { focusBlock, focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
+import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
+import { focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
 import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
@@ -25,10 +25,9 @@ import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './contro
 import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
 import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
-import type { QueryClauses } from './query/parse'
-import { fencedQuery, useTableQuery, type TableQuery } from './query/source'
-import { queryProp } from './schema'
-import { isSortable, nextSort, sortOrder, useViewSort, writeSort, type ViewSort } from './sort'
+import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
+import { useTableQuery, type TableQuery } from './query/source'
+import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { registerGrid, tableRenderScopeId } from './registry'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -194,13 +193,15 @@ const ValueCellBody = ({row, column, schema, editable}: {
   return <EditableCell row={row} fieldId={column.fieldId!} schema={schema}/>
 }
 
+const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
+
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
   const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)
   return (
     <BlockFrame
       block={block} Header={Header} Shell={Shell} Controls={NoControls}
-      className={`tm-table-row ${outside ? 'opacity-60' : ''}`}
+      className={outside ? 'tm-table-row opacity-60' : 'tm-table-row'}
       frameProps={{'data-table-row': block.id, ...(outside ? {'data-table-unmatched': 'true', title: UNMATCHED_TITLE} : {})}}
     >
       {/* `.block-body` clips horizontal overflow: it must be as wide as the
@@ -221,8 +222,6 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
     </BlockFrame>
   )
 }
-
-const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
 const TableCellLayout: BlockLayout = ({Shell, Content}) => (
   <Shell>{shellProps => (
@@ -289,6 +288,8 @@ const TableGrid = (props: GridProps) => {
 }
 
 const NO_COLUMNS: readonly TableColumn[] = []
+const NO_ROWS: readonly string[] = []
+const NO_UNMATCHED: ReadonlySet<string> = new Set()
 
 /** What each column shows: its property definition, and its header name. */
 const useColumnDefinitions = (repo: Block['repo'], workspaceId: string, columns: readonly TableColumn[]) => {
@@ -309,7 +310,8 @@ const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQ
   const all = useColumns(props.host, props.workspaceId, viewId)
   const {schemas, names} = useColumnDefinitions(props.host.repo, props.workspaceId, all ?? NO_COLUMNS)
   const sort = useViewSort(props.host.repo.block(viewId))
-  const order = useMemo(() => sortOrder(sort, all ?? NO_COLUMNS, schemas), [all, schemas, sort])
+  const fieldNames = useQueryableFieldNames(props.host.repo, props.workspaceId)
+  const order = useMemo(() => sortOrder(sort, all ?? NO_COLUMNS, schemas, fieldNames), [all, fieldNames, schemas, sort])
   const split = useMemo(() => {
     const shown = {columns: [] as TableColumn[], schemas: [] as ColumnSchema[], names: [] as string[]}
     const hidden = {columns: [] as TableColumn[], names: [] as string[]}
@@ -337,9 +339,10 @@ const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQ
 const NoColumns = () => <p className="py-1 text-sm text-muted-foreground">This table shows no columns.</p>
 
 const TableBody = ({
-  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, sort, order,
+  host, renderScopeId, parentRenderScopeId, workspaceId, query, columns, schemas, names, toolbar, viewId, viewIds, sort, order,
 }: GridProps & {
   query: TableQuery | null
+  viewIds: readonly string[]
   columns: readonly TableColumn[]
   schemas: readonly ColumnSchema[]
   names: readonly string[]
@@ -353,8 +356,9 @@ const TableBody = ({
   const [controller] = useState(() => new GridController(host, uiStateBlock, renderScopeId, parentRenderScopeId))
   const gridId = useId()
   const {childBacked} = useContext(PropertyDisplayScopeContext)
-  const selected = useRowIds(host, workspaceId, query ? runnableClauses(query) : null, order)
-  const created = useSyncExternalStore(controller.subscribeCreated, controller.getCreated)
+  const selected = useRowIds(host, workspaceId, query?.clauses ?? null, order)
+  const liveCreated = useLiveRows(repo, useSyncExternalStore(controller.subscribeCreated, controller.getCreated))
+  const created = query ? liveCreated : NO_ROWS
   // While a cell or row is being edited the query's answer is held, so an edit
   // that stops a row matching does not pull it out from under the editor.
   const editing = useEditingIn(uiStateBlock, renderScopeId)
@@ -365,6 +369,7 @@ const TableBody = ({
     return [...held, ...created.filter(id => !listed.has(id))]
   }, [created, held])
   const unmatched = useMemo(() => {
+    if (created.length === 0) return NO_UNMATCHED
     const live = new Set(selected ?? [])
     return new Set(created.filter(id => !live.has(id)))
   }, [created, selected])
@@ -415,10 +420,11 @@ const TableBody = ({
   const contentColumn = columns.findIndex(column => column.fieldId === null)
   const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched}),
     [controller, columns, schemas, editable, contentColumn, unmatched])
-  const sortable = useMemo(() => schemas.map(isSortable), [schemas])
-  const onSort = useCallback((columnId: string) => {
-    void writeSort(repo, viewId, nextSort(sort, columnId)).catch(error => console.error('[tables] sort failed', error))
-  }, [repo, sort, viewId])
+  const fieldNames = useQueryableFieldNames(repo, workspaceId)
+  const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
+  const onSort = useCallback((next: ViewSort | undefined) => {
+    void writeSort(repo, viewId, next).catch(error => console.error('[tables] sort failed', error))
+  }, [repo, viewId])
   const rowsOverrides = useMemo(() => ({
     isNestedSurface: true, layoutBoundary: false, renderScopeId,
     [GRID_CONTEXT_KEY]: controller,
@@ -455,95 +461,7 @@ const TableBody = ({
         {!repo.isReadOnly && !query && childBacked && <AddQueryButton host={host} parentRenderScopeId={parentRenderScopeId}/>}
         {toolbar}
       </div>
-      {query && <OutsideQuery host={host} workspaceId={workspaceId} rows={shown}/>}
-    </div>
-  )
-}
-
-/** A query none of whose terms compiled selects nothing, beside its errors:
- *  an empty clause set would select every block in the workspace. */
-const SELECTS_NOTHING: QueryClauses = {anyOf: []}
-const runnableClauses = (query: TableQuery): QueryClauses =>
-  query.parsed.terms.length > 0 ? query.parsed.query : SELECTS_NOTHING
-
-/** Is a block in this render scope being edited? */
-const useEditingIn = (uiStateBlock: Block, renderScopeId: string): boolean =>
-  useHandle(uiStateBlock, {selector: data => !!data &&
-    focusedBlockLocationFromProperties(data.properties)?.renderScopeId === renderScopeId &&
-    safeDecodeRowProperty(data, isEditingProp)})
-
-/** `value`, or the last one seen while `hold` was false. */
-const useHeldWhile = <T,>(value: T, hold: boolean): T => {
-  const [held, setHeld] = useState(value)
-  if (!hold && held !== value) setHeld(value)
-  return hold ? held : value
-}
-
-/** Each term the query could not compile, with its text: the rest still runs. */
-const QueryErrors = ({query}: {query: TableQuery}) => {
-  const {errors} = query.parsed
-  if (errors.length === 0) return null
-  return (
-    <ul data-table-query-errors="true" className="py-1 text-xs text-destructive">
-      {errors.map(error => (
-        <li key={`${error.start}:${error.message}`} data-table-query-error={error.message}>
-          <code className="rounded bg-muted px-1">{query.text.slice(error.start, error.end)}</code> {error.message}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-/** Adds the query property with an empty fenced query and opens its value for editing. */
-const AddQueryButton = ({host, parentRenderScopeId}: {host: Block; parentRenderScopeId: string}) => {
-  const uiStateBlock = useUIStateBlock()
-  const definitions = usePropertyDefinitions(host.repo)
-  const fieldId = definitions?.definitionsByName.get(queryProp.name)?.[0]?.fieldId
-  if (!fieldId) return null
-  const add = async () => {
-    const {valueId} = await host.repo.tx(tx => openPropertyValue(tx, host.id, fieldId, {initialText: fencedQuery('')}),
-      {scope: ChangeScope.BlockDefault, description: 'add table query'})
-    await focusBlock(uiStateBlock, valueId, {edit: true, renderScopeId: parentRenderScopeId})
-  }
-  return <button type="button" data-table-add-query="true" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-    onClick={() => { void add().catch(error => console.error('[tables] add query failed', error)) }}>+ Query</button>
-}
-
-/** The query's field rows, drawn as the outline draws them, in the host's own
- *  scope: the query is edited there, as an ordinary value block. */
-const QueryFields = ({host}: {host: Block}) => {
-  const definitions = usePropertyDefinitions(host.repo)
-  const fieldId = definitions?.definitionsByName.get(queryProp.name)?.[0]?.fieldId
-  return fieldId ? <QueryFieldRows host={host} fieldId={fieldId}/> : null
-}
-
-const QueryFieldRows = ({host, fieldId}: {host: Block; fieldId: string}) => {
-  const fieldRows = useHandle(host.repo.query.propertyRows({ownerId: host.id, fieldId}),
-    {selector: rows => rows?.fields.map(({field}) => field.id) ?? []})
-  if (fieldRows.length === 0) return null
-  return (
-    <PropertyRowListingContext value={host.id}>
-      <div data-table-query-fields="true">
-        {fieldRows.map(id => <BlockComponent key={id} blockId={id}/>)}
-      </div>
-    </PropertyRowListingContext>
-  )
-}
-
-/** Under a query, the host's children the query does not select, drawn as
- *  ordinary outline below the grid: nothing under a table is invisible. */
-const OutsideQuery = ({host, workspaceId, rows}: {host: Block; workspaceId: string; rows: readonly string[]}) => {
-  const {renderScopeId} = useBlockContext()
-  const children = useRowIds(host, workspaceId, null)
-  const outside = useMemo(() => {
-    const drawn = new Set(rows)
-    return (children ?? []).filter(id => !drawn.has(id))
-  }, [children, rows])
-  if (outside.length === 0) return null
-  return (
-    <div data-table-outside-query="true" className="mt-1">
-      <p className="py-1 text-xs text-muted-foreground">Under this table, not selected by the query</p>
-      {outside.map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
+      {query && <OutsideQuery host={host} viewIds={viewIds} rows={shown}/>}
     </div>
   )
 }

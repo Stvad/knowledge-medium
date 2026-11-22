@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { getBlockTypes } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -15,8 +16,9 @@ import { tablesDataExtension } from '../dataExtension'
 import { rowQuery, type TableColumn } from '../model'
 import { createQueryRow, rowBackfill } from '../query/backfill'
 import { parseQuery } from '../query/parse'
+import { openQueryValue } from '../query/queryValue'
 import { fencedQuery, queryResolver, queryTextOf } from '../query/source'
-import { COLUMN_TYPE, VIEW_TYPE } from '../schema'
+import { COLUMN_TYPE, VIEW_TYPE, queryProp } from '../schema'
 import { nextSort, sortOrder, writeSort } from '../sort'
 
 const workspaceId = 'ws-query-slice'
@@ -77,6 +79,10 @@ describe('queryTextOf', () => {
     ['````query\na=1\n````', 'a=1'],
     ['```query\na=1', 'a=1'],
     ['a=1 b=2', 'a=1 b=2'],
+    ['```query\n```', ''],
+    ['~~~\n~~~', ''],
+    ['```query\n\n```', ''],
+    ['```query\na=1\n```  \n', 'a=1'],
   ])('%j', (value, text) => {
     expect(queryTextOf(value)).toBe(text)
   })
@@ -158,7 +164,11 @@ describe('sort', () => {
     ['c-title', undefined],
     ['c-gone', undefined],
   ])('orders by %s as %j', (columnId, order) => {
-    expect(sortOrder({columnId, direction: 'desc'}, columns, schemas)).toEqual(order)
+    expect(sortOrder({columnId, direction: 'desc'}, columns, schemas, new Set(['created']))).toEqual(order)
+  })
+
+  it('does not sort by a property named like a queryable field, which the engine refuses', () => {
+    expect(sortOrder({columnId: 'c-rank', direction: 'asc'}, columns, schemas, new Set(['rank']))).toBeUndefined()
   })
 
   it('stores the column and direction on the view, each change one undo step', async () => {
@@ -177,5 +187,38 @@ describe('sort', () => {
     expect(await stored()).toEqual([firstColumn, 'asc'])
     await writeSort(repo, view!, undefined)
     expect(await stored()).toEqual([undefined, undefined])
+  })
+})
+
+describe('openQueryValue', () => {
+  const queryFieldId = async () => {
+    await materializePropertySeeds(repo, workspaceId, [queryProp])
+    return propertyDefinitionBlockId(workspaceId, queryProp.seedKey)
+  }
+  const valueContents = () => db.db.getAll<{content: string}>(
+    `SELECT v.content FROM blocks f JOIN blocks v ON v.parent_id = f.id
+      WHERE f.parent_id = 'host' AND f.is_field_form = 1 AND f.deleted = 0 AND v.deleted = 0`)
+
+  it('gives a host with no query an empty fence', async () => {
+    await openQueryValue(repo, 'host', await queryFieldId())
+    expect(await valueContents()).toEqual([{content: fencedQuery('')}])
+  })
+
+  it('opens a value the host already holds without rewriting it, projected or not', async () => {
+    const fieldId = await queryFieldId()
+    // Raw rows: a value whose projection has not run yet, as after sync arrival.
+    await db.db.writeTransaction(async tx => {
+      for (const [id, parent, content, fieldForm] of [
+        ['query-field', 'host', `::((${fieldId}))`, 1], ['query-value', 'query-field', fencedQuery('keep=me'), null],
+      ] as const) {
+        await tx.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+            created_at, updated_at, user_updated_at, created_by, updated_by, deleted, is_field_form, reference_target_id)
+            VALUES (?, ?, ?, 'a0', ?, '{}', '[]', 1, 1, 1, 'u', 'u', 0, ?, ?)`,
+          [id, workspaceId, parent, content, fieldForm, fieldForm ? fieldId : null])
+      }
+    })
+    expect(await openQueryValue(repo, 'host', fieldId)).toBe('query-value')
+    expect(await valueContents()).toEqual([{content: fencedQuery('keep=me')}])
   })
 })

@@ -10,7 +10,7 @@ import {
 import { focusBlock, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
-import { showInfo } from '@/utils/toast'
+import { showError, showInfo } from '@/utils/toast'
 import { ROW_CAP, canAddRow } from './model'
 import { forgetCellEdit, openedCellEdit, peekValueOwner, reportRefusal } from './cellEdits'
 import { createQueryRow, rowBackfill } from './query/backfill'
@@ -402,7 +402,7 @@ export class GridController {
     const repo = this.host.repo
     if (repo.isReadOnly || this.refuseRowPastCap()) return
     const id = this.queryTerms
-      ? await createQueryRow(repo, this.host.id, rowBackfill(this.queryTerms))
+      ? await this.createQueryRow(this.queryTerms)
       : await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
     if (!id) return
     if (this.queryTerms) {
@@ -410,6 +410,17 @@ export class GridController {
       this.createdListeners.notify()
     }
     await this.editNewRow(id)
+  }
+
+  /** The query's parent can be gone or read-only by now; the transaction then
+   *  writes nothing, and the user is told. */
+  private async createQueryRow(terms: readonly QueryTerm[]): Promise<string | undefined> {
+    try {
+      return await createQueryRow(this.host.repo, this.host.id, rowBackfill(terms))
+    } catch (error) {
+      showError(`Could not add a row: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
   }
 
   /** A new row has only its text to fill in, in the column that shows it. A

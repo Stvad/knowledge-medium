@@ -3,7 +3,9 @@
  *  one transaction and one undo step. */
 import { ChangeScope, memberCodecOf, type AnyPropertySchema, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
+import { queryableFieldsFacet } from '@/data/facets'
 import type { Repo } from '@/data/repo'
+import { useMemo } from 'react'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle } from '@/hooks/block'
 import type { TableColumn } from './model'
@@ -14,10 +16,13 @@ export interface ViewSort {
   readonly direction: SortDirection
 }
 
-/** Sorts in SQL: a scalar codec the engine compares. Lists, references and the
- *  row's own text do not sort yet. */
-export const isSortable = (schema: AnyPropertySchema | undefined): schema is AnyPropertySchema =>
-  schema?.codec.where !== undefined && memberCodecOf(schema.codec) === undefined
+/** Sorts in SQL: a scalar codec the engine compares, under a name no queryable
+ *  field also claims (the engine refuses an order on such a name). Lists,
+ *  references and the row's own text do not sort yet. */
+export const isSortable = (
+  schema: AnyPropertySchema | undefined, fieldNames: ReadonlySet<string>,
+): schema is AnyPropertySchema =>
+  schema?.codec.where !== undefined && memberCodecOf(schema.codec) === undefined && !fieldNames.has(schema.name)
 
 export const useViewSort = (view: Block): ViewSort | undefined =>
   useHandle(view, {selector: data => {
@@ -29,11 +34,18 @@ export const useViewSort = (view: Block): ViewSort | undefined =>
  *  property, or cannot sort, orders nothing. */
 export const sortOrder = (
   sort: ViewSort | undefined, columns: readonly TableColumn[], schemas: readonly (AnyPropertySchema | undefined)[],
+  fieldNames: ReadonlySet<string>,
 ): TypedBlockQuery['order'] | undefined => {
   if (!sort) return undefined
   const index = columns.findIndex(column => column.id === sort.columnId)
   const schema = index >= 0 ? schemas[index] : undefined
-  return isSortable(schema) ? {property: schema.name, direction: sort.direction} : undefined
+  return isSortable(schema, fieldNames) ? {property: schema.name, direction: sort.direction} : undefined
+}
+
+/** The queryable fields' names in a workspace (`created`, `updated`, a plugin's). */
+export const useQueryableFieldNames = (repo: Repo, workspaceId: string): ReadonlySet<string> => {
+  const fields = repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)
+  return useMemo(() => new Set(fields?.keys() ?? []), [fields])
 }
 
 export const nextSort = (current: ViewSort | undefined, columnId: string): ViewSort | undefined =>

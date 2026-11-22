@@ -52,15 +52,12 @@ const NOT_TABLE_MACHINERY = {types: [VIEW_TYPE, COLUMN_TYPE]}
  *  comes back so the grid can say it stopped. */
 export const rowQuery = (
   hostId: string, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
-): TypedBlockQuery & {limit: number} => query === null
-  ? {
-    workspaceId, parentId: hostId, order: order ?? 'outline', propertyChildren: 'none',
-    exclude: [NOT_TABLE_MACHINERY], limit: ROW_CAP + 1,
-  }
-  : {
-    workspaceId, ...query, order: order ?? 'created-asc', propertyChildren: 'none',
-    exclude: [...query.exclude ?? [], NOT_TABLE_MACHINERY, {id: hostId}], limit: ROW_CAP + 1,
-  }
+): TypedBlockQuery & {limit: number} => ({
+  workspaceId, propertyChildren: 'none', limit: ROW_CAP + 1,
+  ...query === null
+    ? {parentId: hostId, order: order ?? 'outline', exclude: [NOT_TABLE_MACHINERY]}
+    : {...query, order: order ?? 'created-asc', exclude: [...query.exclude ?? [], NOT_TABLE_MACHINERY, {id: hostId}]},
+})
 
 export const useRowIds = (
   host: Block, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
