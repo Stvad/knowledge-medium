@@ -1,1 +1,1 @@
-export{Uet as assertAliasClaimable,Wet as claimedAliases}from"../../chunks/app-CLCwFE9g.js";
+export{Wet as assertAliasClaimable,Get as claimedAliases}from"../../chunks/app-D8sw6OEX.js";

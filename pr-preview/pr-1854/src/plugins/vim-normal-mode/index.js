@@ -1,1 +1,1 @@
-export{YE as vimNormalModeInteractionExtension,XE as vimNormalModePlugin}from"../../../chunks/app-CLCwFE9g.js";
+export{YE as vimNormalModeInteractionExtension,XE as vimNormalModePlugin}from"../../../chunks/app-D8sw6OEX.js";

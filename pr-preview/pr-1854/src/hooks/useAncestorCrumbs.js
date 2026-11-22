@@ -1,1 +1,1 @@
-export{oM as useAncestorCrumbs}from"../../chunks/app-CLCwFE9g.js";
+export{oM as useAncestorCrumbs}from"../../chunks/app-D8sw6OEX.js";

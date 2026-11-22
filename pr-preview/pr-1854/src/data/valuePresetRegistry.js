@@ -1,1 +1,1 @@
-export{U8 as readValuePresetRegistry,W8 as readValuePresets}from"../../chunks/app-CLCwFE9g.js";
+export{W8 as readValuePresetRegistry,G8 as readValuePresets}from"../../chunks/app-D8sw6OEX.js";
