@@ -1,1 +1,1 @@
-export{AA as useMinuteClock}from"../../chunks/app-B66-HSlB.js";
+export{AA as useMinuteClock}from"../../chunks/app-81RuqYF5.js";

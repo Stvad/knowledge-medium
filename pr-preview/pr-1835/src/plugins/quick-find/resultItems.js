@@ -1,1 +1,1 @@
-export{KA as aliasResultItems,qA as blockResultItems,JA as recentResultItems}from"../../../chunks/app-B66-HSlB.js";
+export{KA as aliasResultItems,qA as blockResultItems,JA as recentResultItems}from"../../../chunks/app-81RuqYF5.js";
