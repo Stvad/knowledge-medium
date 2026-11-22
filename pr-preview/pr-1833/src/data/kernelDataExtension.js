@@ -1,0 +1,1 @@
+export{A8 as kernelDataExtension}from"../../chunks/app-T4CWas5t.js";

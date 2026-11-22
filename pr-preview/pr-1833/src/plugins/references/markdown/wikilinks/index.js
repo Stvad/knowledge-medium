@@ -1,0 +1,1 @@
+export{qx as wikilinkMarkdownExtension}from"../../../../../chunks/app-T4CWas5t.js";

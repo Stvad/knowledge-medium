@@ -1,0 +1,1 @@
+export{Yp as quotedInFooterContribution}from"../../../chunks/app-T4CWas5t.js";

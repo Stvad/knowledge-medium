@@ -1,0 +1,1 @@
+export{kg as contributorsPlugin}from"../../../chunks/app-T4CWas5t.js";

@@ -1,0 +1,1 @@
+export{wS as blockDragPlugin}from"../../../chunks/app-T4CWas5t.js";

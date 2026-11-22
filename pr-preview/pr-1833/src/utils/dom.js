@@ -1,0 +1,1 @@
+export{pV as getElementScrollportBounds,mV as isEditorElement,hV as isElementProperlyVisible,gV as nearestScrollableAncestor,_V as shouldExitEditModeAfterBlur}from"../../chunks/app-T4CWas5t.js";

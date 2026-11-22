@@ -1,0 +1,1 @@
+export{qp as annotationsPlugin}from"../../../chunks/app-T4CWas5t.js";

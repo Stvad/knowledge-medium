@@ -1,0 +1,1 @@
+export{fx as LazyBlockEntry}from"../../../chunks/app-T4CWas5t.js";

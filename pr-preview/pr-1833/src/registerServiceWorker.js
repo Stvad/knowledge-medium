@@ -1,0 +1,1 @@
+export{UI as checkForAppUpdate,WI as registerServiceWorker}from"../chunks/app-T4CWas5t.js";

@@ -1,0 +1,1 @@
+export{BB as defaultPasteDecision,VB as pasteDecisionVerb}from"../../chunks/app-T4CWas5t.js";

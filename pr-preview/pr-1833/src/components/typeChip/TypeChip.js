@@ -1,0 +1,1 @@
+export{xF as TypeChip}from"../../../chunks/app-T4CWas5t.js";

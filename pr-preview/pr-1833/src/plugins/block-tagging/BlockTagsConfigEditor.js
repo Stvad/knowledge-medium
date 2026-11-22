@@ -1,0 +1,1 @@
+export{vf as BlockTagsConfigEditor}from"../../../chunks/app-T4CWas5t.js";
