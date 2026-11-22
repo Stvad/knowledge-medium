@@ -1,14 +1,14 @@
 import {
-  createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode,
 } from 'react'
-import { BlockComponent } from '@/components/BlockComponent'
+import { BlockChildren, BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
-import { memberCodecOf, type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
+import { type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
@@ -17,12 +17,12 @@ import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
 import { useContent, useHandle, useWorkspaceId } from '@/hooks/block'
-import { resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
+import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useActionContextActivations } from '@/shortcuts/useActionContext'
 import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './controller'
-import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
+import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, LIST_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
 import { ColumnHeaders, ColumnToolbar, type ResizePreview } from './ColumnHeaders'
 import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, useHeldWhile, useLiveRows } from './QueryUi'
@@ -65,8 +65,6 @@ const columnTrack = (column: TableColumn) =>
 const minWidth = (columns: readonly TableColumn[]) =>
   columns.reduce((sum, column) => sum + (column.width ?? defaultMinWidth(column)), 0)
 
-const NoControls = () => null
-
 const formatStored = (value: unknown): string =>
   value === undefined || value === null ? ''
     : Array.isArray(value) ? value.map(formatStored).join(', ')
@@ -84,22 +82,21 @@ const ReadOnlyCell = ({row, schema}: {row: Block; schema: AnyPropertySchema}) =>
   return <StoredValue properties={properties} schema={schema}/>
 }
 
-/** One value row, mounted as the root of its own scope so structural edits
- *  cannot move it out of the cell. */
-const CellValue = ({valueId, fieldRowId, schema}: {valueId: string; fieldRowId: string; schema: AnyPropertySchema}) => {
-  const overrides = useMemo(() => ({
-    scopeRootId: valueId,
-    surfaceName: CELL_SURFACE,
-    disablePropertyFieldCompletion: true,
-    disableBlockSplit: true,
-    [CELL_CONTEXT_KEY]: valueId,
-  }), [valueId])
+/** The block context a cell draws its blocks in: rooted at `scopeRootId`, out
+ *  of spatial navigation unless `outline`, with `::` off (it would turn a
+ *  value itself into a field row), and the property its values belong to. */
+const CellScope = ({scopeRootId, fieldRowId, schema, outline, children}: {
+  scopeRootId: string; fieldRowId: string; schema: AnyPropertySchema; outline: boolean; children: ReactNode
+}) => {
+  const overrides = useMemo(() => outline
+    ? {scopeRootId, disablePropertyFieldCompletion: true, disableBlockSplit: false, [LIST_CONTEXT_KEY]: true}
+    : {scopeRootId, disablePropertyFieldCompletion: true, disableBlockSplit: true, surfaceName: CELL_SURFACE,
+      [CELL_CONTEXT_KEY]: scopeRootId},
+  [outline, scopeRootId])
   const field = useMemo(() => ({id: fieldRowId, schema}), [fieldRowId, schema])
   return (
     <NestedBlockContextProvider overrides={overrides}>
-      <PropertyFieldRowContext value={field}>
-        <BlockComponent blockId={valueId}/>
-      </PropertyFieldRowContext>
+      <PropertyFieldRowContext value={field}>{children}</PropertyFieldRowContext>
     </NestedBlockContextProvider>
   )
 }
@@ -107,17 +104,31 @@ const CellValue = ({valueId, fieldRowId, schema}: {valueId: string; fieldRowId: 
 const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; schema: AnyPropertySchema}) => {
   const cell = useHandle(row.repo.query.propertyRows({ownerId: row.id, fieldId}), {selector: rows => rows && {
     properties: rows.owner?.properties,
+    fieldRowIds: rows.fields.filter(({values}) => values.length > 0).map(({field}) => field.id),
     values: rows.fields.flatMap(({field, values}) =>
       values.map(value => ({id: value.id, fieldRowId: field.id, hasChildren: value.hasChildren}))),
   }})
   if (!cell) return null
   const {values} = cell
   if (values.length === 0) return <StoredValue properties={cell.properties} schema={schema}/>
+  // A list's members are drawn as the outline draws a field row's children:
+  // bulleted blocks that split, merge, nest and show their own children. The
+  // field row is their scope root and is not drawn (see `./keys`).
+  if (!isSingleValueProperty(schema)) return (
+    <div data-table-list="true" className="min-w-0">
+      {cell.fieldRowIds.map(id => <CellScope key={id} scopeRootId={id} fieldRowId={id} schema={schema} outline>
+        <BlockChildren block={row.repo.block(id)}/>
+      </CellScope>)}
+    </div>
+  )
   const nested = values.some(value => value.hasChildren)
   return (
     <div className="flex min-w-0 flex-col">
+      {/* Each value is the root of its own scope, so structural edits cannot move it out of the cell. */}
       {values.map(value =>
-        <CellValue key={value.id} valueId={value.id} fieldRowId={value.fieldRowId} schema={schema}/>)}
+        <CellScope key={value.id} scopeRootId={value.id} fieldRowId={value.fieldRowId} schema={schema} outline={false}>
+          <BlockComponent blockId={value.id}/>
+        </CellScope>)}
       {nested && <span data-table-nested="true" className="text-xs text-muted-foreground"
         title="This value has nested blocks. Show the table as an outline to see them.">…</span>}
     </div>
@@ -127,6 +138,17 @@ const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; sche
 const isInteractive = (target: EventTarget) =>
   target instanceof Element && target.closest('input, select, button, textarea, a, .cm-editor') !== null
 
+/** A list's members are blocks: a click on one is the block's own. Only this
+ *  cell's list counts, not one of an outer table the cell is drawn inside. */
+const inOwnList = (target: EventTarget, cell: Element) => {
+  const list = target instanceof Element ? target.closest('[data-table-list]') : null
+  return list !== null && list.closest('[data-table-col]') === cell
+}
+
+/** A cell's own event, not one of a table nested in it: that cell handles its own. */
+const isOwnEvent = (event: {target: EventTarget; currentTarget: EventTarget}) =>
+  event.target instanceof Element && event.target.closest('[data-table-col]') === event.currentTarget
+
 const isPlainKey = (event: KeyboardEvent) => !event.metaKey && !event.ctrlKey && !event.altKey
 
 const Cell = ({row, index, sticky, isContent, children}: {
@@ -134,9 +156,10 @@ const Cell = ({row, index, sticky, isContent, children}: {
 }) => {
   const {controller} = useContext(TableContext)!
   const click = (event: MouseEvent<HTMLDivElement>) => {
+    if (!isOwnEvent(event)) return
     // Controls, links and editors keep their click; so does the row's own
     // text, which edits in place.
-    if (isContent || isInteractive(event.target)) {
+    if (isContent || isInteractive(event.target) || inOwnList(event.target, event.currentTarget)) {
       controller.setColumn(index)
       return
     }
@@ -145,15 +168,16 @@ const Cell = ({row, index, sticky, isContent, children}: {
     controller.focusCell(row.id, index, event.detail === 2)
   }
   const focus = (event: FocusEvent<HTMLDivElement>) => {
+    if (!isOwnEvent(event)) return
     if (event.target instanceof HTMLElement && event.target.matches(CELL_CONTROL_SELECTOR)) {
       controller.controlFocused(row.id, index, event.target)
     }
   }
   const blur = (event: FocusEvent<HTMLDivElement>) => {
-    if (event.target instanceof HTMLElement) controller.controlBlurred(event.target)
+    if (isOwnEvent(event) && event.target instanceof HTMLElement) controller.controlBlurred(event.target)
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!(event.target instanceof HTMLElement) || !event.target.matches(CELL_CONTROL_SELECTOR)) return
+    if (!isOwnEvent(event) || !(event.target instanceof HTMLElement) || !event.target.matches(CELL_CONTROL_SELECTOR)) return
     if (event.nativeEvent.isComposing) return
     const command = controlKeyCommand(event)
     if (command) {
@@ -196,12 +220,15 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
+/** A row keeps its bullet, so it opens, opens in the sidebar and has its menu
+ *  as any block does; no expand control, since the grid draws no children.
+ *  The header's `ROW_BULLET_GUTTER` matches the bullet's width. */
+const TableRowLayout: BlockLayout = ({block, Header, Shell, Bullet, Content}) => {
   const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)
   return (
     <BlockFrame
-      block={block} Header={Header} Shell={Shell} Controls={NoControls}
+      block={block} Header={Header} Shell={Shell} Controls={Bullet}
       className={outside ? 'tm-table-row opacity-60' : 'tm-table-row'}
       frameProps={{'data-table-row': block.id, ...(outside ? {'data-table-unmatched': 'true', title: UNMATCHED_TITLE} : {})}}
     >
@@ -269,6 +296,16 @@ const RowKeys = ({controller, rows, renderScopeId}: {
   return null
 }
 
+/** Hands focus that an outline verb put on a cell's undrawn field row to its row. */
+const FieldRowFocusGuard = ({controller, renderScopeId}: {controller: GridController; renderScopeId: string}) => {
+  const focusedId = useHandle(useUIStateBlock(), {selector: data => {
+    const location = focusedBlockLocationFromProperties(data?.properties)
+    return location?.renderScopeId === renderScopeId ? location.blockId : undefined
+  }})
+  useEffect(() => { if (focusedId) controller.leaveFieldRow(focusedId) }, [controller, focusedId])
+  return null
+}
+
 interface GridProps {
   host: Block
   renderScopeId: string
@@ -328,8 +365,11 @@ const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQ
     })
     return {shown, hidden}
   }, [all, schemas, names])
+  const columnNames = useMemo(() => schemas.flatMap(schema => schema ? [schema.name] : []), [schemas])
   if (all === undefined) return null
   const toolbar = props.host.repo.isReadOnly ? null : <ColumnToolbar host={props.host} viewId={viewId}
+    workspaceId={props.workspaceId} query={props.query?.clauses ?? null}
+    columnNames={columnNames}
     hidden={split.hidden.columns} hiddenNames={split.hidden.names}
     hasContentColumn={all.some(column => column.fieldId === null)}/>
   if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>
@@ -382,7 +422,7 @@ const TableBody = ({
     id: column.id,
     fieldId: column.fieldId,
     editable: editable[index]!,
-    list: schemas[index] !== undefined && memberCodecOf(schemas[index]!.codec) !== undefined,
+    list: schemas[index] !== undefined && !isSingleValueProperty(schemas[index]),
   })), [columns, editable, schemas])
 
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
@@ -435,6 +475,7 @@ const TableBody = ({
     <div ref={rootRef} data-table-grid={gridId} className="my-1 text-sm" style={tracks}>
       <CursorStyle gridId={gridId} controller={controller}/>
       <RowKeys controller={controller} rows={rowSet} renderScopeId={renderScopeId}/>
+      <FieldRowFocusGuard controller={controller} renderScopeId={renderScopeId}/>
       {!childBacked && <p className="py-1 text-xs text-muted-foreground">
         Read-only: this workspace stores properties in the block, not as rows.
       </p>}
