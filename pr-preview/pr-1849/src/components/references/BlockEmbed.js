@@ -1,1 +1,1 @@
-export{zF as BlockEmbed}from"../../../chunks/app-BEUVW9-0.js";
+export{BF as BlockEmbed}from"../../../chunks/app-Dl3ZLykt.js";

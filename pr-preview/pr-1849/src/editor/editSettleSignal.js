@@ -1,1 +1,1 @@
-export{TV as blockEditSettled,EV as notifyBlockEditSettled}from"../../chunks/app-BEUVW9-0.js";
+export{DV as blockEditSettled,OV as notifyBlockEditSettled}from"../../chunks/app-Dl3ZLykt.js";

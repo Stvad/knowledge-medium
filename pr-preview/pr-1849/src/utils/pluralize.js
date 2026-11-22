@@ -1,1 +1,1 @@
-export{Wet as agree,Get as pluralize}from"../../chunks/app-BEUVW9-0.js";
+export{Ket as agree,qet as pluralize}from"../../chunks/app-Dl3ZLykt.js";

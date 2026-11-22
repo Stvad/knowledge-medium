@@ -1,1 +1,1 @@
-export{H_ as agentRuntimeBridgeRestartEvent,U_ as bridgeUrl,W_ as isLoopbackBridgeUrl,G_ as processBridgePairingFromHash,K_ as startAgentRuntimeBridge}from"../../../chunks/app-BEUVW9-0.js";
+export{U_ as agentRuntimeBridgeRestartEvent,W_ as bridgeUrl,G_ as isLoopbackBridgeUrl,K_ as processBridgePairingFromHash,q_ as startAgentRuntimeBridge}from"../../../chunks/app-Dl3ZLykt.js";

@@ -1,1 +1,1 @@
-export{YF as chipStyle}from"../../../chunks/app-BEUVW9-0.js";
+export{XF as chipStyle}from"../../../chunks/app-Dl3ZLykt.js";

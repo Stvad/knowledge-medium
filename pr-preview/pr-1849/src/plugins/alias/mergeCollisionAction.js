@@ -1,1 +1,1 @@
-export{FC as mergeAliasCollision}from"../../../chunks/app-BEUVW9-0.js";
+export{IC as mergeAliasCollision}from"../../../chunks/app-Dl3ZLykt.js";
