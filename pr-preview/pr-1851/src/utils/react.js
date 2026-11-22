@@ -1,0 +1,1 @@
+export{VB as useIsMobile,HB as usePointerCoarse}from"../../chunks/app-YyICAhjD.js";

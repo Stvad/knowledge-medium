@@ -1,0 +1,1 @@
+export{Kx as LazyBlockEntry}from"../../../chunks/app-YyICAhjD.js";

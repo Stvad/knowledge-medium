@@ -1,0 +1,1 @@
+export{JB as BlockInfoDialog}from"../../../chunks/app-YyICAhjD.js";

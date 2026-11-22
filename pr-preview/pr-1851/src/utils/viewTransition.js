@@ -1,0 +1,1 @@
+export{Iq as withMoveTransition}from"../../chunks/app-YyICAhjD.js";

@@ -1,0 +1,1 @@
+export{Ef as srsBlockDateAdapter}from"../../../chunks/app-YyICAhjD.js";

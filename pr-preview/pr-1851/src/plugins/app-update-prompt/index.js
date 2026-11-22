@@ -1,0 +1,1 @@
+export{hL as appUpdatePromptExtension}from"../../../chunks/app-YyICAhjD.js";

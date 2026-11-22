@@ -1,0 +1,1 @@
+export{_M as Label}from"../../../chunks/app-YyICAhjD.js";

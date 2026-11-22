@@ -1,0 +1,1 @@
+export{WX as REFERENCES_TARGET_INVALIDATION_CHANNEL,GX as referencesInvalidationRule}from"../../../chunks/app-YyICAhjD.js";

@@ -1,0 +1,1 @@
+export{UR as BlockLoadingPlaceholder}from"../../chunks/app-YyICAhjD.js";

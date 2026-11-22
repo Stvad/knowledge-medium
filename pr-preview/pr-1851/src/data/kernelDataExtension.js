@@ -1,0 +1,1 @@
+export{E9 as kernelDataExtension}from"../../chunks/app-YyICAhjD.js";

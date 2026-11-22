@@ -1,0 +1,1 @@
+export{IJ as AppRuntimeContextProvider,LJ as useAppRuntime}from"../../chunks/app-YyICAhjD.js";

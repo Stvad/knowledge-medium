@@ -1,0 +1,1 @@
+export{kut as aliasSeatNamespacesInTx,Aut as resolveAliasSeatNamespaces}from"../../chunks/app-YyICAhjD.js";
