@@ -39,6 +39,7 @@ describe('parseQuery terms', () => {
     {text: 'assignee', query: {match: [{where: {assignee: {exists: true}}}]}},
     {text: 'tags=urgent', query: {match: [{where: {tags: {contains: 'urgent'}}}]}},
     {text: 'tags!=urgent', query: {exclude: [{where: {tags: {contains: 'urgent'}}}]}},
+    {text: 'scores=3', query: {match: [{where: {scores: {contains: 3}}}]}},
     {text: 'assignee=[[Mary]]', query: {match: [{referencedBy: {id: MARY, sourceField: 'assignee'}}]}},
     {text: `assignee=((${MARY}))`, query: {match: [{referencedBy: {id: MARY, sourceField: 'assignee'}}]}},
     {text: `assignee=[M](((${MARY.toUpperCase()})))`, query: {match: [{referencedBy: {id: MARY, sourceField: 'assignee'}}]}},
@@ -114,6 +115,7 @@ describe('parseQuery errors', () => {
     {text: 'created', span: 'created', message: 'created is always set; compare it, as in created>2026-01-01'},
     {text: 'label>m', span: 'label>m', message: 'label compares with = or != only'},
     {text: 'tags>a', span: 'tags>a', message: 'tags is a list; test a member with = or !='},
+    {text: 'scores=many', span: 'many', message: 'scores takes a number'},
     {text: 'assignee=Mary', span: 'Mary', message: 'assignee= takes [[page]] or ((block id))'},
     {text: 'assignee<[[Mary]]', span: 'assignee<', message: 'assignee is a reference; compare it with = or !='},
     {text: 'assignee=[[Nobody]]', span: '[[Nobody]]', message: 'No page named [[Nobody]]'},
@@ -141,9 +143,10 @@ describe('parseQuery errors', () => {
     expect(result.query).toEqual({types: ['t-book'], match: [{where: {status: {eq: 'open'}}}]})
   })
 
-  it('names a field and a property sharing a name as ambiguous', () => {
+  it.each(['label=x', 'label^f-label=x', 'other^f-label=x'])('names a property named like a field as ambiguous: %s', text => {
     const shadowed = {...resolver, isField: (name: string) => name === 'label'}
-    expect(parseQuery('label=x', shadowed).errors[0]?.message).toBe('label is both a property and a field; write label^<field id>')
+    expect(parseQuery(text, shadowed).errors.map(error => error.message))
+      .toEqual(['label is both a property and a field; rename the property to query it'])
   })
 
   it('needs a table for childof=self', () => {

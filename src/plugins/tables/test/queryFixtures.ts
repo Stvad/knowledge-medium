@@ -13,6 +13,7 @@ export const PROPERTIES: readonly QueryProperty[] = [
   property('done', codecs.boolean),
   property('due', codecs.date),
   property('tags', codecs.list(codecs.string)),
+  property('scores', codecs.list(codecs.number)),
   property('assignee', codecs.ref()),
   property('related', codecs.refList()),
   property('due date', codecs.string),

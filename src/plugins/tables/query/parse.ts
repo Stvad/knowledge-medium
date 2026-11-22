@@ -24,7 +24,7 @@
  *
  *  Names are bare for hand and agent writing; `name^fieldId` (and `#label^typeId`)
  *  is the saved form, the id authoritative and the name decoration. */
-import { isEnumCodec, isRefCodec, isRefListCodec, type AnyPropertySchema, type BlockPredicate, type TypedBlockQuery } from '@/data/api'
+import { isEnumCodec, isRefCodec, isRefListCodec, type AnyPropertySchema, type BlockPredicate, type TypedBlockQuery, type WhereCapability } from '@/data/api'
 import { UUID_RE_SOURCE, aliasedBlockRefSpanSource, blockRefSpanSource } from '@/data/referenceBlock'
 import { MAX_ALIAS_LENGTH, parseOutermostReferences } from '@/plugins/references/referenceParser'
 
@@ -294,26 +294,33 @@ const utcDayStart: DayStart = (year, month, day) => Date.UTC(year, month - 1, da
 const defaultLocalDayStart: DayStart = (year, month, day) => new Date(year, month - 1, day).getTime()
 const isoOf = (ms: number) => new Date(ms).toISOString()
 
-/** The value a scalar operand compares as, or undefined if the codec refuses it.
- *  The reader validates with this and compiling reads it, so the two cannot disagree. */
-const scalarValue = (schema: AnyPropertySchema, text: string): unknown => {
-  const where = schema.codec.where
-  if (!where) return undefined
-  switch (where.storage) {
-    case 'number': return NUMBER.test(text) && Number.isFinite(Number(text)) ? Number(text) : undefined
-    case 'boolean': return text === 'true' ? true : text === 'false' ? false : undefined
-    case 'iso-date': return calendarDay(text) || INSTANT.test(text) ? isoOf(Date.parse(text)) : undefined
-    case 'text': return encodes(where.encode, text) ? text : undefined
-  }
+/** The value an operand compares as under a `where` or list-member capability,
+ *  or undefined if the codec refuses it. The reader validates with this and
+ *  compiling reads it, so the two cannot disagree. */
+const capabilityValue = (capability: WhereCapability<unknown>, text: string): unknown => {
+  const value = (() => {
+    switch (capability.storage) {
+      case 'number': return NUMBER.test(text) && Number.isFinite(Number(text)) ? Number(text) : undefined
+      case 'boolean': return text === 'true' ? true : text === 'false' ? false : undefined
+      case 'iso-date': return calendarDay(text) || INSTANT.test(text) ? isoOf(Date.parse(text)) : undefined
+      case 'text': return text
+    }
+  })()
+  return value !== undefined && encodes(capability.encode, value) ? value : undefined
 }
+
+/** The capability an operand on this property compares through: its scalar
+ *  `where`, or, for a list, its member's. */
+const operandCapability = (schema: AnyPropertySchema): WhereCapability<unknown> | undefined =>
+  schema.codec.where ?? schema.codec.contains
 
 const operandProblem = (property: QueryProperty, text: string): string => {
   const {name, schema: {codec}} = property
-  switch (codec.where?.storage) {
+  switch (operandCapability(property.schema)?.storage) {
     case 'number': return `${name} takes a number`
     case 'boolean': return `${name} takes true or false`
     case 'iso-date': return `${name} takes a date like 2026-01-31 or an ISO instant`
-    default: return `"${text}" is not a value of ${name}${isEnumCodec(codec) ? `: one of ${codec.options.map(option => option.value).join(', ')}` : ''}`
+    default: return `"${text}" is not ${codec.where ? 'a value' : 'a member value'} of ${name}${isEnumCodec(codec) ? `: one of ${codec.options.map(option => option.value).join(', ')}` : ''}`
   }
 }
 
@@ -327,11 +334,12 @@ const compareTerm = ({property, op, operand}: TermOf<'compare'>): Placement => {
   const to = op === 'ne' ? 'exclude' : 'match'
   if (operand.kind === 'ref') return {to, predicate: {referencedBy: {id: operand.id, sourceField: property.name}}}
   const {codec} = property.schema
-  if (!codec.where) return {to, predicate: {where: {[property.name]: {contains: operand.value}}}}
+  const capability = operandCapability(property.schema)!
+  if (!codec.where) return {to, predicate: {where: {[property.name]: {contains: capabilityValue(capability, operand.value)}}}}
   const day = codec.where.storage === 'iso-date' ? dayBounds(operand.value, utcDayStart) : undefined
   return {to, predicate: {where: {[property.name]: day
     ? dayRange(op, day, isoOf)
-    : operatorValue(op, scalarValue(property.schema, operand.value))}}}
+    : operatorValue(op, capabilityValue(capability, operand.value))}}}
 }
 
 const placementOf = (term: AlternativeTerm, options: ParseOptions): Placement => {
@@ -413,15 +421,11 @@ const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, sta
   }
   const value = reader.name()
   if (reader.i === operandStart) reader.fail(start, `Expected a value after ${OP_TEXT[op]}`)
-  if (codec.where) {
-    if (!equality && !isComparable(property.schema)) reader.fail(start, `${property.name} compares with = or != only`)
-    if (scalarValue(property.schema, value) === undefined) reader.fail(operandStart, operandProblem(property, value))
-  } else if (codec.contains) {
-    if (!equality) reader.fail(start, `${property.name} is a list; test a member with = or !=`)
-    if (!encodes(codec.contains.encode, value)) reader.fail(operandStart, `"${value}" is not a member value of ${property.name}`)
-  } else {
-    reader.fail(start, `${property.name} can only be tested for presence: ${property.name} or !${property.name}`)
-  }
+  const capability = operandCapability(property.schema)
+  if (!capability) reader.fail(start, `${property.name} can only be tested for presence: ${property.name} or !${property.name}`)
+  if (!codec.where && !equality) reader.fail(start, `${property.name} is a list; test a member with = or !=`)
+  if (!equality && !isComparable(property.schema)) reader.fail(start, `${property.name} compares with = or != only`)
+  if (capabilityValue(capability, value) === undefined) reader.fail(operandStart, operandProblem(property, value))
   return {kind: 'compare', property, op, operand: {kind: 'text', value}, start, end: reader.i}
 }
 
@@ -441,7 +445,11 @@ const readKeyed = (reader: Reader, negated: boolean, start: number): QueryTerm =
   const {resolver} = reader
   const property = savedId !== undefined ? resolver.propertyById(savedId) : resolver.propertyByName(name)
   const field = savedId === undefined && resolver.isField(name)
-  if (property && field) reader.fail(start, `${name} is both a property and a field; write ${name}^<field id>`, keyEnd)
+  // The engine keys a property term by name, so a property named like a field
+  // is ambiguous however it is addressed here.
+  if (property && resolver.isField(property.name)) {
+    reader.fail(start, `${property.name} is both a property and a field; rename the property to query it`, keyEnd)
+  }
   if (field) {
     if (op === undefined) reader.fail(start, `${name} is always set; compare it, as in ${name}>2026-01-01`, keyEnd)
     if (negated) reader.fail(start, 'Write != instead of a leading !')
