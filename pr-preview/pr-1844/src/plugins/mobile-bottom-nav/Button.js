@@ -1,1 +1,1 @@
-export{gO as MobileBottomNavButton}from"../../../chunks/app-CdWCRFxQ.js";
+export{gO as MobileBottomNavButton}from"../../../chunks/app-C5i7mp-R.js";

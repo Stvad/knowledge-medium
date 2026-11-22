@@ -1,1 +1,1 @@
-export{DR as BlockChildren,OR as BlockComponent}from"../../chunks/app-CdWCRFxQ.js";
+export{DR as BlockChildren,OR as BlockComponent}from"../../chunks/app-C5i7mp-R.js";
