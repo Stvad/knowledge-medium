@@ -1,0 +1,1 @@
+export{IO as blockEditingContentRenderer}from"../../../chunks/app-DrLuVBtw.js";

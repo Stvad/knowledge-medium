@@ -1,0 +1,1 @@
+export{bet as KERNEL_PROCESSORS}from"../../../chunks/app-DrLuVBtw.js";

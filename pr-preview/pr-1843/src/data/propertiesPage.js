@@ -1,0 +1,1 @@
+export{Cut as getOrCreatePropertiesPage,wut as propertiesPageBlockId,Tut as propertiesPageSpec}from"../../chunks/app-DrLuVBtw.js";

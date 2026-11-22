@@ -1,0 +1,1 @@
+export{Gtt as mergeProperties}from"../../chunks/app-DrLuVBtw.js";

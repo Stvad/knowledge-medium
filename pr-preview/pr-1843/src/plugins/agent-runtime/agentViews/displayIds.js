@@ -1,0 +1,1 @@
+export{lb as boundDisplayId,ub as idMark}from"../../../../chunks/app-DrLuVBtw.js";

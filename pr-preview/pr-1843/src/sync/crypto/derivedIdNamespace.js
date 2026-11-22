@@ -1,0 +1,1 @@
+export{odt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DrLuVBtw.js";

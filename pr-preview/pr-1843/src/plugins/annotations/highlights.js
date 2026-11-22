@@ -1,0 +1,1 @@
+export{$g as HIGHLIGHT_CLASS,e_ as MOVED_HIGHLIGHT_CLASS,t_ as SUGGESTION_HIGHLIGHT_CLASS,n_ as coveringStyle,r_ as highlightClasses,i_ as highlightField,a_ as highlightRange,o_ as highlightRanges,s_ as threadHighlights,c_ as threadHighlightsContribution}from"../../../chunks/app-DrLuVBtw.js";

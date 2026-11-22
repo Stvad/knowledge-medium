@@ -1,0 +1,1 @@
+export{$P as CommandPaletteHeaderItem}from"../../../chunks/app-DrLuVBtw.js";

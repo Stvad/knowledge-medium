@@ -1,0 +1,1 @@
+export{Qet as NAMES_IN_A_SENTENCE,$et as describeNames,ett as firstFew}from"../../chunks/app-DrLuVBtw.js";

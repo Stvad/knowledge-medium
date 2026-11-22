@@ -1,0 +1,1 @@
+export{nB as GESTURE_ACTIVE,rB as GESTURE_CANCEL,iB as GESTURE_IDLE,aB as NO_BLOCK_GESTURES_ATTRIBUTE,oB as TOUCH_HOLD_MS,sB as TOUCH_SLOP_PX,cB as allowsBlockGestures,lB as continuousGestureRecognizersFacet,uB as createBlockGestureController,dB as enabledTouchAction,fB as suppressNextClick,pB as unionTouchAction,mB as useContinuousGestures}from"../../chunks/app-DrLuVBtw.js";

@@ -1,0 +1,1 @@
+export{u2 as CHAR_COUNTER_TYPE,h2 as RAW_CHARACTER_COUNT_PROFILE_ID,g2 as WORDS_COUNT_PROFILE_ID,p2 as WORD_COUNTER_TYPE,lr as charCountDisplay,_2 as charLimitProp,v2 as charProfileProp,y2 as charScopeProp,tr as characterCountProfilesFacet,Xn as characterCounterPlugin,ar as textCountProfile}from"../../../chunks/app-DrLuVBtw.js";

@@ -1,0 +1,1 @@
+export{BR as BlockLoadingPlaceholder}from"../../chunks/app-DrLuVBtw.js";

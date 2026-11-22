@@ -1,0 +1,1 @@
+export{nc as propertyRowsPlugin}from"../../../chunks/app-DrLuVBtw.js";

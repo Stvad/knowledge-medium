@@ -1,0 +1,1 @@
+export{qC as attachmentsPlugin}from"../../../chunks/app-DrLuVBtw.js";

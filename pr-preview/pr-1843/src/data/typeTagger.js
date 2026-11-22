@@ -1,0 +1,1 @@
+export{w8 as TypeTagger,T8 as applyTypeTagInTx}from"../../chunks/app-DrLuVBtw.js";

@@ -1,0 +1,1 @@
+export{MJ as adoptOrCreatePropertySchema}from"../../chunks/app-DrLuVBtw.js";

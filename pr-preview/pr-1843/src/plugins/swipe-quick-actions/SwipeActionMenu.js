@@ -1,0 +1,1 @@
+export{uF as SwipeActionMenu}from"../../../chunks/app-DrLuVBtw.js";

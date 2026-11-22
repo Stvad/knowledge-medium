@@ -1,0 +1,1 @@
+export{Rj as BlockCrumbs}from"../../chunks/app-DrLuVBtw.js";

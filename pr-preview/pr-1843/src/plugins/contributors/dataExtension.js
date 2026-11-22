@@ -1,0 +1,1 @@
+export{U0 as contributorsDataExtension}from"../../../chunks/app-DrLuVBtw.js";

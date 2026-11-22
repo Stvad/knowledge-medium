@@ -1,0 +1,1 @@
+export{l2 as characterCounterDataExtension}from"../../../chunks/app-DrLuVBtw.js";

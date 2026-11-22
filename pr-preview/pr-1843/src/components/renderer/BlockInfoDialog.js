@@ -1,0 +1,1 @@
+export{GB as BlockInfoDialog}from"../../../chunks/app-DrLuVBtw.js";

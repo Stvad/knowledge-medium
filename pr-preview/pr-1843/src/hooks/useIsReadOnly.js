@@ -1,0 +1,1 @@
+export{mC as useIsReadOnly}from"../../chunks/app-DrLuVBtw.js";

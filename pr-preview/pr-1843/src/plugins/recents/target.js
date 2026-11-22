@@ -1,0 +1,1 @@
+export{pj as openRecentsPage}from"../../../chunks/app-DrLuVBtw.js";

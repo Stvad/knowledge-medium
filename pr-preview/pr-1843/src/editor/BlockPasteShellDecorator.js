@@ -1,0 +1,1 @@
+export{VI as BlockPasteShellDecorator,HI as blockPasteShellDecorator}from"../../chunks/app-DrLuVBtw.js";

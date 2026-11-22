@@ -1,0 +1,1 @@
+export{XU as BlockProperties}from"../../chunks/app-DrLuVBtw.js";

@@ -1,0 +1,1 @@
+export{PR as LazyBlockComponent}from"../../chunks/app-DrLuVBtw.js";

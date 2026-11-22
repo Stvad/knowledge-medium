@@ -1,0 +1,1 @@
+export{mL as appUpdatePromptExtension}from"../../../chunks/app-DrLuVBtw.js";

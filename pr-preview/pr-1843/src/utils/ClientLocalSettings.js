@@ -1,0 +1,1 @@
+export{YL as ClientLocalSettings,XL as clientLocalSettings}from"../../chunks/app-DrLuVBtw.js";

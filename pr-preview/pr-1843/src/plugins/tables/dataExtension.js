@@ -1,0 +1,1 @@
+export{DX as tablesDataExtension}from"../../../chunks/app-DrLuVBtw.js";

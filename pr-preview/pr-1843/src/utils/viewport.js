@@ -1,0 +1,1 @@
+export{MG as MOBILE_BREAKPOINT_QUERY,NG as POINTER_COARSE_QUERY,PG as isMobileViewport,FG as isPointerCoarse}from"../../chunks/app-DrLuVBtw.js";

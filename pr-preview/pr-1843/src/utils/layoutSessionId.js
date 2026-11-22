@@ -1,0 +1,1 @@
+export{Kct as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,qct as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,Jct as __resetLayoutSessionIdForTesting,Yct as getLayoutSessionId,Xct as isInstalledAppDisplayMode,Zct as readOrCreateLayoutSessionId}from"../../chunks/app-DrLuVBtw.js";

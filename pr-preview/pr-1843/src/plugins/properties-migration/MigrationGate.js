@@ -1,0 +1,1 @@
+export{Ic as MigrationGate}from"../../../chunks/app-DrLuVBtw.js";

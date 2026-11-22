@@ -1,0 +1,1 @@
+export{jJ as propertyShapeLabel}from"../../../chunks/app-DrLuVBtw.js";

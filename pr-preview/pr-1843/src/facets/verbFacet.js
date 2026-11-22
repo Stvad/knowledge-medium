@@ -1,0 +1,1 @@
+export{w3 as defineVerbFacet}from"../../chunks/app-DrLuVBtw.js";

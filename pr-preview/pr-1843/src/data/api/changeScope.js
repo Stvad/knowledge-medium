@@ -1,0 +1,1 @@
+export{$ht as CHANGE_SCOPE_POLICIES,egt as ChangeScope,tgt as isChangeScope,ngt as policyForScope,rgt as scopeAllowedInReadOnly,igt as scopeIsUndoable,agt as scopePoliciesEquivalent,ogt as scopeUploadsToServer,sgt as sourceForScope}from"../../../chunks/app-DrLuVBtw.js";

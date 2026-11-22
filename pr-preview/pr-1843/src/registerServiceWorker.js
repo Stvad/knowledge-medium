@@ -1,0 +1,1 @@
+export{CL as checkForAppUpdate,wL as registerServiceWorker}from"../chunks/app-DrLuVBtw.js";

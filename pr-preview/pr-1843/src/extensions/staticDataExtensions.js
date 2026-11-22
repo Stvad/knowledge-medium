@@ -1,0 +1,1 @@
+export{fX as staticDataExtensions}from"../../chunks/app-DrLuVBtw.js";

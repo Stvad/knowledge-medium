@@ -1,0 +1,1 @@
+export{BB as __resetDialogsForTests,VB as getDialogQueue,HB as isDialogOpenForWorkspace,UB as openDialog,WB as subscribeDialogs}from"../../chunks/app-DrLuVBtw.js";

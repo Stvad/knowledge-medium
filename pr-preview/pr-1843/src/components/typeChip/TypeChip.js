@@ -1,0 +1,1 @@
+export{tI as TypeChip}from"../../../chunks/app-DrLuVBtw.js";

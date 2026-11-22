@@ -1,0 +1,1 @@
+export{$M as dailyDateWikilinkDecorator}from"../../../chunks/app-DrLuVBtw.js";

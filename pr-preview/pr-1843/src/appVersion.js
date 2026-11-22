@@ -1,0 +1,1 @@
+export{id as appVersion}from"../chunks/app-DrLuVBtw.js";

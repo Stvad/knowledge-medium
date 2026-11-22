@@ -1,0 +1,1 @@
+"use client";export{KU as Collapsible,qU as CollapsibleContent,JU as CollapsibleTrigger}from"../../../chunks/app-DrLuVBtw.js";

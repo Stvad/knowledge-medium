@@ -1,0 +1,1 @@
+export{bI as ensureMetricsConsoleHook}from"../../chunks/app-DrLuVBtw.js";

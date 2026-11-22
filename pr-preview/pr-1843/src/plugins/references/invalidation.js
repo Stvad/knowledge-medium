@@ -1,0 +1,1 @@
+export{VX as REFERENCES_TARGET_INVALIDATION_CHANNEL,HX as referencesInvalidationRule}from"../../../chunks/app-DrLuVBtw.js";

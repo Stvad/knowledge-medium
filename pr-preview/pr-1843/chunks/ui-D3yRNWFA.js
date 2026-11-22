@@ -1,0 +1,2 @@
+import{r as e}from"./rolldown-runtime-CNOWq4Kh.js";import{JU as t,KU as n,d8 as r,gM as i,l8 as a,qU as o}from"./app-DrLuVBtw.js";import{a as s,i as c,n as l,o as u,r as d,t as f}from"./card-Jhp9NzF5.js";var p=e({Button:()=>a,Card:()=>f,CardContent:()=>l,CardDescription:()=>d,CardFooter:()=>c,CardHeader:()=>s,CardTitle:()=>u,Collapsible:()=>n,CollapsibleContent:()=>o,CollapsibleTrigger:()=>t,Input:()=>r,Label:()=>i});export{p as t};
+//# sourceMappingURL=ui-D3yRNWFA.js.map

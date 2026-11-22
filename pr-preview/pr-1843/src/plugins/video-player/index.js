@@ -1,0 +1,1 @@
+export{GT as videoPlayerPlugin}from"../../../chunks/app-DrLuVBtw.js";

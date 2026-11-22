@@ -1,0 +1,1 @@
+export{km as quotedInFooterContribution}from"../../../chunks/app-DrLuVBtw.js";

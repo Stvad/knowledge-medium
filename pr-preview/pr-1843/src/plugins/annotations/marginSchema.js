@@ -1,0 +1,1 @@
+export{_0 as annotationMarginOpenProp,v0 as annotationMarginShareProp}from"../../../chunks/app-DrLuVBtw.js";

@@ -1,0 +1,1 @@
+export{yx as backlinksViewPlugin}from"../../../chunks/app-DrLuVBtw.js";

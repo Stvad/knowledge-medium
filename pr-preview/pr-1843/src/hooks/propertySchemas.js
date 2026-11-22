@@ -1,0 +1,1 @@
+export{DJ as usePropertySchemas}from"../../chunks/app-DrLuVBtw.js";

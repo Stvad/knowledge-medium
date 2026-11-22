@@ -1,0 +1,1 @@
+export{TJ as floatingAnchorFromRect,EJ as useAnchoredFloating}from"../../../chunks/app-DrLuVBtw.js";

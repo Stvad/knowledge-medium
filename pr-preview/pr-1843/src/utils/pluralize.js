@@ -1,0 +1,1 @@
+export{Xet as agree,Zet as pluralize}from"../../chunks/app-DrLuVBtw.js";

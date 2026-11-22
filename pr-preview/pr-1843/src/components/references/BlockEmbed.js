@@ -1,0 +1,1 @@
+export{KF as BlockEmbed}from"../../../chunks/app-DrLuVBtw.js";

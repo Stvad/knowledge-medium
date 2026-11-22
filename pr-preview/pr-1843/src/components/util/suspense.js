@@ -1,0 +1,1 @@
+export{mY as SuspenseFallback}from"../../../chunks/app-DrLuVBtw.js";

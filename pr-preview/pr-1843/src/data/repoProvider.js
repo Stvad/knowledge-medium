@@ -1,0 +1,1 @@
+export{_Y as closePowerSyncDbIfOpen,vY as ensurePowerSyncReady,yY as getActiveSyncResolver,bY as getActiveUserId,xY as getPowerSyncDb,SY as isRemoteSyncActive,CY as syncObserverDepsFor,wY as syncResolverForUser,TY as webDatabaseOptions}from"../../chunks/app-DrLuVBtw.js";

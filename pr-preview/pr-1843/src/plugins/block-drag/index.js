@@ -1,0 +1,1 @@
+export{iC as blockDragPlugin}from"../../../chunks/app-DrLuVBtw.js";

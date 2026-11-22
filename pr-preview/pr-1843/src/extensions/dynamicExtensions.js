@@ -1,0 +1,1 @@
+export{$L as dynamicExtensionsExtension}from"../../chunks/app-DrLuVBtw.js";

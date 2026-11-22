@@ -1,0 +1,1 @@
+export{DO as usePromotableBreadcrumb}from"../../../chunks/app-DrLuVBtw.js";

@@ -1,0 +1,1 @@
+export{uQ as geoDataExtension}from"../../../chunks/app-DrLuVBtw.js";

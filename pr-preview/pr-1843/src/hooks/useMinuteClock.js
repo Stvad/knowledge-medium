@@ -1,0 +1,1 @@
+export{dj as useMinuteClock}from"../../chunks/app-DrLuVBtw.js";
