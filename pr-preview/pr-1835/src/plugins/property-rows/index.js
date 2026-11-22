@@ -1,1 +1,0 @@
-export{Ss as propertyRowsPlugin}from"../../../chunks/app-DgRnkyUD.js";

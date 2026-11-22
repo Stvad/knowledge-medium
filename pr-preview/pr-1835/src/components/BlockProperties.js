@@ -1,1 +1,0 @@
-export{gU as BlockProperties}from"../../chunks/app-DgRnkyUD.js";

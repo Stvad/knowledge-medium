@@ -1,1 +1,0 @@
-export{Ij as Label}from"../../../chunks/app-DgRnkyUD.js";

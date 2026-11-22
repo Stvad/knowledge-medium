@@ -1,1 +1,0 @@
-export{qx as wikilinkMarkdownExtension}from"../../../../../chunks/app-DgRnkyUD.js";

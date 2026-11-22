@@ -1,1 +1,0 @@
-export{F7 as kernelDataExtension}from"../../chunks/app-DgRnkyUD.js";

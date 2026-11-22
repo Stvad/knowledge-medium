@@ -1,1 +1,0 @@
-export{BF as ensureMetricsConsoleHook}from"../../chunks/app-DgRnkyUD.js";

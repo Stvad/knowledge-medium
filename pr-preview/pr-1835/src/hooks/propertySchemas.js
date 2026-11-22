@@ -1,1 +1,0 @@
-export{qq as usePropertySchemas}from"../../chunks/app-DgRnkyUD.js";

@@ -1,1 +1,0 @@
-export{XV as ExtensionRenderBoundary}from"../../chunks/app-DgRnkyUD.js";

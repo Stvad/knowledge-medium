@@ -1,1 +1,0 @@
-export{Co as tablesPlugin}from"../../../chunks/app-DgRnkyUD.js";

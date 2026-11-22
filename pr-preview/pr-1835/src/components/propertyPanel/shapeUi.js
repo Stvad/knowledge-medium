@@ -1,1 +1,0 @@
-export{Yq as PropertyShapeButton,Xq as PropertyShapeGlyph}from"../../../chunks/app-DgRnkyUD.js";

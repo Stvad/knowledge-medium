@@ -1,1 +1,0 @@
-export{N6 as FacetBridge}from"../../chunks/app-DgRnkyUD.js";

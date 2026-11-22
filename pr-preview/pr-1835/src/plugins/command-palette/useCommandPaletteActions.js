@@ -1,1 +1,0 @@
-export{JN as useCommandPaletteActions}from"../../../chunks/app-DgRnkyUD.js";

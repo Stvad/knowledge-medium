@@ -1,1 +1,0 @@
-export{bI as ExtensionPromptSurface,xI as extensionPromptsExtension}from"../../../chunks/app-DgRnkyUD.js";

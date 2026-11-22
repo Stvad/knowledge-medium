@@ -1,1 +1,0 @@
-export{yP as CommandPaletteHeaderItem}from"../../../chunks/app-DgRnkyUD.js";
