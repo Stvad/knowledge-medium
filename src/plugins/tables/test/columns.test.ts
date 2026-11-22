@@ -11,6 +11,7 @@ import {
   MIN_COLUMN_WIDTH, addColumn, addPropertyToType, deleteColumn, moveColumn, resizeColumn, setColumnHidden,
 } from '../columns'
 import { turnIntoTable } from '../convert'
+import { rowPropertyNames } from '../model'
 import { tablesDataExtension } from '../dataExtension'
 import { columnFieldProp, columnHiddenProp, columnWidthProp } from '../schema'
 
@@ -73,6 +74,14 @@ const setup = async () => {
 }
 
 describe('column gestures', () => {
+  it('suggests the rows’ own properties for a new column, the most common first', async () => {
+    const {repo} = await setup()
+    // Alphabetically ahead of the author, but on one row of two. Only the
+    // projection is read, so a raw write is enough.
+    await db.db.execute(`UPDATE blocks SET properties_json = json_set(properties_json, '$."test:a-year"', '1815') WHERE id = 'emma'`)
+    expect(await rowPropertyNames(repo.block('host'), workspaceId, null)).toEqual([author.name, 'test:a-year'])
+  })
+
   it('resize writes the width once, rounded, and never narrower than the minimum', async () => {
     const {repo, authorId} = await setup()
     const before = await rowsSnapshot()

@@ -64,8 +64,6 @@ const columnTrack = (column: TableColumn) =>
 const minWidth = (columns: readonly TableColumn[]) =>
   columns.reduce((sum, column) => sum + (column.width ?? defaultMinWidth(column)), 0)
 
-const NoControls = () => null
-
 const formatStored = (value: unknown): string =>
   value === undefined || value === null ? ''
     : Array.isArray(value) ? value.map(formatStored).join(', ')
@@ -195,12 +193,14 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
+/** A row keeps its bullet, so it opens, opens in the sidebar and has its menu
+ *  as any block does; no expand control, since the grid draws no children. */
+const TableRowLayout: BlockLayout = ({block, Header, Shell, Bullet, Content}) => {
   const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)
   return (
     <BlockFrame
-      block={block} Header={Header} Shell={Shell} Controls={NoControls}
+      block={block} Header={Header} Shell={Shell} Controls={Bullet}
       className={outside ? 'tm-table-row opacity-60' : 'tm-table-row'}
       frameProps={{'data-table-row': block.id, ...(outside ? {'data-table-unmatched': 'true', title: UNMATCHED_TITLE} : {})}}
     >
@@ -327,8 +327,11 @@ const TableView = (props: GridProps & {viewIds: readonly string[]; query: TableQ
     })
     return {shown, hidden}
   }, [all, schemas, names])
+  const columnNames = useMemo(() => schemas.flatMap(schema => schema ? [schema.name] : []), [schemas])
   if (all === undefined) return null
   const toolbar = props.host.repo.isReadOnly ? null : <ColumnToolbar host={props.host} viewId={viewId}
+    workspaceId={props.workspaceId} query={props.query?.clauses ?? null}
+    columnNames={columnNames}
     hidden={split.hidden.columns} hiddenNames={split.hidden.names}
     hasContentColumn={all.some(column => column.fieldId === null)}/>
   if (split.shown.columns.length === 0) return <><NoColumns/>{toolbar}</>

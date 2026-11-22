@@ -18,7 +18,8 @@ import {
   addColumn, addColumnForChoice, addPropertyToType, clearColumnWidth, columnWidthFor, deleteColumn, moveColumn,
   resizeColumn, setColumnHidden, typeTargetsFor, type ColumnDeletion, type TypeTarget,
 } from './columns'
-import type { TableColumn } from './model'
+import { rowPropertyNames, type TableColumn } from './model'
+import type { QueryClauses } from './query/parse'
 import { nextSort, type ViewSort } from './sort'
 
 /** A pointer that travels less than this is a click, not a drag. */
@@ -139,7 +140,7 @@ export const ColumnHeaders = ({
 
   return (
     <div ref={scrollRef} onFocus={onFocus} {...headerSurface}
-      className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
+      className={`sticky top-0 z-[2] overflow-hidden border-b border-border bg-background ${ROW_BULLET_GUTTER}`}>
       <div ref={rowRef} role="row" className="relative grid text-sm font-medium" style={template}>
         {columns.map((column, index) => (
           <div key={column.id} role="columnheader" data-table-column={column.id}
@@ -276,15 +277,34 @@ const ColumnMenu = ({host, workspaceId, column, name, rowIds, sort, onSort}: {
   )
 }
 
+/** Where a row's bullet stands (its 20px link and the frame's 4px gap), so the
+ *  header's columns line up with the rows'. Padding, not a margin: it scrolls
+ *  with the header as the rows' bullets scroll with them. */
+const ROW_BULLET_GUTTER = 'pl-6'
+
 /** Below the grid: add a column, and show the hidden ones again. */
-export const ColumnToolbar = ({host, viewId, hidden, hiddenNames, hasContentColumn}: {
+export const ColumnToolbar = ({host, workspaceId, query, viewId, columnNames, hidden, hiddenNames, hasContentColumn}: {
   host: Block
+  workspaceId: string
+  query: QueryClauses | null
   viewId: string
+  /** The properties the view has columns for already, shown or hidden. */
+  columnNames: readonly string[]
   hidden: readonly TableColumn[]
   hiddenNames: readonly string[]
   hasContentColumn: boolean
 }) => {
   const [adding, setAdding] = useState(0)
+  const [rowNames, setRowNames] = useState<readonly string[]>([])
+  const startAdding = () => {
+    // The picker opens once the rows' names are in, so its list does not reorder under the cursor.
+    void rowPropertyNames(host, workspaceId, query)
+      .catch(error => { console.error('[tables] row property names failed', error); return [] })
+      .then(names => {
+        setRowNames(names)
+        setAdding(key => key + 1)
+      })
+  }
   const [hiddenOpen, setHiddenOpen] = useMenuOpen()
   const repo = host.repo
   const userSchemas = repo.userSchemas
@@ -293,6 +313,7 @@ export const ColumnToolbar = ({host, viewId, hidden, hiddenNames, hasContentColu
       {adding > 0
         ? <div className="w-56" data-table-add-column-picker="true">
           <PropertyPicker key={adding} block={host} autoFocus placeholder="Column property"
+            preferredNames={rowNames} excludedNames={columnNames}
             filterSchema={schema => userSchemas.getSchemaBlockId(schema.name) !== undefined}
             onAdd={async choice => {
               await addColumnForChoice(repo, viewId, choice)
@@ -303,7 +324,7 @@ export const ColumnToolbar = ({host, viewId, hidden, hiddenNames, hasContentColu
             onEscape={() => setAdding(0)}/>
         </div>
         : <button type="button" data-table-add-column="true" className="px-2 py-1 hover:text-foreground"
-          onClick={() => setAdding(key => key + 1)}>+ Add column</button>}
+          onClick={startAdding}>+ Add column</button>}
       {!hasContentColumn && <button type="button" className="px-2 py-1 hover:text-foreground"
         onClick={() => { void addColumn(repo, viewId, null).catch(report('add title column')) }}>+ Title column</button>}
       {hidden.length > 0 && (

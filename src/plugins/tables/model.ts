@@ -63,3 +63,16 @@ export const useRowIds = (
   host: Block, workspaceId: string, query: QueryClauses | null, order?: TypedBlockQuery['order'],
 ): readonly string[] | undefined =>
   useHandle(host.repo.query.typedBlockIds(rowQuery(host.id, workspaceId, query, order)), {selector: ids => ids})
+
+/** The property names the table's rows hold, most common first: what a new
+ *  column most likely shows. Read once, from the same rows the grid draws. */
+export const rowPropertyNames = async (
+  host: Block, workspaceId: string, query: QueryClauses | null,
+): Promise<string[]> => {
+  const rows = await host.repo.queryBlocks(rowQuery(host.id, workspaceId, query))
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    for (const name of Object.keys(row.properties)) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return [...counts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b)).map(([name]) => name)
+}
