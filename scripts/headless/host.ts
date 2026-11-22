@@ -1,7 +1,7 @@
 import {provideRuntimeGlobals} from '../agent-eval/nodeShims'
 import {setTimeout as nextTimerTurn} from 'node:timers/promises'
 import {PowerSyncDatabase} from '@powersync/node'
-import {createClientPowerSyncSchema, initializeClientDatabase} from '@/data/internals/initializeClientDatabase'
+import {createClientPowerSyncSchema, initializeClientDatabase, type AnalyzeCheck} from '@/data/internals/initializeClientDatabase'
 import {dbFilenameForUser} from '@/data/localDbStorage'
 import {BlockCache} from '@/data/blockCache'
 import {Repo} from '@/data/repo'
@@ -46,7 +46,9 @@ export async function serveDatabase(
   const {workspaceId} = config
   await db.waitForReady()
   const baseline = db.currentStatus.lastSyncedAt?.getTime()
-  await initializeClientDatabase(db, 'node')
+  let analyzeCheck!: AnalyzeCheck
+  let analyzing: Promise<void> | undefined
+  await initializeClientDatabase(db, 'node', {scheduleAnalyzeCheck: check => { analyzeCheck = check }})
   let gate: ReturnType<typeof startReadGate> | undefined
   const hold = await openUploadHold(db, workspaceId, releaseStaleQueue, () => gate?.uploadHoldChanged())
   if (!config.writable && hold.queuedAtBoot) {
@@ -99,6 +101,10 @@ export async function serveDatabase(
       await untilStopped(Promise.all(namespaces), signal)
     }, visible => {
       if (visible) {
+        // The first open follows the drain, so the statistics describe the
+        // downloaded graph and the ANALYZE does not compete with materializing
+        // it. Once per process: what later growth owes is paid at the next start.
+        analyzing ??= analyzeCheck('first-open')
         releaseBulk?.()
         releaseBulk = undefined
         watchEventsRegistry.setTransport(transport)
@@ -115,6 +121,8 @@ export async function serveDatabase(
       watchEventsRegistry.setTransport(null)
       await gate?.stop()
       releaseBulk?.()
+      // The caller closes the database next; an ANALYZE must not be cut off.
+      await analyzing
       await db.disconnect()
       if (repo) {
         await repo.flushSyncObserver()

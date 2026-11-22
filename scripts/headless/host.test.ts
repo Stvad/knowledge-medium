@@ -16,6 +16,7 @@ import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, t
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
+import {ANALYZE_OPTIMIZE_SQL} from '@/data/internals/clientSchema'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {statusProp} from '@/plugins/todo/schema'
 import {serveDatabase} from './host'
@@ -263,7 +264,7 @@ it('samples the persisted checkpoint only after the reopened database is ready',
   let persisted: number | undefined
   try {
     await first.waitForReady()
-    await initializeClientDatabase(first, 'node')
+    await initializeClientDatabase(first, 'node', {scheduleAnalyzeCheck: () => {}})
     await syncServer(first)([serverWorkspace(testWorkspaceRow(workspaceId)), member])
     persisted = first.currentStatus.lastSyncedAt?.getTime()
     expect(persisted).toEqual(expect.any(Number))
@@ -282,6 +283,63 @@ it('samples the persisted checkpoint only after the reopened database is ready',
   } finally {
     await host.stop()
     await second.close()
+  }
+}, 20_000)
+
+// A database of its own: host runs on the shared fixture leave sqlite_stat1 behind.
+it('builds planner statistics over the drained rows when its gate first opens', async () => {
+  const db = new PowerSyncDatabase({
+    schema: createClientPowerSyncSchema(),
+    database: {dbLocation: fixture.dir, dbFilename: 'analyze.db', readWorkerCount: 1},
+  })
+  const ids = [randomUUID(), randomUUID()]
+  const deliver = syncServer(db)
+  const host = start(plaintext(), async () => {
+    await deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, ...ids.map(id => stagedBlock(id, workspaceId))])
+  }, db)
+  const liveRows = async () => (await db.get<{n: number}>(
+    'SELECT count(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0', [workspaceId])).n
+  // The check's last statement, held until shutdown starts: the database must
+  // not close under it, and `disconnect` is the step before the caller's close.
+  // Its row count at arrival shows the check started after the drain.
+  const order: string[] = []
+  let rowsWhenHeld: number | undefined
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const execute = db.execute.bind(db)
+  vi.spyOn(db, 'execute').mockImplementation(async (sql, params) => {
+    if (sql !== ANALYZE_OPTIMIZE_SQL) return execute(sql, params)
+    rowsWhenHeld = await liveRows()
+    order.push('held')
+    await held
+    const result = await execute(sql, params)
+    order.push('analyzed')
+    return result
+  })
+  const disconnect = db.disconnect.bind(db)
+  vi.spyOn(db, 'disconnect').mockImplementation(async () => {
+    order.push('disconnect')
+    return disconnect()
+  })
+  try {
+    await vi.waitFor(async () => {
+      expect(await host.execute({type: 'get-block', id: ids[1]!})).toMatchObject({id: ids[1]})
+    }, {timeout: 5000})
+    await vi.waitFor(() => expect(order).toEqual(['held']), {timeout: 5000})
+    const stopping = host.stop()
+    release()
+    await stopping
+    expect(order).toEqual(['held', 'analyzed', 'disconnect'])
+    const n = await liveRows()
+    expect(n).toBeGreaterThanOrEqual(ids.length)
+    expect(rowsWhenHeld).toBe(n)
+    const recorded = await db.getOptional<{stat: string}>(
+      "SELECT stat FROM sqlite_stat1 WHERE tbl = 'blocks' AND idx = 'idx_blocks_workspace_active'")
+    expect(Number(recorded?.stat.split(' ')[0])).toBe(n)
+  } finally {
+    release()
+    await host.stop()
+    await db.close()
   }
 }, 20_000)
 

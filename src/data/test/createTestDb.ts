@@ -100,7 +100,7 @@ const openTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
 
 const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   const db = await openTestDb(dbDir)
-  await initializeClientDatabase(db, 'node')
+  await initializeClientDatabase(db, 'node', {scheduleAnalyzeCheck: () => {}})
   return db
 }
 
