@@ -6,6 +6,7 @@ import { BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { useBlockContext } from '@/context/block'
 import { PropertyRowListingContext } from '@/context/propertyDisplay'
+import { definePropertyEditorOverride, type PropertyEditorProps } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useUIStateBlock } from '@/data/globalState'
 import { focusBlock, focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
@@ -13,6 +14,7 @@ import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle, useHandles } from '@/hooks/block'
 import { openQueryValue } from './query/queryValue'
 import { useQueryFieldId, type TableQuery } from './query/source'
+import { queryProp } from './schema'
 
 /** Is a block in this render scope being edited? */
 export const useEditingIn = (uiStateBlock: Block, renderScopeId: string): boolean =>
@@ -51,7 +53,13 @@ export const QueryErrors = ({query}: {query: TableQuery}) => {
   )
 }
 
-/** Adds the query property with an empty fenced query and opens its value for editing. */
+/** The query as written: its text is query syntax, not markdown (`*a*` is no emphasis, `# x` no heading). */
+const QueryText = ({value}: PropertyEditorProps<string>) =>
+  <code data-table-query-text="true" className="block min-h-[1.7em] whitespace-pre-wrap break-words font-mono text-sm">{value}</code>
+
+export const queryPropertyUi = definePropertyEditorOverride(queryProp, {InlineEditor: QueryText})
+
+/** Adds the query property with an empty value and opens it for editing. */
 export const AddQueryButton = ({host, parentRenderScopeId}: {host: Block; parentRenderScopeId: string}) => {
   const uiStateBlock = useUIStateBlock()
   const fieldId = useQueryFieldId(host.repo)

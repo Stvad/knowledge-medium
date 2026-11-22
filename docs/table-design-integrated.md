@@ -26,7 +26,7 @@ It changes four things in #363:
 3. Columns are blocks, one per column (§3).
 4. No tweak layer (§6).
 
-The query keeps #363's code fence, but the fence is the content of a property's value block on the host, not the host's own content (§11).
+The query is the text of a property's value block on the host, not the host's own content (§11).
 
 ## 2. Scope
 
@@ -45,9 +45,7 @@ The query keeps #363's code fence, but the fence is the content of a property's 
 ```
 Reading list             <- host block, table type; content is a free title
   ::((query definition)) <- field row (optional)
-    ```query             <- value block: the query text, in a code fence
-    #book status=open
-    ```
+    #book status=open    <- value block: the query text
   Default                <- view block; content is the view name
     Title                <- column block for the row's own content
     Author               <- column block; field -> definition of `author`
@@ -186,14 +184,15 @@ Scalar property terms, and ref terms whose target type registers a filter defaul
 - **A date property's date-only operand is its UTC day**, because the date editor stores a picked day as UTC midnight. `created`/`updated` use the local day, as decided above.
 - **Shape of the output.** Every property term is its own `match` entry (two terms on one property cannot collide in a `where` map). The first positive type term is the top-level `types`, where the planner bounds the scan; later ones are `match` entries. `!=` and `!#type` are `exclude` entries, so an unset value matches `!=`. One `|` group per query (the engine has one `anyOf`); a negated or `childof=` term cannot be one side of `|`.
 - **Not supported, each a term error:** text search (`"vendor"`), nested groups and AND inside a group, relative dates (`today-30d`), and `#[[Type]]`, since a wikilink in the query is a real reference (#1819) and would mint a page. A multi-word type is `#"Reading list"`.
-- **Saved form:** `name^fieldId` and `#label^typeId`, ids authoritative. References stay as written: they are ordinary references inside the fence, so a rename rewrites them.
+- **Saved form:** `name^fieldId` and `#label^typeId`, ids authoritative. References stay as written: they are ordinary references in the value, so a rename rewrites them.
 
 ### As built (§10 step 4)
 
 Measured in headless Chromium against a dev build, asserting stored values (24 checks, two consecutive clean runs; the earlier slices' key and gesture scripts pass too, with the one change below).
 
-- **Where the query is edited.** The host's own field rows were drawn nowhere in table mode: the grid stands where the children would. The query's field rows are now drawn above the grid, in the host's own scope, exactly as the outline draws a field row, so the query is an ordinary value block. **Departure:** "+ Query" below the grid writes `tables:query` with an empty fence and opens its value for editing; with no field row on screen there was nothing else to click. The host's other properties are still not drawn in table mode (#1837).
-- **Completion inside the fence.** The `#` type tag stays off inside the fence (literal markdown). In the query property's value, inside its fence, the tables plugin's own source offers query text instead: `#` offers the types and a word starting a term offers property keys, queryable fields and `refs`/`childof`/`under`. Accepting one inserts the name alone (`#Book`, `status=`, or `status` alone for a presence-only property) where the parser resolves it to the picked definition, and the saved form (`#label^typeId`, `name^fieldId`) where it would not (a second type with the same label, a property named like a structural key). It writes nothing else, so no type is added or minted. Typing a name after `!`, inside a `|` group, or before an existing `^id` or operator offers only what parses there (measured in headless Chromium, `src/plugins/tables/query/completion.ts`). A ```` ```query ```` fence in any other block gets none of it, and outside the fence the value is an ordinary block, `#` tagging included. `[[` completion stays on, and a link in the query is a real reference, so a rename rewrites it (#1819).
+- **Where the query is edited.** The host's own field rows were drawn nowhere in table mode: the grid stands where the children would. The query's field rows are now drawn above the grid, in the host's own scope, exactly as the outline draws a field row, so the query is an ordinary value block. **Departure:** "+ Query" below the grid writes `tables:query` with an empty value and opens it for editing; with no field row on screen there was nothing else to click. The host's other properties are still not drawn in table mode (#1837).
+- **No fence; the value is the query text** (changed 2026-11-22, Vlad, superseding decision 2's fence). The query property's value is plain text, one query per value block. Its editor is a `literalDocument` (`src/editor/syntaxContext.ts`), contributed by the tables plugin for that property's value only, so the generic char triggers (`#` types, `@` mentions, `@@` places) stand down in it exactly as they do inside a code fence. Read mode shows the text as written in monospace, through the property's `InlineEditor` override, so `*a*` is no emphasis and `# x` no heading; a `[[link]]` shows with its brackets and is not clickable there. A value stored with a fence before this change still runs its inner terms, and its two fence lines show as term errors ("No property or field named ```query") until they are deleted. The value block opened on its own (zoomed into) is an ordinary block, `#` tagging included.
+- **Completion in the query.** The tables plugin's own source offers query text there: `#` offers the types and a word starting a term offers property keys, queryable fields and `refs`/`childof`/`under`. Accepting one inserts the name alone (`#Book`, `status=`, or `status` alone for a presence-only property) where the parser resolves it to the picked definition, and the saved form (`#label^typeId`, `name^fieldId`) where it would not (a second type with the same label, a property named like a structural key, a quoted name standing alone, which is a text search). It writes nothing else, so no type is added or minted. Typing a name after `!`, inside a `|` group, or before an existing `^id` or operator offers only what parses there (measured in headless Chromium, `src/plugins/tables/query/completion.ts`). No other block's text is read as a query. `[[` completion stays on, and a link in the query is a real reference, so a rename rewrites it (#1819).
 - **Rows.** `typedBlockIds` with the parsed clauses, `propertyChildren: 'none'`, `limit` 301, oldest first unless sorted, and `exclude: [{types: [view, column]}, {id: host}]`: no table's machinery, and never the table itself. Without a query the rows are the host's children, now also excluded by type rather than by the view ids. **A query none of whose terms compiled selects nothing** (`anyOf: []`) beside its errors: the empty clause set would otherwise list the whole workspace. Past the cap the notice says to narrow the query.
 - **Term errors** are listed above the grid, each with the text of its term; the other terms still run.
 - **Children not selected** by the query are listed below the grid as ordinary outline (§3), every one, lazily mounted as the outline mounts them.
@@ -201,7 +200,7 @@ Measured in headless Chromium against a dev build, asserting stored values (24 c
 - **Rows created here** are a list on the grid's controller. They are drawn after the query's rows for as long as the grid is mounted (until deleted), dimmed with a title saying the query does not select them when it does not.
 - **The editing freeze** holds the query's answer while a block in the table's render scope is being edited (a cell, or a row's text). Only under a query: the children of the host do not leave by an edit, and a held list would put a new sibling at the end. Row expansion is not built, so its subtree's scope is not covered yet.
 - **Alias lookups** for `[[page]]` terms are live (`useHandles` over `core.aliasLookup`), so a page created or renamed while the query is shown resolves without an edit. While an edited query's new aliases resolve, the last parsed query stands: going back to loading would unmount the grid and drop the rows made in it (measured: with the old behaviour a created row vanished on such an edit).
-- **"+ Query"** opens a query value the host already holds without rewriting it, even when its projection has not landed; only a new draft gets the empty fence.
+- **"+ Query"** opens a query value the host already holds without rewriting it, even when its projection has not landed; only a new draft gets an empty value.
 
 ### While editing
 
@@ -309,7 +308,7 @@ Everything else is in the tables plugin.
 1. **Risk check, throwaway.** Done 2026-11-21; its results are folded into §7 and §12.
 2. **Core seams** (§8).
 3. **Smallest table.** Done 2026-11-21 in #1813: children as rows, one view, column blocks, cells, the three key modes, the guards, "Turn into table" and "Show table as outline" (the latter removes the type; the per-block toggle of §3 is not built). No sort, no query, no row expansion. It departed from §7 in six places, recorded there: row mode activated by the grid, focus writes coalesced, the control mode in the cell's keydown, the header outside the scroller, typing only with vim off, and rows as scope roots.
-4. **Query and sort.** Done 2026-11-22: the parser (#1803, §5 "Query text"), the query as a fenced value on the host, term errors, sort, new-row back-fill, rows created here, the editing freeze (§5 "As built"). Not built: the "show more" past the cap, a query type term as an "Add to #type" candidate.
+4. **Query and sort.** Done 2026-11-22: the parser (#1803, §5 "Query text"), the query as a value on the host, term errors, sort, new-row back-fill, rows created here, the editing freeze (§5 "As built"). Not built: the "show more" past the cap, a query type term as an "Add to #type" candidate.
 5. **Range.** Select, copy, paste, clear, then fill.
 6. **Columns.** Done 2026-11-21: resize, reorder, hide and show, delete, add column, "add to #type" (§6, "Column gestures"), and inserts on the host (#1815, §7 Guards).
 7. **Later.** Named views, grouping, column summaries (SQL aggregates), the remaining engine terms, windowed virtualization, touch range selection, per-column formulas (a closed interpreter, never `eval`).
@@ -317,7 +316,7 @@ Everything else is in the tables plugin.
 ## 11. Decisions
 
 1. **Engine only, or a JS tail in the plugin? Resolved 2026-11-21 (Vlad): engine only, and plugins can extend the language** (§5, "Extending the language"). For the record, the question was: either way the user writes the text query and it compiles to a `TypedBlockQuery`; nobody writes SQL. The question is what happens to a term `TypedBlockQuery` cannot express yet, such as `(status=open | deadline<=today)`. Engine only (pick): that term is an error until `TypedBlockQuery` learns it, so there is one evaluation path, but or-groups wait and only scalar columns sort. JS tail (#363): the plugin loads every candidate row and filters and sorts the rest in JS, so those work on day one, at the cost of a second path.
-2. **Where does the query live? Resolved 2026-11-21 (Vlad): both.** The query is a property on the host, and its value block's content is a fenced code block holding the query text. The host's title stays free; the query is undone, synced and shown like any value; an agent writes it as one markdown block. The fence also removes the editing hazard: type completion is switched off inside literal markdown, a fence included (read: `typeAutocomplete.ts`, `isInsideLiteralMarkdown`), so typing `#book` there cannot tag the row or mint a type. No dedicated query editor is needed. Not checked: that the string codec round-trips multi-line fenced content, and that reference parsing skips the fence (so `[[Mary]]` in a query makes no backlink).
+2. **Where does the query live? Resolved 2026-11-21 (Vlad): both; fence dropped 2026-11-22 (Vlad).** The query is a property on the host, and its value block's content is the query text. The host's title stays free; the query is undone, synced and shown like any value; an agent writes it as one block of plain text. The first version wrapped the text in a ```` ```query ```` fence to switch the `#` type tag off there (it stands down inside literal markdown); once the query had its own completion, a seam keyed on the property does that job instead (§5 "As built"), and the fence was removed. No dedicated query editor is needed.
 3. **Where do rows created in a query table live? Resolved 2026-11-21 (Vlad): under the host.** A parent term in the query (`childof=`, `under=`) still wins. For the record: under the host: visible below the grid even when they stop matching, but deleting the table deletes them. On today's daily note (#363's candidate): safe from that, but created somewhere the user isn't looking.
 4. **The offline sort/filter gap (§2).** Size it with the divergence check first (pick), then decide on re-projecting at sync arrival. It is a platform change, not table work.
 
@@ -345,7 +344,7 @@ Three reviewers read rev 1 against master. Their findings fell into five causes,
 | Focus on the cell, or the host for empty cells | Two-mode cursor; a wildcard action allowlist; keys on an empty cell fell through to the table block itself | Focus on the row; cells are scope roots; no allowlist |
 | The grid decided what to write from what it drew | Could wipe a stored value by opening a cell; clear did nothing on unparseable cells and over-deleted elsewhere; cleanup could delete text typed within the editor's debounce | Three core functions that classify inside the transaction |
 | Host children could be invisible in query mode | Non-matching rows and stray children hidden | Everything under the host is drawn |
-| Query edited in the block editor | `#type` completion would tag the query's value block | The value block's content is a code fence, where that completion is off (decision 2); the query's own completion inserts text there instead |
+| Query edited in the block editor | `#type` completion would tag the query's value block | The query's value editor is a `literalDocument`, where that completion and `@`/`@@` stand down; the query's own completion inserts text there instead |
 | Sort and engine scope understated | "Three small additions", any column sorts | Four additions; scalar columns only |
 
 Also from the review: lazy mounting in place of a new virtualization dependency; one row-source path; single sort on the view; fewer frozen seeds; an explicit error column; the offline gap stated in scope; `!((id))` for embeds.

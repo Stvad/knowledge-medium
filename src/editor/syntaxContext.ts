@@ -1,12 +1,12 @@
-/** Syntax-tree context checks for editor autocompletes. The char
- *  triggers (`#` types, `@` contributors, `@@` places) match on raw
- *  line text, so without a tree check they fire inside markdown spans
- *  whose text is literal syntax, not prose — and with the dropdown open, Enter accepts the
- *  auto-selected completion and eats that text. Kept beside
+/** Literal-text checks for editor autocompletes. The char triggers
+ *  (`#` types, `@` contributors, `@@` places) match on raw line text, so
+ *  without this check they fire inside text that is literal syntax, not
+ *  prose — and with the dropdown open, Enter accepts the auto-selected
+ *  completion and eats that text. Kept beside
  *  triggerMatch.ts (not in it: that module is deliberately import-free
  *  so its tests stay in the cheap node environment). */
 
-import type { EditorState } from '@codemirror/state'
+import { Facet, type EditorState } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
 
@@ -29,12 +29,17 @@ const LITERAL_NODE_NAMES: ReadonlySet<string> = new Set([
   'Entity',
 ])
 
-/** True when `pos` sits inside a literal markdown span (code, URL, raw
- *  HTML, comment). Fail-open: if the tree hasn't been parsed up to
+/** The whole document is literal text: an editor whose block another
+ *  plugin reads as its own syntax (a table's query) contributes `true`. */
+export const literalDocument = Facet.define<boolean, boolean>({combine: values => values.some(Boolean)})
+
+/** True when `pos` sits in literal text: a `literalDocument`, or a literal
+ *  markdown span (code, URL, raw HTML, comment). Fail-open: if the tree hasn't been parsed up to
  *  `pos` yet (resolve lands on the top node), the trigger stays
  *  allowed — a rare transient dropdown beats suppressing completions
  *  while the parser catches up. */
-export const isInsideLiteralMarkdown = (state: EditorState, pos: number): boolean => {
+export const isLiteralTextAt = (state: EditorState, pos: number): boolean => {
+  if (state.facet(literalDocument)) return true
   for (
     let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1);
     node;

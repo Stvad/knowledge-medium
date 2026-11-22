@@ -13,7 +13,7 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { matchMentionTrigger } from '@/editor/atTrigger'
 import { acceptCompletionInsert } from '@/editor/contentFlush'
-import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
+import { isLiteralTextAt } from '@/editor/syntaxContext'
 import { faithfulWikilinkReplacement } from '@/plugins/references/referenceParser'
 import { CONTRIBUTOR_TYPE, contributorKindOf, type ContributorKind } from './schema'
 
@@ -83,7 +83,7 @@ export const contributorMentionSource = (
     const match = matchMentionTrigger(line.text, pos - line.from)
     if (!match) return null
     // `@decorator` in code, `user@host` in a URL: Enter would replace it.
-    if (isInsideLiteralMarkdown(state, pos)) return null
+    if (isLiteralTextAt(state, pos)) return null
 
     const candidates = await getCandidates(match.query)
     if (candidates.length === 0) return null

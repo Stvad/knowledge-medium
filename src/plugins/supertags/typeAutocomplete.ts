@@ -31,7 +31,7 @@ import type {
   CompletionSource,
 } from '@codemirror/autocomplete'
 import type { TypeContribution } from '@/data/api'
-import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
+import { isLiteralTextAt } from '@/editor/syntaxContext'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 
 /** Whether the `#` autocomplete offers this type — everything except
@@ -349,7 +349,7 @@ export const typeTagCompletionSource = (
     // fence, a CSS `#id` in backticks, `http://…/#anchor`) — and with
     // the dropdown open, Enter accepts the auto-selected "Create type"
     // sentinel: it deletes that text and mints a junk type.
-    if (isInsideLiteralMarkdown(state, pos)) return null
+    if (isLiteralTextAt(state, pos)) return null
 
     const candidates = await options.getCandidates(match.query)
     if (candidates.length === 0 && !explicit) return null

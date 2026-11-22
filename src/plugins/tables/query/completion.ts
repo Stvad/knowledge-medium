@@ -1,10 +1,10 @@
-/** Completion inside a table's query. In the query property's value, inside its
- *  fence, `#` offers the workspace's types and a word starting a term offers
- *  its property and field keys; accepting one inserts query text and writes
- *  nothing else. The fence is literal markdown, where the `#` type tag is off
- *  (`isInsideLiteralMarkdown`, the same test), so a pick here can never tag the
- *  value block or mint a type. Outside the fence the value is an ordinary
- *  block, `#` included.
+/** Completion inside a table's query. The query property's value is the query
+ *  text, so its editor is a `literalDocument`: the generic char triggers (`#`
+ *  types, `@` mentions, `@@` places) stand down there, and this source offers
+ *  query text instead. `#` offers the workspace's types and a word starting a
+ *  term offers its property and field keys; accepting one inserts query text
+ *  and writes nothing else, so a pick can never tag the value block or mint a
+ *  type.
  *
  *  A pick inserts the name alone where the parser reads it back as the picked
  *  definition, for readable text; where it would not (a second type with the
@@ -12,8 +12,6 @@
  *  alone, which is a text search) it inserts the saved form, `#label^typeId` or
  *  `name^fieldId`. */
 import type { CompletionSource } from '@codemirror/autocomplete'
-import { syntaxTree } from '@codemirror/language'
-import type { SyntaxNode } from '@lezer/common'
 import { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { isPropertyPickerName } from '@/components/propertyPanel/visibility'
@@ -22,7 +20,7 @@ import { propertyEditorOverridesFacet, queryableFieldsFacet } from '@/data/facet
 import type { Repo } from '@/data/repo'
 import type { CodeMirrorExtensionContribution } from '@/editor/codeMirrorExtensions'
 import { acceptCompletionInsert } from '@/editor/contentFlush'
-import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
+import { literalDocument } from '@/editor/syntaxContext'
 import { queryProp } from '../schema'
 import { propertyKey, propertyName, typeName, typeRef } from './format'
 import {
@@ -199,30 +197,18 @@ const vocabularyOf = (repo: Repo, workspaceId: string, resolver: QueryResolver):
   }
 }
 
-/** Where the query text of the fence at `pos` starts: the line after the opening fence. */
-const fenceContentStart = (state: EditorState, pos: number): number | undefined => {
-  for (let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
-    if (node.name === 'FencedCode') return state.doc.lineAt(node.from).to + 1
-  }
-  return undefined
-}
-
 const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => context => {
   const {state, pos} = context
-  if (!state.selection.main.empty || !isInsideLiteralMarkdown(state, pos)) return null
-  const start = fenceContentStart(state, pos)
   const workspaceId = block.peek()?.workspaceId
-  // `start > pos` is the opening fence line; defence in depth, since a reversed slice reads as no term anyway.
-  if (start === undefined || start > pos || !workspaceId) return null
-  const line = state.doc.lineAt(pos)
-  const trigger = queryTriggerAt(state.doc.sliceString(start, pos), state.doc.sliceString(pos, line.to))
+  if (!state.selection.main.empty || !workspaceId) return null
+  const trigger = queryTriggerAt(state.doc.sliceString(0, pos), state.doc.sliceString(pos, state.doc.lineAt(pos).to))
   if (!trigger) return null
   const resolver = queryResolver(repo, workspaceId, repo.propertyDefinitions, repo.types, new Map())
   const completions = queryCompletions(trigger, vocabularyOf(repo, workspaceId, resolver), resolver)
   if (completions.length === 0) return null
   return {
-    from: start + trigger.from,
-    to: start + trigger.to,
+    from: trigger.from,
+    to: trigger.to,
     // Ranked and matched here; CodeMirror's filter would match the label against `#…`.
     filter: false,
     options: completions.map(completion => ({
@@ -234,9 +220,10 @@ const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => co
   }
 }
 
-/** Only the query property's value: a fence anywhere else is not a query. */
+/** Only the query property's value, drawn in its field row: no other block's text is read as a
+ *  query. The value block opened on its own (zoomed into) is an ordinary block, `#` tagging included. */
 export const queryCompletionExtension: CodeMirrorExtensionContribution = ({repo, block, propertyValueSchema}) => {
   if (!block || propertyValueSchema?.name !== queryProp.name) return []
   const source = queryCompletionSource(repo, block)
-  return [EditorState.languageData.of(() => [{autocomplete: source}])]
+  return [literalDocument.of(true), EditorState.languageData.of(() => [{autocomplete: source}])]
 }

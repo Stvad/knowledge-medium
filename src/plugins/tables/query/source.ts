@@ -1,5 +1,5 @@
-/** A table's query as the grid reads it: the host's query property, unwrapped
- *  from its code fence and parsed against this workspace's names. */
+/** A table's query as the grid reads it: the host's query property, parsed
+ *  against this workspace's names. */
 import { useMemo, useState } from 'react'
 import type { TypeContribution } from '@/data/api'
 import type { Block } from '@/data/block'
@@ -13,28 +13,6 @@ import { usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { parseOutermostReferences } from '@/plugins/references/referenceParser'
 import { queryProp } from '../schema'
 import { parseQuery, type ParsedQuery, type QueryClauses, type QueryProperty, type QueryResolver } from './parse'
-
-const FENCE_LINE = /^[ \t]*(`{3,}|~{3,})/
-
-/** The text inside the value's code fence: the lines between an opening fence
- *  line and the last line that closes it (the same character, at least as
- *  many). An unclosed fence runs to the end. A value with no fence is the query
- *  itself. */
-export const queryTextOf = (value: string): string => {
-  const lines = value.trimEnd().split('\n')
-  const open = FENCE_LINE.exec(lines[0] ?? '')
-  if (!open) return value
-  const fence = open[1]!
-  const closes = (line: string) => {
-    const close = /^[ \t]*(`+|~+)[ \t]*$/.exec(line)
-    return close !== null && close[1]![0] === fence[0] && close[1]!.length >= fence.length
-  }
-  const end = lines.length > 1 && closes(lines[lines.length - 1]!) ? lines.length - 1 : lines.length
-  return lines.slice(1, end).join('\n')
-}
-
-/** The value a query property holds for `text`. */
-export const fencedQuery = (text: string): string => `\`\`\`query\n${text}\n\`\`\``
 
 const propertyOf = (definitions: PropertyDefinitionRegistrySnapshot | null, fieldId: string | undefined): QueryProperty | undefined => {
   if (!definitions || fieldId === undefined) return undefined
@@ -105,7 +83,7 @@ export const useQueryFieldId = (repo: Repo): string | undefined =>
  *  children), undefined until its names first resolve. */
 export const useTableQuery = (host: Block, workspaceId: string): TableQuery | null | undefined => {
   const value = useHandle(host, {selector: data => data ? safeDecodeRowProperty(data, queryProp) : ''})
-  const text = queryTextOf(value ?? '')
+  const text = value ?? ''
   const aliases = useMemo(() => [...new Set(parseOutermostReferences(text).map(ref => ref.alias))].sort(), [text])
   const aliasIds = useAliasIds(host.repo, workspaceId, aliases)
   const definitions = usePropertyDefinitions(host.repo)
