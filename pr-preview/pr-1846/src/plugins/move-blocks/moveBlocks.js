@@ -1,1 +1,1 @@
-export{SC as moveBlocksTo}from"../../../chunks/app-CtH5JoO7.js";
+export{TC as moveBlocksTo}from"../../../chunks/app-D5c-_AVG.js";
