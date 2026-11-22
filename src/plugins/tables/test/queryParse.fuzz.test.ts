@@ -62,7 +62,7 @@ const types = fc.record({kind: fc.constant('types' as const), negated: fc.consta
 const notType = fc.record({kind: fc.constant('types' as const), negated: fc.constant(true), types: oneType})
 const refs = fc.record({kind: fc.constant('refs' as const), target: reference})
 const under = fc.record({kind: fc.constant('under' as const), target: reference})
-const childof = fc.record({kind: fc.constant('childof' as const), target: fc.oneof(fc.constant('self' as const), reference)})
+const childof = fc.record({kind: fc.constant('childof' as const), target: fc.oneof(fc.constant({kind: 'ref' as const, id: SELF, spelling: 'self'}), reference)})
 
 const alternative = fc.oneof(
   fc.record({kind: fc.constant('types' as const), negated: fc.constant(false), types: oneType}),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { formatQuery } from '../query/format'
 import { parseQuery, type ParseOptions } from '../query/parse'
-import { MARY, PROJECTS, localDayStart, resolver } from './queryFixtures'
+import { MARY, PROJECTS, PROPERTIES, localDayStart, resolver } from './queryFixtures'
 
 const SELF = '0190a0c0-0000-7000-8000-00000000000c'
 const options: ParseOptions = {selfId: SELF, localDayStart}
@@ -69,8 +70,8 @@ describe('parseQuery dates', () => {
   it.each([
     {text: 'created=2026-01-05', where: {created: {between: [start, next - 1]}}},
     {text: 'created<2026-01-05', where: {created: {lt: start}}},
-    {text: 'created<=2026-01-05', where: {created: {lt: next}}},
-    {text: 'created>2026-01-05', where: {created: {gte: next}}},
+    {text: 'created<=2026-01-05', where: {created: {lte: next - 1}}},
+    {text: 'created>2026-01-05', where: {created: {gt: next - 1}}},
     {text: 'updated>=2026-01-05', where: {updated: {gte: start}}},
     {text: 'created>2026-01-05T10:00:00.000Z', where: {created: {gt: day('2026-01-05T10:00:00.000Z')}}},
   ])('$text bounds the local day', ({text, where}) => {
@@ -87,11 +88,11 @@ describe('parseQuery dates', () => {
     expect(parse('due=2026-01-05').query).toEqual({match: [{where: {due: {between: [
       '2026-01-05T00:00:00.000Z', '2026-01-05T23:59:59.999Z',
     ]}}}]})
-    expect(parse('due<=2026-01-05').query).toEqual({match: [{where: {due: {lt: '2026-01-06T00:00:00.000Z'}}}]})
+    expect(parse('due<=2026-01-05').query).toEqual({match: [{where: {due: {lte: '2026-01-05T23:59:59.999Z'}}}]})
   })
 
   it('crosses a month end', () => {
-    expect(parse('due>2026-01-31').query).toEqual({match: [{where: {due: {gte: '2026-02-01T00:00:00.000Z'}}}]})
+    expect(parse('due>2026-01-31').query).toEqual({match: [{where: {due: {gt: '2026-01-31T23:59:59.999Z'}}}]})
   })
 })
 
@@ -118,7 +119,7 @@ describe('parseQuery errors', () => {
     {text: 'assignee=[[Nobody]]', span: '[[Nobody]]', message: 'No page named [[Nobody]]'},
     {text: 'label=[[Mary]]', span: '[[', message: 'label is not a reference property; quote the text to compare it'},
     {text: 'label=', span: 'label=', message: 'Expected a value after ='},
-    {text: 'label="open', span: '"open', message: 'Unclosed quote'},
+    {text: 'label="open', span: '"', message: 'Unclosed quote'},
     {text: '!label=x', span: '!label=', message: 'Write != instead of a leading !'},
     {text: '"vendor"', span: '"vendor"', message: 'Text search is not supported yet'},
     {text: 'childof=self childof=[[Projects]]', span: 'childof=[[Projects]]', message: 'Only one childof= per query'},
@@ -127,7 +128,7 @@ describe('parseQuery errors', () => {
     {text: 'refs>[[Mary]]', span: 'refs>', message: 'refs takes ='},
     {text: 'status=open | status!=closed', span: 'status!=closed', message: 'A negated or childof term cannot be one side of |'},
     {text: '(label=1 rating=2)', span: 'r', message: 'Join the terms of a group with |'},
-    {text: 'status=open | ', span: '', message: 'Expected a term'},
+    {text: 'status=open | ', span: ' ', message: 'Expected a term'},
     {text: 'label=a)', span: ')', message: 'Unexpected )'},
     {text: 'label=x"y"', span: '"', message: 'Unexpected "\\""'},
   ])('$text', ({text, span, message}) => {
@@ -149,9 +150,45 @@ describe('parseQuery errors', () => {
     expect(parseQuery('childof=self', resolver).errors[0]?.message).toBe('childof=self needs a table to belong to')
   })
 
+  it('keeps a group\'s ) and the terms after a failed alternative', () => {
+    const result = parse('(status=open |) rating>1')
+    expect(result.errors.map(error => error.message)).toEqual(['Expected a term'])
+    expect(result.query).toEqual({match: [{where: {rating: {gt: 1}}}]})
+  })
+
+  it('resumes after an unclosed quote at the next term', () => {
+    const result = parse('status="open rating>1')
+    expect(result.errors.map(error => error.message)).toEqual(['Unclosed quote'])
+    expect(result.query).toEqual({match: [{where: {rating: {gt: 1}}}]})
+  })
+
+  it('refuses an instant past year 9999', () => {
+    expect(parse('due<+010000-01-01T00:00:00.000Z').errors).toHaveLength(1)
+  })
+
+  it('reads an alias with brackets as the reference grammar does', () => {
+    const nested = {...resolver, blockIdByAlias: (alias: string) => alias === 'Book of [x]' ? MARY : undefined}
+    expect(parseQuery('assignee=[[Book of [x]]]', nested).query)
+      .toEqual({match: [{referencedBy: {id: MARY, sourceField: 'assignee'}}]})
+  })
+
+  it('reports every unbounded under= of a long query', () => {
+    expect(parse('under=[[Projects]] '.repeat(10_000)).errors).toHaveLength(10_000)
+  })
+
   it('allows one | group', () => {
     const result = parse('(status=open | rating>1) (done=true | label)')
     expect(result.errors.map(error => error.message)).toEqual(['Only one | group per query'])
     expect(result.query.anyOf).toHaveLength(2)
+  })
+})
+
+describe('formatQuery', () => {
+  it('quotes ids the parser would otherwise end early', () => {
+    const odd = {...PROPERTIES[2]!, fieldId: 'a b^"c|d)'}
+    const oddResolver = {...resolver, propertyById: (id: string) => id === odd.fieldId ? odd : undefined}
+    const saved = formatQuery(parseQuery(`label^"a b^\\"c|d)"=x`, oddResolver).terms)
+    expect(parseQuery(saved, oddResolver).errors).toEqual([])
+    expect(parseQuery(saved, oddResolver).query).toEqual({match: [{where: {label: {eq: 'x'}}}]})
   })
 })

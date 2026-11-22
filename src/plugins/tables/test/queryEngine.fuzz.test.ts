@@ -148,7 +148,7 @@ const modelMatches = (term: QueryTerm, block: Block, byId: Map<string, Block>): 
       return (value !== undefined && value !== null) === term.present
     }
     case 'refs': return refs.some(r => r.id === term.target.id)
-    case 'childof': return term.target !== 'self' && block.parentId === term.target.id
+    case 'childof': return block.parentId === term.target.id
     case 'under': return block.id === term.target.id || ancestorsOf(block, byId).includes(term.target.id)
     case 'anyOf': return term.alternatives.some(alternative => modelMatches(alternative, block, byId))
     case 'field': return timeMatches(term.op, block.createdAt ?? 1, term.operand, localDayStart)

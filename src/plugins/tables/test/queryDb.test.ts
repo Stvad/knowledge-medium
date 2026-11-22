@@ -63,6 +63,8 @@ describe('parsed terms in the engine', () => {
     ['due>=2026-01-06', ['c']],
     ['due!=2026-01-05', except('a', 'b')],
     ['due<2026-01-05T12:00:00.000Z', ['a']],
+    ['due<=9999-12-31', ['a', 'b', 'c']],
+    ['due>9999-12-31', []],
     ['tags=a', ['a']],
     ['tags!=a', except('a')],
     ['assignee=[[Mary]]', ['a']],

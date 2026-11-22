@@ -8,17 +8,25 @@
  *
  *    #book  #book|#article  !#archived       type, any of these types, not this type
  *    status=open  rating>=3  label=""        a property compared with a value
- *    status!=open                            not equal (an unset value matches)
- *    snooze  !snooze                         property set / unset
+ *    status!=open                            not equal
+ *    snooze  !snooze                         property stored / not stored
  *    assignee=[[Mary]]  owner=((id))         a reference property pointing at a block
  *    refs=[[Mary]]                           references the block through any field
  *    childof=self  childof=[[X]]  under=[[X]] direct parent / ancestor
  *    created>2026-01-01                      a queryable field; a date means the local day
  *    status=open | priority>=3               one or-group
  *
+ *  Terms read what is stored, as the engine compares it: a property's default
+ *  is never assumed for a block that does not store it; `''` and `[]` are
+ *  stored values, so they count as set; a value stored in the wrong shape for
+ *  its codec matches no comparison and does match `!=`, as an unset one does;
+ *  text equality is exact, case included.
+ *
  *  Names are bare for hand and agent writing; `name^fieldId` (and `#label^typeId`)
  *  is the saved form, the id authoritative and the name decoration. */
-import { isRefCodec, isRefListCodec, type AnyPropertySchema, type BlockPredicate, type TypedBlockQuery } from '@/data/api'
+import { isEnumCodec, isRefCodec, isRefListCodec, type AnyPropertySchema, type BlockPredicate, type TypedBlockQuery } from '@/data/api'
+import { UUID_RE_SOURCE, aliasedBlockRefSpanSource, blockRefSpanSource } from '@/data/referenceBlock'
+import { MAX_ALIAS_LENGTH, parseOutermostReferences } from '@/plugins/references/referenceParser'
 
 export interface QueryProperty {
   /** The name `where` keys and `sourceField` use. */
@@ -49,8 +57,10 @@ export interface ParseOptions {
   readonly selfId?: string
   /** Epoch ms of local midnight starting the given calendar day (month 1-12),
    *  for date-only operands on fields. Defaults to this runtime's time zone. */
-  readonly localDayStart?: (year: number, month: number, day: number) => number
+  readonly localDayStart?: DayStart
 }
+
+type DayStart = (year: number, month: number, day: number) => number
 
 export interface QueryTermError {
   readonly start: number
@@ -62,9 +72,13 @@ export type QueryClauses = Pick<TypedBlockQuery, 'types' | 'parentId' | 'match' 
 
 export type CompareOp = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte'
 
-export type Operand =
-  | {readonly kind: 'text'; readonly value: string}
-  | {readonly kind: 'ref'; readonly id: string; readonly spelling: string}
+export interface RefOperand {
+  readonly kind: 'ref'
+  readonly id: string
+  /** As written: `[[alias]]`, `((id))`, `[label](((id)))`, or `self`. */
+  readonly spelling: string
+}
+export type Operand = {readonly kind: 'text'; readonly value: string} | RefOperand
 
 interface Span { readonly start: number; readonly end: number }
 
@@ -73,11 +87,14 @@ export type QueryTerm = Span & (
   | {readonly kind: 'compare'; readonly property: QueryProperty; readonly op: CompareOp; readonly operand: Operand}
   | {readonly kind: 'presence'; readonly property: QueryProperty; readonly present: boolean}
   | {readonly kind: 'field'; readonly field: string; readonly op: CompareOp; readonly operand: string}
-  | {readonly kind: 'refs'; readonly target: Operand & {kind: 'ref'}}
-  | {readonly kind: 'childof'; readonly target: 'self' | (Operand & {kind: 'ref'})}
-  | {readonly kind: 'under'; readonly target: Operand & {kind: 'ref'}}
-  | {readonly kind: 'anyOf'; readonly alternatives: readonly QueryTerm[]}
+  | {readonly kind: 'refs' | 'under'; readonly target: RefOperand}
+  | {readonly kind: 'childof'; readonly target: RefOperand}
+  | {readonly kind: 'anyOf'; readonly alternatives: readonly AlternativeTerm[]}
 )
+
+type TermOf<K extends QueryTerm['kind']> = Extract<QueryTerm, {kind: K}>
+/** A term that is one positive predicate, so it can be one side of `|`. */
+export type AlternativeTerm = Exclude<QueryTerm, TermOf<'anyOf' | 'childof'>>
 
 export interface ParsedQuery {
   readonly query: QueryClauses
@@ -89,33 +106,56 @@ export interface ParsedQuery {
 /** Keys that are structure, not properties. Address a property with one of
  *  these names through its saved form, `under^fieldId`. */
 export const RESERVED_KEYS = ['refs', 'childof', 'under'] as const
+type ReservedKey = typeof RESERVED_KEYS[number]
+const isReservedKey = (name: string): name is ReservedKey => (RESERVED_KEYS as readonly string[]).includes(name)
 
 const OPS: ReadonlyArray<readonly [string, CompareOp]> = [
   ['!=', 'ne'], ['<=', 'lte'], ['>=', 'gte'], ['=', 'eq'], ['<', 'lt'], ['>', 'gt'],
 ]
 export const OP_TEXT: Readonly<Record<CompareOp, string>> = {eq: '=', ne: '!=', lt: '<', lte: '<=', gt: '>', gte: '>='}
 
-/** Characters that end a bare word. */
-const BREAK = /[\s"|()!=<>#^[\]]/
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** Characters that end a bare word. Text holding one is written quoted. */
+export const BREAK = /[\s"|()!=<>#^[\]]/
+/** Characters that end a failed term while recovering: the next term starts after them. */
+const TERM_END = /[\s|()]/
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
+/** The one instant spelling the engine admits: `toISOString()` with a four-digit year. */
+const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 const NUMBER = /^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i
+// Sticky, so reading one at a position never copies the rest of the text.
+const LABELLED_BLOCK_REF = new RegExp(aliasedBlockRefSpanSource(UUID_RE_SOURCE), 'iy')
+const BLOCK_REF = new RegExp(blockRefSpanSource(UUID_RE_SOURCE), 'iy')
 
 class TermError extends Error {
   constructor(readonly start: number, readonly end: number, message: string) { super(message) }
 }
 
+/** Where a quote opened at `start` closes, past its `\"` and `\\` escapes; -1 if it never does. */
+const closingQuote = (text: string, start: number): number => {
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] === '\\' && (text[i + 1] === '"' || text[i + 1] === '\\')) i++
+    else if (text[i] === '"') return i
+  }
+  return -1
+}
+
+const unquote = (inner: string) => inner.replace(/\\(["\\])/g, '$1')
+
 /** A cursor over the text. Every read method throws {@link TermError} with the
- *  span it was reading, and the caller skips to the end of the term. */
+ *  span it was reading; the caller recovers at the next term. */
 class Reader {
   i = 0
-  constructor(readonly text: string) {}
+  constructor(readonly text: string, readonly resolver: QueryResolver, readonly options: ParseOptions) {}
   get done() { return this.i >= this.text.length }
   peek(n = 0) { return this.text[this.i + n] ?? '' }
   startsWith(s: string) { return this.text.startsWith(s, this.i) }
   skipSpace() { while (!this.done && /\s/.test(this.peek())) this.i++ }
+
+  /** Spans stay inside the text and are never empty: one at the very end points at its last character. */
   fail(start: number, message: string, end = this.i): never {
-    throw new TermError(start, Math.min(Math.max(end, start + 1), this.text.length), message)
+    const length = this.text.length
+    const from = Math.min(start, Math.max(length - 1, 0))
+    throw new TermError(from, Math.min(Math.max(end, from + 1), length), message)
   }
 
   bareWord(): string {
@@ -127,54 +167,62 @@ class Reader {
   /** `"…"` with `\"` and `\\` escapes. */
   quoted(): string {
     const start = this.i
-    this.i++
-    let value = ''
-    while (!this.done) {
-      const ch = this.peek()
-      if (ch === '"') { this.i++; return value }
-      if (ch === '\\' && (this.peek(1) === '"' || this.peek(1) === '\\')) { value += this.peek(1); this.i += 2; continue }
-      value += ch
-      this.i++
-    }
-    return this.fail(start, 'Unclosed quote')
+    const close = closingQuote(this.text, start)
+    if (close < 0) this.fail(start, 'Unclosed quote', start + 1)
+    this.i = close + 1
+    return unquote(this.text.slice(start + 1, close))
   }
 
   name(): string {
-    if (this.peek() === '"') return this.quoted()
-    return this.bareWord()
+    return this.peek() === '"' ? this.quoted() : this.bareWord()
   }
 
   /** `^id` after a name, if present. */
   savedId(): string | undefined {
     if (this.peek() !== '^') return undefined
     this.i++
-    const id = this.bareWord()
+    const id = this.name()
     if (!id) this.fail(this.i - 1, 'Expected an id after ^')
     return id
   }
 
-  /** `[[alias]]`, `((id))` or `[label](((id)))`, or undefined if none starts here. */
-  reference(resolver: QueryResolver): (Operand & {kind: 'ref'}) | undefined {
+  /** `[[alias]]` as the reference grammar reads it, `((id))` or `[label](((id)))`;
+   *  undefined if none starts here. */
+  reference(): RefOperand | undefined {
     const start = this.i
     if (this.startsWith('[[')) {
-      const close = this.text.indexOf(']]', this.i + 2)
-      if (close < 0) this.fail(start, 'Unclosed [[', this.text.length)
-      this.i = close + 2
-      const alias = this.text.slice(start + 2, close)
-      const id = resolver.blockIdByAlias(alias)
-      if (!id) this.fail(start, `No page named [[${alias}]]`)
+      const ref = this.wikilinkAt(start)
+      if (!ref) return this.fail(start, 'Unclosed [[', start + 2)
+      this.i = start + ref.endIndex
+      const id = this.resolver.blockIdByAlias(ref.alias)
+      if (!id) this.fail(start, `No page named [[${ref.alias}]]`)
       return {kind: 'ref', id, spelling: this.text.slice(start, this.i)}
     }
-    const labelled = /^\[[^\]\n]*\]\(\(\(([0-9a-f-]{36})\)\)\)/i.exec(this.text.slice(this.i))
-    const plain = /^\(\(([0-9a-f-]{36})\)\)/i.exec(this.text.slice(this.i))
-    const match = labelled ?? plain
-    if (!match) {
-      if (this.startsWith('((') || this.startsWith('[')) this.fail(start, 'Expected [[page]] or ((block id))', this.i + 2)
-      return undefined
+    for (const [pattern, group] of [[LABELLED_BLOCK_REF, 2], [BLOCK_REF, 1]] as const) {
+      pattern.lastIndex = start
+      const match = pattern.exec(this.text)
+      if (!match) continue
+      this.i = start + match[0].length
+      return {kind: 'ref', id: match[group].toLowerCase(), spelling: match[0]}
     }
-    if (!UUID.test(match[1])) this.fail(start, 'Not a block id', this.i + match[0].length)
-    this.i += match[0].length
-    return {kind: 'ref', id: match[1].toLowerCase(), spelling: match[0]}
+    if (this.startsWith('((') || this.startsWith('[')) this.fail(start, 'Expected [[page]] or ((block id))', start + 2)
+    return undefined
+  }
+
+  /** The `[[…]]` starting at `start`, read by the reference grammar over the
+   *  shortest slice that can hold it: up to each `]]` run in turn, so a nested
+   *  link grows the slice and nothing past the link is scanned. */
+  private wikilinkAt(start: number) {
+    let end = start
+    while (end - start <= MAX_ALIAS_LENGTH + 4) {
+      const close = this.text.indexOf(']]', end)
+      if (close < 0) return undefined
+      end = close + 2
+      while (this.text[end] === ']') end++
+      const [ref] = parseOutermostReferences(this.text.slice(start, end))
+      if (ref?.startIndex === 0) return ref
+    }
+    return undefined
   }
 
   operator(): CompareOp | undefined {
@@ -183,6 +231,18 @@ class Reader {
     }
     return undefined
   }
+
+  /** Puts the cursor past a term that failed, without consuming the `|` or `)`
+   *  that ends it. A closed quote is stepped over whole; an unclosed one is one character. */
+  recover(termStart: number) {
+    this.i = termStart
+    while (!this.done && !TERM_END.test(this.peek())) {
+      const close = this.peek() === '"' ? closingQuote(this.text, this.i) : -1
+      this.i = close < 0 ? this.i + 1 : close + 1
+    }
+    // A term that failed on its first character (a stray `(` inside a group) must still move on.
+    if (this.i === termStart && !this.done && this.peek() !== '|' && this.peek() !== ')') this.i++
+  }
 }
 
 const isComparable = (schema: AnyPropertySchema) => {
@@ -190,51 +250,12 @@ const isComparable = (schema: AnyPropertySchema) => {
   return storage === 'number' || storage === 'iso-date'
 }
 
-const encodes = (encode: ((value: never) => unknown) | undefined, value: unknown): boolean => {
+const encodes = (encode: (value: never) => unknown, value: unknown): boolean => {
   try {
-    encode?.(value as never)
-    return encode !== undefined
+    encode(value as never)
+    return true
   } catch {
     return false
-  }
-}
-
-const describeOptions = (schema: AnyPropertySchema): string => {
-  const options = (schema.codec as {options?: readonly {value: string}[]}).options
-  return options ? `: one of ${options.map(option => option.value).join(', ')}` : ''
-}
-
-/** A scalar operand as the codec's `where` takes it, or an error message. */
-const scalarOperand = (property: QueryProperty, text: string): {value: unknown} | {error: string} => {
-  const {schema} = property
-  const storage = schema.codec.where?.storage
-  if (storage === 'number') {
-    const value = Number(text)
-    return NUMBER.test(text) && Number.isFinite(value) ? {value} : {error: `${property.name} takes a number`}
-  }
-  if (storage === 'boolean') {
-    return text === 'true' || text === 'false' ? {value: text === 'true'} : {error: `${property.name} takes true or false`}
-  }
-  if (storage === 'iso-date') {
-    return calendarDay(text) || isInstant(text)
-      ? {value: new Date(text).toISOString()}
-      : {error: `${property.name} takes a date like 2026-01-31 or an ISO instant`}
-  }
-  return encodes(schema.codec.where!.encode, text) ? {value: text} : {error: `"${text}" is not a value of ${property.name}${describeOptions(schema)}`}
-}
-
-const defaultLocalDayStart = (year: number, month: number, day: number) => new Date(year, month - 1, day).getTime()
-const utcDayStart = (year: number, month: number, day: number) => Date.UTC(year, month - 1, day)
-
-/** A day as a range of instants: `=` is the whole day, `<=` ends at the next
- *  midnight, `>` starts there. `ne` is `eq`'s range, negated by the caller. */
-const dayRange = <T>(op: CompareOp, start: number, next: number, encode: (ms: number) => T): Record<string, unknown> => {
-  switch (op) {
-    case 'eq': case 'ne': return {between: [encode(start), encode(next - 1)]}
-    case 'lt': return {lt: encode(start)}
-    case 'lte': return {lt: encode(next)}
-    case 'gt': return {gte: encode(next)}
-    case 'gte': return {gte: encode(start)}
   }
 }
 
@@ -250,15 +271,50 @@ const calendarDay = (text: string): [number, number, number] | undefined => {
     : undefined
 }
 
-/** The day's first instant and the next day's, by `dayStart`'s clock. */
-const dayBounds = (text: string, dayStart: (y: number, m: number, d: number) => number): [number, number] | undefined => {
+/** The day's first and last millisecond by `dayStart`'s clock. The last, not
+ *  the next day's first: 9999-12-31 has no representable next day. */
+const dayBounds = (text: string, dayStart: DayStart): [number, number] | undefined => {
   const day = calendarDay(text)
-  return day && [dayStart(...day), dayStart(day[0], day[1], day[2] + 1)]
+  return day && [dayStart(...day), dayStart(day[0], day[1], day[2] + 1) - 1]
 }
 
-const isInstant = (text: string) => {
-  const ms = Date.parse(text)
-  return Number.isFinite(ms) && new Date(ms).toISOString() === text
+/** A day as an instant range: `=` is the whole day, `<=` ends with it, `>` starts after it.
+ *  `ne` is `eq`'s range, negated by the caller. */
+const dayRange = <T>(op: CompareOp, [first, last]: [number, number], encode: (ms: number) => T): Record<string, unknown> => {
+  switch (op) {
+    case 'eq': case 'ne': return {between: [encode(first), encode(last)]}
+    case 'lt': return {lt: encode(first)}
+    case 'lte': return {lte: encode(last)}
+    case 'gt': return {gt: encode(last)}
+    case 'gte': return {gte: encode(first)}
+  }
+}
+
+const utcDayStart: DayStart = (year, month, day) => Date.UTC(year, month - 1, day)
+const defaultLocalDayStart: DayStart = (year, month, day) => new Date(year, month - 1, day).getTime()
+const isoOf = (ms: number) => new Date(ms).toISOString()
+
+/** The value a scalar operand compares as, or undefined if the codec refuses it.
+ *  The reader validates with this and compiling reads it, so the two cannot disagree. */
+const scalarValue = (schema: AnyPropertySchema, text: string): unknown => {
+  const where = schema.codec.where
+  if (!where) return undefined
+  switch (where.storage) {
+    case 'number': return NUMBER.test(text) && Number.isFinite(Number(text)) ? Number(text) : undefined
+    case 'boolean': return text === 'true' ? true : text === 'false' ? false : undefined
+    case 'iso-date': return calendarDay(text) || INSTANT.test(text) ? isoOf(Date.parse(text)) : undefined
+    case 'text': return encodes(where.encode, text) ? text : undefined
+  }
+}
+
+const operandProblem = (property: QueryProperty, text: string): string => {
+  const {name, schema: {codec}} = property
+  switch (codec.where?.storage) {
+    case 'number': return `${name} takes a number`
+    case 'boolean': return `${name} takes true or false`
+    case 'iso-date': return `${name} takes a date like 2026-01-31 or an ISO instant`
+    default: return `"${text}" is not a value of ${name}${isEnumCodec(codec) ? `: one of ${codec.options.map(option => option.value).join(', ')}` : ''}`
+  }
 }
 
 const operatorValue = (op: CompareOp, value: unknown): Record<string, unknown> =>
@@ -267,35 +323,29 @@ const operatorValue = (op: CompareOp, value: unknown): Record<string, unknown> =
 /** The predicate a positive or negated term contributes, and where it goes. */
 type Placement = {to: 'match' | 'exclude'; predicate: BlockPredicate}
 
-const compareTerm = (term: QueryTerm & {kind: 'compare'}): Placement => {
-  const {property, op, operand} = term
+const compareTerm = ({property, op, operand}: TermOf<'compare'>): Placement => {
   const to = op === 'ne' ? 'exclude' : 'match'
   if (operand.kind === 'ref') return {to, predicate: {referencedBy: {id: operand.id, sourceField: property.name}}}
   const {codec} = property.schema
-  if (!codec.where && codec.contains) return {to, predicate: {where: {[property.name]: {contains: operand.value}}}}
-  if (codec.where?.storage === 'iso-date') {
-    const bounds = dayBounds(operand.value, utcDayStart)
-    if (bounds) return {to, predicate: {where: {[property.name]: dayRange(op, bounds[0], bounds[1], ms => new Date(ms).toISOString())}}}
-  }
-  const scalar = scalarOperand(property, operand.value) as {value: unknown}
-  return {to, predicate: {where: {[property.name]: operatorValue(op, scalar.value)}}}
+  if (!codec.where) return {to, predicate: {where: {[property.name]: {contains: operand.value}}}}
+  const day = codec.where.storage === 'iso-date' ? dayBounds(operand.value, utcDayStart) : undefined
+  return {to, predicate: {where: {[property.name]: day
+    ? dayRange(op, day, isoOf)
+    : operatorValue(op, scalarValue(property.schema, operand.value))}}}
 }
 
-const placementOf = (term: QueryTerm, options: ParseOptions): Placement => {
+const placementOf = (term: AlternativeTerm, options: ParseOptions): Placement => {
   switch (term.kind) {
     case 'types': return {to: term.negated ? 'exclude' : 'match', predicate: {types: term.types.map(type => type.id)}}
     case 'compare': return compareTerm(term)
     case 'presence': return {to: 'match', predicate: {where: {[term.property.name]: {exists: term.present}}}}
     case 'field': {
-      const bounds = dayBounds(term.operand, options.localDayStart ?? defaultLocalDayStart)
-      const where = bounds
-        ? dayRange(term.op, bounds[0], bounds[1], ms => ms)
-        : operatorValue(term.op, Date.parse(term.operand))
+      const day = dayBounds(term.operand, options.localDayStart ?? defaultLocalDayStart)
+      const where = day ? dayRange(term.op, day, ms => ms) : operatorValue(term.op, Date.parse(term.operand))
       return {to: term.op === 'ne' ? 'exclude' : 'match', predicate: {where: {[term.field]: where}}}
     }
     case 'refs': return {to: 'match', predicate: {referencedBy: {id: term.target.id}}}
     case 'under': return {to: 'match', predicate: {scope: 'ancestor', id: term.target.id}}
-    case 'childof': case 'anyOf': throw new Error(`${term.kind} has no single predicate`)
   }
 }
 
@@ -311,140 +361,141 @@ const bounds = (term: QueryTerm): boolean => {
   }
 }
 
-interface TermParser {
-  reader: Reader
-  resolver: QueryResolver
-  options: ParseOptions
-}
+const hasUnder = (term: QueryTerm): boolean =>
+  term.kind === 'under' || (term.kind === 'anyOf' && term.alternatives.some(hasUnder))
 
-const readType = ({reader, resolver}: TermParser, negated: boolean, start: number): QueryTerm => {
+const readType = (reader: Reader, negated: boolean, start: number): QueryTerm => {
   reader.i++
   const label = reader.name()
   const id = reader.savedId()
-  if (!label && !id) reader.fail(start, 'Expected a type name after #')
-  const type = id !== undefined ? resolver.typeById(id) : resolver.typeByLabel(label)
+  if (!label && id === undefined) reader.fail(start, 'Expected a type name after #')
+  const type = id !== undefined ? reader.resolver.typeById(id) : reader.resolver.typeByLabel(label)
   if (!type) return reader.fail(start, id !== undefined ? `No type with id ${id}` : `No type named ${label}`)
   return {kind: 'types', negated, types: [type], start, end: reader.i}
 }
 
-const readTarget = (parser: TermParser, key: string, start: number) => {
-  const target = parser.reader.reference(parser.resolver)
-  if (!target) parser.reader.fail(start, `${key}= takes [[page]] or ((block id))`, parser.reader.i + parser.reader.bareWord().length)
+const readTarget = (reader: Reader, key: string, start: number): RefOperand => {
+  const target = reader.reference()
+  if (!target) return reader.fail(start, `${key}= takes [[page]] or ((block id))`, reader.i + reader.bareWord().length)
   return target
 }
 
-const readKeyed = (parser: TermParser, negated: boolean, start: number): QueryTerm => {
-  const {reader, resolver} = parser
+const readStructural = (reader: Reader, key: ReservedKey, negated: boolean, op: CompareOp | undefined, start: number): QueryTerm => {
+  if (negated) reader.fail(start, `${key}= cannot be negated`)
+  if (op !== 'eq') reader.fail(start, `${key} takes =`)
+  if (key === 'childof' && reader.startsWith('self') && TERM_END.test(reader.peek(4) || ' ')) {
+    reader.i += 4
+    const {selfId} = reader.options
+    if (!selfId) return reader.fail(start, 'childof=self needs a table to belong to')
+    return {kind: 'childof', target: {kind: 'ref', id: selfId, spelling: 'self'}, start, end: reader.i}
+  }
+  const target = readTarget(reader, key, start)
+  return key === 'childof' ? {kind: key, target, start, end: reader.i} : {kind: key, target, start, end: reader.i}
+}
+
+const readFieldTerm = (reader: Reader, field: string, op: CompareOp, start: number): QueryTerm => {
+  const operandStart = reader.i
+  const text = reader.bareWord()
+  if (!calendarDay(text) && !INSTANT.test(text)) reader.fail(operandStart, `${field} takes a date like 2026-01-31 or an ISO instant`)
+  return {kind: 'field', field, op, operand: text, start, end: reader.i}
+}
+
+const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, start: number): QueryTerm => {
+  const operandStart = reader.i
+  const {codec} = property.schema
+  const equality = op === 'eq' || op === 'ne'
+  if (isRefCodec(codec) || isRefListCodec(codec)) {
+    if (!equality) reader.fail(start, `${property.name} is a reference; compare it with = or !=`)
+    return {kind: 'compare', property, op, operand: readTarget(reader, property.name, operandStart), start, end: reader.i}
+  }
+  if (reader.startsWith('[[') || reader.startsWith('((')) {
+    reader.fail(operandStart, `${property.name} is not a reference property; quote the text to compare it`, reader.i + 2)
+  }
+  const value = reader.name()
+  if (reader.i === operandStart) reader.fail(start, `Expected a value after ${OP_TEXT[op]}`)
+  if (codec.where) {
+    if (!equality && !isComparable(property.schema)) reader.fail(start, `${property.name} compares with = or != only`)
+    if (scalarValue(property.schema, value) === undefined) reader.fail(operandStart, operandProblem(property, value))
+  } else if (codec.contains) {
+    if (!equality) reader.fail(start, `${property.name} is a list; test a member with = or !=`)
+    if (!encodes(codec.contains.encode, value)) reader.fail(operandStart, `"${value}" is not a member value of ${property.name}`)
+  } else {
+    reader.fail(start, `${property.name} can only be tested for presence: ${property.name} or !${property.name}`)
+  }
+  return {kind: 'compare', property, op, operand: {kind: 'text', value}, start, end: reader.i}
+}
+
+const readKeyed = (reader: Reader, negated: boolean, start: number): QueryTerm => {
   const quotedName = reader.peek() === '"'
   const name = reader.name()
   const savedId = reader.savedId()
   if (!name && savedId === undefined) reader.fail(start, `Unexpected ${JSON.stringify(reader.peek())}`, start + 1)
-  if (name && !quotedName && savedId === undefined && !reader.done && !/[\s|()=<>!]/.test(reader.peek())) {
+  if (!reader.done && !/[\s|()=<>!]/.test(reader.peek())) {
     reader.fail(start, `Unexpected ${JSON.stringify(reader.peek())} in a name`, reader.i + 1)
   }
   const keyEnd = reader.i
   const op = reader.operator()
 
-  if (savedId === undefined && (RESERVED_KEYS as readonly string[]).includes(name) && !quotedName) {
-    if (negated) reader.fail(start, `${name}= cannot be negated`)
-    if (op !== 'eq') reader.fail(start, `${name} takes =`)
-    if (name === 'childof' && reader.startsWith('self') && !/[^\s|()]/.test(reader.peek(4) || ' ')) {
-      reader.i += 4
-      if (!parser.options.selfId) reader.fail(start, 'childof=self needs a table to belong to')
-      return {kind: 'childof', target: 'self', start, end: reader.i}
-    }
-    const target = readTarget(parser, name, start)
-    return {kind: name as 'refs' | 'childof' | 'under', target, start, end: reader.i} as QueryTerm
-  }
+  if (savedId === undefined && !quotedName && isReservedKey(name)) return readStructural(reader, name, negated, op, start)
 
+  const {resolver} = reader
   const property = savedId !== undefined ? resolver.propertyById(savedId) : resolver.propertyByName(name)
   const field = savedId === undefined && resolver.isField(name)
   if (property && field) reader.fail(start, `${name} is both a property and a field; write ${name}^<field id>`, keyEnd)
-  if (!property && !field) {
-    reader.fail(start, savedId !== undefined ? `No property with id ${savedId}` : `No property or field named ${name}`, keyEnd)
-  }
-
-  if (op === undefined) {
-    if (field) reader.fail(start, `${name} is always set; compare it, as in ${name}>2026-01-01`, keyEnd)
-    return {kind: 'presence', property: property!, present: !negated, start, end: reader.i}
-  }
-  if (negated) reader.fail(start, 'Write != instead of a leading !')
-  const operandStart = reader.i
-
   if (field) {
-    const text = reader.bareWord()
-    if (!calendarDay(text) && !isInstant(text)) reader.fail(operandStart, `${name} takes a date like 2026-01-31 or an ISO instant`)
-    return {kind: 'field', field: name, op, operand: text, start, end: reader.i}
+    if (op === undefined) reader.fail(start, `${name} is always set; compare it, as in ${name}>2026-01-01`, keyEnd)
+    if (negated) reader.fail(start, 'Write != instead of a leading !')
+    return readFieldTerm(reader, name, op, start)
   }
-
-  const prop = property!
-  const {codec} = prop.schema
-  if (isRefCodec(codec) || isRefListCodec(codec)) {
-    if (op !== 'eq' && op !== 'ne') reader.fail(start, `${prop.name} is a reference; compare it with = or !=`, reader.i)
-    const target = readTarget(parser, prop.name, operandStart)
-    return {kind: 'compare', property: prop, op, operand: target, start, end: reader.i}
+  if (!property) {
+    return reader.fail(start, savedId !== undefined ? `No property with id ${savedId}` : `No property or field named ${name}`, keyEnd)
   }
-  if (reader.startsWith('[[') || reader.startsWith('((')) {
-    reader.fail(operandStart, `${prop.name} is not a reference property; quote the text to compare it`, reader.i + 2)
-  }
-  const value = reader.peek() === '"' ? reader.quoted() : reader.bareWord()
-  if (reader.i === operandStart) reader.fail(start, `Expected a value after ${OP_TEXT[op]}`)
-
-  if (!codec.where && !codec.contains) reader.fail(start, `${prop.name} can only be tested for presence: ${prop.name} or !${prop.name}`)
-  if (!codec.where) {
-    if (op !== 'eq' && op !== 'ne') reader.fail(start, `${prop.name} is a list; test a member with = or !=`)
-    if (!encodes(codec.contains!.encode, value)) reader.fail(operandStart, `"${value}" is not a member value of ${prop.name}`)
-  } else {
-    if (op !== 'eq' && op !== 'ne' && !isComparable(prop.schema)) {
-      reader.fail(start, `${prop.name} compares with = or != only`)
-    }
-    const scalar = scalarOperand(prop, value)
-    if ('error' in scalar) reader.fail(operandStart, scalar.error)
-  }
-  return {kind: 'compare', property: prop, op, operand: {kind: 'text', value}, start, end: reader.i}
+  if (op === undefined) return {kind: 'presence', property, present: !negated, start, end: reader.i}
+  if (negated) reader.fail(start, 'Write != instead of a leading !')
+  return readCompare(reader, property, op, start)
 }
 
-const readTerm = (parser: TermParser): QueryTerm => {
-  const {reader} = parser
+/** A quoted string with no key after it is a text search. */
+const isTextSearch = (reader: Reader): boolean => {
+  if (reader.peek() !== '"') return false
+  const close = closingQuote(reader.text, reader.i)
+  return close >= 0 && !/[\^=!<>]/.test(reader.text[close + 1] ?? '')
+}
+
+const readTerm = (reader: Reader): QueryTerm => {
   const start = reader.i
   const negated = reader.peek() === '!' && reader.peek(1) !== '='
   if (negated) reader.i++
-  if (reader.peek() === '#') return readType(parser, negated, start)
-  if (reader.peek() === '"') {
-    const save = reader.i
+  if (reader.peek() === '#') return readType(reader, negated, start)
+  if (isTextSearch(reader)) {
     reader.quoted()
-    const next = reader.peek()
-    reader.i = save
-    if (next !== '^' && next !== '=' && next !== '!' && next !== '<' && next !== '>') {
-      reader.quoted()
-      reader.fail(start, 'Text search is not supported yet')
-    }
+    reader.fail(start, 'Text search is not supported yet')
   }
-  return readKeyed(parser, negated, start)
-}
-
-/** Skip the rest of a term that failed, so the next term starts clean. */
-const skipTerm = (reader: Reader) => {
-  while (!reader.done && !/[\s|()]/.test(reader.peek())) {
-    if (reader.peek() === '"') {
-      try { reader.quoted() } catch { reader.i = reader.text.length }
-    } else reader.i++
-  }
+  return readKeyed(reader, negated, start)
 }
 
 /** Positive type terms or'd together are one type term. */
 const mergeTypeAlternatives = (alternatives: readonly QueryTerm[], start: number, end: number): QueryTerm | undefined => {
-  if (!alternatives.every(term => term.kind === 'types' && !term.negated)) return undefined
-  const types = alternatives.flatMap(term => (term as QueryTerm & {kind: 'types'}).types)
+  const types: QueryType[] = []
+  for (const term of alternatives) {
+    if (term.kind !== 'types' || term.negated) return undefined
+    types.push(...term.types)
+  }
   return {kind: 'types', negated: false, types, start, end}
 }
 
-const ALTERNATIVE_KINDS = new Set<QueryTerm['kind']>(['types', 'compare', 'presence', 'field', 'refs', 'under'])
+const isAlternative = (term: QueryTerm): term is AlternativeTerm => {
+  switch (term.kind) {
+    case 'types': return !term.negated
+    case 'compare': case 'field': return term.op !== 'ne'
+    case 'presence': case 'refs': case 'under': return true
+    case 'childof': case 'anyOf': return false
+  }
+}
 
 /** Reads one item: a term, or `a | b | …`, optionally in parentheses. Errors
  *  inside are collected; the item is undefined if it has nothing usable. */
-const readItem = (parser: TermParser, errors: QueryTermError[]): QueryTerm | undefined => {
-  const {reader} = parser
+const readItem = (reader: Reader, errors: QueryTermError[]): QueryTerm | undefined => {
   const start = reader.i
   const parenthesized = reader.peek() === '('
   if (parenthesized) reader.i++
@@ -456,16 +507,15 @@ const readItem = (parser: TermParser, errors: QueryTermError[]): QueryTerm | und
     try {
       if (reader.peek() === '(') reader.fail(termStart, 'Groups do not nest', termStart + 1)
       if (reader.done || reader.peek() === ')' || reader.peek() === '|') reader.fail(termStart, 'Expected a term', termStart + 1)
-      alternatives.push(readTerm(parser))
-      if (!reader.done && !/[\s|()]/.test(reader.peek())) {
+      alternatives.push(readTerm(reader))
+      if (!reader.done && !TERM_END.test(reader.peek())) {
         reader.fail(reader.i, `Unexpected ${JSON.stringify(reader.peek())}`, reader.i + 1)
       }
     } catch (error) {
       if (!(error instanceof TermError)) throw error
       errors.push({start: error.start, end: error.end, message: error.message})
       failed = true
-      if (reader.i === termStart) reader.i++
-      skipTerm(reader)
+      reader.recover(termStart)
     }
     const beforeSpace = reader.i
     reader.skipSpace()
@@ -486,14 +536,15 @@ const readItem = (parser: TermParser, errors: QueryTermError[]): QueryTerm | und
   if (alternatives.length === 1) return alternatives[0]
   const types = mergeTypeAlternatives(alternatives, start, end)
   if (types) return types
-  const unsupported = alternatives.find(term => !ALTERNATIVE_KINDS.has(term.kind) ||
-    (term.kind === 'types' && term.negated) || ((term.kind === 'compare' || term.kind === 'field') && term.op === 'ne'))
+  const unsupported = alternatives.find(term => !isAlternative(term))
   if (unsupported) {
     errors.push({start: unsupported.start, end: unsupported.end, message: 'A negated or childof term cannot be one side of |'})
     return undefined
   }
-  return {kind: 'anyOf', alternatives, start, end}
+  return {kind: 'anyOf', alternatives: alternatives.filter(isAlternative), start, end}
 }
+
+const UNBOUNDED_UNDER = 'under= needs another term that narrows the rows, such as a #type or a property value'
 
 const compile = (terms: readonly QueryTerm[], options: ParseOptions, errors: QueryTermError[]): {query: QueryClauses; kept: QueryTerm[]} => {
   let types: string[] | undefined
@@ -502,10 +553,12 @@ const compile = (terms: readonly QueryTerm[], options: ParseOptions, errors: Que
   const match: BlockPredicate[] = []
   const exclude: BlockPredicate[] = []
   const kept: QueryTerm[] = []
+  const bounded = terms.some(bounds)
   for (const term of terms) {
+    if (!bounded && hasUnder(term)) { errors.push({...term, message: UNBOUNDED_UNDER}); continue }
     if (term.kind === 'childof') {
       if (parentId !== undefined) { errors.push({...term, message: 'Only one childof= per query'}); continue }
-      parentId = term.target === 'self' ? options.selfId! : term.target.id
+      parentId = term.target.id
     } else if (term.kind === 'anyOf') {
       if (anyOf) { errors.push({...term, message: 'Only one | group per query'}); continue }
       anyOf = term.alternatives.map(alternative => placementOf(alternative, options).predicate)
@@ -516,12 +569,6 @@ const compile = (terms: readonly QueryTerm[], options: ParseOptions, errors: Que
       ;(to === 'match' ? match : exclude).push(predicate)
     }
     kept.push(term)
-  }
-  const unbounded = kept.find(term => term.kind === 'under' ||
-    (term.kind === 'anyOf' && term.alternatives.some(alternative => alternative.kind === 'under')))
-  if (unbounded && !kept.some(bounds)) {
-    errors.push({...unbounded, message: 'under= needs another term that narrows the rows, such as a #type or a property value'})
-    return compile(kept.filter(term => term !== unbounded), options, errors)
   }
   return {
     query: {
@@ -536,8 +583,7 @@ const compile = (terms: readonly QueryTerm[], options: ParseOptions, errors: Que
 }
 
 export const parseQuery = (text: string, resolver: QueryResolver, options: ParseOptions = {}): ParsedQuery => {
-  const reader = new Reader(text)
-  const parser: TermParser = {reader, resolver, options}
+  const reader = new Reader(text, resolver, options)
   const errors: QueryTermError[] = []
   const terms: QueryTerm[] = []
   for (;;) {
@@ -548,7 +594,7 @@ export const parseQuery = (text: string, resolver: QueryResolver, options: Parse
       reader.i++
       continue
     }
-    const item = readItem(parser, errors)
+    const item = readItem(reader, errors)
     if (item) terms.push(item)
   }
   const {query, kept} = compile(terms, options, errors)
