@@ -121,6 +121,14 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.parentIds!)).toEqual(['p'])
   })
 
+  it('invalidates workspace-scoped siblings when a sync write keeps the parent id but changes workspace', () => {
+    const moved = new Map<string, ChangeSnapshot>([['child', {
+      before: {parentId: 'parent', workspaceId: 'old'},
+      after: {parentId: 'parent', workspaceId: 'new'},
+    }]])
+    expect([...snapshotsToChangeNotification(moved).parentIds!]).toEqual(['parent'])
+  })
+
   it('parent-edge for move: adds both old and new parent_ids', () => {
     const map = new Map<string, ChangeSnapshot>([
       ['c', {

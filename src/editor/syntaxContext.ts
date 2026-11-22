@@ -1,7 +1,7 @@
 /** Syntax-tree context checks for editor autocompletes. The char
- *  triggers (`#` types, `@` places) match on raw line text, so without
- *  a tree check they fire inside markdown spans whose text is literal
- *  syntax, not prose — and with the dropdown open, Enter accepts the
+ *  triggers (`#` types, `@` contributors, `@@` places) match on raw
+ *  line text, so without a tree check they fire inside markdown spans
+ *  whose text is literal syntax, not prose — and with the dropdown open, Enter accepts the
  *  auto-selected completion and eats that text. Kept beside
  *  triggerMatch.ts (not in it: that module is deliberately import-free
  *  so its tests stay in the cheap node environment). */

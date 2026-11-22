@@ -76,10 +76,12 @@ import {
 } from '@/plugins/srs-review/schema'
 import {startupMetricsPlugin} from '@/plugins/startup-metrics'
 import {startupRecordProp} from '@/plugins/startup-metrics/record'
+import {syncMetricsPlugin} from '@/plugins/sync-metrics'
+import {syncMetricsRecordProp} from '@/plugins/sync-metrics/record'
 import {interactionMetricsPlugin} from '@/plugins/interaction-metrics'
 import {interactionRecordProp} from '@/plugins/interaction-metrics/record'
 import {todoDataExtension} from '@/plugins/todo/dataExtension'
-import {roamTodoStateProp, statusProp} from '@/plugins/todo/schema'
+import {statusProp} from '@/plugins/todo/schema'
 import {updateIndicatorPlugin} from '@/plugins/update-indicator'
 import {
   currentLoadTimeProp,
@@ -143,8 +145,9 @@ const registrationCases: readonly SeedRegistrationCase[] = [
     declarations: [reviewDeckTagProp, reviewDeckStartedProp, reviewProgressProp],
   },
   {label: 'startup metrics', extension: startupMetricsPlugin, declarations: [startupRecordProp]},
+  {label: 'sync metrics', extension: syncMetricsPlugin, declarations: [syncMetricsRecordProp]},
   {label: 'interaction metrics', extension: interactionMetricsPlugin, declarations: [interactionRecordProp]},
-  {label: 'todo', extension: todoDataExtension, declarations: [statusProp, roamTodoStateProp]},
+  {label: 'todo', extension: todoDataExtension, declarations: [statusProp]},
   {
     label: 'update indicator',
     extension: updateIndicatorPlugin,
@@ -179,7 +182,6 @@ describe('static plugin property seeds', () => {
     const declarations: readonly AnyPropertySeedDeclaration[] = [
       charScopeProp,
       statusProp,
-      roamTodoStateProp,
     ]
     for (const declaration of declarations) {
       expect(declaration.presetId).toBe('strict-enum')

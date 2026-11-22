@@ -22,7 +22,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ReadOnlyError } from '@/data/api'
+import { ChangeScope, CycleError, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
@@ -314,6 +314,116 @@ describe('local and preference writes are not undoable', () => {
     expect(env.repo.undoManager.depths(ChangeScope.UiState)).toEqual({undo: 0, redo: 0})
     expect(env.repo.undoManager.depths(ChangeScope.UserPrefs)).toEqual({undo: 0, redo: 0})
     expect(await env.repo.undo()).toBe(false)
+  })
+})
+
+describe('field-level replay', () => {
+  const readProperties = async (repo: Repo, id: string): Promise<Record<string, unknown>> => {
+    const row = await repo.db.get<{properties_json: string}>('SELECT properties_json FROM blocks WHERE id = ?', [id])
+    return JSON.parse(row.properties_json) as Record<string, unknown>
+  }
+
+  it('keeps an automation write to the same block across undo and redo of a content edit', async () => {
+    await seedRoot(env.repo, 'a', 'original')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:status': 'done'}})
+    }, {scope: ChangeScope.Automation, description: 'automation'})
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('original')
+    expect(await readProperties(env.repo, 'a')).toEqual({'test:status': 'done'})
+
+    expect(await env.repo.redo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+    expect(await readProperties(env.repo, 'a')).toEqual({'test:status': 'done'})
+  })
+
+  it('restores the property the entry changed and keeps one another device changed since', async () => {
+    await seedRoot(env.repo, 'a', 'text')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:mine': 'before'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed props'})
+    env.repo.undoManager.clear()
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:mine': 'after'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit prop'})
+    // Another device's edit to another field, arriving as a raw row write.
+    await env.repo.db.execute(
+      `UPDATE blocks SET content = 'synced', properties_json = json_set(properties_json, '$."test:theirs"', 'x') WHERE id = 'a'`)
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('synced')
+    expect(await readProperties(env.repo, 'a')).toEqual({'test:mine': 'before', 'test:theirs': 'x'})
+  })
+})
+
+describe('replay over a conflicting write', () => {
+  it('restores every row of the entry whole when a write since touched a part the entry changed', async () => {
+    await env.repo.tx(async (tx) => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'a'})
+      await tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'b'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+    env.repo.undoManager.clear()
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:k': 'mine'}})
+      await tx.update('b', {content: 'b edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'entry'})
+    // Off the stack: the same key on `a`, and an unrelated key on `b`.
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {'test:k': 'theirs'}})
+      await tx.update('b', {properties: {'test:other': 'x'}})
+    }, {scope: ChangeScope.BlockDefault, description: 'since', skipUndo: true})
+
+    expect(await env.repo.undo()).toBe(true)
+    const a = await env.repo.load('a')
+    const b = await env.repo.load('b')
+    expect(a?.properties['test:k']).toBeUndefined()
+    expect([b?.content, b?.properties['test:other']]).toEqual(['b', undefined])
+  })
+})
+
+describe('replay refuses a parent cycle', () => {
+  const parentOf = async (id: string) =>
+    (await env.repo.db.get<{parent_id: string | null}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id
+
+  const seedTree = async () => {
+    await env.repo.tx(async (tx) => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'a'})
+      await tx.create({id: 'b', workspaceId: WS, parentId: 'a', orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'seed tree'})
+    env.repo.undoManager.clear()
+  }
+
+  // Another device moves `a` under `b` once `b` is a root.
+  const moveAUnderBElsewhere = () => env.repo.db.execute(`UPDATE blocks SET parent_id = 'b' WHERE id = 'a'`)
+
+  it('refuses an undo that would put b back under a, which now sits under b', async () => {
+    await seedTree()
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'a edited'})
+      await tx.move('b', {parentId: null, orderKey: 'c0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a, root b'})
+    await moveAUnderBElsewhere()
+
+    await expect(env.repo.undo()).rejects.toThrow(CycleError)
+    expect([await parentOf('a'), await parentOf('b')]).toEqual(['b', null])
+    expect(await readContent(env.repo, 'a')).toBe('a edited')
+    expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+  })
+
+  it('refuses it when the entry touched only the moved block', async () => {
+    await seedTree()
+    await env.repo.tx(async (tx) => {
+      await tx.move('b', {parentId: null, orderKey: 'c0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'root b'})
+    await moveAUnderBElsewhere()
+
+    await expect(env.repo.undo()).rejects.toThrow(CycleError)
+    expect([await parentOf('a'), await parentOf('b')]).toEqual(['b', null])
   })
 })
 

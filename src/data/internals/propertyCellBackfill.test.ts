@@ -54,6 +54,15 @@ const tagsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+const dateProp = seedProperty({
+  seedKey: 'test/property/date',
+  revision: 1,
+  name: 'demo:date',
+  preset: 'date',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 let sharedDb: TestDb
 let repo: Repo
 
@@ -74,6 +83,7 @@ beforeEach(async () => {
     definitionSeedsFacet.of(noteProp, {source: 'test'}),
     definitionSeedsFacet.of(extraProp, {source: 'test'}),
     definitionSeedsFacet.of(tagsProp, {source: 'test'}),
+    definitionSeedsFacet.of(dateProp, {source: 'test'}),
   ], {repo, workspaceId: WS, safeMode: false}))
 })
 
@@ -190,6 +200,7 @@ const makeCtx = (): WorkspaceBackfillContext => {
   return {
     syncWaitCount: 0,
     workspaceId: WS,
+    awaitCaughtUp: async () => {},
     getAll: (sql, params) => repo.db.getAll(sql, params as unknown[] | undefined),
     tx: (fn, opts) => repo.tx(fn, {scope: ChangeScope.BlockDefault, skipUndo: true, ...opts}),
     resolveNameSchema: name => {
@@ -246,6 +257,23 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // The cell is untouched — this pass ADDS the child representation, it does
     // not move the value; the cell stays the synchronous read surface.
     expect((await repo.load('b1'))?.properties['demo:note']).toBe('hello')
+  })
+
+  it('leaves the owner\'s edit time alone when the projection re-encodes its cell', async () => {
+    // A date-only cell projects back as a full ISO timestamp, so the owner's
+    // cell is rewritten. That rewrite is the pass's, not an edit of the owner.
+    await create('dated', {})
+    await rawCell('dated', {'demo:date': '2020-01-02'})
+    await sharedDb.db.execute('UPDATE blocks SET user_updated_at = 1000 WHERE id = ?', ['dated'])
+    await flip()
+
+    expect((await run()).outcome).toBe('ran')
+
+    expect(await fieldRowsOf('dated')).toHaveLength(1)
+    const owner = await repo.db.get<{properties_json: string; user_updated_at: number}>(
+      'SELECT properties_json, user_updated_at FROM blocks WHERE id = ?', ['dated'])
+    expect(JSON.parse(owner.properties_json)['demo:date']).not.toBe('2020-01-02')
+    expect(owner.user_updated_at).toBe(1000)
   })
 
   it('leaves an unregistered key in the cell rather than inventing a definition', async () => {
@@ -370,6 +398,26 @@ describe('property cell → children backfill', {timeout: 30_000}, () => {
     // for its original key and again in sweep 2 for the one that arrived behind
     // the cursor; summing the sweeps would count it twice and report more
     // migrated blocks than the graph holds.
+    expect(progress.blocksMaterializedTotal).toBe(ids.length)
+  })
+
+  it('catches up before every sweep after the first, outside the sweep it gates', async () => {
+    const ids = await seedNotes(TWO_BATCHES)
+    await flip()
+    let syncWaitCount = 0
+    const order: string[] = []
+    const ctx = {
+      ...makeCtx(),
+      get syncWaitCount() { return syncWaitCount },
+      // A catch-up that had to wait, as one after a writing sweep does.
+      awaitCaughtUp: async () => { order.push('catch-up'); syncWaitCount += 1 },
+    }
+    const progress = await runPropertyCellBackfill(ctx, p => {
+      if (order.at(-1) !== `sweep ${p.sweeps}`) order.push(`sweep ${p.sweeps}`)
+    })
+
+    expect(order).toEqual(['sweep 1', 'catch-up', 'sweep 2'])
+    expect(progress.sweeps).toBe(2)
     expect(progress.blocksMaterializedTotal).toBe(ids.length)
   })
 
@@ -789,10 +837,10 @@ describe('the pass and the live writer agree about a value\'s children', () => {
    *
    *  `tx.setProperty` dual-writes children inside a user's edit, one row at a
    *  time; the pass emits the same rows for a whole batch and hands them to
-   *  `tx.createMany`. They share the builders (`plannedFieldRow`,
-   *  `plannedValueChildRows`) precisely so they cannot decide differently —
-   *  and this is what would notice if a future edit taught one of them
-   *  something the other does not know. Asserted on the SHAPE, since the two
+   *  `tx.createMany`. They share `plannedFieldRow` and the member encoder
+   *  (`encodedPropertyValueToChildContents`) precisely so they cannot decide
+   *  differently — and this is what would notice if a future edit taught one
+   *  of them something the other does not know. Asserted on the SHAPE, since the two
    *  routes never share ids.
    *
    *  Both grains, because the member split is the interesting half: a scalar

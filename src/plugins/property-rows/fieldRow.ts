@@ -1,0 +1,87 @@
+import type { AnyPropertySchema, BlockData } from '@/data/api'
+import { memberCodecOf } from '@/data/api'
+import { isPropertyFieldInstance } from '@/data/propertyChildren'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
+import type { Repo } from '@/data/repo'
+import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
+import { useCallback, useSyncExternalStore } from 'react'
+import type { BlockContextType } from '@/types'
+import type { Block } from '@/data/block'
+import { useHandle } from '@/hooks/block'
+
+/** What a field row is a row OF: its definition id, the name the outline
+ *  labels it with, and the schema when this device can build one. */
+export interface FieldRowDefinition {
+  readonly fieldId: string
+  readonly name: string
+  readonly schema: AnyPropertySchema | undefined
+}
+
+/** The definition a FIELD ROW (§9 recognition, against the registry this repo
+ *  holds for the row's workspace) names, or `undefined` for any other block.
+ *  Total and synchronous — it backs `canRender`, which runs above the error
+ *  boundary for every block, loaded or not.
+ *
+ *  `definitions` is the registry snapshot the answer is read against, passed in
+ *  rather than read off `repo` so a render that calls this depends on it: the
+ *  React Compiler memoizes on the arguments a call uses, and a registry read
+ *  hidden inside would freeze the answer across a rename. */
+export const fieldRowDefinition = (
+  repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm' | 'workspaceId'> | null | undefined,
+): FieldRowDefinition | undefined => {
+  if (!data) return undefined
+  if (!isPropertyFieldInstance(data, repoFieldDefinitionTest(repo, data.workspaceId))) return undefined
+  const fieldId = data.referenceTargetId!
+  const {name, schema} = resolveFieldDefinition(repo, definitions, data.workspaceId, fieldId)
+  return {fieldId, name: name ?? fieldId, schema}
+}
+
+/** A definition's schema when this device can build one, and its name when the
+ *  registry knows it. `definitions` is passed in for the same reason as in
+ *  {@link fieldRowDefinition}: a render that calls this must depend on it. */
+export const resolveFieldDefinition = (
+  repo: Repo,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+  fieldId: string,
+): {name: string | undefined; schema: AnyPropertySchema | undefined} => {
+  const resolution = repo.propertySchemaResolverFor(workspaceId).resolveField(fieldId)
+  if (resolution.status === 'resolved') return {name: resolution.schema.name, schema: resolution.schema}
+  return {name: definitions?.definitionsByFieldId.get(fieldId)?.name, schema: undefined}
+}
+
+/** A scalar control edits one row; list controls edit the whole list and
+ *  belong in the property panel. */
+export const isSingleValueProperty = (schema: AnyPropertySchema): boolean =>
+  memberCodecOf(schema.codec) === undefined
+
+/** Surfaces that show a block as something other than an outline row — a
+ *  breadcrumb crumb, an inline reference — keep their own rendering. */
+export const drawsPropertyRows = (context: BlockContextType | undefined): boolean =>
+  context?.isBreadcrumb !== true && context?.isReference !== true
+
+/** Is `block` a child of `parentId`? The one test both row renderers make
+ *  against the context their parent provides (a listing, a field row). */
+export const useIsChildOf = (block: Block, parentId: string | null): boolean =>
+  useHandle(block, {selector: data => parentId !== null && data?.parentId === parentId})
+
+/** The repo's property-definition registry snapshot, reactively: a new
+ *  snapshot on every registry rebuild (a rename, a definition arriving). The
+ *  input a render passes to {@link fieldRowDefinition}. */
+export const usePropertyDefinitions = (repo: Repo): PropertyDefinitionRegistrySnapshot | null => {
+  const subscribe = useCallback((cb: () => void) => repo.onPropertySchemasChange(cb), [repo])
+  const snapshot = useCallback(() => repo.propertyDefinitions, [repo])
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+
+/** Observe only the fields that determine a row's property role. */
+export const useFieldRowDefinition = (block: Block): FieldRowDefinition | undefined => {
+  const definitions = usePropertyDefinitions(block.repo)
+  const data = useHandle(block, {selector: row => row ? {
+    referenceTargetId: row.referenceTargetId, parentId: row.parentId,
+    isFieldForm: row.isFieldForm, workspaceId: row.workspaceId,
+  } : undefined})
+  return fieldRowDefinition(block.repo, definitions, data)
+}

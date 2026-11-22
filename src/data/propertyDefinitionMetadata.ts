@@ -2,11 +2,12 @@ import {ChangeScope, isChangeScope, type BlockData, type PropertySchemaOrigin} f
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {seededDefinitionKey, seedKeyOwner} from '@/data/definitionSeeds'
 import {isPropertySeedKey} from '@/data/propertySeeds'
-import {decodeRowProperty} from '@/data/rowProperty'
+import {decodeRowProperty, peekRowProperty} from '@/data/rowProperty'
 import {
   hasBlockType,
   propertyChangeScopeProp,
   propertyHiddenProp,
+  propertyHideInOutlineProp,
   propertyNameProp,
 } from '@/data/properties'
 
@@ -19,6 +20,9 @@ export interface PropertyDefinitionMetadata {
   readonly name: string
   readonly changeScope: ChangeScope
   readonly hidden: boolean
+  /** See `propertyHideInOutlineProp`. Present only when the row stores it;
+   *  read it through `effectiveHideInOutline`. */
+  readonly hideInOutline?: boolean
   readonly origin: PropertySchemaOrigin
   /** Present only when seed provenance passes the deterministic-id check. */
   readonly seedKey?: string
@@ -35,7 +39,7 @@ export const propertySchemaOriginForSeedKey = (seedKey: string): PropertySchemaO
  * seed marker is the one deliberate exception and demotes to ordinary user
  * provenance. */
 export const parsePropertyDefinitionMetadata = (
-  row: BlockData,
+  row: Pick<BlockData, 'id' | 'workspaceId' | 'properties' | 'deleted' | 'createdAt'>,
 ): PropertyDefinitionMetadata | null => {
   if (row.deleted) return null
 
@@ -48,6 +52,10 @@ export const parsePropertyDefinitionMetadata = (
     // strings; definition metadata still requires one of the real tx scopes.
     if (!isChangeScope(changeScope)) return null
     const hidden = decodeRowProperty(row, propertyHiddenProp)
+    // Kept only when STORED, false included: unset falls back to the seed's
+    // declaration (`effectiveHideInOutline`), a stored value does not.
+    const storedHideInOutline = peekRowProperty(row, propertyHideInOutlineProp)
+    const hideInOutline = storedHideInOutline === undefined ? {} : {hideInOutline: storedHideInOutline}
 
     // Require PROPERTY provenance. `seededDefinitionKey` now also validates
     // `/type/` rows (a `block-type` block can be a valid seeded definition), so a
@@ -64,6 +72,7 @@ export const parsePropertyDefinitionMetadata = (
         name,
         changeScope,
         hidden,
+        ...hideInOutline,
         origin: 'user',
       }
     }
@@ -77,6 +86,7 @@ export const parsePropertyDefinitionMetadata = (
       name,
       changeScope,
       hidden,
+      ...hideInOutline,
       origin: propertySchemaOriginForSeedKey(seedKey),
       seedKey,
     }

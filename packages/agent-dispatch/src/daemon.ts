@@ -18,17 +18,17 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
 import {
-  agentRuntimeConfigDir,
   bridgeUrl as resolveBridgeUrl,
   isLocalBridgeUrl,
   loadContributorSelection,
 } from '@knowledge-medium/agent-cli/config'
-import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
+import { loadConfig, type DaemonConfig } from './config.js'
+import { instanceFiles, type InstanceFiles } from './instance.js'
 import { createGraph, createReplyWriter } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
-import { clearPushRegistration, createExemptionPool, startPushLoop } from './push.js'
+import { clearPushRegistration, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
 import { reportBillingPosture } from './billing.js'
@@ -48,8 +48,9 @@ const parseArgs = (argv: string[]) => {
   return args
 }
 
-// Single-instance lock — see pidfile.ts for the takeover semantics.
-const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid')
+/** Set once the config names this daemon's instance; until then it holds
+ *  no pidfile to release. */
+let files: InstanceFiles | null = null
 
 /** Generated --mcp-config for spawned claude runs: the dispatch km
  *  server, bound to the daemon's own profile, with watcher targets
@@ -57,7 +58,7 @@ const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid
  *  `alwaysLoad` puts its tools in the first prompt instead of behind
  *  claude's tool search: every run uses them, so deferring them only
  *  costs each run a lookup turn. */
-const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null): Promise<string> => {
+const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null, configPath: string): Promise<void> => {
   const serverDef = buildMcpServerDef(config, contributorId)
   const mcpConfig = {
     mcpServers: {
@@ -70,10 +71,8 @@ const writeMcpConfig = async (config: DaemonConfig, contributorId: string | null
     },
   }
 
-  const configPath = path.join(agentRuntimeConfigDir(), 'agent-dispatch-mcp.json')
   await fs.mkdir(path.dirname(configPath), {recursive: true})
   await fs.writeFile(configPath, `${JSON.stringify(mcpConfig, null, 2)}\n`)
-  return configPath
 }
 
 const main = async () => {
@@ -102,7 +101,9 @@ const main = async () => {
     process.exit(0)
   }
 
-  await acquirePidfile({file: pidfilePath()})
+  files = instanceFiles(config.instance)
+  // Single-instance lock — see pidfile.ts for the takeover semantics.
+  await acquirePidfile({file: files.pidfile})
 
   // Say — up front and every start — what these runs bill to, so an
   // accidental usage-based-billing setup is visible, not silent.
@@ -157,12 +158,12 @@ const main = async () => {
   if (config.watchers.length === 0) {
     log('no active watchers (all configured watchers are disabled) — clearing push registration and stopping')
     try {
-      await clearPushRegistration(client)
+      await clearPushRegistration(client, config.instance)
       log('push: watch-events registration cleared')
     } catch (error) {
       log(`push: could not clear watch-events registration (${errorMessage(error)})`)
     }
-    await releasePidfile({file: pidfilePath()})
+    await releasePidfile({file: files.pidfile})
     return
   }
   // Defence in depth: active watcher attribution was checked before startup.
@@ -182,7 +183,7 @@ const main = async () => {
     } catch (error) {
       if (args.once) {
         process.stderr.write(`bridge/pairing not ready: ${errorMessage(error)}\n`)
-        await releasePidfile({file: pidfilePath()})
+        await releasePidfile({file: files.pidfile})
         process.exit(1)
       }
       if (!bridgeStartAttempted && !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(resolveBridgeUrl())) {
@@ -202,7 +203,8 @@ const main = async () => {
     }
   }
 
-  const mcpConfigPath = await writeMcpConfig(config, contributorId)
+  const mcpConfigPath = files.mcpConfig
+  await writeMcpConfig(config, contributorId, mcpConfigPath)
   log(`mcp config: ${mcpConfigPath}`)
   const mcpServerDef = buildMcpServerDef(config, contributorId)
 
@@ -216,7 +218,7 @@ const main = async () => {
     config,
     graph,
     replies: createReplyWriter(client),
-    state: createStateStore(config.statePath ?? defaultStatePath()),
+    state: createStateStore(config.statePath ?? files.state),
     runTask: options => options.executor === 'codex'
       ? runCodex({
         codexBin: config.codexBin,
@@ -256,12 +258,7 @@ const main = async () => {
 
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
-  // Exemptions are keyed by the EMITTING watcher — only that watcher's
-  // tick may skip its still-typing gate for these blocks. The pool is
-  // bounded and freshness-checked at drain (see createExemptionPool).
-  const exemptionPool = createExemptionPool()
-  const requestTick: Parameters<typeof startPushLoop>[0]['requestTick'] = exemptions => {
-    if (exemptions) exemptionPool.add(exemptions)
+  const requestTick = () => {
     tickRequested = true
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
@@ -281,20 +278,18 @@ const main = async () => {
 
   while (!stopping) {
     tickRequested = false
-    // Drain the exemptions INTO this tick — ids arriving mid-tick stay
-    // pending and re-tick immediately via tickRequested.
-    await engine.tick({quietExemptByWatcher: exemptionPool.drain()})
+    await engine.tick()
     if (args.once) break
     await napOrTick(config.pollIntervalMs)
   }
 
   await engine.drain()
-  await releasePidfile({file: pidfilePath()})
+  await releasePidfile({file: files.pidfile})
   log('stopped')
 }
 
 main().catch(async error => {
   process.stderr.write(`${errorMessage(error)}\n`)
-  await releasePidfile({file: pidfilePath()})
+  if (files) await releasePidfile({file: files.pidfile})
   process.exit(1)
 })

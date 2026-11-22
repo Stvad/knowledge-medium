@@ -8,6 +8,7 @@ import {
   normalizeReferences,
   type BlockData,
 } from '@/data/api'
+import { merge } from '@/data/mutators'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
@@ -105,6 +106,35 @@ describe('references.retargetMergedBlockReferences', () => {
       {id: intoId, alias: 'Source page'},
       {id: intoId, alias: intoId},
     ]))
+  })
+
+  // Tagging only clears a block's edges at the next parse, so the edge query can
+  // still reach it; the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never rewrites a block newly typed %s', async type => {
+    const intoId = '11111111-1111-4111-8111-111111111111'
+    const fromId = '22222222-2222-4222-8222-222222222222'
+    const refId = '33333333-3333-4333-8333-333333333333'
+    const source = `const label = "[[Source page]] ((${fromId}))"`
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: intoId, workspaceId: WS, parentId: 'p', orderKey: 'a0', content: 'Target page', properties: aliasProperty(['Target page'])})
+      await tx.create({id: fromId, workspaceId: WS, parentId: 'p', orderKey: 'a1', content: 'Source page', properties: aliasProperty(['Source page'])})
+      await tx.create({
+        id: refId, workspaceId: WS, parentId: 'p', orderKey: 'a2',
+        content: source,
+        references: [{id: fromId, alias: 'Source page'}, {id: fromId, alias: fromId}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.tx(async tx => {
+      await tx.update(refId, {properties: {types: [type]}})
+      await tx.run(merge, {intoId, fromId, contentStrategy: 'keepTarget'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.read(fromId)!.deleted).toBe(true)
+    expect(env.read(refId)!.content).toBe(source)
   })
 
   // Regression: `core.deriveReferenceTarget` runs earlier
@@ -614,7 +644,10 @@ describe('references.retargetMergedBlockReferences', () => {
       expect(env.read('value')!.references).toEqual([{id: INTO, alias: INTO}])
     })
 
-    it('keeps a refList member row and its nested content when the owner is retargeted first', async () => {
+    it.each([
+      {form: 'id', pending: false}, {form: 'name', pending: false}, {form: 'name', pending: true},
+    ])('preserves annotations when merging $form refs (pending parser: $pending)', async ({form, pending}) => {
+      const other = '88888888-8888-4888-8888-888888888888'
       // A member row is matched BY VALUE when the owner's list is written, so
       // an owner retargeted while its member still reads `((from))` would read
       // as "member removed, member added": the row and its comments reaped.
@@ -640,37 +673,106 @@ describe('references.retargetMergedBlockReferences', () => {
           id: REF_DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
           content: 'related', properties: {types: ['property-schema']},
         })
-        await tx.create({id: FROM, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'From'})
+        await tx.create({id: FROM, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'From',
+          properties: aliasProperty(['Source'])})
         await tx.create({id: INTO, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Into'})
+        await tx.create({id: other, workspaceId: WS, parentId: null, orderKey: 'a3', content: 'Other'})
         // Sorts ahead of every member row, so the retarget walk reaches it first.
         await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'A0', content: 'Owner'})
-        await tx.setProperty('owner', related, [FROM])
+        await tx.setProperty('owner', related, pending ? [FROM, other] : [FROM])
       }, {scope: ChangeScope.BlockDefault})
       await env.repo.awaitProcessors()
-      const member = await env.h.db.get<{id: string}>(
+      const members = await env.h.db.getAll<{id: string}>(
         `SELECT v.id FROM blocks f JOIN blocks v ON v.parent_id = f.id
-         WHERE f.parent_id = 'owner' AND f.reference_target_id = ? AND v.deleted = 0`,
+         WHERE f.parent_id = 'owner' AND f.reference_target_id = ? AND v.deleted = 0 ORDER BY v.order_key, v.id`,
         [REF_DEF],
       )
+      const member = pending ? members[1]! : members[0]!
+      // Model an edit whose post-commit reference parser has not run yet.
+      if (pending) env.repo.__setProcessorsForTesting([])
+      if (form === 'name') {
+        await env.repo.tx(tx => tx.update(member.id, {content: '[[Source]]'}), {scope: ChangeScope.BlockDefault})
+        await env.repo.awaitProcessors()
+      }
+      expect(env.read(member.id)!.referenceTargetId).toBe(FROM)
+      expect(env.read('owner')!.properties.related).toEqual(pending ? [FROM, FROM] : [FROM])
       await env.repo.tx(tx => tx.create({
         id: 'comment', workspaceId: WS, parentId: member.id, orderKey: 'a0', content: 'a note',
       }), {scope: ChangeScope.BlockDefault})
-      expect((await env.h.db.getAll<{id: string}>(
+      const indexedSources = (await env.h.db.getAll<{id: string}>(
         SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL, [WS, FROM],
-      )).map(row => row.id)).toEqual(['owner', member.id])
+      )).map(row => row.id)
+      expect(indexedSources).toEqual(['owner', members[0]!.id])
+      if (pending) expect(indexedSources).not.toContain(member.id)
 
       await env.repo.mutate.merge({fromId: FROM, intoId: INTO})
       await env.repo.awaitProcessors()
 
       expect(env.read('owner')!.properties.related).toEqual([INTO])
+      expect(env.read(member.id)!.referenceTargetId).toBe(INTO)
       const rows = await env.h.db.getAll<{id: string; content: string; deleted: number}>(
         'SELECT id, content, deleted FROM blocks WHERE id IN (?, ?) ORDER BY id',
         ['comment', member.id],
       )
       expect(rows).toEqual([
         {id: 'comment', content: 'a note', deleted: 0},
-        {id: member.id, content: `((${INTO}))`, deleted: 0},
+        {id: member.id, content: form === 'name' ? '[[Source]]' : `((${INTO}))`, deleted: pending ? 1 : 0},
       ].sort((a, b) => a.id.localeCompare(b.id)))
+
+      expect((await env.repo.load('comment'))!.parentId).toBe(members[0]!.id)
+
+      expect(await env.repo.undo()).toBe(true)
+      expect((await env.repo.load('owner'))!.properties.related).toEqual(pending ? [FROM, FROM] : [FROM])
+      expect(await env.repo.load(member.id)).toMatchObject({referenceTargetId: FROM, deleted: false})
+      expect(await env.repo.load('comment')).toMatchObject({parentId: member.id, deleted: false})
+    })
+
+    // A JSON-spelled value child (#1061) is a serialization, so a span inside
+    // one is an accident: the merge must not reach it, and no seat is minted.
+    it('leaves a JSON-spelled value untouched, and mints no seat for it', async () => {
+      const blob = defineProperty<unknown[]>('blob', {
+        codec: codecs.list(codecs.unsafeIdentity<unknown>()),
+        defaultValue: [],
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const value = [`see ((${FROM}))`, '[[Fresh Name]]', [['nested']]]
+      env.repo.setActiveWorkspaceId(WS)
+      await env.h.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [WS],
+      )
+      env.repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-blob', [{
+        metadata: {
+          fieldId: REF_DEF, workspaceId: WS, createdAt: 1, name: blob.name,
+          changeScope: blob.changeScope, hidden: false, origin: 'user',
+        },
+        schema: blob,
+      }], {workspaceId: WS})
+      await env.repo.tx(async tx => {
+        await tx.create({id: FROM, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'From'})
+        await tx.create({id: INTO, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Into'})
+        await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a3', content: 'Owner'})
+        await tx.setProperty('owner', blob, value)
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+      const members = await env.h.db.getAll<{content: string; references_json: string}>(
+        `SELECT v.content, v.references_json FROM blocks f JOIN blocks v ON v.parent_id = f.id
+         WHERE f.parent_id = 'owner' AND f.reference_target_id = ? AND v.deleted = 0`,
+        [REF_DEF],
+      )
+      expect(members).toHaveLength(value.length) // precondition: the child-backed path ran
+      for (const member of members) {
+        expect(JSON.parse(member.references_json), member.content).toEqual([])
+      }
+      expect(env.read(computeAliasSeatId(PLAINTEXT_ALIAS_SEATS, 'Fresh Name', WS))).toBeUndefined()
+
+      await env.repo.mutate.merge({fromId: FROM, intoId: INTO})
+      await env.repo.awaitProcessors()
+
+      expect(env.read(FROM)!.deleted).toBe(true) // precondition: the merge ran
+      expect(env.read('owner')!.properties[blob.name]).toEqual(value)
     })
   })
 })

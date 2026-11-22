@@ -11,7 +11,6 @@ import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePair
 import { BridgeNotPairedError, startBridgeLoop } from './bridgeLoop.ts'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
-import { blockEditResumed, blockEditSettled } from '@/editor/editSettleSignal.js'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
@@ -296,15 +295,6 @@ export const startAgentRuntimeBridge = (
   watchEventsRegistry.setTransport(async event => {
     await loop.post('/runtime/events', event)
   })
-  // Editor blur short-circuits the settle window for that block —
-  // typed mentions fire the moment the user leaves them. Re-entering
-  // the editor revokes the blur exemption (quiet is no longer
-  // user-confirmed once they're back typing).
-  const offEditSettled = blockEditSettled.add(blockId =>
-    watchEventsRegistry.notifyBlockSettled(blockId))
-  const offEditResumed = blockEditResumed.add(blockId =>
-    watchEventsRegistry.notifyBlockEditing(blockId))
-
   window.addEventListener(agentRuntimeBridgeRestartEvent, loop.wake)
   window.addEventListener(agentTokensChangedEvent, reRegister)
   window.addEventListener('storage', handleStorageChanged)
@@ -319,8 +309,6 @@ export const startAgentRuntimeBridge = (
     // watchers don't keep re-running queries against a stopped bridge.
     watchEventsRegistry.setTransport(null)
     watchEventsRegistry.disposeAll()
-    offEditSettled()
-    offEditResumed()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, loop.wake)
     window.removeEventListener(agentTokensChangedEvent, reRegister)
     window.removeEventListener('storage', handleStorageChanged)

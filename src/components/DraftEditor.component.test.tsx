@@ -122,9 +122,9 @@ describe('DraftEditor', () => {
     expect(values.at(-1)).toBe('[[Launch plan]]')
   })
 
-  it('offers places on @', async () => {
+  it('offers places on @@', async () => {
     const view = await mount()
-    type(view, '@Corn')
+    type(view, '@@Corn')
     act(() => { startCompletion(view) })
     await waitFor(() => expect(currentCompletions(view.state).map(c => c.label)).toContain('Corner Cafe'))
   })

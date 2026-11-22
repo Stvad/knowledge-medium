@@ -4,10 +4,14 @@
  * TWO parts, because two different things can make the copy on disk stale.
  *
  * `row_events.id` is an AUTOINCREMENT the client schema's triggers advance on
- * every change to `blocks` — local `repo.tx` writes and sync-applied ones alike
- * — so its maximum moves exactly when the DATA worth copying moves, and reading
- * it is a rowid lookup rather than a scan. That matters because the
- * alternative is copying multiple gigabytes to discover nothing changed. An
+ * every local `repo.tx` write to `blocks` and every sync-applied change to a
+ * row this device already had. Its maximum therefore moves whenever data only
+ * this device holds moves, and reading it is a rowid lookup rather than a scan.
+ * That matters because the alternative is copying multiple gigabytes to
+ * discover nothing changed. It does NOT move for the rows a bulk load brings in
+ * (`syncBulkLoadScope`): a workspace's first download is not copied until
+ * something else changes, and a copy that lacks it gets it back from the
+ * server on restore. An
  * update that moves only a row's version is not a change: the copy on disk
  * holds the same data, and sync re-delivers the bump to a restored copy, whose
  * checkpoint predates it.
@@ -74,17 +78,18 @@ const readQueueFingerprint = async (
  * Derived rather than stored, from the FIRST row the local audit log holds:
  * `row_events` is never trimmed and its id is an autoincrement, so row 1 is the
  * first thing this database ever recorded, and its timestamp never moves. A
- * database that the browser wiped and PowerSync re-created gets a new one,
- * because the re-download writes fresh events.
+ * database that the browser wiped and PowerSync re-created gets a new one: its
+ * log starts again, at the first write after the re-download (the download's
+ * own creates are not logged — `syncBulkLoadScope`).
  *
  * It does NOT identify a DEVICE — restoring a mirror copies the log along with
  * everything else, so two installs can hold the same incarnation. The install
  * id it is paired with in the filename is what separates those.
  *
  * The two ways of having no answer are kept APART because they call for
- * opposite things. An EMPTY log is a positive fact: every `blocks` insert is
- * logged, local and sync-applied alike, so an empty log means no local
- * writes — and therefore nothing in the upload queue either, which is the whole
+ * opposite things. An EMPTY log is a positive fact: every local write to
+ * `blocks` is logged, so an empty log means there have been none — and
+ * therefore nothing in the upload queue either, which is the whole
  * of what this feature protects. There is nothing to copy, so no copy is taken.
  * An UNREADABLE log says nothing about the database; in particular it says
  * nothing about whether the FILE copies, since the export streams raw bytes and

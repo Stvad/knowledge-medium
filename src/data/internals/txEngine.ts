@@ -33,6 +33,7 @@ import type {
   BlockReference,
   Mutator,
   NewBlockData,
+  PropertyChildrenView,
   PropertySchema,
   ResolvedPropertySchema,
   SameTxEmittedEvent,
@@ -68,9 +69,11 @@ import {
   normalizeReferences,
   scopePoliciesEquivalent,
 } from '@/data/api'
-import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { isValidSeededDefinition, seededDefinitionKey } from '@/data/definitionSeeds'
+import { isPropertySeedKey } from '@/data/propertySeeds'
+import { propertyHideInOutlineProp } from '@/data/properties'
 import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
-import { chunk as chunksOf } from 'lodash-es'
+import { chunk as chunksOf, cloneDeep } from 'lodash-es'
 import { MAX_IDS_PER_IN_CLAUSE, buildInClause } from './sqlBinds'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
@@ -86,7 +89,7 @@ import {
   readHasLiveReferrer,
 } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
-import type { BlockCache } from '@/data/blockCache'
+import { deepFreeze, type BlockCache } from '@/data/blockCache'
 import {
   getResolvedProperty,
   isResolvableFieldDefinition,
@@ -101,9 +104,10 @@ import {
   readPropertyDefinitionBags,
 } from '@/data/internals/propertyKeyScan'
 import {
-  isPropertyFieldInstance,
+  isLeftOutOfChildrenView,
   propertyCellValueRejection,
   type IsPropertyFieldDefinition,
+  type PropertyRowClassifier,
 } from '@/data/propertyChildren'
 import {
   changedPropertyNames,
@@ -113,8 +117,9 @@ import {
   upsertFieldRow,
   type RevivalHistory,
 } from './propertyChildrenProcessor'
-import { deleteSubtreeInTx } from '@/data/subtreeDelete'
+import { deleteSubtreeAnnouncedInTx } from '@/data/subtreeDelete'
 import { storedPropertyValue } from '@/data/rowProperty'
+import { replayConflicts, replayTarget } from './replayMerge'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -155,13 +160,17 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
   return false
 }
 
-/** v1 invariant (schema-unification §5.1): a materialized seed definition is
- *  wholly code-owned — its bag and lifecycle belong to materialization and
- *  the §13 revision-upgrade step (both `Automation` scope); synced-in
- *  changes never pass through this engine at all. The schema editor and
- *  property panel already render seed rows read-only; this is the
- *  data-layer backstop for the agent bridge, the importer, and the outline
- *  delete key.
+/** A property's outline visibility is user-owned; all other seed metadata
+ *  and type-definition metadata stay code-owned. Removing the override
+ *  restores the declaration's default. */
+const isEditableSeedPreference = (row: BlockData, name: string): boolean =>
+  isPropertySeedKey(seededDefinitionKey(row))
+  && name === propertyHideInOutlineProp.name
+  && (row.properties[name] === undefined || typeof row.properties[name] === 'boolean')
+
+/** A materialized seed definition's schema and lifecycle are code-owned.
+ *  Only its outline preference is user-editable. This commit-time check
+ *  also covers writes from the agent bridge, importer, and outline.
  *
  *  ONE commit-time check over the tx's snapshots map — the single
  *  convergence point for everything a tx wrote — rather than per-primitive
@@ -175,7 +184,7 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
  *
  *  Rules, under `BlockDefault` scope only:
  *   - a row may not BECOME a valid seeded definition (forgery);
- *   - a valid seeded definition's bag may not change (which also covers
+ *   - a valid seeded definition's code-owned metadata may not change (which also covers
  *     stripping its provenance) and it may not be tombstoned or
  *     hard-deleted. Content/references edits and plain restores stay
  *     allowed — they don't touch the code-owned fields, and
@@ -201,7 +210,7 @@ export const assertNoSeedDefinitionWrites = (
     }
     if (beforeSeed && (
       after === null
-      || !jsonValuesEqual(before.properties, after.properties)
+      || changedPropertyNames(before.properties, after.properties).some(name => !isEditableSeedPreference(after, name))
       || (!before.deleted && after.deleted)
     )) {
       throw new SeededDefinitionWriteError(id)
@@ -260,6 +269,10 @@ export interface TxImplContext {
    *  property schemas against one registry snapshot per tx, without this
    *  context re-deriving that closure itself. */
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
+  /** The definition ids the workspace's `'non-hidden'` view skips (`outlineSkippedFieldIds` over the
+   *  same tx-start registry snapshot the resolver reads), for the
+   *  `'non-hidden'` child view. */
+  outlineSkippedFieldIdsFor: (workspaceId: string) => ReadonlySet<string>
   /** Tx-start write scope; null permits stage-0 or explicitly forced writes.
    *  A scope with workspaceId null has no open workspace and refuses writes. */
   writableWorkspace: {readonly workspaceId: string | null} | null
@@ -436,6 +449,10 @@ export class TxImpl implements Tx {
    *  (never written through this engine), so within-tx staleness cannot
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
+  /** Per-tx cache of `workspaces.encryption_mode`, which is written only
+   *  outside any tx (sync, `markLocalWorkspaceConverted`) and so waits behind
+   *  this tx's write lock. */
+  private readonly encryptionModeCache = new Map<string, Promise<string | null>>()
 
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
@@ -484,27 +501,39 @@ export class TxImpl implements Tx {
     before: BlockData | null,
     after: BlockData,
   ): Promise<PropertyBagWrites> {
-    const names = changedPropertyNames(before?.properties ?? {}, after.properties)
-    if (names.length === 0 || this.ctx.propertyWritesAreSettled()) return null
-    if (!(await this.isPropertyChildBackedWorkspace(after.workspaceId))) return null
+    const previous = before?.properties ?? {}
+    const names = changedPropertyNames(previous, after.properties)
+    if (names.length === 0) {
+      after.properties = previous
+      return null
+    }
+    // Capture changed inputs before the first await. The next write uses this bag as its preimage.
+    after.properties = cloneDeep(after.properties)
+    if (this.ctx.propertyWritesAreSettled()) return null
     const resolver = this.propertySchemaResolverFor(after.workspaceId)
-    const schemas = new Map<string, ResolvedPropertySchema<unknown>>()
+    const childSchemas = await this.isPropertyChildBackedWorkspace(after.workspaceId)
+      ? new Map<string, ResolvedPropertySchema<unknown>>()
+      : null
     for (const name of names) {
       const resolution = resolver.resolve(name)
       const encoded = storedPropertyValue(after.properties, name)
       if (resolution.status !== 'resolved') {
+        // A cell can carry an unregistered key. A known definition with no
+        // local codec may own backlinks this writer cannot maintain.
+        if (childSchemas === null && resolution.reason !== 'behavior-unavailable') continue
         // Orphan cleanup cannot leave children owned by an existing definition.
         if (resolution.reason === 'definition-unavailable' && encoded === undefined) continue
         throw new PropertySchemaIdentityError(name, resolution.reason)
       }
+      if (childSchemas === null) continue
       const schema = resolution.schema
       if (encoded !== undefined) {
         const rejection = propertyCellValueRejection(schema, encoded)
         if (rejection) throw undecodableCellValueError(name, after.id, schema, rejection)
       }
-      schemas.set(name, schema)
+      childSchemas.set(name, schema)
     }
-    return schemas
+    return childSchemas
   }
 
   /** A row this tx brought back from a tombstone. Its eager child writes take
@@ -563,7 +592,12 @@ export class TxImpl implements Tx {
   }
 
   workspaceEncryptionMode(workspaceId: string): Promise<string | null> {
-    return readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+    let mode = this.encryptionModeCache.get(workspaceId)
+    if (mode === undefined) {
+      mode = readWorkspaceEncryptionMode(this.ctx.txDb, workspaceId)
+      this.encryptionModeCache.set(workspaceId, mode)
+    }
+    return mode
   }
 
   /** REFUSED once this transaction has written, and that is the whole reason
@@ -595,6 +629,11 @@ export class TxImpl implements Tx {
   workspaceUnappliedCount(workspaceId: string): Promise<number> {
     return this.viewGapReadsBeforeAnyWrite('workspaceUnappliedCount')
       .workspaceUnappliedCount(workspaceId)
+  }
+
+  createdInThisTx(id: string): boolean {
+    const entry = this.ctx.snapshots.get(id)
+    return entry !== undefined && entry.before === null
   }
 
   async liveRowsForIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
@@ -693,9 +732,11 @@ export class TxImpl implements Tx {
   }
 
   peek(id: string): BlockData | null {
-    const own = peekSnapshot(this.ctx.snapshots, id)
-    if (own !== undefined) return own
-    return this.ctx.cache.getSnapshot(id) ?? null
+    const entry = this.ctx.snapshots.get(id)
+    if (!entry) return this.ctx.cache.getSnapshot(id) ?? null
+    // Publish one immutable snapshot per version without freezing caller-owned values.
+    if (entry.after && !Object.isFrozen(entry.after)) entry.after = deepFreeze(cloneDeep(entry.after))
+    return entry.after
   }
 
   // ──── Lifecycle ────
@@ -1135,7 +1176,7 @@ export class TxImpl implements Tx {
    *  tx's NET bag change: a key `setProperty`-created then removed in the SAME
    *  tx nets to "no change", so its eagerly-written children would never be
    *  reconciled and PROJECT would reproject the value back. The machinery-aware
-   *  `deleteSubtreeInTx` carries any user-authored sub-children down with it
+   *  `deleteSubtreeAnnouncedInTx` carries any user-authored sub-children down with it
    *  (recoverable via history), matching MATERIALIZE's own removal branch. */
   private async deletePropertyValueChildren(
     parent: BlockData,
@@ -1146,7 +1187,7 @@ export class TxImpl implements Tx {
       [parent.workspaceId, parent.id, schema.fieldId],
     )
     for (const row of fieldRows) {
-      await deleteSubtreeInTx(this.propertyChildTx, row.id)
+      await deleteSubtreeAnnouncedInTx(this.propertyChildTx, row.id)
     }
   }
 
@@ -1313,7 +1354,7 @@ export class TxImpl implements Tx {
   async childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {hidePropertyChildren?: boolean},
+    options?: {propertyChildren?: PropertyChildrenView},
   ): Promise<BlockData[]> {
     let data: BlockData[]
     if (parentId === null) {
@@ -1337,7 +1378,7 @@ export class TxImpl implements Tx {
       const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
       data = rows.map(parseBlockRow)
     }
-    // Default is the structural view (EVERY child); `hidePropertyChildren`
+    // Default is the structural view (EVERY child); `propertyChildren: 'none'`
     // is the display view. Not flip-gated — it is the in-tx twin of
     // VISIBLE_CHILDREN_SQL and must answer the same question, and the
     // backfill mints field rows before the flip. Root listings are exempt:
@@ -1347,11 +1388,15 @@ export class TxImpl implements Tx {
     // `::` rows can classify, so a ref-typed VALUE pointing at a definition is
     // never misread, and a marked row inside a property subtree IS machinery
     // and filters like any other, at any depth.
-    if (parentId === null) return data
-    if (options?.hidePropertyChildren !== true || data.length === 0) return data
+    const view = options?.propertyChildren ?? 'all'
+    if (parentId === null || view === 'all' || data.length === 0) return data
     if (!data.some(row => row.isFieldForm === true)) return data
-    const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
-    return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))
+    const rowsWorkspaceId = data[0]!.workspaceId
+    const classifier: PropertyRowClassifier = {
+      isFieldDefinition: this.isFieldDefinitionCheckerFor(rowsWorkspaceId),
+      isOutlineSkipped: fieldId => this.ctx.outlineSkippedFieldIdsFor(rowsWorkspaceId).has(fieldId),
+    }
+    return data.filter(row => !isLeftOutOfChildrenView(row, view, classifier))
   }
 
   async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {
@@ -1473,23 +1518,54 @@ export class TxImpl implements Tx {
     })
   }
 
-  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void {
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>, workspaceId?: string): void {
+    if (workspaceId !== undefined) {
+      this.assertWritableWorkspace(workspaceId)
+      this.pinWorkspace(workspaceId)
+    }
     if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
     this.ctx.sameTxEvents.push({name, payload})
   }
 
   // ──── Engine-internal raw row applier (UndoManager only) ────
 
-  /** Drive the row at `id` to exactly `target` (or soft-delete if target
-   *  is null). Bypasses the public primitives — intentionally — because
+  /** Whether any row of an entry was written since, in a part the entry also
+   *  changed (`replayConflicts`): such an entry restores its far side whole.
+   *  Read before the replay writes anything. */
+  async replayEntryConflicts(
+    rows: ReadonlyArray<readonly [id: string, target: BlockData | null, from: BlockData | null]>,
+  ): Promise<boolean> {
+    for (const [id, target, from] of rows) {
+      if (target === null) continue
+      const current = await this.get(id)
+      if (current !== null && replayConflicts(current, from, target)) return true
+    }
+    return false
+  }
+
+  /** Refuse a replay that left a parent cycle: `applyRaw` skips `move`'s
+   *  cycle walk, and a row it puts back under its old parent can find that
+   *  parent moved beneath it since. Run once, after every row of the entry is
+   *  applied, over the rows this tx reparented. */
+  async assertReplayAcyclic(): Promise<void> {
+    for (const [id, {before, after}] of this.ctx.snapshots) {
+      if (!after || after.parentId === null || after.parentId === before?.parentId) continue
+      if (await this.isDescendantOf(after.parentId, id)) throw new CycleError(id, after.parentId)
+    }
+  }
+
+  /** Drive the row at `id` to `target` (or soft-delete if target is null).
+   *  With `merge`, only the parts the entry changed between `from` (its other
+   *  side) and `target` — see `replayMerge.ts`; every other part keeps its
+   *  current value. Bypasses the public primitives — intentionally — because
    *  undo replay restores arbitrary snapshot state that the narrow patch
    *  shape of `tx.update` can't express (e.g. `parent_id` + `order_key`
    *  + `deleted` flipping in one write). Spec §10 step 7 + the
    *  BlockDataPatch comment in `api/blockData.ts`.
    *
-   *  Cycle / parent-deleted UX checks are skipped: the snapshot was
-   *  captured from a previously-committed tx, so the target state is
-   *  known to be valid (the engine validated it then). The
+   *  `move`'s checks don't run per row: the parent-deleted trigger still
+   *  fires (`Repo._replay` retries around it) and the cycle walk runs once
+   *  per entry (`assertReplayAcyclic`). The
    *  workspace-invariant trigger still fires on UPDATE-of-parent_id, so
    *  the storage-level guarantee holds. `updatedAt` / `updatedBy` are
    *  stamped to the replay tx's user + now() — a redo at 10:01 by user
@@ -1511,7 +1587,7 @@ export class TxImpl implements Tx {
    *  though the target state is valid — `applyRaw` itself does no
    *  ordering or retry around that; callers own it (see
    *  `replayApplicationOrder` in txSnapshots.ts). */
-  async applyRaw(id: string, target: BlockData | null): Promise<void> {
+  async applyRaw(id: string, target: BlockData | null, from: BlockData | null, merge: boolean): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
     const now = this.ctx.now()
@@ -1572,13 +1648,14 @@ export class TxImpl implements Tx {
       return
     }
 
-    // Row exists; UPDATE all non-immutable fields to match target.
-    // workspace_id, id, created_at, created_by are immutable by
-    // contract (§4.1.1) and the snapshot's values for these match
-    // the row's current values when the original tx pre-existed the
-    // row. updated_at / updated_by stamp the replay action.
+    // Row exists: with `merge`, restore the parts of it the entry changed,
+    // onto the row as it is now (`replayTarget`); else the far side whole.
+    // workspace_id, id, created_at, created_by
+    // are immutable by contract (§4.1.1); updated_at / updated_by stamp the
+    // replay action.
+    const restored = merge ? replayTarget(beforeData, from, target) : target
     const after: BlockData = {
-      ...target,
+      ...restored,
       // Locally monotonic row-version (invariant I3) — see the soft-delete
       // branch above. Undo IS a user action → fresh display stamp (also
       // overrides a pre-migration snapshot's missing `userUpdatedAt`).
@@ -1589,18 +1666,18 @@ export class TxImpl implements Tx {
     await this.ctx.txDb.execute(
       `UPDATE blocks SET parent_id = ?, reference_target_id = ?, is_field_form = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
-        target.parentId,
+        restored.parentId,
         // Undo replay must restore the local derived columns too: same-tx
         // processors are skipped on replay (`isReplay`), so nothing
         // re-derives them — the snapshot is the only source (invariants
         // index: "undo restores what processors won't re-derive").
-        target.referenceTargetId ?? null,
-        target.isFieldForm ? 1 : null,
-        target.orderKey,
-        target.content,
-        JSON.stringify(target.properties),
-        JSON.stringify(target.references),
-        target.deleted ? 1 : 0,
+        restored.referenceTargetId ?? null,
+        restored.isFieldForm ? 1 : null,
+        restored.orderKey,
+        restored.content,
+        JSON.stringify(restored.properties),
+        JSON.stringify(restored.references),
+        restored.deleted ? 1 : 0,
         after.updatedAt,
         now,
         userId,

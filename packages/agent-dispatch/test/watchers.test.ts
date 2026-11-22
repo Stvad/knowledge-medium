@@ -21,30 +21,22 @@ const block = (overrides: Partial<BlockView> = {}): BlockView => ({
 })
 
 describe('decidePending', () => {
-  it('quietExempt bypasses the still-typing gate but not baseline or status', () => {
-    const typing = block({editedAtMs: NOW - 1_000})
-    expect(decidePending({source: typing, nowMs: NOW, quietMs: 5_000}).reason).toBe('still-typing')
-    // Source-confirmed quiet (blur / explicit ask): claim immediately.
-    expect(decidePending({source: typing, nowMs: NOW, quietMs: 5_000, quietExempt: true}).pending).toBe(true)
-
-    // The exemption is ONLY about quiet — history and claimed state hold.
-    const preBaseline = block({editedAtMs: NOW - 10_000})
-    expect(decidePending({source: preBaseline, nowMs: NOW, baselineMs: NOW - 5_000, quietExempt: true}).reason)
-      .toBe('pre-baseline')
-    const claimed = block({properties: {[PROPS.status]: 'done'}, editedAtMs: NOW - 1_000})
-    expect(decidePending({source: claimed, nowMs: NOW, quietMs: 5_000, quietExempt: true}).reason)
-      .toBe('already-processed')
-  })
-
-
   it('marks an unseen mention block as pending', () => {
     expect(decidePending({source: block(), nowMs: NOW}))
       .toEqual({pending: true, reason: 'pending'})
   })
 
-  it.each(['queued', 'done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
+  it.each(['done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
     const source = block({properties: {[PROPS.status]: status}})
     expect(decidePending({source, nowMs: NOW}).pending).toBe(false)
+  })
+
+  it('keeps a queued block pending, behind the same edit gates as an unclaimed one', () => {
+    const queued = block({properties: {[PROPS.status]: 'queued'}})
+    expect(decidePending({source: queued, nowMs: NOW})).toEqual({pending: true, reason: 'pending'})
+
+    const typing = block({properties: {[PROPS.status]: 'queued'}, editedAtMs: NOW - 100})
+    expect(decidePending({source: typing, nowMs: NOW, settleMs: 5_000}).reason).toBe('still-typing')
   })
 
   it('skips a fresh running block but re-queues a stale one (crashed run)', () => {
@@ -82,16 +74,72 @@ describe('decidePending', () => {
     expect(decidePending({source: followUp, nowMs: NOW}).pending).toBe(true)
   })
 
-  it('waits out the quiet period so half-typed requests are not claimed', () => {
-    const typing = block({editedAtMs: NOW - 3_000})
-    expect(decidePending({source: typing, nowMs: NOW, quietMs: 15_000}))
+  it('waits out the settle window so an in-flight edit is not claimed', () => {
+    const typing = block({editedAtMs: NOW - 500})
+    expect(decidePending({source: typing, nowMs: NOW, settleMs: 1_000}))
       .toEqual({pending: false, reason: 'still-typing'})
 
-    const settled = block({editedAtMs: NOW - 16_000})
-    expect(decidePending({source: settled, nowMs: NOW, quietMs: 15_000}).pending).toBe(true)
+    const settled = block({editedAtMs: NOW - 1_500})
+    expect(decidePending({source: settled, nowMs: NOW, settleMs: 1_000}).pending).toBe(true)
 
     // No edit timestamp available → don't block on it.
-    expect(decidePending({source: block(), nowMs: NOW, quietMs: 15_000}).pending).toBe(true)
+    expect(decidePending({source: block(), nowMs: NOW, settleMs: 1_000}).pending).toBe(true)
+  })
+
+  describe('a block open in an editor', () => {
+    // The editor's last write to its ui-state row: focus moves, caret moves.
+    const hold = {settleMs: 1_000, editHoldMs: 120_000, nowMs: NOW, editingActiveAtMs: NOW - 5_000}
+
+    it('holds past the settle window while the user pauses to think', () => {
+      expect(decidePending({...hold, source: block({editedAtMs: NOW - 60_000})}))
+        .toEqual({pending: false, reason: 'being-edited'})
+    })
+
+    it('fires as soon as the block leaves the editor', () => {
+      expect(decidePending({...hold, editingActiveAtMs: null, source: block({editedAtMs: NOW - 1_500})}).pending).toBe(true)
+    })
+
+    it('holds an old mention the user has just gone back into', () => {
+      expect(decidePending({...hold, source: block({editedAtMs: NOW - 600_000})}).reason).toBe('being-edited')
+    })
+
+    it('gives up once neither the text nor the editor has moved for the cap', () => {
+      const idle = {...hold, editingActiveAtMs: NOW - 120_000}
+      expect(decidePending({...idle, source: block({editedAtMs: NOW - 130_000})}).pending).toBe(true)
+      // A device that vanished mid-edit leaves its flag set forever.
+      expect(decidePending({...idle, editingActiveAtMs: NOW - 30 * 86_400_000, source: block({editedAtMs: NOW - 130_000})}).pending)
+        .toBe(true)
+    })
+
+    it('holds while the text moves, even if the editor has not written lately', () => {
+      expect(decidePending({...hold, editingActiveAtMs: NOW - 200_000, source: block({editedAtMs: NOW - 1_500})}).reason)
+        .toBe('being-edited')
+    })
+
+    it('holds a mention of unknown edit time only while the editor is active', () => {
+      expect(decidePending({...hold, source: block()}).reason).toBe('being-edited')
+      expect(decidePending({...hold, editingActiveAtMs: null, source: block()}).pending).toBe(true)
+    })
+
+    it('an ask overrides the hold for the text it was made with, but not the settle window', () => {
+      const asked = {[PROPS.askedAt]: NOW - 60_000}
+      expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 60_000})}).pending).toBe(true)
+      expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 59_500})}).pending).toBe(true)
+      expect(decidePending({...hold, source: block({properties: {[PROPS.askedAt]: NOW - 500}, editedAtMs: NOW - 500})}).reason)
+        .toBe('still-typing')
+    })
+
+    it('an ask stops overriding the hold once the user writes on', () => {
+      const asked = {[PROPS.askedAt]: NOW - 600_000}
+      expect(decidePending({...hold, source: block({properties: asked, editedAtMs: NOW - 60_000})}).reason).toBe('being-edited')
+    })
+
+    it('holds nothing that is not a pending mention', () => {
+      const claimed = block({properties: {[PROPS.status]: 'done'}, editedAtMs: NOW - 500})
+      expect(decidePending({...hold, source: claimed}).reason).toBe('already-processed')
+      const preBaseline = block({editedAtMs: NOW - 10_000})
+      expect(decidePending({...hold, source: preBaseline, baselineMs: NOW - 5_000}).reason).toBe('pre-baseline')
+    })
   })
 
   it('ignores foreign statuses (does not choke on user-set values)', () => {

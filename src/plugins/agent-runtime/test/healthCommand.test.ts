@@ -35,6 +35,19 @@ describe('runHealthCommand', () => {
     expect(health.syncDivergence).toEqual([])
   })
 
+  it('counts rejected uploads and includes host state only when a host provides it', async () => {
+    const {repo} = createTestRepo({db: shared.db})
+    await shared.db.execute(
+      `INSERT INTO ps_crud_rejected (original_id, tx_id, data, rejected_at)
+       VALUES (1, 2, '{}', 3), (2, 2, '{}', 3)`,
+    )
+    expect(await runHealthCommand(repo)).not.toHaveProperty('host')
+    expect(await runHealthCommand(repo, () => ({gate: 'closed'}))).toMatchObject({
+      rejectedUploads: 2,
+      host: {gate: 'closed'},
+    })
+  })
+
   it('reports a staged row the drain let go of that blocks does not hold', async () => {
     // What the probe counts is `syncDivergence.test.ts`'s; this pins that health
     // carries it. A newer staged row, flag clear, queue entry consumed.

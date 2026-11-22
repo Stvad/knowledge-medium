@@ -11,6 +11,8 @@ import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {propertySchemaOriginForSeedKey} from '@/data/propertyDefinitionMetadata'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import type {IsPropertyFieldDefinition} from '@/data/propertyChildren'
+import type {Repo} from '@/data/repo'
 import {decodeRowProperty, peekRowProperty} from '@/data/rowProperty'
 
 export type PropertyBoundaryResolution<T> =
@@ -49,6 +51,12 @@ export const isResolvableFieldDefinition = (
   resolution.status === 'resolved'
   || (resolution.status === 'identity-unavailable'
     && (resolution.reason === 'shadowed' || resolution.reason === 'behavior-unavailable'))
+
+/** Bind field recognition to a workspace in the repo's live registry. */
+export const repoFieldDefinitionTest = (repo: Repo, workspaceId: string): IsPropertyFieldDefinition => {
+  const resolver = repo.propertySchemaResolverFor(workspaceId)
+  return fieldId => isResolvableFieldDefinition(resolver.resolveField(fieldId))
+}
 
 /** A resolver is created for an owning transaction/workspace registry
  * snapshot; callers supply only the definition handle or name, never a

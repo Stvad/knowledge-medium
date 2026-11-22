@@ -22,7 +22,7 @@ export interface ThreadRootRow {
 
 /** Bind `[...RecognitionParams, idsJson]`: the count's placeholders come
  *  first in the text. The count is the visible-children view
- *  `core.childIds({hidePropertyChildren: true})` takes. */
+ *  `core.childIds({propertyChildren: 'none'})` takes. */
 const THREAD_ROOTS_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('b')},
          (SELECT COUNT(*) FROM blocks c

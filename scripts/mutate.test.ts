@@ -26,6 +26,11 @@ describe('parseMutateArgs', () => {
     expect(cfg).toMatchObject({ mutation: { kind: 'edit' }, testName: 'rejects', baseline: false, timeoutMs: 2000 })
   })
 
+  it('resolves --config against the repo root', () => {
+    expect(parseMutateArgs([...base, '--edit', 'true', '--config', 'vitest.browser.config.ts'], '/r').vitestConfig)
+      .toBe('/r/vitest.browser.config.ts')
+  })
+
   it('requires exactly one mutation, both paths, and a positive timeout', () => {
     expect(() => parseMutateArgs(base, '/r')).toThrow(/--delete or --edit/)
     expect(() => parseMutateArgs([...base, '--delete', 'x', '--edit', 'y'], '/r')).toThrow(/not both/)

@@ -8,8 +8,26 @@ import { withContributorId, type BridgeClient } from '@knowledge-medium/agent-cl
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
 import type { AgentResumeOptions } from './resumeCommand.js'
+import { MEMORY_BLOCK_TITLE, type MemoryEntry } from './memory.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
+
+export interface MemoryOutline {
+  /** The outline the run's prompt shows. */
+  text: string
+  /** The blocks its embeds show, by id: the shared notes. */
+  sharedRoots: string[]
+}
+
+/** The blocks a run's account of memory changes compares, fixed when it starts. */
+export interface MemoryScope {
+  memoryId: string
+  /** The shared notes the run's outline shows: {@link MemoryOutline.sharedRoots}. */
+  sharedRoots: readonly string[]
+  /** The mention: under it go the daemon's reply and its progress note,
+   *  which can sit inside a shared note or the memory and are not memory. */
+  mentionId: string
+}
 
 interface TaskPropsWrite {
   status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
@@ -17,12 +35,33 @@ interface TaskPropsWrite {
   attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
 }
 
+/** Blocks of memory a run's prompt shows (about 50 short lines). */
+const MEMORY_OUTLINE_LIMIT = 50
+/** Levels of it: a note, the block it embeds, and that block's children. */
+const MEMORY_OUTLINE_DEPTH = 3
+/** Blocks of memory, shared notes included, the reply's account of changes
+ *  compares; past it the comparison is skipped, since a cut window would
+ *  report false changes. One limit for both: a large embedded page skips the
+ *  account of own notes too, which the reply then says. */
+export const MEMORY_DIFF_LIMIT = 1000
+/** The reconcile key the daemon creates the memory block under, which also
+ *  finds it again after the person retitles it. */
+const MEMORY_KEY = 'agent-dispatch:memory'
+
 /** Reads, and the `agent:*` writes to a mention's source block. They go
  *  through a client with `contributorId: null`, for which the contributors
  *  processor records nothing, so a person's note keeps exactly the authors
  *  who wrote it. */
-export const createGraph = (client: BridgeClient) => {
-  const bridgeGraph = createBridgeGraph(withContributorId(client, null))
+export const createGraph = (bridgeClient: BridgeClient) => {
+  const client = withContributorId(bridgeClient, null)
+  const bridgeGraph = createBridgeGraph(client)
+
+  /** Every `agent:*` write: merged into the bag (update-block merges), so it
+   *  never clobbers dispatch state written concurrently, and kept off the
+   *  user's undo stack — a cmd-Z in the app must undo the person's own edit,
+   *  not flip a task back to `running`. */
+  const writeTaskProps = (id: string, properties: Record<string, unknown>) =>
+    bridgeGraph.updateBlock(id, {properties, undoable: false})
 
   // KNOWN LIMITATION: this write goes through the bridge `update-block`
   // command, which stamps user_updated_at/updatedBy like a user edit —
@@ -41,39 +80,135 @@ export const createGraph = (client: BridgeClient) => {
     if (args.resumeOptions !== undefined && args.resumeOptions !== null) properties[PROPS.resumeOptions] = args.resumeOptions
     if (args.error !== undefined) properties[PROPS.error] = args.error ?? ''
     if (args.attempts !== undefined) properties[PROPS.attempts] = args.attempts
-    if (args.activity !== undefined) properties[PROPS.activity] = args.activity ?? ''
-    // Clear the cancel REQUEST on terminal writes (merged, like activity)
-    // so a satisfied/stale cancel never re-cancels a later rerun.
+    if (args.activity !== undefined) {
+      properties[PROPS.activity] = args.activity ?? ''
+      properties[PROPS.activityAt] = args.activity ? args.nowMs : 0
+    }
+    // Clear the cancel REQUEST on terminal writes so a satisfied/stale
+    // cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
-    await bridgeGraph.updateBlock(id, {properties})
+    await writeTaskProps(id, properties)
   }
 
-  /** Transient "what the run is doing now" label — merged
-   *  (update-block merges the properties map) so it never clobbers
-   *  other dispatch state written concurrently. */
-  const setActivity = async (id: string, label: string): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {properties: {[PROPS.activity]: label}})
+  /** Transient "what the run is doing now" label. */
+  const setActivity = async (id: string, label: string, nowMs: number): Promise<void> => {
+    await writeTaskProps(id, {[PROPS.activity]: label, [PROPS.activityAt]: nowMs})
   }
 
-  /** Persist the run's session id the instant it's known (mid-run),
-   *  merged so it never clobbers concurrent dispatch state. */
+  /** Persist the run's session id the instant it's known (mid-run). */
   const setSession = async (id: string, session: string, resumeOptions?: AgentResumeOptions | null): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {
-      properties: {
-        [PROPS.session]: session,
-        ...(resumeOptions ? {[PROPS.resumeOptions]: resumeOptions} : {}),
-      },
+    await writeTaskProps(id, {
+      [PROPS.session]: session,
+      ...(resumeOptions ? {[PROPS.resumeOptions]: resumeOptions} : {}),
     })
   }
 
-  /** Clear ONLY the cancel request (merged single-key write, like
-   *  setSession) so a Stop the daemon cannot act on cannot clobber a
-   *  concurrently terminal task. */
+  /** Clear ONLY the cancel request, a single-key write, so a Stop the daemon
+   *  cannot act on cannot clobber a concurrently terminal task. */
   const clearCancel = async (id: string): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {properties: {[PROPS.cancel]: ''}})
+    await writeTaskProps(id, {[PROPS.cancel]: ''})
+  }
+
+  /** The block the daemon created (by its key, whatever its title now), else
+   *  one the person titled `Memory`. */
+  const findMemoryBlock = async (pageId: string): Promise<string | null> => {
+    const rows = await bridgeGraph.sqlAll(
+      `SELECT id FROM blocks
+        WHERE parent_id = ? AND deleted = 0
+          AND (json_extract(properties_json, '$."agent:subtreeKey"') = ? OR lower(trim(content)) = lower(?))
+        ORDER BY json_extract(properties_json, '$."agent:subtreeKey"') IS ? DESC, order_key, id LIMIT 1`,
+      [pageId, MEMORY_KEY, MEMORY_BLOCK_TITLE, MEMORY_KEY],
+    )
+    const id = (rows[0] as {id?: unknown} | undefined)?.id
+    return typeof id === 'string' ? id : null
+  }
+
+  /** The watched page's memory block, created when missing. Created as a
+   *  keyed reconcile, not create-block: it stays off the person's undo stack,
+   *  and two runs creating it at once converge on one block. INVARIANT: the
+   *  reconcile runs only when no block carries the key, so it only ever
+   *  creates; on a keyed block it would reset the title the person gave it. */
+  const ensureMemoryBlock = async (pageId: string): Promise<string> => {
+    const found = await findMemoryBlock(pageId)
+    if (found) return found
+    const result = await bridgeGraph.reconcileMarkdownSubtree(pageId, MEMORY_BLOCK_TITLE, {
+      key: MEMORY_KEY, shape: 'block', final: true, undoable: false,
+    }) as {rootIds?: unknown}
+    const created = Array.isArray(result?.rootIds) ? result.rootIds[0] : undefined
+    if (typeof created !== 'string') throw new Error(`creating the ${MEMORY_BLOCK_TITLE} block under ${pageId} returned no id`)
+    return created
+  }
+
+  /** The bounded outline the run's own `subtree` tool prints (shallow levels
+   *  first, long entries cut with a marker, embeds expanded), and the shared
+   *  notes in it: the rows an embed brings in, which live outside the memory
+   *  block. Both from one view's bounds, so the shared notes are the ones the
+   *  run is shown. */
+  const memoryOutline = async (memoryId: string): Promise<MemoryOutline> => {
+    const params = {type: 'view-outline', ref: memoryId, depth: MEMORY_OUTLINE_DEPTH, limit: MEMORY_OUTLINE_LIMIT} as const
+    const [text, view] = await Promise.all([
+      client.runCommand(params),
+      client.runCommand({...params, format: 'json'}) as Promise<{rows?: Array<{id?: unknown, embedded?: unknown}>}>,
+    ])
+    if (typeof text !== 'string') throw new Error('view-outline returned no text')
+    if (!Array.isArray(view?.rows)) throw new Error('view-outline returned no rows')
+    const sharedRoots = view.rows.flatMap(row => row.embedded && typeof row.id === 'string' ? [row.id] : [])
+    return {text, sharedRoots}
+  }
+
+  /** Every block below the memory block and every block of the shared notes,
+   *  field rows aside, in the memory block's workspace only and without the
+   *  mention's subtree, for the reply's account of what a run changed; null
+   *  past {@link MEMORY_DIFF_LIMIT}. */
+  const memoryEntries = async ({memoryId, sharedRoots, mentionId}: MemoryScope): Promise<MemoryEntry[] | null> => {
+    const rows = await bridgeGraph.sqlAll(
+      `WITH RECURSIVE ws(workspace_id) AS (SELECT workspace_id FROM blocks WHERE id = ?),
+       tree(id) AS (
+         SELECT id FROM blocks
+          WHERE (parent_id = ? OR id IN (SELECT value FROM json_each(?)))
+            AND deleted = 0 AND is_field_form IS NOT 1 AND workspace_id = (SELECT workspace_id FROM ws) AND id != ?
+         UNION
+         SELECT b.id FROM blocks b JOIN tree ON b.parent_id = tree.id
+          WHERE b.deleted = 0 AND b.is_field_form IS NOT 1 AND b.workspace_id = (SELECT workspace_id FROM ws) AND b.id != ?
+       )
+       SELECT blocks.id, blocks.content FROM tree JOIN blocks ON blocks.id = tree.id LIMIT ?`,
+      [memoryId, memoryId, JSON.stringify(sharedRoots), mentionId, mentionId, MEMORY_DIFF_LIMIT + 1],
+    )
+    if (rows.length > MEMORY_DIFF_LIMIT) return null
+    return rows.flatMap(row => {
+      const {id, content} = row as {id?: unknown, content?: unknown}
+      return typeof id === 'string' ? [{id, content: typeof content === 'string' ? content : ''}] : []
+    })
+  }
+
+  /** Which of `ids` are property VALUE blocks: an unmarked child of a field
+   *  row (a marked row with a parent). Deliberately does not ask whether the
+   *  row's target is a definition: seed definitions resolve by id without a
+   *  row, so that check would miss attribution and reopen the self-mention
+   *  loop. ACCEPTED: a note under a hand-made `::((page))` row is skipped. */
+  const propertyValueBlocks = async (ids: readonly string[]): Promise<Set<string>> => {
+    const found = new Set<string>()
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500)
+      const rows = await bridgeGraph.sqlAll(
+        `SELECT s.id FROM blocks s JOIN blocks f ON f.id = s.parent_id
+          WHERE s.id IN (${chunk.map(() => '?').join(', ')})
+            AND s.is_field_form IS NOT 1 AND f.is_field_form = 1 AND f.parent_id IS NOT NULL`,
+        chunk,
+      )
+      for (const row of rows) {
+        const {id} = row as {id?: unknown}
+        if (typeof id === 'string') found.add(id)
+      }
+    }
+    return found
   }
 
   return {
+    ensureMemoryBlock,
+    propertyValueBlocks,
+    memoryOutline,
+    memoryEntries,
     resolvePageId: bridgeGraph.resolvePageId,
     backlinkSources: bridgeGraph.backlinkSources,
     getBlock: bridgeGraph.getBlock,
@@ -81,6 +216,7 @@ export const createGraph = (client: BridgeClient) => {
     getSubtree: bridgeGraph.getSubtree,
     sqlAll: bridgeGraph.sqlAll,
     blockViews: bridgeGraph.blockViews,
+    beingEditedBlocks: bridgeGraph.beingEditedBlocks,
     comments: bridgeGraph.comments,
     setTaskProps,
     setActivity,
@@ -94,9 +230,6 @@ export type Graph = ReturnType<typeof createGraph>
 /** The agent's replies, attributed to the client's contributor. */
 export const createReplyWriter = (client: BridgeClient) => {
   const bridgeGraph = createBridgeGraph(client)
-
-  const createReply = async (parentId: string, content: string): Promise<BlockData> =>
-    bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
 
   /** Reconcile the run's reply subtree (tagged `replyKey`) under `parentId`
    *  to match `markdown`, app-side in ONE transaction (a failure never
@@ -115,10 +248,12 @@ export const createReplyWriter = (client: BridgeClient) => {
       shape: opts.shape,
       ...(opts.final ? {final: true} : {}),
       properties: {[PROPS.reply]: true},
+      // A reply is the agent's write, not the person's: off their undo stack.
+      undoable: false,
     })
   }
 
-  return {createReply, reconcileReplyTree}
+  return {reconcileReplyTree}
 }
 
 export type ReplyWriter = ReturnType<typeof createReplyWriter>

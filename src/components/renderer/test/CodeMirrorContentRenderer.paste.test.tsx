@@ -23,6 +23,7 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations'
 import { CodeMirrorContentRenderer } from '../CodeMirrorContentRenderer'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
@@ -140,10 +141,10 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderEditor = () => {
+  const renderEditor = ({disableBlockSplit = false} = {}) => {
     const view = render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root', disableBlockSplit}}>
           <ActiveContextsProvider>
             <CodeMirrorContentRenderer block={repo.block('block-1')} />
           </ActiveContextsProvider>
@@ -164,7 +165,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     act(() => { dispatchPaste(content, '- cut text') })
 
     await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
-    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root'})
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE})
     // A cut leaves the originals in place, so a text paste here would duplicate them.
     // Every mock here is already resolved, so one macrotask runs the handler's
     // whole continuation; the absence checks below can't run before it.
@@ -196,6 +197,38 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
 
     await vi.waitFor(() => expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1))
     expect(pasteArmedCut).toHaveBeenCalledTimes(1)
+  })
+
+  // With the html-document plugin off, a document is edited here as text.
+  it('takes a paste into source whole, with no files', async () => {
+    await repo.tx(tx => tx.update('block-1', {properties: {types: ['html-document']}}),
+      {scope: ChangeScope.BlockDefault, description: 'type the block as source'})
+    await repo.block('block-1').load()
+    const {content} = renderEditor()
+
+    act(() => {
+      const event = new Event('paste', {bubbles: true, cancelable: true})
+      Object.defineProperty(event, 'clipboardData', {value: {
+        getData: (type: string) => type === 'text/plain' ? 'one\ntwo' : '',
+        files: [new File(['x'], 'shot.png', {type: 'image/png'})],
+      }})
+      content.dispatchEvent(event)
+    })
+
+    await vi.waitFor(() => expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(resolvePasteWithMediaCapture).mock.calls[0][1])
+      .toMatchObject({intent: 'single-block', files: [], surface: 'editor'})
+  })
+
+  it('pastes as one block, with no armed cut, where Split is refused', async () => {
+    const {content, editorView} = renderEditor({disableBlockSplit: true})
+
+    act(() => { dispatchPaste(content, 'one\ntwo') })
+
+    await vi.waitFor(() => expect(editorView.state.doc.toString()).toContain('one\ntwo'))
+    expect(vi.mocked(resolvePasteWithMediaCapture).mock.calls[0][1]).toMatchObject({intent: 'single-block'})
+    expect(pasteArmedCut).not.toHaveBeenCalled()
+    expect(pasteEditModeMultilineText).not.toHaveBeenCalled()
   })
 
   it('skips the armed cut on the plain-text chord (Cmd+Shift+V)', async () => {

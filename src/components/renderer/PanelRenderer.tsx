@@ -1,6 +1,7 @@
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { PropertyDisplayScope } from '@/components/propertyDisplay/PropertyDisplayScope'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
 import {
@@ -15,7 +16,8 @@ import { useIsActivePanel, useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef } from 'react'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
 import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { panelMountsFacet } from '@/extensions/core.js'
@@ -47,6 +49,7 @@ const PANEL_HISTORY_BUTTON_CLASS =
 function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
   const [selectionState] = useSelectionState()
   const repo = useRepo()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
 
   const multiSelectDeps = useMemo(() => {
     if (!selectionState.selectedBlockIds.length) return null
@@ -58,8 +61,9 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
       // root is the panel's zoom root. Forwarded to per-block structural
       // actions (indent/outdent/delete) via applyToAllBlocksInSelection.
       scopeRootId,
+      propertyDisplay,
     }
-  }, [selectionState, repo, scopeRootId])
+  }, [selectionState, repo, scopeRootId, propertyDisplay])
 
   useActionContext(
     ActionContextTypes.MULTI_SELECT_MODE,
@@ -71,8 +75,8 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 }
 
 /** PANEL_RIGHT_CLEARANCE (`@/utils/panelClearance`), on what holds a centred
- *  `max-w-3xl` frame. */
-const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-var(--container-3xl))))]'
+ *  `max-w-3xl` frame, capped at PANEL_TEXT_MIN_WIDTH_PX. */
+const FRAME_RIGHT_CLEARANCE_CLASS = 'pr-[min(var(--panel-right-clearance,0px),max(0px,calc(100%-480px)))]'
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -343,49 +347,48 @@ export function PanelRenderer({block}: BlockRendererProps) {
       className={`panel min-w-0 max-w-full flex flex-col relative ${
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
-      {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
-      {/* Keeps this panel's focused row mounted even when it's still a lazy
-          placeholder — see the component. Renders null. */}
-      <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
-      <div
-        className={`pointer-events-none absolute inset-x-0 top-1 z-10 ${FRAME_RIGHT_CLEARANCE_CLASS}`}
-      >
-        <div
-          className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5"
-        >
+      {/* Around the whole panel, not only the outline: the multi-select
+          context and the panel mounts dispatch gestures over that outline. */}
+      <PropertyDisplayScope>
+        {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
+        {/* Keeps this panel's focused row mounted even when it's still a lazy
+            placeholder — see the component. Renders null. */}
+        <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
+        {/* `.panel-actions` ends the buttons where the content ends (`index.css`). */}
+        <div className="panel-actions pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-end gap-0.5">
           {actionButtons}
         </div>
-      </div>
-      <div
-        ref={scrollRef}
-        // Stable handle for the pane's scrollport. Callers inside it find it by
-        // walking ancestors for a scrolling overflow (nearestScrollableAncestor),
-        // which is robust to wrappers; this handle is for tests, and for panel
-        // mounts, which sit beside the scrollport rather than inside it.
-        data-panel-scrollport=""
-        // Bottom clearance: below md the bottom nav's; from md up, whatever
-        // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
-        // (`@/utils/panelClearance`), named literally here for Tailwind.
-        className={`${FRAME_RIGHT_CLEARANCE_CLASS} ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
-        onPointerDownCapture={activatePanel}
-        onFocusCapture={trackPanelFocus ? activatePanel : undefined}
-        onScroll={scheduleScrollTopWrite}
-      >
-        <div className="mx-auto w-full max-w-3xl">
-          {panelBody}
+        <div
+          ref={scrollRef}
+          // Stable handle for the pane's scrollport. Callers inside it find it by
+          // walking ancestors for a scrolling overflow (nearestScrollableAncestor),
+          // which is robust to wrappers; this handle is for tests, and for panel
+          // mounts, which sit beside the scrollport rather than inside it.
+          data-panel-scrollport=""
+          // Bottom clearance: below md the bottom nav's; from md up, whatever
+          // fixed bar floats over the pane declares in PANEL_BOTTOM_CLEARANCE
+          // (`@/utils/panelClearance`), named literally here for Tailwind.
+          className={`${FRAME_RIGHT_CLEARANCE_CLASS} ${stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-[var(--panel-bottom-clearance,0px)]'}`}
+          onPointerDownCapture={activatePanel}
+          onFocusCapture={trackPanelFocus ? activatePanel : undefined}
+          onScroll={scheduleScrollTopWrite}
+        >
+          <div className="mx-auto w-full max-w-3xl">
+            {panelBody}
+          </div>
         </div>
-      </div>
-      {/* Per-panel mount points — chrome contributed via
-          `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
-          inside `.panel` so position:fixed/absolute children sit in the
-          panel's positioning context, and isolated under render
-          boundaries so a loading or misbehaving plugin can't tear down
-          the panel. */}
-      {panelMounts.map(({id, component: Component}) => (
-        <ExtensionRenderBoundary key={id}>
-          <Component block={block}/>
-        </ExtensionRenderBoundary>
-      ))}
+        {/* Per-panel mount points — chrome contributed via
+            `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
+            inside `.panel` so position:fixed/absolute children sit in the
+            panel's positioning context, and isolated under render
+            boundaries so a loading or misbehaving plugin can't tear down
+            the panel. */}
+        {panelMounts.map(({id, component: Component}) => (
+          <ExtensionRenderBoundary key={id}>
+            <Component block={block}/>
+          </ExtensionRenderBoundary>
+        ))}
+      </PropertyDisplayScope>
     </div>
   )
 }

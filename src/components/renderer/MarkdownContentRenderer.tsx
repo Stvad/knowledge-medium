@@ -8,6 +8,7 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { markdownExtensionsFacet, type MarkdownRenderData } from '@/markdown/extensions.js'
 import { MarkdownSourceContext, useMarkdownInput } from '@/markdown/context.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
+import { useGutterText } from './BlockGutter.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
 
@@ -52,6 +53,7 @@ export function MarkdownContentRenderer({
   // page title renders this component (the recents page does) and gets one;
   // one that doesn't, doesn't. Above the early return to keep hook order fixed.
   const titleClass = useBlockTitleTextClass(block)
+  const gutterText = useGutterText(block)
 
   if (!renderData) return null
 
@@ -91,7 +93,9 @@ export function MarkdownContentRenderer({
   const content = contentTransform ? contentTransform(renderData.content) : renderData.content
 
   return (
-    <Container className={className}>
+    // The span container is the inline contract (a reference, a breadcrumb):
+    // a citation, which never takes the block's gutter corner.
+    <Container ref={Container === 'div' ? gutterText : undefined} className={className}>
       <MarkdownSourceContext value={{block, workspaceId: renderData.workspaceId}}>
         <Markdown
           remarkPlugins={markdownConfig.remarkPlugins}

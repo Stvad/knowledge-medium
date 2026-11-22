@@ -9,14 +9,17 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import { PROPS } from './config.js'
-import type { Graph, ReplyWriter } from './graph.js'
-import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
+import type { Graph, MemoryScope, ReplyWriter } from './graph.js'
+import { formatRunUsage, THINKING_ACTIVITY, type AgentRunOptions, type AgentRunResult, type RunEvent } from './runner.js'
 import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, isMention, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { loadThreadContext } from './threadContext.js'
-import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
+import { diffMemory, renderMemoryChanges, type MemoryEntry } from './memory.js'
+import { MEMORY_DIFF_LIMIT } from './graph.js'
+// Dispatch's km server (`./mcp.ts`) must never set `localMediaFiles`: this list pre-approves its add_media.
+import { KM_MCP_ALLOWED_TOOLS_WITHOUT_LOCAL_FILES as DISPATCH_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
 
 export interface ChannelEvent {
   content: string
@@ -42,6 +45,9 @@ export interface EngineDeps {
    *  instantly (default is a real timer). */
   delay?: (ms: number) => Promise<void>
 }
+
+const usageNote = (result: AgentRunResult): string =>
+  result.usage ? ` · ${formatRunUsage(result.usage)}` : ''
 
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
@@ -73,6 +79,7 @@ const logPreview = (content: string | null | undefined): string => {
  *  it to `status:error`. Bounded and short so a genuinely-down bridge fails
  *  fast; retrying is safe because the reconcile is keyed (reconcileReply). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
+const THINKING_DEBOUNCE_MS = 3_000
 
 /** agent:session values are executor-scoped: codex thread ids are stored
  *  as `codex:<id>`, claude session ids bare (anything stored before
@@ -95,6 +102,9 @@ const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
 
 const storedSessionFor = (executor: 'claude' | 'codex', sessionId: string | null): string | null =>
   sessionId && executor === 'codex' ? `${CODEX_SESSION_PREFIX}${sessionId}` : sessionId
+
+/** `agent:activity` on a follow-up queued behind its thread's live run. */
+export const THREAD_BUSY_ACTIVITY = 'waiting for the run already going in this thread'
 
 const executorLabel = (executor: 'claude' | 'codex'): string =>
   executor === 'codex' ? 'Codex' : 'Claude'
@@ -128,6 +138,13 @@ export const createEngine = (deps: EngineDeps) => {
    *  silently poll a dead id forever. */
   const pageIdCache = new Map<string, {id: string, resolvedAt: number}>()
   const PAGE_ID_TTL_MS = 10 * 60_000
+  const targetPageId = async (target: string): Promise<string> => {
+    const cached = pageIdCache.get(target)
+    if (cached && now() - cached.resolvedAt < PAGE_ID_TTL_MS) return cached.id
+    const id = await graph.resolvePageId(target)
+    pageIdCache.set(target, {id, resolvedAt: now()})
+    return id
+  }
   /** Launch timestamps within the rolling hour — the global spend
    *  circuit-breaker. PERSISTED (state.ts): an in-memory-only log would
    *  re-arm a full budget on every crash/restart, unbounding the exact
@@ -203,7 +220,7 @@ export const createEngine = (deps: EngineDeps) => {
       cwd: runner.cwd ?? os.homedir(),
       allowedTools: runner.executor === 'claude'
         ? [...new Set([
-          ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
+          ...(mcpConfigPath ? DISPATCH_MCP_ALLOWED_TOOLS : []),
           ...config.defaultAllowedTools,
           ...runner.allowedTools,
         ])]
@@ -229,7 +246,7 @@ export const createEngine = (deps: EngineDeps) => {
    *  (the pre-filter used a tick-start snapshot; the ambient session may
    *  have closed it since), then write the terminal `error` props BEFORE
    *  the reply, so the state sticks even if the reply write fails: a
-   *  createReply-succeeds / setTaskProps-fails split would re-enter every
+   *  reply-succeeds / setTaskProps-fails split would re-enter every
    *  tick and spam ⚠️ blocks into the user's notes (the one write path with
    *  no billed-run circuit breaker). */
   const parkExhausted = async (watcher: BacklinksWatcher, sourceId: string) => {
@@ -237,21 +254,67 @@ export const createEngine = (deps: EngineDeps) => {
     if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
     const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
     await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
-    await replies.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`).catch(() => {})
+    await replies.reconcileReplyTree(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`, {
+      replyKey: `park:${sourceId}`, shape: 'block', final: true,
+    }).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
+  }
+
+  /** The watcher's memory as the run starts: what its prompt shows, and the
+   *  entries the reply's account of memory changes is diffed against. The
+   *  shared notes are fixed here, so an embed the run adds or removes is
+   *  reported as that one note rather than as the notes it shows appearing
+   *  or going; an edit through an embed the run added goes unlisted. */
+  const loadMemory = async (watcher: BacklinksWatcher, mentionId: string) => {
+    const blockId = await graph.ensureMemoryBlock(await targetPageId(watcher.target))
+    const outline = await graph.memoryOutline(blockId)
+    const scope: MemoryScope = {memoryId: blockId, sharedRoots: outline.sharedRoots, mentionId}
+    return {blockId, outline: outline.text, scope, entries: await graph.memoryEntries(scope)}
+  }
+
+  /** What the run changed in its memory, for the reply; null when nothing. */
+  const memoryChanges = async (
+    watcher: BacklinksWatcher, memory: {blockId: string, scope: MemoryScope, entries: MemoryEntry[] | null},
+  ): Promise<string | null> => {
+    try {
+      const after = await graph.memoryEntries(memory.scope)
+      if (!memory.entries || !after) {
+        return `Memory and the shared notes it embeds have more than ${MEMORY_DIFF_LIMIT} blocks, so changes to them are not listed here.`
+      }
+      return renderMemoryChanges(diffMemory(memory.entries, after))
+    } catch (error) {
+      log(`[${watcher.name}] could not read memory ${memory.blockId} after the run: ${errorMessage(error)}`)
+      return null
+    }
+  }
+
+  /** The pre-claim re-check; null when the mention is no longer pending. */
+  const readPendingMention = async (watcher: BacklinksWatcher, sourceId: string, baselineMs: number) => {
+    // Edit state first: a block read after "not being edited" can't be older
+    // than the edit that ended, and the prompt is built from this read.
+    const editingActiveAtMs = (await graph.beingEditedBlocks()).get(sourceId)
+    const block = await graph.getBlock(sourceId)
+    if (!block) return null
+    const decision = decidePending({
+      source: block, nowMs: now(), settleMs: watcher.settleMs, editingActiveAtMs, editHoldMs: watcher.editHoldMs, baselineMs,
+    })
+    if (!decision.pending) return null
+    return {block, decision, ancestorBlocks: await graph.ancestors(sourceId)}
   }
 
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
-    quietExempt: boolean,
   ) => {
     const {runner} = watcher
-    // Pre-claim bails spawned nothing — refund the slot (refundLaunch).
-    const block = await graph.getBlock(sourceId)
-    if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
-    if (!decision.pending) return refundLaunch(launchStamp)
-    const ancestorBlocks = await graph.ancestors(sourceId)
+    // Pre-claim exits spawned nothing, so each one, a failed read included,
+    // gives the launch slot back.
+    const pending = await readPendingMention(watcher, sourceId, baselineMs)
+      .catch(error => {
+        refundLaunch(launchStamp)
+        throw error
+      })
+    if (!pending) return refundLaunch(launchStamp)
+    const {block, decision, ancestorBlocks} = pending
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
@@ -259,7 +322,15 @@ export const createEngine = (deps: EngineDeps) => {
       ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
-    if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
+    if (sessionKey && running.has(sessionKey)) {
+      refundLaunch(launchStamp)
+      if (block.properties?.[PROPS.status] === 'queued') return
+      log(`[${watcher.name}] ${sourceId} waiting: its thread's session ${session} is still running`)
+      await graph.setTaskProps(sourceId, {
+        status: 'queued', watcher: watcher.name, executor: runner.executor, activity: THREAD_BUSY_ACTIVITY, nowMs: now(),
+      })
+      return
+    }
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
     // A fresh run's session id is unknown until mid-run. The instant it is
@@ -329,7 +400,7 @@ export const createEngine = (deps: EngineDeps) => {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, activity: null, nowMs: claimStamp,
       })
 
       // Claim-verify: re-read and confirm OUR claim stuck. Defends only
@@ -361,6 +432,12 @@ export const createEngine = (deps: EngineDeps) => {
         log(`[${watcher.name}] no thread context for ${sourceId}: ${errorMessage(error)}`)
         return null
       })
+      const memory = watcher.memory
+        ? await loadMemory(watcher, sourceId).catch(error => {
+          log(`[${watcher.name}] no memory for ${sourceId}: ${errorMessage(error)}`)
+          return null
+        })
+        : null
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
@@ -375,6 +452,7 @@ export const createEngine = (deps: EngineDeps) => {
         watcherName: watcher.name,
         target: watcher.target,
         thread: thread ?? undefined,
+        memory: memory ? {blockId: memory.blockId, outline: memory.outline, shared: memory.scope.sharedRoots.length > 0} : undefined,
         // Only spawn delivery posts (and thus splits) the reply — the
         // channel session writes its own, so don't nudge it.
         splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
@@ -422,7 +500,13 @@ export const createEngine = (deps: EngineDeps) => {
         })
       }
 
-      let lastActivity: string | null = null
+      type Step = {label: string, startedAt: number}
+      const seenSteps = new Set<string>()
+      const pendingSteps = new Map<string, Step>()
+      const oldestPendingStep = () => pendingSteps.values().next().value
+      const writeActivity = (step: Step) => queueWrite(() => graph.setActivity(sourceId, step.label, step.startedAt))
+      let thinkingTimer: ReturnType<typeof setTimeout> | undefined
+      const cancelThinking = () => clearTimeout(thinkingTimer)
       let lastTextWriteMs = 0
       let sessionRecorded = false
       const resumeOptionsForSession = (sessionId: string | null) =>
@@ -431,9 +515,23 @@ export const createEngine = (deps: EngineDeps) => {
           : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
-          if (event.label === lastActivity) return
-          lastActivity = event.label
-          queueWrite(() => graph.setActivity(sourceId, event.label))
+          if (seenSteps.has(event.stepId)) return
+          seenSteps.add(event.stepId)
+          cancelThinking()
+          const step = {label: event.label, startedAt: now()}
+          pendingSteps.set(event.stepId, step)
+          if (oldestPendingStep() === step) writeActivity(step)
+        } else if (event.kind === 'activity-end') {
+          const previous = oldestPendingStep()
+          pendingSteps.delete(event.stepId)
+          const next = oldestPendingStep()
+          if (next === previous) return
+          if (next) {
+            writeActivity(next)
+          } else {
+            const endedAt = now()
+            thinkingTimer = setTimeout(() => writeActivity({label: THINKING_ACTIVITY, startedAt: endedAt}), THINKING_DEBOUNCE_MS)
+          }
         } else if (event.kind === 'text') {
           if (!watcher.streamReply) return
           lastStreamedText = event.text
@@ -471,8 +569,17 @@ export const createEngine = (deps: EngineDeps) => {
       }
 
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
-      const result = await runTask(runOptions)
+      let result: AgentRunResult
+      try {
+        result = await runTask(runOptions)
+      } finally {
+        cancelThinking()
+      }
       await writes // ordering guarantee: no progress write races the final one below
+      // On every terminal reply, a failed or cancelled run's too: it may have
+      // written its memory before it ended.
+      const memoryNote = memory ? await memoryChanges(watcher, memory) : null
+      const withMemoryNote = (text: string) => memoryNote ? `${text}\n\n${memoryNote}` : text
 
       if (result.ok) {
         // Deliberately NOT gated on signal.aborted: if the child completed
@@ -484,7 +591,7 @@ export const createEngine = (deps: EngineDeps) => {
         // Terminal write: converges a streamed tree onto the final text, or
         // creates it fresh. Retried so a transient bridge blip recovers
         // rather than losing the billed answer.
-        await reconcileReplyWithRetry(finalText, {final: true})
+        await reconcileReplyWithRetry(withMemoryNote(finalText), {final: true})
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {
           status: 'done',
@@ -494,7 +601,7 @@ export const createEngine = (deps: EngineDeps) => {
           cancel: null,
           nowMs: now(),
         })
-        log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+        log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
         // a timeout/crash so the task parks `error: cancelled` (deliberate,
@@ -514,7 +621,7 @@ export const createEngine = (deps: EngineDeps) => {
         // note appended, rather than losing it.
         const partial = lastStreamedText.trim()
         await reconcileReplyWithRetry(
-          partial ? `${partial}\n\n${failureNote}` : failureNote,
+          withMemoryNote(partial ? `${partial}\n\n${failureNote}` : failureNote),
           {final: true, shape: 'block'},
         )
         terminalReplyDelivered = true
@@ -527,7 +634,7 @@ export const createEngine = (deps: EngineDeps) => {
           cancel: null,
           nowMs: now(),
         })
-        log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+        log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}${usageNote(result)}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,
@@ -558,19 +665,23 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  const tickBacklinksWatcher = async (watcher: BacklinksWatcher, quietExemptBlockIds: ReadonlySet<string>) => {
+  const tickBacklinksWatcher = async (watcher: BacklinksWatcher) => {
     // Baseline stamp is taken BEFORE any awaited scan: a mention typed
     // while the first resolve/scan is in flight must not end up with
     // editedAtMs < baseline (it would be classed pre-baseline forever).
     const tickStartMs = now()
-    const cached = pageIdCache.get(watcher.target)
-    let targetId = cached && now() - cached.resolvedAt < PAGE_ID_TTL_MS ? cached.id : undefined
-    if (!targetId) {
-      targetId = await graph.resolvePageId(watcher.target)
-      pageIdCache.set(watcher.target, {id: targetId, resolvedAt: now()})
-    }
+    const targetId = await targetPageId(watcher.target)
 
-    const sources = (await graph.backlinkSources(targetId)).filter(source => isMention(source.sourceFields))
+    // A property value block is never a task's source: the property belongs
+    // to its owner, and while child-backed workspaces still dual-write the
+    // cell the owner carries the same reference under the property's name,
+    // where `isMention` decides it. Its own edge is plain content, so
+    // `isMention` would count an attribution value as a mention and every
+    // reply would summon the agent again. Once the cell goes, this must map
+    // a value block to its owner instead of dropping it.
+    const backlinks = await graph.backlinkSources(targetId)
+    const values = backlinks.length === 0 ? new Set<string>() : await graph.propertyValueBlocks(backlinks.map(source => source.id))
+    const sources = backlinks.filter(source => !values.has(source.id) && isMention(source.sourceFields))
 
     // First sight of this watcher: record the baseline and fire nothing.
     // Pointing a watcher at an established page must not claim (and
@@ -591,6 +702,7 @@ export const createEngine = (deps: EngineDeps) => {
     // decision re-runs with a fresh read inside processMention before
     // any claim is written.
     const views = await graph.blockViews(sources.map(source => source.id))
+    const editing = await graph.beingEditedBlocks()
     for (const source of sources) {
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
       // Clear a agent:cancel the daemon can't act on. sweepCancellations
@@ -618,8 +730,14 @@ export const createEngine = (deps: EngineDeps) => {
         continue
       }
       if (running.has(source.id)) continue
-      const quietExempt = quietExemptBlockIds.has(source.id)
-      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
+      const preview = decidePending({
+        source: view,
+        nowMs: now(),
+        settleMs: watcher.settleMs,
+        editingActiveAtMs: editing.get(source.id),
+        editHoldMs: watcher.editHoldMs,
+        baselineMs,
+      })
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
@@ -635,7 +753,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
       const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp))
     }
   }
 
@@ -705,9 +823,9 @@ export const createEngine = (deps: EngineDeps) => {
       }))
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
-        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
+        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}${usageNote(result)}: ${truncate(result.resultText.trim(), 200)}`)
       } else {
-        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}${usageNote(result)}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
       }
     })
   }
@@ -732,16 +850,7 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
-
-  /** `quietExemptByWatcher`: blocks whose quiet period was confirmed at
-   *  the source (blur / settle), keyed by the EMITTING watcher — only
-   *  that watcher may skip its still-typing gate for them, so a query
-   *  watcher's short settle can't vouch against a backlinks watcher's
-   *  longer quietMs. The push loop collects these from event payloads;
-   *  sweep ticks pass nothing. */
-  const tick = async (options: {quietExemptByWatcher?: ReadonlyMap<string, ReadonlySet<string>>} = {}) => {
-    const quietExemptByWatcher = options.quietExemptByWatcher
+  const tick = async () => {
     if (!launchTimesLoaded) {
       launchTimes = await state.getLaunchTimes()
       pruneLaunchTimes()
@@ -753,7 +862,7 @@ export const createEngine = (deps: EngineDeps) => {
     for (const watcher of config.watchers) {
       try {
         if (watcher.kind === 'backlinks') {
-          await tickBacklinksWatcher(watcher, quietExemptByWatcher?.get(watcher.name) ?? NO_EXEMPTIONS)
+          await tickBacklinksWatcher(watcher)
         } else {
           await tickQueryWatcher(watcher)
         }

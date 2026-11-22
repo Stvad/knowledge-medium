@@ -16,7 +16,8 @@ import {hasBlockType, focusBlock, isCollapsedProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {lazyBlockCacheKey, requestLazyMount} from '@/components/util/lazyMountRegistry.js'
 import {decodeRowProperty} from '@/data/rowProperty'
-import {navigationVerb, type NavigationResult} from '@/utils/navigation'
+import {navigationVerb} from '@/utils/navigation'
+import {peekSurfaceZoom, setSurfaceZoom} from '@/utils/surfaceZoom'
 import {panelRenderScopeId} from '@/utils/renderScope'
 import {THREAD_TYPE, threadIsOpen, threadTargetIdOf} from './schema.ts'
 import {cardRenderScopeId, outerCardSurface, revealThread, viewKey} from './uiStore.ts'
@@ -76,15 +77,15 @@ export const threadLanding = async (repo: Repo, blockId: string): Promise<Thread
   return threads.length === 0 ? null : {targetId: at, threads, collapsed, rows}
 }
 
-/** The render scope `blockId` has inside the cards of `landing`, once the
- *  navigation has made the target its panel's top-level block. Each card's
- *  scope derives from the one around it; the outermost is a margin card where
- *  the margin is drawn. */
-export const landingFocusScope = (panelId: string, landing: ThreadLanding, inMargin: boolean): string =>
-  landing.threads.reduce(
-    (scope, thread, depth) => cardRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id),
-    panelRenderScopeId(panelId, landing.targetId),
-  )
+/** The render scope of each card of `landing`, outermost first, with the
+ *  target's row rendered in `rowScope`; the navigated block is focused in the
+ *  last. Each card's scope derives from the one around it; the outermost is a
+ *  margin card where the margin is drawn. */
+export const landingCardScopes = (rowScope: string, landing: ThreadLanding, inMargin: boolean): string[] => {
+  let scope = rowScope
+  return landing.threads.map((thread, depth) =>
+    scope = cardRenderScopeId(depth === 0 && inMargin ? 'margin' : 'comments', scope, thread.id))
+}
 
 /** The last landing's rows, wanted mounted until the next landing. A card
  *  mounts its rows lazily, and `FocusedRowLazyMount` walks a focused row's
@@ -97,22 +98,31 @@ const wantRowsMounted = (rows: readonly string[]): void => {
   landingRowWants = rows.map(id => requestLazyMount(lazyBlockCacheKey(id)))
 }
 
-const revealLanding = async (
+/** Show `blockId` in its card beside `landing`'s target, whose row renders
+ *  in `rowScope` of `panelId`, and focus it there. */
+export const revealLanding = async (
   repo: Repo,
-  {panelId}: NavigationResult,
+  panelId: string,
+  rowScope: string,
   landing: ThreadLanding,
   blockId: string,
 ): Promise<void> => {
   const outer = landing.threads[0]
-  revealThread(panelId, viewKey(panelRenderScopeId(panelId, landing.targetId), landing.targetId), outer.id, outer.open)
+  revealThread(panelId, viewKey(rowScope, landing.targetId), outer.id, outer.open)
   wantRowsMounted(landing.rows)
   if (landing.collapsed.length > 0) {
     await repo.tx(async tx => {
       for (const id of landing.collapsed) await revealChildren(tx, id)
     }, {scope: ChangeScope.BlockDefault, description: 'reveal comment'})
   }
+  const cardScopes = landingCardScopes(rowScope, landing, outerCardSurface(panelId) === 'margin')
+  // A card zoomed into another part of its thread would hide the block.
+  for (const scope of cardScopes) {
+    const zoomed = peekSurfaceZoom(scope)
+    if (zoomed !== undefined && !landing.rows.includes(zoomed)) setSurfaceZoom(scope, null)
+  }
   // Focus is the panel's, as `writePanelContent` sets it for the landing.
-  await focusBlock(repo.block(panelId), blockId, {renderScopeId: landingFocusScope(panelId, landing, outerCardSurface(panelId) === 'margin')})
+  await focusBlock(repo.block(panelId), blockId, {renderScopeId: cardScopes.at(-1)!})
 }
 
 export const threadNavigationContribution = navigationVerb.decorator(next => async request => {
@@ -121,6 +131,10 @@ export const threadNavigationContribution = navigationVerb.decorator(next => asy
   // block itself.
   if (!landing || (landing.collapsed.length > 0 && request.repo.isReadOnly)) return next(request)
   const result = await next({...request, input: {...request.input, blockId: landing.targetId}})
-  if (result) await revealLanding(request.repo, result, landing, request.input.blockId)
+  if (result) {
+    await revealLanding(
+      request.repo, result.panelId, panelRenderScopeId(result.panelId, landing.targetId), landing, request.input.blockId,
+    )
+  }
   return result
 }, {source: 'annotations'})

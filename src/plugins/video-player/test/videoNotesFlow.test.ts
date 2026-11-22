@@ -11,7 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ChangeScope, type User } from '@/data/api'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   focusedBlockLocationProp,
@@ -92,7 +92,7 @@ describe('enterVideoNotesView', () => {
     expect(panelBlock().peekProperty(topLevelBlockIdProp)).toBe(VIDEO)
     expect(panelHistory.getSnapshot(panelId)).toStrictEqual({back: [], forward: []})
 
-    const childIds = await videoBlock().childIds.load()
+    const childIds = await childIdsOf(repo, VIDEO)
     expect(childIds).toHaveLength(1)
     expect(panelBlock().peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: childIds[0],
@@ -110,7 +110,7 @@ describe('enterVideoNotesView', () => {
     expect(panelHistory.getSnapshot(panelId).back).toEqual([
       {blockId: PAGE, viewModeEnter: VIDEO_NOTES_VIEW_MODE},
     ])
-    expect(await videoBlock().childIds.load()).toEqual(['existing-note'])
+    expect(await childIdsOf(repo, VIDEO)).toEqual(['existing-note'])
   })
 
   it('is a no-op on a non-panel ui-state block', async () => {
@@ -120,7 +120,7 @@ describe('enterVideoNotesView', () => {
     expect(plainUiState.peekProperty(topLevelBlockIdProp)).toBeUndefined()
     expect(plainUiState.peekProperty(panelViewModeProp)).toBeUndefined()
     expect(plainUiState.peekProperty(panelMaximizedProp)).not.toBe(true)
-    expect(await videoBlock().childIds.load()).toEqual([])
+    expect(await childIdsOf(repo, VIDEO)).toEqual([])
   })
 
   // The immersion half of the gesture: without it, pane-scoping the notes view

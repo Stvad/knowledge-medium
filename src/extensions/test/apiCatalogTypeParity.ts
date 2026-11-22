@@ -76,6 +76,9 @@ export type {
   BlockContentRendererSlot,
   BlockContentSurfaceContribution,
   BlockContentSurfaceProps,
+  BlockGutterCorner,
+  BlockGutterItem,
+  BlockGutterItemContribution,
   BlockTextClassContext,
   BlockTextClassContribution,
   BlockInteractionContext,
@@ -115,6 +118,11 @@ export type {
 } from '@/utils/navigation.js'
 
 export type {
+  SurfaceZoom,
+  ZoomCrumb,
+} from '@/components/ZoomableSurface.js'
+
+export type {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
@@ -147,7 +155,7 @@ export type {
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
 
-export type { SystemPage } from '@/data/facets.js'
+export type { QueryableField, SystemPage } from '@/data/facets.js'
 
 export type {
   DerivedChildOutcome,

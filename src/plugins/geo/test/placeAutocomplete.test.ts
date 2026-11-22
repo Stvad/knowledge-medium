@@ -5,25 +5,10 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  matchAtTrigger,
   placeCompletionSource,
   planResolvedInsert,
   type PlaceAutocompleteCandidate,
 } from '../placeAutocomplete'
-
-describe('matchAtTrigger', () => {
-  // Char-generic matcher behavior (whitespace, caps, wikilink guards,
-  // email/anchor rejection) is covered in
-  // src/editor/test/triggerMatch.test.ts against the shared
-  // matchCharTrigger; this suite pins only the @-wrapper wiring.
-  it('matches a basic place query', () => {
-    expect(matchAtTrigger('met at @blue bottle', 19)).toEqual({from: 7, query: 'blue bottle'})
-  })
-
-  it('still matches a doubled @ (no stacked-trigger rejection for @)', () => {
-    expect(matchAtTrigger('@@name', 6)).toEqual({from: 1, query: 'name'})
-  })
-})
 
 describe('planResolvedInsert', () => {
   it('uses the recorded span when the trigger text is still there', () => {
@@ -97,10 +82,10 @@ describe('placeCompletionSource', () => {
       },
     })
 
-    const first = await source(docContext('@here', 5))
+    const first = await source(docContext('@@here', 6))
     expect(first!.options.map(o => o.label)).toEqual(['X'])
 
-    const second = await source(docContext('@here', 5))
+    const second = await source(docContext('@@here', 6))
     expect(second!.options.map(o => o.label)).toEqual(['Local'])
   })
 
@@ -111,8 +96,34 @@ describe('placeCompletionSource', () => {
       ],
       resolvePlace: async () => null,
     })
-    const result = await source(docContext('@', 1))
+    const result = await source(docContext('@@', 2))
     expect(result!.options.map(o => o.label)).toEqual(['Local'])
+    expect(result!.from).toBe(0)
+  })
+
+  it('answers a bare @ with only the hand-off row, and @query not at all', async () => {
+    const getCandidates = vi.fn(async () => [
+      {id: 't', source: 'local' as const, label: 'Local', insertText: 'Local'},
+    ])
+    const source = placeCompletionSource({getCandidates, resolvePlace: async () => null})
+    const bare = await source(docContext('ask @', 5))
+    expect(bare).toMatchObject({from: 4, to: 5})
+    expect(bare!.options.map(o => o.label)).toEqual(['Search places (@@)…'])
+    expect(await source(docContext('ask @blu', 8))).toBeNull()
+    // No place search runs (and no Google request) for a single @.
+    expect(getCandidates).not.toHaveBeenCalled()
+  })
+
+  it('the hand-off row turns a bare @ into @@', async () => {
+    const source = placeCompletionSource({getCandidates: async () => [], resolvePlace: async () => null})
+    const doc = 'ask @ later'
+    const view = new EditorView({state: EditorState.create({doc, selection: {anchor: 5}})})
+    const result = await source(new CompletionContext(view.state, 5, false))
+    const option = result!.options[0]
+    ;(option.apply as (v: EditorView, c: unknown, from: number, to: number) => void)(view, option, 4, 5)
+    expect(view.state.doc.toString()).toBe('ask @@ later')
+    expect(view.state.selection.main.head).toBe(6)
+    view.destroy()
   })
 
   it('never fires inside literal markdown (code), where @word is the code', async () => {
@@ -133,7 +144,7 @@ describe('placeCompletionSource', () => {
     const inline = 'use `@media` here'
     expect(await source(markdownContext(inline, inline.indexOf('`', 5)))).toBeNull()
     // …but prose in the same language still fires.
-    const prose = 'met at @blue'
+    const prose = 'met at @@blue'
     expect(await source(markdownContext(prose, prose.length))).not.toBeNull()
   })
 })
@@ -154,8 +165,8 @@ describe('placeCompletionSource — resolved insert delivery', () => {
       },
       persistInsert: opts.persistInsert,
     })
-    const state = EditorState.create({doc: 'met at @blue'})
-    const result = await source(new CompletionContext(state, 12, true))
+    const state = EditorState.create({doc: 'met at @@blue'})
+    const result = await source(new CompletionContext(state, 13, true))
     const option = result!.options[0]
     const apply = option.apply
     if (typeof apply !== 'function') throw new Error('expected a function apply')
@@ -166,7 +177,7 @@ describe('placeCompletionSource — resolved insert delivery', () => {
     const {option, apply, state} = await buildOption({resolveName: 'Blue Bottle'})
     const view = new EditorView({state, parent: document.body})
     try {
-      apply(view, option, 7, 12)
+      apply(view, option, 7, 13)
       await vi.waitFor(() => {
         expect(view.state.doc.toString()).toBe('met at [[Blue Bottle]]')
       })
@@ -183,14 +194,14 @@ describe('placeCompletionSource — resolved insert delivery', () => {
     })
     const view = new EditorView({state, parent: document.body})
     try {
-      apply(view, option, 7, 12)
+      apply(view, option, 7, 13)
     } finally {
       // The collision toast steals focus; the per-block editor unmounts
       // and destroys the view before resolvePlace settles.
       view.destroy()
     }
     await vi.waitFor(() => {
-      expect(persisted).toEqual([{triggerText: '@blue', insert: '[[Blue Bottle]]'}])
+      expect(persisted).toEqual([{triggerText: '@@blue', insert: '[[Blue Bottle]]'}])
     })
   })
 })

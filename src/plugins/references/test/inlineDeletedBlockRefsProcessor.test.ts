@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, normalizeReferences, type BlockData } from '@/data/api'
+import { deleteBlock } from '@/data/mutators'
 import { Repo } from '@/data/repo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp } from '@/data/properties'
@@ -75,6 +76,48 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read(D)!.deleted).toBe(true)
     expect(env.read('s')!.content).toBe('before deleted body after')
     expect(env.read('s')!.references).toEqual([])
+  })
+
+  // Tagging only clears a block's edges at the next parse, so the edge query can
+  // still reach it; the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never inlines into a block newly typed %s', async type => {
+    const source = `const id = "((${D}))"`
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'deleted body'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: source,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.tx(async tx => {
+      await tx.update('s', {properties: {types: [type]}})
+      await tx.run(deleteBlock, {id: D})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('s')!.content).toBe(source)
+  })
+
+  it.each(['extension', 'html-document'])('leaves a citation of a deleted %s block dangling', async type => {
+    const citation = `see ((${D})) today`
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x = y[[0]]', properties: {types: [type]}})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: citation,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('s')!.content).toBe(citation)
+    expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
   })
 
   // Regression: `core.deriveReferenceTarget` runs earlier

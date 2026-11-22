@@ -751,8 +751,7 @@ const valuesLostBy = (
   if (!change.encodingChanged) return 0
   const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
     change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow)
-      .map(value => value.content),
+    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow),
   ))
   return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
@@ -796,9 +795,9 @@ const applyToParent = async (
       ctx.tx, siblings, change.fieldId, isFieldDefinition,
     )
     if (perFieldRow === null) continue
-    const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content'>>> = []
+    const canonicalized: Array<Array<Pick<BlockData, 'id' | 'content' | 'referenceTargetId'>>> = []
     for (const values of perFieldRow) {
-      const group: Array<Pick<BlockData, 'id' | 'content'>> = []
+      const group: Array<Pick<BlockData, 'id' | 'content' | 'referenceTargetId'>> = []
       for (const value of values) {
         // A RENAME touches no encoding, so there is nothing to convert: the
         // stored text is already what this codec writes, and re-spelling it
@@ -807,7 +806,7 @@ const applyToParent = async (
         // projection does — which is what makes "a rename can lose nothing"
         // true by construction rather than by argument.
         if (!change.encodingChanged) {
-          group.push({id: value.id, content: value.content})
+          group.push(value)
           continue
         }
         // At value-child GRAIN, both ways: under a list codec this row holds
@@ -821,7 +820,7 @@ const applyToParent = async (
         // text route re-reads `null` and the ambiguity decides the other way
         // (`list` -> `string`).
         const conversion = convertValueChildContent(
-          change.beforeSchema, change.schema, value.content,
+          change.beforeSchema, change.schema, value,
         )
         // Left exactly as stored and out of the projection — the same thing
         // the projection itself does with text it cannot read. Whether that
@@ -829,7 +828,7 @@ const applyToParent = async (
         // `valuesLostBy` asks it of the aggregate.
         if (conversion.outcome === 'unreadable') continue
         const canonical = conversion.content
-        group.push({id: value.id, content: canonical})
+        group.push({...value, content: canonical})
         if (value.content === canonical) continue
         // Re-stamp the reference columns from the REWRITTEN content, the same
         // duty every same-tx processor that rewrites `content` after
@@ -868,7 +867,6 @@ const applyToParent = async (
     // first-parseable-wins read here would publish one member and let
     // MATERIALIZE reap the rest.
     const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
-      .map(value => value.content)
     const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
     const lost = valuesLostBy(change, perFieldRow, projected)
     if (lost > 0) {

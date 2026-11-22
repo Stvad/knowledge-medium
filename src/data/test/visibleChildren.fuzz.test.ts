@@ -8,7 +8,7 @@
  * views read the SAME stamped columns for recognition conditions (1) and (2) —
  * `is_field_form` and `reference_target_id`, plus `parent_id IS NOT NULL` —
  * and split only on condition (3), "does the target name a definition":
- *  - JS: `visibleChildrenOf` → `tx.childrenOf(…, {hidePropertyChildren})` →
+ *  - JS: `visibleChildrenOf` → `tx.childrenOf(…, {propertyChildren})` →
  *    `isPropertyFieldInstance` with the tx's registry checker
  *    (`isResolvableFieldDefinition(resolver.resolveField(id))`), fed by the
  *    user-schemas projector's parse of definition rows plus the code seeds.
@@ -66,6 +66,7 @@ import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcesso
 import { VISIBLE_CHILDREN_SQL, VISIBLE_SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-visible'
@@ -450,7 +451,7 @@ const compareViews = async (u: Universe): Promise<void> => {
   const jsChildren = new Map<string, string[]>()
   await tx(u, async t => {
     for (const id of live) {
-      jsChildren.set(id, (await visibleChildrenOf(t, id)).map(c => c.id))
+      jsChildren.set(id, (await visibleChildrenOf(t, id, undefined, NO_PROPERTY_DISPLAY_SCOPE)).map(c => c.id))
     }
   })
 

@@ -11,7 +11,7 @@ import {
   subscribeLocalDbCorruption,
 } from '@/data/localDbCorruptionSignal.js'
 
-const errorMessage = (error: unknown): string =>
+export const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
 /**

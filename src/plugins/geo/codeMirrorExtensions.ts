@@ -1,5 +1,5 @@
-/** CodeMirror surface for the geo plugin: autocomplete theme + `@`
- *  completion source contributed via `EditorState.languageData`. The
+/** CodeMirror surface for the geo plugin: the `@@` place completion
+ *  source contributed via `EditorState.languageData`. The
  *  single central `autocompletion()` call (in
  *  `src/editor/autocomplete.ts`) walks language data and
  *  picks the source up.
@@ -11,12 +11,12 @@
  *  via `startCompletion(view)` after stashing the candidates in the
  *  closure. The session token, Google client, and resolver all live in
  *  that closure (created per editor mount), so the billing session
- *  boundary still matches "one `@` press' worth of interactions". */
+ *  boundary still matches "one `@@` press' worth of interactions". */
 
 import { startCompletion } from '@codemirror/autocomplete'
 import type { CompletionSource } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import type { EditorView } from '@codemirror/view'
 import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
@@ -48,22 +48,6 @@ const LOCAL_RESULT_CAP = 8
 const GOOGLE_RESULT_CAP = 6
 const NEARBY_PICKER_RADIUS_M = 200
 const NEARBY_PICKER_MAX = 8
-
-const placeAutocompleteTheme = EditorView.theme({
-  '.cm-tooltip.cm-tooltip-autocomplete.tm-place-autocomplete': {
-    zIndex: '1000',
-    overflow: 'hidden',
-    border: '1px solid hsl(var(--border))',
-    borderRadius: 'var(--radius-md)',
-    backgroundColor: 'hsl(var(--popover))',
-    color: 'hsl(var(--popover-foreground))',
-    padding: '0.25rem',
-    fontFamily: 'inherit',
-    fontSize: '0.875rem',
-    lineHeight: '1.25rem',
-    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
-  },
-})
 
 const aliasesOf = (block: { properties: Record<string, unknown> }): readonly string[] => {
   const raw = block.properties[aliasesProp.name]
@@ -282,7 +266,7 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
 
     if (candidate.source === 'sentinel:current-location') {
       // Defer resolution: open the nearby picker. The picker stage
-      // re-uses the same span so dismissal leaves `@here` intact.
+      // re-uses the same span so dismissal leaves `@@here` intact.
       await openCurrentLocationPicker(ctx.view, {from: ctx.from, to: ctx.to})
       return {kind: 'handled'}
     }
@@ -341,7 +325,6 @@ const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {
   const placeSource = buildPlaceCompletionSource(ctx)
   return [
-    placeAutocompleteTheme,
     EditorState.languageData.of(() => [{autocomplete: placeSource}]),
   ]
 }

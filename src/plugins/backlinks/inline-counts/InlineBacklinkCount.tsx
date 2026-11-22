@@ -4,8 +4,8 @@
  *  Two cooperating facet contributions, sharing one ephemeral expansion
  *  store (`expansionStore.ts`):
  *
- *    - a `blockContentDecorators` contribution overlays a small count pill
- *      on the block's content line. The pill shows only when the block has
+ *    - a `blockGutterItems` contribution puts a small count pill in the
+ *      block's top-right gutter. The pill shows only when the block has
  *      ≥1 backlink; clicking it toggles the expansion.
  *    - a `blockBelowContent` contribution renders the same backlinks-view
  *      section the focal block uses (`BacklinksViewSection`, so the block's
@@ -17,11 +17,11 @@
 import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
 import { useWorkspaceId } from '@/hooks/block.js'
-import {
-  cachedContentDecorator,
-  type BlockContentDecoratorContribution,
-  type BlockBelowContentContribution,
-  type BlockResolveContext,
+import type {
+  BlockBelowContentContribution,
+  BlockGutterItem,
+  BlockGutterItemContribution,
+  BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
 import { GutterPill } from '@/components/GutterPill.js'
@@ -30,44 +30,28 @@ import { inlineBacklinksApplies } from './applies.ts'
 import { useBacklinkCount } from './useBacklinkCount.ts'
 import { toggleBacklinkExpansion, useBacklinkExpansion } from './expansionStore.ts'
 
-// ──── Count pill (content decorator) ────
+// ──── Count pill (gutter item) ────
 
-const InlineBacklinkCountBadge = ({
-  block,
-  Inner,
-}: {
-  block: Block
-  Inner: BlockRenderer
-}) => {
+const InlineBacklinkCountPill: BlockRenderer = ({block}) => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
   const count = useBacklinkCount(block, workspaceId)
   const expanded = useBacklinkExpansion(block.id)
-
-  // Reserve a right gutter (flex column) rather than absolutely overlaying
-  // the count, so it never covers text at the end of a long line. With no
-  // badge the content is the sole flex child and stays full width.
+  if (count === 0) return null
   return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <Inner block={block} />
-      </div>
-      {count > 0 && (
-        <GutterPill
-          count={count}
-          expanded={expanded}
-          onClick={() => toggleBacklinkExpansion(block.id)}
-          label={`${count} linked reference${count === 1 ? '' : 's'}`}
-        />
-      )}
-    </div>
+    <GutterPill
+      count={count}
+      expanded={expanded}
+      onClick={() => toggleBacklinkExpansion(block.id)}
+      label={`${count} linked reference${count === 1 ? '' : 's'}`}
+    />
   )
 }
 
-const decorate = cachedContentDecorator(InlineBacklinkCountBadge, 'WithInlineBacklinkCount')
+const countPillItem: BlockGutterItem = {corner: 'top-right', component: InlineBacklinkCountPill}
 
-export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorContribution = (ctx) =>
-  inlineBacklinksApplies(ctx) ? decorate : null
+export const inlineBacklinkCountItemContribution: BlockGutterItemContribution = (ctx) =>
+  inlineBacklinksApplies(ctx) ? countPillItem : null
 
 // ──── Expanded references ────
 

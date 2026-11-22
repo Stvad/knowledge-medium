@@ -87,12 +87,14 @@ export const BLOCK_LOCAL_COLUMNS = [
 
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
 
+export const BLOCK_LOCAL_COLUMN_NAMES: readonly (keyof BlockRow)[] = BLOCK_LOCAL_COLUMNS.map(column => column.name)
+
 /** Column list for reads/writes against the live `blocks` table (synced
  *  storage columns + local-only columns). `blocks_synced` reads must keep
  *  using the storage-only list. */
 export const BLOCKS_TABLE_COLUMN_NAMES: readonly (keyof BlockRow)[] = [
   ...BLOCK_COLUMN_NAMES,
-  ...BLOCK_LOCAL_COLUMNS.map(column => column.name),
+  ...BLOCK_LOCAL_COLUMN_NAMES,
 ]
 
 const formatSqlList = (items: readonly string[], indentSize: number) => {
@@ -231,6 +233,12 @@ export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
   WHERE deleted = 0 AND properties_json <> '{}'
 `
 
+/** Read the user edit stamp using the same expression as the recency index. */
+export const editTimeSql = (alias?: string): string => {
+  const prefix = alias ? `${alias}.` : ''
+  return `coalesce(${prefix}user_updated_at, ${prefix}updated_at)`
+}
+
 /** Serves the recency window every "what did I touch lately" surface pages
  *  through: the empty-query pickers (`core.recentBlocks`,
  *  `core.recentUserBlocks`), the activity feed (`core.recentActivity`) and
@@ -262,8 +270,17 @@ export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
  *  serves are interactive and the writes it taxes are one row at a time. */
 export const CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_recent
-  ON blocks (workspace_id, coalesce(user_updated_at, updated_at) DESC, id ASC)
+  ON blocks (workspace_id, ${editTimeSql()} DESC, id ASC)
   WHERE deleted = 0 AND content != ''
+`
+
+/** Blocks open in an editor on any client (the readers carry this predicate
+ *  literally; see `BEING_EDITED_BLOCKS_SQL`). Holds a handful of ui-state
+ *  rows, so a read re-run on every table change stays cheap on a large graph. */
+export const CREATE_BLOCKS_BEING_EDITED_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_being_edited
+  ON blocks (id)
+  WHERE deleted = 0 AND json_extract(properties_json, '$.isEditing') = 1
 `
 
 /** Partial index over the local derived column: field-row recognition and
@@ -438,7 +455,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
   {key: 'createdAt', sqlExpression: rowRef => `${rowRef}.created_at`},
   {key: 'updatedAt', sqlExpression: rowRef => `${rowRef}.updated_at`},
-  {key: 'userUpdatedAt', sqlExpression: rowRef => `coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at)`},
+  {key: 'userUpdatedAt', sqlExpression: editTimeSql},
   {key: 'createdBy', sqlExpression: rowRef => `${rowRef}.created_by`},
   {key: 'updatedBy', sqlExpression: rowRef => `${rowRef}.updated_by`},
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},

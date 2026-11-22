@@ -83,3 +83,31 @@ jobs:
       # to the root node_modules/.bin.
       - name: Run Strength Tracker extension checks
         run: pnpm -C agent-extensions/strength-tracker run check
+
+  # Tests that drive real browsers (`*.browser.test.ts`). Their own job because
+  # the gate has no browser binaries, and this is the only place a sandbox
+  # boundary gets exercised on every engine.
+  browser-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '26.x'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium webkit firefox
+
+      - name: Run browser tests
+        run: pnpm run test:browser

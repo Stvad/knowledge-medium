@@ -28,6 +28,7 @@ import {panelRenderScopeId} from '@/utils/renderScope'
 import {plainOutlinerPlugin} from '@/plugins/plain-outliner'
 import {referencesPlugin} from '@/plugins/references'
 import {addComment} from './addComment'
+import {annotationMarginOpenProp} from './marginSchema'
 import {annotationsPlugin} from './index'
 
 const WS = 'ws'
@@ -201,6 +202,29 @@ describe('the block comments toggle action', () => {
     try {
       await screen.findByText(COMMENT)
       await waitForRenderOrder(() => screen.getByText(COMMENT), () => screen.getByText(CHILD))
+    } finally {
+      await invoke(ActionContextTypes.NORMAL_MODE, deps)
+    }
+  })
+
+  it('opens the panel\'s margin from the expanded comments', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'margin-panel', workspaceId: WS, parentId: null, orderKey: 'a2'})
+    }, {scope: ChangeScope.BlockDefault})
+    const deps = {block: repo.block('target'), uiStateBlock: repo.block('ui-state'), renderScopeId: panelRenderScopeId('margin-panel', 'page')}
+    render(
+      <AppRuntimeContextProvider value={repo.facetRuntime!}>
+        <ActiveContextsProvider>
+          {panel('margin-panel', <DefaultBlockRenderer block={repo.block('target')}/>)}
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+    await invoke(ActionContextTypes.NORMAL_MODE, deps)
+
+    try {
+      expect(repo.block('margin-panel').peekProperty(annotationMarginOpenProp)).toBeFalsy()
+      act(() => screen.getByRole('button', {name: 'Show in margin'}).click())
+      await vi.waitFor(() => expect(repo.block('margin-panel').peekProperty(annotationMarginOpenProp)).toBe(true))
     } finally {
       await invoke(ActionContextTypes.NORMAL_MODE, deps)
     }

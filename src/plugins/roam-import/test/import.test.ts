@@ -21,7 +21,8 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, seedProperty } from '@/data/api'
+import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { addBlockTypeToProperties, aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -35,7 +36,7 @@ import {
   todayIso,
 } from '@/plugins/daily-notes/dailyNotes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
-import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
+import { statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -58,6 +59,7 @@ import { importRoam } from '../import'
 import { roamBlockId } from '../blockIds'
 import { ROAM_ISA_PROP, ROAM_PAGE_ALIAS_PROP } from '../properties'
 import type { RoamExport } from '../types'
+import { ROAM_TODO_STATE_PROP } from '../todo'
 
 const WORKSPACE = 'ws-1'
 const USER_ID = 'user-1'
@@ -339,14 +341,25 @@ describe('importRoam', {timeout: 30_000}, () => {
     const openProps = JSON.parse(open!.properties_json) as Record<string, unknown>
     expect(openProps[typesProp.name]).toContain(TODO_TYPE)
     expect(openProps[statusProp.name]).toBe('open')
-    expect(openProps[roamTodoStateProp.name]).toBe('TODO')
+    expect(openProps[ROAM_TODO_STATE_PROP]).toBe('TODO')
 
     const done = await readBlock(roamBlockId(WORKSPACE, 'todoDone'))
     expect(done?.content).toBe('ship phase five')
     const doneProps = JSON.parse(done!.properties_json) as Record<string, unknown>
     expect(doneProps[typesProp.name]).toContain(TODO_TYPE)
     expect(doneProps[statusProp.name]).toBe('done')
-    expect(doneProps[roamTodoStateProp.name]).toBe('DONE')
+    expect(doneProps[ROAM_TODO_STATE_PROP]).toBe('DONE')
+
+    const definition = [...env.repo.propertyDefinitions!.definitionsByFieldId.values()]
+      .find(field => field.name === 'roam:todo-state')!
+    expect(definition).toBeDefined()
+    await env.repo.tx(async tx => {
+      const row = (await tx.get(definition.fieldId))!
+      await tx.update(row.id, {properties: {...row.properties, 'property-schema:hidden': true}})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(JSON.parse((await readBlock(definition.fieldId))!.properties_json)['property-schema:hidden']).toBe(true)
+    expect(JSON.parse((await readBlock(roamBlockId(WORKSPACE, 'todoDone')))!.properties_json)['roam:todo-state'])
+      .toBe('DONE')
   })
 
   it('imports DONE SRS marker-only children as archived SM-2.5 metadata on the parent', async () => {
@@ -378,6 +391,35 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(marker?.content).toBe('[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]] [[DONE]]')
   })
 
+  it('reuses the retired Roam todo enum definition without changing stored metadata or values', async () => {
+    const legacy = seedProperty({
+      seedKey: 'system:todo/property/roam-todo-state', revision: 1,
+      name: ROAM_TODO_STATE_PROP, preset: 'strict-enum',
+      config: {options: [{value: 'TODO', label: 'TODO'}, {value: 'DONE', label: 'DONE'}]},
+      defaultValue: 'TODO', changeScope: ChangeScope.BlockDefault, hideInOutline: true,
+    })
+    await materializePropertySeeds(env.repo, WORKSPACE, [legacy])
+    await vi.waitFor(() => expect(env.repo.propertySchemas.get(ROAM_TODO_STATE_PROP)).toBeDefined())
+    const definitionId = propertyDefinitionBlockId(WORKSPACE, legacy.seedKey)
+    const before = JSON.parse((await readBlock(definitionId))!.properties_json)
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'historic-todo', workspaceId: WORKSPACE, parentId: null,
+        orderKey: 'a0', content: 'Historical task', properties: {[ROAM_TODO_STATE_PROP]: 'DONE'}})
+    }, {scope: ChangeScope.BlockDefault})
+    await importRoam([{
+      title: 'Imported tasks', uid: 'legacyTodoPage',
+      children: [{string: '#TODO Imported task', uid: 'legacyTodoBlock'}],
+    }], env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    expect(JSON.parse((await readBlock(definitionId))!.properties_json)).toEqual(before)
+    expect(JSON.parse((await readBlock('historic-todo'))!.properties_json)[ROAM_TODO_STATE_PROP]).toBe('DONE')
+    const imported = JSON.parse((await readBlock(roamBlockId(WORKSPACE, 'legacyTodoBlock')))!.properties_json)
+    expect(imported[ROAM_TODO_STATE_PROP]).toBe('TODO')
+    expect(imported[statusProp.name]).toBe('open')
+    expect(env.repo.propertySchemaResolverFor(WORKSPACE).resolve(ROAM_TODO_STATE_PROP).status).toBe('resolved')
+  })
+
   it('preserves app-owned todo status while refreshing Roam source mirrors on re-import', async () => {
     const todoExport: RoamExport = [
       {
@@ -402,7 +444,7 @@ describe('importRoam', {timeout: 30_000}, () => {
         properties: {
           ...row.properties,
           [statusProp.name]: statusProp.codec.encode('done'),
-          [roamTodoStateProp.name]: roamTodoStateProp.codec.encode('DONE'),
+          [ROAM_TODO_STATE_PROP]: 'DONE',
           'local:note': 'keep me',
         },
       })
@@ -416,7 +458,7 @@ describe('importRoam', {timeout: 30_000}, () => {
     const reimported = await readBlock(todoId)
     const reimportedProps = JSON.parse(reimported!.properties_json) as Record<string, unknown>
     expect(reimportedProps[statusProp.name]).toBe('done')
-    expect(reimportedProps[roamTodoStateProp.name]).toBe('TODO')
+    expect(reimportedProps[ROAM_TODO_STATE_PROP]).toBe('TODO')
     expect(reimportedProps['local:note']).toBe('keep me')
 
     await importRoam([
@@ -436,7 +478,7 @@ describe('importRoam', {timeout: 30_000}, () => {
     const noMarkerProps = JSON.parse(noMarker!.properties_json) as Record<string, unknown>
     expect(noMarkerProps[statusProp.name]).toBe('done')
     expect(noMarkerProps[typesProp.name]).toContain(TODO_TYPE)
-    expect(noMarkerProps[roamTodoStateProp.name]).toBeUndefined()
+    expect(noMarkerProps[ROAM_TODO_STATE_PROP]).toBeUndefined()
     expect(noMarkerProps['local:note']).toBe('keep me')
   })
 

@@ -5,8 +5,9 @@
  * of the old date-shift actions but exposes get/set in absolute-ISO
  * form for the calendar sheet and scrub gestures.
  */
-import type { EditorView } from '@codemirror/view'
+import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
+import { hasSourceContent, takesTextEdit } from '@/data/blockTypes'
 import {
   parseOutermostReferences,
   type ParsedReference,
@@ -69,7 +70,7 @@ export const referenceDateAdapter: BlockDateAdapter = {
   id: REFERENCE_DATE_ADAPTER_ID,
   canHandle: (block: Block) => {
     const data = block.peek()
-    if (!data) return false
+    if (!data || hasSourceContent(data)) return false
     return singleDateReferenceMatch(data.content) !== null
   },
   getCurrentIso: async (block: Block) => {
@@ -77,36 +78,19 @@ export const referenceDateAdapter: BlockDateAdapter = {
     if (!data) return null
     return singleDateReferenceMatch(data.content)?.iso ?? null
   },
+  // Reads the row it writes, in the same tx: a picker stays open while an edit, a
+  // delete or a type change syncs in.
   setIso: async (block: Block, iso: string) => {
     if (block.repo.isReadOnly) return false
-    const data = block.peek() ?? await block.load()
-    if (!data) return false
-    const nextContent = replaceSingleDateReferenceContent(data.content, iso)
-    if (nextContent === null || nextContent === data.content) return false
-    await block.setContent(nextContent)
-    return true
+    let written = false
+    await block.repo.tx(async tx => {
+      const row = await tx.get(block.id)
+      if (!takesTextEdit(row)) return
+      const nextContent = replaceSingleDateReferenceContent(row.content, iso)
+      if (nextContent === null || nextContent === row.content) return
+      await tx.update(block.id, {content: nextContent})
+      written = true
+    }, {scope: ChangeScope.BlockDefault, description: 'set date reference'})
+    return written
   },
 }
-
-export const createEditorReferenceDateAdapter = (editorView: EditorView): BlockDateAdapter => ({
-  id: `${REFERENCE_DATE_ADAPTER_ID}.editor`,
-  canHandle: () => singleDateReferenceMatch(editorView.state.doc.toString()) !== null,
-  getCurrentIso: async () =>
-    singleDateReferenceMatch(editorView.state.doc.toString())?.iso ?? null,
-  setIso: async (block: Block, iso: string) => {
-    if (block.repo.isReadOnly) return false
-    const sourceContent = editorView.state.doc.toString()
-    const nextContent = replaceSingleDateReferenceContent(sourceContent, iso)
-    if (nextContent === null || nextContent === sourceContent) return false
-
-    editorView.dispatch({
-      changes: {
-        from: 0,
-        to: editorView.state.doc.length,
-        insert: nextContent,
-      },
-    })
-    await block.setContent(nextContent)
-    return true
-  },
-})

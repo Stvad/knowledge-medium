@@ -10,7 +10,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, localSchemaFacet, sameTxProcessorsFacet } from '@/data/facets.js'
+import { AGENT_PROPS } from '@/plugins/agent-dispatch-companion/chipState'
 import {
   resolveAnalyzeTables,
   resolveLocalSchemaContributions,
@@ -30,6 +31,13 @@ beforeAll(async () => { shared = await createTestDb() })
 afterAll(async () => { await shared.cleanup() })
 
 describe('app boot composition', () => {
+  it('keeps every dispatch property seed registered after the app runtime replaces bootstrap data facets', () => {
+    const { repo } = createTestRepo({ db: shared.db })
+    const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
+    const names = runtime.read(definitionSeedsFacet).map(seed => seed.name)
+    expect(names).toEqual(expect.arrayContaining(Object.values(AGENT_PROPS)))
+  })
+
   it('composes the full production plugin set into a runtime that has contributions', () => {
     const { repo } = createTestRepo({ db: shared.db })
     const extensions = staticAppExtensions({ repo })
@@ -52,12 +60,28 @@ describe('app boot composition', () => {
   describe('default keybindings', () => {
     afterEach(() => { vi.restoreAllMocks() })
 
-    it.each([true, false])('do not conflict (mac: %s)', mac => {
+    it.each([true, false])('overlap only for ordered property-display fallbacks (mac: %s)', mac => {
       vi.spyOn(platform, 'isMacPlatform').mockReturnValue(mac)
       const { repo } = createTestRepo({ db: shared.db })
       const runtime = resolveAppRuntimeSync(staticAppExtensions({ repo }), { overrides: new Map(), safeMode: false })
-      const conflicts = findKeybindingConflicts(runtime.read(actionsFacet))
-      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([])
+      const actions = runtime.read(actionsFacet)
+      const conflicts = findKeybindingConflicts(actions)
+      const alternatives = ['property-rows.block.cycle', 'toggle_properties']
+      expect(conflicts.map(c => [c.chord, c.actions.map(a => a.actionId)])).toEqual([['t', alternatives]])
+      // The cycle must precede the panel toggle in both contexts; a declined
+      // cycle leaves the panel as the first dispatchable candidate.
+      for (const prefix of ['', 'multi_select.']) {
+        const ids = alternatives.map(id => `${prefix}${id}`)
+        const candidates = actions.filter(action => ids.includes(action.id))
+        expect(candidates.map(action => action.id)).toEqual(ids)
+        for (const childBacked of [true, false]) {
+          const first = candidates.find(action => !action.canDispatch || action.canDispatch({
+            uiStateBlock: repo.block('panel'),
+            propertyDisplay: {childBacked, workspace: 'inherit', panel: 'inherit'},
+          }))
+          expect(first?.id).toBe(childBacked ? ids[0] : ids[1])
+        }
+      }
     })
   })
 

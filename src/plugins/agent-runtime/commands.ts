@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo, WorkspaceRematerialization } from '@/data/repo'
 import type { Block } from '@/data/block'
+import { listRejectedUploads, retryRejectedUpload } from '@/data/rejectedUploads'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
 import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
@@ -93,7 +94,7 @@ import {
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref, userPageBlockId } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -566,8 +567,10 @@ const readExtensionOverrides = async (
   workspaceId: string,
 ): Promise<Overrides | null> => {
   try {
+    // This device's own intent, not `preferencesRootId`: the loader and
+    // `setExtensionEnabled` both use the acting user's page.
     // A copy: with nothing stored this is the schema's shared default.
-    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
+    return new Map(await readPluginPref(repo, userPageBlockId(workspaceId, repo.user.id), extensionsPrefsType, extensionsOverridesProp))
   } catch {
     return null
   }
@@ -1135,7 +1138,7 @@ const reconcileMarkdownSubtree = async (
         // Visible view: a property field row is machinery OWNED by `doomed`
         // (not foreign content), so it must not be rescued/reparented — it
         // goes with `doomed` in the subtree-delete below.
-        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {hidePropertyChildren: true}))
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {propertyChildren: 'none'}))
           .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
         if (foreign.length > 0) {
           // Land the rescued children in the doomed node's OWN slot (between
@@ -1163,12 +1166,12 @@ const reconcileMarkdownSubtree = async (
         // field/value machinery, which must be tombstoned with it rather
         // than stranded live under the tombstone (§9). True pre-flip too:
         // the backfill mints that machinery before the workspace reads it,
-        // and `hidePropertyChildren` recognizes it on the bit.
+        // and `propertyChildren` recognizes it on the bit.
         // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
-  }, agentTxOptions('reconcile-markdown-subtree'))
+  }, agentTxOptions('reconcile-markdown-subtree', {undoable: input.undoable}))
 
   return {ids, rootIds}
 }
@@ -1204,20 +1207,13 @@ const updateRuntimeBlock = async (
       : input.replaceProperties
         ? structuredClone(input.properties) as Record<string, unknown>
         : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
-    // Deliberately the RAW bag write, not the typed setProperty/setProperties:
-    // `input.properties` is arbitrary external JSON (raw-encoded values, often
-    // schema-less keys from agent extensions). The typed primitives would throw
-    // on an unresolvable schema or an undecodable value; the raw write + the
-    // same-tx MATERIALIZE processor instead reconciles the schema-backed,
-    // decodable subset into children (create/update, and delete-by-omission on
-    // a `replaceProperties` replace) and gracefully leaves the rest cell-only
-    // (MATERIALIZE skips keys it can't resolve/decode). Read-inside-tx above
-    // already closed the TOCTOU clobber this verb was once flagged for.
+    // Agent properties arrive encoded. Pass the bag to tx.update so the
+    // workspace's storage mode governs validation and child materialization.
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
-  }, agentTxOptions('update-block'))
+  }, agentTxOptions('update-block', {undoable: input.undoable}))
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return withGrainWarnings(repo, await repo.load(input.id), input.properties)
@@ -1670,6 +1666,18 @@ const chosenBlockId = (...candidates: readonly unknown[]): string | undefined =>
 
 const contributorsEnabled = (context: AgentRuntimeContext): boolean =>
   context.runtime.read(sameTxProcessorsFacet).has(contributorAttributionProcessor.name)
+
+/** The attribution processor's refusal, asked BEFORE a command's expensive or
+ *  unattributed first step — the one its own transaction-time check comes too
+ *  late for. */
+const refuseUnchosenContributor = (
+  context: AgentRuntimeContext,
+  command: {contributorId?: string | null},
+): void => {
+  if (contributorsEnabled(context) && command.contributorId === undefined) {
+    throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
+  }
+}
 
 const requireComments = (context: AgentRuntimeContext): void => {
   if (!context.runtime.read(queriesFacet).has(THREAD_IDS_FOR_BLOCK_QUERY)) {
@@ -2236,8 +2244,10 @@ export const createAgentRuntimeContext = ({
   repo,
   runtime,
   safeMode,
+  hostHealth,
 }: AgentRuntimeBridgeOptions): AgentRuntimeContext => {
   const context: AgentRuntimeContext = {
+    hostHealth,
     repo,
     db: repo.db,
     runtime,
@@ -2251,7 +2261,7 @@ export const createAgentRuntimeContext = ({
     // time as `((fieldId))` blocks pretending to be user content. Agents that
     // genuinely want raw storage have `sql`.
     getSubtree: async rootId =>
-      await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
+      await repo.query.subtree({id: rootId, propertyChildren: 'none'}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
@@ -2294,6 +2304,7 @@ export const executeCommand = async (
       repo: context.repo.withTxContext({contributorId: command.contributorId, contributorSource: 'agent'}),
       runtime: context.runtime,
       safeMode: context.safeMode,
+      hostHealth: context.hostHealth,
     })
   }
   return executeAttributedCommand(command, context)
@@ -2317,7 +2328,7 @@ const executeAttributedCommand = async (
       return describeRuntimeSummary(context)
 
     case 'health':
-      return runHealthCommand(context.repo)
+      return runHealthCommand(context.repo, context.hostHealth)
 
     case 'describe-runtime':
       return describeRuntime(context, {
@@ -2388,9 +2399,7 @@ const executeAttributedCommand = async (
       }
       // Refused here, not left to the attribution check inside the capture's tx: by
       // then the bytes are stored, and nothing reclaims them.
-      if (contributorsEnabled(context) && command.contributorId === undefined) {
-        throw new Error(CHOOSE_CONTRIBUTOR_MESSAGE)
-      }
+      refuseUnchosenContributor(context, command)
       return addMedia(context.repo, workspaceId, {
         base64: requireString(command.base64, 'base64'),
         filename: command.filename,
@@ -2437,6 +2446,7 @@ const executeAttributedCommand = async (
         shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
         final: command.final === true,
         properties,
+        undoable: command.undoable,
       })
     }
 
@@ -2470,6 +2480,7 @@ const executeAttributedCommand = async (
         expectedContent: command.expectedContent === undefined
           ? undefined
           : requireString(command.expectedContent, 'expectedContent'),
+        undoable: command.undoable,
       })
     }
 
@@ -2596,6 +2607,9 @@ const executeAttributedCommand = async (
       })
 
     case 'run-backfill':
+      // Refused here, not left to the pass's first batch: by then the claim is
+      // taken, over the workspace's record of an earlier completed run.
+      refuseUnchosenContributor(context, command)
       return context.runBackfill({
         backfillId: requireString(command.backfillId, 'backfillId'),
         workspaceId: command.workspaceId === undefined
@@ -2612,6 +2626,12 @@ const executeAttributedCommand = async (
           ? undefined
           : requireString(command.scope, 'scope'),
       })
+
+    case 'rejected-uploads':
+      return listRejectedUploads(context.repo.db)
+
+    case 'retry-rejected-upload':
+      return retryRejectedUpload(context.repo.db, command.txId)
 
     case 'run-action':
     case 'action':

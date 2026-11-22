@@ -15,7 +15,6 @@ import {ChangeScope, type BlockData, type Tx} from '@/data/api'
 import type {Block} from '@/data/block'
 import {isEditingProp, peekFocusedBlockLocation} from '@/data/properties'
 import type {Repo} from '@/data/repo'
-import {visibleChildrenOf} from '@/data/visibleChildren'
 import {blockEditSettled} from '@/editor/editSettleSignal.js'
 import {enterEditModeForBlock} from '@/extensions/blockInteraction.js'
 import {deleteBlockThroughUi} from '@/utils/deleteBlockThroughUi.js'
@@ -99,7 +98,7 @@ const dropIfEmpty = async (thread: Block): Promise<void> => {
   const empty = await thread.repo.tx(async tx => {
     const root = await tx.get(thread.id)
     if (!root || root.deleted) return false
-    for (const comment of await visibleChildrenOf(tx, thread.id)) {
+    for (const comment of await tx.childrenOf(thread.id, undefined, {propertyChildren: 'none'})) {
       if (!await isBlankComment(tx, comment)) return false
     }
     return true

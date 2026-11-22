@@ -36,6 +36,7 @@ import {
   toViewRow,
   type ViewRow,
 } from './shared.ts'
+import { NO_REFS, refLines, REFS_LEGEND, resolveRowRefs, type ExpandRefsParam } from './refs.ts'
 import { boundLabels, clipLine, CONTEXT_HEAD_CHARS, contextPreview, formatCount, isReferenceOnly } from './text.ts'
 
 const MAX_BACKLINKS = 500
@@ -82,15 +83,17 @@ const VIA_NAME_HEAD = 400
 /** The first few property names each source references the target through,
  *  plus how many there are — windowed in SQL, so a source with thousands
  *  of ref fields costs its shown few. Distinctness and order use whole names;
- *  only a head of each is returned. */
-const SOURCE_FIELDS_FOR_SOURCES_SQL = `
+ *  only a head of each is returned. The `CROSS JOIN` keeps the page's ids
+ *  outer; left free, the planner drives from every edge of the target and
+ *  rescans the ids per edge. */
+export const SOURCE_FIELDS_FOR_SOURCES_SQL = `
   SELECT source_id, substr(source_field, 1, ${VIA_NAME_HEAD}) AS source_field, n FROM (
     SELECT source_id, source_field,
            ROW_NUMBER() OVER (PARTITION BY source_id ORDER BY source_field) AS rn,
            COUNT(*) OVER (PARTITION BY source_id) AS n
       FROM (SELECT DISTINCT r.source_id AS source_id, r.source_field AS source_field
               FROM json_each(?) j
-              JOIN block_references r ON r.source_id = j.value
+              CROSS JOIN block_references r ON r.source_id = j.value
              WHERE r.workspace_id = ? AND r.target_id = ? AND r.source_field != '')
   ) WHERE rn <= ?
 `
@@ -132,12 +135,16 @@ const backlinkRows = async (
   targetId: string,
   sources: readonly BlockData[],
   positionOf: (id: string) => number,
+  params: ExpandRefsParam,
 ): Promise<BacklinkRow[]> => {
   const ids = sources.map(source => source.id)
   const linkOnly = sources.filter(source => isReferenceOnly(source.content))
+  const targetOnly = new Set([targetId])
   const parentIds = [...new Set(linkOnly.flatMap(source => contextParentId(source) ?? []))]
-  const [renderer, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
+  const [renderer, refs, crumbs, childCounts, via, parents, firstChildren, siblings] = await Promise.all([
     createPropertyRenderer(repo, sources, 'brief'),
+    // A reference to the target is what put the row here; the header names it.
+    resolveRowRefs(repo, workspaceId, sources.map(source => ({...source, skip: targetOnly})), params),
     loadCrumbs(repo, ids, workspaceId),
     visibleChildCounts(repo, ids, workspaceId),
     viaPropertiesBySource(repo, workspaceId, targetId, ids),
@@ -147,7 +154,7 @@ const backlinkRows = async (
   ])
   return sources.map(source => {
     const row: BacklinkRow = {
-      ...toViewRow(source, {renderer, maxChars: ROW_CHARS}),
+      ...toViewRow(source, {renderer, maxChars: ROW_CHARS, refs: refs.get(source.id) ?? NO_REFS}),
       position: positionOf(source.id),
       parentId: source.parentId,
       breadcrumb: crumbs.get(source.id) ?? [],
@@ -169,7 +176,7 @@ const backlinkRows = async (
   })
 }
 
-export interface BacklinksParams {
+export interface BacklinksParams extends ExpandRefsParam {
   ref: string
   limit?: number
   offset?: number
@@ -202,7 +209,7 @@ export const buildBacklinksView = async (
     offset,
     nextOffset: end < ids.length ? end : null,
     filter: filter ?? null,
-    rows: await backlinkRows(repo, block.workspaceId, block.id, sources, id => offset + page.indexOf(id) + 1),
+    rows: await backlinkRows(repo, block.workspaceId, block.id, sources, id => offset + page.indexOf(id) + 1, params),
   }
 }
 
@@ -218,9 +225,14 @@ const renderBacklinkRow = (row: BacklinkRow, index: number, samePlace: boolean):
   const body = `${row.content}${metaSuffix(row)}${children}`
   const firstChild = row.firstChildContent ? `   ↳ first child: ${row.firstChildContent}` : null
   if (samePlace) {
-    return [`${index}. ${idMark(row.id)}  (same place as above)${via}  ${body}`, ...(firstChild ? [firstChild] : []), ...siblingLines(row.siblings)]
+    return [
+      `${index}. ${idMark(row.id)}  (same place as above)${via}  ${body}`,
+      ...refLines(row, '   '),
+      ...(firstChild ? [firstChild] : []),
+      ...siblingLines(row.siblings),
+    ]
   }
-  const lines = [`${index}. ${idMark(row.id)}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`]
+  const lines = [`${index}. ${idMark(row.id)}  ${crumbLine(row.breadcrumb)}${via}`, `   ${body}`, ...refLines(row, '   ')]
   if (row.parentContent) lines.push(`   ↳ parent: ${row.parentContent}`)
   if (firstChild) lines.push(firstChild)
   lines.push(...siblingLines(row.siblings))
@@ -247,6 +259,7 @@ export const renderBacklinksView = (view: BacklinksView): string => {
     lines.push(...renderBacklinkRow(row, row.position, index > 0 && samePlace(row, view.rows[index - 1])))
   })
   if (view.rows.some(row => row.cut > 0)) lines.push(CUT_LEGEND)
+  if (view.rows.some(row => row.refs.length > 0)) lines.push(REFS_LEGEND)
   return joinDisplayLines(lines)
 }
 
@@ -307,7 +320,11 @@ export const buildGroupedBacklinksView = async (
   const membersPerGroup = Math.max(1, Math.min(requestedPerGroup, Math.floor(MAX_BACKLINKS / Math.max(1, page.length))))
   const memberIds = [...new Set(page.flatMap(group => membersOf(group.sourceIds)))]
   const members = await loadBlocks(repo, memberIds, {workspaceId: block.workspaceId})
-  const renderer = await createPropertyRenderer(repo, members, 'brief')
+  const targetOnly = new Set([block.id])
+  const [renderer, refs] = await Promise.all([
+    createPropertyRenderer(repo, members, 'brief'),
+    resolveRowRefs(repo, block.workspaceId, members.map(member => ({...member, skip: targetOnly})), params),
+  ])
   const memberById = new Map(members.map(member => [member.id, member]))
   const end = offset + page.length
 
@@ -330,7 +347,7 @@ export const buildGroupedBacklinksView = async (
         members: consumed
           .flatMap(id => {
             const member = memberById.get(id)
-            return member ? [toViewRow(member, {renderer, maxChars: ROW_CHARS})] : []
+            return member ? [toViewRow(member, {renderer, maxChars: ROW_CHARS, refs: refs.get(member.id) ?? NO_REFS})] : []
           }),
       }
     }),
@@ -345,12 +362,15 @@ export const renderGroupedBacklinksView = (view: GroupedBacklinksView): string =
     const id = group.groupId === null ? '' : `  ${idMark(group.groupId)}`
     lines.push(`## ${group.label}${id}  (${formatCount(group.memberCount)})`)
     if (view.memberOffset > 0) lines.push(`  (members from #${formatCount(view.memberOffset + 1)})`)
-    for (const member of group.members) lines.push(`- ${member.content}${metaSuffix(member)}  ${idMark(member.id)}`)
+    for (const member of group.members) {
+      lines.push(`- ${member.content}${metaSuffix(member)}  ${idMark(member.id)}`, ...refLines(member, '  '))
+    }
     if (group.nextMemberOffset !== null) {
       const rest = group.memberCount - group.nextMemberOffset
       lines.push(`  +${formatCount(rest)} more — memberOffset=${group.nextMemberOffset} offset=${view.offset + index} limit=1 continues this group`)
     }
   })
   if (view.groups.some(group => group.members.some(member => member.cut > 0))) lines.push(CUT_LEGEND)
+  if (view.groups.some(group => group.members.some(member => member.refs.length > 0))) lines.push(REFS_LEGEND)
   return joinDisplayLines(lines)
 }

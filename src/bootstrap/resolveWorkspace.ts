@@ -52,18 +52,17 @@ export const resolveWorkspace = async (
     if (useRemoteSync) {
       const access = await canAccessRemoteWorkspace(requestedWorkspaceId)
       if (access.kind === 'allowed') {
-        // Server confirms access; getInitialLayout will poll for the blocks
-        // to land via sync.
+        // Server confirms access; the layout's sync gate waits for its rows.
         return {id: requestedWorkspaceId, freshlyCreated: false}
       }
       if (access.kind === 'unknown') {
         // Transport-level failure (offline, 5xx, JWT mid-refresh). We don't
         // know if the user has access. Trust the URL hash rather than
         // silently bumping them to a different workspace — the misroute is
-        // worse UX than a momentary "no blocks yet" page (which the user
-        // can fix with a reload once back online). If they really lack
-        // access, the next online bootstrap re-runs this check and falls
-        // through cleanly.
+        // worse UX than the sync gate waiting for a row that may never come
+        // (its workspace menu is the way out). If they really lack access,
+        // the next online bootstrap re-runs this check and falls through
+        // cleanly.
         console.warn(
           `canAccessRemoteWorkspace failed for ${requestedWorkspaceId}; trusting URL workspace and proceeding`,
           access.error,

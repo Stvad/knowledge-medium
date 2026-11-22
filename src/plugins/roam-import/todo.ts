@@ -1,4 +1,6 @@
-import type { RoamTodoState } from '@/plugins/todo/schema'
+export type RoamTodoState = 'TODO' | 'DONE'
+
+export const ROAM_TODO_STATE_PROP = 'roam:todo-state'
 
 const ROAM_TODO_MARKER_RE =
   /(^|\s)(?:#\[\[(TODO|DONE)\]\]|#(TODO|DONE)\b|\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\})(?=$|\s)/g

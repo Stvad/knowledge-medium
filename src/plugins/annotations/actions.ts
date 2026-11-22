@@ -426,6 +426,10 @@ export const readSelectionGestures: readonly ReadSelectionGesture[] = [
   },
 ]
 
+/** The gestures a selection rendered in `renderScopeId` offers. */
+export const readSelectionGesturesIn = (renderScopeId: string | undefined): readonly ReadSelectionGesture[] =>
+  readSelectionGestures.filter(gesture => gestureRunsHere(gesture, {renderScopeId}))
+
 /** The click that ends a drag-select in rendered content would enter edit
  *  mode and swap the selected text for an editor. While the clicked block
  *  holds a selection the click does nothing; the next click, which collapses

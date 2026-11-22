@@ -10,7 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RepoContext } from '@/context/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childrenOf } from '@/data/test/createTestRepo'
 import { recentsPageBlockId } from '@/data/recentsPage'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
@@ -53,7 +53,7 @@ const recentsRow = (workspaceId = WS) => repo.load(recentsPageBlockId(workspaceI
 const shownBlockIds = async (): Promise<readonly string[]> => {
   const uiState = await getUIStateBlock(repo, WS, USER, {})
   const layoutSession = getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
-  return panelBlockIds(await (await layoutSession).children.load())
+  return panelBlockIds(await childrenOf(repo, (await layoutSession).id))
 }
 
 const runCommand = () => openRecentsAction(repo).handler({} as never, {} as never)

@@ -55,6 +55,8 @@ export interface TypedChildSpec {
    *  write. Use `getOrCreateTypedChild`, which stamps 0 and adopts. */
   id?: string
   references?: readonly BlockReference[]
+  /** Expand the parent, for a record the user should see land. */
+  revealParent?: boolean
   /** Reuse one registry snapshot across a batch of records. Optional — the
    *  type tagger takes its own when this is absent; passing one just avoids
    *  re-snapshotting per record in a loop. */
@@ -93,6 +95,7 @@ export const createTypedChild = async (
     ...(spec.id !== undefined ? {id: spec.id} : {}),
     ...(spec.position !== undefined ? {position: spec.position} : {}),
     ...(spec.references !== undefined ? {references: [...spec.references]} : {}),
+    ...(spec.revealParent !== undefined ? {revealParent: spec.revealParent} : {}),
   })
 
   // Types first: a property whose schema the type contributes should find

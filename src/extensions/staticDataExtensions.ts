@@ -12,7 +12,9 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { findReplaceDataExtension } from '@/plugins/find-replace/dataExtension.js'
 import { geoDataExtension } from '@/plugins/geo/dataExtension.js'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension.js'
+import { htmlDocumentDataExtension } from '@/plugins/html-document/dataExtension.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
+import { tablesDataExtension } from '@/plugins/tables/dataExtension.js'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension.js'
 import { todoDataExtension } from '@/plugins/todo/dataExtension.js'
 
@@ -35,10 +37,12 @@ export const staticDataExtensions: AppExtension[] = [
   srsReschedulingDataExtension,
   todoDataExtension,
   characterCounterDataExtension,
+  htmlDocumentDataExtension,
   geoDataExtension,
   agentDispatchCompanionDataExtension,
   agentRuntimeDataExtension,
   attachmentsDataExtension,
   contributorsDataExtension,
   annotationsDataExtension,
+  tablesDataExtension,
 ]

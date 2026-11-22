@@ -213,9 +213,8 @@ export class PropertySchemaScopeMismatchError extends DataLayerError {
  *  targeting a row that is ALREADY a materialized seed definition, or a
  *  write (create, update, createOrGet, or a restore with a properties
  *  patch) that makes a row BECOME a provenance-valid seed definition
- *  (forgery) when it wasn't one before the write. A seed's bag is wholly
- *  code-owned in v1 (schema-unification §5.1 — no user-editable fields),
- *  so the schema editor and property panel render it read-only; this is
+ *  (forgery) when it wasn't one before the write. A seed's schema and
+ *  lifecycle are code-owned; property outline visibility is editable. This is
  *  the data-layer backstop that keeps the invariant true for every other
  *  writer (agent bridge, importer, the outline delete key). System writes
  *  run under Automation scope (materialization, the §13 revision-upgrade
@@ -223,7 +222,7 @@ export class PropertySchemaScopeMismatchError extends DataLayerError {
 export class SeededDefinitionWriteError extends DataLayerError {
   constructor(public readonly blockId: string) {
     super(
-      `cannot edit or delete seed definition block ${blockId}: its bag is ` +
+      `cannot edit or delete seed definition block ${blockId}: its schema is ` +
       `code-owned (defined in code). Change the declaration and bump its ` +
       `revision instead of editing the materialized row.`,
     )

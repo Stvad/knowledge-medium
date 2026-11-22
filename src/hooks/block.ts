@@ -28,17 +28,24 @@
 import { isEqual } from 'lodash-es'
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
 } from 'react'
-import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
+import type { BlockData, Handle, PropertyChildrenView, PropertySchema, TypedBlockQuery } from '@/data/api'
 import { getAliases } from '@/data/properties.js'
 import { decodeRowProperty } from '@/data/rowProperty'
 import { Block } from '../data/block'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo.js'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import {
+  blockPropertyDisplaySetting,
+  resolvePropertyDisplayMode,
+  type PropertyDisplayMode,
+} from '@/data/propertyDisplayMode'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
@@ -411,14 +418,49 @@ export const useBlockAliases = (block: Block): readonly string[] =>
  *  this, every LazyBlockComponent that mounts on intersection would
  *  pay its own `block.load()` round-trip and the page would visibly
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
- *  non-rendering callers (counting / id-only scans). */
+ *  non-rendering callers (counting / id-only scans).
+ *
+ *  Lists the children the outline shows: which property rows are among
+ *  them is `usePropertyDisplayMode`'s answer for this block. */
 export const useChildIds = (block: Block): string[] =>
-  // Display hook: the outline shows the visible view (recognized property
-  // field rows excluded, §9). Structural traversals use the everything-by-
-  // default query instead.
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
-    selector: ids => ids ?? EMPTY_STRING_ARRAY,
-  }) as string[]
+  useChildIdsForMode(block, usePropertyDisplayMode(block))
+
+/** {@link useChildIds} for a caller that already resolved the mode. */
+export const useChildIdsForMode = (block: Block, mode: PropertyDisplayMode): string[] => {
+  const ids = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
+    selector: ids => ids,
+  })
+  return ids ?? loadedListOfAnotherView(block, mode)
+}
+
+/** While a non-default view's list loads, a loaded list of another view of
+ *  the same parent: the other non-default view first (still live right after
+ *  a show-all ↔ show-non-hidden switch), then the default. Answering `[]`
+ *  instead unmounts every child — editor and lazy-mount state with it — only
+ *  to mount them again a moment later. Nothing for the default view, so an
+ *  outline that never switches allocates nothing here; switching back to
+ *  hide-all can remount the listing once. */
+const loadedListOfAnotherView = (block: Block, view: PropertyChildrenView): string[] => {
+  if (view === 'none') return EMPTY_STRING_ARRAY as string[]
+  const others: readonly PropertyChildrenView[] = view === 'non-hidden' ? ['all', 'none'] : ['non-hidden', 'none']
+  for (const other of others) {
+    const ids = block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: other}).peek()
+    if (ids) return ids
+  }
+  return EMPTY_STRING_ARRAY as string[]
+}
+
+/** The outline's property display mode for `block`'s children here: the
+ *  block's own switch over the panel's scope (`PropertyDisplayScope`), combined
+ *  by `resolvePropertyDisplayMode`, the one resolver. The block setting
+ *  is read tolerantly, above the per-block error boundary. */
+export const usePropertyDisplayMode = (block: Block): PropertyDisplayMode => {
+  const scope = useContext(PropertyDisplayScopeContext)
+  const blockSetting = useHandle(block, {
+    selector: blockPropertyDisplaySetting,
+  })
+  return resolvePropertyDisplayMode({...scope, block: blockSetting})
+}
 
 /** Reactive child Block facades. Same structural-equality bail-out
  *  story as `useChildIds` — `repo.block(id)` is identity-stable, so the
@@ -430,8 +472,8 @@ export const useChildIds = (block: Block): string[] =>
  *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  // Display hook: visible view (property field rows excluded, §9).
-  return useHandle(block.repo.query.children({id: block.id, hidePropertyChildren: true}), {
+  // Mode `none` (every property field row excluded, §9), whatever the outline's mode.
+  return useHandle(block.repo.query.children({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -447,10 +489,13 @@ export const useChildren = (block: Block): Block[] => {
  *  — every block that renders a bullet (BlockBullet) also renders its
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
-export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
-    selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
+export const useHasChildren = (block: Block): boolean => {
+  const mode = usePropertyDisplayMode(block)
+  const hasChildren = useHandle(block.repo.query.childIds({id: block.id, hydrate: true, propertyChildren: mode}), {
+    selector: ids => ids === undefined ? undefined : ids.length > 0,
   })
+  return hasChildren ?? loadedListOfAnotherView(block, mode).length > 0
+}
 
 /** A leaf-to-root chain as breadcrumb-ordered facades. `core.ancestors`
  *  walks leaf-to-root; every consumer renders root-first. */
@@ -558,8 +603,8 @@ export const useRetainParents = (blocks: readonly Block[]): void => {
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
-  // Display hook: visible view (property field rows excluded, §9).
-  return useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
+  // Mode `none` (every property field row excluded, §9), whatever the outline's mode.
+  return useHandle(block.repo.query.subtree({id: block.id, propertyChildren: 'none'}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }

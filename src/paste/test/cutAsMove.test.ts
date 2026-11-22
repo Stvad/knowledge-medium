@@ -3,6 +3,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { armCut, disarmCut, getArmedCut, undoOrTakeBackCut } from '../armedCut'
@@ -281,5 +284,21 @@ describe('pasteFromClipboard (vim p, multi-select p)', () => {
 
     expect(pasted.map(block => block.id)).toEqual(['a'])
     expect(await childIds('page')).toEqual(['b', 'x', 'y', 'a'])
+  })
+
+  // Whitespace counts as empty: Enter then Escape in an empty document leaves '\n'.
+  it.each(['', '\n', '  \n'])('puts the text whole into an empty source block (%j)', async empty => {
+    const source = '<div>\n  <p>[[1,2],[3,4]]</p>\n</div>'
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    await createBlock('page', 'Page', null, 'a0')
+    await createBlock('doc', empty, 'page', 'a0', {types: [HTML_DOCUMENT_TYPE]})
+    await repo.block('doc').load()
+    vi.stubGlobal('navigator', {clipboard: {readText: async () => source}})
+
+    await pasteFromClipboard(repo.block('doc'), repo, {scopeRootId: 'page'})
+
+    expect((await repo.block('doc').load())?.content).toBe(source)
+    expect(await childIds('page')).toEqual(['doc'])
+    expect(await childIds('doc')).toEqual([])
   })
 })

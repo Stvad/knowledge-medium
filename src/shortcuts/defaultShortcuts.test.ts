@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const grabSoftKeyboard = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/softKeyboardGrab.js', () => ({ grabSoftKeyboard }))
 import { waitFor } from '@testing-library/react'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
@@ -523,6 +526,28 @@ describe('default CodeMirror shortcuts', () => {
     const action = findGlobalAction(env.repo, RELOAD_IN_SAFE_MODE_ACTION_ID)
 
     expect(action.description).toBe('Reload in safe mode')
+  })
+
+  it('grabs the soft keyboard inside the gesture, before any await, unless the workspace is read-only', async () => {
+    // The assertion is made synchronously after the call: the grab must run
+    // before the handler's first await, or it is outside the tap's gesture.
+    grabSoftKeyboard.mockClear()
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const action = findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID)
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    const run = action.handler({uiStateBlock: rootUiState}, trigger)
+    expect(grabSoftKeyboard).toHaveBeenCalledOnce()
+    await run
+
+    grabSoftKeyboard.mockClear()
+    env.repo.setReadOnly(true)
+    try {
+      await action.handler({uiStateBlock: rootUiState}, trigger)
+      expect(grabSoftKeyboard).not.toHaveBeenCalled()
+    } finally {
+      env.repo.setReadOnly(false)
+    }
   })
 
   it('creates a new editable child in the active panel from the global action', async () => {
@@ -1360,7 +1385,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
   })
 
-  describe('next to an extension block', () => {
+  describe.each(['extension', 'html-document'])('next to a %s block', type => {
     const seed = async (firstType?: string, secondType?: string) => {
       await env.repo.tx(async tx => {
         await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -1382,9 +1407,22 @@ describe('default CodeMirror shortcuts', () => {
       expect(env.repo.block('second').peek()?.content).toBe('second')
     }
 
+    it('Enter mid-source does not split it', async () => {
+      const uiStateBlock = await seed(type, undefined)
+      await focusBlock(uiStateBlock, 'first')
+      await findEditModeAction(env.repo, 'split_block_cm').handler({
+        block: env.repo.block('first'),
+        editorView: codeMirrorEditorView('first', 2),
+        uiStateBlock,
+        scopeRootId: 'root',
+      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+      expectBothIntact()
+      expect(await childIds('root')).toEqual(['first', 'second'])
+    })
+
     it.each([
-      ['prose, with source above', 'extension', undefined],
-      ['source, with prose above', undefined, 'extension'],
+      ['prose, with source above', type, undefined],
+      ['source, with prose above', undefined, type],
     ] as const)('Backspace at the start of %s does not join them', async (_name, firstType, secondType) => {
       const uiStateBlock = await seed(firstType, secondType)
       await focusBlock(uiStateBlock, 'second')
@@ -1398,8 +1436,8 @@ describe('default CodeMirror shortcuts', () => {
     })
 
     it.each([
-      ['prose, with source below', undefined, 'extension'],
-      ['source, with prose below', 'extension', undefined],
+      ['prose, with source below', undefined, type],
+      ['source, with prose below', type, undefined],
     ] as const)('Delete at the end of %s does not join them', async (_name, firstType, secondType) => {
       const uiStateBlock = await seed(firstType, secondType)
       await focusBlock(uiStateBlock, 'first')

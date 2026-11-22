@@ -13,7 +13,7 @@ import {
   verifiedCopy,
   writeAttachmentParts,
 } from './attachmentParts.js'
-import { sha256Hex } from './bundleParts.js'
+import { sha256Hex } from '../../crypto/sha256Hex.js'
 
 const noSleep = async () => {}
 const listedOf = (...names: string[]) => new Set<string>(names)

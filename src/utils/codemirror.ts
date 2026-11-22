@@ -2,6 +2,8 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
 import { EditorView, ViewPlugin, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { javascript } from '@codemirror/lang-javascript'
 import { insertNewline } from '@codemirror/commands'
 import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
@@ -237,8 +239,10 @@ export const keepOutlineEditKeysInEditor = (event: ReactKeyboardEvent) => {
   if (OUTLINE_EDIT_KEYS.has(event.key)) event.stopPropagation()
 }
 
-/** `@uiw/react-codemirror`'s basic setup as the block editor takes it: off but
- *  for bracket closing. Keys, history and completion come from the app. */
+/** `@uiw/react-codemirror`'s basic setup as the block editor takes it. What it
+ *  doesn't name stays on. Of its keymaps only bracket closing's, fold's and lint's do;
+ *  keys and history come from the app, and autocompletion brings its own keymap
+ *  whatever this says. */
 export const BLOCK_EDITOR_BASIC_SETUP = {
   closeBrackets: true,
   lineNumbers: false,
@@ -255,11 +259,33 @@ export const BLOCK_EDITOR_BASIC_SETUP = {
   completionKeymap: false,
 } as const satisfies BasicSetupOptions
 
+/** Markdown syntax in the block editor is marked with STATIC classes and
+ *  painted from the palette tokens in index.css (`.km-md-*`), so every theme
+ *  reaches it — and so can an extension's stylesheet. @uiw's basicSetup
+ *  supplies `defaultHighlightStyle` only as a FALLBACK, so removing this
+ *  main highlighter leaves light-only hardcoded colors, not no highlighting. */
+const markdownHighlightStyle = HighlightStyle.define([
+  {tag: tags.url, class: 'km-md-url'},
+  {tag: tags.link, class: 'km-md-link'},
+  {tag: tags.heading, class: 'km-md-heading'},
+  {tag: tags.emphasis, class: 'km-md-emphasis'},
+  {tag: tags.strong, class: 'km-md-strong'},
+  {tag: tags.strikethrough, class: 'km-md-strikethrough'},
+  {tag: tags.monospace, class: 'km-md-code'},
+  // The marks themselves: `#`, `**`, `-`, `>`, link brackets, `[ ]`.
+  {tag: [tags.processingInstruction, tags.atom], class: 'km-md-mark'},
+  // Apparatus that is neither prose nor a mark: `---`, a reference-style
+  // link label or a fence's language word, a comment. Not `tags.string`:
+  // in markdown it also covers entities and emoji shortcodes, which are text.
+  {tag: [tags.contentSeparator, tags.labelName, tags.comment], class: 'km-md-meta'},
+])
+
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
+    syntaxHighlighting(markdownHighlightStyle),
     keymap.of(markdownFormattingKeymap),
     softLineBreakOnBeforeInput,
     acceptCompletionBeforeIOSDefer,
@@ -342,10 +368,15 @@ export const createMinimalMarkdownConfig = (
   return extensions
 }
 
-export const createTypeScriptConfig = (): Extension[] => [
-  javascript({jsx: true, typescript: true}),
+export const createTypeScriptConfig = (): Extension[] =>
+  createSourceEditorConfig(javascript({jsx: true, typescript: true}))
+
+/** An editor for source in `language` rather than a block's markdown. */
+export const createSourceEditorConfig = (language: Extension): Extension[] => [
+  language,
   EditorView.theme({
     '&': {background: 'transparent', color: 'inherit'},
+    '&.cm-focused': {outline: 'none'},
     '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
     // Wrapping (below) means no horizontal scroll, so the scroller can be a

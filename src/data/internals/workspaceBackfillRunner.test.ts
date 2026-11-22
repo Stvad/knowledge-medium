@@ -395,11 +395,11 @@ describe('workspace backfill runner — sync gating', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const running = repo.runWorkspaceBackfillNow(WS, 'operator-transient-v1')
-    // The runner takes its 30s deadline when it first asks for the gap, after
+    // The runner takes its deadline when it first asks for the gap, after
     // batch 0 COMMITS. Time advanced before that never reaches the deadline, so
     // fence on the ask, not on batch 0's body having run.
     await vi.waitFor(() => expect(gapReported).toBe(true))
-    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
     const result = await running
     warn.mockRestore()
 

@@ -6,8 +6,9 @@
  * `GRAPH_READ_TOOLS`, shared with the CLI) + block-level
  * writes only. No eval, no sql execute, no extension lifecycle — a
  * spawned model gets graph access, not a JS interpreter in the app.
- * `add_media` is the one tool that reaches past the graph, and an entry
- * point has to ask for it (`localMediaFiles`).
+ * `add_media` takes the file's bytes from the model; reading a local path
+ * instead reaches past the graph, and an entry point has to ask for that
+ * (`localMediaFiles`).
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
@@ -19,10 +20,11 @@ import { z } from 'zod'
 import { createBridgeClient, type BridgeClient, withContributorId } from './client.js'
 import { parseContributorSelection } from './config.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
-import { readMediaFileBase64 } from './mediaFile.js'
+import { mediaContentBase64, mimeFromFilename, readMediaFileBase64 } from './mediaFile.js'
 import { type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import {
   addCommentCommandSchema,
+  BRIDGE_COMMAND_TIMEOUT_MS,
   createContributorCommandSchema,
   listContributorsCommandSchema,
   addMediaCommandSchema,
@@ -56,7 +58,7 @@ export const KM_MCP_INSTRUCTIONS = `Knowledge Medium is an outliner: everything 
 
 Addressing: get_block, subtree, backlinks, grouped_backlinks and search's \`under\` take a block as its id, a page name, or a date (today, yesterday, 2026-06-18) for that day's daily note. The write tools' id fields take an id, never a name; a write target (append_markdown's target, create_block's parentId) also takes a [[Page name]] or a date, creating that page or daily note when missing.
 
-The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. Pass format: "json" for structured output.
+The views (get_block, subtree, backlinks, grouped_backlinks, search) and sql_query are bounded and say so (page and daily_note are lookups that return the matched block whole): an outline line is \`- content  key:: value  ^id\`, the block's id after the ^, \`(+N children)\` marks children not expanded, \`…[+N chars]\` marks cut text (get_block reads it a page at a time: pass its nextContentOffset as contentOffset until that is null), and a cut-off list ends with the offset to continue from. References show what the app shows: \`↳ ((id)) "…"\` after a line is the text that reference displays (not part of the block's content), and in subtree an embed (!((id)), ![[Page]]) expands into rows marked (embedded) that carry the embedded blocks' own ids, so an edit through one changes that block; expandRefs: false prints content only. Pass format: "json" for structured output.
 
 Start with subtree on a page name or "today" for an overview, search for text (filters: types, under, includeExtensions), backlinks / grouped_backlinks for what references something. guide indexes the data model (guide with a topic reads one section); sql_query is the escape hatch (read-only, rows capped). A media block (type media, shown in notes as ((id))) holds only metadata: read_media returns the image or file itself, subtree on the Assets page lists them (if that name shows no Assets type, it is another page: select from block_types where type = 'media'), and backlinks shows where one is used.
 
@@ -86,7 +88,8 @@ export type GraphMcpWriteOperation =
   | {type: 'edit_block', id: string, old: string, new: string}
   | {type: 'add_comment', target: string, quote?: string, occurrence?: number, content?: string, replacement?: string}
   | {type: 'create_page', name?: string, date?: string}
-  | {type: 'add_media', path: string, filename: string, mime?: string, workspaceId?: string}
+  /** `path` is set only when the bytes come from a local file (`localMediaFiles`). */
+  | {type: 'add_media', path?: string, filename: string, mime?: string, workspaceId?: string}
   | {type: 'create_contributor', name: string, kind?: 'human' | 'agent' | 'automation', role?: string, workspaceId?: string}
 
 export interface GraphMcpWriteGuard {
@@ -105,7 +108,7 @@ export interface GraphMcpServerOptions {
   contributorId?: string | null
   timeoutMs?: number
   writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
-  /** Offer `add_media`, which reads a local path the model names. Off unless the
+  /** Let `add_media` read a local path the model names. Off unless the
    *  entry point asks: a server whose model is driven by synced notes (agent-dispatch)
    *  must not turn a note into a read of this machine's files. */
   localMediaFiles?: boolean
@@ -118,7 +121,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     : parseContributorSelection(process.env.AGENT_RUNTIME_CONTRIBUTOR_ID)
   const baseClient = options.client ?? createBridgeClient({
     profile: options.profile ?? process.env.AGENT_RUNTIME_PROFILE,
-    timeoutMs: options.timeoutMs ?? 60_000,
+    timeoutMs: options.timeoutMs ?? BRIDGE_COMMAND_TIMEOUT_MS,
   })
   const client = withContributorId(baseClient, configuredContributorId)
   const graph = createBridgeGraph(client)
@@ -198,32 +201,49 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     }
   })
 
-  if (options.localMediaFiles === true) {
-    server.registerTool('add_media' satisfies KmMcpToolName, {
-      description: 'Store a local file as a media block under the workspace\'s Assets page; the same bytes added '
-      + 'twice are one block. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
-      + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
-      inputSchema: {
-        path: z.string().describe('Absolute path of the file'),
-        filename: addMediaCommandSchema.shape.filename,
-        mime: addMediaCommandSchema.shape.mime,
-        workspaceId: addMediaCommandSchema.shape.workspaceId,
-      },
-      // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
-      annotations: {destructiveHint: true, openWorldHint: true},
-    }, async ({path: filePath, filename, mime, workspaceId}) => {
-      if (!path.isAbsolute(filePath)) throw new Error(`add_media needs an absolute path; got ${filePath}.`)
-      const name = filename ?? path.basename(filePath)
-      await beforeWrite({type: 'add_media', path: filePath, filename: name, mime, workspaceId})
-      return json(await client.runCommand({
-        type: 'add-media',
-        base64: await readMediaFileBase64(filePath),
-        filename: name,
-        ...(mime !== undefined ? {mime} : {}),
-        ...(workspaceId !== undefined ? {workspaceId} : {}),
-      }))
-    })
-  }
+  const localMediaFiles = options.localMediaFiles === true
+  server.registerTool('add_media' satisfies KmMcpToolName, {
+    description: 'Store a file as a media block under the workspace\'s Assets page; the same bytes added '
+    + 'twice are one block. Pass the file itself as `content` (text such as SVG as is, binary as base64 with encoding "base64")'
+    + (localMediaFiles ? ', or a local file\'s absolute `path`' : '')
+    + '. Returns its ((id)) reference: write that in a block\'s content (append_markdown, edit_block) '
+    + `to show it there. It syncs to everyone in that workspace, and deleting the block leaves the stored bytes in place. Refused past ${MEDIA_BRIDGE_MAX_BYTES} bytes.`,
+    inputSchema: {
+      ...(localMediaFiles ? {path: z.string().optional().describe('Absolute path of a local file; instead of content')} : {}),
+      content: z.string().optional().describe('The file itself: text as is, or base64 with encoding "base64"'),
+      encoding: z.enum(['utf8', 'base64']).optional().describe('How content is written. Default: utf8'),
+      filename: addMediaCommandSchema.shape.filename.describe(
+        'The block\'s content. Required with content; a path defaults to the file\'s own name',
+      ),
+      mime: addMediaCommandSchema.shape.mime.describe(
+        'MIME type, for bytes that are no recognised image or PDF (those are typed by their bytes). Default: image/svg+xml '
+        + 'for a .svg filename, else application/octet-stream, which shows as a download',
+      ),
+      workspaceId: addMediaCommandSchema.shape.workspaceId,
+    },
+    // Not destructive to the graph, but it cannot be recalled: a hint to clients that decide from annotations whether to ask.
+    annotations: {destructiveHint: true, openWorldHint: localMediaFiles},
+  }, async ({path: filePath, content, encoding, filename, mime, workspaceId}: {
+    path?: string, content?: string, encoding?: 'utf8' | 'base64', filename?: string, mime?: string, workspaceId?: string
+  }) => {
+    if ((filePath === undefined) === (content === undefined)) {
+      throw new Error(localMediaFiles ? 'add_media takes exactly one of path and content.' : 'add_media needs content.')
+    }
+    if (content !== undefined && !filename) throw new Error('add_media needs a filename with content.')
+    if (filePath !== undefined && !path.isAbsolute(filePath)) {
+      throw new Error(`add_media needs an absolute path; got ${filePath}.`)
+    }
+    const name = filename || path.basename(filePath!)
+    const type = mime ?? mimeFromFilename(name)
+    await beforeWrite({type: 'add_media', ...(filePath !== undefined ? {path: filePath} : {}), filename: name, mime: type, workspaceId})
+    return json(await client.runCommand({
+      type: 'add-media',
+      base64: content !== undefined ? mediaContentBase64(content, encoding ?? 'utf8') : await readMediaFileBase64(filePath!),
+      filename: name,
+      ...(type !== undefined ? {mime: type} : {}),
+      ...(workspaceId !== undefined ? {workspaceId} : {}),
+    }))
+  })
 
   server.registerTool('list_contributors' satisfies KmMcpToolName, {
     description: 'List page-backed contributors in a workspace. Use this to find an id for contributorId configuration.',

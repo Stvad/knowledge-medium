@@ -15,11 +15,13 @@ import { onboardingLanding } from './landing.ts'
 import { insertTutorialAction } from './action.ts'
 import { tutorialBannerHeader } from './TutorialBanner.tsx'
 
-// The seeded tutorial tags demo blocks with the todo / char-counter / srs /
-// place / map types. The seed runs at bootstrap (before the app runtime is
-// applied), so it reads those types from `repo.snapshotTypeRegistries()` —
-// which is populated from `staticDataExtensions`, where those plugins' data
-// extensions are registered. That's the dependency; it isn't re-declared here.
+// The seeded tutorial tags demo blocks with the todo / char-counter /
+// word-counter / srs / place / map / html-document types, and starts its demo
+// comment threads through the annotations plugin. The seed runs at bootstrap
+// (before the app runtime is applied), so it reads those types from
+// `repo.snapshotTypeRegistries()` — which is populated from
+// `staticDataExtensions`, where those plugins' data extensions are registered.
+// That's the dependency; it isn't re-declared here.
 //
 // A `{repo}` factory (not a bare extension) because the "Open tutorial"
 // action needs the live Repo to seed into the active workspace — the same

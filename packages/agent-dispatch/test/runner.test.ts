@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process'
 import {
   BILLING_ENV_DENYLIST,
   buildClaudeArgs,
+  formatRunUsage,
   createStreamJsonParser,
   runClaude,
   scrubEnv,
@@ -22,6 +23,7 @@ describe('buildClaudeArgs', () => {
   it('builds a print-mode stream-json run WITHOUT the prompt in argv (stdin carries it)', () => {
     expect(buildClaudeArgs(baseOptions)).toEqual([
       '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+      '--disable-slash-commands', '--tools', '',
     ])
   })
 
@@ -43,8 +45,30 @@ describe('buildClaudeArgs', () => {
       '--model', 'claude-sonnet-5',
       '--effort', 'high',
       '--mcp-config', '/tmp/km.json', '--strict-mcp-config',
+      '--disable-slash-commands', '--tools', '',
       '--allowedTools', 'mcp__km__get_block,mcp__km__search',
     ])
+  })
+
+  it('offers only the built-in tools the run may use, named without their permission patterns', () => {
+    const args = buildClaudeArgs({
+      ...baseOptions,
+      allowedTools: ['mcp__km__search', 'WebSearch', 'Bash(git *)', 'Bash(ls)', 'Read'],
+    })
+    expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2))
+      .toEqual(['--tools', 'WebSearch,Bash,Read'])
+  })
+})
+
+describe('formatRunUsage', () => {
+  it('summarizes the counts compactly for a log line', () => {
+    expect(formatRunUsage({inputTokens: 244, cacheReadTokens: 25_134_938, cacheWriteTokens: 983_213, outputTokens: 95_722}))
+      .toBe('tokens: in 244 · cache read 25.1M · cache write 983.2k · out 95.7k')
+  })
+
+  it('leaves out a cache-write count the executor does not report', () => {
+    expect(formatRunUsage({inputTokens: 11_485, cacheReadTokens: 2432, cacheWriteTokens: null, outputTokens: 20}))
+      .toBe('tokens: in 11.5k · cache read 2.4k · out 20')
   })
 })
 
@@ -68,6 +92,78 @@ describe('scrubEnv', () => {
 describe('createStreamJsonParser', () => {
   const line = (obj: unknown) => `${JSON.stringify(obj)}\n`
 
+  it('starts finalized tool uses by step id and ends valid tool results', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+    const tool = (id: string) => {
+      const item = {type: 'tool_use', id, name: 'mcp__km__comments'}
+      parser.feed(line({type: 'assistant', message: {content: [item]}}))
+    }
+    const result = (id: string) => parser.feed(line({type: 'user', message: {content: [
+      null, {type: 'tool_result', tool_use_id: id, content: 'result'},
+    ]}}))
+    tool('tool-1')
+    tool('tool-2')
+    parser.feed(line({type: 'user', message: {content: [
+      null,
+      {type: 'tool_result', tool_use_id: 42, content: 'bad id'},
+      {type: 'tool_result', tool_use_id: ['tool-1'], content: 'bad id'},
+      {type: 'tool_result', tool_use_id: '', content: 'empty id'},
+      {type: 'text', tool_use_id: 'tool-1'},
+      {type: 'tool_result', content: 'missing id'},
+    ]}}))
+    result('tool-1')
+    result('tool-1')
+    result('tool-2')
+    expect(events).toEqual([
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-1'},
+      {kind: 'activity', label: 'km: comments', stepId: 'tool-2'},
+      {kind: 'activity-end', stepId: 'tool-1'},
+      {kind: 'activity-end', stepId: 'tool-1'},
+      {kind: 'activity-end', stepId: 'tool-2'},
+    ])
+  })
+
+  it('does not start streamed tool_use until the finalized assistant message', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+    const contentBlock = {type: 'tool_use', id: 'tool-streamed', name: 'mcp__km__comments'}
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: contentBlock}}))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_delta', delta: {
+      type: 'input_json_delta', partial_json: '{"query":"a long streamed argument"}',
+    }}}))
+    expect(events).toEqual([])
+
+    parser.feed(line({type: 'assistant', message: {content: [contentBlock]}}))
+    expect(events).toEqual([{kind: 'activity', label: 'km: comments', stepId: 'tool-streamed'}])
+  })
+
+  it('never starts an orphaned streamed tool_use', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_start', content_block: {
+      type: 'tool_use', id: 'tool-orphan', name: 'mcp__km__comments',
+    }}}))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_delta', delta: {
+      type: 'input_json_delta', partial_json: '{"query":"an incomplete call"}',
+    }}}))
+    expect(parser.finish()).toBeNull()
+    expect(events).toEqual([])
+  })
+
+  it('ignores finalized tool uses with missing, empty, or malformed ids or names', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+    for (const item of [
+      {type: 'tool_use', name: 'WebSearch'},
+      {type: 'tool_use', id: '', name: 'WebSearch'},
+      {type: 'tool_use', id: 42, name: 'WebSearch'},
+      {type: 'tool_use', id: 'tool-1', name: ''},
+      {type: 'tool_use', id: 'tool-2', name: 42},
+    ]) parser.feed(line({type: 'assistant', message: {content: [item]}}))
+    expect(events).toEqual([])
+  })
+
   it('full happy path: init -> tool_use activity -> text deltas cumulative -> result', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))
@@ -75,7 +171,7 @@ describe('createStreamJsonParser', () => {
     parser.feed(line({type: 'system', subtype: 'init', session_id: 'sess-1'}))
     parser.feed(line({
       type: 'stream_event',
-      event: {type: 'content_block_start', content_block: {type: 'tool_use', name: 'mcp__km__get_block'}},
+      event: {type: 'content_block_start', content_block: {type: 'tool_use', id: 'tool-get-block', name: 'mcp__km__get_block'}},
     }))
     parser.feed(line({type: 'stream_event', event: {type: 'message_start'}}))
     parser.feed(line({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'Hel'}}}))
@@ -84,7 +180,6 @@ describe('createStreamJsonParser', () => {
 
     expect(events).toEqual([
       {kind: 'session', sessionId: 'sess-1'},
-      {kind: 'activity', label: 'km: get_block'},
       {kind: 'text', text: 'Hel'},
       {kind: 'text', text: 'Hello'},
     ])
@@ -116,6 +211,13 @@ describe('createStreamJsonParser', () => {
 
     expect(events).toEqual([])
     expect(parser.finish()).toMatchObject({resultText: 'ok'})
+  })
+
+  it('the last result line wins: a run that waited on a background subagent ends with a second one', () => {
+    const parser = createStreamJsonParser()
+    parser.feed(line({type: 'result', result: 'Launched the agent; I will reply when it returns.', session_id: 's', is_error: false}))
+    parser.feed(line({type: 'result', result: 'The final answer', session_id: 's', is_error: false}))
+    expect(parser.finish()).toMatchObject({resultText: 'The final answer'})
   })
 
   it('finish() returns null when no result line was seen', () => {
@@ -166,7 +268,7 @@ describe('createStreamJsonParser', () => {
     parser.feed(line({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'the answer'}}}))
     parser.feed(line({type: 'assistant', message: {content: [
       {type: 'text', text: 'Let me search'},
-      {type: 'tool_use', name: 'WebSearch'},
+      {type: 'tool_use', id: 'tool-search', name: 'WebSearch'},
       {type: 'text', text: 'the answer'},
     ]}}))
 
@@ -175,7 +277,7 @@ describe('createStreamJsonParser', () => {
     // never the trailing block alone ('the answer').
     expect(textEvents).toEqual(['Let me search', 'Let me searchthe answer'])
     // The summary still drives the activity chip from its tool_use block.
-    expect(events).toContainEqual({kind: 'activity', label: 'Searching the web'})
+    expect(events).toContainEqual({kind: 'activity', label: 'Searching the web', stepId: 'tool-search'})
   })
 
   it('a multi-text-block summary still delivers full text when no deltas fired', () => {
@@ -185,7 +287,7 @@ describe('createStreamJsonParser', () => {
     // No partial-message deltas — the summary is the only text source.
     parser.feed(line({type: 'assistant', message: {content: [
       {type: 'text', text: 'Alpha'},
-      {type: 'tool_use', name: 'WebSearch'},
+      {type: 'tool_use', id: 'tool-search', name: 'WebSearch'},
       {type: 'text', text: 'Omega'},
     ]}}))
 
@@ -198,17 +300,17 @@ describe('createStreamJsonParser', () => {
     const parser = createStreamJsonParser(event => events.push(event))
 
     parser.feed(line({type: 'assistant', message: {content: [
-      {type: 'tool_use', name: 'mcp__km__search'},
-      {type: 'tool_use', name: 'WebSearch'},
-      {type: 'tool_use', name: 'WebFetch'},
-      {type: 'tool_use', name: 'Bash'},
+      {type: 'tool_use', id: 'tool-search', name: 'mcp__km__search'},
+      {type: 'tool_use', id: 'tool-web-search', name: 'WebSearch'},
+      {type: 'tool_use', id: 'tool-web-fetch', name: 'WebFetch'},
+      {type: 'tool_use', id: 'tool-bash', name: 'Bash'},
     ]}}))
 
     expect(events).toEqual([
-      {kind: 'activity', label: 'km: search'},
-      {kind: 'activity', label: 'Searching the web'},
-      {kind: 'activity', label: 'Fetching a page'},
-      {kind: 'activity', label: 'Bash'},
+      {kind: 'activity', label: 'km: search', stepId: 'tool-search'},
+      {kind: 'activity', label: 'Searching the web', stepId: 'tool-web-search'},
+      {kind: 'activity', label: 'Fetching a page', stepId: 'tool-web-fetch'},
+      {kind: 'activity', label: 'Bash', stepId: 'tool-bash'},
     ])
   })
 
@@ -231,6 +333,36 @@ const streamResult = (obj: Record<string, unknown>) =>
   `process.stdout.write(JSON.stringify(${JSON.stringify(obj)}) + '\\n')`
 
 describe('runClaude', () => {
+  it('reports the run\'s token usage from the result line', async () => {
+    const result = await runClaude(baseOptions, fakeClaude(streamResult({
+      type: 'result', result: 'hi', session_id: 's1', is_error: false,
+      usage: {input_tokens: 4, cache_creation_input_tokens: 14625, cache_read_input_tokens: 14244, output_tokens: 34},
+    })))
+    expect(result.usage).toEqual({inputTokens: 4, cacheWriteTokens: 14625, cacheReadTokens: 14244, outputTokens: 34})
+  })
+
+  it('totals usage over the whole process — every model and subagent — from modelUsage', async () => {
+    // A background subagent makes claude emit a result line per parent turn;
+    // each line's `usage` covers that turn only, while `modelUsage` is the
+    // process-wide total.
+    const result = await runClaude(baseOptions, fakeClaude(streamResult({
+      type: 'result', result: 'hi', session_id: 's1', is_error: false,
+      usage: {input_tokens: 2, cache_creation_input_tokens: 723, cache_read_input_tokens: 18720, output_tokens: 12},
+      modelUsage: {
+        'claude-opus-5-5': {inputTokens: 6, cacheReadInputTokens: 37_032, cacheCreationInputTokens: 33_302, outputTokens: 1132},
+        'claude-haiku-5-5': {inputTokens: 4, cacheReadInputTokens: 100, cacheCreationInputTokens: 200, outputTokens: 30},
+      },
+    })))
+    expect(result.usage).toEqual({inputTokens: 10, cacheReadTokens: 37_132, cacheWriteTokens: 33_502, outputTokens: 1162})
+  })
+
+  it('reports no usage when the result line carries none', async () => {
+    const result = await runClaude(baseOptions, fakeClaude(
+      streamResult({type: 'result', result: 'hi', session_id: 's1', is_error: false}),
+    ))
+    expect(result.usage).toBeNull()
+  })
+
   it('returns ok with parsed result on a clean run', async () => {
     const result = await runClaude(baseOptions, fakeClaude(
       streamResult({type: 'result', result: 'hi', session_id: 's1', is_error: false}),
@@ -338,7 +470,7 @@ describe('runClaude', () => {
     const events: RunEvent[] = []
     const script = [
       streamResult({type: 'system', subtype: 'init', session_id: 'sess-e2e'}),
-      streamResult({type: 'assistant', message: {content: [{type: 'tool_use', name: 'mcp__km__get_block'}]}}),
+      streamResult({type: 'assistant', message: {content: [{type: 'tool_use', id: 'tool-get-block', name: 'mcp__km__get_block'}]}}),
       streamResult({type: 'stream_event', event: {type: 'message_start'}}),
       streamResult({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'partial'}}}),
       streamResult({type: 'result', result: 'final answer', session_id: 'sess-e2e', is_error: false}),
@@ -349,7 +481,7 @@ describe('runClaude', () => {
     expect(result).toMatchObject({ok: true, resultText: 'final answer', sessionId: 'sess-e2e'})
     expect(events).toEqual([
       {kind: 'session', sessionId: 'sess-e2e'},
-      {kind: 'activity', label: 'km: get_block'},
+      {kind: 'activity', label: 'km: get_block', stepId: 'tool-get-block'},
       {kind: 'text', text: 'partial'},
     ])
   })

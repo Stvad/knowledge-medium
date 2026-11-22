@@ -328,9 +328,8 @@ const resolveSynthesisMode = async (
  *    workspace at first encounter.
  *  - NO FALLBACK TO THE PLAINTEXT NAMESPACE. An E2EE workspace with no `K_id`
  *    refuses rather than minting under the public constant — quietly publishing
- *    name-derived ids is the one outcome worse than a refusal. The key read
- *    also locks the workspace (`requireWorkspaceKeys`): its record went missing
- *    after the entry gate checked it.
+ *    name-derived ids is the one outcome worse than a refusal. A key read that
+ *    finds the record gone also locks the workspace (`requireWorkspaceKeys`).
  *
  * PRE-LOCK ONLY: it reads the key store, which must never run under the write
  * lock, so its own reads go through the Repo's handle.

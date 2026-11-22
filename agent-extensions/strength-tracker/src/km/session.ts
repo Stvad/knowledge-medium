@@ -43,6 +43,7 @@ import {writeLayoffInTx} from './store'
 import {asSet, asWorkout} from './records'
 import {discardTally, type DiscardTally} from './subtree'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
+import {contentChildren} from './children'
 import {
   catchUpRpeProp,
   completedAtProp,
@@ -189,7 +190,7 @@ export const takePlaceOf = async (
         content: line.content,
         parentId: line.parentId,
         properties: line.properties,
-        hasChildren: (await tx.childrenOf(replaces.id, undefined, {hidePropertyChildren: true}))
+        hasChildren: (await tx.childrenOf(replaces.id, undefined, {propertyChildren: 'none'}))
           .some(child => !child.deleted),
       })
     // Left where `startSession` put it — appended under the same parent — and
@@ -231,7 +232,7 @@ export const takePlaceOf = async (
  *  the warning ends up describing a tree the delete no longer applies to.
  */
 export const discardCounts = async (repo: Repo, workoutId: string): Promise<DiscardTally> =>
-  discardTally(async id => (await repo.block(id).children.load()) ?? [], workoutId)
+  discardTally(id => contentChildren(repo, id), workoutId)
 
 // ──── stamping ────
 
@@ -384,7 +385,7 @@ const stampSession = async (
     // is a peer's row arriving over sync — so this half is a partial catch-up,
     // not a general one, and the two-device case stays as `starting` describes.
     const seen = new Map<string, BlockData>()
-    for (const block of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
+    for (const block of await tx.childrenOf(parentId, undefined, {propertyChildren: 'none'})) {
       seen.set(block.id, block)
     }
     for (const id of known) {
@@ -851,7 +852,7 @@ const misfiled = async (tx: Tx, workoutId: string): Promise<BlockData[]> => {
   // only into typed entries — could not reach it. Finish then closed around a
   // set that never entered history and kept its checkbox.
   const walk = async (parentId: string, parentIsEntry: boolean): Promise<void> => {
-    for (const child of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
+    for (const child of await tx.childrenOf(parentId, undefined, {propertyChildren: 'none'})) {
       if (seen.has(child.id)) continue
       seen.add(child.id)
       if (child.deleted) continue
@@ -884,9 +885,9 @@ const setsOf = async (
   workoutId: string,
 ): Promise<{entry: BlockData; sets: BlockData[]}[]> => {
   const out: {entry: BlockData; sets: BlockData[]}[] = []
-  for (const entry of await tx.childrenOf(workoutId, undefined, {hidePropertyChildren: true})) {
+  for (const entry of await tx.childrenOf(workoutId, undefined, {propertyChildren: 'none'})) {
     if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) continue
-    const sets = (await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true}))
+    const sets = (await tx.childrenOf(entry.id, undefined, {propertyChildren: 'none'}))
       .filter(child => !child.deleted && hasBlockType(child, SET_TYPE))
     out.push({entry, sets})
   }

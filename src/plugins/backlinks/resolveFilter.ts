@@ -1,5 +1,5 @@
 import type { Repo } from '@/data/repo'
-import { readPluginPref } from '@/data/stateBlocks.js'
+import { preferencesRootId, readPluginPref } from '@/data/stateBlocks.js'
 import {
   backlinksPrefsType,
   dailyNoteBacklinksDefaultsProp,
@@ -48,7 +48,7 @@ export const resolveBacklinksFilter = async (
   // 'effective': mirror useBacklinkFilterState — merge the daily-note
   // defaults (only applied when the block is a daily note) with the
   // block's own stored filter.
-  const dailyNoteDefaults = await readPluginPref(repo, workspaceId, repo.user, backlinksPrefsType, dailyNoteBacklinksDefaultsProp)
+  const dailyNoteDefaults = await readPluginPref(repo, preferencesRootId(repo, workspaceId), backlinksPrefsType, dailyNoteBacklinksDefaultsProp)
   const effective = effectiveBacklinksFilterForBlock(blockData, stored, dailyNoteDefaults)
   return hasBacklinksFilter(effective) ? effective : undefined
 }

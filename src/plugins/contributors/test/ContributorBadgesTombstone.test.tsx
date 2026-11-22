@@ -2,15 +2,14 @@
 import {act, cleanup, render, screen, waitFor} from '@testing-library/react'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope} from '@/data/api'
-import type {Block} from '@/data/block'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import type {BlockRenderer} from '@/types.js'
+import type {BlockGutterItem} from '@/extensions/blockInteraction.js'
 import {CONTRIBUTOR_TYPE, contributorKindProp, contributorRoleProp} from '../schema.js'
 import {attributionCreatorsProp, attributionEditorsProp} from '../schema.js'
 import {contributorsDataExtension} from '../dataExtension.js'
-import {contributorBadgesDecoratorContribution} from '../ContributorBadges.js'
+import {contributorBadgeItemContribution} from '../ContributorBadges.js'
 
 vi.mock('@/utils/navigation.js', () => ({useOpenBlock: () => () => {}}))
 vi.mock('@/context/layoutWsContext.js', () => ({useAppHashInContext: (_ws: string, id: string) => `#${id}`}))
@@ -18,7 +17,6 @@ vi.mock('@/context/layoutWsContext.js', () => ({useAppHashInContext: (_ws: strin
 const WS = 'ws-contributors'
 const NOTE = 'note'
 const AGENT = 'agent-profile'
-const Inner: BlockRenderer = ({block}: {block: Block}) => <span>Body {block.id}</span>
 let sharedDb: TestDb
 let repo: Repo
 const createRepo = () => createTestRepo({db: sharedDb.db, user: {id: 'user-1'}, extensions: [contributorsDataExtension]}).repo
@@ -50,10 +48,10 @@ const seedNoteAndAgent = async (kind: 'human' | 'agent') => {
 
 const renderNote = () => {
   const block = repo.block(NOTE)
-  const decorate = contributorBadgesDecoratorContribution({block} as never)
-  if (!decorate) throw new Error('contributors decorator opted out')
-  const Decorated = decorate(Inner)
-  return render(<Decorated block={block}/>)
+  const item = contributorBadgeItemContribution({block} as never)
+  if (!item || Array.isArray(item)) throw new Error('contributors badge item opted out')
+  const Badge = (item as BlockGutterItem).component
+  return render(<Badge block={block}/>)
 }
 
 const badge = () => screen.getByRole('button', {name: /Authorship details/})
@@ -98,6 +96,5 @@ describe('contributor badge profile liveness', () => {
       })
     })
     await waitFor(() => expect(screen.queryByRole('button', {name: /Authorship details/})).toBeNull())
-    expect(screen.getByText('Body note')).toBeTruthy()
   })
 })

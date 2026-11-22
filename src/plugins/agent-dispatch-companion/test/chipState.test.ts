@@ -1,9 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
-import { chipStateFor, chipTitle, elapsedLabel } from '../chipState.ts'
-import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
+import { activityStateFor, chipActivityDetails, chipStateFor, chipTitle, compactActivityLabel, elapsedLabel } from '../chipState.ts'
 import { contentWithAgentMention } from '../askAgent.ts'
+
+const chipTitleFor = (properties: Record<string, unknown>, nowMs = 1_000_000): string => {
+  const chip = chipStateFor(properties)!
+  return chipTitle(chip, activityStateFor(chip, nowMs), nowMs)
+}
 
 describe('chipStateFor', () => {
   it('returns null without a agent:status (including reply blocks and junk values)', () => {
@@ -19,7 +22,7 @@ describe('chipStateFor', () => {
       'agent:status': 'running',
       'agent:updated-at': 1_000,
       'agent:attempts': 2,
-    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', cancelling: false})
+    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', activityAtMs: null, cancelling: false})
 
     expect(chipStateFor({'agent:status': 'done'})).toMatchObject({kind: 'done', attempts: 1})
     expect(chipStateFor({
@@ -29,7 +32,8 @@ describe('chipStateFor', () => {
     expect(chipStateFor({
       'agent:status': 'running',
       'agent:activity': 'km: search',
-    })).toMatchObject({kind: 'running', activity: 'km: search'})
+      'agent:activity-at': 2_000,
+    })).toMatchObject({kind: 'running', activity: 'km: search', activityAtMs: 2_000})
   })
 
   it('sanitizes malformed metadata instead of propagating it', () => {
@@ -38,13 +42,13 @@ describe('chipStateFor', () => {
       'agent:updated-at': 'yesterday',
       'agent:attempts': -3,
       'agent:activity': 42,
-    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false})
+    })).toEqual({kind: 'running', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', activityAtMs: null, cancelling: false})
   })
 
   it('uses the persisted executor to label non-Claude runs', () => {
     expect(chipStateFor({'agent:status': 'running', 'agent:executor': 'codex'}))
       .toMatchObject({executor: 'codex', executorLabel: 'Codex'})
-    expect(chipTitle(chipStateFor({'agent:status': 'done', 'agent:executor': 'codex'})!))
+    expect(chipTitleFor({'agent:status': 'done', 'agent:executor': 'codex'}))
       .toContain('Codex replied')
   })
 
@@ -57,24 +61,131 @@ describe('chipStateFor', () => {
   })
 })
 
+describe('activityStateFor', () => {
+  const now = 1_000_000
+
+  it('warns only for km steps after the strict bridge-relative threshold', () => {
+    const km = chipStateFor({
+      'agent:status': 'running',
+      'agent:activity': 'km: comments',
+      'agent:activity-at': now - 20_000,
+    })!
+    expect(activityStateFor(km, now)).toMatchObject({ageLabel: '20s', stalled: false})
+    expect(activityStateFor(km, now + 1)).toMatchObject({ageLabel: '21s', stalled: true})
+
+    const other = chipStateFor({
+      'agent:status': 'running',
+      'agent:activity': 'Searching the web',
+      'agent:activity-at': now - 10 * 60_000,
+    })!
+    expect(activityStateFor(other, now)).toMatchObject({ageLabel: '10m', stalled: false})
+    expect(activityStateFor(other, now + 1)).toMatchObject({stalled: false})
+    expect(chipTitle(other, activityStateFor(other, now + 1), now + 1)).not.toContain('No progress')
+  })
+
+  it('returns no step age for missing, invalid, zero, or empty activity', () => {
+    for (const activityAt of [undefined, 'now', '1000', Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+      const chip = chipStateFor({
+        'agent:status': 'running',
+        'agent:activity': 'km: comments',
+        ...(activityAt === undefined ? {} : {'agent:activity-at': activityAt}),
+      })!
+      expect(chip.activityAtMs).toBeNull()
+      expect(activityStateFor(chip, now)).toBeNull()
+    }
+    const noActivity = chipStateFor({'agent:status': 'running', 'agent:activity-at': now - 90_000})!
+    expect(activityStateFor(noActivity, now)).toBeNull()
+  })
+
+  it('clamps future timestamps to zero age and suppresses warnings while cancelling or not running', () => {
+    const future = chipStateFor({
+      'agent:status': 'running',
+      'agent:activity': 'km: comments',
+      'agent:activity-at': now + 90_000,
+    })!
+    expect(activityStateFor(future, now)).toMatchObject({ageLabel: '0s', stalled: false})
+
+    const cancelling = chipStateFor({
+      'agent:status': 'running', 'agent:activity': 'km: comments',
+      'agent:activity-at': now - 120_000, 'agent:cancel': true,
+    })!
+    expect(activityStateFor(cancelling, now)).toBeNull()
+    for (const status of ['queued', 'done', 'error'] as const) {
+      const chip = chipStateFor({
+        'agent:status': status, 'agent:activity': 'km: comments',
+        'agent:activity-at': now - 120_000,
+      })!
+      expect(activityStateFor(chip, now)).toBeNull()
+    }
+  })
+})
+
 describe('chipTitle', () => {
   it('surfaces the error message and retry attempts', () => {
-    expect(chipTitle(chipStateFor({'agent:status': 'error', 'agent:error': 'exit 1: boom'})!))
+    expect(chipTitleFor({'agent:status': 'error', 'agent:error': 'exit 1: boom'}))
       .toContain('exit 1: boom')
-    expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:attempts': 3})!))
+    expect(chipTitleFor({'agent:status': 'running', 'agent:attempts': 3}))
       .toContain('attempt 3')
   })
 
   it('appends the activity label for a running chip when present', () => {
-    const withActivity = chipTitle(chipStateFor({'agent:status': 'running', 'agent:activity': 'Searching the web'})!)
+    const withActivity = chipTitleFor({'agent:status': 'running', 'agent:activity': 'Searching the web'})
     expect(withActivity).toContain('Searching the web')
-    const withoutActivity = chipTitle(chipStateFor({'agent:status': 'running'})!)
+    const withoutActivity = chipTitleFor({'agent:status': 'running'})
     expect(withoutActivity).not.toContain('—')
   })
 
+  it('says why a queued chip is waiting when the daemon gave a reason', () => {
+    expect(chipTitleFor({'agent:status': 'queued', 'agent:activity': 'waiting for the run already going in this thread'}))
+      .toBe('Queued for Claude — waiting for the run already going in this thread')
+    expect(chipTitleFor({'agent:status': 'queued'})).toBe('Queued for Claude')
+  })
+
   it('says a running chip is being cancelled, since the pill has no room for the executor then', () => {
-    expect(chipTitle(chipStateFor({'agent:status': 'running', 'agent:cancel': 1})!))
+    expect(chipTitleFor({'agent:status': 'running', 'agent:cancel': 1}))
       .toBe('Cancelling the Claude run')
+  })
+})
+
+describe('compactActivityLabel and chipActivityDetails', () => {
+  it('maps known activities compactly and keeps unknown km tools neutral', () => {
+    expect(compactActivityLabel('km: get_block')).toBe('Reading')
+    expect(compactActivityLabel('km: update_block')).toBe('Writing')
+    expect(compactActivityLabel('km: search')).toBe('Search')
+    expect(compactActivityLabel('Searching the web')).toBe('Search')
+    expect(compactActivityLabel('Fetching a page')).toBe('Fetching')
+    expect(compactActivityLabel('Thinking')).toBe('Thinking')
+    expect(compactActivityLabel('Running a command')).toBe('Running')
+    expect(compactActivityLabel('km: future_tool')).toBe('Working')
+    expect(compactActivityLabel('km: constructor')).toBe('Working')
+  })
+
+  it('keeps total time available before the first step and omits it without a claim timestamp', () => {
+    expect(chipTitleFor({'agent:status': 'running', 'agent:updated-at': 88_000}, 100_000))
+      .toContain('Working · 12s total')
+    const withoutClaim = chipStateFor({
+      'agent:status': 'running', 'agent:activity': 'Thinking', 'agent:activity-at': 97_000,
+    })!
+    expect(chipActivityDetails(withoutClaim, activityStateFor(withoutClaim, 100_000), 100_000))
+      .toBe('Thinking · 3s on this step')
+  })
+
+  it('labels step and total durations separately, omitting an absent step age', () => {
+    const chip = chipStateFor({
+      'agent:status': 'running',
+      'agent:updated-at': 88_000,
+      'agent:activity': 'km: get_block',
+      'agent:activity-at': 97_000,
+    })!
+    expect(chipActivityDetails(chip, activityStateFor(chip, 100_000), 100_000))
+      .toBe('Reading: km: get_block · 3s on this step · 12s total')
+    const withoutStepStart = chipStateFor({
+      'agent:status': 'running',
+      'agent:updated-at': 90_000,
+      'agent:activity': 'km: future_tool',
+    })!
+    expect(chipActivityDetails(withoutStepStart, activityStateFor(withoutStepStart, 100_000), 100_000))
+      .toBe('Working: km: future_tool · 10s total')
   })
 })
 
@@ -101,28 +212,5 @@ describe('contentWithAgentMention', () => {
     expect(contentWithAgentMention('summarize this  ')).toBe('summarize this [[claude]]')
     expect(contentWithAgentMention('already [[claude]] here')).toBe('already [[claude]] here')
     expect(contentWithAgentMention('case [[CLAUDE]] variant')).toBe('case [[CLAUDE]] variant')
-  })
-})
-
-describe('agentStatusChipContribution gate', () => {
-  const ctx = (over: Partial<BlockResolveContext>): BlockResolveContext =>
-    ({isTopLevel: false, ...over}) as BlockResolveContext
-
-  const withContext = (over: Record<string, unknown>) =>
-    ctx({blockContext: over as BlockResolveContext['blockContext']})
-
-  it('attaches where the block renders as a full row — outline, backlinks, embeds', () => {
-    expect(agentStatusChipContribution(ctx({}))).toBeTruthy()
-    expect(agentStatusChipContribution(ctx({isTopLevel: true}))).toBeTruthy()
-    // A backlink-entry body / embed sets isNestedSurface but still renders
-    // the block as a full row, so the chip belongs there — the review
-    // surface for what the daemon picked up must not hide status.
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isBacklink: true}))).toBeTruthy()
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isEmbedded: true}))).toBeTruthy()
-  })
-
-  it('suppresses only inline references and breadcrumb segments (a gutter pill cannot lay out inline)', () => {
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isReference: true}))).toBeNull()
-    expect(agentStatusChipContribution(withContext({isNestedSurface: true, isBreadcrumb: true}))).toBeNull()
   })
 })

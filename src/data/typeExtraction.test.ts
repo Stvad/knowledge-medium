@@ -14,8 +14,8 @@ import {
   getBlockTypes,
   typesProp,
 } from '@/data/properties'
-import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { BLOCK_TYPE_NAME_CONFLICT } from '@/data/internals/blockTypeTypeifyProcessor'
+import { BLOCK_TYPE_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BLOCK_TYPE_NAME_CONFLICT, BLOCK_TYPE_SOURCE_CONFLICT } from '@/data/internals/blockTypeTypeifyProcessor'
 import {
   GrammarShapedLabelError,
   LossyLabelError,
@@ -1252,6 +1252,74 @@ describe('block-type typeify processor', () => {
     await claimAlias(env, 'Book')
 
     await expect(tagBlockType(env, 'Book')).rejects.toMatchObject({code: 'alias.collision'})
+  })
+
+  describe('a block that would be both a type and source', () => {
+    it('refuses a type becoming source, and keeps the type', async () => {
+      env = await setup()
+      const id = await tagBlockType(env, 'Book')
+      const types = getBlockTypes((await env.repo.load(id))!)
+
+      await expect(env.repo.tx(
+        tx => tx.setProperty(id, typesProp, [...types, HTML_DOCUMENT_TYPE]),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      expect(getBlockTypes((await env.repo.load(id))!)).toEqual(types)
+    })
+
+    it('refuses source becoming a type, and keeps the source', async () => {
+      env = await setup()
+      const source = '<div>\n  <p>x</p>\n</div>\n'
+      const id = await createBlock(env, source, {[typesProp.name]: [HTML_DOCUMENT_TYPE]})
+
+      await expect(env.repo.tx(
+        tx => env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      const row = await env.repo.load(id)
+      expect(row!.content).toBe(source)
+      expect(getBlockTypes(row!)).toEqual([HTML_DOCUMENT_TYPE])
+    })
+
+    it('refuses a merge that would union a type and source, in either direction', async () => {
+      env = await setup()
+      const type = await tagBlockType(env, 'Book')
+      const doc = await createBlock(env, '<p>x</p>', {[typesProp.name]: [HTML_DOCUMENT_TYPE]})
+
+      for (const [intoId, fromId] of [[type, doc], [doc, type]]) {
+        await expect(env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'}))
+          .rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      }
+      expect(getBlockTypes((await env.repo.load(doc))!)).toEqual([HTML_DOCUMENT_TYPE])
+      expect((await env.repo.load(type))!.deleted).toBe(false)
+    })
+
+    it('refuses a merge into a deleted type, which a restore would bring back as both', async () => {
+      env = await setup()
+      const type = await tagBlockType(env, 'Book')
+      const doc = await createBlock(env, '<p>x</p>', {[typesProp.name]: [HTML_DOCUMENT_TYPE]})
+      await env.repo.block(type).delete()
+
+      await expect(env.repo.mutate.merge({intoId: type, fromId: doc, contentStrategy: 'concat'}))
+        .rejects.toMatchObject({code: BLOCK_TYPE_SOURCE_CONFLICT})
+      const row = await env.repo.load(doc)
+      expect(row!.content).toBe('<p>x</p>')
+      expect(getBlockTypes(row!)).toEqual([HTML_DOCUMENT_TYPE])
+    })
+
+    // Written raw, as a client that predates the rule could have left it.
+    it('leaves one that is both already alone when its source is edited', async () => {
+      env = await setup()
+      const id = await tagBlockType(env, 'Book')
+      const properties = await rawPropertiesOf(env, id)
+      await rawProperties(env, id, {...properties, [typesProp.name]: [...properties[typesProp.name] as string[], HTML_DOCUMENT_TYPE]})
+
+      await env.repo.tx(tx => tx.update(id, {content: '<div>hello</div>'}), {scope: ChangeScope.BlockDefault})
+      const row = await env.repo.load(id)
+      expect(row!.content).toBe('<div>hello</div>')
+      expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+      expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+    })
   })
 
   describe('with the alias plugin off', () => {

@@ -5,9 +5,12 @@ const RESTING_TONES = {
   amber: 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100',
 } as const
 
-/** A small rounded count pill in a block's right gutter that toggles an inline
- *  section under the block. Pills from different plugins sit side by side on
- *  one line, so they share this one shape. */
+/** The shape every pill in a block's gutter shares, so pills from different
+ *  plugins line up side by side; the gutter centres them on the first line. */
+export const GUTTER_PILL_CLASS = 'inline-flex h-4 shrink-0 select-none items-center rounded-full text-xs leading-none'
+
+/** A small rounded count pill in a block's gutter that toggles an inline
+ *  section under the block. */
 export const GutterPill = ({
   count,
   expanded,
@@ -32,7 +35,7 @@ export const GutterPill = ({
     aria-expanded={expanded}
     aria-label={label}
     title={label}
-    className={`mt-0.5 inline-flex h-4 min-w-4 shrink-0 select-none items-center justify-center gap-0.5 rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
+    className={`${GUTTER_PILL_CLASS} min-w-4 justify-center gap-0.5 px-1 tabular-nums transition-colors ${
       expanded
         ? 'bg-accent text-accent-foreground'
         : `${RESTING_TONES[tone]} hover:bg-accent hover:text-accent-foreground`

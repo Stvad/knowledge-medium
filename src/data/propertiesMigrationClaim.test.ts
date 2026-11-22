@@ -197,6 +197,44 @@ describe('the migration running under its own claim', {timeout: 30_000}, () => {
     expect(await claimRow()).toBeNull()
   })
 
+  it('leaves the previous completion in place when a re-run of a finished pass FAILS', async () => {
+    // The re-run reclaims the completed claim, overwriting its completion
+    // stamp; releasing it by deleting the row would erase the workspace's
+    // record that the migration ever finished, for a run that wrote nothing.
+    const repo = makeOperatorRepo()
+    await seedTarget(repo)
+    await seedClaim({completed: true})
+
+    expect((await repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)).outcome)
+      .toBe('failed')
+
+    expect(await claimRow()).toMatchObject({
+      [migrationClaimantProp.name]: 'peer-device',
+      [migrationClaimedAtProp.name]: 1,
+      [migrationCompletedAtProp.name]: 2,
+    })
+  })
+
+  it('hands back a claim that repaired a malformed row by deleting it, not by writing the junk back', async () => {
+    // A malformed bag records nothing, and once the gesture has flipped the
+    // workspace its undecodable values would fail the release outright.
+    const repo = makeOperatorRepo()
+    await seedTarget(repo)
+    await sharedDb.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+         properties_json, deleted, created_at, updated_at, user_updated_at,
+         created_by, updated_by)
+       VALUES (?, ?, NULL, 'k-claim', ?, ?, 0, 1, 1, 1, 'user-1', 'user-1')`,
+      [graphBackfillClaimBlockId(WS, PROPERTY_CELL_BACKFILL_ID), WS, PROPERTY_CELL_BACKFILL_ID,
+       JSON.stringify({[migrationClaimantProp.name]: 'peer-device'})],
+    )
+
+    expect((await repo.runWorkspaceBackfillNow(WS, PROPERTY_CELL_BACKFILL_ID)).outcome)
+      .toBe('failed')
+
+    expect(await claimRow()).toBeNull()
+  })
+
   it('turns a second device away without mistaking a peer\'s claim for a failure', async () => {
     // A peer's claim is in flight, so this device must report `held-by-peer`.
     // It reaches that verdict through `ensureHome`, which writes.

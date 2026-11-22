@@ -1,13 +1,16 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /**
  * Property panel shell. The lookup chain/model lives in
  * `propertyPanel/model.ts`; row actions live in `propertyPanel/actions.ts`;
  * row/add/config UI lives under `propertyPanel/`.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
+import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { outlineSurfaceOf } from '@/data/outlineSurface.js'
 import { useChildIds, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock, useUserPage } from '@/data/globalState.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -69,6 +72,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
   const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
+  const propertyDisplay = useContext(PropertyDisplayScopeContext)
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -168,9 +172,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const focusAfterProperties = async () => {
-    if (!scopeRootId) return
+    const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
+    if (!surface) return
 
-    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
+    const next = await nextVisibleBlock(block, surface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})
@@ -310,23 +315,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               openSchemaPanel(existingId)
               return schemas.get(trimmed)
             }
-            // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. A synthesized
-            // seed may not have materialized its definition row yet, so there
-            // is no panel to open; the form can still adopt its behavior.
-            const kernelSchema = schemas.get(trimmed)
-            if (kernelSchema) return kernelSchema
             try {
-              const schema = await block.repo.userSchemas.addSchema({
-                name: trimmed,
-                presetId,
-              })
+              const result = await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId})
               const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-              if (newId) {
+              if (result.kind === 'created' && newId) {
                 flashRecent(trimmed)
                 openSchemaPanel(newId)
               }
-              return schema
+              return result.schema
             } catch (err) {
               console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
               return undefined

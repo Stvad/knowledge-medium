@@ -1,9 +1,10 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@/test/waitFor'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
+  codecs,
   seedProperty,
   seedType,
   type BlockReference,
@@ -15,15 +16,20 @@ import { typesProp } from '@/data/properties'
 import {
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_CHANNEL,
   typedBlocksLiveKey,
   typedBlocksStructureKey,
+  typedBlocksPropertyKey,
 } from '@/data/invalidation'
-import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
+import { definitionSeedsFacet, KERNEL_QUERYABLE_FIELDS, queryableFieldsFacet, typeSeedsFacet, type QueryableField } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
 import type { AnyPropertySchema, ResolvedTypedBlockQuery } from '@/data/api'
 import { trackTestRepo } from '@/data/test/testRepoScope'
+import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { LoaderHandle } from './handleStore'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -122,6 +128,7 @@ const create = async (args: {
   id: string
   workspaceId?: string
   parentId?: string | null
+  orderKey?: string
   types?: readonly string[]
   properties?: Record<string, unknown>
   references?: BlockReference[]
@@ -134,7 +141,7 @@ const create = async (args: {
     id: args.id,
     workspaceId: args.workspaceId ?? WS,
     parentId: args.parentId ?? null,
-    orderKey: `k-${args.id}`,
+    orderKey: args.orderKey ?? `k-${args.id}`,
     properties,
     references: args.references ?? [],
   }), {
@@ -144,6 +151,396 @@ const create = async (args: {
 }
 
 const ids = (rows: readonly {id: string}[]) => rows.map(row => row.id)
+
+describe('hydrated typedBlocks limit', () => {
+  it('limits both single-type and multi-type results after ordering', async () => {
+    await create({id: 'first', types: ['todo']})
+    await create({id: 'second', types: ['todo', 'task']})
+    await create({id: 'third', types: ['task']})
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 1}).load())).toEqual(['first'])
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo', 'task'], limit: 2}).load())).toEqual(['first', 'second'])
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['todo'], limit: 0}).load())).toEqual([])
+  })
+})
+
+describe('typed queries for table rows', () => {
+  it.each([undefined, 'created-asc', 'created-desc'] as const)('reorders limited ids after a synced creation-time correction (%s)', async order => {
+    env.repo.startSyncObserver({throttleMs: 0})
+    const put = async (id: string, createdAt: number, updatedAt: number) => {
+      await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id, workspaceId: WS, parentId: 'parent', orderKey: id, content: '',
+        properties: {}, references: [], createdAt, updatedAt, userUpdatedAt: 1,
+        createdBy: 'remote', updatedBy: 'remote', deleted: false,
+      }))
+      await env.repo.flushSyncObserver()
+    }
+    await put('first', 10, 10)
+    await put('second', 20, 20)
+    const query = {workspaceId: WS, parentId: 'parent', order}
+    const handle = env.repo.query.typedBlockIds({...query, limit: 1})
+    expect(await handle.load()).toEqual([order === 'created-desc' ? 'second' : 'first'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await put('second', 5, 30)
+      await waitFor(() => expect(handle.peek()).toEqual([order === 'created-desc' ? 'first' : 'second']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('treats an unconstrained OR alternative as true and preserves the outer query', async () => {
+    await create({id: 'first', types: ['entry'], properties: {status: 'open'}})
+    await create({id: 'second', types: ['entry']})
+    await create({id: 'outside'})
+    for (const anyOf of [[{}], [{where: {status: 'open'}}, {scope: 'ancestor', where: {}}]] as const) {
+      const query = {workspaceId: WS, types: ['entry'], anyOf}
+      expect(await env.repo.query.typedBlockIds(query).load()).toEqual(['first', 'second'])
+      expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
+    }
+  })
+
+  it.each(['created', 'updated'])('refuses a date-only timestamp operand for %s', async name => {
+    for (const value of ['2026-01-01', {lte: '2026-01-01'}, {between: [0, '2026-01-01']}]) {
+      const query = {workspaceId: WS, where: {[name]: value}}
+      await expect(env.repo.query.typedBlockIds(query).load()).rejects.toThrow(/date-only.*instant/i)
+    }
+  })
+
+  it('validates field expression params and placeholders before executing SQL', () => {
+    const name = 'test:expression'
+    const compile = (sql: string, params: unknown) => {
+      const field: QueryableField = {
+        name, value: () => ({sql, params: params as readonly unknown[]}), encode: Number,
+        dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+      }
+      return compileTypedBlockQuery({workspaceId: WS, where: {[name]: 5}},
+        {properties: new Map(), fields: new Map([[name, field]])})
+    }
+    expect(() => compile('?', 'x')).toThrow(/params.*array/)
+    expect(() => compile('? + ?', [1])).toThrow(/placeholder/)
+    expect(() => compile('?', [1, 2])).toThrow(/placeholder/)
+    expect(() => compile('?2', [1])).toThrow(/anonymous/)
+    expect(() => compile(':val', [])).toThrow(/anonymous/)
+    expect(compile("(SELECT a$b FROM (SELECT ? AS a$b)) + length('it''s ?') /* ? */", [1]).params).toEqual([WS, 1, 5])
+  })
+
+  it('limits direct children after outline ordering while counting all live matches', async () => {
+    await create({id: 'parent'})
+    await create({id: 'other-parent'})
+    await create({id: 'a', parentId: 'parent', orderKey: 'b', types: ['entry']})
+    await create({id: 'c', parentId: 'parent', orderKey: 'a', types: ['entry']})
+    await create({id: 'b', parentId: 'parent', orderKey: 'a', types: ['entry']})
+    await create({id: 'deleted', parentId: 'parent', orderKey: 'A', types: ['entry']})
+    await create({id: 'nested', parentId: 'b', orderKey: 'A', types: ['entry']})
+    await create({id: 'outside', parentId: 'other-parent', orderKey: 'A', types: ['entry']})
+    await create({id: 'untyped', parentId: 'parent', orderKey: 'A'})
+    await env.repo.tx(tx => tx.delete('deleted'), {scope: ChangeScope.BlockDefault})
+
+    const query = {workspaceId: WS, parentId: 'parent', order: 'outline', types: ['entry']} as const
+    expect(await env.repo.query.typedBlockIds(query).load()).toEqual(['b', 'c', 'a'])
+    expect(await env.repo.query.typedBlockIds({...query, limit: 2}).load()).toEqual(['b', 'c'])
+    expect(ids(await env.repo.query.typedBlocks({...query, limit: 2}).load())).toEqual(['b', 'c'])
+    expect(await env.repo.query.typedBlockIds({...query, limit: 0}).load()).toEqual([])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(3)
+    void (() => {
+      // @ts-expect-error Count always covers the complete match set.
+      env.repo.query.typedBlockCount({...query, limit: 2})
+    })
+  })
+
+  it('uses a direct parent to bound the ancestor walk before limiting', async () => {
+    await create({id: 'parent', properties: {[statusProp.name]: 'open'}})
+    await create({id: 'first', parentId: 'parent', orderKey: 'a'})
+    await create({id: 'second', parentId: 'parent', orderKey: 'b'})
+    await create({id: 'descendant', parentId: 'first', orderKey: 'A'})
+    const query = {
+      workspaceId: WS,
+      parentId: 'parent',
+      order: 'outline',
+      match: [{scope: 'ancestor', where: {[statusProp.name]: 'open'}}],
+    } as const
+    expect(await env.repo.query.typedBlockIds({...query, limit: 1}).load()).toEqual(['first'])
+    expect(ids(await env.repo.query.typedBlocks(query).load())).toEqual(['first', 'second'])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
+  })
+
+  it('sorts ASCII text without case and keeps accented letters after z', async () => {
+    await create({id: 'parent'})
+    for (const word of ['Banana', 'apple', 'zebra', 'Éclair']) {
+      await create({id: word, parentId: 'parent', properties: {[statusProp.name]: word}})
+    }
+    for (const direction of ['asc', 'desc'] as const) {
+      const ordered = ['apple', 'Banana', 'zebra', 'Éclair']
+      expect(await env.repo.query.typedBlockIds({
+        workspaceId: WS, parentId: 'parent', order: {property: statusProp.name, direction},
+      }).load()).toEqual(direction === 'asc' ? ordered : ordered.reverse())
+    }
+  })
+
+  it('sorts numeric cells in SQL with deterministic ties and treats malformed values as missing', async () => {
+    await create({id: 'parent'})
+    await create({id: 'a-ten', parentId: 'parent', properties: {[priorityProp.name]: 10}})
+    await create({id: 'c-two', parentId: 'parent', properties: {[priorityProp.name]: 2}})
+    await create({id: 'b-two', parentId: 'parent', properties: {[priorityProp.name]: 2}})
+    await create({id: 'empty', parentId: 'parent'})
+    await create({id: 'malformed', parentId: 'parent'})
+    // The stored projection can outlive a schema change and carry an old shape.
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET properties_json = ? WHERE id = ?',
+      [JSON.stringify({[priorityProp.name]: '1'}), 'malformed'],
+    ))
+
+    const query = {workspaceId: WS, parentId: 'parent'}
+    const asc = {...query, order: {property: priorityProp.name, direction: 'asc'}} as const
+    const desc = {...query, order: {property: priorityProp.name, direction: 'desc'}} as const
+    const ascending = ['b-two', 'c-two', 'a-ten', 'empty', 'malformed']
+    const descending = ['a-ten', 'b-two', 'c-two', 'empty', 'malformed']
+    expect(await env.repo.query.typedBlockIds(asc).load()).toEqual(ascending)
+    expect(ids(await env.repo.query.typedBlocks(asc).load())).toEqual(ascending)
+    expect(await env.repo.query.typedBlockIds(desc).load()).toEqual(descending)
+    expect(ids(await env.repo.query.typedBlocks(desc).load())).toEqual(descending)
+    expect(await env.repo.query.typedBlockIds({...asc, limit: 3}).load()).toEqual(ascending.slice(0, 3))
+    expect(await env.repo.query.typedBlockIds({...desc, limit: 3}).load()).toEqual(descending.slice(0, 3))
+    expect(await env.repo.query.typedBlockCount(desc).load()).toBe(ascending.length)
+  })
+
+  it('keeps outline ids quiet for irrelevant edits and follows reorders and moves', async () => {
+    await create({id: 'parent'})
+    await create({id: 'other-parent'})
+    await create({id: 'a', parentId: 'parent', orderKey: 'a'})
+    await create({id: 'b', parentId: 'parent', orderKey: 'b'})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, parentId: 'parent', order: 'outline', propertyChildren: 'none',
+    })
+    expect(await handle.load()).toEqual(['a', 'b'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('a', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+      await create({id: 'elsewhere', parentId: 'other-parent'})
+      await env.repo.tx(
+        tx => tx.move('elsewhere', {parentId: null, orderKey: 'a'}), {scope: ChangeScope.BlockDefault},
+      )
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+
+      await env.repo.tx(
+        tx => tx.move('b', {parentId: 'parent', orderKey: 'A'}), {scope: ChangeScope.BlockDefault},
+      )
+      await waitFor(() => expect(handle.peek()).toEqual(['b', 'a']))
+      await env.repo.tx(
+        tx => tx.move('b', {parentId: 'other-parent', orderKey: 'x'}), {scope: ChangeScope.BlockDefault},
+      )
+      await waitFor(() => expect(handle.peek()).toEqual(['a']))
+      await env.repo.tx(
+        tx => tx.move('elsewhere', {parentId: 'parent', orderKey: 'A'}), {scope: ChangeScope.BlockDefault},
+      )
+      await waitFor(() => expect(handle.peek()).toEqual(['elsewhere', 'a']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('invalidates limited property-sort ids for a sort-key edit beyond the limit', async () => {
+    await create({id: 'first', types: ['entry'], properties: {[priorityProp.name]: 1}})
+    await create({id: 'second', types: ['entry'], properties: {[priorityProp.name]: 2}})
+    const query = {
+      workspaceId: WS, types: ['entry'], order: {property: priorityProp.name, direction: 'asc'},
+    } as const
+    const handle = env.repo.query.typedBlockIds({...query, limit: 1})
+    const count = env.repo.query.typedBlockCount(query)
+    expect(await handle.load()).toEqual(['first'])
+    expect(await count.load()).toBe(2)
+    const unsubscribers = [handle.subscribe(() => {}), count.subscribe(() => {})]
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('first', {properties: {
+        [typesProp.name]: ['entry'], [priorityProp.name]: 1, [statusProp.name]: 'edited',
+      }}), {scope: ChangeScope.BlockDefault})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+      await env.repo.tx(tx => tx.setProperty('second', priorityProp, 0), {scope: ChangeScope.BlockDefault})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before + 1)
+      await waitFor(() => expect(handle.peek()).toEqual(['second']))
+    } finally {
+      unsubscribers.forEach(unsubscribe => unsubscribe())
+    }
+  })
+
+  it('reorders mounted limited ids when a synced definition changes the sort codec', async () => {
+    const property = 'custom-sort'
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    env.repo.startSyncObserver({throttleMs: 0})
+    const syncDefinition = async (preset: string, updatedAt: number) => {
+      await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
+        id: 'sort-definition', workspaceId: WS, parentId: null, orderKey: 'a0', content: '',
+        properties: {types: ['property-schema'], 'property-schema:name': property, 'property-schema:preset': preset},
+        references: [], createdAt: 1, updatedAt, userUpdatedAt: updatedAt,
+        createdBy: 'remote', updatedBy: 'remote', deleted: false,
+      }))
+      await env.repo.flushSyncObserver()
+      await waitFor(() => expect(env.repo.propertySchemas.get(property)?.codec.type).toBe(preset))
+    }
+    await syncDefinition('string', 1)
+    await create({id: 'text-value', types: ['entry']})
+    await create({id: 'numeric-value', types: ['entry']})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$."custom-sort"',
+         CASE id WHEN 'numeric-value' THEN 2 ELSE '2' END)
+       WHERE id IN ('numeric-value', 'text-value')`,
+    ))
+
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, types: ['entry'], order: {property, direction: 'asc'}, limit: 1,
+    })
+    expect(await handle.load()).toEqual(['text-value'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await syncDefinition('number', 2)
+      expect(await env.h.db.getAll(
+        'SELECT id, json_extract(properties_json, ?) AS value FROM blocks WHERE id IN (?, ?) ORDER BY id',
+        ['$."custom-sort"', 'numeric-value', 'text-value'],
+      )).toEqual([{id: 'numeric-value', value: 2}, {id: 'text-value', value: '2'}])
+      await waitFor(() => expect(handle.peek()).toEqual(['numeric-value']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('uses the workspace sort codec and field recognition after switching workspaces', async () => {
+    const property = 'custom-sort'
+    const definition = {types: ['property-schema'], 'property-schema:name': property}
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await create({id: 'definition-a', properties: {...definition, 'property-schema:preset': 'string'}})
+    await create({id: 'malformed-a', properties: {...definition, 'property-schema:name': ''}})
+    await create({id: 'parent-a'})
+    await create({id: 'text-a', parentId: 'parent-a', properties: {[property]: '2'}})
+    await create({id: 'number-a', parentId: 'parent-a'})
+    await create({id: 'field-a', parentId: 'parent-a'})
+    await create({id: 'plain-a', parentId: 'parent-a'})
+    await env.repo.tx(async tx => {
+      await tx.stampReferenceTarget('field-a', 'definition-a', true)
+      await tx.stampReferenceTarget('plain-a', 'malformed-a', true)
+    }, {scope: ChangeScope.BlockDefault})
+    await waitFor(() => {
+      expect(env.repo.propertySchemas.get(property)?.codec.type).toBe('string')
+      expect(env.repo.propertyDefinitions?.unparseableDefinitionIds.has('malformed-a')).toBe(true)
+    })
+    const order = {property, direction: 'asc'} as const
+    const queryA = {workspaceId: WS, parentId: 'parent-a', propertyChildren: 'none', order} as const
+    expect(await env.repo.query.typedBlockIds({...queryA, limit: 1}).load()).toEqual(['text-a'])
+
+    env.repo.setActiveWorkspaceId(OTHER_WS)
+    await env.repo.whenPropertyDefinitionsReady(OTHER_WS)
+    await create({id: 'definition-b', workspaceId: OTHER_WS, properties: {...definition, 'property-schema:preset': 'number'}})
+    await create({id: 'parent-b', workspaceId: OTHER_WS})
+    await create({id: 'a-text-b', workspaceId: OTHER_WS, parentId: 'parent-b'})
+    await create({id: 'z-number-b', workspaceId: OTHER_WS, parentId: 'parent-b'})
+    await env.h.db.writeTransaction(async tx => {
+      for (const [id, value] of [['number-a', 2], ['z-number-b', 2], ['a-text-b', '2']]) {
+        await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[property]: value}), id])
+      }
+    })
+    await waitFor(() => expect(env.repo.propertySchemas.get(property)?.codec.type).toBe('number'))
+
+    expect(await env.repo.query.typedBlockIds({workspaceId: OTHER_WS, parentId: 'parent-b', order}).load())
+      .toEqual(['z-number-b', 'a-text-b'])
+    expect(await env.repo.query.typedBlockIds(queryA).load()).toEqual(['text-a', 'number-a', 'plain-a'])
+  })
+
+  it('refuses registry-dependent queries for an unloaded workspace', async () => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    const workspaceId = OTHER_WS
+    await create({id: 'foreign', workspaceId, properties: {[priorityProp.name]: 1}})
+    const unloaded = 'property registry unavailable for the requested workspace'
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId, order: {property: priorityProp.name, direction: 'asc'},
+    }).load())).rejects.toThrow(unloaded)
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId, propertyChildren: 'none',
+    }).load())).rejects.toThrow(unloaded)
+  })
+
+  it('excludes recognized fields and their direct values while retaining blocks below a value', async () => {
+    await env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
+    const fieldId = propertyDefinitionBlockId(WS, statusProp.seedKey)
+    expect(await env.repo.db.getOptional('SELECT id FROM blocks WHERE id = ?', [fieldId])).toBeNull()
+    await create({id: 'owner'})
+    await create({id: 'field', parentId: 'owner', types: ['entry']})
+    await create({id: 'value', parentId: 'field', types: ['entry']})
+    await create({id: 'nested', parentId: 'value', types: ['entry']})
+    const query = {workspaceId: WS, types: ['entry'], propertyChildren: 'none'} as const
+    const handle = env.repo.query.typedBlockIds(query)
+    const count = env.repo.query.typedBlockCount(query)
+    const hydrated = env.repo.query.typedBlocks(query)
+    expect(await handle.load()).toEqual(['field', 'value', 'nested'])
+    expect(await count.load()).toBe(3)
+    const before = env.repo.handleStore.metrics.loaderInvalidations
+    await env.repo.tx(tx => tx.update('nested', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+    expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+    expect(ids(await hydrated.load())).toEqual(['field', 'value', 'nested'])
+    const unsubscribers = [handle.subscribe(() => {}), count.subscribe(() => {}), hydrated.subscribe(() => {})]
+    try {
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', fieldId, true), {scope: ChangeScope.BlockDefault})
+      expect(await env.h.db.get('SELECT is_field_form, reference_target_id FROM blocks WHERE id = ?', ['field']))
+        .toEqual({is_field_form: 1, reference_target_id: fieldId})
+      await waitFor(() => {
+        expect(handle.peek()).toEqual(['nested'])
+        expect(count.peek()).toBe(1)
+        expect(ids(hydrated.peek() ?? [])).toEqual(['nested'])
+      })
+      await env.repo.tx(tx => tx.move('value', {parentId: 'owner', orderKey: 'z'}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['value', 'nested']))
+      await env.repo.tx(tx => tx.move('value', {parentId: 'field', orderKey: 'z'}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['nested']))
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', 'unknown', true), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['field', 'value', 'nested']))
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', fieldId, true), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['nested']))
+      await env.repo.tx(tx => tx.stampReferenceTarget('field', fieldId, false), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['field', 'value', 'nested']))
+    } finally {
+      unsubscribers.forEach(unsubscribe => unsubscribe())
+    }
+  })
+
+  it('re-resolves mounted child ids when a tagged definition starts and stops parsing', async () => {
+    await env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!.whenPrimed(WS)
+    const definition = {types: ['property-schema'], 'property-schema:preset': 'string'}
+    const broken = {...definition, 'property-schema:name': ''}
+    await create({id: 'definition', properties: broken})
+    await create({id: 'owner'})
+    await create({id: 'field', parentId: 'owner'})
+    await env.repo.tx(
+      tx => tx.stampReferenceTarget('field', 'definition', true), {scope: ChangeScope.BlockDefault},
+    )
+    await waitFor(() => expect(env.repo.propertyDefinitions?.unparseableDefinitionIds.has('definition')).toBe(true))
+
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, parentId: 'owner', propertyChildren: 'none'})
+    expect(await handle.load()).toEqual(['field'])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      await env.repo.tx(tx => tx.update('definition', {properties: {
+        ...definition, 'property-schema:name': 'custom-property',
+      }}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual([]))
+      await env.repo.tx(tx => tx.update('definition', {properties: broken}), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(handle.peek()).toEqual(['field']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it.each([reviewerProp.name, reviewersProp.name, labelsProp.name])('refuses sorting by %s', async property => {
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId: WS, order: {property, direction: 'asc'},
+    }).load())).rejects.toThrow(new RegExp(property))
+  })
+
+  it('refuses outline order without a direct parent', async () => {
+    await expect(Promise.resolve().then(() => env.repo.query.typedBlockIds({
+      workspaceId: WS, order: 'outline',
+    }).load())).rejects.toThrow(/parentId/)
+  })
+})
 
 describe('repo.queryBlocks', () => {
   it('rejects calls that omit workspaceId at the type level', () => {
@@ -375,7 +772,7 @@ describe('repo.queryBlocks', () => {
       } as unknown as AnyPropertySchema
       expect(() => compileTypedBlockQuery(
         {workspaceId: WS, where: {priority: {gt: 1}}},
-        new Map([['priority', legacy]]),
+        {properties: new Map([['priority', legacy]])},
       )).toThrow('declares where.storage undefined')
     })
 
@@ -778,6 +1175,17 @@ describe('repo.queryBlocks', () => {
 })
 
 describe('repo.subscribeBlocks', () => {
+  it('asks only a projector-mode subscription\'s handle to rerun on a stale mark', () => {
+    const asked = vi.spyOn(LoaderHandle.prototype, 'rerunOnStaleMark')
+
+    env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, () => {})()
+    expect(asked).not.toHaveBeenCalled()
+
+    env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, () => {}, {freshInitial: true})()
+    expect(asked).toHaveBeenCalledTimes(1)
+    asked.mockRestore()
+  })
+
   it('updates when local writes change type membership', async () => {
     const fired: string[][] = []
     const off = env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, rows => {
@@ -906,7 +1314,7 @@ describe('compileTypedBlockQuery — type filter join order', () => {
   const compileTypes = (types: string[], extra: Partial<ResolvedTypedBlockQuery> = {}) =>
     compileTypedBlockQuery(
       {workspaceId: WS, types, match: [], exclude: [], ...extra},
-      new Map(),
+      {properties: new Map()},
       {projection: 'ids'},
     )
 
@@ -931,5 +1339,677 @@ describe('compileTypedBlockQuery — type filter join order', () => {
     const {sql, params} = compileTypes(['todo'], {referencedBy: {id: 'target-1'}})
     expect(params).toEqual(['todo', WS, 'target-1'])
     expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('br.workspace_id = ?'))
+  })
+})
+
+// Seeding the large fixture and refreshing statistics takes about 2 seconds.
+it('bounds limited table queries by workspace, type, or siblings with and without statistics', async () => {
+  const {db} = env.h
+  await db.writeTransaction(async tx => {
+    await tx.execute(`
+      WITH RECURSIVE parents(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM parents WHERE n < 399)
+      INSERT INTO blocks (id, workspace_id, order_key, created_at, updated_at, created_by, updated_by)
+      SELECT 'parent-' || n, CASE WHEN n < 360 THEN ? ELSE ? END, printf('%03d', n), n, n, 'user', 'user'
+      FROM parents
+    `, [WS, OTHER_WS])
+    await tx.execute(`
+      WITH RECURSIVE children(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM children WHERE n < 41999)
+      INSERT INTO blocks (id, workspace_id, parent_id, order_key, properties_json,
+                          created_at, updated_at, created_by, updated_by)
+      SELECT 'child-' || n, CASE WHEN n % 400 < 360 THEN ? ELSE ? END, 'parent-' || (n % 400),
+             printf('%05d', n), CASE
+               WHEN n % 137 = 1 THEN json_object('priority', n % 37, 'types', json_array('entry'))
+               WHEN n % 2 = 0 THEN json_object('types', json_array('todo'))
+               ELSE '{}'
+             END, n, n, 'user', 'user'
+      FROM children
+    `, [WS, OTHER_WS])
+    const base = {workspaceId: WS, propertyChildren: 'none'} as const
+    const order = {property: priorityProp.name, direction: 'asc'} as const
+    const fields = new Map(KERNEL_QUERYABLE_FIELDS.map(field => [field.name, field]))
+    const readPlan = async (query: ResolvedTypedBlockQuery) => {
+      const compiled = compileTypedBlockQuery(query, {properties: env.repo.propertySchemas, fields}, {projection: 'ids', limit: 20})
+      const plan = await tx.getAll<{parent: number; detail: string}>(
+        `EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params],
+      )
+      return plan.filter(row => row.parent === 0).map(row => row.detail)
+    }
+    const assertPlans = async () => {
+      const tempSort = 'USE TEMP B-TREE FOR ORDER BY'
+      const workspacePlan = await readPlan({...base, order})
+      expect(workspacePlan[0]).toBe('SEARCH b USING INDEX idx_blocks_workspace_active (workspace_id=?)')
+      expect(workspacePlan).toContain(tempSort)
+
+      const typePlan = await readPlan({...base, types: ['entry'], order})
+      expect(typePlan[0]).toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
+      expect(typePlan[1]).toBe('SEARCH b USING INDEX sqlite_autoindex_blocks_1 (id=?)')
+
+      const siblingSearch = 'SEARCH b USING INDEX idx_blocks_parent_order (parent_id=?)'
+      for (const types of [undefined, ['entry']]) {
+        const siblings = {...base, parentId: 'parent-1', types}
+        const outlinePlan = await readPlan({...siblings, order: 'outline'})
+        expect(outlinePlan[0]).toBe(siblingSearch)
+        expect(outlinePlan).not.toContain(tempSort)
+        const propertyPlan = await readPlan({...siblings, order})
+        expect(propertyPlan[0]).toBe(siblingSearch)
+        expect(propertyPlan).toContain(tempSort)
+        expect((await readPlan({...siblings, order: 'outline', where: {
+          created: {gt: 0}, updated: {gte: 0}, labels: {contains: 'urgent'},
+        }}))[0]).toBe(siblingSearch)
+      }
+    }
+
+    await assertPlans()
+    await tx.execute('ANALYZE main.blocks')
+    await tx.execute('ANALYZE main.block_types')
+    await assertPlans()
+  })
+}, 20_000)
+
+describe('typed query disjunctions and extended where operators', () => {
+  // Bulk seeding and analyzing the two-workspace graph takes about one second.
+  it('finds reference alternatives from both target indexes before and after ANALYZE', async () => {
+    await env.h.db.writeTransaction(async tx => {
+      // The shared DB can retain planner stats from an earlier fixture after its rows are reset.
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute('ANALYZE main.block_references')
+      await tx.execute(`
+        WITH RECURSIVE nums(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM nums WHERE n < 19999)
+        INSERT INTO blocks (id, workspace_id, order_key, references_json, created_at, updated_at, created_by, updated_by)
+        SELECT 'source-' || n, CASE WHEN n % 5 = 0 THEN ? ELSE ? END, 'a',
+               json_array(json_object('id', 'target-' || (n % 257), 'alias', 'link',
+                 'sourceField', CASE WHEN n % 4 = 3 THEN 'reviewer' ELSE '' END)),
+               n, n, 'user', 'user'
+        FROM nums
+      `, [OTHER_WS, WS])
+      const query = {workspaceId: WS, anyOf: [
+        {referencedBy: {id: 'target-3'}}, {referencedBy: {id: 'target-7', sourceField: 'reviewer'}},
+      ]}
+      const compiled = compileTypedBlockQuery(query, {properties: env.repo.propertySchemas}, {projection: 'ids', limit: 5})
+      const check = async () => {
+        const plan = (await tx.getAll<{detail: string}>(`EXPLAIN QUERY PLAN ${compiled.sql}`, [...compiled.params]))
+          .map(row => row.detail)
+        expect(plan, plan.join('\n')).toContain('MULTI-INDEX OR')
+        expect(plan.filter(step => step.includes('idx_block_references_target (target_id=? AND workspace_id=?)'))).toHaveLength(2)
+        expect(plan.filter(step => step.includes('sqlite_autoindex_blocks_1 (id=?)'))).toHaveLength(2)
+        expect(ids(await tx.getAll<{id: string}>(compiled.sql, [...compiled.params])))
+          .toEqual(['source-3', 'source-7', 'source-517', 'source-774', 'source-1031'])
+      }
+      await check()
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute('ANALYZE main.block_references')
+      await check()
+    })
+  }, 20_000)
+
+  it('ORs self-scoped and ancestor-scoped predicates inside an independently bounded query', async () => {
+    await create({id: 'ancestor', properties: {status: 'ancestor-hit'}})
+    await create({id: 'ancestor-match', parentId: 'ancestor', properties: {done: false}})
+    await create({id: 'outside-bound', parentId: 'ancestor', properties: {done: true}})
+    await create({id: 'self-match', properties: {done: false, status: 'self-hit'}})
+    await create({id: 'not-a-match', parentId: 'self-match', properties: {done: false}})
+
+    const anyOf = [
+      {where: {status: 'self-hit'}},
+      {scope: 'ancestor', where: {status: 'ancestor-hit'}},
+    ] as const
+    const query = {workspaceId: WS, where: {done: false}, anyOf}
+    expect(await env.repo.query.typedBlockIds(query).load()).toEqual(['ancestor-match', 'self-match'])
+    expect(ids(await env.repo.queryBlocks(query))).toEqual(['ancestor-match', 'self-match'])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(2)
+    await expect(env.repo.queryBlocks({workspaceId: WS, anyOf}))
+      .rejects.toThrow('require at least one candidate filter')
+    expect(await env.repo.query.typedBlockIds({...query, anyOf: []}).load()).toEqual([])
+  })
+
+  it('returns no matches for empty alternatives even alongside an unbounded ancestor predicate', async () => {
+    await create({id: 'parent'})
+    await create({id: 'child', parentId: 'parent'})
+    const query = {workspaceId: WS, anyOf: [], match: [{scope: 'ancestor', id: 'parent'}]} as const
+    expect(await env.repo.query.typedBlockIds(query).load()).toEqual([])
+    expect(await env.repo.query.typedBlockCount(query).load()).toBe(0)
+  })
+
+  it.each([
+    {label: 'where', predicates: {where: {created: {gt: 0}}}},
+    {label: 'self alternative', predicates: {anyOf: [{where: {created: {gt: 0}}}]}},
+    {label: 'ancestor alternative', predicates: {anyOf: [{scope: 'ancestor', where: {created: {gt: 0}}}]}},
+  ] as const)('refuses timestamp filters in an unloaded workspace ($label)', async ({predicates}) => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await create({id: 'foreign', workspaceId: OTHER_WS, types: ['entry']})
+    const query = {workspaceId: OTHER_WS, types: ['entry'], ...predicates}
+    await expect(env.repo.query.typedBlockIds(query).load()).rejects.toThrow('property registry unavailable')
+  })
+
+  it('stops an ancestor alternative at the workspace boundary', async () => {
+    await create({id: 'local', types: ['entry']})
+    await create({id: 'foreign-parent', workspaceId: OTHER_WS, properties: {status: 'open'}})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET parent_id = ? WHERE id = ?', ['foreign-parent', 'local'],
+    ))
+    const query = {workspaceId: WS, types: ['entry'], anyOf: [{scope: 'ancestor', where: {status: 'open'}}]} as const
+    expect(await env.repo.query.typedBlockIds(query).load()).toEqual([])
+  })
+
+  it('admits a newly created id alternative whose matching property lives on an ancestor', async () => {
+    await create({id: 'parent', properties: {status: 'open'}})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, anyOf: [{id: 'later'}, {id: 'another'}],
+      match: [{scope: 'ancestor', where: {status: 'open'}}],
+    })
+    expect(await handle.load()).toEqual([])
+    const off = handle.subscribe(() => {})
+    try {
+      await create({id: 'later', parentId: 'parent'})
+      await waitFor(() => expect(handle.peek()).toEqual(['later']))
+    } finally {
+      off()
+    }
+  })
+
+  it('admits a candidate when its previously missing ancestor arrives', async () => {
+    await create({id: 'child', types: ['entry']})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET parent_id = ? WHERE id = ?', ['late-parent', 'child'],
+    ))
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, types: ['entry'], anyOf: [{scope: 'ancestor', id: 'late-parent'}],
+    })
+    expect(await handle.load()).toEqual([])
+    const off = handle.subscribe(() => {})
+    try {
+      await create({id: 'late-parent'})
+      await waitFor(() => expect(handle.peek()).toEqual(['child']))
+    } finally {
+      off()
+    }
+  })
+
+  it('keeps all-self alternatives quiet for an unrelated block create', async () => {
+    await create({id: 'target'})
+    await create({id: 'property-match', properties: {status: 'open'}})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS, anyOf: [{where: {status: 'open'}}, {referencedBy: {id: 'target'}}],
+    })
+    expect(await handle.load()).toEqual(['property-match'])
+    const off = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await create({id: 'unrelated'})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+      await create({id: 'reference-match', references: [{id: 'target', alias: 'target'}]})
+      await waitFor(() => expect(handle.peek()).toEqual(['property-match', 'reference-match']))
+    } finally {
+      off()
+    }
+  })
+
+  it('binds operands through custom queryable fields and invalidates ids on a declared dependency', async () => {
+    const field = 'test:content'
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+      name: field,
+      value: alias => ({sql: `${alias}.content`, params: []}),
+      encode: operand => codecs.string.decode(operand),
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }])
+    const literal = "it's ?"
+    await create({id: 'row'})
+    const query = {workspaceId: WS, where: {[field]: {eq: literal}}}
+    const handle = env.repo.query.typedBlockIds(query)
+    expect(await handle.load()).toEqual([])
+    const unsubscribe = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('row', {content: literal}), {scope: ChangeScope.BlockDefault})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before + 1)
+      await waitFor(() => expect(handle.peek()).toEqual(['row']))
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('filters and orders on one bound virtual value and keeps missing values last', async () => {
+    const field = 'test:score'
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'scores', [{
+      name: field,
+      value: alias => ({sql: `json_extract(${alias}.properties_json, ?)`, params: ['$.priority']}),
+      encode: operand => codecs.number.decode(operand),
+      dependencies: [workspaceId => ({
+        kind: 'plugin', channel: TYPED_BLOCKS_PROPERTY_CHANNEL, key: typedBlocksPropertyKey(workspaceId, priorityProp.name),
+      })],
+    }])
+    await create({id: 'a-missing', types: ['entry']})
+    await create({id: 'higher', types: ['entry'], properties: {priority: 7}})
+    await create({id: 'lower', types: ['entry'], properties: {priority: 3}})
+    const base = {workspaceId: WS, types: ['entry']}
+    const ordered = (direction: 'asc' | 'desc') => ({...base, order: {property: field, direction}})
+    const ascending = env.repo.query.typedBlockIds(ordered('asc'))
+    expect(await ascending.load()).toEqual(['lower', 'higher', 'a-missing'])
+    expect(await env.repo.query.typedBlockIds(ordered('desc')).load()).toEqual(['higher', 'lower', 'a-missing'])
+    expect(await env.repo.query.typedBlockIds({
+      ...ordered('desc'), where: {[field]: {between: [3, 7]}}, limit: 1,
+    }).load()).toEqual(['higher'])
+    expect(await env.repo.query.typedBlockIds({...base, where: {[field]: {exists: true}}}).load()).toEqual(['higher', 'lower'])
+    expect(await env.repo.query.typedBlockIds({...base, where: {[field]: null}}).load()).toEqual(['a-missing'])
+    const off = ascending.subscribe(() => {})
+    try {
+      await env.repo.tx(tx => tx.setProperty('higher', priorityProp, 1), {scope: ChangeScope.BlockDefault})
+      await waitFor(() => expect(ascending.peek()).toEqual(['higher', 'lower', 'a-missing']))
+    } finally {
+      off()
+    }
+  })
+
+  it('refreshes a cached query when its runtime field is replaced or removed', async () => {
+    const field = 'test:chosen-row'
+    const source = 'test'
+    const chooseRow = (id: string): QueryableField => ({
+      name: field,
+      value: alias => ({sql: `${alias}.id = ?`, params: [id]}),
+      encode: Number,
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    })
+    await create({id: 'first'})
+    await create({id: 'second'})
+    env.repo.setRuntimeContributions(queryableFieldsFacet, source, [chooseRow('first')])
+
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, where: {[field]: true}})
+    expect(await handle.load()).toEqual(['first'])
+    env.repo.setRuntimeContributions(queryableFieldsFacet, source, [chooseRow('second')])
+    expect(await handle.load()).toEqual(['second'])
+    env.repo.setRuntimeContributions(queryableFieldsFacet, source, [])
+    await expect(handle.load()).rejects.toThrow(field)
+  })
+
+  it('recovers a subscribed query when its initially missing runtime field is installed', async () => {
+    await create({id: 'row'})
+    const field = 'test:late-field'
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, where: {[field]: true}})
+    const off = handle.subscribe(() => {})
+    try {
+      await waitFor(() => expect(handle.status()).toBe('error'))
+      expect(() => handle.read()).toThrow(field)
+      env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+        name: field,
+        value: () => ({sql: '1', params: []}),
+        encode: Number,
+        dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+      }])
+      await waitFor(() => expect(handle.peek()).toEqual(['row']))
+    } finally {
+      off()
+    }
+  })
+
+  it('uses the requested workspace for scoped queryable fields', async () => {
+    const field: QueryableField = {
+      name: 'test:workspace-field',
+      value: () => ({sql: '1', params: []}),
+      encode: Number,
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [field])
+    await create({id: 'in-a'})
+    await create({id: 'in-b', workspaceId: OTHER_WS})
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    const where = {[field.name]: true}
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, where}).load()).toEqual(['in-a'])
+
+    env.repo.setActiveWorkspaceId(OTHER_WS)
+    await env.repo.whenPropertyDefinitionsReady(OTHER_WS)
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [
+      {...field, value: () => ({sql: '0', params: []})},
+    ], {workspaceId: OTHER_WS})
+    expect(await env.repo.query.typedBlockIds({workspaceId: OTHER_WS, where}).load()).toEqual([])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, where, limit: 1}).load()).toEqual(['in-a'])
+  })
+
+  it('accepts an ancestor walk bounded by an explicitly selective virtual field', async () => {
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+      name: 'test:row', bounding: true,
+      value: alias => ({sql: `${alias}.id`, params: []}),
+      encode: operand => codecs.string.decode(operand),
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }])
+    await create({id: 'parent'})
+    await create({id: 'child', parentId: 'parent'})
+    await create({id: 'sibling', parentId: 'parent'})
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, where: {'test:row': 'child'}, match: [{scope: 'ancestor', id: 'parent'}],
+    }).load()).toEqual(['child'])
+  })
+
+  it.each(['created', 'updated'])('refuses ambiguous timestamp names in filters and sorts (%s)', async name => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await create({id: 'definition', properties: {types: ['property-schema'], 'property-schema:name': name, 'property-schema:preset': 'string'}})
+    await waitFor(() => expect(env.repo.propertySchemas.has(name)).toBe(true))
+    for (const term of [{where: {[name]: 'yesterday'}}, {order: {property: name, direction: 'desc' as const}}]) {
+      await expect(env.repo.query.typedBlockIds({workspaceId: WS, ...term}).load())
+        .rejects.toThrow(new RegExp(`ambiguous.*${name}`))
+    }
+  })
+
+  it('keeps virtual fields outside the ancestor bound by default', async () => {
+    env.repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+      name: 'test:always', value: () => ({sql: '1', params: []}), encode: Number,
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }])
+    await expect(env.repo.query.typedBlockIds({
+      workspaceId: WS, where: {'test:always': true}, match: [{scope: 'ancestor', id: 'first'}],
+    }).load()).rejects.toThrow('require at least one candidate filter')
+    await expect(env.repo.query.typedBlockIds({workspaceId: WS, where: {'test:always': {toString: 1}}}).load())
+      .rejects.toThrow('unknown operator')
+  })
+
+  it('filters created and user-facing updated timestamps as milliseconds, including the legacy fallback', async () => {
+    const origin = Date.UTC(2024, 0, 1)
+    const lastEdit = Date.UTC(2024, 0, 2)
+    await env.repo.tx(tx => tx.create({
+      id: 'imported', workspaceId: WS, parentId: null, orderKey: 'a',
+    }, {sourceTimestamps: {createdAt: origin, userUpdatedAt: lastEdit}}), {scope: ChangeScope.BlockDefault})
+    await create({id: 'legacy'})
+    await env.h.db.writeTransaction(tx => tx.execute(
+      'UPDATE blocks SET updated_at = ?, user_updated_at = NULL WHERE id = ?',
+      [lastEdit, 'legacy'],
+    ))
+
+    const base = {workspaceId: WS}
+    expect(await env.repo.query.typedBlockIds({...base, where: {created: {eq: origin}}}).load())
+      .toEqual(['imported'])
+    expect(await env.repo.query.typedBlockIds({...base, where: {updated: {lte: lastEdit}}}).load())
+      .toEqual(['legacy', 'imported'])
+    expect(await env.repo.query.typedBlockIds({...base, where: {updated: {lt: lastEdit}}}).load())
+      .toEqual([])
+  })
+
+  it('invalidates the updated filter without invalidating the created filter on a content edit', async () => {
+    const createdAt = Date.UTC(2023, 0, 1)
+    const userUpdatedAt = Date.UTC(2023, 0, 2)
+    await env.repo.tx(tx => tx.create({
+      id: 'row', workspaceId: WS, parentId: null, orderKey: 'a',
+    }, {sourceTimestamps: {createdAt, userUpdatedAt}}), {scope: ChangeScope.BlockDefault})
+    const created = env.repo.query.typedBlockIds({workspaceId: WS, where: {created: {eq: createdAt}}})
+    const updated = env.repo.query.typedBlockIds({workspaceId: WS, where: {updated: {gt: userUpdatedAt}}})
+    expect(await created.load()).toEqual(['row'])
+    expect(await updated.load()).toEqual([])
+    const offCreated = created.subscribe(() => {})
+    const offUpdated = updated.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('row', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before + 1)
+      await waitFor(() => expect(updated.peek()).toEqual(['row']))
+      expect(created.peek()).toEqual(['row'])
+    } finally {
+      offCreated()
+      offUpdated()
+    }
+  })
+
+  it('requires a codec to opt into contains independently of its member encoding', () => {
+    const {encode, decode} = codecs.list(codecs.string)
+    const property = {
+      ...labelsProp,
+      codec: {type: 'test:member-list', member: codecs.string, encode, decode},
+    }
+    expect(() => compileTypedBlockQuery(
+      {workspaceId: WS, where: {[property.name]: {contains: 'label'}}},
+      {properties: new Map([[property.name, property]])},
+    )).toThrow('contains requires a codec with a contains capability')
+  })
+
+  it('checks ISO date member shape even if a contributed encoder binds noncanonical text', async () => {
+    const canonical = '2026-01-01T00:00:00.000Z'
+    const malformed = canonical + '\u0000junk'
+    const name = 'dates'
+    const property = {
+      ...labelsProp, name,
+      codec: {...labelsProp.codec, contains: {storage: 'iso-date' as const, encode: String}},
+    }
+    await create({id: 'valid', properties: {[name]: [canonical]}})
+    await create({id: 'malformed', properties: {[name]: [malformed]}})
+    const memberIds = async (contains: string) => {
+      const {sql, params} = compileTypedBlockQuery(
+        {workspaceId: WS, where: {[name]: {contains}}}, {properties: new Map([[name, property]])}, {projection: 'ids'},
+      )
+      return env.h.db.getAll<{id: string}>(sql, [...params])
+    }
+    expect(await memberIds(canonical)).toEqual([{id: 'valid'}])
+    expect(await memberIds(malformed)).toEqual([])
+  })
+
+  it('matches scalar list members while ignoring malformed stored list shapes', async () => {
+    const {name} = labelsProp
+    await create({id: 'match', properties: {[name]: ['7', 'extra']}})
+    await create({id: 'scalar'})
+    await create({id: 'object'})
+    await create({id: 'wrong-member'})
+    await env.h.db.writeTransaction(async tx => {
+      for (const [id, value] of [['scalar', '7'], ['object', {label: '7'}], ['wrong-member', [7]]]) {
+        await tx.execute('UPDATE blocks SET properties_json = ? WHERE id = ?', [JSON.stringify({[name]: value}), id])
+      }
+    })
+
+    const where = {[name]: {contains: '7'}}
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, where}).load()).toEqual(['match'])
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {[name]: {contains: 7}}})).rejects.toThrow()
+  })
+})
+
+describe('predicate types term', () => {
+  const VIEW = 'test:view'
+  const COLUMN = 'test:column'
+  const setTypes = (id: string, types: readonly string[]) =>
+    env.repo.tx(tx => tx.setProperty(id, typesProp, [...types]), {scope: ChangeScope.BlockDefault})
+
+  const seedTable = async () => {
+    await create({id: 'row-a', types: ['row']})
+    await create({id: 'row-view', types: ['row', VIEW]})
+    await create({id: 'row-b', types: ['row', 'other']})
+    await create({id: 'row-column', types: ['row', COLUMN]})
+    await create({id: 'plain'})
+    await create({id: 'view', types: [VIEW]})
+  }
+
+  it('excludes exactly the blocks carrying any of the named types', async () => {
+    await seedTable()
+    const exclude = [{types: [VIEW, COLUMN]}]
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude}).load())
+      .toEqual(['row-a', 'row-b'])
+    // An untyped block has no membership row, so it is not excluded.
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, exclude}).load())
+      .toEqual(['row-a', 'row-b', 'plain'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude, limit: 1}).load())
+      .toEqual(['row-a'])
+    expect(await env.repo.query.typedBlockCount({workspaceId: WS, types: ['row'], exclude}).load()).toBe(2)
+    expect(ids(await env.repo.query.typedBlocks({workspaceId: WS, types: ['row'], exclude}).load()))
+      .toEqual(['row-a', 'row-b'])
+    // Ids are trimmed like the top-level filter's.
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [{types: [` ${VIEW} `, COLUMN]}]}).load())
+      .toEqual(['row-a', 'row-b'])
+  })
+
+  it('matches any of the named types and ANDs with the predicate’s other terms', async () => {
+    await seedTable()
+    await create({id: 'open-view', types: [VIEW], properties: {status: 'open'}})
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, match: [{types: [VIEW, COLUMN]}]}).load())
+      .toEqual(['row-view', 'row-column', 'view', 'open-view'])
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, match: [{types: [VIEW], where: {status: 'open'}}],
+    }).load()).toEqual(['open-view'])
+  })
+
+  it('accepts a type as an anyOf alternative', async () => {
+    await seedTable()
+    await create({id: 'open', properties: {status: 'open'}})
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, anyOf: [{types: [COLUMN]}, {where: {status: 'open'}}],
+    }).load()).toEqual(['row-column', 'open'])
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, types: ['row'], anyOf: [{types: [VIEW]}, {types: [` ${COLUMN}`]}],
+    }).load()).toEqual(['row-view', 'row-column'])
+  })
+
+  it('treats an empty or blank types list as no type term', async () => {
+    await seedTable()
+    const all = ['row-a', 'row-view', 'row-b', 'row-column', 'plain', 'view']
+    for (const types of [[], ['  ']]) {
+      expect(await env.repo.query.typedBlockIds({workspaceId: WS, exclude: [{types}]}).load()).toEqual(all)
+      expect(await env.repo.query.typedBlockIds({workspaceId: WS, match: [{types}]}).load()).toEqual(all)
+      // An unconstrained alternative matches every candidate.
+      expect(await env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types}, {types: [VIEW]}]}).load())
+        .toEqual(all)
+    }
+  })
+
+  it('keeps foreign-workspace blocks out of every predicate position', async () => {
+    await seedTable()
+    await create({id: 'foreign-view', workspaceId: OTHER_WS, types: ['row', VIEW]})
+    await create({id: 'foreign-row', workspaceId: OTHER_WS, types: ['row']})
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, match: [{types: [VIEW]}]}).load())
+      .toEqual(['row-view', 'view'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types: [VIEW]}]}).load())
+      .toEqual(['row-view', 'view'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [{types: [VIEW]}]}).load())
+      .toEqual(['row-a', 'row-b', 'row-column'])
+  })
+
+  it('matches a type on the block or any ancestor in ancestor scope', async () => {
+    await create({id: 'table', types: [VIEW]})
+    await create({id: 'inside', parentId: 'table', types: ['row']})
+    await create({id: 'deeper', parentId: 'inside', types: ['row']})
+    await create({id: 'outside', types: ['row']})
+    const ancestor = {scope: 'ancestor', types: [VIEW]} as const
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], match: [ancestor]}).load())
+      .toEqual(['inside', 'deeper'])
+    expect(await env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [ancestor]}).load())
+      .toEqual(['outside'])
+    // A self-scope type term bounds the ancestor walk on its own.
+    expect(await env.repo.query.typedBlockIds({
+      workspaceId: WS, match: [{types: ['row']}, ancestor],
+    }).load()).toEqual(['inside', 'deeper'])
+    await expect(env.repo.query.typedBlockIds({workspaceId: WS, match: [ancestor]}).load())
+      .rejects.toThrow(/bound the recursive walk/)
+  })
+
+  it('wakes a mounted ids handle when a block gains or loses an excluded type, and stays quiet otherwise', async () => {
+    await seedTable()
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, types: ['row'], exclude: [{types: [VIEW, COLUMN]}]})
+    expect(await handle.load()).toEqual(['row-a', 'row-b'])
+    const off = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await env.repo.tx(tx => tx.update('row-a', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
+      await create({id: 'unrelated', types: ['other']})
+      await setTypes('plain', ['other'])
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+
+      await setTypes('row-a', ['row', COLUMN])
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before + 1)
+      await waitFor(() => expect(handle.peek()).toEqual(['row-b']))
+      await setTypes('row-view', ['row'])
+      await waitFor(() => expect(handle.peek()).toEqual(['row-view', 'row-b']))
+    } finally {
+      off()
+    }
+  })
+
+  it('wakes ancestor-scoped ids and counts when an ancestor gains or loses the type', async () => {
+    await create({id: 'parent'})
+    await create({id: 'inside', parentId: 'parent', types: ['row']})
+    await create({id: 'outside', types: ['row']})
+    const query = {workspaceId: WS, types: ['row'], exclude: [{scope: 'ancestor', types: [VIEW]}]} as const
+    const handle = env.repo.query.typedBlockIds(query)
+    const count = env.repo.query.typedBlockCount(query)
+    expect(await handle.load()).toEqual(['inside', 'outside'])
+    expect(await count.load()).toBe(2)
+    const offs = [handle.subscribe(() => {}), count.subscribe(() => {})]
+    try {
+      await setTypes('parent', [VIEW])
+      await waitFor(() => expect(handle.peek()).toEqual(['outside']))
+      await waitFor(() => expect(count.peek()).toBe(1))
+      await setTypes('parent', [])
+      await waitFor(() => expect(handle.peek()).toEqual(['inside', 'outside']))
+      await waitFor(() => expect(count.peek()).toBe(2))
+    } finally {
+      offs.forEach(off => off())
+    }
+  })
+
+  it('answers an empty anyOf with no rows on every forced-index path', async () => {
+    await create({id: 'parent'})
+    await create({id: 'child', parentId: 'parent', properties: {status: 'open'}})
+    for (const query of [
+      {workspaceId: WS, parentId: 'parent', anyOf: []},
+      {workspaceId: WS, anyOf: [], order: {property: statusProp.name, direction: 'asc'}},
+    ] as const) {
+      expect(await env.repo.query.typedBlockIds(query).load()).toEqual([])
+    }
+  })
+
+  it('wakes a type alternative for a new matching block but not for an unrelated create', async () => {
+    await create({id: 'open', properties: {status: 'open'}})
+    const handle = env.repo.query.typedBlockIds({workspaceId: WS, anyOf: [{types: [VIEW]}, {where: {status: 'open'}}]})
+    expect(await handle.load()).toEqual(['open'])
+    const off = handle.subscribe(() => {})
+    try {
+      const before = env.repo.handleStore.metrics.loaderInvalidations
+      await create({id: 'unrelated', types: ['other']})
+      expect(env.repo.handleStore.metrics.loaderInvalidations).toBe(before)
+      await create({id: 'view', types: [VIEW]})
+      await waitFor(() => expect(handle.peek()).toEqual(['open', 'view']))
+    } finally {
+      off()
+    }
+  })
+
+  it('drives a limited, type-bounded exclusion from the type index before and after ANALYZE', async () => {
+    await env.h.db.writeTransaction(async tx => {
+      // Drop statistics an earlier fixture left behind; `ANALYZE sqlite_schema` reloads the emptied table.
+      // Analyzing the empty tables first creates `sqlite_stat1` when the file runs alone.
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute(`DELETE FROM sqlite_stat1 WHERE tbl IN ('blocks', 'block_types')`)
+      await tx.execute('ANALYZE sqlite_schema')
+      await tx.execute(`
+        WITH RECURSIVE nums(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM nums WHERE n < 9999)
+        INSERT INTO blocks (id, workspace_id, order_key, properties_json, created_at, updated_at, created_by, updated_by)
+        SELECT 'b-' || n, CASE WHEN n % 10 = 0 THEN ? ELSE ? END, 'a', CASE
+                 WHEN n % 50 = 1 THEN json_object('types', json_array('row', ?))
+                 WHEN n % 7 = 0 THEN json_object('types', json_array('row'))
+                 WHEN n % 3 = 0 THEN json_object('types', json_array(?))
+                 ELSE '{}'
+               END, n, n, 'user', 'user'
+        FROM nums
+      `, [OTHER_WS, WS, VIEW, COLUMN])
+      const query = {workspaceId: WS, types: ['row'], exclude: [{types: [VIEW, COLUMN]}]}
+      const compiled = compileTypedBlockQuery(query, {properties: new Map()}, {projection: 'ids', limit: 20})
+      const readPlan = async (sql: string, params: readonly unknown[]) => (await tx.getAll<{detail: string}>(
+        `EXPLAIN QUERY PLAN ${sql}`, [...params],
+      )).map(row => row.detail)
+      const alternatives = compileTypedBlockQuery(
+        {workspaceId: WS, anyOf: [{types: [VIEW]}, {types: [COLUMN]}]}, {properties: new Map()}, {projection: 'ids', limit: 20},
+      )
+      const assertPlan = async () => {
+        const plan = await readPlan(compiled.sql, compiled.params)
+        expect(plan[0]).toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
+        expect(plan[1]).toBe('SEARCH b USING INDEX sqlite_autoindex_blocks_1 (id=?)')
+        const alternativesPlan = await readPlan(alternatives.sql, alternatives.params)
+        expect(alternativesPlan[0]).toBe('MULTI-INDEX OR')
+        for (const detail of [...plan, ...alternativesPlan]) expect(detail).not.toMatch(/^SCAN|idx_blocks_workspace/)
+      }
+      await assertPlan()
+      await tx.execute('ANALYZE main.blocks')
+      await tx.execute('ANALYZE main.block_types')
+      await assertPlan()
+      // Table queries omit property rows. That clause tips the stat-free planner to the
+      // workspace index, as it does for any exclusion; with statistics it takes the type index.
+      const withoutPropertyRows = compileTypedBlockQuery(
+        {...query, propertyChildren: 'none'}, {properties: new Map()}, {projection: 'ids', limit: 20},
+      )
+      expect((await readPlan(withoutPropertyRows.sql, withoutPropertyRows.params))[0])
+        .toBe('SEARCH bt USING INDEX idx_block_types_type_workspace (type=? AND workspace_id=?)')
+      const rows = await tx.getAll<{id: string}>(compiled.sql, [...compiled.params])
+      expect(rows).toHaveLength(20)
+    })
   })
 })

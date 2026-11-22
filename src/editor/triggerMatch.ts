@@ -1,7 +1,7 @@
-/** Shared trigger-char detection for editor autocompletes (`@` places,
- *  `#` type tags). One implementation of the backward walk + guards so
- *  the fiddly parts — especially the wikilink-ownership parsing — can
- *  only be fixed in one place.
+/** Shared trigger-char detection for editor autocompletes (the `@`
+ *  family in `atTrigger.ts`, `#` type tags). One implementation of the
+ *  backward walk + guards so the fiddly parts — especially the
+ *  wikilink-ownership parsing — can only be fixed in one place.
  *
  *  Trigger shape: `<trigger><query>` and no `[`/`]` in the query (the
  *  wikilink autocomplete owns `[[…`). What may precede the trigger is
@@ -28,26 +28,30 @@ export interface TriggerMatch {
 }
 
 export interface CharTriggerOptions {
-  /** Reject when the char immediately before the trigger is the
-   *  trigger itself — `##foo` is markdown-heading territory, not a
-   *  half-typed `#` tag. (The `@` place trigger doesn't set this:
-   *  `@@name` has no competing syntax.) */
-  rejectDoubledTrigger?: boolean
+  /** What a doubled trigger (`@@foo`, `##foo`) means to this source.
+   *  `'reject'`: not mine — `##foo` is markdown-heading territory for
+   *  `#`, and `@@` belongs to places, not the `@` contributor trigger.
+   *  `'require'`: ONLY a doubled trigger fires (the `@@` place
+   *  trigger); `from` is the pair's first char so the whole `@@query`
+   *  is replaced, and the prefix guards below apply to that first char.
+   *  Unset: no check (the second char of a pair fires on its own).
+   *  A tripled trigger fires neither mode. */
+  doubled?: 'reject' | 'require'
   /** Allow the trigger to fire when a word character sits immediately
    *  before it (`title#todo`), instead of treating that as email- /
    *  anchor-like and bowing out. The `#` type trigger sets this so a tag
    *  can be glued onto a word without a throwaway leading space; a `/`
-   *  earlier in the same token still bows out (URL path). The `@` place
-   *  trigger leaves it off — `user@host` must stay an email. */
+   *  earlier in the same token still bows out (URL path). The `@`/`@@`
+   *  triggers leave it off — `user@host` must stay an email. */
   allowWordCharBefore?: boolean
 }
 
 /** All registered trigger chars. The walk breaks on a SIBLING trigger
- *  so the nearest trigger owns the input: in `meet @cafe #todo|` the
+ *  so the nearest trigger owns the input: in `meet @@cafe #todo|` the
  *  `#` source matches `todo` while the `@` walk hits the `#` and
  *  yields — otherwise both sources fire into one dropdown, the place
  *  query swallows ` #todo` (a remote Places request per keystroke),
- *  and the type query swallows ` @home`. */
+ *  and the type query swallows ` @@home`. */
 const TRIGGER_CHARS: ReadonlySet<string> = new Set(['@', '#'])
 
 /** Queries routinely span words, so the caps below decide when a
@@ -113,11 +117,13 @@ const siblingWouldFire = (text: string, sibPos: number, pos: number): boolean =>
   if (afterPos < pos && text[afterPos] === ' ') return false
   const before = sibPos > 0 ? text[sibPos - 1] : ''
   if (text[sibPos] === '#') return before !== '#' && !tokenBeforeHasSlash(text, sibPos)
+  // Ignores `@` doubling: junk like `#bar x@@` yields to an `@@` that the
+  // place trigger then refuses, so nothing opens. Accepted.
   return !/\w/.test(before)
 }
 
-/** Pure trigger-detection helper. Callers export thin per-char
- *  wrappers (`matchAtTrigger`, `matchHashTrigger`) for their
+/** Pure trigger-detection helper. Callers use thin wrappers (the `@`
+ *  family in `atTrigger.ts`, `matchHashTrigger`) for their
  *  CompletionSources and tests. */
 export const matchCharTrigger = (
   text: string,
@@ -163,7 +169,12 @@ export const matchCharTrigger = (
   if (query.startsWith(' ')) return null
   if (query.split(' ').filter(w => w.length > 0).length > MAX_QUERY_WORDS) return null
 
-  const triggerPos = i - 1
+  const nearestTriggerPos = i - 1
+  const isDoubled = nearestTriggerPos > 0 && text[nearestTriggerPos - 1] === trigger
+  if (opts.doubled === 'reject' && isDoubled) return null
+  if (opts.doubled === 'require' && !isDoubled) return null
+  const triggerPos = opts.doubled === 'require' ? nearestTriggerPos - 1 : nearestTriggerPos
+  if (opts.doubled === 'require' && triggerPos > 0 && text[triggerPos - 1] === trigger) return null
   // Word char immediately before the trigger. `@` treats it as
   // email-like (`a@b`, `user@host`) and bows out. `#` allows a tag
   // glued onto the tail of a word (`title#todo`) so tagging a one-word
@@ -175,7 +186,6 @@ export const matchCharTrigger = (
   // the trigger or earlier in the token. (Independent of the word-char
   // check above, which a leading `/` would otherwise skip past.)
   if (opts.allowWordCharBefore && tokenBeforeHasSlash(text, triggerPos)) return null
-  if (opts.rejectDoubledTrigger && triggerPos > 0 && text[triggerPos - 1] === trigger) return null
   // Trigger directly preceded by `[` → inside a half-typed `[[@foo`; skip.
   if (triggerPos > 0 && text[triggerPos - 1] === '[') return null
   // Trigger lives inside an unclosed `[[...` earlier on the line →

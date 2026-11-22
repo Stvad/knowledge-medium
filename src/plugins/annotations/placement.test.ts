@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {describe, expect, it} from 'vitest'
-import {byPlacement, fitColumn, placeCards, type MarginCard} from './placement'
+import {adjacentCard, byPlacement, fitColumn, marginWheel, outOfView, placeCards, releasesPin, scrollToShow, type MarginCard} from './placement'
 
 const cards = (...pairs: Array<[anchor: number, height: number]>) => pairs.map(([anchor, height]) => ({anchor, height}))
 
@@ -21,9 +21,18 @@ describe('placeCards', () => {
     expect(placeCards(cards([0, 40], [10, 100], [20, 40], [400, 10]), 1, 8, 1000)).toEqual([-38, 10, 118, 400])
   })
 
-  it('leaves the focused card unpinned while its row is out of view', () => {
-    expect(placeCards(cards([0, 80], [20, 40], [1200, 40]), 2, 8, 1000)).toEqual([0, 88, 1200])
-    expect(placeCards(cards([-50, 40], [20, 40]), 0, 8, 1000)).toEqual([-50, 20])
+  it('keeps the focused card in view while its row is scrolled away, the others flowing around it', () => {
+    expect(placeCards(cards([0, 80], [20, 40], [1200, 40]), 2, 8, 1000)).toEqual([0, 88, 960])
+    expect(placeCards(cards([-50, 40], [20, 40]), 0, 8, 1000)).toEqual([0, 48])
+    expect(placeCards(cards([-900, 40], [-500, 300], [-100, 40]), 1, 8, 1000)).toEqual([-900, 0, 308])
+  })
+
+  it('tops a focused card taller than the view at the view’s top once its row is above it', () => {
+    expect(placeCards(cards([-200, 1500]), 0, 8, 1000)).toEqual([0])
+  })
+
+  it('leaves a focused card whose row is in view at its row, so activating it never moves it', () => {
+    expect(placeCards(cards([600, 900]), 0, 8, 1000)).toEqual([600])
   })
 
   it('places nothing for no cards', () => {
@@ -32,36 +41,54 @@ describe('placeCards', () => {
 })
 
 describe('fitColumn', () => {
-  const bounds = {min: 240, max: 520}
+  const bounds = {
+    text: {min: 480, max: 768},
+    column: {min: 240, max: 520},
+    edge: 16,
+  }
+  const fit = (pane: number, share?: number) => fitColumn({pane, share, ...bounds})
 
-  it('leaves the text where it is when the right side already holds the widest column', () => {
-    expect(fitColumn({left: 900, right: 900}, bounds)).toEqual({width: 520, shift: 0})
-    expect(fitColumn({left: 520, right: 520}, bounds)).toEqual({width: 520, shift: 0})
+  it('leaves the text centred when the side beside it holds the widest column', () => {
+    expect(fit(2000)).toEqual({width: 520, clearance: 0, left: 1400})
   })
 
-  it('moves the text left by only what the widest column still needs', () => {
-    expect(fitColumn({left: 460, right: 444}, bounds)).toEqual({width: 520, shift: 76})
+  it('moves the text left, unchanged in width, by only what the column still needs', () => {
+    expect(fit(1700)).toEqual({width: 520, clearance: 172, left: 1164})
   })
 
-  it('never moves the text past the room on its left', () => {
-    expect(fitColumn({left: 100, right: 300}, bounds)).toEqual({width: 400, shift: 100})
+  it('narrows the text rather than dropping the column in a pane split in two', () => {
+    expect(fit(1000)).toEqual({width: 333, clearance: 365, left: 651})
   })
 
-  it('fits a column the right side could not hold alone', () => {
-    expect(fitColumn({left: 120, right: 120}, bounds)).toEqual({width: 240, shift: 120})
+  it('takes a set share of the pane over the automatic width, past the automatic maximum', () => {
+    expect(fit(2000, 0.35)).toEqual({width: 700, clearance: 232, left: 1284})
   })
 
-  it('refuses a column under the minimum, even with the text moved all the way', () => {
-    expect(fitColumn({left: 119, right: 120}, bounds)).toBeNull()
+  it('gives back the width a share was taken from', () => {
+    // 611 / 1500 stores as 0.4073, a hair under the ratio.
+    expect(fit(1500, 0.4073)?.width).toBe(611)
   })
 
-  it('treats a text frame wider than the pane as no room on either side', () => {
-    expect(fitColumn({left: -16, right: -32}, bounds)).toBeNull()
-    expect(fitColumn({left: -16, right: 300}, bounds)).toEqual({width: 300, shift: 0})
+  it('keeps a set share in a narrower pane, so the text narrows with the column', () => {
+    expect(fit(1200, 0.35)).toEqual({width: 420, clearance: 452, left: 764})
+  })
+
+  it('gives up set share before the text goes under its minimum', () => {
+    expect(fit(1000, 0.7)).toEqual({width: 488, clearance: 520, left: 496})
+  })
+
+  it('never goes under the column minimum, even when set narrower', () => {
+    expect(fit(2000, 0.05)).toEqual({width: 240, clearance: 0, left: 1400})
+  })
+
+  it('refuses a pane that holds the text minimum but not the column minimum beside it', () => {
+    expect(fit(752)).toEqual({width: 240, clearance: 272, left: 496})
+    expect(fit(751)).toBeNull()
+    expect(fit(751, 0.9)).toBeNull()
   })
 
   it('gives whole pixels, so the text never lands between them', () => {
-    expect(fitColumn({left: 100.5, right: 300.5}, bounds)).toEqual({width: 400, shift: 100})
+    expect(fit(1000.7)).toEqual({width: 333, clearance: 365, left: 651})
   })
 })
 
@@ -81,5 +108,104 @@ describe('byPlacement', () => {
 
   it('breaks a tie in place by stored order', () => {
     expect(sorted(card('b', 0, 10, 1), card('a', 0, 10, 0))).toEqual(['a', 'b'])
+  })
+})
+
+describe('scrollToShow', () => {
+  const clip = {top: 100, bottom: 900}
+
+  it('leaves a box that shows alone', () => {
+    expect(scrollToShow({top: 200, bottom: 300}, clip, 8)).toBe(0)
+  })
+
+  it('scrolls a box below the clip up to its foot', () => {
+    expect(scrollToShow({top: 1000, bottom: 1100}, clip, 8)).toBe(208)
+  })
+
+  it('scrolls a box above the clip down to its head', () => {
+    expect(scrollToShow({top: 20, bottom: 60}, clip, 8)).toBe(-88)
+  })
+
+  it('shows the top of a box taller than the clip', () => {
+    expect(scrollToShow({top: 1000, bottom: 2500}, clip, 8)).toBe(892)
+  })
+})
+
+describe('adjacentCard', () => {
+  it('is the next or previous card in placement order', () => {
+    expect(adjacentCard(['a', 'b', 'c'], 'a', 1)).toBe('b')
+    expect(adjacentCard(['a', 'b', 'c'], 'b', -1)).toBe('a')
+  })
+
+  it('is none past either end, or for a card not placed', () => {
+    expect(adjacentCard(['a', 'b'], 'b', 1)).toBeUndefined()
+    expect(adjacentCard(['a', 'b'], 'a', -1)).toBeUndefined()
+    expect(adjacentCard(['a', 'b'], 'gone', 1)).toBeUndefined()
+  })
+})
+
+describe('outOfView', () => {
+  it('is a span wholly above or below the view', () => {
+    expect(outOfView({top: -50, bottom: 0}, 1000)).toBe(true)
+    expect(outOfView({top: 1000, bottom: 1040}, 1000)).toBe(true)
+    expect(outOfView({top: -50, bottom: 1}, 1000)).toBe(false)
+    expect(outOfView({top: 999, bottom: 1040}, 1000)).toBe(false)
+  })
+})
+
+describe('releasesPin', () => {
+  const pin = {userScrolling: true, writing: false, placed: true, wasInView: true, inView: false}
+
+  it('releases when the user scrolls its row from in view to out of it', () => {
+    expect(releasesPin(pin)).toBe(true)
+  })
+
+  it('keeps it while the row stays out of view, as after a link in it scrolled the page', () => {
+    expect(releasesPin({...pin, wasInView: false})).toBe(false)
+    expect(releasesPin({...pin, wasInView: undefined})).toBe(false)
+  })
+
+  it('keeps it for a scroll the app made, or while writing in the card', () => {
+    expect(releasesPin({...pin, userScrolling: false})).toBe(false)
+    expect(releasesPin({...pin, writing: true})).toBe(false)
+  })
+
+  it('keeps it while its row is in view', () => {
+    expect(releasesPin({...pin, inView: true})).toBe(false)
+  })
+
+  it('releases a pin with no row here, from another page, once the user scrolls', () => {
+    expect(releasesPin({...pin, placed: false, wasInView: undefined})).toBe(true)
+    expect(releasesPin({...pin, placed: false, userScrolling: false})).toBe(false)
+  })
+})
+
+describe('marginWheel', () => {
+  const wheel = {
+    paused: false, horizontal: false, innerCanScroll: false,
+    overActive: true, activeClipped: false, writing: false, hasNext: true,
+  }
+
+  it('moves on to the next card from the end of the active one', () => {
+    expect(marginWheel(wheel)).toBe('move-on')
+  })
+
+  it('drops the rest of a gesture after moving on', () => {
+    expect(marginWheel({...wheel, paused: true})).toBe('drop')
+  })
+
+  it('leaves a sideways swipe and a scroller with room to the browser', () => {
+    expect(marginWheel({...wheel, horizontal: true})).toBe('native')
+    expect(marginWheel({...wheel, innerCanScroll: true})).toBe('native')
+  })
+
+  it('first shows the part of the active card the column cuts off', () => {
+    expect(marginWheel({...wheel, activeClipped: true})).toBe('reveal')
+  })
+
+  it('scrolls the page from elsewhere in the margin, past the last card, or while writing in the card', () => {
+    expect(marginWheel({...wheel, overActive: false})).toBe('page')
+    expect(marginWheel({...wheel, hasNext: false})).toBe('page')
+    expect(marginWheel({...wheel, writing: true})).toBe('page')
   })
 })

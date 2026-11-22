@@ -47,11 +47,19 @@ const applySynthesis = vi.fn<(...args: unknown[]) => Promise<SynthesisResult>>()
  *  about, so a stub says what it is testing and nothing else. */
 const synthesized = (over: Partial<SynthesisResult> = {}): SynthesisResult =>
   ({created: 0, converged: 0, skipped: [], undoHistoryCleared: false, ...over})
-const flipBlocked = vi.fn<() => string | null>()
+const flipBlocked = vi.fn<(plan: unknown, outcome?: SynthesisResult) => string | null>()
 vi.mock('@/data/internals/propertyDefinitionSynthesis', () => ({
   planPropertyDefinitionSynthesis: () => planSynthesis(),
   applyPropertyDefinitionSynthesis: (...args: unknown[]) => applySynthesis(...args),
-  flipBlockedBySynthesis: () => flipBlocked(),
+  flipBlockedBySynthesis: (plan: unknown, outcome?: SynthesisResult) => flipBlocked(plan, outcome),
+}))
+
+/** Whether this browser kept its client id. Partial, so `getClientId` stays
+ *  real and the claimant ids below are the ones the action reads. */
+const clientIdPersistent = vi.fn<() => boolean>()
+vi.mock('@/utils/clientId', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/utils/clientId')>()),
+  isClientIdPersistent: () => clientIdPersistent(),
 }))
 
 /** The pre-dialog survey of stored cell values, faked for the same reason the
@@ -240,6 +248,8 @@ beforeEach(() => {
   flipWorkspace.mockResolvedValue({localApplied: true})
   remoteSyncActive.mockReset()
   remoteSyncActive.mockReturnValue(true)
+  clientIdPersistent.mockReset()
+  clientIdPersistent.mockReturnValue(true)
   planSynthesis.mockResolvedValue(plan())
   applySynthesis.mockResolvedValue(synthesized())
   flipBlocked.mockReturnValue(null)
@@ -714,6 +724,100 @@ describe('the graph-wide claim', () => {
     expect(runPass).not.toHaveBeenCalled()
     expect(progressHandle.fail).toHaveBeenCalledWith(
       expect.stringMatching(/could not switch this workspace/i))
+  })
+})
+
+describe('a browser whose client id will not survive a reload', () => {
+  it('refuses the flip before the consent screen, and says to use a normal profile', async () => {
+    // The claim is keyed on the client id. Here it is per-process, so after a
+    // reload this browser can neither resume nor release the claim it took,
+    // and every device sits behind the waiting dialog until someone clears it
+    // by hand.
+    clientIdPersistent.mockReturnValue(false)
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/normal, non-private browser/))
+    expect(showInfo).toHaveBeenCalledWith(expect.stringMatching(/retrying alone will not clear/))
+  })
+
+  it('refuses a backfill-only run on a flipped workspace too, since it takes the same claim', async () => {
+    clientIdPersistent.mockReturnValue(false)
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+  })
+})
+
+describe('the key-level flip gate under the claim', () => {
+  /** A gate that reads the plan it is handed, so which plan reaches it is
+   *  what the test observes. */
+  const gateOnBlockers = (planArg: unknown) =>
+    (planArg as {blockers: unknown[]}).blockers.length > 0 ? 'a key cannot be given a definition' : null
+
+  it('refuses the flip when a blocker arrives while the dialog is open', async () => {
+    flipBlocked.mockImplementation(gateOnBlockers)
+    planSynthesis.mockResolvedValueOnce(plan())
+      .mockResolvedValue({...plan(), blockers: [{key: '', cells: 1, reason: 'empty'}]})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(openDialog).toHaveBeenCalled()
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(
+      expect.stringMatching(/stopped before switching this workspace over.*cannot be given a definition/i))
+    // Above the history drop, for the same reason the cell gate is.
+    expect(beginHistoryDrop).not.toHaveBeenCalled()
+  })
+
+  it('refuses the flip when a key with no definition arrives while the dialog is open', async () => {
+    // Mintable, but the user never saw it, so this run does not mint it; and
+    // flipping past it leaves a key the pass skips. A re-run shows it.
+    planSynthesis.mockResolvedValueOnce(plan(1))
+      .mockResolvedValue({...plan(), candidates: [
+        {key: 'demo:orphan0', cells: 1, presetId: 'string' as const},
+        {key: 'demo:arrived', cells: 2, presetId: 'string' as const},
+      ]})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    // What the user consented to is still what gets minted.
+    expect(applySynthesis).toHaveBeenCalledWith(repo, expect.objectContaining({
+      candidates: [expect.objectContaining({key: 'demo:orphan0'})]}))
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/demo:arrived/))
+  })
+
+  it('fails closed when the re-plan under the claim THROWS', async () => {
+    planSynthesis.mockResolvedValueOnce(plan()).mockRejectedValue(new Error('the read failed'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const {repo, runPass} = makeRepo()
+
+    await invoke(repo)
+
+    expect(flipWorkspace).not.toHaveBeenCalled()
+    expect(runPass).not.toHaveBeenCalled()
+    expect(progressHandle.fail).toHaveBeenCalledWith(expect.stringMatching(/could not re-check/i))
+  })
+
+  it('does not re-plan an already-flipped workspace, which has no flip left to guard', async () => {
+    const {repo, runPass} = makeRepo(RAN, {flipped: true})
+
+    await invoke(repo)
+
+    expect(planSynthesis).toHaveBeenCalledTimes(1)
+    expect(runPass).toHaveBeenCalled()
   })
 })
 

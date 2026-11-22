@@ -163,8 +163,12 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
     await expect(fs.access(path.join(tempDir, 'agent-dispatch.pid'))).rejects.toMatchObject({code: 'ENOENT'})
   })
 
-  it('clears disabled watcher registration without a contributor or attributed command', async () => {
+  it.each([
+    ['no instance', undefined, 'agent-dispatch'],
+    ['a named instance', 'host', 'agent-dispatch-host'],
+  ] as const)('clears disabled watcher registration for %s without a contributor or attributed command', async (_label, instance, consumer) => {
     await fs.writeFile(configPath, JSON.stringify({
+      instance,
       profile: 'dispatch-test',
       workspaceId: 'workspace-test',
       push: false,
@@ -176,10 +180,45 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
     expect(result.stdout).toContain('no active watchers')
     expect(result.stdout).toContain('push: watch-events registration cleared')
     expect(commands).toHaveLength(1)
-    expect(commands[0]).toMatchObject({type: 'watch-events', consumer: 'agent-dispatch', watchers: []})
+    expect(commands[0]).toMatchObject({type: 'watch-events', consumer, watchers: []})
     expect(commands[0]).not.toHaveProperty('contributorId')
     expect(requests).not.toContain('GET /runtime/whoami')
     await expect(fs.access(path.join(tempDir, 'agent-dispatch.pid'))).rejects.toMatchObject({code: 'ENOENT'})
+  })
+
+  it('runs a named instance beside a live default daemon, on its own pidfile, state and MCP config', async () => {
+    vi.stubEnv('AGENT_RUNTIME_CONTRIBUTOR_DIR', selectionDir)
+    await saveContributorSelection('dispatch-test', 'workspace-test', 'contributor-agent')
+    // The default daemon's lock, held by a live process (this test's).
+    const defaultPidfile = path.join(tempDir, 'agent-dispatch.pid')
+    await fs.writeFile(defaultPidfile, `${process.pid}\n`)
+    await fs.writeFile(configPath, JSON.stringify({
+      instance: 'host',
+      profile: 'dispatch-test',
+      workspaceId: 'workspace-test',
+      push: false,
+      claudeBin: '/usr/bin/false',
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude'}],
+    }))
+    // An armed baseline only in the instance's own state file: claiming the
+    // mention shows the daemon read it there.
+    const ownDir = path.join(tempDir, 'agent-dispatch-host')
+    await fs.mkdir(ownDir)
+    await fs.writeFile(path.join(ownDir, 'state.json'), JSON.stringify({backlinkBaselines: {mentions: 0}}))
+    pendingMention = {}
+
+    const result = await runDaemon()
+
+    expect(result.stderr).not.toContain('already running')
+    const statuses = commands.filter(command => command.type === 'update-block')
+      .map(command => (command.properties as Record<string, unknown>)['agent:status'])
+    expect(statuses).toEqual(['running', 'error'])
+    const mcpConfig = JSON.parse(await fs.readFile(path.join(ownDir, 'mcp.json'), 'utf8'))
+    expect(mcpConfig.mcpServers.km.env).toMatchObject({AGENT_RUNTIME_PROFILE: 'dispatch-test'})
+    await expect(fs.access(path.join(tempDir, 'agent-dispatch-mcp.json'))).rejects.toMatchObject({code: 'ENOENT'})
+    expect(await fs.readFile(defaultPidfile, 'utf8')).toBe(`${process.pid}\n`)
+    // Released on the way out.
+    await expect(fs.access(path.join(ownDir, 'daemon.pid'))).rejects.toMatchObject({code: 'ENOENT'})
   })
 
   it.each([
@@ -203,9 +242,13 @@ describe('dispatch contributor selection', {timeout: DAEMON_KILL_MS + 10_000}, (
 
     await runDaemon()
 
-    const replies = commands.filter(command => command.type === 'reconcile-markdown-subtree')
+    const reconciles = commands.filter(command => command.type === 'reconcile-markdown-subtree')
+    const isMemoryBlock = (command: {key?: unknown}) => command.key === 'agent-dispatch:memory'
+    const replies = reconciles.filter(command => !isMemoryBlock(command))
     expect(replies.length).toBeGreaterThan(0)
     for (const reply of replies) expect(reply).toMatchObject({parentId: 'source-1', contributorId: selected})
+    // The memory block under the watched page is the daemon's, like its bookkeeping.
+    for (const memory of reconciles.filter(isMemoryBlock)) expect(memory).toMatchObject({contributorId: null})
     const bookkeeping = commands.filter(command => command.type === 'update-block')
     expect(bookkeeping.map(command => (command.properties as Record<string, unknown>)['agent:status']))
       .toEqual(['running', 'error'])

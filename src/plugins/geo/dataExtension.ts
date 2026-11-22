@@ -1,5 +1,5 @@
 /** Data-layer contributions for the geo plugin — types, property
- *  schemas, queries, and the CodeMirror surface (theme + `@`
+ *  schemas, queries, and the CodeMirror surface (the `@@`
  *  completion source via languageData). Composed into the user-facing
  *  `geoPlugin` in `./index.ts`. */
 

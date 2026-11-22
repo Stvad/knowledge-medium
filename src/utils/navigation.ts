@@ -49,6 +49,7 @@ import { navigateInPanel } from './panelHistory'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import { parseAppHash } from '@/utils/routing'
 import { isMobileViewport } from '@/utils/viewport'
+import { zoomSurfaceIn, zoomSurfaceOut } from '@/utils/surfaceZoom'
 import { blockLinkClickIntent, type BlockLinkClickModifierState } from '@/utils/linkClickGestures.js'
 import {
   insertPanelRow,
@@ -76,7 +77,17 @@ interface NavigateBaseInput {
    *  decorators redirect/observe by source, not just by resolved target.
    *  Optional — untagged navigations are still redirectable by target/block. */
   origin?: string
+  /** The render scope the gesture was made in (the clicked row's, the focused
+   *  block's), where there is one. A surface nested in a panel shares the
+   *  panel's id; this tells a navigation made inside it from the panel's own. */
+  sourceRenderScopeId?: string
 }
+
+/** `origin` of a zoom into a block of the view the gesture was made in: its
+ *  bullet, Zoom In. */
+export const ZOOM_ORIGIN = 'zoom'
+/** `origin` of a zoom out of that view, to its root's parent. */
+export const ZOOM_OUT_ORIGIN = 'zoom-out'
 
 export interface NavigatePanelInput extends NavigateBaseInput {
   target: 'panel'
@@ -143,6 +154,19 @@ export interface NavigationRequest {
   input: ResolvedNavigateInput
 }
 
+/** Applies a zoom made inside a zoomable surface (`@/utils/surfaceZoom`),
+ *  which zooms that surface and leaves its panel as it is, returning that
+ *  panel. Only one aimed at the surface's own panel: a bullet opened in a new
+ *  panel is a navigation. Null when the navigation is the panel's after all. */
+const zoomSurface = async (repo: Repo, input: NavigateInput): Promise<string | null> => {
+  const renderScopeId = input.sourceRenderScopeId
+  if (input.target !== 'panel' || renderScopeId === undefined) return null
+  const zoomed = input.origin === ZOOM_ORIGIN
+    ? await zoomSurfaceIn(repo, {renderScopeId, blockId: input.blockId, panelId: input.panelId})
+    : input.origin === ZOOM_OUT_ORIGIN && await zoomSurfaceOut(repo, renderScopeId)
+  return zoomed ? input.panelId : null
+}
+
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   return getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
@@ -161,7 +185,7 @@ const panelRowsForLayoutSession = async (
   layoutSessionBlock: Block,
 ) => allPanelRowsInLayoutOrder(
   layoutSessionBlock.id,
-  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
+  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, propertyChildren: 'none'}).load(),
 )
 
 /** The panel rows the user can actually SEE — never index raw row order, which
@@ -174,7 +198,7 @@ const visiblePanelRowsForLayoutSession = async (
   await layoutSessionBlock.load()
   return visiblePanelRows(await panelRowsForLayoutSession(layoutSessionBlock), {
     activePanelId: layoutSessionBlock.peekProperty(activePanelIdProp),
-    canRenderSplit: !isMobileViewport(),
+    canRenderSplit: canRenderSplit(),
   })
 }
 
@@ -198,6 +222,10 @@ export const resolveActivePanelRow = async (
   return panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
 }
 
+/** Can this viewport show a second pane? Below the mobile breakpoint the
+ *  layout renders ONE pane (`soloPanelRow`). */
+const canRenderSplit = (): boolean => !isMobileViewport()
+
 /** Where a resolved navigation should go: an existing panel to swap, or a fresh
  *  panel to create. The single decision both the WRITE (`applyNavigation`) and
  *  the READ (`resolveGlobalCommandTarget`) share, so they can't drift — every
@@ -216,8 +244,10 @@ const resolveDestination = async (
   const {workspaceId} = input
   switch (input.target) {
     case 'new-panel':
+      if (!canRenderSplit()) return activeDestination(repo, workspaceId)
       return {kind: 'create-row', workspaceId, afterPanelId: input.sourcePanelId}
     case 'sidebar-stack':
+      if (!canRenderSplit()) return activeDestination(repo, workspaceId)
       return {kind: 'create-stack', workspaceId, sourcePanelId: input.sourcePanelId}
     case 'panel':
       // Guard a stale/fabricated panelId via block existence (NOT layout-row
@@ -235,14 +265,21 @@ const resolveDestination = async (
         ? {kind: 'panel', workspaceId, panelId: panels[0].id}
         : {kind: 'create-row', workspaceId}
     }
-    case 'active': {
-      const ls = await resolveLayoutSessionBlock(repo, workspaceId)
-      const panel = await resolveActivePanelRow(ls)
-      return panel
-        ? {kind: 'panel', workspaceId, panelId: panel.id}
-        : {kind: 'create-row', workspaceId}
-    }
+    case 'active':
+      return activeDestination(repo, workspaceId)
   }
+}
+
+/** The active pane, or a first row when the layout is empty. Also where
+ *  `new-panel` / `sidebar-stack` land on a viewport that cannot render a
+ *  split: the open swaps the visible pane's content (Back still returns, via
+ *  panel history) instead of minting a row the layout would never show. */
+const activeDestination = async (repo: Repo, workspaceId: string): Promise<NavDestination> => {
+  const ls = await resolveLayoutSessionBlock(repo, workspaceId)
+  const panel = await resolveActivePanelRow(ls)
+  return panel
+    ? {kind: 'panel', workspaceId, panelId: panel.id}
+    : {kind: 'create-row', workspaceId}
 }
 
 /** Apply a resolved navigation by mutating layout-session panel rows, returning
@@ -349,6 +386,13 @@ export const navigate = async (
   const request: NavigationRequest = {repo, input: {...input, workspaceId}}
   const runtime = repo.facetRuntime
   try {
+    // Ahead of the verb: a zoom of a surface nested in the panel is not a
+    // navigation, so no decorator has to know to leave it alone.
+    const zoomedPanelId = await zoomSurface(repo, request.input)
+    if (zoomedPanelId !== null) {
+      const shown = repo.block(zoomedPanelId).peekProperty(topLevelBlockIdProp) ?? input.blockId
+      return {panelId: zoomedPanelId, blockId: shown, workspaceId}
+    }
     return runtime
       ? await navigationVerb.run(runtime, request)
       : await applyNavigation(request)
@@ -396,6 +440,12 @@ export interface NavigationGesture {
   /** The panel the gesture came from, if any (follow-link uses it as the
    *  navigation target; modifier opens use it as the insertion anchor). */
   panelId?: string
+  /** The render scope the gesture was made in
+   *  (`NavigateInput.sourceRenderScopeId`). */
+  renderScopeId?: string
+  /** The resulting navigation's `origin`, where the surface means something
+   *  narrower than its role (a bullet is a follow-link that zooms). */
+  origin?: string
   blockId: string
   workspaceId: string
   viewport: NavigationViewport
@@ -471,7 +521,12 @@ export const defaultNavigationIntent = (
   gesture: NavigationGesture,
 ): NavigationDecision => {
   const {role, modifiers, panelId, blockId, workspaceId, viewport} = gesture
-  const base = {blockId, workspaceId, origin: role}
+  const base = {
+    blockId,
+    workspaceId,
+    origin: gesture.origin ?? role,
+    ...(gesture.renderScopeId === undefined ? {} : {sourceRenderScopeId: gesture.renderScopeId}),
+  }
   switch (blockLinkClickIntent(modifiers)) {
     case 'native':
       return PASSTHROUGH
@@ -502,6 +557,7 @@ const isNavigateInput = (value: unknown): value is NavigateInput => {
   // can't slip through to `insertPanelRow`.
   if (typeof v.blockId !== 'string') return false
   if (!isOptionalString(v.workspaceId) || !isOptionalString(v.origin)) return false
+  if (!isOptionalString(v.sourceRenderScopeId)) return false
   switch (v.target) {
     case 'main':
     case 'active':
@@ -717,6 +773,8 @@ export interface OpenBlockContext {
 
 export interface BlockOpenerOptions {
   plainClick?: BlockOpenerPlainClick
+  /** See `NavigationGesture.origin`. */
+  origin?: string
 }
 
 /** The standard way for plugins and components to wire a clickable surface
@@ -730,9 +788,9 @@ export interface BlockOpenerOptions {
  *  `useBlockOpener` instead and pass the block at call time. */
 export const useOpenBlock = (
   {blockId, workspaceId}: OpenBlockContext,
-  {plainClick = 'follow-link'}: BlockOpenerOptions = {},
+  {plainClick = 'follow-link', origin}: BlockOpenerOptions = {},
 ) => {
-  const opener = useBlockOpener({plainClick})
+  const opener = useBlockOpener({plainClick, origin})
   return useCallback(
     (e: MouseEvent) => opener(e, {blockId, workspaceId}),
     [opener, blockId, workspaceId],
@@ -752,7 +810,10 @@ export const openBlockFromEvent = (
   repo: Repo,
   e: MouseEvent,
   {blockId, workspaceId}: OpenBlockContext,
-  {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
+  {plainClick = 'follow-link', origin, panelId, renderScopeId}: BlockOpenerOptions & {
+    panelId?: string
+    renderScopeId?: string
+  } = {},
 ): void => {
   const resolvedWorkspaceId = workspaceId ?? repo.activeWorkspaceId
   if (!resolvedWorkspaceId) return
@@ -760,6 +821,8 @@ export const openBlockFromEvent = (
     role: plainClick,
     modifiers: modifiersFromMouseEvent(e),
     panelId,
+    renderScopeId,
+    origin,
     blockId,
     workspaceId: resolvedWorkspaceId,
     viewport: currentViewport(),
@@ -770,12 +833,12 @@ export const openBlockFromEvent = (
  *  that resolve the target block from the event (lists, breadcrumbs, map
  *  markers rendered in a loop). Single subscription per component instead
  *  of one hook per item. */
-export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
+export const useBlockOpener = ({plainClick = 'follow-link', origin}: BlockOpenerOptions = {}) => {
   const repo = useRepo()
-  const {panelId} = useBlockContext()
+  const {panelId, renderScopeId} = useBlockContext()
   return useCallback(
     (e: MouseEvent, target: OpenBlockContext) =>
-      openBlockFromEvent(repo, e, target, {plainClick, panelId}),
-    [repo, panelId, plainClick],
+      openBlockFromEvent(repo, e, target, {plainClick, origin, panelId, renderScopeId}),
+    [repo, panelId, renderScopeId, plainClick, origin],
   )
 }

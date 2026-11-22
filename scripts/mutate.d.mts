@@ -6,6 +6,7 @@ export interface MutateConfig {
   test: string
   mutation: { kind: 'delete'; text: string } | { kind: 'edit'; command: string }
   testName: string | undefined
+  vitestConfig: string | undefined
   baseline: boolean
   timeoutMs: number
 }

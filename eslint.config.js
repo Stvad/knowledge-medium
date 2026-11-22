@@ -247,11 +247,9 @@ export default tseslint.config(
     },
   },
   {
-    // Child-visibility guardrail. `tx.childrenOf` /
-    // `repo.query.{children,subtree,childIds}` default to the structural
-    // everything-view (hidden property field-row machinery included); the
-    // visible/outline view is opt-in (`hidePropertyChildren` / the
-    // `visibleChildrenOf` helper).
+    // Child-view guardrail. `tx.childrenOf` /
+    // `repo.query.{children,subtree,childIds}` answer every child (property
+    // field rows included) unless the caller names a view (`propertyChildren`).
     //
     // Split by ALTITUDE, not by directory (the first cut scoped this to a
     // list of display dirs and two consecutive reviews found bare traversals
@@ -260,13 +258,12 @@ export default tseslint.config(
     //
     //   - a `repo.query.{children,subtree,childIds}({id})` is a READ-OUT —
     //     rendered, serialized, or handed to an agent. Every such call site in
-    //     `src/` wants the visible view, so guard the query handles EVERYWHERE
+    //     `src/` wants a view it can name, so guard the query handles EVERYWHERE
     //     and let new consumers inherit the check for free.
     //   - `tx.childrenOf` is the low-level primitive. Mixed data-layer files
     //     (mutators, paste, panelLayoutProjection, agent-runtime) call it
     //     structurally on purpose — order-key and sibling math must see every
-    //     row — so it is only guarded in the pure display dirs below, and the
-    //     mixed files spell visible intent with the `visibleChildrenOf` helper.
+    //     row — so it is only guarded in the pure display dirs below.
     files: [SOURCE_GLOB],
     plugins: {'child-view': childView},
     rules: {

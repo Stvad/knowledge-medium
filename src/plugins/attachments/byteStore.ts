@@ -21,7 +21,7 @@
  * a destruction hook.
  */
 
-import { withLock } from './laneLock.js'
+import { withLock } from '@/utils/webLock.js'
 
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'

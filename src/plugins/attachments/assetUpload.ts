@@ -27,7 +27,7 @@ import { showError } from '@/utils/toast.js'
 import { remoteSyncGated } from './assetResolver.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
-import { withLock } from './laneLock.js'
+import { withLock } from '@/utils/webLock.js'
 import { resolveCaptureMime } from './mediaBlock.js'
 import { refreshUploadLaneStatus } from './uploadLaneStatus.js'
 import {

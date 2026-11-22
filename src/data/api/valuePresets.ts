@@ -10,7 +10,10 @@ export interface ValuePresetConfigEditorProps<TConfig> {
   onChange: (next: TConfig) => void
 }
 
-interface ValuePresetPresentationBase<TConfig = void> {
+interface ValuePresetPresentationBase<TValue = unknown, TConfig = void> {
+  /** Optional control for a scalar value block in the outline. Receives the
+   *  value block itself; changes edit that row, not the owner's whole property. */
+  readonly InlineEditor?: PropertyEditor<TValue>
   /** Stable join key; must match the corresponding codec core id. */
   readonly id: string
   /** Human label for the picker. */
@@ -28,7 +31,7 @@ interface ValuePresetPresentationBase<TConfig = void> {
 /** A picker-visible presentation must provide an editor. Hidden codec-only
  *  presets may omit it when their values have no generic editing UI. */
 export type ValuePresetPresentation<TValue = unknown, TConfig = void> =
-  ValuePresetPresentationBase<TConfig> & (
+  ValuePresetPresentationBase<TValue, TConfig> & (
     | {readonly Editor: PropertyEditor<TValue>; readonly hideFromPicker?: boolean}
     | {readonly Editor?: never; readonly hideFromPicker: true}
   )

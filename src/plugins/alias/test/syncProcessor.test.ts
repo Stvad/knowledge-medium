@@ -19,7 +19,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'
@@ -107,6 +107,38 @@ describe('alias.sync — Case A1 (content edit, old value is an alias)', () => {
 
     expect((await env.read('t'))!.content).toBe('New name')
     expect(await readAliases('t')).toEqual(['New name'])
+  })
+})
+
+describe('alias.sync — source content is not a name', () => {
+  const typedPage = async (type: string) => {
+    await createTarget('t', 'Report', ['Report'])
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'citer', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'see [[Report]] today'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    await env.repo.tx(tx => tx.setProperty('t', typesProp, [type]), {scope: ChangeScope.BlockDefault})
+    await flush()
+  }
+
+  it.each(['extension', 'html-document'])('editing a page typed %s keeps its name and its citations', async type => {
+    await typedPage(type)
+    await env.repo.mutate.setContent({id: 't', content: '<p>the document</p>'})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('<p>the document</p>')
+    expect(await readAliases('t')).toEqual(['Report'])
+    expect((await env.read('citer'))!.content).toBe('see [[Report]] today')
+  })
+
+  it.each(['extension', 'html-document'])('renaming a page typed %s leaves its source alone', async type => {
+    await typedPage(type)
+    await env.repo.mutate.setContent({id: 't', content: '<p>the document</p>'})
+    await flush()
+    await env.repo.tx(tx => tx.setProperty('t', aliasesProp, ['Renamed']), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('<p>the document</p>')
   })
 })
 

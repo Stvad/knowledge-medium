@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { appEffectsFacet } from '@/extensions/core.js'
-import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { blockContentDecoratorsFacet, blockGutterItemsFacet } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   currentLoadTimeProp,
@@ -33,9 +33,12 @@ describe('updateIndicatorPlugin', () => {
     expect(currentLoadTimeProp.changeScope).toBe(ChangeScope.UserPrefs)
   })
 
-  it('contributes its block content decorator', () => {
+  it('contributes its dot as a top-right gutter item, not a content decorator', () => {
     const runtime = resolveFacetRuntimeSync(updateIndicatorPlugin)
 
-    expect(runtime.contributions(blockContentDecoratorsFacet)).toHaveLength(1)
+    expect(runtime.read(blockGutterItemsFacet)({} as never)).toEqual([
+      expect.objectContaining({ corner: 'top-right' }),
+    ])
+    expect(runtime.contributions(blockContentDecoratorsFacet)).toHaveLength(0)
   })
 })

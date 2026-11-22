@@ -1,5 +1,5 @@
 /** `createOrFindPlace` — alias-based dedup + Place block creation.
- *  Single entry point used by the `@` autocomplete (Phase C), the
+ *  Single entry point used by the `@@` autocomplete (Phase C), the
  *  property editor (Phase E), and the current-location flow (Phase F).
  *
  *  Dedup rules:

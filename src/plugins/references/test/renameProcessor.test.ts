@@ -734,23 +734,23 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     expect((await env.read('s'))!.content).toBe(`see [${alias}](((${PIN_TARGET}))) please`)
   })
 
-  it("never rewrites an installed extension's source code", async () => {
+  it.each(['extension', 'html-document'])('never rewrites the source code in a %s block', async type => {
     // `references.parseReferences` deliberately does not run the wikilink
-    // grammar over extension source (code hands it `[[`
+    // grammar over source code (code hands it `[[`
     // openers for free — one real extension minted three phantom pages before
-    // that gate). So extension blocks have NO edge, which is exactly why the
+    // that gate). So these blocks have NO edge, which is exactly why the
     // edge-keyed leg never reached them and the content leg would. Rewriting a
-    // span inside stored source corrupts an extension so it no longer loads.
+    // span inside stored source corrupts it.
     await seedTarget('t', 'Old', ['Old'])
     const code = 'const re = /[[Old]]/g // matches [[Old]]'
     await env.repo.tx(async tx => {
       await tx.create({
         id: 'ext', workspaceId: WS, parentId: null, orderKey: 'e0',
-        content: code, properties: {types: ['extension']},
+        content: code, properties: {types: [type]},
       })
     }, {scope: ChangeScope.BlockDefault})
     await flush()
-    // Precondition, asserted not assumed: the extension really has no edge,
+    // Precondition, asserted not assumed: the block really has no edge,
     // so this test is about the content leg and nothing else.
     expect(await blockReferences('ext', 't')).toEqual([])
 
@@ -761,6 +761,26 @@ describe('rename — the references-parse fence (§11 group 4)', () => {
     await flush()
 
     expect((await env.read('ext'))!.content).toBe(code)
+  })
+
+  // Tagging only clears a block's edges at the next parse. Until then the
+  // edge-keyed leg still reaches it, and the same tx holds that window open.
+  it.each(['extension', 'html-document'])('never rewrites a block newly typed %s through its old edge', async type => {
+    await seedTarget('t', 'Old', ['Old'])
+    const code = 'const label = "[[Old]]"'
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'e0', content: code})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await blockReferences('src', 't')).not.toEqual([])
+
+    await env.repo.tx(async tx => {
+      await tx.update('src', {properties: {types: [type]}})
+      await tx.setProperty('t', aliasesProp, ['New'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('src'))!.content).toBe(code)
   })
 
   it('skips the content leg when TWO targets release the same alias in one commit', async () => {

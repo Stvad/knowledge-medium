@@ -8,59 +8,49 @@
  *
  * Each page carries its canonical alias, the outline sections (Welcome,
  * basics, navigation, …), and an `extensions/` sub-page whose children
- * are one block per example extension. All inserts run in a single
- * `repo.tx` so both pages land atomically.
+ * are one block per example extension. The pages land in a single
+ * `repo.tx`; the demo comment threads follow, each in its own.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
-import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { EXTENSION_TYPE, HTML_DOCUMENT_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, childIdsOf } from '@/data/test/createTestRepo'
 import { releaseTestRepos } from '@/data/test/testRepoScope'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { typeSeedsFacet } from '@/data/facets'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
-import { todoDataExtension } from '@/plugins/todo/dataExtension'
-import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
-import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
-import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import { TODO_TYPE } from '@/plugins/todo/schema'
-import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
+import { CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
 import { charLimitProp } from '@/plugins/character-counter/properties'
 import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling/schema'
 import { MAP_TYPE, PLACE_TYPE } from '@/plugins/geo/blockTypes'
 import { placeLatProp } from '@/plugins/geo/properties'
+import { resolveAnchor } from '@/plugins/annotations/anchor'
+import { THREAD_TYPE, threadAnchorOf, threadReplacementOf, threadTargetIdOf } from '@/plugins/annotations/schema'
 import { seedTutorial } from '../seed'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import {
   EXTENSIONS_PAGE_TITLE,
   TUTORIAL_DEFAULT_TITLE,
   TUTORIAL_VIM_TITLE,
+  tutorialOutline,
+  type TutorialNode,
 } from '../outline'
+import { TUTORIAL_TYPE_EXTENSIONS } from './tutorialTypeExtensions'
+import { annotationsDataExtension } from '@/plugins/annotations/dataExtension'
 
 const WS = 'ws-1'
-
-// The block-type data extensions the tutorial's demos depend on. A focused
-// list — NOT the full `staticDataExtensions` — so the seed tx doesn't register
-// the references/alias post-commit processors, which fire async and would make
-// the "single command_events row" assertion racy. The separate completeness
-// test below guards that production's `staticDataExtensions` actually contains
-// these (the original bug was char-counter + geo missing from it).
-const TUTORIAL_TYPE_EXTENSIONS = [
-  todoDataExtension,
-  characterCounterDataExtension,
-  srsReschedulingDataExtension,
-  geoDataExtension,
-]
 
 interface Harness {
   h: TestDb
   repo: Repo
 }
 
-const setup = async (): Promise<Harness> => {
+const setup = async (extensions = TUTORIAL_TYPE_EXTENSIONS): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
   // Mirror production: at construction the Repo gets its data-layer types from
@@ -70,7 +60,7 @@ const setup = async (): Promise<Harness> => {
   const { repo } = createTestRepo({
     db: h.db,
     user: { id: 'user-1' },
-    extensions: TUTORIAL_TYPE_EXTENSIONS,
+    extensions,
   })
   return { h, repo }
 }
@@ -84,6 +74,18 @@ const listAllBlockIds = async (h: TestDb): Promise<string[]> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')
   return rows.map(r => r.id)
 }
+
+const threadRootsIn = async (h: TestDb, repo: Repo) => {
+  const ids = await listAllBlockIds(h)
+  for (const id of ids) await repo.load(id)
+  return ids.map(id => repo.block(id)).filter(b => b.hasType(THREAD_TYPE)).map(b => b.peek()!)
+}
+
+const demoComments = (nodes: readonly TutorialNode[]): string[] =>
+  nodes.flatMap(node => [
+    ...(node.thread?.comment ? [node.thread.comment] : []),
+    ...demoComments(node.children ?? []),
+  ])
 
 const findPageByAlias = async (h: TestDb, repo: Repo, alias: string): Promise<string | null> => {
   for (const id of await listAllBlockIds(h)) {
@@ -141,6 +143,8 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     expect(hasTyped(TODO_TYPE)).toBe(true)
     expect(hasTyped(SRS_SM25_TYPE)).toBe(true)
     expect(hasTyped(MAP_TYPE)).toBe(true)
+    expect(hasTyped(WORD_COUNTER_TYPE)).toBe(true)
+    expect(hasTyped(HTML_DOCUMENT_TYPE)).toBe(true)
 
     // Char-counter demo carries its type-lifted `char:limit` (set via addType).
     const charBlock = blocks.find(b => b.hasType(CHAR_COUNTER_TYPE))
@@ -157,7 +161,7 @@ describe('seedTutorial', {timeout: 30_000}, () => {
   it('seeds advanced sections collapsed and keeps essentials expanded', async () => {
     await env.repo.load(tutorialId, { descendants: true })
 
-    const childIds = await env.repo.block(tutorialId).childIds.load()
+    const childIds = await childIdsOf(env.repo, tutorialId)
     const sectionByContent = new Map(
       childIds.map(id => [env.repo.block(id).peek()?.content ?? '', env.repo.block(id)]),
     )
@@ -173,7 +177,7 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     await env.repo.load(tutorialId, { descendants: true })
 
     const tutorial = env.repo.block(tutorialId)
-    const childIds = await tutorial.childIds.load()
+    const childIds = await childIdsOf(env.repo, tutorial.id)
     // The outline has many top-level sections (Welcome, basics,
     // navigation, …, extensions). Asserting the exact count would make
     // this brittle against future copy-edits; just sanity-check it's
@@ -207,11 +211,34 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     }
   })
 
-  it('all inserts share a single tx — exactly one command_events row', async () => {
-    const rows = await env.h.db.getAll<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM command_events',
-    )
-    expect(rows[0]?.count).toBe(1)
+  it('writes the pages in a single tx', async () => {
+    const rows = await env.h.db.getAll<{ description: string | null }>('SELECT description FROM command_events')
+    expect(rows.filter(row => row.description === 'seed tutorial')).toHaveLength(1)
+    // The pages' tx, the Comments page annotations creates for the first
+    // thread, and one tx per demo thread: a split page write adds a row.
+    expect(rows).toHaveLength(1 + 1 + 4)
+  })
+
+  it('leaves one undo step for the whole seed', () => {
+    expect(env.repo.undoManagerFor(WS).depths(ChangeScope.BlockDefault).undo).toBe(1)
+  })
+
+  it('starts a demo comment thread and a demo edit suggestion in each variant, anchored exactly', async () => {
+    const roots = await threadRootsIn(env.h, env.repo)
+    expect(roots).toHaveLength(4)
+
+    for (const root of roots) {
+      const target = env.repo.block(threadTargetIdOf(root)!).peek()!
+      const anchor = threadAnchorOf(root)
+      expect(anchor.kind).toBe('range')
+      if (anchor.kind === 'range') expect(resolveAnchor(target.content, anchor).state).toBe('exact')
+    }
+    expect(roots.map(threadReplacementOf).filter(Boolean)).toEqual(['receive', 'receive'])
+
+    const [comment] = demoComments(tutorialOutline('default'))
+    const firstComments = await Promise.all(roots.filter(root => !threadReplacementOf(root)).map(async root =>
+      (await childIdsOf(env.repo, root.id)).map(id => env.repo.block(id).peek()?.content)))
+    expect(firstComments).toEqual([[comment], [comment]])
   })
 
   // The seed runs at bootstrap against the Repo's construction-time registry,
@@ -227,9 +254,30 @@ describe('seedTutorial', {timeout: 30_000}, () => {
     const typeIds = new Set<string>(
       runtime.read(typeSeedsFacet).map(t => t.id),
     )
-    for (const typeId of [TODO_TYPE, CHAR_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE]) {
+    for (const typeId of [
+      TODO_TYPE, CHAR_COUNTER_TYPE, WORD_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE,
+      HTML_DOCUMENT_TYPE, THREAD_TYPE,
+    ]) {
       expect(typeIds.has(typeId)).toBe(true)
     }
+  })
+})
+
+describe('seedTutorial when a demo thread cannot be written', {timeout: 30_000}, () => {
+  it('still seeds the pages and returns the tutorial', async () => {
+    // Without the annotations types, every thread write refuses.
+    env = await setup(TUTORIAL_TYPE_EXTENSIONS.filter(ext => ext !== annotationsDataExtension))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let tutorialId: string
+    try {
+      tutorialId = await seedTutorial(env.repo, WS)
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('demo comments failed'), expect.any(Error))
+    } finally {
+      logged.mockRestore()
+    }
+    await env.repo.load(tutorialId)
+    expect(env.repo.block(tutorialId).peek()?.content).toBe(TUTORIAL_DEFAULT_TITLE)
+    expect(await findPageByAlias(env.h, env.repo, TUTORIAL_VIM_TITLE)).not.toBeNull()
   })
 })
 
@@ -251,6 +299,7 @@ describe('seedTutorial into a workspace with a properties-migration mode', {time
     const allIds = await listAllBlockIds(env.h)
     for (const id of allIds) await env.repo.load(id)
     const blocks = allIds.map(id => env.repo.block(id))
+    expect(await threadRootsIn(env.h, env.repo)).toHaveLength(4)
     for (const [extension, property] of [['hello-renderer', 'user:hello'], ['split-layout', 'user:layout']]) {
       const demo = blocks.find(b => b.peek()?.content.startsWith(`Try it: enable \`${extension}\``))
       expect(demo?.peek()?.content).toContain(property)

@@ -33,6 +33,7 @@ import type {MarkdownExtension} from '@/markdown/extensions.js'
 import {fnv1a32Hex} from '@/utils/fnv1a.js'
 import {coveringStyle, highlightClasses, highlightRanges, type HighlightRange} from './highlights.ts'
 import type {HighlightThread} from './summaries.ts'
+import {providedHere, type ProvidedFor} from './surface.ts'
 
 const ANNOTATION_MARK_NODE = 'annotationMark'
 
@@ -390,14 +391,11 @@ const recordSourceSpans = (tree: Root, spans: WeakMap<object, Span>, source: str
 
 /** The input the block's feed is provided under, around its content, by
  *  whatever already reads its thread summaries: the comment pill on outline
- *  blocks, and a card for its comments. It applies only where it was provided,
- *  that block in that render scope: an embed or a block ref inside the content
- *  inherits it, and sets a scope of its own, `((B))` inside B included. */
+ *  blocks, and a card for its comments. It applies only where it was provided
+ *  (`providedHere`). */
 export const THREAD_HIGHLIGHTS_INPUT = 'annotations.threadHighlights'
 
-export interface ThreadHighlightsFeed {
-  blockId: string
-  renderScopeId: string | undefined
+export interface ThreadHighlightsFeed extends ProvidedFor {
   threads: readonly HighlightThread[]
 }
 
@@ -406,8 +404,7 @@ export interface ThreadHighlightsFeed {
  *  render (an export) has no render scope, and no selection to map. */
 export const threadMarksMarkdownExtension: MarkdownExtension = ({block, blockContext, input, data}) => {
   const feed = input[THREAD_HIGHLIGHTS_INPUT] as ThreadHighlightsFeed | undefined
-  const fed = feed !== undefined && feed.blockId === block.id && feed.renderScopeId === blockContext.renderScopeId
-  const ranges = fed ? highlightRanges(data.content, feed.threads) : []
+  const ranges = providedHere(feed, block.id, blockContext.renderScopeId) ? highlightRanges(data.content, feed.threads) : []
   const sourceKey = blockContext.renderScopeId === undefined
     ? undefined
     : renderedSourceKey(block.id, blockContext.renderScopeId, data.content)

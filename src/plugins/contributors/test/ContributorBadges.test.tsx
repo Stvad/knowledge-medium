@@ -3,6 +3,7 @@ import {act, cleanup, fireEvent, render, screen} from '@testing-library/react'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {Block} from '@/data/block'
 import type {BlockData} from '@/data/api'
+import type {BlockGutterItem} from '@/extensions/blockInteraction.js'
 import {USER_TYPE} from '@/data/blockTypes'
 import {typesProp} from '@/data/properties'
 
@@ -14,7 +15,7 @@ vi.mock('@/hooks/block.js', () => ({useHandle: useHandleMock}))
 vi.mock('@/utils/navigation.js', () => ({useOpenBlock: useOpenBlockMock}))
 vi.mock('@/context/layoutWsContext.js', () => ({useAppHashInContext: (_ws: string, id: string) => `#${id}`}))
 
-import {contributorBadgesDecoratorContribution} from '../ContributorBadges.js'
+import {contributorBadgeItemContribution} from '../ContributorBadges.js'
 import {attributionCreatorsProp, attributionEditorsProp, contributorKindProp, contributorRoleProp} from '../schema.js'
 import {CONTRIBUTOR_PROFILES_BY_IDS_QUERY} from '../queries.js'
 
@@ -40,15 +41,14 @@ const block = {id: 'note', repo: {
     [CONTRIBUTOR_PROFILES_BY_IDS_QUERY]: () => profileQueryHandle,
   },
 }} as unknown as Block
-const Inner = ({block: b}: {block: Block}) => <span>Body {b.id}</span>
-const decorate = (properties: Record<string, unknown>) => {
+const badgeItem = (properties: Record<string, unknown>) => {
   useHandleMock.mockImplementation((handle: unknown, options: {selector: (data: unknown) => unknown}) =>
     handle === block
       ? options.selector(blockData(properties))
       : options.selector([...profileRows.values()]))
-  const render = contributorBadgesDecoratorContribution({block} as never)
-  if (!render) throw new Error('expected contributor decorator')
-  return render(Inner)
+  const item = contributorBadgeItemContribution({block} as never)
+  if (!item || Array.isArray(item)) throw new Error('expected one contributor badge item')
+  return (item as BlockGutterItem).component
 }
 
 beforeEach(() => {
@@ -59,28 +59,26 @@ beforeEach(() => {
 afterEach(() => {cleanup(); vi.clearAllMocks()})
 
 describe('contributor badges', () => {
-  it('keeps plain content free of badge chrome when attribution has no agent', () => {
-    const Decorated = decorate({
+  it('renders nothing when attribution has no agent', () => {
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['human']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
-    const {container} = render(<Decorated block={block}/>)
-    expect(screen.getByText('Body note')).toBeTruthy()
-    expect(container.querySelector('button')).toBeNull()
-    expect(container.querySelector('.flex.w-full')).toBeNull()
+    const {container} = render(<Badge block={block}/>)
+    expect(container.innerHTML).toBe('')
   })
 
   it('reflects profile edits in the badge and open details', async () => {
-    const Decorated = decorate({
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
     setProfiles(profile('agent', 'Research Agent', 'agent', 'research'))
-    const view = render(<Decorated block={block}/>)
+    const view = render(<Badge block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent'}).textContent).toBe('Research Agent')
 
     act(() => setProfiles(profile('agent', 'Updated Agent', 'automation', 'summarizer')))
-    view.rerender(<Decorated block={block}/>)
+    view.rerender(<Badge block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Updated Agent'}).textContent).toBe('Updated Agent')
     expect(screen.getByRole('button', {name: 'Authorship details: By Updated Agent'}).getAttribute('title')).toBe('By Updated Agent')
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
@@ -89,12 +87,12 @@ describe('contributor badges', () => {
   })
 
   it('treats a USER_TYPE profile as human even when its stored kind is agent', () => {
-    const Decorated = decorate({
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
     setProfiles(profile('agent', 'Research Agent', 'agent', 'research'))
-    const view = render(<Decorated block={block}/>)
+    const view = render(<Badge block={block}/>)
     expect(screen.getByRole('button', {name: /Research Agent/})).toBeTruthy()
 
     act(() => setProfiles({
@@ -104,35 +102,34 @@ describe('contributor badges', () => {
         [typesProp.name]: typesProp.codec.encode([USER_TYPE]),
       },
     }))
-    view.rerender(<Decorated block={block}/>)
+    view.rerender(<Badge block={block}/>)
     expect(screen.queryByRole('button', {name: /Authorship details/})).toBeNull()
-    expect(screen.getByText('Body note')).toBeTruthy()
   })
 
   it('keeps repeated and additional contributors compact with a count', () => {
-    const Decorated = decorate({
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent', 'agent', 'other']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode([]),
     })
     setProfiles(profile('agent', 'Research Agent', 'agent', 'research'), profile('other', 'Writer Bot', 'automation', 'writer'))
-    render(<Decorated block={block}/>)
+    render(<Badge block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent, Writer Bot'}).textContent).toBe('Research Agent+1')
   })
 
   it('uses the first non-human editor as the badge primary when there is no non-human creator', () => {
-    const Decorated = decorate({
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['human']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['writer']),
     })
     setProfiles(profile('human', 'Alice', 'human'), profile('writer', 'Writer Bot', 'automation', 'writer'))
-    render(<Decorated block={block}/>)
+    render(<Badge block={block}/>)
     const badge = screen.getByRole('button', {name: 'Authorship details: Edited by Writer Bot'})
     expect(badge.textContent).toBe('Writer Bot')
     expect(badge.querySelector('svg')).toBeTruthy()
   })
 
   it('omits a creator from the editor summary but keeps mixed editor attribution in details', async () => {
-    const Decorated = decorate({
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['agent', 'writer', 'reviewer', 'human']),
     })
@@ -142,7 +139,7 @@ describe('contributor badges', () => {
       profile('reviewer', 'Review Bot', 'agent', 'reviewer'),
       profile('human', 'Alice', 'human'),
     )
-    render(<Decorated block={block}/>)
+    render(<Badge block={block}/>)
     const badge = screen.getByRole('button', {name: /Authorship details/})
     expect(badge.textContent).toBe('Research Agent+2')
     expect(badge.getAttribute('title')).toBe('By Research Agent · Edited by Writer Bot, Review Bot')
@@ -157,11 +154,11 @@ describe('contributor badges', () => {
   })
 
   it('shows each contributor once in the badge while retaining creator/editor detail records', async () => {
-    const Decorated = decorate({
+    const Badge = badgeItem({
       [attributionCreatorsProp.name]: attributionCreatorsProp.codec.encode(['human', 'agent']),
       [attributionEditorsProp.name]: attributionEditorsProp.codec.encode(['agent']),
     })
-    render(<Decorated block={block}/>)
+    render(<Badge block={block}/>)
     expect(screen.getByRole('button', {name: 'Authorship details: By Research Agent'}).textContent).toBe('Research Agent')
     fireEvent.pointerDown(screen.getByRole('button', {name: /Authorship details/}), {button: 0, pointerType: 'mouse'})
     await screen.findByRole('menu')

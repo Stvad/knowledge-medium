@@ -54,6 +54,7 @@ export const attributionCreatorsProp = seedProperty({
   config: {targetTypes: [CONTRIBUTOR_TYPE]},
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 export const attributionEditorsProp = seedProperty({
@@ -64,6 +65,7 @@ export const attributionEditorsProp = seedProperty({
   config: {targetTypes: [CONTRIBUTOR_TYPE]},
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
+  hideInOutline: true,
 })
 
 // Contributor profiles are ordinary pages. The profile creation helper adds

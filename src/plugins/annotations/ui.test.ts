@@ -9,6 +9,7 @@ import {
   commentActionsContribution,
   commentContextMenuItem,
   commentPillContribution,
+  commentSurfaceContribution,
   commentsBelowContentContribution,
   inCard,
   pillClick,
@@ -19,9 +20,24 @@ const thread = (id: string, open = true): ThreadSummary =>
   ({id, open, anchor: {kind: 'block'}, suggestion: false, commentCount: 1, quoterCount: 0, createdAt: 0})
 
 /** The contributions decide from the resolve context alone, so a context with
- *  just the fields they read is enough. */
-const ctx = (fields: {types?: string[]; isTopLevel?: boolean; blockContext?: Record<string, unknown>}) =>
-  ({types: fields.types ?? [], isTopLevel: fields.isTopLevel ?? false, blockContext: fields.blockContext} as unknown as BlockResolveContext)
+ *  just the fields they read is enough. `rows` is the block (`self`) and its
+ *  parent as stored, for the rules that read them. */
+const ctx = (fields: {
+  types?: string[]
+  isTopLevel?: boolean
+  blockContext?: Record<string, unknown>
+  rows?: {self?: Record<string, unknown>; parent?: Record<string, unknown>}
+}) => {
+  const self = {parentId: 'P', ...fields.rows?.self}
+  const blockOf = (data: unknown) => ({peek: () => data})
+  return {
+    types: fields.types ?? [],
+    isTopLevel: fields.isTopLevel ?? false,
+    blockContext: fields.blockContext,
+    block: blockOf(self),
+    repo: {block: () => blockOf(fields.rows?.parent ?? {})},
+  } as unknown as BlockResolveContext
+}
 
 describe('where the comments UI attaches', () => {
   it('adds a separate selection menu only to full nested block surfaces', () => {
@@ -34,15 +50,15 @@ describe('where the comments UI attaches', () => {
     expect(nestedReadSelectionMenuContribution(ctx({blockContext: {isNestedSurface: true, isBacklink: true, isBreadcrumb: true}}))).toBeNull()
   })
 
-  it('puts the pill and the inline threads on outline blocks, the focal one included, but not on nested surfaces', () => {
-    expect(commentPillContribution(ctx({}))).toBeTruthy()
-    expect(commentsBelowContentContribution(ctx({}))).toBeTruthy()
-    // Unlike the reference pill: nothing else shows a focal block's comments.
-    expect(commentPillContribution(ctx({isTopLevel: true}))).toBeTruthy()
-    expect(commentsBelowContentContribution(ctx({isTopLevel: true}))).toBeTruthy()
+  it('puts the pill, the read surface and the inline threads on outline blocks, the focal one included, but not on nested surfaces', () => {
+    const outlineOnly = [commentPillContribution, commentSurfaceContribution, commentsBelowContentContribution]
+    for (const contribution of outlineOnly) {
+      expect(contribution(ctx({}))).toBeTruthy()
+      // Unlike the reference pill: nothing else shows a focal block's comments.
+      expect(contribution(ctx({isTopLevel: true}))).toBeTruthy()
+      expect(contribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
+    }
     expect(commentContextMenuItem(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
-    expect(commentPillContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
-    expect(commentsBelowContentContribution(ctx({blockContext: {isNestedSurface: true}}))).toBeNull()
   })
 
   it('gives Reply and Delete to comments inside a card, not to the root or to blocks outside one', () => {
@@ -50,6 +66,12 @@ describe('where the comments UI attaches', () => {
     expect(commentActionsContribution(ctx({blockContext: card}))).toBeTruthy()
     expect(commentActionsContribution(ctx({types: [THREAD_TYPE], blockContext: card}))).toBeNull()
     expect(commentActionsContribution(ctx({}))).toBeNull()
+  })
+
+  it('gives none to a property row in a card, or to its value', () => {
+    const card = {[COMMENT_CARD_KEY]: 'card:T', renderScopeId: 'card:T', scopeRootId: 'T', isNestedSurface: true}
+    expect(commentActionsContribution(ctx({blockContext: card, rows: {self: {isFieldForm: true}}}))).toBeNull()
+    expect(commentActionsContribution(ctx({blockContext: card, rows: {parent: {isFieldForm: true}}}))).toBeNull()
   })
 
   it('stops at a nested surface inside a card, such as a note embedded in a comment', () => {
