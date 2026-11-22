@@ -1,1 +1,1 @@
-export{XA as formatAbsoluteDateTime,ZA as formatRelativeTime}from"../../chunks/app-BJryqiZw.js";
+export{ZA as formatAbsoluteDateTime,QA as formatRelativeTime}from"../../chunks/app-of-M_6eT.js";

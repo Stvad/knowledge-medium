@@ -1,1 +1,1 @@
-export{ZO as WorkspaceSettingsDialog}from"../../../chunks/app-BJryqiZw.js";
+export{QO as WorkspaceSettingsDialog}from"../../../chunks/app-of-M_6eT.js";

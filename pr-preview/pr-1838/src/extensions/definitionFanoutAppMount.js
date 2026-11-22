@@ -1,1 +1,1 @@
-export{VR as DefinitionFanoutProgress,HR as definitionFanoutAppMountExtension}from"../../chunks/app-BJryqiZw.js";
+export{HR as DefinitionFanoutProgress,UR as definitionFanoutAppMountExtension}from"../../chunks/app-of-M_6eT.js";

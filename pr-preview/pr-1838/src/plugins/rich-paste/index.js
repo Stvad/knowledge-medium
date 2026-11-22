@@ -1,1 +1,1 @@
-export{PC as richPastePlugin}from"../../../chunks/app-BJryqiZw.js";
+export{FC as richPastePlugin}from"../../../chunks/app-of-M_6eT.js";

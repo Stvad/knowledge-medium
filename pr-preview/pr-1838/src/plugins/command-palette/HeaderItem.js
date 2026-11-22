@@ -1,1 +1,1 @@
-export{WP as CommandPaletteHeaderItem}from"../../../chunks/app-BJryqiZw.js";
+export{GP as CommandPaletteHeaderItem}from"../../../chunks/app-of-M_6eT.js";
