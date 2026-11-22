@@ -1,1 +1,1 @@
-export{GD as BlockLink}from"../../../chunks/app-CGdfGHHd.js";
+export{Ej as BlockLink}from"../../../chunks/app-S_SQ4JW-.js";

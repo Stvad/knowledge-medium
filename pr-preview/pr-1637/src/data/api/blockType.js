@@ -1,1 +1,1 @@
-export{Hut as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-CGdfGHHd.js";
+export{kgt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-S_SQ4JW-.js";

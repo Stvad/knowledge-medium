@@ -1,1 +1,1 @@
-export{jF as BlockChildren,MF as BlockComponent}from"../../chunks/app-CGdfGHHd.js";
+export{ZR as BlockChildren,QR as BlockComponent}from"../../chunks/app-S_SQ4JW-.js";

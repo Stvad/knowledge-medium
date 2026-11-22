@@ -1,1 +1,1 @@
-export{ko as openDbMirrorSettingsAction}from"../../../chunks/app-CGdfGHHd.js";
+export{pl as openDbMirrorSettingsAction}from"../../../chunks/app-S_SQ4JW-.js";
