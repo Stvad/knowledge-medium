@@ -1,1 +1,1 @@
-export{MZ as characterCounterDataExtension}from"../../../chunks/app-_jHrbcHH.js";
+export{x2 as characterCounterDataExtension}from"../../../chunks/app-DA-dge-H.js";

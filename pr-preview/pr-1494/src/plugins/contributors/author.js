@@ -1,1 +1,1 @@
-export{ng as authorIdOf}from"../../../chunks/app-_jHrbcHH.js";
+export{ny as authorIdOf}from"../../../chunks/app-DA-dge-H.js";

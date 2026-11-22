@@ -1,1 +1,1 @@
-export{EN as exampleExtensions,DN as insertExampleExtensionsUnder}from"../../chunks/app-_jHrbcHH.js";
+export{NI as exampleExtensions,PI as insertExampleExtensionsUnder}from"../../chunks/app-DA-dge-H.js";

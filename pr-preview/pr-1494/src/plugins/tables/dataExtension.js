@@ -1,0 +1,1 @@
+export{zX as tablesDataExtension}from"../../../chunks/app-DA-dge-H.js";

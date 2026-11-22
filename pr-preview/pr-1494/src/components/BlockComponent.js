@@ -1,1 +1,1 @@
-export{MF as BlockChildren,NF as BlockComponent}from"../../chunks/app-_jHrbcHH.js";
+export{VR as BlockChildren,HR as BlockComponent}from"../../chunks/app-DA-dge-H.js";

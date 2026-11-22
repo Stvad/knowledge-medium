@@ -1,1 +1,1 @@
-export{BI as BlockTypeBlockRenderer,VI as BlockTypeContentRenderer,HI as writeBlockTypeLabel}from"../../../chunks/app-_jHrbcHH.js";
+export{eB as BlockTypeBlockRenderer,tB as BlockTypeContentRenderer,nB as writeBlockTypeLabel}from"../../../chunks/app-DA-dge-H.js";

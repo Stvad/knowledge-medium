@@ -1,1 +1,1 @@
-export{NG as usePropertySchemas}from"../../chunks/app-_jHrbcHH.js";
+export{zJ as usePropertySchemas}from"../../chunks/app-DA-dge-H.js";

@@ -1,1 +1,1 @@
-export{gh as extensionsOverridesProp,_h as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-_jHrbcHH.js";
+export{gv as extensionsOverridesProp,_v as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-DA-dge-H.js";

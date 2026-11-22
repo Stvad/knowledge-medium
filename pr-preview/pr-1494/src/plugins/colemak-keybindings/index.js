@@ -1,1 +1,1 @@
-export{DC as COLEMAK_KEYBINDINGS_PLUGIN_ID,OC as colemakKeybindingsPlugin,kC as colemakMovementKeybindingOverrides}from"../../../chunks/app-_jHrbcHH.js";
+export{ZE as COLEMAK_KEYBINDINGS_PLUGIN_ID,QE as colemakKeybindingsPlugin,$E as colemakMovementKeybindingOverrides}from"../../../chunks/app-DA-dge-H.js";

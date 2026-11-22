@@ -1,1 +1,1 @@
-export{wu as blockTaggingDataExtension}from"../../../chunks/app-_jHrbcHH.js";
+export{ap as blockTaggingDataExtension}from"../../../chunks/app-DA-dge-H.js";

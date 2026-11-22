@@ -1,1 +1,1 @@
-export{nq as referencesDataExtension}from"../../../chunks/app-_jHrbcHH.js";
+export{QX as referencesDataExtension}from"../../../chunks/app-DA-dge-H.js";

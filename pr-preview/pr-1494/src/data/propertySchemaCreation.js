@@ -1,0 +1,1 @@
+export{WJ as adoptOrCreatePropertySchema}from"../../chunks/app-DA-dge-H.js";

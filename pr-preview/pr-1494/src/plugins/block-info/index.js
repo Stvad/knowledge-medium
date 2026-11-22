@@ -1,1 +1,1 @@
-export{rv as blockInfoPlugin}from"../../../chunks/app-_jHrbcHH.js";
+export{hx as blockInfoPlugin}from"../../../chunks/app-DA-dge-H.js";

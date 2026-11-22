@@ -1,1 +1,1 @@
-export{Dy as aliasCompletions,Oy as referencesCodeMirrorExtensions}from"../../../chunks/app-_jHrbcHH.js";
+export{zS as aliasCompletions,BS as buildBlockrefSource,VS as buildWikilinkSource,HS as referencesCodeMirrorExtensions}from"../../../chunks/app-DA-dge-H.js";

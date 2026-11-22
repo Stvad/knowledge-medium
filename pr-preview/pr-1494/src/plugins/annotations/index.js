@@ -1,1 +1,1 @@
-export{Yd as annotationsPlugin}from"../../../chunks/app-_jHrbcHH.js";
+export{Mm as annotationsPlugin}from"../../../chunks/app-DA-dge-H.js";

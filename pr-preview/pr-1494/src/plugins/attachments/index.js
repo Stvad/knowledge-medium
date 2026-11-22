@@ -1,1 +1,1 @@
-export{Ib as attachmentsPlugin}from"../../../chunks/app-_jHrbcHH.js";
+export{QC as attachmentsPlugin}from"../../../chunks/app-DA-dge-H.js";

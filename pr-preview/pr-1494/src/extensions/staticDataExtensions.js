@@ -1,1 +1,1 @@
-export{VK as staticDataExtensions}from"../../chunks/app-_jHrbcHH.js";
+export{wX as staticDataExtensions}from"../../chunks/app-DA-dge-H.js";

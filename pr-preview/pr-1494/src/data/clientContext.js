@@ -1,1 +1,1 @@
-export{D2 as ClientContext}from"../../chunks/app-_jHrbcHH.js";
+export{V8 as ClientContext}from"../../chunks/app-DA-dge-H.js";

@@ -1,1 +1,1 @@
-export{LF as BlockLoadingPlaceholder}from"../../chunks/app-_jHrbcHH.js";
+export{ZR as BlockLoadingPlaceholder}from"../../chunks/app-DA-dge-H.js";
