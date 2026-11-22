@@ -464,7 +464,8 @@ const findFirstInstanceLocation = (
   return (first && locationOf(first)) ?? undefined
 }
 
-const crossPanelFocus = async (
+/** Focus a row in another panel and make that panel the active one, in one transaction. */
+export const crossPanelFocus = async (
   sourcePanelBlock: Block,
   destPanelId: string,
   destLocation: FocusedBlockLocation,

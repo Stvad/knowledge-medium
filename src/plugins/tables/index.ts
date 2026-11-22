@@ -12,9 +12,11 @@ import { cellEditorExtension } from './cellEdits'
 import { tablesDataExtension } from './dataExtension'
 import { queryPropertyUi } from './QueryUi'
 import { queryCompletionExtension } from './query/completion'
+import { tableRowVerbs } from './rowVerbs'
 import {
   tableActionContexts, tableActions, tableOutlineVerbRedirects, tableRoleOf, tableShortcutActivation,
 } from './keys'
+import { tableVerticalSteps } from './navigation'
 import { CELL_SURFACE, TableCellLayout, TableHostLayout, TableRowLayout } from './TableLayout'
 import { TABLE_TYPE } from './schema'
 
@@ -49,4 +51,6 @@ export const tablesPlugin: AppExtension = systemToggle({
   tableActionContexts.map(config => actionContextsFacet.of(config, {source: SOURCE})),
   [...tableActions, ...tableConversionActions].map(action => actionsFacet.of(action, {source: SOURCE})),
   tableOutlineVerbRedirects,
+  tableRowVerbs,
+  tableVerticalSteps,
 ])
