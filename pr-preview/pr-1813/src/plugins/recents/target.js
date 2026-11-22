@@ -1,0 +1,1 @@
+export{cA as openRecentsPage}from"../../../chunks/app-DhEn_mNe.js";

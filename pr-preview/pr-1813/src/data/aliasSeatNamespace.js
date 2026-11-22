@@ -1,0 +1,1 @@
+export{slt as aliasSeatNamespacesInTx,clt as resolveAliasSeatNamespaces}from"../../chunks/app-DhEn_mNe.js";

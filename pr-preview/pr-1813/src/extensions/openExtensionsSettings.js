@@ -1,0 +1,1 @@
+export{nR as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,rR as openExtensionsSettings}from"../../chunks/app-DhEn_mNe.js";

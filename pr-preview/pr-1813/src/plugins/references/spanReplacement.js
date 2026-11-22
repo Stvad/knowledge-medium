@@ -1,0 +1,1 @@
+export{pX as preferredSpanReplacement}from"../../../chunks/app-DhEn_mNe.js";

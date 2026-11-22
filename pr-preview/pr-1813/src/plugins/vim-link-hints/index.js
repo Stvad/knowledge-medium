@@ -1,0 +1,1 @@
+export{PT as vimLinkHintsPlugin}from"../../../chunks/app-DhEn_mNe.js";

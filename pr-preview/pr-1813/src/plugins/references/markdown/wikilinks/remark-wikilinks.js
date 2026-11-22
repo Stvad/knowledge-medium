@@ -1,0 +1,1 @@
+export{wx as remarkWikilinks}from"../../../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{fQ as dailyNotesLocalSchema}from"../../../chunks/app-DhEn_mNe.js";

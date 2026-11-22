@@ -1,0 +1,1 @@
+export{jI as gestureBindingDescriptor,MI as matchesGestureEvent}from"../../chunks/app-DhEn_mNe.js";

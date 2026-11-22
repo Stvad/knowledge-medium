@@ -1,0 +1,1 @@
+export{Ust as MIGRATIONS_PAGE_ALIAS,Wst as getOrCreateMigrationsPage,Gst as migrationsPageBlockId,Kst as migrationsPageSpec}from"../../chunks/app-DhEn_mNe.js";

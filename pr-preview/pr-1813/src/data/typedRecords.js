@@ -1,0 +1,1 @@
+export{R$ as adoptTypedBlock,z$ as createTypedChild,gut as derivedBlockId,B$ as getOrCreateTypedChild}from"../../chunks/app-DhEn_mNe.js";

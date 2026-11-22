@@ -1,0 +1,1 @@
+export{dj as Label}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{g4 as agentRuntimeDataExtension}from"../../../chunks/app-DhEn_mNe.js";

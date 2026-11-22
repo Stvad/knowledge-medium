@@ -1,0 +1,1 @@
+export{Npt as SYSTEM_AUTHOR_PREFIX,Ppt as isSystemAuthor,Fpt as systemAuthor}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{GH as BlockProperties}from"../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{Jr as extensionsOverridesUi}from"../../../chunks/app-DhEn_mNe.js";

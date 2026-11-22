@@ -1,0 +1,1 @@
+export{oP as SWIPE_QUICK_ACTIONS_GESTURE_ID,sP as SWIPE_TRIGGER_PX,cP as swipeRecognizer}from"../../../chunks/app-DhEn_mNe.js";

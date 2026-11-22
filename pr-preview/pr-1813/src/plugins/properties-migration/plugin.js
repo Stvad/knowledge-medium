@@ -1,0 +1,1 @@
+export{Ms as propertiesMigrationPlugin}from"../../../chunks/app-DhEn_mNe.js";

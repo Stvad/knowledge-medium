@@ -1,0 +1,1 @@
+export{lY as staticDataExtensions}from"../../chunks/app-DhEn_mNe.js";

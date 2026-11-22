@@ -1,0 +1,1 @@
+export{jQ as annotationsDataExtension}from"../../../chunks/app-DhEn_mNe.js";

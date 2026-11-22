@@ -1,0 +1,1 @@
+export{Bd as ADD_TAG_ACTION_ID,Vd as ADD_TAG_BLOCKS_ACTION_ID,Gd as appendTagToBlocks,Kd as appendTagToContent,zd as blockTaggingPlugin,tf as blockTagsConfigProp}from"../../../chunks/app-DhEn_mNe.js";

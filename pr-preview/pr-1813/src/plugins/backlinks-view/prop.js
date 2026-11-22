@@ -1,0 +1,1 @@
+export{jb as DEFAULT_BACKLINKS_VIEW_ID,Mb as FLAT_BACKLINKS_VIEW_ID,Nb as GROUPED_BACKLINKS_VIEW_ID,Pb as backlinksViewProp,Fb as defaultBacklinksViewIdForBlock}from"../../../chunks/app-DhEn_mNe.js";

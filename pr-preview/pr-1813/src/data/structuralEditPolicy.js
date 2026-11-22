@@ -1,0 +1,1 @@
+export{EF as resolveStructuralEditPolicy,DF as structuralEditPolicyForBlock}from"../../chunks/app-DhEn_mNe.js";

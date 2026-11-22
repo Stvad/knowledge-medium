@@ -1,0 +1,1 @@
+export{Il as REMATERIALIZE_WORKSPACE_ACTION_ID,Ll as rematerializeWorkspaceAction,Rl as rematerializeWorkspaceActionContribution}from"../../../chunks/app-DhEn_mNe.js";

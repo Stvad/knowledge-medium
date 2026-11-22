@@ -1,0 +1,1 @@
+export{MH as isFocalRender,NH as useIsFocalRender}from"../../chunks/app-DhEn_mNe.js";

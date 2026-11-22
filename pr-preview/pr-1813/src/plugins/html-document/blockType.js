@@ -1,0 +1,1 @@
+export{OX as htmlDocumentTypeSeed}from"../../../chunks/app-DhEn_mNe.js";

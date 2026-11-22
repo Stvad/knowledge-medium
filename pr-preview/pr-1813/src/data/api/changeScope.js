@@ -1,0 +1,1 @@
+export{Mmt as CHANGE_SCOPE_POLICIES,Nmt as ChangeScope,Pmt as isChangeScope,Fmt as policyForScope,Imt as scopeAllowedInReadOnly,Lmt as scopeIsUndoable,Rmt as scopePoliciesEquivalent,zmt as scopeUploadsToServer,Bmt as sourceForScope}from"../../../chunks/app-DhEn_mNe.js";

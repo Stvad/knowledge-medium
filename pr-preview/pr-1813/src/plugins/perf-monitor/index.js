@@ -1,0 +1,1 @@
+export{ai as perfMonitorPlugin}from"../../../chunks/app-DhEn_mNe.js";

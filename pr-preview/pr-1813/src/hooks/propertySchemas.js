@@ -1,0 +1,1 @@
+export{Sq as usePropertySchemas}from"../../chunks/app-DhEn_mNe.js";

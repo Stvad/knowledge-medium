@@ -1,0 +1,1 @@
+export{wY as tablesDataExtension}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{lJ as SuspenseFallback}from"../../../chunks/app-DhEn_mNe.js";

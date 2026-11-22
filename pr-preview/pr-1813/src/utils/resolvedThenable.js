@@ -1,0 +1,1 @@
+export{p2 as resolvedThenable,m2 as stampFulfilled}from"../../chunks/app-DhEn_mNe.js";

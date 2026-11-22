@@ -1,0 +1,1 @@
+export{qpt as definePostCommitProcessor}from"../../../chunks/app-DhEn_mNe.js";

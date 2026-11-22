@@ -1,0 +1,1 @@
+export{Bw as videoPlayerPlugin}from"../../../chunks/app-DhEn_mNe.js";

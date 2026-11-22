@@ -1,0 +1,1 @@
+export{wp as quotedInFooterContribution}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{OK as withMoveTransition}from"../../chunks/app-DhEn_mNe.js";

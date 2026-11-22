@@ -1,0 +1,1 @@
+export{JI as dynamicExtensionsExtension}from"../../chunks/app-DhEn_mNe.js";

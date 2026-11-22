@@ -1,0 +1,1 @@
+export{HS as attachmentsPlugin}from"../../../chunks/app-DhEn_mNe.js";

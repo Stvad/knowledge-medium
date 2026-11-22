@@ -1,0 +1,1 @@
+export{lI as appUpdatePromptExtension}from"../../../chunks/app-DhEn_mNe.js";

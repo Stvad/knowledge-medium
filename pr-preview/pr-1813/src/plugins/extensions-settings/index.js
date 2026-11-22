@@ -1,0 +1,1 @@
+export{o_ as extensionsOverridesProp,s_ as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-DhEn_mNe.js";

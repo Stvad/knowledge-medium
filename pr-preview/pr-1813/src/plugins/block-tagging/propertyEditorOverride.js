@@ -1,0 +1,1 @@
+export{Jd as blockTagsConfigUi}from"../../../chunks/app-DhEn_mNe.js";

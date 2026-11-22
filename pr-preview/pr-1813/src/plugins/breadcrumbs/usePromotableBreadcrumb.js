@@ -1,0 +1,1 @@
+export{SD as usePromotableBreadcrumb}from"../../../chunks/app-DhEn_mNe.js";

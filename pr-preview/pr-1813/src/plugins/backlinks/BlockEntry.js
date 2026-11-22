@@ -1,0 +1,1 @@
+export{Vb as LazyBlockEntry}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{PA as useAncestorCrumbs}from"../../chunks/app-DhEn_mNe.js";

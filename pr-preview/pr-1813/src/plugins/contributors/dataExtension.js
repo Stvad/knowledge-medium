@@ -1,0 +1,1 @@
+export{F1 as contributorsDataExtension}from"../../../chunks/app-DhEn_mNe.js";

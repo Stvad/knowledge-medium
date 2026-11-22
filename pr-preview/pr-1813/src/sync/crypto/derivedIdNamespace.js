@@ -1,0 +1,1 @@
+export{Vlt as deriveWorkspaceIdNamespace}from"../../../chunks/app-DhEn_mNe.js";

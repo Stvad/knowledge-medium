@@ -1,0 +1,1 @@
+export{KF as editorAutocompleteExtension}from"../../chunks/app-DhEn_mNe.js";

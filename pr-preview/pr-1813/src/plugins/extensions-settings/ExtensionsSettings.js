@@ -1,0 +1,1 @@
+export{$r as ExtensionsSettings}from"../../../chunks/app-DhEn_mNe.js";

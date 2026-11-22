@@ -1,0 +1,1 @@
+export{UG as applyToAllBlocksInSelection,WG as defineBlocksAction,GG as hasEditableTarget,KG as isImeKeyEvent,qG as isPropertyEditingField,JG as isTypingKeyEvent,YG as makeCMMode,XG as makeModeAction,ZG as makeMultiSelect,QG as makeNormalMode,$G as multiSelectActionId,eK as withRecoveredLetterKey}from"../../chunks/app-DhEn_mNe.js";

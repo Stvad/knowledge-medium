@@ -1,0 +1,1 @@
+export{FL as BlockLoadingPlaceholder}from"../../chunks/app-DhEn_mNe.js";

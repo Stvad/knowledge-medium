@@ -1,0 +1,1 @@
+export{on as buildTypeTagCandidates,sn as findCompletableTypeByName,cn as matchHashTrigger,ln as planTriggerDeletion,un as planTriggerRestore,dn as restoreDeletedTextToView,fn as typeTagCompletionSource,pn as visibleTagTypeIds}from"../../../chunks/app-DhEn_mNe.js";

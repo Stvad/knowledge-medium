@@ -1,0 +1,1 @@
+export{TP as DEFAULT_QUICK_ACTION_ITEMS,EP as SWIPE_RIGHT_BLOCK_ACTION_ID,DP as isQuickActionItem,OP as quickActionItemsFacet}from"../../../chunks/app-DhEn_mNe.js";

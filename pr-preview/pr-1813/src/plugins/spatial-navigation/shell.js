@@ -1,0 +1,1 @@
+export{nE as spatialNavigationShellDecorator}from"../../../chunks/app-DhEn_mNe.js";

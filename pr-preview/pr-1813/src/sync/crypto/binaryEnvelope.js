@@ -1,0 +1,1 @@
+export{LO as BINARY_ENVELOPE_MAGIC,RO as BINARY_ENVELOPE_MIN_BYTES,zO as BINARY_ENVELOPE_OVERHEAD_BYTES,BO as BINARY_MAGIC_BYTES,VO as decodeBinaryEnvelope,HO as encodeBinaryEnvelope,UO as hasBinaryEnvelopeMagic}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{hF as ensureMetricsConsoleHook}from"../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{vI as checkForAppUpdate,yI as registerServiceWorker}from"../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{KI as resolveAppRuntime,qI as resolveAppRuntimeSync}from"../../chunks/app-DhEn_mNe.js";

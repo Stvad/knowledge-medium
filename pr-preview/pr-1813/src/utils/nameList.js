@@ -1,0 +1,1 @@
+export{F9 as NAMES_IN_A_SENTENCE,I9 as describeNames,L9 as firstFew}from"../../chunks/app-DhEn_mNe.js";

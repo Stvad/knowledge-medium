@@ -1,0 +1,1 @@
+export{DX as htmlDocumentDataExtension}from"../../../chunks/app-DhEn_mNe.js";

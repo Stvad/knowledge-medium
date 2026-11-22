@@ -1,0 +1,1 @@
+export{kL as LazyBlockComponent}from"../../chunks/app-DhEn_mNe.js";

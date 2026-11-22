@@ -1,0 +1,1 @@
+export{M_ as BLOCK_HISTORY_CONTENT_CHARS,N_ as LISTED_PROPERTY_NAMES,P_ as MAX_LISTED_CHANGES,F_ as blockHistory,I_ as recentChanges}from"../../../chunks/app-DhEn_mNe.js";

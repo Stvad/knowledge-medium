@@ -1,0 +1,1 @@
+export{Jj as dailyDateWikilinkDecorator}from"../../../chunks/app-DhEn_mNe.js";

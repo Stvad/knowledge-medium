@@ -1,0 +1,1 @@
+export{Sx as wikilinkMarkdownExtension}from"../../../../../chunks/app-DhEn_mNe.js";

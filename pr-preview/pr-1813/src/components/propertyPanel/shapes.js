@@ -1,0 +1,1 @@
+export{Eq as propertyShapeLabel}from"../../../chunks/app-DhEn_mNe.js";

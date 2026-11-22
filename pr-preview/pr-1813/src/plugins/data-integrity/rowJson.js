@@ -1,0 +1,1 @@
+export{al as parsePropertiesJson}from"../../../chunks/app-DhEn_mNe.js";

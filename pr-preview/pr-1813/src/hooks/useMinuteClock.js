@@ -1,0 +1,1 @@
+export{oA as useMinuteClock}from"../../chunks/app-DhEn_mNe.js";

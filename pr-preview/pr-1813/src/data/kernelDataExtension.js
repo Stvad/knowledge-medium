@@ -1,0 +1,1 @@
+export{s7 as kernelDataExtension}from"../../chunks/app-DhEn_mNe.js";

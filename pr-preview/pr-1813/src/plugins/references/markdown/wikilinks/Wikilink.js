@@ -1,0 +1,1 @@
+export{Cx as Wikilink}from"../../../../../chunks/app-DhEn_mNe.js";

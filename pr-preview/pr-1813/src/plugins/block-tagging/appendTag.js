@@ -1,0 +1,1 @@
+export{Gd as appendTagToBlocks,Kd as appendTagToContent}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{JN as CommandPaletteHeaderItem}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{fx as geoContentDecoratorContribution}from"../../../chunks/app-DhEn_mNe.js";

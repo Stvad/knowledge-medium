@@ -1,0 +1,1 @@
+export{r_ as extensionApiCatalog,i_ as extensionApiRuntimeExports}from"../../chunks/app-DhEn_mNe.js";

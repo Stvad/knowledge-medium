@@ -1,0 +1,1 @@
+export{Yd as BlockTagsConfigEditor}from"../../../chunks/app-DhEn_mNe.js";

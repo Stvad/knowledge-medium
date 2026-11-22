@@ -1,0 +1,1 @@
+export{i7 as Block,a7 as requireLoadedBlock}from"../../chunks/app-DhEn_mNe.js";

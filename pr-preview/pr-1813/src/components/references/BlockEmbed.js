@@ -1,0 +1,1 @@
+export{VP as BlockEmbed}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{Rc as dataIntegrityPlugin}from"../../../chunks/app-DhEn_mNe.js";

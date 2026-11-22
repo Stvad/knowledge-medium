@@ -1,0 +1,1 @@
+export{Vw as videoPlayerMarkdownExtension}from"../../../chunks/app-DhEn_mNe.js";

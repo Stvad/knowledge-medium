@@ -1,0 +1,1 @@
+export{SK as isIOS,CK as isMacPlatform}from"../../chunks/app-DhEn_mNe.js";

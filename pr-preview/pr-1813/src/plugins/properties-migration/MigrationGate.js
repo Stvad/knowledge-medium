@@ -1,0 +1,1 @@
+export{Ns as MigrationGate}from"../../../chunks/app-DhEn_mNe.js";

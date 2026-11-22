@@ -1,0 +1,1 @@
+export{$x as blockDragPlugin}from"../../../chunks/app-DhEn_mNe.js";

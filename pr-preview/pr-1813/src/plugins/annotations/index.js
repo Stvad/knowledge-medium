@@ -1,0 +1,1 @@
+export{Sp as annotationsPlugin}from"../../../chunks/app-DhEn_mNe.js";

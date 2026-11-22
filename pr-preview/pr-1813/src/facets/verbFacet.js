@@ -1,0 +1,1 @@
+export{h4 as defineVerbFacet}from"../../chunks/app-DhEn_mNe.js";

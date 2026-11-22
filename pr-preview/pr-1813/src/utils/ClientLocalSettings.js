@@ -1,0 +1,1 @@
+export{WI as ClientLocalSettings,GI as clientLocalSettings}from"../../chunks/app-DhEn_mNe.js";

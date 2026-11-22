@@ -1,0 +1,1 @@
+export{K_ as authorIdOf}from"../../../chunks/app-DhEn_mNe.js";

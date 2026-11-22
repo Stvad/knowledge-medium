@@ -1,0 +1,1 @@
+export{bU as declarationOnlyDefinitionForName,xU as declarationOnlyStatusText}from"../../../chunks/app-DhEn_mNe.js";

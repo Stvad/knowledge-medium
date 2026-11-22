@@ -1,0 +1,1 @@
+export{OD as plainOutlinerPlugin}from"../../../chunks/app-DhEn_mNe.js";

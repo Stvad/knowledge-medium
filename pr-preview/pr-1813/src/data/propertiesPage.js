@@ -1,0 +1,1 @@
+export{ilt as getOrCreatePropertiesPage,alt as propertiesPageBlockId,olt as propertiesPageSpec}from"../../chunks/app-DhEn_mNe.js";

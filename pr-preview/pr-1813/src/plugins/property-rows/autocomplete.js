@@ -1,0 +1,1 @@
+export{bs as OUTLINE_PROPERTY_PRESET_ID,xs as propertyAutocomplete,Ss as propertyCompletionSource}from"../../../chunks/app-DhEn_mNe.js";

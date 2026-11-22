@@ -1,0 +1,1 @@
+export{ob as BlockMetaCard}from"../../../chunks/app-DhEn_mNe.js";

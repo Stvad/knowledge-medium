@@ -1,0 +1,1 @@
+export{gU as typePropertyGroups}from"../../chunks/app-DhEn_mNe.js";

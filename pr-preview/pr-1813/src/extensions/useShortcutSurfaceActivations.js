@@ -1,0 +1,1 @@
+export{MB as useShortcutSurfaceActivations}from"../../chunks/app-DhEn_mNe.js";

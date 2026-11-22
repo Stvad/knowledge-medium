@@ -1,0 +1,1 @@
+export{Gw as hmsToSeconds}from"../../chunks/app-DhEn_mNe.js";

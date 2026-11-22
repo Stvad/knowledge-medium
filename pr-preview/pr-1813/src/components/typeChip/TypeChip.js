@@ -1,0 +1,1 @@
+export{XP as TypeChip}from"../../../chunks/app-DhEn_mNe.js";

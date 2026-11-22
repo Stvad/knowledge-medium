@@ -1,0 +1,1 @@
+export{ab as blockInfoPlugin}from"../../../chunks/app-DhEn_mNe.js";

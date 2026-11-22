@@ -1,0 +1,1 @@
+export{KR as ConfirmBulkDeleteDialog}from"../../chunks/app-DhEn_mNe.js";

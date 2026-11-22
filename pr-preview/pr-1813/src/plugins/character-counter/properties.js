@@ -1,0 +1,1 @@
+export{s0 as RAW_CHARACTER_COUNT_PROFILE_ID,c0 as WORDS_COUNT_PROFILE_ID,l0 as charLimitProp,u0 as charProfileProp,d0 as charScopeProp}from"../../../chunks/app-DhEn_mNe.js";

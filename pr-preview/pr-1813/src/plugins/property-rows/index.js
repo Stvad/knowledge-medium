@@ -1,0 +1,1 @@
+export{es as propertyRowsPlugin}from"../../../chunks/app-DhEn_mNe.js";

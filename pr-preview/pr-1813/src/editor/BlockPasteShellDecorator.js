@@ -1,0 +1,1 @@
+export{IF as BlockPasteShellDecorator,LF as blockPasteShellDecorator}from"../../chunks/app-DhEn_mNe.js";

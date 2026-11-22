@@ -1,0 +1,1 @@
+export{Zd as blockTaggingDataExtension}from"../../../chunks/app-DhEn_mNe.js";

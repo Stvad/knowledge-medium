@@ -1,0 +1,1 @@
+export{NI as dispatchPointerAction,PI as setPointerActionDispatcher}from"../../chunks/app-DhEn_mNe.js";

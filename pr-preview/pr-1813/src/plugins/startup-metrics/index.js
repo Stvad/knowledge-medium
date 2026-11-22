@@ -1,0 +1,1 @@
+export{Ha as startupMetricsPlugin}from"../../../chunks/app-DhEn_mNe.js";

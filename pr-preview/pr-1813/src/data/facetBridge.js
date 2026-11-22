@@ -1,0 +1,1 @@
+export{c6 as FacetBridge}from"../../chunks/app-DhEn_mNe.js";

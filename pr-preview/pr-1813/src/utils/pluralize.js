@@ -1,0 +1,1 @@
+export{N9 as agree,P9 as pluralize}from"../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{ig as contributorsPlugin}from"../../../chunks/app-DhEn_mNe.js";

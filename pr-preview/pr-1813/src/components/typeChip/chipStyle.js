@@ -1,0 +1,1 @@
+export{ZP as chipStyle}from"../../../chunks/app-DhEn_mNe.js";

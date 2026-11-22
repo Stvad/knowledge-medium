@@ -1,0 +1,1 @@
+export{Jh as HIGHLIGHT_CLASS,Yh as MOVED_HIGHLIGHT_CLASS,Xh as SUGGESTION_HIGHLIGHT_CLASS,Zh as coveringStyle,Qh as highlightClasses,$h as highlightField,eg as highlightRange,tg as highlightRanges,ng as threadHighlights,rg as threadHighlightsContribution}from"../../../chunks/app-DhEn_mNe.js";

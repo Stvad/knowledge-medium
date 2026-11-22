@@ -1,0 +1,1 @@
+export{F2 as aliasDataExtension}from"../../../chunks/app-DhEn_mNe.js";

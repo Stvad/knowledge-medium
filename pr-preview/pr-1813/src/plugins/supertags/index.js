@@ -1,0 +1,1 @@
+export{nn as supertagsPlugin}from"../../../chunks/app-DhEn_mNe.js";

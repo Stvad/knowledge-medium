@@ -1,0 +1,1 @@
+export{zpt as defineQuery}from"../../../chunks/app-DhEn_mNe.js";

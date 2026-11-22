@@ -1,0 +1,1 @@
+export{ZR as GESTURE_ACTIVE,QR as GESTURE_CANCEL,$R as GESTURE_IDLE,ez as NO_BLOCK_GESTURES_ATTRIBUTE,tz as TOUCH_HOLD_MS,nz as TOUCH_SLOP_PX,rz as allowsBlockGestures,iz as continuousGestureRecognizersFacet,az as createBlockGestureController,oz as enabledTouchAction,sz as suppressNextClick,cz as unionTouchAction,lz as useContinuousGestures}from"../../chunks/app-DhEn_mNe.js";

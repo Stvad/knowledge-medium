@@ -1,0 +1,1 @@
+export{qC as DEFAULT_MAX_CAPTURE_BYTES,JC as captureMedia,YC as mediaBlockId}from"../../../chunks/app-DhEn_mNe.js";

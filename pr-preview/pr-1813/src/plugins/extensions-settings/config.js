@@ -1,0 +1,1 @@
+export{a_ as extensionsOverridesPresetCore,o_ as extensionsOverridesProp,s_ as extensionsPrefsType,c_ as overridesCodec}from"../../../chunks/app-DhEn_mNe.js";

@@ -1,0 +1,1 @@
+export{th as confirmThreadDeletion}from"../../../chunks/app-DhEn_mNe.js";

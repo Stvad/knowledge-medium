@@ -1,0 +1,1 @@
+export{RS as richPastePlugin}from"../../../chunks/app-DhEn_mNe.js";
