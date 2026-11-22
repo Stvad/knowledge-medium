@@ -48,7 +48,6 @@ import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
 import { createClientPowerSyncSchema, initializeClientDatabase } from './internals/initializeClientDatabase.js'
 import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
-import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import {
@@ -63,7 +62,6 @@ import {
   watchForRuntimeCorruption,
 } from '@/utils/dbForensicsHooks.js'
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
-import { installedAnalyzeArmingProbes } from '@/data/localSchema.js'
 import {
   dbFilenameForUser,
   recordPreviewDatabaseForReaper,
@@ -413,56 +411,26 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     throw markDbOpenFailure(error)
   }
   markStartup('dbOpened')
-  const backfillDb = await initializeClientDatabase(powerSyncDb, 'web', () => markStartup('clientSchemaApplied'))
+  await initializeClientDatabase(powerSyncDb, 'web', {
+    onClientSchemaApplied: () => markStartup('clientSchemaApplied'),
+    scheduleAnalyzeCheck: check => {
+      // (a) Boot. scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap runs
+      // it inside the cold-start window on a busy load, and a real ANALYZE —
+      // on a cold fresh device, potentially every table at once — parks the
+      // single SQLite worker for seconds, so it must not land on first paint.
+      const scheduleCheck = (reason: string) => scheduleDeepIdle(() => void check(reason), CATCHUP_DEEP_IDLE)
+      scheduleCheck('boot')
+
+      // (b) First sync of THIS session: a fresh device boots with an empty
+      // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and
+      // the observer materializes the rows, the table is large and the boot
+      // baseline is stale — re-check then so the user gets good plans the same
+      // session instead of after a reload. If the first sync already completed
+      // in a prior session, (a) covered it: `onFirstSync` would call back at once.
+      if (!powerSyncDb.currentStatus?.hasSynced) {
+        onFirstSync(powerSyncDb, () => scheduleCheck('first-sync'))
+      }
+    },
+  })
   markStartup('localSchemaApplied')
-
-  // ANALYZE off the cold-start path. wa-sqlite never auto-populates
-  // `sqlite_stat1`, so the planner makes pessimal join-order choices on
-  // `blocks` once a workspace is large (a 4-id `json_each` lookup can
-  // degenerate to a 4-second scan of the workspace partial index).
-  // `runAnalyzeIfStale` asks SQLite what is stale (`PRAGMA optimize`) and
-  // re-analyzes only that — a settled workspace pays ~nothing, and the boot
-  // after a release that adds an index pays one table rather than the whole
-  // file. See clientSchema / docs/pragma-optimize-spike.
-  //
-  // scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap means it WILL run
-  // inside the cold-start window on a busy load (its own doc says so). When
-  // this DOES fire it runs a real ANALYZE on the single SQLite worker — on a
-  // cold fresh device, potentially every table at once — and parking that
-  // worker for seconds IS the freeze this whole change is about, so it must
-  // not land on first paint.
-  //
-  const scheduleAnalyzeCheck = (reason: string) => {
-    scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(
-        backfillDb,
-        installedAnalyzeArmingProbes(),
-      ).then(({proposed, owed}) => {
-        // Silent when nothing was stale, which is every boot after the first —
-        // but when it DOES park the worker, say which tables it was for.
-        // Otherwise the only symptom of a mis-tuned staleness rule is an
-        // unexplained pause.
-        if (owed.length > 0) {
-          console.info(`[Repo] ANALYZE owed by a bulk write (${reason}):`, owed.join(', '))
-        }
-        if (proposed && proposed.length > 0) {
-          console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
-        }
-      }).catch(error => {
-        console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
-      })
-    }, CATCHUP_DEEP_IDLE)
-  }
-  scheduleAnalyzeCheck('boot')
-
-  // (b) First sync of THIS session: a fresh device boots with an empty
-  // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and
-  // the observer materializes the rows, the table is large and the boot
-  // baseline is stale — re-check then so the user gets good plans the same
-  // session instead of after a reload. One-shot; disposes after the first
-  // `hasSynced`. If the first sync already completed in a prior session,
-  // (a) above already covered it, so don't bother registering.
-  if (!powerSyncDb.currentStatus?.hasSynced) {
-    onFirstSync(powerSyncDb, () => scheduleAnalyzeCheck('first-sync'))
-  }
 }

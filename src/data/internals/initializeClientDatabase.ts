@@ -38,9 +38,11 @@ import {
   ensureClientSchemaStateValueColumn,
   ensureStagingNeedsApplyColumn,
   ensureUndoGroupIdColumns,
+  runAnalyzeIfStale,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
+  installedAnalyzeArmingProbes,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
@@ -132,11 +134,25 @@ export const initializeClientSchema = async (
   }
 }
 
+/** One planner-statistics pass (`runAnalyzeIfStale`). Logs what it analyzed
+ *  and why it failed; never rejects. */
+export type AnalyzeCheck = (reason: string) => Promise<void>
+
+export type ClientDatabaseOptions = {
+  /** Hands the device its {@link AnalyzeCheck} to run when a real ANALYZE —
+   *  seconds on a large graph, on the one write connection — will not land on
+   *  work it must not delay. Required because SQLite never builds `sqlite_stat1`
+   *  itself, and without it the planner turns `blocks` joins into scans. Called
+   *  once, before `initializeClientDatabase` resolves. */
+  scheduleAnalyzeCheck: (check: AnalyzeCheck) => void
+  onClientSchemaApplied?: () => void
+}
+
 export const initializeClientDatabase = async (
   powerSyncDb: SchemaDb,
   platform: 'web' | 'node',
-  onClientSchemaApplied?: () => void,
-) => {
+  {scheduleAnalyzeCheck, onClientSchemaApplied}: ClientDatabaseOptions,
+): Promise<void> => {
   await initializeClientSchema(powerSyncDb, platform)
   onClientSchemaApplied?.()
 
@@ -163,5 +179,19 @@ export const initializeClientDatabase = async (
   await grandfatherWorkspaceFirstSync(backfillDb)
   const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
   await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
-  return backfillDb
+  scheduleAnalyzeCheck(reason => runAnalyzeIfStale(
+    backfillDb,
+    installedAnalyzeArmingProbes(),
+  ).then(({proposed, owed}) => {
+    // Silent when nothing was stale. Otherwise name the tables: the log is the
+    // only explanation for the pause a real ANALYZE causes.
+    if (owed.length > 0) {
+      console.info(`[clientSchema] ANALYZE owed by a bulk write (${reason}):`, owed.join(', '))
+    }
+    if (proposed && proposed.length > 0) {
+      console.info(`[clientSchema] ANALYZE (${reason}):`, proposed.join(', '))
+    }
+  }).catch(error => {
+    console.warn(`[clientSchema] ANALYZE check failed (${reason}):`, error)
+  }))
 }
