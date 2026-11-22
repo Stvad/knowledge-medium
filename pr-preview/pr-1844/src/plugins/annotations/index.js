@@ -1,0 +1,1 @@
+export{Sm as annotationsPlugin}from"../../../chunks/app-CUkDBXnm.js";

@@ -1,0 +1,1 @@
+export{BT as videoPlayerPlugin}from"../../../chunks/app-CUkDBXnm.js";

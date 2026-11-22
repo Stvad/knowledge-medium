@@ -1,0 +1,1 @@
+export{jc as MigrationGate}from"../../../chunks/app-CUkDBXnm.js";

@@ -1,0 +1,1 @@
+export{RC as richPastePlugin}from"../../../chunks/app-CUkDBXnm.js";

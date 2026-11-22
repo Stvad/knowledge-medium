@@ -1,0 +1,1 @@
+export{sx as updateIndicatorPlugin}from"../../../chunks/app-CUkDBXnm.js";

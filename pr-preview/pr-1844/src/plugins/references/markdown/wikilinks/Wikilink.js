@@ -1,0 +1,1 @@
+export{CS as Wikilink}from"../../../../../chunks/app-CUkDBXnm.js";

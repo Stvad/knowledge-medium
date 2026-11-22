@@ -1,0 +1,1 @@
+export{CP as useCommandPaletteActions}from"../../../chunks/app-CUkDBXnm.js";

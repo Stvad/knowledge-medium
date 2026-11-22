@@ -1,0 +1,1 @@
+export{EJ as propertyShapeLabel}from"../../../chunks/app-CUkDBXnm.js";

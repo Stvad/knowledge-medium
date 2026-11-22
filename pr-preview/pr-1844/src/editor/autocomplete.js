@@ -1,0 +1,1 @@
+export{KI as editorAutocompleteExtension}from"../../chunks/app-CUkDBXnm.js";

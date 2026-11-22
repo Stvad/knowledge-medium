@@ -1,0 +1,1 @@
+export{v9 as kernelDataExtension}from"../../chunks/app-CUkDBXnm.js";

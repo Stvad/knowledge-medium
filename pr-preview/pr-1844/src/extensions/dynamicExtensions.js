@@ -1,0 +1,1 @@
+export{JL as dynamicExtensionsExtension}from"../../chunks/app-CUkDBXnm.js";

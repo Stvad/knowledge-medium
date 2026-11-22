@@ -1,0 +1,1 @@
+export{kR as LazyBlockComponent}from"../../chunks/app-CUkDBXnm.js";

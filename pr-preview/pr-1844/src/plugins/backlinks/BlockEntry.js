@@ -1,0 +1,1 @@
+export{Vx as LazyBlockEntry}from"../../../chunks/app-CUkDBXnm.js";

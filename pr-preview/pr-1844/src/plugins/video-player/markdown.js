@@ -1,0 +1,1 @@
+export{VT as videoPlayerMarkdownExtension}from"../../../chunks/app-CUkDBXnm.js";

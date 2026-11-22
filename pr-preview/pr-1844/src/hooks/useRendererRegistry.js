@@ -1,0 +1,1 @@
+export{RR as defaultRegistry,IR as refreshRendererRegistry,LR as useRenderer}from"../../chunks/app-CUkDBXnm.js";

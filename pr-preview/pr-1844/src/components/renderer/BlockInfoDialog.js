@@ -1,0 +1,1 @@
+export{BB as BlockInfoDialog}from"../../../chunks/app-CUkDBXnm.js";

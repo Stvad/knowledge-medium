@@ -1,0 +1,1 @@
+export{Ac as propertiesMigrationPlugin}from"../../../chunks/app-CUkDBXnm.js";

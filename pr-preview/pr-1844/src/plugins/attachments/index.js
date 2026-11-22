@@ -1,0 +1,1 @@
+export{HC as attachmentsPlugin}from"../../../chunks/app-CUkDBXnm.js";

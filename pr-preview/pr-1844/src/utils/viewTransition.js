@@ -1,0 +1,1 @@
+export{Oq as withMoveTransition}from"../../chunks/app-CUkDBXnm.js";

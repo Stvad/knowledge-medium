@@ -1,0 +1,1 @@
+export{GU as BlockProperties}from"../../chunks/app-CUkDBXnm.js";

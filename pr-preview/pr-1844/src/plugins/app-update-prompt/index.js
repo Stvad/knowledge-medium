@@ -1,0 +1,1 @@
+export{lL as appUpdatePromptExtension}from"../../../chunks/app-CUkDBXnm.js";

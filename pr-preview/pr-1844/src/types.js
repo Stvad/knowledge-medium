@@ -1,0 +1,1 @@
+export{Odt as isChildBackedPropertiesWorkspace}from"../chunks/app-CUkDBXnm.js";

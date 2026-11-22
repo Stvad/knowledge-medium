@@ -1,0 +1,1 @@
+export{i2 as characterCounterDataExtension}from"../../../chunks/app-CUkDBXnm.js";

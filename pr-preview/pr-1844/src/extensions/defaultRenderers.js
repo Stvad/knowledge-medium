@@ -1,0 +1,1 @@
+export{RR as defaultRegistry,zR as defaultRendererContributions,BR as defaultRenderersExtension}from"../../chunks/app-CUkDBXnm.js";

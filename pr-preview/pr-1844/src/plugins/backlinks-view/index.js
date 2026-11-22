@@ -1,0 +1,1 @@
+export{mx as backlinksViewPlugin}from"../../../chunks/app-CUkDBXnm.js";

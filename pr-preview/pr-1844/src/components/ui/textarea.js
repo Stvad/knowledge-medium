@@ -1,0 +1,1 @@
+export{t as Textarea}from"../../../chunks/textarea-C38SkvIk.js";

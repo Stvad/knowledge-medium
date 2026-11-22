@@ -1,0 +1,1 @@
+export{Kf as blockTagsConfigUi}from"../../../chunks/app-CUkDBXnm.js";

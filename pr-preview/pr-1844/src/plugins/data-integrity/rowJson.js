@@ -1,0 +1,1 @@
+export{ru as parsePropertiesJson}from"../../../chunks/app-CUkDBXnm.js";

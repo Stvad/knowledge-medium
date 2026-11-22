@@ -1,0 +1,1 @@
+export{JP as CommandPaletteHeaderItem}from"../../../chunks/app-CUkDBXnm.js";

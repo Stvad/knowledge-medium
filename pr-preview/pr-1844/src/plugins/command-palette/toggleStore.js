@@ -1,0 +1,1 @@
+export{YP as commandPaletteToggle}from"../../../chunks/app-CUkDBXnm.js";

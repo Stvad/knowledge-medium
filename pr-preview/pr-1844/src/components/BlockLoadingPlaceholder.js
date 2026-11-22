@@ -1,0 +1,1 @@
+export{FR as BlockLoadingPlaceholder}from"../../chunks/app-CUkDBXnm.js";

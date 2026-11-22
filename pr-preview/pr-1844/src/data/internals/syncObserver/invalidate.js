@@ -1,0 +1,1 @@
+export{X8 as applySyncInvalidation}from"../../../../chunks/app-CUkDBXnm.js";

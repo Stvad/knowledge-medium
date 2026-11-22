@@ -1,0 +1,1 @@
+export{DO as BreadcrumbList}from"../../../chunks/app-CUkDBXnm.js";

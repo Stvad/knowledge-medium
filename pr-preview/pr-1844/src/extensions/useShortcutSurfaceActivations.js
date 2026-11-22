@@ -1,0 +1,1 @@
+export{MV as useShortcutSurfaceActivations}from"../../chunks/app-CUkDBXnm.js";

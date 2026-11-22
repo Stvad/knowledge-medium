@@ -1,0 +1,1 @@
+export{DJ as adoptOrCreatePropertySchema}from"../../chunks/app-CUkDBXnm.js";

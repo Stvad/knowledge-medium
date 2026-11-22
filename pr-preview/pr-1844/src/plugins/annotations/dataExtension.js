@@ -1,0 +1,1 @@
+export{P$ as annotationsDataExtension}from"../../../chunks/app-CUkDBXnm.js";

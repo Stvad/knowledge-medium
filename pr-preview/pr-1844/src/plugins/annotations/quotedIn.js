@@ -1,0 +1,1 @@
+export{wm as quotedInFooterContribution}from"../../../chunks/app-CUkDBXnm.js";

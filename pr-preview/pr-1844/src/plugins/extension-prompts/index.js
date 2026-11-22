@@ -1,0 +1,1 @@
+export{YI as ExtensionPromptSurface,XI as extensionPromptsExtension}from"../../../chunks/app-CUkDBXnm.js";

@@ -1,0 +1,1 @@
+export{sX as staticDataExtensions}from"../../chunks/app-CUkDBXnm.js";

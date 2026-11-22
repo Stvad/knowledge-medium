@@ -1,0 +1,1 @@
+export{Pu as REMATERIALIZE_WORKSPACE_ACTION_ID,Fu as rematerializeWorkspaceAction,Iu as rematerializeWorkspaceActionContribution}from"../../../chunks/app-CUkDBXnm.js";

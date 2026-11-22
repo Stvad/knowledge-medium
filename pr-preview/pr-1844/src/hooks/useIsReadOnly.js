@@ -1,0 +1,1 @@
+export{lC as useIsReadOnly}from"../../chunks/app-CUkDBXnm.js";

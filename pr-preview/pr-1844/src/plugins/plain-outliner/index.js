@@ -1,0 +1,1 @@
+export{OO as plainOutlinerPlugin}from"../../../chunks/app-CUkDBXnm.js";

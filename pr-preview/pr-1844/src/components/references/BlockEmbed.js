@@ -1,0 +1,1 @@
+export{VF as BlockEmbed}from"../../../chunks/app-CUkDBXnm.js";

@@ -1,0 +1,1 @@
+export{Yf as blockTaggingDataExtension}from"../../../chunks/app-CUkDBXnm.js";

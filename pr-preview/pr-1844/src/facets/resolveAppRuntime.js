@@ -1,0 +1,1 @@
+export{KL as resolveAppRuntime,qL as resolveAppRuntimeSync}from"../../chunks/app-CUkDBXnm.js";

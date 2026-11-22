@@ -1,0 +1,1 @@
+export{QR as Header}from"../../chunks/app-CUkDBXnm.js";

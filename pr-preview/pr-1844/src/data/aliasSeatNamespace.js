@@ -1,0 +1,1 @@
+export{xut as aliasSeatNamespacesInTx,Sut as resolveAliasSeatNamespaces}from"../../chunks/app-CUkDBXnm.js";

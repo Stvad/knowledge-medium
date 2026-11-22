@@ -1,0 +1,1 @@
+export{XF as TypeChip}from"../../../chunks/app-CUkDBXnm.js";

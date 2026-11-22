@@ -1,0 +1,1 @@
+export{h2 as backlinksDataExtension}from"../../../chunks/app-CUkDBXnm.js";

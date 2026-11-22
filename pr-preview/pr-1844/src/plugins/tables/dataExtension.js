@@ -1,0 +1,1 @@
+export{SX as tablesDataExtension}from"../../../chunks/app-CUkDBXnm.js";
