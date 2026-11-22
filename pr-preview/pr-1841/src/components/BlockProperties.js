@@ -1,0 +1,1 @@
+export{HU as BlockProperties}from"../../chunks/app-DOQ4T4iz.js";

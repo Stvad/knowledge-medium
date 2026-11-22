@@ -1,0 +1,1 @@
+export{IC as richPasteDecisionContribution}from"../../../chunks/app-DOQ4T4iz.js";

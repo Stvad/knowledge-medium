@@ -1,0 +1,1 @@
+export{_J as floatingAnchorFromRect,vJ as useAnchoredFloating}from"../../../chunks/app-DOQ4T4iz.js";

@@ -1,0 +1,1 @@
+export{zC as attachmentsPlugin}from"../../../chunks/app-DOQ4T4iz.js";

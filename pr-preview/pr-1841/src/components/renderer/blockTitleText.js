@@ -1,0 +1,1 @@
+export{WH as BLOCK_TITLE_TEXT_CLASS,GH as useBlockTitleTextClass}from"../../../chunks/app-DOQ4T4iz.js";

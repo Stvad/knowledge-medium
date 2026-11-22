@@ -1,0 +1,1 @@
+export{$R as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,ez as openExtensionsSettings}from"../../chunks/app-DOQ4T4iz.js";

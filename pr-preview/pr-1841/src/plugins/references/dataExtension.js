@@ -1,0 +1,1 @@
+export{MX as referencesDataExtension}from"../../../chunks/app-DOQ4T4iz.js";

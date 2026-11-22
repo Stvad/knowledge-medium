@@ -1,0 +1,1 @@
+export{CI as resolveStructuralEditPolicy,wI as structuralEditPolicyForBlock}from"../../chunks/app-DOQ4T4iz.js";

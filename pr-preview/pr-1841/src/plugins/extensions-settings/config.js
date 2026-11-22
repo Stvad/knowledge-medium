@@ -1,0 +1,1 @@
+export{nv as extensionsOverridesPresetCore,rv as extensionsOverridesProp,iv as extensionsPrefsType,av as overridesCodec}from"../../../chunks/app-DOQ4T4iz.js";

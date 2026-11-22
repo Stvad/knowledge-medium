@@ -1,0 +1,1 @@
+export{rn as supertagsPlugin}from"../../../chunks/app-DOQ4T4iz.js";

@@ -1,0 +1,1 @@
+export{q8 as applySyncInvalidation}from"../../../../chunks/app-DOQ4T4iz.js";

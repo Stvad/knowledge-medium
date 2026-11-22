@@ -1,0 +1,1 @@
+export{Js as propertyRowsPlugin}from"../../../chunks/app-DOQ4T4iz.js";

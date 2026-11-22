@@ -1,0 +1,1 @@
+export{fI as ensureMetricsConsoleHook}from"../../chunks/app-DOQ4T4iz.js";

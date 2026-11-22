@@ -1,0 +1,1 @@
+export{wJ as adoptOrCreatePropertySchema}from"../../chunks/app-DOQ4T4iz.js";

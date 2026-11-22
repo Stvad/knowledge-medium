@@ -1,0 +1,1 @@
+export{but as DerivedIdNamespaceUnavailableError,xut as derivedIdNamespaceInTx,Sut as resolveDerivedIdNamespace}from"../../chunks/app-DOQ4T4iz.js";

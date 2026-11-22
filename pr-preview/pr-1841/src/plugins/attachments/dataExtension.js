@@ -1,0 +1,1 @@
+export{G4 as attachmentCleanerIOContribution,K4 as attachmentsDataExtension}from"../../../chunks/app-DOQ4T4iz.js";

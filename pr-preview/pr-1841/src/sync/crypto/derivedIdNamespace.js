@@ -1,0 +1,1 @@
+export{Qut as deriveWorkspaceIdNamespace}from"../../../chunks/app-DOQ4T4iz.js";

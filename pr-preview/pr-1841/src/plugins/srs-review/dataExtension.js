@@ -1,0 +1,1 @@
+export{Vd as srsReviewDataExtension}from"../../../chunks/app-DOQ4T4iz.js";

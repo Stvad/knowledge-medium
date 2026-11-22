@@ -1,0 +1,1 @@
+export{MB as __resetDialogsForTests,NB as getDialogQueue,PB as isDialogOpenForWorkspace,FB as openDialog,IB as subscribeDialogs}from"../../chunks/app-DOQ4T4iz.js";

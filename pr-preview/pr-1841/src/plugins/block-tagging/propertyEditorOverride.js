@@ -1,0 +1,1 @@
+export{Uf as blockTagsConfigUi}from"../../../chunks/app-DOQ4T4iz.js";

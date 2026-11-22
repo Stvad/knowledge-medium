@@ -1,0 +1,1 @@
+export{bS as Wikilink}from"../../../../../chunks/app-DOQ4T4iz.js";

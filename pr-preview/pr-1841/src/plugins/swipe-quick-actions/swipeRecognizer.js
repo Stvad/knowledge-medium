@@ -1,0 +1,1 @@
+export{rF as SWIPE_QUICK_ACTIONS_GESTURE_ID,iF as SWIPE_TRIGGER_PX,aF as swipeRecognizer}from"../../../chunks/app-DOQ4T4iz.js";

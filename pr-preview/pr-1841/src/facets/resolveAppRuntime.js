@@ -1,0 +1,1 @@
+export{UL as resolveAppRuntime,WL as resolveAppRuntimeSync}from"../../chunks/app-DOQ4T4iz.js";

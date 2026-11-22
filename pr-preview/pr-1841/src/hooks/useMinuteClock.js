@@ -1,0 +1,1 @@
+export{rj as useMinuteClock}from"../../chunks/app-DOQ4T4iz.js";

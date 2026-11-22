@@ -1,0 +1,1 @@
+export{FR as defaultRegistry,IR as defaultRendererContributions,LR as defaultRenderersExtension}from"../../chunks/app-DOQ4T4iz.js";

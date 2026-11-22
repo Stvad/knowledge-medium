@@ -1,0 +1,1 @@
+export{Dn as AnnotatedFrame,On as gesturesPlacement}from"../../../chunks/app-DOQ4T4iz.js";

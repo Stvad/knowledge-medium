@@ -1,0 +1,1 @@
+export{Het as agree,Uet as pluralize}from"../../chunks/app-DOQ4T4iz.js";

@@ -1,0 +1,1 @@
+export{_W as declarationOnlyDefinitionForName,vW as declarationOnlyStatusText}from"../../../chunks/app-DOQ4T4iz.js";

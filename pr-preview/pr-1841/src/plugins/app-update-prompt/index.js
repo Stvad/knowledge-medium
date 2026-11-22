@@ -1,0 +1,1 @@
+export{oL as appUpdatePromptExtension}from"../../../chunks/app-DOQ4T4iz.js";

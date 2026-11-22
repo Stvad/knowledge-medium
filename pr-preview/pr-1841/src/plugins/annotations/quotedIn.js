@@ -1,0 +1,1 @@
+export{xm as quotedInFooterContribution}from"../../../chunks/app-DOQ4T4iz.js";

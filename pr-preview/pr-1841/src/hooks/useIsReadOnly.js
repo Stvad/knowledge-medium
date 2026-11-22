@@ -1,0 +1,1 @@
+export{oC as useIsReadOnly}from"../../chunks/app-DOQ4T4iz.js";

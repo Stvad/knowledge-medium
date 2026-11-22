@@ -1,0 +1,1 @@
+export{h9 as kernelDataExtension}from"../../chunks/app-DOQ4T4iz.js";

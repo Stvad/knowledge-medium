@@ -1,0 +1,1 @@
+export{JI as extensionPromptDiagnosticContribution,YI as extensionPromptDiagnosticSource}from"../../../chunks/app-DOQ4T4iz.js";

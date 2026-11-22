@@ -1,0 +1,1 @@
+export{t_ as contributorsPlugin}from"../../../chunks/app-DOQ4T4iz.js";

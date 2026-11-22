@@ -1,0 +1,1 @@
+export{GL as dynamicExtensionsExtension}from"../../chunks/app-DOQ4T4iz.js";

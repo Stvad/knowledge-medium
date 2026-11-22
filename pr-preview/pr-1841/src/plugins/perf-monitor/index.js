@@ -1,0 +1,1 @@
+export{oi as perfMonitorPlugin}from"../../../chunks/app-DOQ4T4iz.js";
