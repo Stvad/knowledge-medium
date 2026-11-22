@@ -165,6 +165,18 @@ describe('parseQuery errors', () => {
     expect(result.query).toEqual({match: [{where: {rating: {gt: 1}}}]})
   })
 
+  it.each(['due=2026-13-01T00:00:00.000Z', 'created>2026-02-30T00:00:00.000Z'])('refuses an instant that names no moment: %s', text => {
+    const result = parse(`${text} rating>1`)
+    expect(result.errors).toHaveLength(1)
+    expect(result.query).toEqual({match: [{where: {rating: {gt: 1}}}]})
+  })
+
+  it('bounds under= only by a term that stays', () => {
+    const result = parse('(under=[[Projects]] | rating>1) (label=a | status=open)')
+    expect(result.errors.map(error => error.message)).toEqual([expect.stringContaining('under= needs'), 'Only one | group per query'])
+    expect(result.query).toEqual({})
+  })
+
   it('refuses an instant past year 9999', () => {
     expect(parse('due<+010000-01-01T00:00:00.000Z').errors).toHaveLength(1)
   })
