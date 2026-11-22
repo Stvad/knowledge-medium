@@ -1,1 +1,1 @@
-export{Cp as computePromotedFromChildren,wp as detectInlineAttribute}from"../../../chunks/app-FBYlNW-N.js";
+export{wp as computePromotedFromChildren,Tp as detectInlineAttribute}from"../../../chunks/app-B01lqcBr.js";

@@ -1,1 +1,1 @@
-export{GP as CommandPaletteHeaderItem}from"../../../chunks/app-FBYlNW-N.js";
+export{KP as CommandPaletteHeaderItem}from"../../../chunks/app-B01lqcBr.js";

@@ -1,1 +1,1 @@
-export{vut as aliasSeatNamespacesInTx,yut as resolveAliasSeatNamespaces}from"../../chunks/app-FBYlNW-N.js";
+export{yut as aliasSeatNamespacesInTx,but as resolveAliasSeatNamespaces}from"../../chunks/app-B01lqcBr.js";

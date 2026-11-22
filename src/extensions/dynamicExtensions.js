@@ -1,1 +1,1 @@
-export{GL as dynamicExtensionsExtension}from"../../chunks/app-FBYlNW-N.js";
+export{KL as dynamicExtensionsExtension}from"../../chunks/app-B01lqcBr.js";

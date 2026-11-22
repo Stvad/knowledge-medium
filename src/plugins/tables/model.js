@@ -1,1 +1,1 @@
-export{Vs as ROW_CAP,Hs as canAddRow,Us as rowQuery,Ws as useColumns,Gs as useRowIds,Ks as useViewIds,qs as viewQuery}from"../../../chunks/app-FBYlNW-N.js";
+export{Vs as ROW_CAP,Hs as canAddRow,Us as rowPropertyNames,Ws as rowQuery,Gs as useColumns,Ks as useRowIds,qs as useViewIds,Js as viewQuery}from"../../../chunks/app-B01lqcBr.js";

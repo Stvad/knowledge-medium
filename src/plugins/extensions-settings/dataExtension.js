@@ -1,1 +1,1 @@
-export{Jr as extensionsDataExtension}from"../../../chunks/app-FBYlNW-N.js";
+export{Jr as extensionsDataExtension}from"../../../chunks/app-B01lqcBr.js";

@@ -1,1 +1,1 @@
-export{wC as BlockSearchPicker}from"../../chunks/app-FBYlNW-N.js";
+export{TC as BlockSearchPicker}from"../../chunks/app-B01lqcBr.js";
