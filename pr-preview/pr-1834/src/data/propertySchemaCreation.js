@@ -1,1 +1,1 @@
-export{Qq as adoptOrCreatePropertySchema}from"../../chunks/app-cb0xGPW9.js";
+export{Qq as adoptOrCreatePropertySchema}from"../../chunks/app-Bo4esYbx.js";
