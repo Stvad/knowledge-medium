@@ -3,7 +3,8 @@ import { materializeStagingRows, type MaterializeDeps } from '@/data/internals/s
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { referenceTargetLookupsVia } from '@/data/internals/referenceTargetLookups.js'
 import { encodeForWire, type GetCek } from '@/sync/transform.js'
-import type { MaterializeFixture } from './materialize-fixture.js'
+import { MATERIALIZE_WORKSPACE_ID, type MaterializeFixture } from './materialize-fixture.js'
+import { buildDeferredSearchIndex } from '@/data/internals/clientSchema.js'
 
 export const DEFAULT_MATERIALIZE_WINDOW_SIZE = 1000
 export interface QueryMetric { count: number; elapsedMs: number }
@@ -13,6 +14,8 @@ export interface MaterializeMetrics {
   txCount: number
   txElapsedMs: number
   phase1ElapsedMs: number
+  /** `--bulk-load` only: the deferred search-index build after the last window. */
+  deferredIndexMs: number
   keyCalls: number
   keyElapsedMs: number
 }
@@ -34,7 +37,7 @@ export type MaterializeWireRows = Awaited<ReturnType<typeof makeMaterializeWireR
 
 export const createMaterializeMetrics = (): MaterializeMetrics => ({
   calls: {}, sql: new Map(), txCount: 0, txElapsedMs: 0, phase1ElapsedMs: 0,
-  keyCalls: 0, keyElapsedMs: 0,
+  deferredIndexMs: 0, keyCalls: 0, keyElapsedMs: 0,
 })
 
 const sqlKey = (sql: string) => sql.replace(/\s+/g, ' ').trim().replace(
@@ -140,7 +143,9 @@ export const runMaterializePass = async (
   fixture: MaterializeFixture,
   mode: MaterializeMode,
   key: CryptoKey,
-  options: {windowSize?: number; getCek?: GetCek; metrics?: MaterializeMetrics} = {},
+  /** `bulkLoad`: the production bulk hold — windows carry the bulk scope, and
+   *  the deferred search-index build runs after the last one, inside `wallMs`. */
+  options: {windowSize?: number; getCek?: GetCek; metrics?: MaterializeMetrics; bulkLoad?: boolean} = {},
 ): Promise<MaterializePassResult> => {
   const windowSize = options.windowSize ?? DEFAULT_MATERIALIZE_WINDOW_SIZE
   const metrics = options.metrics ?? createMaterializeMetrics()
@@ -166,7 +171,8 @@ export const runMaterializePass = async (
     const instrumented = instrumentMaterializeDb(db, metrics, () => { firstTxAt = performance.now() })
     const beforeTx = metrics.txElapsedMs
     const started = performance.now()
-    const outcome = await materializeStagingRows(instrumented, {upserted, removed: []}, deps)
+    const outcome = await materializeStagingRows(instrumented, {upserted, removed: []}, deps,
+      options.bulkLoad ? {bulkLoadWorkspaceIds: [MATERIALIZE_WORKSPACE_ID]} : {})
     const txDelta = metrics.txElapsedMs - beforeTx
     totalPhase1Ms += firstTxAt === null ? performance.now() - started : firstTxAt - started
     totalTransactionMs += txDelta
@@ -175,6 +181,11 @@ export const runMaterializePass = async (
     if (outcome.deferred.length || outcome.quarantined.length || outcome.applied.length + outcome.skippedStale.length !== upserted.length) {
       throw new Error(`Unexpected ${mode} materialization outcome: ${JSON.stringify({applied: outcome.applied.length, skipped: outcome.skippedStale.length, deferred: outcome.deferred.length, quarantined: outcome.quarantined.length})}`)
     }
+  }
+  if (options.bulkLoad) {
+    const started = performance.now()
+    await buildDeferredSearchIndex(db)
+    metrics.deferredIndexMs = performance.now() - started
   }
   metrics.phase1ElapsedMs = totalPhase1Ms
   metrics.txElapsedMs = totalTransactionMs

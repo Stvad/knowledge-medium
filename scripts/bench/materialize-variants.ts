@@ -35,6 +35,8 @@ export interface VariantOptions {
   dropIndexes: boolean
   rebuildDerived: boolean
   randomIds: boolean
+  /** Run the production bulk hold (`runMaterializePass`'s `bulkLoad`). */
+  bulkLoad?: boolean
   /** Total page cache across connections, KiB; undefined leaves the runner's default. */
   cacheKb?: number
 }
@@ -100,6 +102,7 @@ export const derivedCounts = async (db: PowerSyncDb) => {
   return {
     block_aliases: await count('block_aliases'), block_types: await count('block_types'),
     blocks_fts_rowids: await count('blocks_fts_rowids'), blocks_fts: await count('blocks_fts'),
+    blocks_fts_owed: await count('blocks_fts_owed'),
     row_events: await count('row_events'),
   }
 }
@@ -158,6 +161,7 @@ export const variantInfoOf = (o: VariantOptions): Record<string, unknown> => ({
   ...(o.randomIds ? {randomIds: o.randomIds} : {}),
   ...(o.dropTriggers.length ? {droppedTriggers: o.dropTriggers} : {}),
   ...(o.dropIndexes ? {droppedIndexes: true} : {}),
+  ...(o.bulkLoad ? {bulkLoad: true} : {}),
   ...(o.cacheKb !== undefined ? {cacheKb: o.cacheKb} : {}),
   // Alias references resolve through block_aliases, which blocks_alias_insert fills; without it
   // reference_target_id/is_field_form are legitimately not derived, so skip only that validation.
@@ -183,6 +187,7 @@ export const runVariantSamples = async (env: VariantEnv, reps: number) => {
         }
         const result = await runMaterializePass(db, fixture, mode, key, {
           metrics: createMaterializeMetrics(), windowSize: options.window, getCek: env.getCek,
+          bulkLoad: options.bulkLoad,
         })
         const validation = await validateMaterializeDb(db, fixture, {skipDerivedReferenceChecks})
         const extra: Record<string, unknown> = {...variantInfo}
