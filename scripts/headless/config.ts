@@ -11,8 +11,7 @@ const common = {
   stateDir: z.string().trim().min(1),
   profile: z.string().trim().min(1).transform(normalizeProfileName),
   writable: z.boolean().default(false),
-  /** A user page whose preferences reads resolve against; unset reads the
-   *  host account's own. Writes never go there. */
+  /** The `userPageId` of a `PreferencesPage`; unset reads the host account's own. */
   preferencesPage: z.string().trim().min(1).optional(),
 }
 const configSchema = z.discriminatedUnion('mode', [
