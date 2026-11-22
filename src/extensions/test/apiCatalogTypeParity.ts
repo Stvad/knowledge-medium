@@ -157,6 +157,8 @@ export type {
 
 export type { QueryableField, SystemPage } from '@/data/facets.js'
 
+export type { ChildrenView, ChildrenViewContext, ChildrenViewContribution, ListingSurface } from '@/data/childrenView.js'
+
 export type {
   DerivedChildOutcome,
   DerivedChildSpec,
