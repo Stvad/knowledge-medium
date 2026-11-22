@@ -1,1 +1,1 @@
-export{TH as typePropertyGroups}from"../../chunks/app-BswXElea.js";
+export{BU as typePropertyGroups}from"../../chunks/app-DVsAz0At.js";

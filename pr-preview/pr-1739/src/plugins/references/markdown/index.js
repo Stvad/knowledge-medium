@@ -1,1 +1,1 @@
-export{jb as referencesMarkdownExtension}from"../../../../chunks/app-BswXElea.js";
+export{Wx as referencesMarkdownExtension}from"../../../../chunks/app-DVsAz0At.js";

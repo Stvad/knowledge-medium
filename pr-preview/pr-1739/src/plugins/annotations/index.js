@@ -1,1 +1,1 @@
-export{If as annotationsPlugin}from"../../../chunks/app-BswXElea.js";
+export{Kp as annotationsPlugin}from"../../../chunks/app-DVsAz0At.js";

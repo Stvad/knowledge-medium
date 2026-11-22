@@ -1,1 +1,1 @@
-export{tJ as referencesDataExtension}from"../../../chunks/app-BswXElea.js";
+export{tX as referencesDataExtension}from"../../../chunks/app-DVsAz0At.js";

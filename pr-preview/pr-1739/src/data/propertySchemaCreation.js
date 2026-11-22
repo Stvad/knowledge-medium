@@ -1,1 +1,1 @@
-export{IK as adoptOrCreatePropertySchema}from"../../chunks/app-BswXElea.js";
+export{Zq as adoptOrCreatePropertySchema}from"../../chunks/app-DVsAz0At.js";
