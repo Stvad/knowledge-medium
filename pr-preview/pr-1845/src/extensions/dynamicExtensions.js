@@ -1,0 +1,1 @@
+export{GL as dynamicExtensionsExtension}from"../../chunks/app-m-Ucc5LI.js";

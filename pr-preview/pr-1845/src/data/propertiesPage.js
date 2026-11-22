@@ -1,0 +1,1 @@
+export{hut as getOrCreatePropertiesPage,gut as propertiesPageBlockId,_ut as propertiesPageSpec}from"../../chunks/app-m-Ucc5LI.js";

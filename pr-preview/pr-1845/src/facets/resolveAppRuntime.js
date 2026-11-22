@@ -1,0 +1,1 @@
+export{UL as resolveAppRuntime,WL as resolveAppRuntimeSync}from"../../chunks/app-m-Ucc5LI.js";

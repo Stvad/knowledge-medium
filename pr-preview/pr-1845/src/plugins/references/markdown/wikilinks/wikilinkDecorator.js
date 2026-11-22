@@ -1,0 +1,1 @@
+export{qM as isWikilinkDisplayParts,JM as resolveWikilinkDisplay,YM as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-m-Ucc5LI.js";

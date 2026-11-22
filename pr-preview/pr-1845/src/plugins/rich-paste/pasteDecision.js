@@ -1,0 +1,1 @@
+export{IC as richPasteDecisionContribution}from"../../../chunks/app-m-Ucc5LI.js";

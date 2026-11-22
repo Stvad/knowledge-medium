@@ -1,0 +1,1 @@
+export{NI as BlockPasteShellDecorator,PI as blockPasteShellDecorator}from"../../chunks/app-m-Ucc5LI.js";

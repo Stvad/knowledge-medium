@@ -1,0 +1,1 @@
+export{yq as isIOS,bq as isMacPlatform}from"../../chunks/app-m-Ucc5LI.js";

@@ -1,0 +1,1 @@
+export{bS as Wikilink}from"../../../../../chunks/app-m-Ucc5LI.js";

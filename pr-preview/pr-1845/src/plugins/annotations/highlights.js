@@ -1,0 +1,1 @@
+export{Gg as HIGHLIGHT_CLASS,Kg as MOVED_HIGHLIGHT_CLASS,qg as SUGGESTION_HIGHLIGHT_CLASS,Jg as coveringStyle,Yg as highlightClasses,Xg as highlightField,Zg as highlightRange,Qg as highlightRanges,$g as threadHighlights,e_ as threadHighlightsContribution}from"../../../chunks/app-m-Ucc5LI.js";

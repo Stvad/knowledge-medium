@@ -1,0 +1,1 @@
+export{Dc as propertiesMigrationPlugin}from"../../../chunks/app-m-Ucc5LI.js";

@@ -1,0 +1,1 @@
+export{Oc as MigrationGate}from"../../../chunks/app-m-Ucc5LI.js";

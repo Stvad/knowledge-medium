@@ -1,0 +1,1 @@
+export{An as useFrameThemeCss}from"../../../chunks/app-m-Ucc5LI.js";

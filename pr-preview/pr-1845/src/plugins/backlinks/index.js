@@ -1,0 +1,1 @@
+export{vx as backlinksPlugin}from"../../../chunks/app-m-Ucc5LI.js";

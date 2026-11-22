@@ -1,0 +1,1 @@
+export{aj as openRecentsPage}from"../../../chunks/app-m-Ucc5LI.js";

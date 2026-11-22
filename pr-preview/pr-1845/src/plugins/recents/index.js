@@ -1,0 +1,1 @@
+export{UA as OPEN_RECENTS_ACTION_ID,WA as openRecentsAction,GA as recentsHeaderItem,KA as recentsPlugin}from"../../../chunks/app-m-Ucc5LI.js";

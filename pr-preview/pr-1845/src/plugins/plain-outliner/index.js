@@ -1,0 +1,1 @@
+export{TO as plainOutlinerPlugin}from"../../../chunks/app-m-Ucc5LI.js";

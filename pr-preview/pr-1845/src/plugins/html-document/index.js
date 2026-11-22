@@ -1,0 +1,1 @@
+export{hn as htmlDocumentPlugin}from"../../../chunks/app-m-Ucc5LI.js";

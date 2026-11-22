@@ -1,0 +1,1 @@
+export{rj as useMinuteClock}from"../../chunks/app-m-Ucc5LI.js";

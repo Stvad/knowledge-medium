@@ -1,0 +1,1 @@
+export{mO as mobileBottomNavItemsFacet}from"../../../chunks/app-m-Ucc5LI.js";

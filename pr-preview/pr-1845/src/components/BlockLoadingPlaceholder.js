@@ -1,0 +1,1 @@
+export{MR as BlockLoadingPlaceholder}from"../../chunks/app-m-Ucc5LI.js";

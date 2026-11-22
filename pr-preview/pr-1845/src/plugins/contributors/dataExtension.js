@@ -1,0 +1,1 @@
+export{F0 as contributorsDataExtension}from"../../../chunks/app-m-Ucc5LI.js";

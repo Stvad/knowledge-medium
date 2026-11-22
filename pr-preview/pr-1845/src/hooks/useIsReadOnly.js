@@ -1,0 +1,1 @@
+export{oC as useIsReadOnly}from"../../chunks/app-m-Ucc5LI.js";

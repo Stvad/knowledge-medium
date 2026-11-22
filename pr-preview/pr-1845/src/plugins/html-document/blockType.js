@@ -1,0 +1,1 @@
+export{OZ as htmlDocumentTypeSeed}from"../../../chunks/app-m-Ucc5LI.js";

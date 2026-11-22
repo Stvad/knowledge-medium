@@ -1,0 +1,1 @@
+export{Xu as appVersion}from"../chunks/app-m-Ucc5LI.js";

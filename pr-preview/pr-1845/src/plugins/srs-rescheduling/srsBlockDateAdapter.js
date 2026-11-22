@@ -1,0 +1,1 @@
+export{vf as srsBlockDateAdapter}from"../../../chunks/app-m-Ucc5LI.js";

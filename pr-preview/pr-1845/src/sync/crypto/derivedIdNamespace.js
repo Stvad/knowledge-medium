@@ -1,0 +1,1 @@
+export{Qut as deriveWorkspaceIdNamespace}from"../../../chunks/app-m-Ucc5LI.js";

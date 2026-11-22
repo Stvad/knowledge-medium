@@ -1,0 +1,1 @@
+"use client";export{RU as Collapsible,zU as CollapsibleContent,BU as CollapsibleTrigger}from"../../../chunks/app-m-Ucc5LI.js";

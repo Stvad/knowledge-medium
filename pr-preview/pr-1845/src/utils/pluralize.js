@@ -1,0 +1,1 @@
+export{Het as agree,Uet as pluralize}from"../../chunks/app-m-Ucc5LI.js";

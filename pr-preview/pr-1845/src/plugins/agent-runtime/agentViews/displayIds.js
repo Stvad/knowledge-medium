@@ -1,0 +1,1 @@
+export{tb as boundDisplayId,nb as idMark}from"../../../../chunks/app-m-Ucc5LI.js";

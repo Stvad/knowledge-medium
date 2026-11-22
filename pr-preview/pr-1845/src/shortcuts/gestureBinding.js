@@ -1,0 +1,1 @@
+export{OL as gestureBindingDescriptor,kL as matchesGestureEvent}from"../../chunks/app-m-Ucc5LI.js";

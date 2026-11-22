@@ -1,0 +1,1 @@
+export{GP as CommandPaletteHeaderItem}from"../../../chunks/app-m-Ucc5LI.js";

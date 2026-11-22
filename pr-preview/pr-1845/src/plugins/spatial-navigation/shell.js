@@ -1,0 +1,1 @@
+export{$E as spatialNavigationShellDecorator}from"../../../chunks/app-m-Ucc5LI.js";

@@ -1,0 +1,1 @@
+export{Dn as AnnotatedFrame,On as gesturesPlacement}from"../../../chunks/app-m-Ucc5LI.js";

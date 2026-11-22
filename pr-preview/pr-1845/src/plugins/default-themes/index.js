@@ -1,0 +1,1 @@
+export{zA as DEFAULT_THEME_ID_DARK,BA as DEFAULT_THEME_ID_LIGHT,wA as defaultThemeContributions,CA as defaultThemesPlugin}from"../../../chunks/app-m-Ucc5LI.js";

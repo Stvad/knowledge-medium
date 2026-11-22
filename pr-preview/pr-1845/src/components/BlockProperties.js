@@ -1,0 +1,1 @@
+export{HU as BlockProperties}from"../../chunks/app-m-Ucc5LI.js";

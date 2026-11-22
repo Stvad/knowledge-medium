@@ -1,0 +1,1 @@
+export{ev as extensionApiCatalog,tv as extensionApiRuntimeExports}from"../../chunks/app-m-Ucc5LI.js";

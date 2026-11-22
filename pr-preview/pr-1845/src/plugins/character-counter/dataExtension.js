@@ -1,0 +1,1 @@
+export{t2 as characterCounterDataExtension}from"../../../chunks/app-m-Ucc5LI.js";

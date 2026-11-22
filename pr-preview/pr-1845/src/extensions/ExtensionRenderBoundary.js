@@ -1,0 +1,1 @@
+export{SH as ExtensionRenderBoundary}from"../../chunks/app-m-Ucc5LI.js";

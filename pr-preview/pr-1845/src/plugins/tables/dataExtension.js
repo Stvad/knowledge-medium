@@ -1,0 +1,1 @@
+export{yX as tablesDataExtension}from"../../../chunks/app-m-Ucc5LI.js";

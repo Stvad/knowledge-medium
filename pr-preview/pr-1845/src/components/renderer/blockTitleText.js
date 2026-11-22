@@ -1,0 +1,1 @@
+export{WH as BLOCK_TITLE_TEXT_CLASS,GH as useBlockTitleTextClass}from"../../../chunks/app-m-Ucc5LI.js";

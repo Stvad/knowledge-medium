@@ -1,0 +1,1 @@
+export{yS as wikilinkMarkdownExtension}from"../../../../../chunks/app-m-Ucc5LI.js";

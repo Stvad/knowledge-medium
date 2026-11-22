@@ -1,0 +1,1 @@
+export{EP as COMMAND_PALETTE_ACTION_ID,DP as COMMAND_PALETTE_CONTEXT,OP as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,kP as commandPaletteActionContext}from"../../../chunks/app-m-Ucc5LI.js";

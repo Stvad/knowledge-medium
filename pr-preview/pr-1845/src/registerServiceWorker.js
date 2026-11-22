@@ -1,0 +1,1 @@
+export{hL as checkForAppUpdate,gL as registerServiceWorker}from"../chunks/app-m-Ucc5LI.js";

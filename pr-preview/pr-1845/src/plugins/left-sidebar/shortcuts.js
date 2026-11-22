@@ -1,0 +1,1 @@
+export{GO as getOrCreateShortcutsBlock,KO as journalShortcutBlockId,qO as shortcutsBlockId}from"../../../chunks/app-m-Ucc5LI.js";

@@ -1,0 +1,1 @@
+export{KR as TopLevelRenderer}from"../../../chunks/app-m-Ucc5LI.js";

@@ -1,0 +1,1 @@
+export{oY as SuspenseFallback}from"../../../chunks/app-m-Ucc5LI.js";

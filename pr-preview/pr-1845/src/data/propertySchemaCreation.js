@@ -1,0 +1,1 @@
+export{wJ as adoptOrCreatePropertySchema}from"../../chunks/app-m-Ucc5LI.js";

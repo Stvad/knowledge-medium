@@ -1,0 +1,1 @@
+export{fa as interactionMetricsPlugin}from"../../../chunks/app-m-Ucc5LI.js";

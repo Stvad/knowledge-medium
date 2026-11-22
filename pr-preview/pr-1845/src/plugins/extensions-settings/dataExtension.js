@@ -1,0 +1,1 @@
+export{Jr as extensionsDataExtension}from"../../../chunks/app-m-Ucc5LI.js";

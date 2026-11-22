@@ -1,0 +1,1 @@
+export{vut as aliasSeatNamespacesInTx,yut as resolveAliasSeatNamespaces}from"../../chunks/app-m-Ucc5LI.js";

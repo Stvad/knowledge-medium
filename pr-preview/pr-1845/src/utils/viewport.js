@@ -1,0 +1,1 @@
+export{wG as MOBILE_BREAKPOINT_QUERY,TG as POINTER_COARSE_QUERY,EG as isMobileViewport,DG as isPointerCoarse}from"../../chunks/app-m-Ucc5LI.js";

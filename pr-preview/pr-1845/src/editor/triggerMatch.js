@@ -1,0 +1,1 @@
+export{IQ as matchCharTrigger}from"../../chunks/app-m-Ucc5LI.js";

@@ -1,0 +1,1 @@
+export{Uf as blockTagsConfigUi}from"../../../chunks/app-m-Ucc5LI.js";

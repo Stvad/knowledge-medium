@@ -1,0 +1,1 @@
+export{Xm as moveCommentToOwnThread}from"../../../chunks/app-m-Ucc5LI.js";

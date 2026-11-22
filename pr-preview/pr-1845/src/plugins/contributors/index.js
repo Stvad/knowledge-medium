@@ -1,0 +1,1 @@
+export{t_ as contributorsPlugin}from"../../../chunks/app-m-Ucc5LI.js";

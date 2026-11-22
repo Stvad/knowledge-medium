@@ -1,0 +1,1 @@
+export{GM as dailyDateWikilinkDecorator}from"../../../chunks/app-m-Ucc5LI.js";
