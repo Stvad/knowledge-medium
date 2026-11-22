@@ -1,1 +1,1 @@
-export{rn as supertagsPlugin}from"../../../chunks/app-BQKPjqVR.js";
+export{rn as supertagsPlugin}from"../../../chunks/app-QjpWeW3O.js";

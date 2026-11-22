@@ -1,1 +1,1 @@
-export{AW as buildPropertyPanelSections}from"../../chunks/app-BQKPjqVR.js";
+export{VW as buildPropertyPanelSections}from"../../chunks/app-QjpWeW3O.js";

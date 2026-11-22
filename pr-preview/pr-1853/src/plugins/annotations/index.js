@@ -1,1 +1,1 @@
-export{Mm as annotationsPlugin}from"../../../chunks/app-BQKPjqVR.js";
+export{Um as annotationsPlugin}from"../../../chunks/app-QjpWeW3O.js";
