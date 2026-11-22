@@ -1,1 +1,1 @@
-export{C3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-Dl3ZLykt.js";
+export{C3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CaiqMuIC.js";

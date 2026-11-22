@@ -1,1 +1,1 @@
-export{QI as extensionPromptStore,$I as pendingExtensionPrompts}from"../../../chunks/app-Dl3ZLykt.js";
+export{QI as extensionPromptStore,$I as pendingExtensionPrompts}from"../../../chunks/app-CaiqMuIC.js";

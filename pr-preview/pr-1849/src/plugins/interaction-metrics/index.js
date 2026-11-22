@@ -1,1 +1,1 @@
-export{fa as interactionMetricsPlugin}from"../../../chunks/app-Dl3ZLykt.js";
+export{fa as interactionMetricsPlugin}from"../../../chunks/app-CaiqMuIC.js";

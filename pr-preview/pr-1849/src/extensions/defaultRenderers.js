@@ -1,1 +1,1 @@
-export{zR as defaultRegistry,BR as defaultRendererContributions,VR as defaultRenderersExtension}from"../../chunks/app-Dl3ZLykt.js";
+export{zR as defaultRegistry,BR as defaultRendererContributions,VR as defaultRenderersExtension}from"../../chunks/app-CaiqMuIC.js";

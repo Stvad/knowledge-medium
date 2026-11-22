@@ -1,1 +1,1 @@
-export{OR as LazyBlockComponent}from"../../chunks/app-Dl3ZLykt.js";
+export{OR as LazyBlockComponent}from"../../chunks/app-CaiqMuIC.js";

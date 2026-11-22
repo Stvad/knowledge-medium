@@ -1,1 +1,1 @@
-export{GL as resolveAppRuntime,KL as resolveAppRuntimeSync}from"../../chunks/app-Dl3ZLykt.js";
+export{GL as resolveAppRuntime,KL as resolveAppRuntimeSync}from"../../chunks/app-CaiqMuIC.js";

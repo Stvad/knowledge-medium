@@ -1,1 +1,1 @@
-export{IR as BlockLoadingPlaceholder}from"../../chunks/app-Dl3ZLykt.js";
+export{IR as BlockLoadingPlaceholder}from"../../chunks/app-CaiqMuIC.js";

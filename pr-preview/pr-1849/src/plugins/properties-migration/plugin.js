@@ -1,1 +1,1 @@
-export{kc as propertiesMigrationPlugin}from"../../../chunks/app-Dl3ZLykt.js";
+export{kc as propertiesMigrationPlugin}from"../../../chunks/app-CaiqMuIC.js";

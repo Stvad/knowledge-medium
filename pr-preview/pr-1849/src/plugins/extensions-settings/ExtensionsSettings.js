@@ -1,1 +1,1 @@
-export{ei as ExtensionsSettings}from"../../../chunks/app-Dl3ZLykt.js";
+export{ei as ExtensionsSettings}from"../../../chunks/app-CaiqMuIC.js";

@@ -1,1 +1,1 @@
-export{Qm as moveCommentToOwnThread}from"../../../chunks/app-Dl3ZLykt.js";
+export{Qm as moveCommentToOwnThread}from"../../../chunks/app-CaiqMuIC.js";
