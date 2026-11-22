@@ -1,1 +1,1 @@
-export{gz as ConfirmBulkDeleteDialog}from"../../chunks/app-BAJEyHhJ.js";
+export{gz as ConfirmBulkDeleteDialog}from"../../chunks/app-PoOtsjvq.js";
