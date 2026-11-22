@@ -1,1 +1,1 @@
-export{hO as mobileBottomNavItemsFacet}from"../../../chunks/app-CSKRKmra.js";
+export{hO as mobileBottomNavItemsFacet}from"../../../chunks/app-DnlJ__Aw.js";

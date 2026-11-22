@@ -1,1 +1,1 @@
-export{aX as staticDataExtensions}from"../../chunks/app-CSKRKmra.js";
+export{aX as staticDataExtensions}from"../../chunks/app-DnlJ__Aw.js";

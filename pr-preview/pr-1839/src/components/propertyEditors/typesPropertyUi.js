@@ -1,1 +1,1 @@
-export{UF as kernelPropertyUiExtension,WF as typesPropertyUi,GF as typesPropertyUiExtension}from"../../../chunks/app-CSKRKmra.js";
+export{UF as kernelPropertyUiExtension,WF as typesPropertyUi,GF as typesPropertyUiExtension}from"../../../chunks/app-DnlJ__Aw.js";

@@ -1,1 +1,1 @@
-export{det as assertAliasClaimable,fet as claimedAliases}from"../../chunks/app-CSKRKmra.js";
+export{det as assertAliasClaimable,fet as claimedAliases}from"../../chunks/app-DnlJ__Aw.js";

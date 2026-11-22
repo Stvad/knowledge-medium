@@ -1,1 +1,1 @@
-export{G2 as pluginPrefsExtension,K2 as pluginUIStateExtension}from"../../chunks/app-CSKRKmra.js";
+export{G2 as pluginPrefsExtension,K2 as pluginUIStateExtension}from"../../chunks/app-DnlJ__Aw.js";

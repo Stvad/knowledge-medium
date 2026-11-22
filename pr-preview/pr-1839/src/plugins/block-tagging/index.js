@@ -1,1 +1,1 @@
-export{If as ADD_TAG_ACTION_ID,Lf as ADD_TAG_BLOCKS_ACTION_ID,Vf as appendTagToBlocks,Hf as appendTagToContent,Ff as blockTaggingPlugin,Zf as blockTagsConfigProp}from"../../../chunks/app-CSKRKmra.js";
+export{If as ADD_TAG_ACTION_ID,Lf as ADD_TAG_BLOCKS_ACTION_ID,Vf as appendTagToBlocks,Hf as appendTagToContent,Ff as blockTaggingPlugin,Zf as blockTagsConfigProp}from"../../../chunks/app-DnlJ__Aw.js";

@@ -1,1 +1,1 @@
-export{qI as ExtensionPromptSurface,JI as extensionPromptsExtension}from"../../../chunks/app-CSKRKmra.js";
+export{qI as ExtensionPromptSurface,JI as extensionPromptsExtension}from"../../../chunks/app-DnlJ__Aw.js";

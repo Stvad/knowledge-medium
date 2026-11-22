@@ -1,1 +1,1 @@
-export{$ut as deriveWorkspaceIdNamespace}from"../../../chunks/app-CSKRKmra.js";
+export{$ut as deriveWorkspaceIdNamespace}from"../../../chunks/app-DnlJ__Aw.js";

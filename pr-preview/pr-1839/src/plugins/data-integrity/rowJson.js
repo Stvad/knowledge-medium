@@ -1,1 +1,1 @@
-export{tu as parsePropertiesJson}from"../../../chunks/app-CSKRKmra.js";
+export{tu as parsePropertiesJson}from"../../../chunks/app-DnlJ__Aw.js";

@@ -1,1 +1,1 @@
-export{PI as BlockPasteShellDecorator,FI as blockPasteShellDecorator}from"../../chunks/app-CSKRKmra.js";
+export{PI as BlockPasteShellDecorator,FI as blockPasteShellDecorator}from"../../chunks/app-DnlJ__Aw.js";

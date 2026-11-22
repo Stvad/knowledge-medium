@@ -1,1 +1,1 @@
-export{pI as ensureMetricsConsoleHook}from"../../chunks/app-CSKRKmra.js";
+export{pI as ensureMetricsConsoleHook}from"../../chunks/app-DnlJ__Aw.js";

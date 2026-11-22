@@ -1,1 +1,1 @@
-export{AV as useShortcutSurfaceActivations}from"../../chunks/app-CSKRKmra.js";
+export{AV as useShortcutSurfaceActivations}from"../../chunks/app-DnlJ__Aw.js";

@@ -1,1 +1,1 @@
-export{KM as dailyDateWikilinkDecorator}from"../../../chunks/app-CSKRKmra.js";
+export{KM as dailyDateWikilinkDecorator}from"../../../chunks/app-DnlJ__Aw.js";
