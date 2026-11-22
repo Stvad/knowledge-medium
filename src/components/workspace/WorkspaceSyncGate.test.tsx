@@ -25,10 +25,11 @@ import {
   syncServer,
   testWorkspaceRow,
 } from '@/data/test/syncCheckpoint'
-import { noKey } from '@/data/internals/syncObserver/test/harness'
 import type { Materializability } from '@/sync/transform'
 import { WorkspaceSyncGate } from './WorkspaceSyncGate'
-import { RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX } from '@/data/internals/clientSchema'
+import { RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX, syncBulkLoadScope } from '@/data/internals/clientSchema'
+import { INSERT_BLOCK_SQL, noKey } from '@/data/internals/syncObserver/test/harness'
+import { blockToRowParams } from '@/data/blockSchema'
 
 const backlog = vi.hoisted(() => {
   let value = 0
@@ -130,6 +131,30 @@ describe('WorkspaceSyncGate', () => {
     await drainStaged(shared.db)
     await deliver([serverWorkspace(workspaceRow)])
 
+    await vi.waitFor(() => expect(onReady).toHaveBeenCalled())
+  })
+
+  it('shows the deferred search index being built, and opens once it is', async () => {
+    await deliver([serverWorkspace(workspaceRow)])
+    // Rows a bulk window inserted and whose build has not run: the state the
+    // gate meets between a drain's last window and its build.
+    await shared.db.writeTransaction(async tx => {
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [syncBulkLoadScope([WS])])
+      await tx.execute(INSERT_BLOCK_SQL, blockToRowParams({
+        id: 'b1', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'para', properties: {}, references: [],
+        createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'u', updatedBy: 'u', deleted: false,
+      }))
+      await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+    })
+    const onReady = vi.fn()
+    renderGate({onReady})
+    expect(await screen.findByText('Building the search index')).toBeTruthy()
+    expect(onReady).not.toHaveBeenCalled()
+
+    // The gate's own kick reaches an observer, whose drain ends with the build.
+    withObserver()
+    cleanup()
+    renderGate({onReady})
     await vi.waitFor(() => expect(onReady).toHaveBeenCalled())
   })
 

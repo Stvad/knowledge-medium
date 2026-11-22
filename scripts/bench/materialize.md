@@ -298,3 +298,50 @@ What it shows:
 
 Not measured: more than one sample per variant, WebKit, a database at the
 device's scale, or any slow-disk machine.
+
+## Deferred search index under the bulk hold
+
+`--bulk-load` (either runner) runs the production bulk hold: every window
+carries the bulk scope, so no row-event create is written and the search-index
+insert is deferred to `blocks_fts_owed`, and `buildDeferredSearchIndex` runs
+once after the last window, inside the wall time (`deferredIndexMs`).
+`--per-row-fts` with it restores the per-row search trigger under the same
+scope: the hold as it was before the deferral, and the baseline for it.
+(`--drop-triggers blocks_row_event_insert` is not that baseline: without the
+bulk scope it still logs every derived-column stamp.)
+
+Measured 2026-11-21: headless Chromium, `OPFSWriteAheadVFS`, 150,000 encrypted
+rows with scattered ids, `initial`, `--cache-kb 15000` (4% of the file),
+`--window 20000`, runs interleaved, load average 8–45.
+
+| Variant | Rows/s | Upsert s | Deferred build s |
+| --- | ---: | ---: | ---: |
+| `--bulk-load --per-row-fts` (the hold before) | 3,095 / 2,501 / 3,038 / 2,676 | 33.8 / 42.5 / 34.3 / 38.5 | |
+| `--bulk-load` | 3,743 / 3,794 | 19.9 / 20.6 | 4.6 / 4.7 |
+| `--bulk-load --drop-indexes` | 5,560 / 5,300 | 8.4 / 9.1 | 3.8 / 3.8 |
+
+`--bulk-load`'s rows/s includes its build. The `--drop-indexes` row was taken
+with an earlier build (rowids in id order, about 0.9 s faster) and has the
+1.4–1.5 s of re-creating the twelve indexes added to its wall time by hand
+(the runner reports it in `recreateIndexMs` only); its `--rebuild-derived`
+backfills are not counted, since production would not run them.
+
+So the deferral is worth about 1.25–1.4x, and dropping `blocks`' secondary
+indexes during the load would be worth about 1.4x on top. The indexes are not
+dropped: they are shared by every workspace on the device, and several
+production queries name one with `INDEXED BY`, which SQLite refuses at prepare
+time when the index is missing (one of them, the alias re-derive drain, is
+scheduled during a first drain).
+
+The build allocates FTS rowids in arrival order, as the per-row trigger does.
+An earlier version allocated them in id order: the index came out the same
+size, but FTS5 keys doclists by rowid, and a rare-term MATCH on the fixture
+ran 3-4x slower at 150k and 8x slower at 1.2M (0.38 to 3.0 ms). Merging or
+optimizing the segments afterwards did not recover it; arrival order did.
+
+The build at the device's scale, on Node (better-sqlite3, a 12-core laptop,
+128 MB of cache on the writer, as production gives the writer of its 256 MB;
+Node also serves misses from the OS page cache): 1,200,000 owed rows build in
+23.1–23.3 s, in 50,000-row transactions (one transaction took 28.7 s under the
+same load). Chromium took about twice Node's time at 150k, so a 1.2M build there
+is likely nearer a minute; that figure is reasoned, not measured.

@@ -31,6 +31,9 @@
  * write commits, no processor involved. Reading it through the active
  * tx's `ctx.db` therefore sees every committed row plus this tx's own
  * staged writes. That is the fence: ask the index that can't be stale.
+ * The one exception is a workspace under a sync bulk load, whose inserts are
+ * indexed at the drain's end (`blocks_fts_owed`); its gate keeps it closed
+ * until then.
  *
  * The FTS index is `case_sensitive 0` and trigram-based, so a MATCH is a
  * CANDIDATE filter — it returns `[[old]]` for alias `Old`. Candidates are
