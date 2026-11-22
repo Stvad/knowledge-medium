@@ -1,1 +1,1 @@
-export{vh as DraftEditor}from"../../chunks/app-DuNp8WQV.js";
+export{vh as DraftEditor}from"../../chunks/app-BtX2RBb9.js";
