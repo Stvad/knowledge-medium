@@ -23,7 +23,10 @@
 import type { Repo, ViewGap } from '@/data/repo'
 import {
   DELETE_KEYED_MARKER_SQL,
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
+  RECONCILE_RESCAN_MARKER_PREFIX,
   RECORD_KEYED_MARKER_SQL,
+  RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL,
   SELECT_KEYED_MARKER_SQL,
   WORKSPACE_FIRST_SYNC_MARKER_PREFIX,
 } from '@/data/internals/clientSchema'
@@ -74,4 +77,18 @@ export const recordWorkspaceFirstSync = async (db: MarkerDb, workspaceId: string
 /** For a workspace whose row is absent: whatever this device had of it is gone. */
 export const forgetWorkspaceFirstSync = async (db: MarkerDb, workspaceId: string): Promise<void> => {
   await db.execute(DELETE_KEYED_MARKER_SQL, [markerKey(workspaceId)])
+}
+
+/** Call before this device's first sync of a workspace materializes any of it.
+ *  Then its one-time reconcile rescan reads only the rows a drain left
+ *  unapplied, instead of rewriting `blocks` from every staged row right after
+ *  the first drain wrote them ({@link RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL}).
+ *  Called once a drain has applied a row, it records nothing, and the rescan
+ *  reads every row as before. */
+export const noteColdFirstSync = async (db: MarkerDb, workspaceId: string): Promise<void> => {
+  await db.execute(RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL, [
+    `${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${workspaceId}`,
+    `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`,
+    workspaceId,
+  ])
 }

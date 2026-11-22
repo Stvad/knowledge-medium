@@ -59,6 +59,7 @@ import {
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
   RECONCILE_RESCAN_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
@@ -312,6 +313,9 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}%'`,
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${WORKSPACE_FIRST_SYNC_MARKER_PREFIX}%'`,

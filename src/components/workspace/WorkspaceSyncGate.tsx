@@ -10,7 +10,7 @@ import { Explanation, GateCard } from '@/components/workspace/keyUi'
 import { ProgressRow, SyncProgress } from '@/components/workspace/SyncProgress'
 import { useRepo } from '@/context/repo'
 import { useMaterializeBacklog } from '@/hooks/useMaterializeBacklog'
-import { readWorkspaceFirstSync, recordWorkspaceFirstSync, type WorkspaceFirstSync } from '@/data/workspaceFirstSync'
+import { noteColdFirstSync, readWorkspaceFirstSync, recordWorkspaceFirstSync, type WorkspaceFirstSync } from '@/data/workspaceFirstSync'
 
 interface Props {
   workspaceId: string
@@ -53,6 +53,12 @@ export function WorkspaceSyncGate({workspaceId, workspaceName, awaitingRow, onRe
   const kicking = useRef<Promise<void> | null>(null)
   // A bulk load while the gate is up — see `BlocksSyncedObserver.holdBulkLoad`.
   useEffect(() => repo.holdBulkSyncLoad(workspaceId), [repo, workspaceId])
+  // Reached without an access gate's drain on a device that kept its pin and
+  // key but not its database, where nothing else records it.
+  useEffect(() => {
+    noteColdFirstSync(repo.db, workspaceId)
+      .catch((err: unknown) => console.warn('[WorkspaceSyncGate] cold first-sync note failed', err))
+  }, [repo, workspaceId])
 
   const kickDrain = useCallback((): Promise<void> => {
     kicking.current ??= repo.flushSyncObserver().then(

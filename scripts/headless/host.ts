@@ -15,6 +15,7 @@ import {staticDataExtensions} from '@/extensions/staticDataExtensions'
 import {createAgentRuntimeContext} from '@/plugins/agent-runtime/commands'
 import {watchEventsRegistry} from '@/plugins/agent-runtime/watchEvents'
 import {openWorkspaceData} from '@/bootstrap/openWorkspaceData'
+import {noteColdFirstSync} from '@/data/workspaceFirstSync'
 import {untilStopped} from '@/utils/untilStopped'
 import type {User} from '@/types'
 import {resolveAppVersion} from '../app-version'
@@ -72,6 +73,8 @@ export async function serveDatabase(
     await openDeviceWorkspace(config, user.id, parseWorkspaceRow(row))
     if (existing) await connect(db, connector)
     const cold = !await db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
+    // Before the Repo, whose observer starts draining as it is built.
+    if (cold) await noteColdFirstSync(db, workspaceId)
     const preferencesPage = config.preferencesPage ? {workspaceId, userPageId: config.preferencesPage} : undefined
     const active = new Repo({db, user, cache: new BlockCache(), syncObserverDeps: resolver, isReadOnly: true, preferencesPage})
     repo = active

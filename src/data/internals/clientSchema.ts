@@ -1298,6 +1298,31 @@ export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
  *  client. */
 export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
 
+/** Per-workspace: every `needs_apply` flag this device holds for the workspace
+ *  is a drain's own judgment, so its one-time reconcile rescan may read only the
+ *  flagged rows instead of every staged row. Keyed
+ *  `reconcile_rescan_flags_trusted_v1:<workspaceId>`; recorded by
+ *  {@link RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL}. */
+export const RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX = 'reconcile_rescan_flags_trusted_v1:'
+
+/** Records {@link RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX} for a workspace none
+ *  of whose staged rows has a cleared flag. The narrow rescan differs from the
+ *  full one only on cleared flags, and a cleared flag is the one thing a legacy
+ *  device can have wrong (a shadow an old-gate drain skipped, a row the upgrade
+ *  seed cleared). With none present, every flag from here on is set by a
+ *  delivery and cleared only by a drain that judged the row.
+ *
+ *  One statement, so the check and the write cannot be split by a drain window.
+ *  The reconcile-marker term is cost only, not correctness: a workspace whose
+ *  rescan is done never reads this marker, and the term spares it the staging
+ *  scan. Params: flags-trusted key, reconcile key, workspace id. */
+export const RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL = `
+  INSERT OR IGNORE INTO client_schema_state (key, completed_at)
+  SELECT ?, strftime('%s', 'now') * 1000
+   WHERE NOT EXISTS (SELECT 1 FROM client_schema_state WHERE key = ?)
+     AND NOT EXISTS (SELECT 1 FROM blocks_synced WHERE workspace_id = ? AND needs_apply = 0)
+`
+
 /** Per-workspace: this device has caught up on the workspace's first sync, so
  *  it opens without the sync gate (`workspaceFirstSync.ts`). Keyed
  *  `workspace_first_sync_v1:<workspaceId>`. */

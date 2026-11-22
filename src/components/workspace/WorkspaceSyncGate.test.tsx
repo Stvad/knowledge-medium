@@ -27,6 +27,7 @@ import {
 import { noKey } from '@/data/internals/syncObserver/test/harness'
 import type { Materializability } from '@/sync/transform'
 import { WorkspaceSyncGate } from './WorkspaceSyncGate'
+import { RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX } from '@/data/internals/clientSchema'
 
 const backlog = vi.hoisted(() => {
   let value = 0
@@ -97,6 +98,13 @@ describe('WorkspaceSyncGate', () => {
     expect(release).not.toHaveBeenCalled()
     unmount()
     expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('notes a workspace this device holds nothing of as a cold first sync', async () => {
+    renderGate({awaitingRow: true, onReady: vi.fn()})
+    await vi.waitFor(async () => expect(await shared.db.getOptional(
+      'SELECT 1 FROM client_schema_state WHERE key = ?', [`${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${WS}`],
+    )).toBeTruthy())
   })
 
   it('does not open on status changes while the workspace is not caught up', async () => {

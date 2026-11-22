@@ -16,7 +16,9 @@ import {clearSyncState, drainStaged, serverWorkspace, stagedBlock, syncServer, t
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore} from '@/sync/keys/keyStore'
 import {encryptUploadColumns} from '@/sync/transform'
-import {ANALYZE_OPTIMIZE_SQL} from '@/data/internals/clientSchema'
+import {ANALYZE_OPTIMIZE_SQL, RECONCILE_RESCAN_MARKER_PREFIX} from '@/data/internals/clientSchema'
+import {Repo} from '@/data/repo'
+import type {SyncDrainStats} from '@/data/internals/syncObserver/observer'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {statusProp} from '@/plugins/todo/schema'
 import {serveDatabase} from './host'
@@ -72,7 +74,8 @@ const plaintext = (): HeadlessConfig => ({mode: 'plaintext', workspaceId, profil
 const writable = () => ({...plaintext(), writable: true})
 
 // This database boot took 0.36–1.45 s in the focused run.
-it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes or returning device secrets', async mode => {
+it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes, returning device secrets or re-materializing it', async mode => {
+  const repos = vi.spyOn(Repo.prototype, 'setActiveWorkspaceId')
   const config = plaintext()
   const key = await mintWorkspaceKey(workspaceId)
   const keyFile = join(fixture.dir, 'fixture-key')
@@ -103,10 +106,19 @@ it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download wi
     await deliver([{...block, data: {...data, updated_at: 2, user_updated_at: 2}}])
     await vi.waitFor(async () => expect(await fixture.db.getOptional('SELECT 1 FROM row_events WHERE block_id = ?', [id])).toBeTruthy())
     await assertReadSurface(host.execute, id, {deviceValue, workspaceKey: key.displayed})
+    // The open's one-time reconcile rescan has run to completion.
+    await vi.waitFor(async () => expect(await fixture.db.getOptional(
+      'SELECT 1 FROM client_schema_state WHERE key = ?', [`${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`],
+    )).toBeTruthy())
   } finally {
     await host.stop()
   }
   expect(await fixture.db.get('SELECT count(*) AS n FROM ps_crud')).toEqual({n: 0})
+  // ...without rewriting `blocks` from staging: the queue drain already applied every row.
+  const drains: SyncDrainStats['source'][] = []
+  ;(repos.mock.contexts[0] as Repo).onSyncDrainStats(stats => drains.push(stats.source))
+  expect(drains).toContain('queue')
+  expect(drains).not.toContain('workspace')
 }, 20_000)
 
 // This database boot took 0.21 s in the focused run.
