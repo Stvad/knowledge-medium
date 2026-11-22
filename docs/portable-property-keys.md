@@ -1,6 +1,6 @@
 # Portable property and type keys
 
-> **Status:** proposal, nothing built. The two decisions in §8 are open.
+> **Status:** proposal, nothing built. The three decisions in §8 are open.
 > **Last verified against code:** 2026-11-21, master `fd7abbb9a51`. Row counts measured the
 > same day on the largest live workspace through the agent bridge's read verbs.
 
@@ -23,10 +23,11 @@ definition block's id?
    seed ledger already freezes it for built-ins. What is not portable today is only the pointer
    in the field row. Freeze the name for user-defined properties too and add a separate display
    label; a rename then edits the definition and no consumer.
-2. **`prop/<key>` and `type/<id>` are reserved names that resolve through the definition
-   registries.** Nothing is stored for them: no alias on any definition row, no migration, no
-   new synced data. `[[prop/status]]` in prose becomes a real reference to the definition, with
-   a backlink.
+2. **Every definition answers to a reserved alias, `prop/<key>` or `type/<id>`, in the alias
+   index.** `[[prop/status]]` is then an ordinary link: it autocompletes, navigates and
+   backlinks like any other. How the entry gets into the index is fork 3: derived by the index
+   from the definition row's own name (my pick, nothing stored), or stored in the definition's
+   alias list by a one-time backfill.
 3. **A field row that is bound is always `::((fieldId))`.** One kernel processor rewrites a
    locally written `::[[prop/<key>]]` row to the id form when the key resolves. A key that does
    not resolve leaves the row as written: visible, readable, its values intact, and not
@@ -42,21 +43,22 @@ What each piece buys, so it can be cut along the line:
 | Piece | Buys | Without it |
 |---|---|---|
 | frozen name + label | keys that survive a rename, in other workspaces and in old exports | every rename strands exported and prose key references |
-| reserved-name resolution | `[[prop/…]]` and `[[type/…]]` as references and backlinks | properties are portable but not referenceable in prose |
+| reserved alias | `[[prop/…]]` and `[[type/…]]` as links, with autocomplete and backlinks | properties are portable but not referenceable in prose |
 | bind-on-write processor | paste, import, move and agent writes all bind, through one owner | each inbound path binds for itself |
 | export in key form | readable markdown; cross-workspace paste works | exported rows carry ids that mean nothing elsewhere |
 
 Items 3 and 4 are the pair the properties-as-blocks design named as follow-ups and never built
 ("copy resolves references" out, definitions answering to their name in). What is new here: the
-name is reserved and prefixed instead of bare, so it cannot collide with a page; it is frozen;
-and it is resolved by the registry instead of claimed in the alias index, which removes the
-collision policy #1407 asks for.
+name is reserved and prefixed instead of bare, so it cannot collide with a page and needs no
+collision policy (the question #1407 asks); and it is frozen.
 
-**Two decisions are yours** (§8 has the examples):
+**Three decisions are yours** (§8 has the examples):
 
 - *Where the key form lives.* Border only, as above (my pick), or as the stored form of every
   field row.
 - *What a rename does.* Edits the label and leaves the key (my pick), or re-keys as today.
+- *How the reserved alias gets into the index.* Derived from the definition's name (my pick),
+  or stored on the definition and backfilled.
 
 Where the original framing overreached, in my reading:
 
@@ -217,9 +219,9 @@ A random short id (`prop/k7f3q9`) instead of the name is rejected in §5.
 (`assertNameAvailable`). A seed that later declares a name a user definition holds takes the
 name; the user row stays resolvable by id and its values are read under the seed's codec (read,
 `propertyDefinitionRegistry.ts`). For the 390 namespaced names that is the intended adoption of
-keys an extension wrote before declaring them. Because `prop/<key>` resolves through that same
-registry rule, this design neither fixes nor worsens the case; a stored alias claim would have
-worsened it (§5).
+keys an extension wrote before declaring them. The reserved alias has to follow the same rule,
+the seed's row winning the alias as it wins the name, which §4.4 makes a requirement of either
+way of building it. With that, this design neither fixes nor worsens the case.
 
 **One key, two codecs, across workspaces.** A text paste or markdown import carries rows, not
 definitions. The row binds to the destination's definition and its values are read under the
@@ -249,11 +251,19 @@ The key form is handled at three places, each with one owner:
   did not resolve when it was written. It keeps `is_field_form = 1` and a null target, which is
   the existing "unbound field intent" state, and it is never machinery. This is the clause that
   option (b) in §8 would flip.
-- **Reserved-name resolution for references.** The exact alias lookup's two entry points
-  (`tx.aliasLookup` and the `core.aliasLookup` query) answer a `prop/…` or `type/…` name from
-  the registry: the property registry's winner for the name, or the type registry's block for
-  the id (`blockIdByTypeId`, `src/data/typeDefinitionRegistry.ts`). So the references plugin
-  writes an edge for `[[prop/status]]` in prose with no change of its own.
+- **The reserved alias.** Each property definition has `prop/<name>` in the alias index, and
+  each seeded type definition `type/<id>`. The exact lookup, link autocomplete, navigation and
+  the references plugin then need no change of their own. Three rules come with it, whichever
+  way fork 3 goes:
+  1. *The reserved prefixes are exempt from the alias uniqueness trigger.* Who holds a
+     definition's name is the registry's question. Without the exemption a seed whose name a
+     user row holds aborts its whole creation batch, and two same-name definitions that arrive
+     by sync refuse every later property write to each other (the trigger re-inserts a row's
+     whole alias list on any property change).
+  2. *Among several claimants of a reserved alias, the lookup returns the one the registry
+     names.* The generic rule is oldest claimant; the registry lets a current seed win over an
+     older user row. The alias must not disagree with the name.
+  3. *A reserved alias on a block that is not a definition is not indexed.*
 
 And one rule: **a reserved name is never seated.** A `[[name]]` miss mints a page seat today
 (`ensureAliasTarget`, `src/data/targets.ts`, three callers, plus the Roam importer's twin). For
@@ -268,19 +278,20 @@ What this deliberately does not do:
   be the wrong tool: it stamps the local column and writes no reference edge, so a row bound
   that way is invisible to a later re-key or merge (read, `repo.ts` and
   `referencesProcessor.ts`).
-- **No text-only recognition.** A reserved prefix *could* make "this is a property row" a fact
-  of the text. It would classify a row whose key no definition holds, with no codec to project
+- **No text-only recognition, under the border form.** A reserved prefix *could* make "this is
+  a property row" a fact of the text, and that is the basis of the one stored-form variant I
+  would consider (§8, fork 1, b2). Bolted onto id-addressed rows it would classify a row whose key no definition holds, with no codec to project
   it, and in the outline's hidden tier it would vanish. Leaving it an ordinary visible block is
   the right behaviour for data nobody can interpret. What the prefix makes textual is intent and
   a label: such a row can be offered a "bind" or "create this property" action later. No such
   affordance exists today; it would be new UI and is not in the build order.
-- **No new authority for names.** A stored alias would have been a fifth place answering "who
-  holds this name", with a different winner rule from the registry's (§2). Resolving through the
-  registry adds none.
+- **No new authority for names.** Left to the generic rules, the alias index would be a fifth
+  place answering "who holds this name", with a different winner from the registry's (§2). Rules
+  1 and 2 make it a mirror that cannot disagree, pinned by a consistency test: for every
+  definition, the alias lookup for `prop/<name>` returns the registry's winner for `name`.
 
-A page that already carries an alias under a reserved prefix would stop being reachable by that
-alias, since the registry answers first. None exists in the largest graph; count per workspace
-before enabling.
+A page that already carries an alias under a reserved prefix stops being reachable by that
+alias (rule 3). None exists in the largest graph; count per workspace before enabling.
 
 ### 4.5 Stored form versus border form, sized
 
@@ -288,15 +299,18 @@ before enabling.
 
 | Write to synced data | Largest graph |
 |---|---|
-| field rows, cells, definitions, type memberships | 0 |
+| field rows, cells, type memberships | 0 |
+| definitions, fork 3(a) | 0 |
+| definitions, fork 3(b) | 718 rows, about 2,150 with their property children, once per graph |
 
-There is no migration and no once-per-graph pass. `property-schema:label` is a new seeded
-property; it is written the first time a user relabels something. New code: the label and the
-rename change; the bind-on-write processor; the reserved-name branch in the alias lookup; the
+Under fork 3(a) there is no migration and no once-per-graph pass. `property-schema:label` is a
+new seeded property; it is written the first time a user relabels something. New code: the label
+and the rename change; the bind-on-write processor; the reserved alias and its three rules; the
 no-seat rule; the export rewrite in the one clipboard serializer (`serializeBlock`,
 `src/utils/copy.ts`).
 
-**Option one, key form as the stored form.**
+**Option one, key form as the stored form** (as variant b1 of fork 1: each row's key is
+resolved to a definition id, and the code stays keyed by that id).
 
 | | Largest graph |
 |---|---|
@@ -353,10 +367,10 @@ properties the equivalent adoption exists and is usually wanted (§4.3); for typ
 new, and wrong. Tokens are also stored outside membership (a `ref` property's `targetTypes`
 config), so a token migration has an open-ended audit.
 
-So tokens stay as they are, and the only type change here is the reserved name: `[[type/page]]`
-resolves to the seeded definition through the type registry, with nothing stored. For a
-user-defined type the registry's id is the block id, so the reserved spelling is no more
-readable than a block reference; its readable name is its label, `[[Person]]`, as today.
+So tokens stay as they are, and the only type change here is the reserved alias: `[[type/page]]`
+resolves to the seeded definition row. A user-defined type gets none; its token is a block id,
+so the spelling would be no more readable than a block reference, and its readable name is
+already its label, `[[Person]]`.
 
 Carrying a user-defined type's membership across workspaces needs a portable key for the type
 and a token map at the border. It is deferred: 5 such types and 1,384 memberships in the largest
@@ -372,7 +386,8 @@ length.
 
 Under the recommendation:
 
-- Nothing is stored or synced for the reserved names. They are answered from local registries.
+- Under fork 3(a) nothing is stored or synced for the reserved alias; the index is local. Under
+  3(b) it sits in the definition row's sealed columns.
 - No id is derived from a key. User-created definitions keep random ids, and no seat is minted
   for a reserved name.
 - The label lives in the definition row's sealed columns.
@@ -387,14 +402,16 @@ not which property it is. With `::[[prop/<key>]]` at rest, a field row's ciphert
 the key's length plus a constant, in `content` and (reasoned) in `references_json` too.
 Built-in keys are public, so length
 sorts each block's field rows into small sets of candidate properties, for the whole workspace.
+Padding field-row content to a fixed length closes this. It is not designed here: the envelope
+has no padding today, so it is a change to what every device seals and opens.
 
 ## 5. Rejected alternatives
 
 | Alternative | Why not |
 |---|---|
 | Key form as the stored form, now | §4.5, §4.7. Deferred, not foreclosed; it is fork 1 |
-| Definitions store `prop/<key>` in their alias list (my first draft) | The materializer cannot write existing seeded rows. A seed whose key a user row already claims would abort its whole creation batch on the uniqueness trigger. Two same-key definitions arriving by sync would each refuse every later property write. The alias winner (oldest) differs from the registry winner (the seed). The alias plugin starts syncing content into any block that has an alias, and the first alias is used as a display name. All read |
-| Derive the alias in the index trigger from the row's own name | Fixes the storage problems, keeps the winner disagreement |
+| Definitions store `prop/<key>` in their alias list under the generic alias rules (first draft) | As drafted it failed, all read: the materializer cannot write existing seeded rows; a seed whose key a user row already claims aborts its creation batch on the uniqueness trigger; two same-key definitions arriving by sync refuse each other's later writes; the alias winner differs from the registry winner; the alias plugin starts syncing content into any aliased block; the first alias is used as a display name. With §4.4's three rules and the guards listed there it is workable, and is now fork 3(b) |
+| Answer reserved names from the registry with nothing in the alias index (second draft) | Not a real alias: no link autocomplete, and a second resolution path beside the index for every consumer |
 | Rename keeps the old key as an extra name | §4.2 |
 | Random short keys for user properties | Unreadable where the key is meant to be read; two workspaces that each made `priority` stop matching; and the cell must either be re-keyed (about 168k entries) or keep the name as a third identity. Its one advantage, never meeting a built-in, is an adoption that is usually wanted |
 | An id-carrying key, `::((prop/status))` | Parses and derives textually, but the target is then not a block; every consumer that joins `reference_target_id` to `blocks` or `block_types` needs a key branch |
@@ -419,11 +436,13 @@ Each step ships alone. None writes a stored field row, a cell, or a definition t
    *Break to name in the PR:* `schema.name` stops being the display label once a property is
    relabelled; an extension rendering it shows the key. Nothing throws.
 
-2. **Reserved names.** The registry branch at the two alias-lookup entry points; no seat in
+2. **Reserved alias.** The index entry (fork 3) and its three rules; no seat in
    `ensureAliasTarget` and the importer's twin; derive returns no target for a reserved name.
    *Verify, with the real references plugin:* `[[prop/status]]` in prose yields an edge to the
    definition the registry names, including when an older user row holds the same name as a
-   seed. `[[prop/nope]]` and `::[[prop/nope]]` mint no block. A `::[[prop/status]]` row written
+   seed. Two same-name definitions set up as sync arrivals can each still be edited. Creating a
+   seed whose name a user row holds does not abort. `[[prop/nope]]` and `::[[prop/nope]]` mint
+   no block. A `::[[prop/status]]` row written
    with the bind processor absent keeps a null target and is listed as an ordinary child.
 
 3. **Bind on write.** The same-tx processor.
@@ -473,13 +492,26 @@ Each step ships alone. None writes a stored field row, a cell, or a definition t
   visible block reading `::[[prop/priority]]` with its value under it. Cost: no stored data
   changes; four small pieces of code.
 - *(b) Stored everywhere.* The same page is stored as `::[[prop/status]]`. A guest lacking the
-  definition reads `status` with no stand-in, and export is the stored text. Cost: a rewrite of
-  384,706 rows in the largest graph, uploaded twice over (content and references); every field
-  row bound through the registry from then on, with late binding and winner changes to build;
-  and on an encrypted workspace the server can sort field rows by property-name length.
+  definition reads `status` with no stand-in, and export is the stored text. You have said the
+  size of the rewrite (384,706 rows in the largest graph) and field-row padding are acceptable;
+  I agree neither is the real objection. The real one depends on which stored design:
+  - *(b1) The key is resolved to a definition id; the code stays keyed by that id.* This is what
+    §4.5 sizes. A row is a property row only once its key has resolved on that device, so
+    recognition depends on arrival order and on which definition currently wins the key, and
+    late binding and winner changes have to be built. I would not do this at any migration
+    cost.
+  - *(b2) The key is the identity.* A row is a property row because its text is `::` plus a
+    reserved name, on every device, with no lookup; a definition supplies the codec and label by
+    name, as it already does for the cell. That keeps what the id form was chosen for, and
+    makes rows portable and guest-readable with nothing to translate. A key with no definition
+    is a visible property row with its values as text. Cost: the data layer is keyed by field
+    id today (the resolver, projection, rename fan-out, duplicate folding; 39 non-test files
+    and 335 lines mention `fieldId`, by grep) and would be re-keyed by name, on top of the row
+    rewrite and padding. It is not designed in this document.
 
-I would take (a), and revisit (b) only if guests seeing unnamed rows still matters once
-stand-ins exist. Everything in (a) is needed by (b).
+I would take (a) now. It is the first part of (b2) either way: the frozen key, the reserved
+alias and the key-form export are all needed by it. If you lean towards stored, (b2) is the
+variant to design, and it wants its own sizing pass over the id-keyed code before a decision.
 
 **Fork 2: what a rename does.**
 
@@ -494,6 +526,30 @@ stand-ins exist. Everything in (a) is needed by (b).
 
 I would take (a). A key that moves when relabelled is not a portable key, and (b) is the reason
 exports and other workspaces could not rely on it.
+
+**Fork 3: how the reserved alias gets into the index.**
+
+- *(a) Derived (my pick).* The alias-index triggers gain a second leg: for a row typed
+  `property-schema`, index `prop/` plus its name; for a seeded type row, `type/` plus its type
+  id. The `status` definition block shows no alias property, and `[[prop/status]]` resolves,
+  autocompletes and backlinks. It is there on every device as soon as the definition row is,
+  built-ins included, and on sync arrival, because the triggers fire there too. Nothing is
+  stored or synced, nothing can be deleted by hand, and it cannot drift from the name. Cost:
+  the trigger leg and a local rebuild of the index; the alias is not visible on the block.
+- *(b) Stored and backfilled.* `prop/status` is written into the definition's `alias` property
+  and shows on the block like a page's alias. New definitions get it at creation. Existing ones
+  get it from a one-time, once-per-graph backfill: 718 definition rows in the largest graph,
+  about 2,150 rows with their property children. It can write seeded rows, because the seed
+  read-only gate applies to ordinary edits only (`assertNoSeedDefinitionWrites`,
+  `src/data/internals/txEngine.ts`). It also needs: the alias plugin's content sync to skip
+  definitions; the readers that show a block's first alias as its name to skip reserved
+  aliases; the backfill to check every alias a row already holds and write one definition per
+  transaction; and an owner that moves the alias on a re-key and removes it when a block stops
+  being a definition. Recovery is removing the entry it added.
+
+I would take (a). The alias is a pure function of the name, so storing it makes a second copy to
+keep in step, and each guard in (b) exists only because of that copy. (b) is workable if seeing
+the alias on the definition block matters to you.
 
 **Calls I made that are not forks, but are worth an objection if you have one:**
 
