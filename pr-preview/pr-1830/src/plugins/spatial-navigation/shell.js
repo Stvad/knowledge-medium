@@ -1,0 +1,1 @@
+export{EE as spatialNavigationShellDecorator}from"../../../chunks/app-73APFI-e.js";

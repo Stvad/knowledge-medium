@@ -1,0 +1,1 @@
+export{HI as checkForAppUpdate,UI as registerServiceWorker}from"../chunks/app-73APFI-e.js";

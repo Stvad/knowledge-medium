@@ -1,0 +1,1 @@
+export{Alt as getOrCreatePropertiesPage,jlt as propertiesPageBlockId,Mlt as propertiesPageSpec}from"../../chunks/app-73APFI-e.js";

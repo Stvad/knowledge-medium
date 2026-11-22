@@ -1,0 +1,1 @@
+export{Ow as runSingleOwner}from"../../../chunks/app-73APFI-e.js";

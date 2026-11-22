@@ -1,0 +1,1 @@
+export{AA as useMinuteClock}from"../../chunks/app-73APFI-e.js";

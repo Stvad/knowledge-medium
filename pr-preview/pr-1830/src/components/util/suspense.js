@@ -1,0 +1,1 @@
+export{NJ as SuspenseFallback}from"../../../chunks/app-73APFI-e.js";

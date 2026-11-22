@@ -1,0 +1,1 @@
+export{Kx as wikilinkMarkdownExtension}from"../../../../../chunks/app-73APFI-e.js";

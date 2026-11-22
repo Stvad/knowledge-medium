@@ -1,0 +1,1 @@
+export{iet as agree,aet as pluralize}from"../../chunks/app-73APFI-e.js";

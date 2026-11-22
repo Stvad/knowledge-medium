@@ -1,0 +1,1 @@
+export{tn as staticAppExtensions}from"../../chunks/app-73APFI-e.js";

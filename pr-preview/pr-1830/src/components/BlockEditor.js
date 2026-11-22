@@ -1,0 +1,1 @@
+export{YB as BlockEditor}from"../../chunks/app-73APFI-e.js";

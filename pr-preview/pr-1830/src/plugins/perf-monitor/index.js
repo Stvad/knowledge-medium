@@ -1,0 +1,1 @@
+export{ai as perfMonitorPlugin}from"../../../chunks/app-73APFI-e.js";

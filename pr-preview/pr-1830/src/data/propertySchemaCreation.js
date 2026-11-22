@@ -1,0 +1,1 @@
+export{Zq as adoptOrCreatePropertySchema}from"../../chunks/app-73APFI-e.js";

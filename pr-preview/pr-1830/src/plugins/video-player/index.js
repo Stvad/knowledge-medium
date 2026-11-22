@@ -1,0 +1,1 @@
+export{uT as videoPlayerPlugin}from"../../../chunks/app-73APFI-e.js";

@@ -1,0 +1,1 @@
+export{BU as typePropertyGroups}from"../../chunks/app-73APFI-e.js";

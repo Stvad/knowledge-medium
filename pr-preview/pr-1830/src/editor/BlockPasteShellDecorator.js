@@ -1,0 +1,1 @@
+export{oI as BlockPasteShellDecorator,sI as blockPasteShellDecorator}from"../../chunks/app-73APFI-e.js";

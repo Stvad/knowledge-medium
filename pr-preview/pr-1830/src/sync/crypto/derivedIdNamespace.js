@@ -1,0 +1,1 @@
+export{put as deriveWorkspaceIdNamespace}from"../../../chunks/app-73APFI-e.js";

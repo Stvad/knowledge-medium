@@ -1,0 +1,1 @@
+export{pf as appendTagToBlocks,mf as appendTagToContent}from"../../../chunks/app-73APFI-e.js";

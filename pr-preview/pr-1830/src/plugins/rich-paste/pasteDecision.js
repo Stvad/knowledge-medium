@@ -1,0 +1,1 @@
+export{lC as richPasteDecisionContribution}from"../../../chunks/app-73APFI-e.js";

@@ -1,0 +1,1 @@
+export{KK as isIOS,qK as isMacPlatform}from"../../chunks/app-73APFI-e.js";

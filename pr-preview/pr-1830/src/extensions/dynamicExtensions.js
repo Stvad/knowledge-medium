@@ -1,0 +1,1 @@
+export{vL as dynamicExtensionsExtension}from"../../chunks/app-73APFI-e.js";

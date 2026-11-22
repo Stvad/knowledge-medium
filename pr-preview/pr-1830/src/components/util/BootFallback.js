@@ -1,0 +1,1 @@
+export{MJ as BootFallback}from"../../../chunks/app-73APFI-e.js";

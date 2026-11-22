@@ -1,0 +1,1 @@
+export{KD as usePromotableBreadcrumb}from"../../../chunks/app-73APFI-e.js";

@@ -1,0 +1,1 @@
+export{SN as EXTENSIONS_PAGE_TITLE,CN as TUTORIAL_DEFAULT_TITLE,wN as TUTORIAL_VIM_TITLE,BT as onboardingPlugin,xN as seedTutorial}from"../../../chunks/app-73APFI-e.js";

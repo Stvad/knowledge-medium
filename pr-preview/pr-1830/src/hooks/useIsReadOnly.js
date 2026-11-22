@@ -1,0 +1,1 @@
+export{NS as useIsReadOnly}from"../../chunks/app-73APFI-e.js";

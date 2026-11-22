@@ -1,0 +1,1 @@
+export{Xq as propertyShapeLabel}from"../../../chunks/app-73APFI-e.js";

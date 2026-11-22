@@ -1,0 +1,1 @@
+export{Cu as appVersion}from"../chunks/app-73APFI-e.js";

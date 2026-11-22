@@ -1,0 +1,1 @@
+export{QK as withMoveTransition}from"../../chunks/app-73APFI-e.js";

@@ -1,0 +1,1 @@
+export{KY as tablesDataExtension}from"../../../chunks/app-73APFI-e.js";

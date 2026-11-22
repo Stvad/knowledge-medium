@@ -1,0 +1,1 @@
+export{So as tablesPlugin}from"../../../chunks/app-73APFI-e.js";

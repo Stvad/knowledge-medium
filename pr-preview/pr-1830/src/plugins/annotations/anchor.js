@@ -1,0 +1,1 @@
+export{P$ as ANCHOR_CONTEXT_LENGTH,F$ as captureAnchor,I$ as recaptureAnchor,L$ as resolveAnchor,R$ as widenToReferenceSpans,z$ as widenToSpans}from"../../../chunks/app-73APFI-e.js";

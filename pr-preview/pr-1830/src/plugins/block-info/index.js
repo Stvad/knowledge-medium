@@ -1,0 +1,1 @@
+export{kb as blockInfoPlugin}from"../../../chunks/app-73APFI-e.js";

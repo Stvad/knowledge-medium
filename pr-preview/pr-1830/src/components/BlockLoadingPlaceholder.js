@@ -1,0 +1,1 @@
+export{aR as BlockLoadingPlaceholder}from"../../chunks/app-73APFI-e.js";

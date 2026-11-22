@@ -1,0 +1,1 @@
+export{WI as appUpdate,GI as useAppUpdateAvailable}from"../chunks/app-73APFI-e.js";

@@ -1,0 +1,1 @@
+export{w0 as characterCounterDataExtension}from"../../../chunks/app-73APFI-e.js";

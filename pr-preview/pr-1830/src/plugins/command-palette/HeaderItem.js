@@ -1,0 +1,1 @@
+export{vP as CommandPaletteHeaderItem}from"../../../chunks/app-73APFI-e.js";

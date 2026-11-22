@@ -1,0 +1,1 @@
+export{i3 as SYNCED_TABLES,a3 as syncedWriteTarget,o3 as writeTargets}from"../../chunks/app-73APFI-e.js";

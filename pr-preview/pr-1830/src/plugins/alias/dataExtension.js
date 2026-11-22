@@ -1,0 +1,1 @@
+export{a4 as aliasDataExtension}from"../../../chunks/app-73APFI-e.js";

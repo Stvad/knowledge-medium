@@ -1,0 +1,1 @@
+export{Fj as Label}from"../../../chunks/app-73APFI-e.js";

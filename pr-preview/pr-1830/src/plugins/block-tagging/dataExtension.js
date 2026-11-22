@@ -1,0 +1,1 @@
+export{yf as blockTaggingDataExtension}from"../../../chunks/app-73APFI-e.js";

@@ -1,0 +1,1 @@
+export{KU as AddPropertyForm}from"../../../chunks/app-73APFI-e.js";

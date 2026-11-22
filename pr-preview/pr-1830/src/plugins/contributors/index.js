@@ -1,0 +1,1 @@
+export{Og as contributorsPlugin}from"../../../chunks/app-73APFI-e.js";
