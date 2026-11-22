@@ -503,6 +503,22 @@ export type ValueChildContent = string | {
 const textOfValueChild = (value: ValueChildContent): string =>
   typeof value === 'string' ? value : value.content
 
+/** How a `ref` value row's text reads. The decoder and
+ *  {@link awaitsReferenceTarget} both ask here, so they cannot disagree about
+ *  which rows are waiting on a stamp. */
+type RefValueReading =
+  | {readonly kind: 'id'; readonly id: string}
+  | {readonly kind: 'awaits-target'}
+  | {readonly kind: 'not-a-reference'}
+
+const readRefValue = (content: string, referenceTargetId: string | null | undefined): RefValueReading => {
+  const exact = parseExactReferenceBlockContent(content)
+  if (!exact || exact.fieldForm) return {kind: 'not-a-reference'}
+  // ID forms remain readable before derivation (including sync arrival).
+  if (isIdCarryingReference(exact)) return {kind: 'id', id: exact.id}
+  return referenceTargetId == null ? {kind: 'awaits-target'} : {kind: 'id', id: referenceTargetId}
+}
+
 const contentToEncodedValue = (
   codec: AnyCodec,
   content: string,
@@ -528,14 +544,10 @@ const contentToEncodedValue = (
   }
   switch (codec.type) {
     case 'ref': {
-      const exact = parseExactReferenceBlockContent(content)
-      if (!exact || exact.fieldForm) {
-        throw new CodecError('whole-value reference', content)
-      }
-      // ID forms remain readable before derivation (including sync arrival).
-      if (isIdCarryingReference(exact)) return exact.id
-      if (referenceTargetId == null) throw new CodecError('resolved named reference', content)
-      return referenceTargetId
+      const read = readRefValue(content, referenceTargetId)
+      if (read.kind === 'not-a-reference') throw new CodecError('whole-value reference', content)
+      if (read.kind === 'awaits-target') throw new CodecError('resolved named reference', content)
+      return read.id
     }
     case 'string':
     case 'url':
@@ -579,6 +591,16 @@ const contentToEncodedValue = (
       return jsonFromContent(content)
   }
 }
+
+/** A value row that names its target (`[[name]]`) and has no target derived on
+ *  this device yet. Its member is UNKNOWN here, not absent: the decoder refuses
+ *  it only because the stamp that would answer it has not run, and another
+ *  device may have projected it into the cell. */
+export const awaitsReferenceTarget = (
+  schema: AnyPropertySchema,
+  row: Exclude<ValueChildContent, string>,
+): boolean => valueChildCodec(schema).type === 'ref'
+  && readRefValue(row.content, row.referenceTargetId).kind === 'awaits-target'
 
 /** Encode ONE value child's content, at {@link valueChildCodec} grain — a
  *  whole scalar value, or one member of a multi-valued property. */

@@ -58,6 +58,7 @@ import {
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
+  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
   scalarValueRow,
@@ -74,7 +75,7 @@ import {
   propertyFieldContent,
   unionValuesAcrossFieldRows,
 } from '@/data/propertyChildren'
-import { jsonValuesEqual } from './jsonCanonical'
+import { jsonValuesEqual, persistedJsonKey } from './jsonCanonical'
 import { storedPropertyValue } from '@/data/rowProperty'
 import { deleteSubtreeAnnouncedInTx, deleteSubtreeInTx } from '@/data/subtreeDelete'
 import { mintPropertyChildRow } from './propertyChildMint'
@@ -116,9 +117,8 @@ export type ProjectableRow =
 /**
  * `full` — the projection is authoritative: children are truth, so a field
  * set with no parseable value UNSETS the owner's key (§9's default-value
- * rule). Only correct inside `core.projectPropertyChildren`, whose
- * `settledWrites` stops the follow-on materialize reading that unset as a
- * user deleting the key.
+ * rule). Only correct inside a `settledWrites` processor, which stops the
+ * follow-on materialize reading that unset as a user deleting the key.
  *
  * `additive` — the caller did not observe user intent and its write is NOT
  * settled, so it may only GIVE an owner a key it lacks. Never unset, never
@@ -127,8 +127,14 @@ export type ProjectableRow =
  * with no field rows at all, and a `full` re-projection there would read
  * "nothing parses" as "unset" and drive materialize into tombstoning the
  * very rows it just recognized.
+ *
+ * `resolved` — `full`, except that while a field has a value row still awaiting
+ * its reference target ({@link awaitsReferenceTarget}) the write may only ADD
+ * to what the cell holds ({@link keepsStoredValue}). That member is unknown on
+ * this device, not absent, so a projection without it is no evidence that it
+ * was removed. Used where a stamp, not a user, dispatched the projection.
  */
-export type ProjectionMode = 'full' | 'additive'
+export type ProjectionMode = 'full' | 'additive' | 'resolved'
 
 const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
   resolveFieldSchema: (fieldId) => {
@@ -238,28 +244,10 @@ const collectAffectedProjection = async (
  *  making one row's values PEERS of the other's, so reading only one would
  *  drop members that are about to become siblings anyway.
  *
- *  Denoted-value rule (§5): only DIRECT value children are read — a
- *  comment deep under a value child never re-projects the parent. */
-const projectedFieldValue = async (
-  tx: Tx,
-  schema: AnyPropertySchema,
-  fieldRows: readonly BlockData[],
-): Promise<unknown | undefined> => {
-  // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
-  // materialized under the field row is its own machinery, never a value
-  // candidate.
-  const perFieldRow: BlockData[][] = []
-  for (const fieldRow of fieldRows) {
-    perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
-  }
-  return projectFieldRowValues(schema, perFieldRow)
-}
-
-/** {@link projectedFieldValue} over values already read: each of one schema's
- *  live field rows' value children, field rows and values both in
- *  `(order_key, id)` order. The read-only consistency audit recomputes cells
- *  through this, so it cannot disagree with the processor about what a cell
- *  should hold. */
+ *  Over values already read: each of one schema's live field rows' value
+ *  children, field rows and values both in `(order_key, id)` order. The
+ *  read-only consistency audit recomputes cells through this, so it cannot
+ *  disagree with the processor about what a cell should hold. */
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
@@ -272,6 +260,30 @@ export const projectFieldRowValues = (
   // `unionValuesAcrossFieldRows` owns what happens across the rows.
   return childContentsToEncodedPropertyValue(
     schema, unionValuesAcrossFieldRows(schema, perFieldRow))
+}
+
+/** Does writing `projected` over `stored` keep everything `stored` holds? A
+ *  list keeps it when every stored member is still there, counted with
+ *  multiplicity; any other value only when it is unchanged. An absent key holds
+ *  nothing, so anything keeps it. */
+export const keepsStoredValue = (
+  schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined,
+): boolean => {
+  if (stored === undefined) return true
+  if (memberCodecOf(schema.codec) === undefined || !Array.isArray(stored) || !Array.isArray(projected)) {
+    return jsonValuesEqual(stored, projected)
+  }
+  const remaining = new Map<string, number>()
+  for (const member of projected) {
+    const key = persistedJsonKey(member)
+    remaining.set(key, (remaining.get(key) ?? 0) + 1)
+  }
+  return stored.every(member => {
+    const key = persistedJsonKey(member)
+    const left = remaining.get(key) ?? 0
+    remaining.set(key, left - 1)
+    return left > 0
+  })
 }
 
 /** Re-project ONE owner's cell for every field of it this pass touched.
@@ -316,7 +328,14 @@ const reprojectOwner = async (
     // Editing the OWNER does not help — `collectAffectedProjection` maps a
     // CHANGED row through its own bit or its parent's.
     if (mode === 'additive' && fieldRows.length > 1) continue
-    const projected = await projectedFieldValue(tx, schema, fieldRows)
+    // Denoted-value rule (§5): only DIRECT value children are read — a comment
+    // deep under a value child never re-projects the owner.
+    const perFieldRow: BlockData[][] = []
+    for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
+    const projected = projectFieldRowValues(schema, perFieldRow)
+    if (mode === 'resolved'
+      && perFieldRow.flat().some(row => awaitsReferenceTarget(schema, row))
+      && !keepsStoredValue(schema, storedPropertyValue(nextProperties, schema.name), projected)) continue
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -1367,7 +1386,7 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
         if (row) rows.push(row)
       }
     }
-    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'full')
+    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'resolved')
   },
 })
 
