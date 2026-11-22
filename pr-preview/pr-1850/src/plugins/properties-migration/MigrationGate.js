@@ -1,0 +1,1 @@
+export{Fc as MigrationGate}from"../../../chunks/app-BZv-MOfY.js";

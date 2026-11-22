@@ -1,0 +1,1 @@
+export{Sut as getOrCreatePropertiesPage,Cut as propertiesPageBlockId,wut as propertiesPageSpec}from"../../chunks/app-BZv-MOfY.js";

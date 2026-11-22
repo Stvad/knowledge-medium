@@ -1,0 +1,1 @@
+export{SL as checkForAppUpdate,CL as registerServiceWorker}from"../chunks/app-BZv-MOfY.js";

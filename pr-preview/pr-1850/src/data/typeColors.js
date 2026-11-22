@@ -1,0 +1,1 @@
+export{nI as DEFAULT_TYPE_COLORS,rI as defaultTypeColor,iI as pickLeastUsedTypeColor}from"../../chunks/app-BZv-MOfY.js";

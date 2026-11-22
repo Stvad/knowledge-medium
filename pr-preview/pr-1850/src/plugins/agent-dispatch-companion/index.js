@@ -1,0 +1,1 @@
+export{__ as agentDispatchCompanionPlugin}from"../../../chunks/app-BZv-MOfY.js";

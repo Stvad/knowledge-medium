@@ -1,0 +1,1 @@
+export{Zf as BlockTagsConfigEditor}from"../../../chunks/app-BZv-MOfY.js";

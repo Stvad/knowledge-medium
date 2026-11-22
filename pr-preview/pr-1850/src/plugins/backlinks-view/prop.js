@@ -1,0 +1,1 @@
+export{Fx as DEFAULT_BACKLINKS_VIEW_ID,Ix as FLAT_BACKLINKS_VIEW_ID,Lx as GROUPED_BACKLINKS_VIEW_ID,Rx as backlinksViewProp,zx as defaultBacklinksViewIdForBlock}from"../../../chunks/app-BZv-MOfY.js";

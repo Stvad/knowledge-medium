@@ -1,0 +1,1 @@
+export{Mq as withMoveTransition}from"../../chunks/app-BZv-MOfY.js";

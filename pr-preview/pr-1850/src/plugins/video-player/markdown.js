@@ -1,0 +1,1 @@
+export{GT as videoPlayerMarkdownExtension}from"../../../chunks/app-BZv-MOfY.js";

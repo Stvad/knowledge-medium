@@ -1,0 +1,1 @@
+export{dtt as USER_SCHEMAS_PROJECTOR_ID,ftt as UserSchemasService,ptt as buildSchemaOrNull,mtt as decodePresetConfig,htt as definitionSchema,gtt as isRegistrablePropertyName,_tt as propertySchemaNameRejection,vtt as tryBuildSchema,ytt as userSchemasProjector}from"../../chunks/app-BZv-MOfY.js";

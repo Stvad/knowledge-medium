@@ -1,0 +1,1 @@
+export{WB as BlockInfoDialog}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{EJ as usePropertySchemas}from"../../chunks/app-BZv-MOfY.js";

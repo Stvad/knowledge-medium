@@ -1,0 +1,1 @@
+export{AJ as propertyShapeLabel}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{cV as canConvertEmptyChildBlockToProperty,lV as convertEmptyChildBlockToProperty}from"../../chunks/app-BZv-MOfY.js";

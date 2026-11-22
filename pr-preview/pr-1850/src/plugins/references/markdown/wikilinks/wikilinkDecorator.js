@@ -1,0 +1,1 @@
+export{eN as isWikilinkDisplayParts,tN as resolveWikilinkDisplay,nN as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-BZv-MOfY.js";

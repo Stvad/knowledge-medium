@@ -1,0 +1,1 @@
+export{ES as wikilinkMarkdownExtension}from"../../../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{m2 as RAW_CHARACTER_COUNT_PROFILE_ID,h2 as WORDS_COUNT_PROFILE_ID,g2 as charLimitProp,_2 as charProfileProp,v2 as charScopeProp}from"../../../chunks/app-BZv-MOfY.js";

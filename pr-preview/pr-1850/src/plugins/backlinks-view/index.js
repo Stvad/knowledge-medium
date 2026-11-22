@@ -1,0 +1,1 @@
+export{vx as backlinksViewPlugin}from"../../../chunks/app-BZv-MOfY.js";

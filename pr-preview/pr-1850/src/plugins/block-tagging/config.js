@@ -1,0 +1,1 @@
+export{ep as blockTaggingPrefsType,tp as blockTagsConfigCodec,np as blockTagsConfigPresetCore,rp as blockTagsConfigProp,ip as isValidTagName,ap as normalizeBlockTagsConfig,op as selectableTagNames,sp as tagNameIssue}from"../../../chunks/app-BZv-MOfY.js";

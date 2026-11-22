@@ -1,0 +1,1 @@
+export{c2 as characterCounterDataExtension}from"../../../chunks/app-BZv-MOfY.js";

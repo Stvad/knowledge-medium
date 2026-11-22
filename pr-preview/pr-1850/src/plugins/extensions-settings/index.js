@@ -1,0 +1,1 @@
+export{uv as extensionsOverridesProp,dv as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-BZv-MOfY.js";

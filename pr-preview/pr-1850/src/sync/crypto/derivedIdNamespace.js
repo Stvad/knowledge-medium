@@ -1,0 +1,1 @@
+export{adt as deriveWorkspaceIdNamespace}from"../../../chunks/app-BZv-MOfY.js";

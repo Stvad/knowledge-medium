@@ -1,0 +1,1 @@
+export{Gs as showTableAsOutline,Ks as turnIntoTable}from"../../../chunks/app-BZv-MOfY.js";

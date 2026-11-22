@@ -1,0 +1,1 @@
+export{$I as ExtensionPromptSurface,eL as extensionPromptsExtension}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{Eq as isIOS,Dq as isMacPlatform}from"../../chunks/app-BZv-MOfY.js";

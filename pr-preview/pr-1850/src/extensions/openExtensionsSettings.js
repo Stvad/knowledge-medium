@@ -1,0 +1,1 @@
+export{oz as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,sz as openExtensionsSettings}from"../../chunks/app-BZv-MOfY.js";

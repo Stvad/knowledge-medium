@@ -1,0 +1,1 @@
+export{Qg as HIGHLIGHT_CLASS,$g as MOVED_HIGHLIGHT_CLASS,e_ as SUGGESTION_HIGHLIGHT_CLASS,t_ as coveringStyle,n_ as highlightClasses,r_ as highlightField,i_ as highlightRange,a_ as highlightRanges,o_ as threadHighlights,s_ as threadHighlightsContribution}from"../../../chunks/app-BZv-MOfY.js";

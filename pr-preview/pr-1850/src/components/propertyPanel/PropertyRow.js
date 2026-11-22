@@ -1,0 +1,1 @@
+export{tW as PropertyRow,nW as PropertyValueCell}from"../../../chunks/app-BZv-MOfY.js";

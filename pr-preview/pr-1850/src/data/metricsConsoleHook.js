@@ -1,0 +1,1 @@
+export{yI as ensureMetricsConsoleHook}from"../../chunks/app-BZv-MOfY.js";

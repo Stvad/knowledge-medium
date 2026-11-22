@@ -1,0 +1,1 @@
+export{NR as LazyBlockComponent}from"../../chunks/app-BZv-MOfY.js";

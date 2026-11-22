@@ -1,0 +1,1 @@
+export{C8 as TypeTagger,w8 as applyTypeTagInTx}from"../../chunks/app-BZv-MOfY.js";

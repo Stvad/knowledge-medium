@@ -1,0 +1,1 @@
+export{kO as getBreadcrumbContentPreview}from"../../../chunks/app-BZv-MOfY.js";

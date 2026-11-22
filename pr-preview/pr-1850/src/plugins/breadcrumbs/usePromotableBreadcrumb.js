@@ -1,0 +1,1 @@
+export{EO as usePromotableBreadcrumb}from"../../../chunks/app-BZv-MOfY.js";

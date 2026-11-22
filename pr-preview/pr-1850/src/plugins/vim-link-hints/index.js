@@ -1,0 +1,1 @@
+export{RE as vimLinkHintsPlugin}from"../../../chunks/app-BZv-MOfY.js";

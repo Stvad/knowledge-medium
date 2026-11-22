@@ -1,0 +1,1 @@
+export{Zet as NAMES_IN_A_SENTENCE,Qet as describeNames,$et as firstFew}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{G9 as loadTypeIdsByBlock}from"../../chunks/app-BZv-MOfY.js";

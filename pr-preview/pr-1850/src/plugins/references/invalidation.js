@@ -1,0 +1,1 @@
+export{BX as REFERENCES_TARGET_INVALIDATION_CHANNEL,VX as referencesInvalidationRule}from"../../../chunks/app-BZv-MOfY.js";

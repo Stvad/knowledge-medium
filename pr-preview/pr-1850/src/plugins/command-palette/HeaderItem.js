@@ -1,0 +1,1 @@
+export{QP as CommandPaletteHeaderItem}from"../../../chunks/app-BZv-MOfY.js";

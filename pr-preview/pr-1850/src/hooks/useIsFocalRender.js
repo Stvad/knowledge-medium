@@ -1,0 +1,1 @@
+export{IU as isFocalRender,LU as useIsFocalRender}from"../../chunks/app-BZv-MOfY.js";

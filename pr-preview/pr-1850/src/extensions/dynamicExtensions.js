@@ -1,0 +1,1 @@
+export{QL as dynamicExtensionsExtension}from"../../chunks/app-BZv-MOfY.js";

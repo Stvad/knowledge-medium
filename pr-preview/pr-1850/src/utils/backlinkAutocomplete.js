@@ -1,0 +1,1 @@
+export{RS as backlinkCompletionSource,zS as createBacklinkAutocomplete,BS as isInsideBacklinkBrackets}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{Sc as OUTLINE_PROPERTY_PRESET_ID,Cc as propertyAutocomplete,wc as propertyCompletionSource}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{E3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{cj as BlockLink}from"../../../chunks/app-BZv-MOfY.js";

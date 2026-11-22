@@ -1,0 +1,1 @@
+export{Mx as inlineBacklinksApplies}from"../../../../chunks/app-BZv-MOfY.js";

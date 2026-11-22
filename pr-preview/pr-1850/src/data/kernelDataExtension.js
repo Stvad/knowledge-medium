@@ -1,0 +1,1 @@
+export{S9 as kernelDataExtension}from"../../chunks/app-BZv-MOfY.js";

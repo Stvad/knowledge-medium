@@ -1,0 +1,1 @@
+export{wL as appUpdate,TL as useAppUpdateAvailable}from"../chunks/app-BZv-MOfY.js";

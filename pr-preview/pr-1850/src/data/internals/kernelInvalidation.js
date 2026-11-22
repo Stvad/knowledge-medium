@@ -1,0 +1,1 @@
+export{net as emitKernelInvalidations,ret as kernelInvalidationRule}from"../../../chunks/app-BZv-MOfY.js";

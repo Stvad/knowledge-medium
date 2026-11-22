@@ -1,0 +1,1 @@
+export{eI as TypeChip}from"../../../chunks/app-BZv-MOfY.js";

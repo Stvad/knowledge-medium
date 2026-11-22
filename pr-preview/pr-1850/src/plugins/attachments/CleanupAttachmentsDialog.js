@@ -1,0 +1,1 @@
+export{XC as CleanupAttachmentsDialog}from"../../../chunks/app-BZv-MOfY.js";

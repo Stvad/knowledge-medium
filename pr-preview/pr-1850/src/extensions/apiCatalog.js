@@ -1,0 +1,1 @@
+export{sv as extensionApiCatalog,cv as extensionApiRuntimeExports}from"../../chunks/app-BZv-MOfY.js";

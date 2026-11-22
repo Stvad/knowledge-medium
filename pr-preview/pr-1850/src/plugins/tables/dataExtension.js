@@ -1,0 +1,1 @@
+export{EX as tablesDataExtension}from"../../../chunks/app-BZv-MOfY.js";

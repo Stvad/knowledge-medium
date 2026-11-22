@@ -1,0 +1,1 @@
+export{rh as moveCommentToOwnThread}from"../../../chunks/app-BZv-MOfY.js";

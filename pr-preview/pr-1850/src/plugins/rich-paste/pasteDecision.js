@@ -1,0 +1,1 @@
+export{UC as richPasteDecisionContribution}from"../../../chunks/app-BZv-MOfY.js";

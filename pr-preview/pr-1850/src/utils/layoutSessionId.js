@@ -1,0 +1,1 @@
+export{Gct as BROWSER_LAYOUT_SESSION_ID_STORAGE_KEY,Kct as INSTALLED_APP_LAYOUT_SESSION_ID_STORAGE_KEY,qct as __resetLayoutSessionIdForTesting,Jct as getLayoutSessionId,Yct as isInstalledAppDisplayMode,Xct as readOrCreateLayoutSessionId}from"../../chunks/app-BZv-MOfY.js";

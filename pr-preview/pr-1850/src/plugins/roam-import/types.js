@@ -1,0 +1,1 @@
+export{pm as getExtraRoamProps}from"../../../chunks/app-BZv-MOfY.js";

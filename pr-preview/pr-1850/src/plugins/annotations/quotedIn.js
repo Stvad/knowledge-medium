@@ -1,0 +1,1 @@
+export{Om as quotedInFooterContribution}from"../../../chunks/app-BZv-MOfY.js";

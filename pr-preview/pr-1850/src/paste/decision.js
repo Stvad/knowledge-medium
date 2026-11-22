@@ -1,0 +1,1 @@
+export{yV as defaultPasteDecision,bV as pasteDecisionVerb}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{qf as appendTagToBlocks,Jf as appendTagToContent}from"../../../chunks/app-BZv-MOfY.js";

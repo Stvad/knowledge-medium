@@ -1,0 +1,1 @@
+export{pY as SuspenseFallback}from"../../../chunks/app-BZv-MOfY.js";

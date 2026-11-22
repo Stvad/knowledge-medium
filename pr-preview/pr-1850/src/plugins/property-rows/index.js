@@ -1,0 +1,1 @@
+export{tc as propertyRowsPlugin}from"../../../chunks/app-BZv-MOfY.js";

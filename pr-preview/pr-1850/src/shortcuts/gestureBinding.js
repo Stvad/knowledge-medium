@@ -1,0 +1,1 @@
+export{FL as gestureBindingDescriptor,IL as matchesGestureEvent}from"../../chunks/app-BZv-MOfY.js";

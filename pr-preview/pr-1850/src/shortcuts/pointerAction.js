@@ -1,0 +1,1 @@
+export{LL as dispatchPointerAction,RL as setPointerActionDispatcher}from"../../chunks/app-BZv-MOfY.js";

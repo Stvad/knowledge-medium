@@ -1,0 +1,1 @@
+export{HC as richPastePlugin}from"../../../chunks/app-BZv-MOfY.js";

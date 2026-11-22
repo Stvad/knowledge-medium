@@ -1,0 +1,1 @@
+export{Tf as srsBlockDateAdapter}from"../../../chunks/app-BZv-MOfY.js";

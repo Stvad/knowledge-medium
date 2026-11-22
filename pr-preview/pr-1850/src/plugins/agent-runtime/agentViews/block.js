@@ -1,0 +1,1 @@
+export{My as buildBlockView,Ny as renderBlockView}from"../../../../chunks/app-BZv-MOfY.js";

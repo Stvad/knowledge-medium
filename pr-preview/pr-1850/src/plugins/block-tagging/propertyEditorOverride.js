@@ -1,0 +1,1 @@
+export{Xf as blockTagsConfigUi}from"../../../chunks/app-BZv-MOfY.js";

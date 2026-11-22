@@ -1,0 +1,1 @@
+export{g0 as annotationMarginOpenProp,_0 as annotationMarginShareProp}from"../../../chunks/app-BZv-MOfY.js";

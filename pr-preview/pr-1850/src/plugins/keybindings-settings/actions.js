@@ -1,0 +1,1 @@
+export{fP as openKeybindingsSettingsAction}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{IV as useShortcutSurfaceActivations}from"../../chunks/app-BZv-MOfY.js";

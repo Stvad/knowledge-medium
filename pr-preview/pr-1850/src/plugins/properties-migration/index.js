@@ -1,0 +1,1 @@
+export{Rc as migratePropertiesToBlocksAction,Pc as propertiesMigrationPlugin}from"../../../chunks/app-BZv-MOfY.js";

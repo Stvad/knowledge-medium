@@ -1,0 +1,1 @@
+export{bW as typePropertyGroups}from"../../chunks/app-BZv-MOfY.js";

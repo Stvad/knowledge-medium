@@ -1,0 +1,1 @@
+export{KG as anyBlockTombstoned,qG as isBlockTombstoned}from"../../chunks/app-BZv-MOfY.js";

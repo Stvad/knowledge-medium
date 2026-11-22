@@ -1,0 +1,1 @@
+export{Qht as CHANGE_SCOPE_POLICIES,$ht as ChangeScope,egt as isChangeScope,tgt as policyForScope,ngt as scopeAllowedInReadOnly,rgt as scopeIsUndoable,igt as scopePoliciesEquivalent,agt as scopeUploadsToServer,ogt as sourceForScope}from"../../../chunks/app-BZv-MOfY.js";

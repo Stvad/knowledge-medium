@@ -1,0 +1,1 @@
+export{lx as blockInfoPlugin}from"../../../chunks/app-BZv-MOfY.js";

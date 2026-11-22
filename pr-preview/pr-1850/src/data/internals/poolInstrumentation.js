@@ -1,0 +1,1 @@
+export{p6 as instrumentAdapter}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{rC as blockDragPlugin}from"../../../chunks/app-BZv-MOfY.js";

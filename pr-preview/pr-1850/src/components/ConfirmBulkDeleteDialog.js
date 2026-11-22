@@ -1,0 +1,1 @@
+export{Xz as ConfirmBulkDeleteDialog}from"../../chunks/app-BZv-MOfY.js";

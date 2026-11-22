@@ -1,0 +1,1 @@
+export{fj as openRecentsPage}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{XL as resolveAppRuntime,ZL as resolveAppRuntimeSync}from"../../chunks/app-BZv-MOfY.js";

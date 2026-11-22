@@ -1,0 +1,1 @@
+export{Yet as agree,Xet as pluralize}from"../../chunks/app-BZv-MOfY.js";

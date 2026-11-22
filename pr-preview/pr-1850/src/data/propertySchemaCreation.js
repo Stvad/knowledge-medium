@@ -1,0 +1,1 @@
+export{jJ as adoptOrCreatePropertySchema}from"../../chunks/app-BZv-MOfY.js";

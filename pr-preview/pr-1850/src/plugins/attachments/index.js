@@ -1,0 +1,1 @@
+export{KC as attachmentsPlugin}from"../../../chunks/app-BZv-MOfY.js";

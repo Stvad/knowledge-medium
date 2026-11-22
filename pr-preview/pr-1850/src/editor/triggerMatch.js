@@ -1,0 +1,1 @@
+export{UQ as matchCharTrigger}from"../../chunks/app-BZv-MOfY.js";

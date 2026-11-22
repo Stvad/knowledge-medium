@@ -1,0 +1,1 @@
+export{YU as BlockProperties}from"../../chunks/app-BZv-MOfY.js";

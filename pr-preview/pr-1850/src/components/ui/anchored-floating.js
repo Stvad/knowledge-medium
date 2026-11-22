@@ -1,0 +1,1 @@
+export{wJ as floatingAnchorFromRect,TJ as useAnchoredFloating}from"../../../chunks/app-BZv-MOfY.js";

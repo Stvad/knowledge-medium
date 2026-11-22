@@ -1,0 +1,1 @@
+export{Rj as useAncestorCrumbs}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{MO as plainOutlinerPlugin}from"../../../chunks/app-BZv-MOfY.js";

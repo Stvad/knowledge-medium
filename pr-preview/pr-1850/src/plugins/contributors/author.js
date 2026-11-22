@@ -1,0 +1,1 @@
+export{Xv as authorIdOf}from"../../../chunks/app-BZv-MOfY.js";

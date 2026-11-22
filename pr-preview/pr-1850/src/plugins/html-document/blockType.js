@@ -1,0 +1,1 @@
+export{FZ as htmlDocumentTypeSeed}from"../../../chunks/app-BZv-MOfY.js";

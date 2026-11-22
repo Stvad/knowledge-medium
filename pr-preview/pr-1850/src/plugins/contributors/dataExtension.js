@@ -1,0 +1,1 @@
+export{H0 as contributorsDataExtension}from"../../../chunks/app-BZv-MOfY.js";

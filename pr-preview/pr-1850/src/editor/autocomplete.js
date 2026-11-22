@@ -1,0 +1,1 @@
+export{XI as editorAutocompleteExtension}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{C3 as defineVerbFacet}from"../../chunks/app-BZv-MOfY.js";

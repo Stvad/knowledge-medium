@@ -1,0 +1,1 @@
+export{Tut as aliasSeatNamespacesInTx,Eut as resolveAliasSeatNamespaces}from"../../chunks/app-BZv-MOfY.js";

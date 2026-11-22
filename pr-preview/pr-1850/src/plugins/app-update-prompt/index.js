@@ -1,0 +1,1 @@
+export{pL as appUpdatePromptExtension}from"../../../chunks/app-BZv-MOfY.js";

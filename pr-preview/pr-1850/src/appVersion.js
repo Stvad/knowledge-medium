@@ -1,0 +1,1 @@
+export{rd as appVersion}from"../chunks/app-BZv-MOfY.js";

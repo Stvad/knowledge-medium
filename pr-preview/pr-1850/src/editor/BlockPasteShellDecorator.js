@@ -1,0 +1,1 @@
+export{BI as BlockPasteShellDecorator,VI as blockPasteShellDecorator}from"../../chunks/app-BZv-MOfY.js";

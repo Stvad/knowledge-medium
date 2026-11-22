@@ -1,0 +1,1 @@
+export{XA as OPEN_RECENTS_ACTION_ID,ZA as openRecentsAction,QA as recentsHeaderItem,$A as recentsPlugin}from"../../../chunks/app-BZv-MOfY.js";

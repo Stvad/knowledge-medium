@@ -1,0 +1,1 @@
+export{lv as extensionsOverridesPresetCore,uv as extensionsOverridesProp,dv as extensionsPrefsType,fv as overridesCodec}from"../../../chunks/app-BZv-MOfY.js";

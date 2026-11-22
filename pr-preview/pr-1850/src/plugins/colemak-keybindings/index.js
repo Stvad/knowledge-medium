@@ -1,0 +1,1 @@
+export{GE as COLEMAK_KEYBINDINGS_PLUGIN_ID,KE as colemakKeybindingsPlugin,qE as colemakMovementKeybindingOverrides}from"../../../chunks/app-BZv-MOfY.js";

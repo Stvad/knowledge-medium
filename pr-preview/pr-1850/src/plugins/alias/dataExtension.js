@@ -1,0 +1,1 @@
+export{U4 as aliasDataExtension}from"../../../chunks/app-BZv-MOfY.js";

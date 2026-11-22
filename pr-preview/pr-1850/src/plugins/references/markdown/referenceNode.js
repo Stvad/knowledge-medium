@@ -1,0 +1,1 @@
+export{AS as EmbedComponent,jS as referenceTargetOf}from"../../../../chunks/app-BZv-MOfY.js";

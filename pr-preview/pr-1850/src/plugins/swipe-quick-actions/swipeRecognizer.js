@@ -1,0 +1,1 @@
+export{uF as SWIPE_QUICK_ACTIONS_GESTURE_ID,dF as SWIPE_TRIGGER_PX,fF as swipeRecognizer}from"../../../chunks/app-BZv-MOfY.js";

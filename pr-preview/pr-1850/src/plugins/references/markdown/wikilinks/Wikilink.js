@@ -1,0 +1,1 @@
+export{DS as Wikilink}from"../../../../../chunks/app-BZv-MOfY.js";

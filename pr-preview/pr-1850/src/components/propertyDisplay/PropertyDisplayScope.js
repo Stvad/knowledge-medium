@@ -1,0 +1,1 @@
+export{Tz as PropertyDisplayScope}from"../../../chunks/app-BZv-MOfY.js";

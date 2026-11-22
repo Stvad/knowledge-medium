@@ -1,0 +1,1 @@
+export{DP as useCommandPaletteActions}from"../../../chunks/app-BZv-MOfY.js";

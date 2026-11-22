@@ -1,0 +1,1 @@
+export{uj as useMinuteClock}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{KA as DEFAULT_THEME_ID_DARK,qA as DEFAULT_THEME_ID_LIGHT,jA as defaultThemeContributions,AA as defaultThemesPlugin}from"../../../chunks/app-BZv-MOfY.js";

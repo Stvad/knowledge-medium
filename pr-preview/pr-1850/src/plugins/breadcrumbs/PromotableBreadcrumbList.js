@@ -1,0 +1,1 @@
+export{DO as PromotableBreadcrumbList}from"../../../chunks/app-BZv-MOfY.js";

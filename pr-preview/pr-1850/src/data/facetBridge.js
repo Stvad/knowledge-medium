@@ -1,0 +1,1 @@
+export{g8 as FacetBridge}from"../../chunks/app-BZv-MOfY.js";

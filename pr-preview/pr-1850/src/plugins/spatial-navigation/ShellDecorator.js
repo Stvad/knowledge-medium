@@ -1,0 +1,1 @@
+export{sD as SpatialNavigationShellDecorator}from"../../../chunks/app-BZv-MOfY.js";

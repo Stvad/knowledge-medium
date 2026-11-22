@@ -1,0 +1,1 @@
+export{$f as blockTaggingDataExtension}from"../../../chunks/app-BZv-MOfY.js";

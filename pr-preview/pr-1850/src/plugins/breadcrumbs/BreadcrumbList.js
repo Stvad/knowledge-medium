@@ -1,0 +1,1 @@
+export{jO as BreadcrumbList}from"../../../chunks/app-BZv-MOfY.js";

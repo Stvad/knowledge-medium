@@ -1,0 +1,1 @@
+export{Bl as dataIntegrityPlugin}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{gS as geoContentDecoratorContribution}from"../../../chunks/app-BZv-MOfY.js";

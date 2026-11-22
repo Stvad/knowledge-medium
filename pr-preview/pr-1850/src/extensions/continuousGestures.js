@@ -1,0 +1,1 @@
+export{tB as GESTURE_ACTIVE,nB as GESTURE_CANCEL,rB as GESTURE_IDLE,iB as NO_BLOCK_GESTURES_ATTRIBUTE,aB as TOUCH_HOLD_MS,oB as TOUCH_SLOP_PX,sB as allowsBlockGestures,cB as continuousGestureRecognizersFacet,lB as createBlockGestureController,uB as enabledTouchAction,dB as suppressNextClick,fB as unionTouchAction,pB as useContinuousGestures}from"../../chunks/app-BZv-MOfY.js";

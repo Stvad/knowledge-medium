@@ -1,0 +1,1 @@
+export{kV as BlockEditor}from"../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{Ru as REMATERIALIZE_WORKSPACE_ACTION_ID,zu as rematerializeWorkspaceAction,Bu as rematerializeWorkspaceActionContribution}from"../../../chunks/app-BZv-MOfY.js";

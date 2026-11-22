@@ -1,0 +1,1 @@
+export{R$ as annotationsDataExtension}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{JL as ClientLocalSettings,YL as clientLocalSettings}from"../../chunks/app-BZv-MOfY.js";

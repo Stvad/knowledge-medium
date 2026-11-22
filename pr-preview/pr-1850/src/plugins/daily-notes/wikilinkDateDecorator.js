@@ -1,0 +1,1 @@
+export{QM as dailyDateWikilinkDecorator}from"../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{AI as resolveStructuralEditPolicy,jI as structuralEditPolicyForBlock}from"../../chunks/app-BZv-MOfY.js";

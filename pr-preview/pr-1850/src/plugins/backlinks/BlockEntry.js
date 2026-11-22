@@ -1,0 +1,1 @@
+export{Gx as LazyBlockEntry}from"../../../chunks/app-BZv-MOfY.js";

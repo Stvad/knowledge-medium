@@ -1,0 +1,1 @@
+export{tI as chipStyle}from"../../../chunks/app-BZv-MOfY.js";

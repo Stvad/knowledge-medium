@@ -1,0 +1,1 @@
+export{Dut as DerivedIdNamespaceUnavailableError,Out as derivedIdNamespaceInTx,kut as resolveDerivedIdNamespace}from"../../chunks/app-BZv-MOfY.js";

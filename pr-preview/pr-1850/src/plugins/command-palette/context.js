@@ -1,0 +1,1 @@
+export{NP as COMMAND_PALETTE_ACTION_ID,PP as COMMAND_PALETTE_CONTEXT,FP as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,IP as commandPaletteActionContext}from"../../../chunks/app-BZv-MOfY.js";

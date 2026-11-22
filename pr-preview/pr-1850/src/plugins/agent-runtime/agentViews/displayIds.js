@@ -1,0 +1,1 @@
+export{cb as boundDisplayId,lb as idMark}from"../../../../chunks/app-BZv-MOfY.js";

@@ -1,0 +1,1 @@
+export{Hf as ADD_TAG_ACTION_ID,Uf as ADD_TAG_BLOCKS_ACTION_ID,qf as appendTagToBlocks,Jf as appendTagToContent,Vf as blockTaggingPlugin,rp as blockTagsConfigProp}from"../../../chunks/app-BZv-MOfY.js";

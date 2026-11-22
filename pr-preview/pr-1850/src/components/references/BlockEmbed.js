@@ -1,0 +1,1 @@
+export{GF as BlockEmbed}from"../../../chunks/app-BZv-MOfY.js";

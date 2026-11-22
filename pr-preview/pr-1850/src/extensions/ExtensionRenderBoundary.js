@@ -1,0 +1,1 @@
+export{kH as ExtensionRenderBoundary}from"../../chunks/app-BZv-MOfY.js";

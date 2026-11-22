@@ -1,0 +1,1 @@
+export{oI as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,sI as OPEN_PREFERENCES_ACTION_ID,cI as RELOAD_IN_SAFE_MODE_ACTION_ID,lI as defaultActionContextsExtension,uI as defaultActionsExtension,dI as getDefaultActionGroups,fI as getDefaultActions}from"../../chunks/app-BZv-MOfY.js";

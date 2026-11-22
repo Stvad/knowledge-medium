@@ -1,0 +1,1 @@
+export{lQ as geoDataExtension}from"../../../chunks/app-BZv-MOfY.js";

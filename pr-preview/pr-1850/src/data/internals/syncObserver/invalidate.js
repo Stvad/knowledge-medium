@@ -1,0 +1,1 @@
+export{e5 as applySyncInvalidation}from"../../../../chunks/app-BZv-MOfY.js";

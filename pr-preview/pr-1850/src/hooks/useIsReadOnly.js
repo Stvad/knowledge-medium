@@ -1,0 +1,1 @@
+export{pC as useIsReadOnly}from"../../chunks/app-BZv-MOfY.js";

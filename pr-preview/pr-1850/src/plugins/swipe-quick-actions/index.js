@@ -1,0 +1,1 @@
+export{uF as SWIPE_QUICK_ACTIONS_GESTURE_ID,AF as SWIPE_RIGHT_BLOCK_ACTION_ID,lF as SwipeActionMenu,MF as quickActionItemsFacet,iF as swipeQuickActionsPlugin}from"../../../chunks/app-BZv-MOfY.js";

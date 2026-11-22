@@ -1,0 +1,1 @@
+export{GR as gfmMarkdownExtension,KR as isExternalHref}from"../../chunks/app-BZv-MOfY.js";

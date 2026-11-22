@@ -1,0 +1,1 @@
+export{w3 as agentRuntimeDataExtension}from"../../../chunks/app-BZv-MOfY.js";

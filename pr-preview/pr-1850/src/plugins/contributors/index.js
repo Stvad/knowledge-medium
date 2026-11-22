@@ -1,0 +1,1 @@
+export{c_ as contributorsPlugin}from"../../../chunks/app-BZv-MOfY.js";
