@@ -1,1 +1,0 @@
-export{l0 as annotationMarginOpenProp,u0 as annotationMarginShareProp}from"../../../chunks/app-DOQ4T4iz.js";

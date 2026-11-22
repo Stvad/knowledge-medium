@@ -1,1 +1,0 @@
-export{yq as isIOS,bq as isMacPlatform}from"../../chunks/app-DOQ4T4iz.js";

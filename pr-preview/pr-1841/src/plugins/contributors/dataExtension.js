@@ -1,1 +1,0 @@
-export{F0 as contributorsDataExtension}from"../../../chunks/app-DOQ4T4iz.js";

@@ -1,1 +1,0 @@
-export{_L as appUpdate,vL as useAppUpdateAvailable}from"../chunks/app-DOQ4T4iz.js";

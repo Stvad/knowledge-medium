@@ -1,1 +1,0 @@
-export{UI as editorAutocompleteExtension}from"../../chunks/app-DOQ4T4iz.js";

@@ -1,1 +1,0 @@
-export{Ig as SOURCE_SPANS_ATTRIBUTE,Lg as THREAD_HIGHLIGHTS_INPUT,Rg as remarkAnnotationMarks,zg as renderedSourceKey,Bg as threadMarksMarkdownExtension}from"../../../chunks/app-DOQ4T4iz.js";

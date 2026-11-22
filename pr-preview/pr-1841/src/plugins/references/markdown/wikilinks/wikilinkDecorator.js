@@ -1,1 +1,0 @@
-export{qM as isWikilinkDisplayParts,JM as resolveWikilinkDisplay,YM as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-DOQ4T4iz.js";

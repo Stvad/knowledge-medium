@@ -1,1 +1,0 @@
-export{Uv as authorIdOf}from"../../../chunks/app-DOQ4T4iz.js";

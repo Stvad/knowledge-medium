@@ -1,1 +1,0 @@
-export{qS as BLOCK_HOLD_GESTURE,JS as BLOCK_HOLD_RECOGNIZER_ID,YS as blockHoldRecognizer}from"../../../chunks/app-DOQ4T4iz.js";

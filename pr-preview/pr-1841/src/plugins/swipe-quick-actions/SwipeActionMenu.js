@@ -1,1 +1,0 @@
-export{nF as SwipeActionMenu}from"../../../chunks/app-DOQ4T4iz.js";

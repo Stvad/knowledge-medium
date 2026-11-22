@@ -1,1 +1,0 @@
-export{hL as checkForAppUpdate,gL as registerServiceWorker}from"../chunks/app-DOQ4T4iz.js";

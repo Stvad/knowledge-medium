@@ -1,1 +1,0 @@
-export{bd as archiveSrsCard}from"../../../chunks/app-DOQ4T4iz.js";

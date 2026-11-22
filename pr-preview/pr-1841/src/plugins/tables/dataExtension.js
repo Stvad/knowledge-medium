@@ -1,1 +1,0 @@
-export{yX as tablesDataExtension}from"../../../chunks/app-DOQ4T4iz.js";

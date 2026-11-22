@@ -1,1 +1,0 @@
-export{zA as DEFAULT_THEME_ID_DARK,BA as DEFAULT_THEME_ID_LIGHT,wA as defaultThemeContributions,CA as defaultThemesPlugin}from"../../../chunks/app-DOQ4T4iz.js";

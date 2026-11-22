@@ -1,1 +1,0 @@
-export{qS as BLOCK_HOLD_GESTURE,LS as touchSelectionPlugin,US as touchSelectionToolbarItemsFacet}from"../../../chunks/app-DOQ4T4iz.js";

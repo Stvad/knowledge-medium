@@ -1,1 +1,0 @@
-export{MR as BlockLoadingPlaceholder}from"../../chunks/app-DOQ4T4iz.js";

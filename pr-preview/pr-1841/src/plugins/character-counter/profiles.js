@@ -1,1 +1,0 @@
-export{er as builtinCountProfiles,tr as characterCountProfilesFacet,nr as profileFrom,rr as profileLabel,ir as rawCharacterCountProfile,ar as textCountProfile,or as wordsCountProfile}from"../../../chunks/app-DOQ4T4iz.js";

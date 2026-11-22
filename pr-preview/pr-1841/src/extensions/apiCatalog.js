@@ -1,1 +1,0 @@
-export{ev as extensionApiCatalog,tv as extensionApiRuntimeExports}from"../../chunks/app-DOQ4T4iz.js";

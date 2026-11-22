@@ -1,1 +1,0 @@
-export{GM as dailyDateWikilinkDecorator}from"../../../chunks/app-DOQ4T4iz.js";

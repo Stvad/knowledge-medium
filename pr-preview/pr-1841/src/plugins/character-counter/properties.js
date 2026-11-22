@@ -1,1 +1,0 @@
-export{s2 as RAW_CHARACTER_COUNT_PROFILE_ID,c2 as WORDS_COUNT_PROFILE_ID,l2 as charLimitProp,u2 as charProfileProp,d2 as charScopeProp}from"../../../chunks/app-DOQ4T4iz.js";

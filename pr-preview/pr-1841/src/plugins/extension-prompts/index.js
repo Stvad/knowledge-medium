@@ -1,1 +1,0 @@
-export{KI as ExtensionPromptSurface,qI as extensionPromptsExtension}from"../../../chunks/app-DOQ4T4iz.js";

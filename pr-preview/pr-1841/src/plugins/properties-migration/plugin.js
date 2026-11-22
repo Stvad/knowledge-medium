@@ -1,1 +1,0 @@
-export{Dc as propertiesMigrationPlugin}from"../../../chunks/app-DOQ4T4iz.js";

@@ -1,1 +1,0 @@
-export{I4 as aliasDataExtension}from"../../../chunks/app-DOQ4T4iz.js";

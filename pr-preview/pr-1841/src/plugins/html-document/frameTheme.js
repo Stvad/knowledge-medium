@@ -1,1 +1,0 @@
-export{An as useFrameThemeCss}from"../../../chunks/app-DOQ4T4iz.js";

@@ -1,1 +1,0 @@
-export{SV as BlockEditor}from"../../chunks/app-DOQ4T4iz.js";
