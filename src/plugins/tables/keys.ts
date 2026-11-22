@@ -8,25 +8,37 @@ import type { ShortcutActivationContribution } from '@/extensions/blockInteracti
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import {
   ActionContextTypes,
-  type ActionConfig, type ActionContextConfig, type BaseShortcutDependencies, type BlockShortcutDependencies,
+  type ActionConfig, type ActionContextConfig, type ActionContextType, type BaseShortcutDependencies,
+  type BlockShortcutDependencies,
 } from '@/shortcuts/types'
+import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
-import { gridForRow } from './registry'
+import { gridDrawing } from './registry'
 
 export const GRID_CONTEXT_KEY = 'tablesGrid'
-/** Set to the row's id on the context its row mounts in, so the layout
- *  draws that block, and only that block, as a row. */
+/** The id of the row, or of the cell's value, whose context this is. A context
+ *  field reaches the whole subtree, references and embeds included, so only
+ *  the block it names takes the role. */
 export const ROW_CONTEXT_KEY = 'tablesRowId'
-export const CELL_CONTEXT_KEY = 'tablesCell'
+export const CELL_CONTEXT_KEY = 'tablesCellId'
+
+export type TableRole = 'row' | 'cell'
+
+/** What the grid draws this block as, if anything. */
+export const tableRoleOf = (blockId: string, context: BlockContextType | undefined): TableRole | undefined => {
+  if (!context || context.isReference || context.isBreadcrumb) return undefined
+  if (context[CELL_CONTEXT_KEY] === blockId) return 'cell'
+  if (context[ROW_CONTEXT_KEY] === blockId) return 'row'
+  return undefined
+}
 
 export const TABLE_ROW_CONTEXT = 'tables.row'
 export const TABLE_TYPING_CONTEXT = 'tables.row-typing'
 export const TABLE_EDIT_CONTEXT = 'tables.edit'
 
 export interface GridDependencies extends BaseShortcutDependencies {
-  gridCommand: (command: GridCommand, key?: string) => void
-  /** Vim's normal mode owns printable keys while it is active. */
-  normalModeActive?: () => boolean
+  /** Returns false when the command does not apply, so the key falls through. */
+  gridCommand: (command: GridCommand, key?: string) => boolean
 }
 
 const isGridDependencies = (deps: unknown): deps is GridDependencies =>
@@ -64,16 +76,13 @@ const gridAction = (
   description: `Table: ${command}`,
   defaultBinding: {keys, eventOptions: {preventDefault: true}},
   isVisible: () => false,
-  ...(contextType === TABLE_TYPING_CONTEXT
-    ? {canDispatch: (deps: GridDependencies) => deps.normalModeActive?.() !== true}
-    : {}),
   handler: (deps, trigger) => {
-    if (!isGridDependencies(deps)) return
+    if (!isGridDependencies(deps)) return false
     if (options.yieldToEditor && handledElsewhere(trigger)) return false
     // Focus reaches a control before row mode deactivates: the key is the control's.
     if (onCellControl(trigger)) return false
     const key = options.passKey && trigger instanceof KeyboardEvent && trigger.key.length === 1 ? trigger.key : undefined
-    deps.gridCommand(command, key)
+    if (!deps.gridCommand(command, key)) return false
   },
 })
 
@@ -120,37 +129,42 @@ export const tableActions: ActionConfig[] = [
  *  with no shell to activate anything. */
 export const tableShortcutActivation: ShortcutActivationContribution = activation => {
   if (!activation.inFocus || activation.isSelected) return null
-  const blockContext = activation.blockContext
-  const grid = blockContext?.[GRID_CONTEXT_KEY]
+  const grid = activation.blockContext?.[GRID_CONTEXT_KEY]
   if (!(grid instanceof GridController)) return null
-  const isRow = blockContext?.[ROW_CONTEXT_KEY] === activation.block.id
-  const isCell = blockContext?.[CELL_CONTEXT_KEY] === true && blockContext.scopeRootId === activation.block.id
-  return activation.surface === 'codemirror' && activation.inEditMode && (isRow || isCell)
-    ? [{context: TABLE_EDIT_CONTEXT, dependencies: {gridCommand: grid.run}}]
+  return activation.surface === 'codemirror' && activation.inEditMode && tableRoleOf(activation.block.id, activation.blockContext)
+    ? [{context: TABLE_EDIT_CONTEXT, dependencies: {gridCommand: grid.command}}]
     : null
 }
 
-/** Vim's normal-mode verbs act on the outline around a block: on a row they
- *  would step into its property rows, or create a child the grid never
- *  draws. On a grid row the grid takes them instead. */
-const redirect = (actionId: string, command: GridCommand): ActionDispatchDecorator => ({
+/** The outline's verbs walk the outline around a block: on a row or a cell's
+ *  value they would step into property rows or children the grid never draws,
+ *  or create a block it never shows. On a grid's row or value the grid takes
+ *  them instead, and a command that does not apply falls back to the verb. */
+const redirect = (context: ActionContextType, actionId: string, command: GridCommand): ActionDispatchDecorator => ({
   actionId,
-  context: ActionContextTypes.NORMAL_MODE,
+  context,
   wrap: (deps, trigger, next) => {
     const {block, renderScopeId} = deps as BlockShortcutDependencies
-    const grid = gridForRow(renderScopeId, block?.id)
-    if (!grid) return next(deps, trigger)
-    grid.command(command)
+    const grid = gridDrawing(renderScopeId, block?.id)
+    if (!grid || !grid.command(command)) return next(deps, trigger)
   },
 })
 
-export const tableNormalModeRedirects = [
-  redirect('move_down', 'down'),
-  redirect('move_up', 'up'),
-  redirect('move_left', 'left'),
-  redirect('move_right', 'right'),
-  redirect('create_block_below_and_edit', 'insert-below'),
-  redirect('create_block_above_and_edit', 'insert-above'),
-  redirect('enter_edit_mode', 'open-start'),
-  redirect('enter_edit_mode_at_end', 'open'),
+const NORMAL = ActionContextTypes.NORMAL_MODE
+const EDITING = ActionContextTypes.EDIT_MODE_CM
+
+export const tableOutlineVerbRedirects = [
+  redirect(NORMAL, 'move_down', 'down'),
+  redirect(NORMAL, 'move_up', 'up'),
+  redirect(NORMAL, 'move_left', 'left'),
+  redirect(NORMAL, 'move_right', 'right'),
+  redirect(NORMAL, 'create_block_below_and_edit', 'insert-below'),
+  redirect(NORMAL, 'create_block_above_and_edit', 'insert-above'),
+  redirect(NORMAL, 'enter_edit_mode', 'open-start'),
+  redirect(NORMAL, 'enter_edit_mode_at_end', 'open'),
+  // Arrows at an editor's edge leave the cell the way row mode moves.
+  redirect(EDITING, 'move_up_from_cm_start', 'up'),
+  redirect(EDITING, 'move_down_from_cm_end', 'down'),
+  redirect(EDITING, 'move_left_from_cm_start', 'previous'),
+  redirect(EDITING, 'move_right_from_cm_end', 'next'),
 ].map(decorator => actionDispatchWrap(decorator, {source: 'tables', precedence: 100}))

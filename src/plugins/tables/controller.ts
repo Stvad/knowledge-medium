@@ -7,50 +7,54 @@ import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
-import { focusBlock, isEditingBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { focusBlock, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
-import { showError } from '@/utils/toast'
-import { openedCellEdit } from './cellEdits'
-import type { TableColumn } from './model'
+import { forgetCellEdit, openedCellEdit, peekValueOwner, reportRefusal } from './cellEdits'
 
 export type GridCommand =
   | 'left' | 'right' | 'up' | 'down' | 'next' | 'previous'
   | 'open' | 'open-start' | 'leave' | 'clear' | 'insert-below' | 'insert-above'
 
+/** What the controller needs of a column. */
+export interface GridColumn {
+  /** The property definition, or null for the row's own text. */
+  readonly fieldId: string | null
+  readonly editable: boolean
+  /** A list property: typing over it would replace only its last member. */
+  readonly list: boolean
+}
+
 export const CELL_CONTROL_SELECTOR = '[data-property-value-row] :is(input, button, select, textarea)'
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
-const reportRefusal = (error: unknown) => {
-  if (!(error instanceof PropertyEditRefusedError)) throw error
-  showError(error.message)
-}
-
 export class GridController {
   private rowIds: readonly string[] = []
   private rowIndex = new Map<string, number>()
-  private columns: readonly TableColumn[] = []
-  private editable: readonly boolean[] = []
+  private columns: readonly GridColumn[] = []
   private column = 0
   private readonly columnListeners = new CallbackSet('tables column')
+  /** The inline control (checkbox, date, select) that holds DOM focus, if any. */
+  private control: HTMLElement | null = null
   private readonly controlListeners = new CallbackSet('tables control')
   /** The row a focus write is still committing to. A key pressed before it
    *  commits moves on from it, not from the row the store still names. */
   private pendingRowId: string | null = null
   private readonly pendingListeners = new CallbackSet('tables pending row')
+  private focusWrite: Promise<void> | null = null
+  /** An open in flight, and the keys typed while it runs: each would
+   *  otherwise open the cell again and replace the first character. */
+  private opening: Promise<void> | null = null
+  private typedAhead = ''
   private root: HTMLElement | null = null
-  /** The inline control (checkbox, date, select) that holds DOM focus, if any. */
-  private control: HTMLElement | null = null
-  /** Whether vim's normal mode is active; it owns printable keys then. */
-  private normalMode = false
-  readonly run = (command: GridCommand, key?: string) => this.command(command, key)
-  readonly isNormalModeActive = () => this.normalMode
 
   constructor(
     readonly host: Block,
     readonly uiStateBlock: Block,
     readonly renderScopeId: string,
+    /** Where the host itself is drawn, for leaving the table upwards. */
+    private readonly parentRenderScopeId: string,
   ) {}
 
   setRows(rowIds: readonly string[]) {
@@ -58,14 +62,17 @@ export class GridController {
     this.rowIndex = new Map(rowIds.map((id, index) => [id, index]))
   }
 
-  setColumns(columns: readonly TableColumn[], editable: readonly boolean[]) {
+  setColumns(columns: readonly GridColumn[]) {
     this.columns = columns
-    this.editable = editable
     if (this.column >= columns.length) this.setColumn(columns.length - 1)
   }
 
-  hasRow(id: string) {
-    return this.rowIndex.has(id)
+  /** The row index of a row block, or of the row a cell's value belongs to. */
+  rowOf(blockId: string): number | undefined {
+    const direct = this.rowIndex.get(blockId)
+    if (direct !== undefined) return direct
+    const owner = peekValueOwner(this.host.repo, blockId)
+    return owner ? this.rowIndex.get(owner.ownerId) : undefined
   }
 
   get currentColumn() {
@@ -73,24 +80,14 @@ export class GridController {
   }
 
   readonly subscribeColumn = (listener: () => void) => this.columnListeners.add(listener)
-
   readonly subscribeControl = (listener: () => void) => this.controlListeners.add(listener)
-  readonly isInControl = () => this.control !== null
   readonly subscribePending = (listener: () => void) => this.pendingListeners.add(listener)
   readonly getPendingRow = () => this.pendingRowId
-
-  private setPendingRow(rowId: string | null) {
-    if (rowId === this.pendingRowId) return
-    this.pendingRowId = rowId
-    this.pendingListeners.notify()
-  }
+  /** A control removed without a blur no longer holds focus. */
+  readonly isInControl = () => this.control?.isConnected === true
 
   setRoot(root: HTMLElement | null) {
     this.root = root
-  }
-
-  setNormalMode(active: boolean) {
-    this.normalMode = active
   }
 
   private setControl(control: HTMLElement | null) {
@@ -99,13 +96,18 @@ export class GridController {
     this.controlListeners.notify()
   }
 
+  private setPendingRow(rowId: string | null) {
+    if (rowId === this.pendingRowId) return
+    this.pendingRowId = rowId
+    this.pendingListeners.notify()
+  }
+
   /** An inline control in a cell took DOM focus: the row takes app focus
    *  without taking DOM focus back from the control. */
   controlFocused(rowId: string, column: number, control: HTMLElement) {
     this.setColumn(column)
     this.setControl(control)
-    const location = peekFocusedBlockLocation(this.uiStateBlock)
-    if (location?.blockId !== rowId || location.renderScopeId !== this.renderScopeId) {
+    if (!isFocusedBlock(this.uiStateBlock, rowId, this.renderScopeId)) {
       void focusBlock(this.uiStateBlock, rowId, {renderScopeId: this.renderScopeId})
     }
   }
@@ -119,17 +121,19 @@ export class GridController {
     const row = this.rowIndex.get(rowId)
     if (row === undefined) return
     this.focusRow(row, column)
-    if (open) void this.open(row).catch(reportRefusal)
+    if (open) this.command('open')
   }
 
-  /** Synchronous: a deferred column change races the focus an inline control takes. */
-  setColumn(column: number) {
+  /** Synchronous: a deferred column change races the focus an inline control
+   *  takes. Returns whether the column moved. */
+  setColumn(column: number): boolean {
     const next = clamp(column, this.columns.length - 1)
-    if (next === this.column) return
+    if (next === this.column) return false
     this.column = next
     this.columnListeners.notify()
     const focused = this.focusedRow()
     if (focused) this.revealColumn(focused.row)
+    return true
   }
 
   /** Scroll the cursor's cell clear of the frozen first column and the right edge. */
@@ -152,13 +156,8 @@ export class GridController {
     if (pending !== undefined) return {row: pending, onRow: true}
     const location = peekFocusedBlockLocation(this.uiStateBlock)
     if (location?.renderScopeId !== this.renderScopeId) return undefined
-    const direct = this.rowIndex.get(location.blockId)
-    if (direct !== undefined) return {row: direct, onRow: true}
-    const repo = this.host.repo
-    const fieldId = repo.block(location.blockId).peek()?.parentId
-    const ownerId = fieldId ? repo.block(fieldId).peek()?.parentId : undefined
-    const row = ownerId ? this.rowIndex.get(ownerId) : undefined
-    return row === undefined ? undefined : {row, onRow: false}
+    const row = this.rowOf(location.blockId)
+    return row === undefined ? undefined : {row, onRow: this.rowIndex.has(location.blockId)}
   }
 
   private rowElement(row: number) {
@@ -180,58 +179,92 @@ export class GridController {
     this.focusWrite ??= this.writePendingFocus()
   }
 
-  private focusWrite: Promise<void> | null = null
-
   /** One focus write at a time, always to the latest row: held arrow keys
    *  outrun the writes, and a queue of them would keep moving focus after
-   *  the keys stop. */
+   *  the keys stop. A failed write drops the pending row, so it cannot keep
+   *  answering for a focus that never landed. */
   private async writePendingFocus(): Promise<void> {
+    // Settle the caller's assignment before `finally` can clear it.
+    await Promise.resolve()
     try {
       while (this.pendingRowId !== null) {
         const rowId = this.pendingRowId
         await focusBlock(this.uiStateBlock, rowId, {renderScopeId: this.renderScopeId})
         if (this.pendingRowId === rowId) this.setPendingRow(null)
       }
+    } catch (error) {
+      this.setPendingRow(null)
+      console.error('[tables] focus write failed', error)
     } finally {
       this.focusWrite = null
     }
   }
 
-  command(command: GridCommand, key?: string): void {
+  /** Run a grid command. Returns false when it does not apply, so the key
+   *  falls through to whatever else binds it. */
+  readonly command = (command: GridCommand, key?: string): boolean => {
     const focused = this.focusedRow()
-    if (!focused) return
+    if (!focused) return false
     const {row, onRow} = focused
-    const inControl = this.control !== null
-    const inRowMode = onRow && !inControl &&
+    const inRowMode = onRow && !this.isInControl() &&
       !isEditingBlock(this.uiStateBlock, this.rowIds[row]!, this.renderScopeId)
     switch (command) {
-      case 'left': case 'previous':
-        if (inRowMode) return this.setColumn(this.column - 1)
-        return this.focusRow(row, this.column - 1)
-      case 'right': case 'next':
-        if (inRowMode) return this.setColumn(this.column + 1)
-        return this.focusRow(row, this.column + 1)
+      case 'left': case 'previous': case 'right': case 'next': {
+        const step = command === 'left' || command === 'previous' ? -1 : 1
+        if (!inRowMode) {
+          this.focusRow(row, this.column + step)
+          return true
+        }
+        return this.setColumn(this.column + step)
+      }
       case 'up':
-        return this.focusRow(clamp(row - 1, this.rowIds.length - 1))
+        if (row === 0) {
+          void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
+          return true
+        }
+        this.focusRow(row - 1)
+        return true
       case 'down':
-        return this.focusRow(clamp(row + 1, this.rowIds.length - 1))
+        this.focusRow(clamp(row + 1, this.rowIds.length - 1))
+        return true
       case 'leave':
-        return this.focusRow(row)
+        this.focusRow(row)
+        return true
       case 'open': case 'open-start':
-        void this.open(row, key, command === 'open-start').catch(reportRefusal)
-        return
+        if (this.opening) {
+          if (key !== undefined) this.typedAhead += key
+          return true
+        }
+        this.opening = this.open(row, key, command === 'open-start').catch(reportRefusal).finally(() => {
+          this.opening = null
+          this.typedAhead = ''
+        })
+        return true
       case 'clear':
         void this.clear(row).catch(reportRefusal)
-        return
+        return true
       case 'insert-below': case 'insert-above':
         void this.insertRow(row, command === 'insert-below' ? 'below' : 'above')
-        return
+        return true
     }
   }
 
+  private assertEditable(column: GridColumn) {
+    if (!column.editable || this.host.repo.isReadOnly) {
+      throw new PropertyEditRefusedError('read-only', 'This column is read-only here.')
+    }
+  }
+
+  /** Append what was typed while opening to the block the editor will show. */
+  private async flushTypedAhead(block: Block) {
+    const ahead = this.typedAhead
+    this.typedAhead = ''
+    if (ahead) await block.setContent(`${block.peek()?.content ?? ''}${ahead}`)
+  }
+
   /** Open the cursor's cell. `text` is a typed first character: it replaces
-   *  an existing value, as typing over a spreadsheet cell does. */
-  async open(row: number, text?: string, atStart = false): Promise<void> {
+   *  a scalar value, as typing over a spreadsheet cell does. */
+  private async open(row: number, text?: string, atStart = false): Promise<void> {
     const rowId = this.rowIds[row]
     const column = this.columns[this.column]
     if (!rowId || !column) return
@@ -240,54 +273,61 @@ export class GridController {
     if (column.fieldId === null) {
       if (text !== undefined && !repo.isReadOnly) {
         await rowBlock.load()
-        await rowBlock.setContent(`${rowBlock.peek()?.content ?? ''}${text}`)
+        this.typedAhead = text + this.typedAhead
+        await this.flushTypedAhead(rowBlock)
       }
       const length = rowBlock.peek()?.content.length ?? 0
       return enterEditModeForBlock(rowBlock, this.uiStateBlock, this.renderScopeId, {start: atStart ? 0 : length})
     }
-    const control = this.rowElement(row)
-      ?.querySelector<HTMLElement>(`[data-table-col="${this.column}"] ${CELL_CONTROL_SELECTOR}`)
+    // The cell's control and kind are known only once its row is drawn.
+    const element = this.rowElement(row)
+    if (!element) return
+    const control = element.querySelector<HTMLElement>(`[data-table-col="${this.column}"] ${CELL_CONTROL_SELECTOR}`)
     if (control) {
       control.focus()
       return
     }
-    if (!this.editable[this.column] || repo.isReadOnly) {
-      throw new PropertyEditRefusedError('read-only', 'This column is read-only here.')
-    }
+    this.assertEditable(column)
     const fieldId = column.fieldId
+    // Typing over a list would replace its last member: a list opens as Enter does.
+    const initialText = column.list ? undefined : text
+    if (column.list) this.typedAhead = ''
     const opened = await repo.tx(
-      tx => openPropertyValue(tx, rowId, fieldId, text === undefined ? {} : {initialText: text}),
+      tx => openPropertyValue(tx, rowId, fieldId, initialText === undefined ? {} : {initialText}),
       {scope: ChangeScope.BlockDefault, description: 'edit table cell'},
     )
     openedCellEdit(opened, this.renderScopeId)
-    const value = repo.block(opened.valueId)
-    await value.load()
-    const length = value.peek()?.content.length ?? 0
-    await enterEditModeForBlock(value, this.uiStateBlock, this.renderScopeId, {start: atStart ? 0 : length})
+    try {
+      const value = repo.block(opened.valueId)
+      await value.load()
+      if (!column.list) await this.flushTypedAhead(value)
+      const length = value.peek()?.content.length ?? 0
+      await enterEditModeForBlock(value, this.uiStateBlock, this.renderScopeId, {start: atStart ? 0 : length})
+    } catch (error) {
+      forgetCellEdit(opened.valueId, this.renderScopeId)
+      throw error
+    }
   }
 
-  async clear(row: number): Promise<void> {
+  private async clear(row: number): Promise<void> {
     const rowId = this.rowIds[row]
     const column = this.columns[this.column]
     if (!rowId || column?.fieldId == null) return
-    if (!this.editable[this.column] || this.host.repo.isReadOnly) {
-      throw new PropertyEditRefusedError('read-only', 'This column is read-only here.')
-    }
+    this.assertEditable(column)
     const fieldId = column.fieldId
     await this.host.repo.tx(tx => clearPropertyValue(tx, rowId, fieldId),
       {scope: ChangeScope.BlockDefault, description: 'clear table cell'})
   }
 
   /** A new row beside the focused one, under the host, editing its text. */
-  async insertRow(row: number, side: 'below' | 'above'): Promise<void> {
+  private async insertRow(row: number, side: 'below' | 'above'): Promise<void> {
     const rowId = this.rowIds[row]
     const repo = this.host.repo
     if (!rowId || repo.isReadOnly) return
     const id = side === 'below'
       ? await repo.mutate.createSiblingBelow({siblingId: rowId})
       : await repo.mutate.createSiblingAbove({siblingId: rowId})
-    if (!id) return
-    await this.editNewRow(id)
+    if (id) await this.editNewRow(id)
   }
 
   /** A new last row, editing its text. */

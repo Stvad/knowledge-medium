@@ -6,7 +6,14 @@ import { TABLE_TYPE } from './schema'
 
 const isTable = ({block}: BlockShortcutDependencies) => {
   const data = block?.peek()
-  return data !== undefined && data !== null && hasBlockType(data, TABLE_TYPE)
+  return data != null && hasBlockType(data, TABLE_TYPE)
+}
+
+/** A field row or one of its values; `turnIntoTable` refuses these too. */
+const isPropertyRow = ({block}: BlockShortcutDependencies) => {
+  const data = block?.peek()
+  if (data?.isFieldForm) return true
+  return data?.parentId ? block.repo.block(data.parentId).peek()?.isFieldForm === true : false
 }
 
 const turnIntoTableAction: BlockAction = {
@@ -32,6 +39,6 @@ const bindBoth = (action: BlockAction, isVisible: (deps: BlockShortcutDependenci
 
 /** Both contexts: normal mode exists only with vim mode on, which is opt-in. */
 export const tableConversionActions: ActionConfig[] = [
-  ...bindBoth(turnIntoTableAction, deps => !isTable(deps)),
+  ...bindBoth(turnIntoTableAction, deps => !isTable(deps) && !isPropertyRow(deps)),
   ...bindBoth(showAsOutlineAction, deps => isTable(deps)),
 ]

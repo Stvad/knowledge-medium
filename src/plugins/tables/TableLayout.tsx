@@ -5,26 +5,25 @@ import {
 import { BlockComponent } from '@/components/BlockComponent'
 import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
-import { FocusedRowLazyMount } from '@/components/util/FocusedRowLazyMount'
+import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
-import type { AnyPropertySchema, BlockData } from '@/data/api'
+import { memberCodecOf, type AnyPropertySchema, type BlockData } from '@/data/api'
 import type { Block } from '@/data/block'
-import type { Repo } from '@/data/repo'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
 import { isPropertyValueEditable } from '@/data/internals/propertyValueEdits'
 import { focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
 import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
-import { useContent, useHandle } from '@/hooks/block'
-import { usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
+import { useContent, useHandle, useWorkspaceId } from '@/hooks/block'
+import { resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useActionContextActivations } from '@/shortcuts/useActionContext'
 import { surfaceRenderScopeId } from '@/utils/renderScope'
 import { TABLE_SURFACE } from './cellEdits'
-import { CELL_CONTROL_SELECTOR, GridController } from './controller'
+import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './controller'
 import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
 import { ROW_CAP, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { registerGrid } from './registry'
@@ -37,6 +36,8 @@ interface TableState {
   columns: readonly TableColumn[]
   schemas: readonly (AnyPropertySchema | undefined)[]
   editable: readonly boolean[]
+  /** The first column that shows the row's own text, -1 for none. */
+  contentColumn: number
   template: CSSProperties
 }
 
@@ -79,7 +80,7 @@ const CellValue = ({valueId, fieldRowId, schema}: {valueId: string; fieldRowId: 
     surfaceName: CELL_SURFACE,
     disablePropertyFieldCompletion: true,
     disableBlockSplit: true,
-    [CELL_CONTEXT_KEY]: true,
+    [CELL_CONTEXT_KEY]: valueId,
   }), [valueId])
   const field = useMemo(() => ({id: fieldRowId, schema}), [fieldRowId, schema])
   return (
@@ -114,15 +115,16 @@ const EditableCell = ({row, fieldId, schema}: {row: Block; fieldId: string; sche
 const isInteractive = (target: EventTarget) =>
   target instanceof Element && target.closest('input, select, button, textarea, a, .cm-editor') !== null
 
-const Cell = ({row, index, children, sticky}: {row: Block; index: number; children: ReactNode; sticky?: boolean}) => {
+const isPlainKey = (event: KeyboardEvent) => !event.metaKey && !event.ctrlKey && !event.altKey
+
+const Cell = ({row, index, sticky, isContent, children}: {
+  row: Block; index: number; sticky: boolean; isContent: boolean; children: ReactNode
+}) => {
   const {controller} = useContext(TableContext)!
   const click = (event: MouseEvent<HTMLDivElement>) => {
-    if (isInteractive(event.target)) {
-      controller.setColumn(index)
-      return
-    }
-    if (sticky) {
-      // The row's own text keeps its native click: it edits in place.
+    // Controls, links and editors keep their click; so does the row's own
+    // text, which edits in place.
+    if (isContent || isInteractive(event.target)) {
       controller.setColumn(index)
       return
     }
@@ -142,10 +144,16 @@ const Cell = ({row, index, children, sticky}: {row: Block; index: number; childr
     if (!(event.target instanceof HTMLElement) || !event.target.matches(CELL_CONTROL_SELECTOR)) return
     if (event.nativeEvent.isComposing) return
     const command = controlKeyCommand(event)
-    if (!command) return
-    event.preventDefault()
-    event.stopPropagation()
-    controller.command(command)
+    if (command) {
+      event.preventDefault()
+      event.stopPropagation()
+      controller.command(command)
+      return
+    }
+    // A plain key on a control is the control's: a checkbox is a button, so no
+    // modal context shadows the row's bindings (vim's Delete would remove the row).
+    // Chords still reach the app.
+    if (isPlainKey(event)) event.stopPropagation()
   }
   return (
     <div
@@ -175,8 +183,7 @@ const ValueCellBody = ({row, column, schema, editable}: {
 }
 
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
-  const {columns, schemas, editable, template} = useContext(TableContext)!
-  const contentColumn = columns.findIndex(column => column.fieldId === null)
+  const {columns, schemas, editable, contentColumn, template} = useContext(TableContext)!
   return (
     <BlockFrame
       block={block} Header={Header} Shell={Shell} Controls={NoControls}
@@ -188,7 +195,7 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Content}) => {
       <div className="block-body grow" style={{minWidth: template.minWidth}}>
         <div className="grid" style={template}>
           {columns.map((column, index) => (
-            <Cell key={column.id} row={block} index={index} sticky={index === 0}>
+            <Cell key={column.id} row={block} index={index} sticky={index === 0} isContent={index === contentColumn}>
               {column.fieldId === null
                 ? index === contentColumn ? <Content/> : <RowText row={block}/>
                 : <ValueCellBody row={block} column={column} schema={schemas[index]} editable={editable[index]!}/>}
@@ -208,47 +215,34 @@ const TableCellLayout: BlockLayout = ({Shell, Content}) => (
   )}</Shell>
 )
 
-const useColumnCursor = (controller: GridController) =>
-  useSyncExternalStore(controller.subscribeColumn, () => controller.currentColumn)
-
 const CursorStyle = ({gridId, controller}: {gridId: string; controller: GridController}) => {
-  const column = useColumnCursor(controller)
-  const grid = `[data-table-grid="${CSS.escape(gridId)}"]`
-  return <style>{`${grid} [data-table-row]:focus-within [data-table-col="${column}"],
-${grid} [data-table-row]:focus [data-table-col="${column}"] {
+  const column = useSyncExternalStore(controller.subscribeColumn, () => controller.currentColumn)
+  return <style>{`[data-table-grid="${CSS.escape(gridId)}"] [data-table-row]:focus-within [data-table-col="${column}"] {
   box-shadow: inset 0 0 0 2px var(--color-ring, currentColor);
 }`}</style>
 }
 
-const ColumnHeaders = ({repo, columns, schemas, template, scrollRef}: {
-  repo: Repo
-  columns: readonly TableColumn[]
-  schemas: readonly (AnyPropertySchema | undefined)[]
+const ColumnHeaders = ({names, template, scrollRef}: {
+  names: readonly string[]
   template: CSSProperties
-  scrollRef: (element: HTMLDivElement | null) => void
-}) => {
-  const definitions = usePropertyDefinitions(repo)
-  return (
-    <div ref={scrollRef} className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
-      <div role="row" className="grid text-sm font-medium" style={template}>
-        {columns.map((column, index) => {
-          const name = column.label || (column.fieldId === null ? 'Title'
-            : schemas[index]?.name ?? definitions?.definitionsByFieldId.get(column.fieldId)?.name ?? 'Unknown property')
-          return (
-            <div key={column.id} role="columnheader"
-              className={`truncate border-r border-border px-2 py-1 ${index === 0 ? 'sticky left-0 z-[1] bg-background' : ''}`}>
-              {name}
-            </div>
-          )
-        })}
-      </div>
+  scrollRef: React.Ref<HTMLDivElement>
+}) => (
+  <div ref={scrollRef} className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
+    <div role="row" className="grid text-sm font-medium" style={template}>
+      {names.map((name, index) => (
+        <div key={index} role="columnheader"
+          className={`truncate border-r border-border px-2 py-1 ${index === 0 ? 'sticky left-0 z-[1] bg-background' : ''}`}>
+          {name}
+        </div>
+      ))}
     </div>
-  )
-}
+  </div>
+)
 
-/** Row mode, activated from focus state rather than by the
- *  row's shell, so keys keep working while the row focus moved to mounts.
- *  The row a focus write is still committing to counts as focused. */
+/** Row mode, activated from focus state rather than by the row's shell, so
+ *  keys keep working while the row focus moved to mounts. The row a focus
+ *  write is still committing to counts as focused. Typing opens a cell only
+ *  while vim's normal mode is off: there the same keys are vim's. */
 const RowKeys = ({controller, rows, renderScopeId}: {
   controller: GridController; rows: ReadonlySet<string>; renderScopeId: string
 }) => {
@@ -261,92 +255,107 @@ const RowKeys = ({controller, rows, renderScopeId}: {
   }})
   const pending = useSyncExternalStore(controller.subscribePending, controller.getPendingRow)
   const inControl = useSyncExternalStore(controller.subscribeControl, controller.isInControl)
+  const normalMode = useActiveContextsState().has(ActionContextTypes.NORMAL_MODE)
   const panelActive = useIsActivePanel(uiStateBlock)
   const rowId = pending ?? focus?.blockId
-  const onRow = panelActive && rowId !== undefined && rows.has(rowId) && (pending !== null || !focus?.editing)
-  const dependencies = useMemo(() => ({gridCommand: controller.run, normalModeActive: controller.isNormalModeActive}), [controller])
+  const onRow = panelActive && !inControl && rowId !== undefined && rows.has(rowId) && (pending !== null || !focus?.editing)
+  const dependencies = useMemo(() => ({gridCommand: controller.command}), [controller])
   // Stable, or every render would release and re-claim the contexts.
-  const activations = useMemo(() => !inControl && onRow
-    ? [{context: TABLE_ROW_CONTEXT, dependencies}, {context: TABLE_TYPING_CONTEXT, dependencies}]
-    : [], [dependencies, inControl, onRow])
+  const activations = useMemo(() => !onRow ? []
+    : normalMode ? [{context: TABLE_ROW_CONTEXT, dependencies}]
+    : [{context: TABLE_ROW_CONTEXT, dependencies}, {context: TABLE_TYPING_CONTEXT, dependencies}],
+  [dependencies, normalMode, onRow])
   useActionContextActivations(activations)
   return null
 }
 
-/** Its own component so a context change re-renders only this. */
-const NormalModeProbe = ({controller}: {controller: GridController}) => {
-  const active = useActiveContextsState()
-  useLayoutEffect(() => { controller.setNormalMode(active.has(ActionContextTypes.NORMAL_MODE)) }, [active, controller])
-  return null
+interface GridProps {
+  host: Block
+  renderScopeId: string
+  parentRenderScopeId: string
+  workspaceId: string
 }
 
-const TableGrid = ({host, renderScopeId, workspaceId}: {host: Block; renderScopeId: string; workspaceId: string}) => {
+/** Nothing is drawn until the view and its columns have loaded, so a table
+ *  never flashes as empty. */
+const TableGrid = (props: GridProps) => {
+  const viewIds = useViewIds(props.host, props.workspaceId)
+  if (viewIds === undefined) return null
+  if (viewIds.length === 0) return <NoColumns/>
+  return <TableView {...props} viewIds={viewIds}/>
+}
+
+const TableView = (props: GridProps & {viewIds: readonly string[]}) => {
+  const columns = useColumns(props.host, props.workspaceId, props.viewIds[0]!)
+  if (columns === undefined) return null
+  if (columns.length === 0) return <NoColumns/>
+  return <TableBody {...props} columns={columns}/>
+}
+
+const NoColumns = () =>
+  <p className="py-1 text-sm text-muted-foreground">This table has no columns yet. Show it as an outline to add some.</p>
+
+const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewIds, columns}: GridProps & {
+  viewIds: readonly string[]; columns: readonly TableColumn[]
+}) => {
   const uiStateBlock = useUIStateBlock()
   const repo = host.repo
-  const [controller] = useState(() => new GridController(host, uiStateBlock, renderScopeId))
+  const [controller] = useState(() => new GridController(host, uiStateBlock, renderScopeId, parentRenderScopeId))
   const gridId = useId()
   const {childBacked} = useContext(PropertyDisplayScopeContext)
   const definitions = usePropertyDefinitions(repo)
-  const viewIds = useViewIds(host, workspaceId)
-  const columns = useColumns(host, workspaceId, viewIds[0])
   const rowIds = useRowIds(host, workspaceId, viewIds)
   const shown = useMemo(() => rowIds?.slice(0, ROW_CAP) ?? [], [rowIds])
-  const schemas = useMemo(() => {
-    void definitions
-    const resolver = repo.propertySchemaResolverFor(workspaceId)
-    return columns.map(column => {
-      if (column.fieldId === null) return undefined
-      const resolution = resolver.resolveField(column.fieldId)
-      return resolution.status === 'resolved' ? resolution.schema : undefined
-    })
-  }, [columns, definitions, repo, workspaceId])
+  const definitionsOf = useMemo(() => columns.map(column => column.fieldId === null ? undefined
+    : resolveFieldDefinition(repo, definitions, workspaceId, column.fieldId)), [columns, definitions, repo, workspaceId])
+  const schemas = useMemo(() => definitionsOf.map(definition => definition?.schema), [definitionsOf])
   const editable = useMemo(() => columns.map((column, index) => !repo.isReadOnly &&
     (column.fieldId === null || (childBacked && isPropertyValueEditable(schemas[index])))),
   [childBacked, columns, repo.isReadOnly, schemas])
+  const gridColumns = useMemo<GridColumn[]>(() => columns.map((column, index) => ({
+    fieldId: column.fieldId,
+    editable: editable[index]!,
+    list: schemas[index] !== undefined && memberCodecOf(schemas[index]!.codec) !== undefined,
+  })), [columns, editable, schemas])
+  const names = useMemo(() => columns.map((column, index) => column.label ||
+    (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
 
   useLayoutEffect(() => { controller.setRows(shown) }, [controller, shown])
-  useLayoutEffect(() => { controller.setColumns(columns, editable) }, [controller, columns, editable])
+  useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
   const rowSet = useMemo(() => new Set(shown), [shown])
-
   const template = useMemo<CSSProperties>(() => ({
     gridTemplateColumns: columns.map(columnTrack).join(' '),
     minWidth: `${minWidth(columns)}px`,
   }), [columns])
-  const header = useRef<HTMLDivElement | null>(null)
+  const header = useRef<HTMLDivElement>(null)
   const syncHeader = (event: React.UIEvent<HTMLDivElement>) => {
     if (header.current) header.current.scrollLeft = event.currentTarget.scrollLeft
   }
   const rootRef = useCallback((element: HTMLDivElement | null) => { controller.setRoot(element) }, [controller])
-  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, template}),
-    [controller, columns, schemas, editable, template])
+  const contentColumn = columns.findIndex(column => column.fieldId === null)
+  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, template}),
+    [controller, columns, schemas, editable, contentColumn, template])
   const rowsOverrides = useMemo(() => ({
-    isNestedSurface: true, layoutBoundary: false, scopeRootId: host.id, renderScopeId,
+    isNestedSurface: true, layoutBoundary: false, renderScopeId,
     [GRID_CONTEXT_KEY]: controller,
-  }), [controller, host.id, renderScopeId])
-
-  if (viewIds.length === 0 || columns.length === 0) {
-    return <p className="py-1 text-sm text-muted-foreground">This table has no columns yet. Show it as an outline to add some.</p>
-  }
+  }), [controller, renderScopeId])
 
   return (
     <div ref={rootRef} data-table-grid={gridId} className="my-1 text-sm">
       <CursorStyle gridId={gridId} controller={controller}/>
-      <NormalModeProbe controller={controller}/>
       <RowKeys controller={controller} rows={rowSet} renderScopeId={renderScopeId}/>
       {!childBacked && <p className="py-1 text-xs text-muted-foreground">
         Read-only: this workspace stores properties in the block, not as rows.
       </p>}
-      <ColumnHeaders repo={repo} columns={columns} schemas={schemas} template={template}
-        scrollRef={element => { header.current = element }}/>
+      <ColumnHeaders names={names} template={template} scrollRef={header}/>
       {/* The gesture marker sits on the scroller: horizontal touch panning
           needs the marked element to be the one that scrolls. */}
       <div data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
         className="overflow-x-auto overflow-y-hidden" onScroll={syncHeader}>
         <TableContext value={table}>
           <NestedBlockContextProvider overrides={rowsOverrides}>
-            <FocusedRowLazyMount block={uiStateBlock} scopeRootId={host.id}/>
             {shown.map(id => <TableRow key={id} id={id} renderScopeId={renderScopeId}/>)}
           </NestedBlockContextProvider>
         </TableContext>
@@ -354,14 +363,21 @@ const TableGrid = ({host, renderScopeId, workspaceId}: {host: Block; renderScope
       {rowIds && rowIds.length > ROW_CAP && <p className="py-1 text-xs text-muted-foreground">
         Showing the first {ROW_CAP} rows.
       </p>}
-      {!repo.isReadOnly && <button type="button" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => { void controller.appendRow() }}>+ New row</button>}
+      {/* A row added past the cap would not be drawn. */}
+      {!repo.isReadOnly && rowIds && rowIds.length < ROW_CAP &&
+        <button type="button" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => { void controller.appendRow() }}>+ New row</button>}
     </div>
   )
 }
 
+/** Each row is the root of its own scope. The outline's indent, outdent,
+ *  merge and vertical move would otherwise carry it into a subtree the grid
+ *  never draws, or fold the first row into the view block; at a scope root the
+ *  structural policy refuses them. Split would make a hidden first child there,
+ *  so it is refused too. Deleting a row stays allowed. */
 const TableRow = ({id, renderScopeId}: {id: string; renderScopeId: string}) => {
-  const overrides = useMemo(() => ({[ROW_CONTEXT_KEY]: id}), [id])
+  const overrides = useMemo(() => ({[ROW_CONTEXT_KEY]: id, scopeRootId: id, disableBlockSplit: true}), [id])
   return (
     <NestedBlockContextProvider overrides={overrides}>
       <LazyBlockComponent blockId={id} renderScopeId={renderScopeId}/>
@@ -369,17 +385,21 @@ const TableRow = ({id, renderScopeId}: {id: string; renderScopeId: string}) => {
   )
 }
 
-const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, BelowContent, Footer}) => {
-  const blockContext = useBlockContext()
-  const workspaceId = useHandle(block, {selector: data => data?.workspaceId})
-  const parentScope = typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : ''
-  const renderScopeId = surfaceRenderScopeId(TABLE_SURFACE, parentScope, block.id)
+const TableHostLayout: BlockLayout = ({block, Header, Shell, Controls, Content, Properties, BelowContent, Footer}) => {
+  const workspaceId = useWorkspaceId(block)
+  const parentRenderScopeId = useBlockContext().renderScopeId ?? ''
+  const renderScopeId = surfaceRenderScopeId(TABLE_SURFACE, parentRenderScopeId, block.id)
   return (
     <BlockFrame block={block} Header={Header} Shell={Shell} Controls={Controls} className="tm-table-host">
       <div className="block-body min-w-0 grow">
         <Content/>
+        {Properties && <Properties/>}
         <BelowContent/>
-        {workspaceId && <TableGrid key={renderScopeId} host={block} renderScopeId={renderScopeId} workspaceId={workspaceId}/>}
+        {/* The grid stands where the children would, so it collapses with them. */}
+        <CollapsibleContent>
+          {workspaceId && <TableGrid key={renderScopeId} host={block} renderScopeId={renderScopeId}
+            parentRenderScopeId={parentRenderScopeId} workspaceId={workspaceId}/>}
+        </CollapsibleContent>
         <Footer/>
       </div>
     </BlockFrame>

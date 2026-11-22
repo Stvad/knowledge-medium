@@ -89,4 +89,15 @@ describe('turnIntoTable', () => {
     expect(viewIds).toHaveLength(1)
     expect(await repo.query.typedBlockIds(rowQuery('host', workspaceId, viewIds)).load()).toEqual(['dune', 'emma'])
   })
+
+  it('refuses a property field row or value row, leaving the stored value alone', async () => {
+    const repo = await setup()
+    const [field] = await db.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND is_field_form = 1 AND reference_target_id = ?', ['emma', authorField])
+    const [value] = await db.db.getAll<{id: string}>('SELECT id FROM blocks WHERE parent_id = ?', [field!.id])
+    const before = await db.db.getAll('SELECT * FROM blocks ORDER BY id')
+    await turnIntoTable(repo, field!.id)
+    await turnIntoTable(repo, value!.id)
+    expect(await db.db.getAll('SELECT * FROM blocks ORDER BY id')).toEqual(before)
+  })
 })

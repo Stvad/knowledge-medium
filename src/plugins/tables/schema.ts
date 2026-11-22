@@ -4,6 +4,7 @@
  *  child of the host is a row. A column with no field shows the row's own
  *  content; its block content is an optional header label. */
 import { ChangeScope, seedProperty, seedType } from '@/data/api'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 
 export const TABLE_TYPE = 'tables:table'
 export const VIEW_TYPE = 'tables:view'
@@ -14,7 +15,7 @@ export const columnFieldProp = seedProperty({
   revision: 1,
   name: 'tables:columnField',
   preset: 'optional-ref',
-  config: {targetTypes: ['property-schema']},
+  config: {targetTypes: [PROPERTY_SCHEMA_TYPE]},
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
