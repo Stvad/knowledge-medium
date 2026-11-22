@@ -78,6 +78,11 @@ class MemoryStorage implements BlobStore {
   }
 }
 
+const remote = (storage: MemoryStorage): HostMediaRemote => ({
+  blobStore: storage,
+  readLiveWorkspace: async () => { throw new Error('An encrypted upload needs no live mode read') },
+})
+
 const IMAGE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5])
 
 async function encryptedHost(storage: MemoryStorage) {
@@ -90,12 +95,8 @@ async function encryptedHost(storage: MemoryStorage) {
     serverWorkspace({...testWorkspaceRow(workspaceId), encryption_mode: 'e2ee', wk_canary: key.canary}),
     member,
   ]
-  const media: HostMediaRemote = {
-    blobStore: storage,
-    readLiveWorkspace: async () => { throw new Error('An encrypted upload needs no live mode read') },
-  }
   const start = () => {
-    const host = startHost(fixture.db, config, user, {connect: () => deliver(rows), media})
+    const host = startHost(fixture.db, config, user, {connect: () => deliver(rows), media: remote(storage)})
     return {
       ...host,
       health: async () => (await host.execute({type: 'health'}) as {host: Record<string, unknown>}).host,
@@ -154,10 +155,20 @@ it('keeps an upload that could not reach Storage for the next process, which sen
   // What the next process builds over the same state directory and database.
   storage.offline = false
   const keys = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(fixture.db, id))
-  const next = openHostMedia(fixture.db, fixture.dir, user.id, true, keys, {blobStore: storage, readLiveWorkspace: async () => {
-    throw new Error('An encrypted upload needs no live mode read')
-  }})
-  next.start({load: async id => await fixture.db.getOptional<BlockData>('SELECT * FROM blocks WHERE id = ?', [id])})
+  const repo = {load: async (id: string) => await fixture.db.getOptional<BlockData>('SELECT * FROM blocks WHERE id = ?', [id])}
+  const nextProcess = (writeRefusal: string | null) => openHostMedia({
+    db: fixture.db, stateDir: fixture.dir, userId: user.id, keys, ...remote(storage), writeRefusal: () => writeRefusal,
+  })
+
+  // A host that may not write (demoted, held) leaves the record pending, not failed.
+  const demoted = nextProcess('the member role viewer cannot write')
+  demoted.start(repo)
+  await demoted.stop()
+  expect(storage.objects.size).toBe(0)
+  expect(await demoted.health()).toEqual({staged: 0, pending: 1, failed: 0})
+
+  const next = nextProcess(null)
+  next.start(repo)
   // Stopping at once still lets the boot reconcile and its upload finish.
   await next.stop()
   expect(storage.objects.size).toBe(1)

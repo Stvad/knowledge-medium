@@ -17,7 +17,8 @@ export const attachmentCleanerIOContribution = attachmentCleanerIOVerb.impl(
 
 /** In the data runtime as well as the plugin's: the conversion flow runs from
  *  the workspace gate, where no app runtime has been installed yet, and a
- *  headless host captures media blocks with the data runtime alone. */
+ *  headless host captures media blocks with the data runtime alone. Its seeds
+ *  then materialize whether or not a tab has Attachments on, as todo's do. */
 export const attachmentsDataExtension: AppExtension = [
   typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, {source: 'attachments'}),
   typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, {source: 'attachments'}),

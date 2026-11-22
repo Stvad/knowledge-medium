@@ -71,7 +71,10 @@ export async function serveDatabase(
     throw new Error('Read-only host found queued writes. Preserve this database for recovery.')
   }
   const resolver = createSyncResolver(() => user.id, getWorkspaceKeyStore(), id => readWorkspaceEncryptionMode(db, id))
-  const media = openHostMedia(db, config.stateDir, user.id, config.writable === true, resolver, remote)
+  const media = openHostMedia({
+    db, stateDir: config.stateDir, userId: user.id, keys: resolver, ...remote,
+    writeRefusal: () => gate ? gate.writeRefusal() : 'Starting gate',
+  })
   let repo: Repo | undefined
   let bridge: HostBridge | undefined
   let releaseBulk: (() => void) | undefined

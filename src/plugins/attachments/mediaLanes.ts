@@ -28,6 +28,10 @@ export interface MediaLaneDeps {
   readonly keys: Pick<SyncResolver, 'getMaterializability' | 'getCek' | 'getContentKeyHmac'>
   /** The server's workspace row read now (`fetchWorkspaceConversionState`). */
   readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
+  /** Whether this client may upload now. A drain asked for while it may not leaves
+   *  every record pending; uploading regardless would turn a demotion's 403 into a
+   *  permanent `failed`. */
+  readonly canDrain: () => boolean
 }
 
 export interface MediaLanes {
@@ -50,7 +54,7 @@ export interface MediaLanes {
 }
 
 export const createMediaLanes = (deps: MediaLaneDeps): MediaLanes => {
-  const { userId, byteStore, uploadStore: store, blobStore, keys, readLiveWorkspace } = deps
+  const { userId, byteStore, uploadStore: store, blobStore, keys, readLiveWorkspace, canDrain } = deps
   const keyDeps = {
     getMaterializability: keys.getMaterializability,
     getCek: keys.getCek,
@@ -60,21 +64,23 @@ export const createMediaLanes = (deps: MediaLaneDeps): MediaLanes => {
   let running: Promise<void> | null = null
   let again = false
   const drain = (): Promise<void> => {
-    if (running) {
-      again = true
-      return running
-    }
-    running = (async () => {
-      do {
-        again = false
-        try {
-          await drainUploads(userId, { store, byteStore, blobStore, readLiveWorkspace, ...keyDeps })
-        } catch (error) {
-          console.warn('[mediaLanes] drain failed', error)
-        }
-      } while (again)
-    })().finally(() => { running = null })
-    return running
+    if (!canDrain()) return running ?? Promise.resolve()
+    again = true
+    // The body awaits before its `finally`, so `running` is assigned before it is cleared.
+    return (running ??= (async () => {
+      try {
+        do {
+          again = false
+          try {
+            await drainUploads(userId, { store, byteStore, blobStore, readLiveWorkspace, ...keyDeps })
+          } catch (error) {
+            console.warn('[mediaLanes] drain failed', error)
+          }
+        } while (again && canDrain())
+      } finally {
+        running = null
+      }
+    })())
   }
 
   return {

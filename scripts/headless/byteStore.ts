@@ -8,9 +8,18 @@ const isMissing = (error: unknown) => (error as NodeJS.ErrnoException)?.code ===
 /** The host's plaintext asset bytes, as files under `root` laid out like the
  *  browser's OPFS store. The resolver serves a stored file as already verified, so
  *  an object path only ever holds a complete file: each write lands in `partial/`
- *  and is renamed into place. */
+ *  and is renamed into place. The directory is not fsynced after the rename: on a
+ *  power loss a capture's file can be missing, which fails its upload record
+ *  visibly, and adding the same bytes again re-arms it. */
 export class FsByteStore implements ByteStore {
-  constructor(private readonly root: string) {}
+  private readonly partial: string
+  /** One process owns a state directory, so what `partial/` holds at the first
+   *  write is an earlier process's interrupted write. */
+  private swept?: Promise<void>
+
+  constructor(private readonly root: string) {
+    this.partial = join(root, 'partial')
+  }
 
   private object(userId: string, workspaceId: string, contentKey: string) {
     return join(this.root, ...assetPathSegments(userId, workspaceId, contentKey))
@@ -31,8 +40,9 @@ export class FsByteStore implements ByteStore {
 
   async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
     const target = this.object(userId, workspaceId, contentKey)
-    const partial = join(this.root, 'partial', randomUUID())
-    await mkdir(dirname(partial), {recursive: true})
+    await (this.swept ??= rm(this.partial, {recursive: true, force: true}))
+    const partial = join(this.partial, randomUUID())
+    await mkdir(this.partial, {recursive: true})
     await mkdir(dirname(target), {recursive: true})
     try {
       await writeFile(partial, bytes, {flush: true})
