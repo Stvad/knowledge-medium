@@ -1,1 +1,1 @@
-export{N$ as dailyPageAliases,P$ as formatIsoDate,F$ as formatRoamDate}from"../../chunks/app-C3XWOd6H.js";
+export{P$ as dailyPageAliases,F$ as formatIsoDate,I$ as formatRoamDate}from"../../chunks/app-BrT2Advu.js";

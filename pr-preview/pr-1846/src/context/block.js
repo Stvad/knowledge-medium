@@ -1,1 +1,1 @@
-export{lJ as BlockContext,uJ as BlockContextProvider,dJ as NestedBlockContextProvider,fJ as useBlockContext}from"../../chunks/app-C3XWOd6H.js";
+export{uJ as BlockContext,dJ as BlockContextProvider,fJ as NestedBlockContextProvider,pJ as useBlockContext}from"../../chunks/app-BrT2Advu.js";

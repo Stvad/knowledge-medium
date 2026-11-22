@@ -1,1 +1,1 @@
-export{wm as annotationsPlugin}from"../../../chunks/app-C3XWOd6H.js";
+export{wm as annotationsPlugin}from"../../../chunks/app-BrT2Advu.js";

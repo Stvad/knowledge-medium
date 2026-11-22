@@ -1,1 +1,1 @@
-export{fL as APP_CHECK_FOR_UPDATES_ACTION_ID,pL as APP_RELOAD_ACTION_ID,mL as appCheckForUpdatesActionContribution,hL as appReloadActionContribution,gL as appUpdateDiagnosticContribution}from"../../../chunks/app-C3XWOd6H.js";
+export{pL as APP_CHECK_FOR_UPDATES_ACTION_ID,mL as APP_RELOAD_ACTION_ID,hL as appCheckForUpdatesActionContribution,gL as appReloadActionContribution,_L as appUpdateDiagnosticContribution}from"../../../chunks/app-BrT2Advu.js";
