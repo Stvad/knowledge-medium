@@ -8,7 +8,9 @@ import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
-import { focusBlock, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { editorSelection, focusBlock, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { getLastVisibleDescendant } from '@/utils/selection'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
 import { showError, showInfo } from '@/utils/toast'
@@ -77,6 +79,7 @@ export class GridController {
   /** The query's terms; null when the rows are the host's children. */
   private queryTerms: readonly QueryTerm[] | null = null
   private sorted = false
+  private displayScope: PropertyDisplayScopeLevels = NO_PROPERTY_DISPLAY_SCOPE
   /** Rows made here while a query is set, drawn for as long as the grid is
    *  mounted whether or not they match. */
   private created: readonly string[] = []
@@ -124,30 +127,23 @@ export class GridController {
     return !this.refuseRowPastCap()
   }
 
-  /** A query's rows live anywhere, and are what the query selects: making
-   *  one a child of another or the reverse is done in the outline. */
-  private refuseUnderQuery(): boolean {
+  /** A query's rows live anywhere, and are what the query selects: nesting
+   *  one under another, the reverse, or merging two is done in the outline. */
+  refusesUnderQuery(): boolean {
     if (!this.queryTerms) return false
-    showInfo('A query table’s rows are what the query selects: nest them in the outline.')
+    showInfo('A query table’s rows are what the query selects: nest or merge them in the outline.')
     return true
   }
 
   /** Tab on a row: it becomes the last child of the row drawn above it, shown
    *  under that row. Nothing above the first row: never the view block. */
   async nestRow(rowId: string): Promise<void> {
-    const row = this.rowIndex.get(rowId)
-    if (!row || this.host.repo.isReadOnly || this.refuseUnderQuery()) return
-    const parentId = this.rowIds[row - 1]!
+    const parentId = this.rowAbove(rowId)
+    if (!parentId || this.host.repo.isReadOnly || this.refusesUnderQuery()) return
     await this.host.repo.tx(async tx => {
       await tx.run(move, {id: rowId, parentId, position: {kind: 'last'}})
       await revealChildren(tx, parentId)
     }, {scope: ChangeScope.BlockDefault, description: 'nest table row'})
-  }
-
-  /** Shift+Tab on a row's child: it becomes the row after that row. */
-  async unnestChild(childId: string, rowId: string): Promise<void> {
-    if (this.host.repo.isReadOnly || this.refuseUnderQuery() || this.refuseRowPastCap()) return
-    await this.host.repo.mutate.move({id: childId, parentId: this.host.id, position: {kind: 'after', siblingId: rowId}})
   }
 
   /** Move a row past the one drawn beside it. A sort or a query decides the
@@ -162,6 +158,44 @@ export class GridController {
     const siblingId = this.rowIds[row + step]
     if (!siblingId) return
     await this.host.repo.mutate.move({id: rowId, parentId: this.host.id, position: {kind: step < 0 ? 'before' : 'after', siblingId}})
+  }
+
+  /** The property display the rows' subtree is drawn with. */
+  setDisplayScope(scope: PropertyDisplayScopeLevels) {
+    this.displayScope = scope
+  }
+
+  /** A row's children as the grid draws them: none while it is collapsed,
+   *  never its property rows (its cells draw those). */
+  async drawnChildIds(rowId: string): Promise<string[]> {
+    const row = this.host.repo.block(rowId)
+    await row.load()
+    return row.peekProperty(isCollapsedProp) ?? false ? []
+      : row.repo.query.childIds({id: rowId, propertyChildren: 'none'}).load()
+  }
+
+  /** The last block a row draws: its last child as the outline draws it
+   *  (followed down to its last shown descendant), or the row itself. */
+  async lastDrawnIn(rowId: string): Promise<Block> {
+    const repo = this.host.repo
+    const lastChild = (await this.drawnChildIds(rowId)).at(-1)
+    return lastChild ? getLastVisibleDescendant(repo.block(lastChild),
+      {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope}) : repo.block(rowId)
+  }
+
+  /** ArrowUp from a row's text: the last block the row above draws, edited
+   *  at its last line, or the row above in row mode when it draws nothing more. */
+  private async editLastDrawnAbove(row: number) {
+    const aboveId = this.rowIds[row - 1]!
+    const moves = this.cursorMoves
+    const target = await this.lastDrawnIn(aboveId)
+    if (this.cursorMoves !== moves) return
+    if (target.id === aboveId) {
+      this.focusRow(row - 1)
+      return
+    }
+    await this.uiStateBlock.set(editorSelection, {blockId: target.id, line: 'last'})
+    await focusBlock(this.uiStateBlock, target.id, {edit: true, renderScopeId: this.renderScopeId})
   }
 
   /** The row drawn above `rowId`, if any. */
@@ -365,7 +399,9 @@ export class GridController {
           void focusBlock(this.uiStateBlock, this.host.id, {renderScopeId: this.parentRenderScopeId})
           return true
         }
-        this.focusRow(row - 1)
+        // From a row's text being edited, into what the row above draws last.
+        if (onRow && !inRowMode) void this.editLastDrawnAbove(row)
+        else this.focusRow(row - 1)
         return true
       case 'down':
         this.focusRow(clamp(row + 1, this.rowIds.length - 1))

@@ -115,15 +115,12 @@ describe('GridController', () => {
   describe('row gestures a query or a sort decides', () => {
     const parentOf = async (id: string) => (await db.db.get<{parent_id: string}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id
 
-    it('nests and un-nests no rows under a query', async () => {
-      const {repo, controller, rowIds} = await setup(2)
+    it('nests no rows under a query', async () => {
+      const {controller, rowIds} = await setup(2)
       controller.setRows(rowIds, rowIds.length)
       controller.setQuery([{kind: 'property', text: 'x'} as never])
       await controller.nestRow(rowIds[1]!)
       expect(await parentOf(rowIds[1]!)).toBe('host')
-      const child = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'child'})
-      await controller.unnestChild(child!, rowIds[0]!)
-      expect(await parentOf(child!)).toBe(rowIds[0])
     })
 
     it('nests a row under the row drawn above it, not the view', async () => {

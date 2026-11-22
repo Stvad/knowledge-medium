@@ -6,7 +6,7 @@ import { EditorView } from '@codemirror/view'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
+import { editorSelection, focusBlock, isCollapsedProp, isEditingProp, typesProp, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -36,6 +36,7 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import * as toast from '@/utils/toast'
+import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { turnIntoTable } from '../convert'
 import { tablesPlugin } from '../index'
 import { CELL_CONTROL_SELECTOR } from '../controller'
@@ -327,6 +328,14 @@ describe('a row draws its children', () => {
     await waitFor(() => expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE}))
   })
 
+  it('ArrowUp from the next row’s text edits the last child shown above it', async () => {
+    const id = await note()
+    mount()
+    press(await editAt('row-1', 'start'), 'ArrowUp')
+    await waitFor(() => expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+  })
+
   it('ArrowUp from its first child edits the row’s text', async () => {
     const id = await note()
     mount()
@@ -384,8 +393,11 @@ describe('the outline’s verbs between rows', () => {
 
   it('Tab on the first row nests it nowhere', async () => {
     mount()
-    press(await editAt('row-0', 'end'), 'Tab')
-    await settle()
+    const view = await editAt('row-0', 'end')
+    const nest = vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'nestRow')
+    press(view, 'Tab')
+    await waitFor(() => expect(nest).toHaveBeenCalledWith('row-0'))
+    await act(() => nest.mock.results[0]!.value)
     expect((await repo.load('row-0'))?.parentId).toBe(HOST)
   })
 
@@ -416,10 +428,62 @@ describe('the outline’s verbs between rows', () => {
     await waitFor(() => expect(document.querySelector('[data-table-row="row-0"]')).not.toBeNull())
     await act(async () => { await gridOfHost(PARENT_SCOPE, HOST)!.moveRow('row-0', 1) })
     await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-1', 'row-0']))
+    const info = vi.spyOn(toast, 'showInfo')
     press(await editAt('row-0', 'start'), 'Backspace')
-    await settle()
+    await waitFor(() => expect(info).toHaveBeenCalled())
     expect(await rowsUnderHost()).toEqual(['row-1', 'row-0'])
   })
+
+  it('a row whose only property is its collapse flag still merges', async () => {
+    await repo.block('row-1').set(isCollapsedProp, false)
+    expect(repo.block('row-1').peek()?.properties).toHaveProperty(isCollapsedProp.name)
+    mount()
+    press(await editAt('row-1', 'start'), 'Backspace')
+    await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-0']))
+  })
+
+  it('Enter in the middle of a row whose children show still splits it into two rows', async () => {
+    await repo.mutate.createChild({parentId: 'row-1', content: 'note', position: {kind: 'last'}})
+    mount()
+    const view = await editAt('row-1', 'start')
+    act(() => { view.dispatch({selection: {anchor: 3}}) })
+    press(view, 'Enter')
+    await waitFor(async () => expect(await rowsUnderHost()).toHaveLength(3))
+    expect(await contentsUnder('row-1')).toEqual(['note'])
+  })
+
+  // Refused merges: the outline's own refusals, and a nested table's machinery.
+  const refusedMerge = async (setup: () => Promise<string>) => {
+    const target = await setup()
+    const before = await contentOf(target)
+    mount()
+    const view = await editAt('row-1', 'start')
+    // The refusal makes no write; the gesture's walk ends at `getLastVisibleDescendant`
+    // or the merge's own checks, so wait for the key to be handled, then compare.
+    press(view, 'Backspace')
+    await settle()
+    expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
+    expect(await contentOf(target)).toBe(before)
+  }
+
+  it('merges no row into a block holding source', () => refusedMerge(async () => {
+    const id = await repo.mutate.createChild({parentId: 'row-0', content: '<p>doc</p>', position: {kind: 'last'}})
+    await repo.block(id!).set(typesProp, [HTML_DOCUMENT_TYPE])
+    return id!
+  }))
+
+  it('merges no row into a nested table’s column block', () => refusedMerge(async () => {
+    const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
+    await turnIntoTable(repo, id!)
+    return id!
+  }))
+
+  it('merges no row with children into a collapsed row above with children', () => refusedMerge(async () => {
+    const above = await repo.mutate.createChild({parentId: 'row-0', content: 'n0', position: {kind: 'last'}})
+    await repo.mutate.createChild({parentId: 'row-1', content: 'n1', position: {kind: 'last'}})
+    await repo.block('row-0').set(isCollapsedProp, true)
+    return above!
+  }))
 
   it('moves a row above the row before it, and never above the first row', async () => {
     mount()
@@ -428,8 +492,9 @@ describe('the outline’s verbs between rows', () => {
     await act(async () => { await runActionById('move_block_up_cm', new KeyboardEvent('keydown')) })
     await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-1', 'row-0']))
     await editorOn('row-1')
+    const move = vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'moveRow')
     await act(async () => { await runActionById('move_block_up_cm', new KeyboardEvent('keydown')) })
-    await settle()
+    await act(() => move.mock.results[0]!.value)
     expect(await rowsUnderHost()).toEqual(['row-1', 'row-0'])
     expect((await children(HOST))[0]).toContain('tables:view')
   })
@@ -613,6 +678,19 @@ describe('normal mode on a list member', () => {
     await normalRun(alpha!, 'create_block_below_and_edit')
     await waitFor(async () => expect(await contentsUnder(await fieldRowId())).toEqual(['alpha', '', 'beta']))
     expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
+  })
+
+  it('sideways on a row’s child is the outline’s, not a column move', async () => {
+    const moveLeft = vi.fn()
+    configureRuntime(vimNormalModePlugin({repo}), actionsFacet.of({
+      id: 'move_left', description: 'stand-in for spatial navigation', context: ActionContextTypes.NORMAL_MODE,
+      handler: moveLeft, defaultBinding: {keys: 'h'},
+    }))
+    const child = await repo.mutate.createChild({parentId: 'row-0', content: 'a note', position: {kind: 'last'}})
+    mount()
+    await normalRun(child!, 'move_left')
+    expect(moveLeft).toHaveBeenCalled()
+    expect(focused()).toEqual({blockId: child, renderScopeId: SCOPE})
   })
 
   it('enter-edit edits the member itself', async () => {

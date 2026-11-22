@@ -2,24 +2,23 @@
  *  its own scope, so inside a row (its children) the outline's verbs run as
  *  they are, and at a row the outline refuses them. Between rows the grid
  *  decides, by the rows it draws: their order may be a sort's, and a query's
- *  rows live anywhere. */
-import { ChangeScope } from '@/data/api'
+ *  rows live anywhere. Where the host's own order is the drawn one, the
+ *  outline's handler runs with the host as the scope root. */
 import type { Block } from '@/data/block'
-import { merge } from '@/data/mutators'
+import { editorSelection, focusBlock, hasBlockType } from '@/data/properties'
 import { displayScopeOf } from '@/data/propertyDisplayMode'
-import { editorSelection, focusBlock, isCollapsedProp } from '@/data/properties'
-import { visibleChildIds } from '@/data/visibleChildren'
 import { actionDispatchWrap, type ActionDispatchDecorator } from '@/shortcuts/actionDispatch'
 import { requestEditorFocusIfEditing } from '@/shortcuts/blockActions'
+import { mergeUp } from '@/shortcuts/blockMergeGesture'
 import {
   ActionContextTypes, type ActionContextType, type BaseShortcutDependencies, type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
-import { deleteBlockThroughUi, ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
-import { getLastVisibleDescendant } from '@/utils/selection'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi'
 import { showInfo } from '@/utils/toast'
 import type { GridController } from './controller'
 import { gridDrawing } from './registry'
+import { COLUMN_TYPE, VIEW_TYPE } from './schema'
 
 const NORMAL = ActionContextTypes.NORMAL_MODE
 const EDITING = ActionContextTypes.EDIT_MODE_CM
@@ -49,56 +48,71 @@ const onRow = (
   },
 })
 
-/** The row's children are drawn under it: not collapsed, and some to draw. */
-const showsChildren = async (row: Block, deps: BaseShortcutDependencies) =>
-  !(row.peekProperty(isCollapsedProp) ?? false) && (await visibleChildIds(row, displayScopeOf(deps))).length > 0
-
-/** Enter in a row's text, by the outline's own split, with the host as the
+/** Enter in a row's text, by the outline's own split with the host as the
  *  scope root: at the end a new row below, or a first child when the row's
  *  children show; mid-text the row splits in two. A query's rows live
- *  anywhere, so there the end makes a new row as "+ New row" does, and a
- *  split is refused. */
+ *  anywhere: there the end makes a first child as the outline does when the
+ *  children show, else a new row as "+ New row" does, and a split is refused. */
 const splitRow: ActionDispatchDecorator = {
   actionId: 'split_block_cm',
   context: EDITING,
   wrap: async (deps, trigger, next) => {
     const grid = rowGrid(deps)
     const {block, editorView} = deps as CodeMirrorEditModeDependencies
-    if (!grid || !editorView || await showsChildren(block, deps)) {
+    if (!grid || !editorView) {
       await next(deps, trigger)
       return
     }
-    const atEnd = editorView.state.selection.main.head === editorView.state.doc.length
-    if (grid.hasQuery) {
-      if (atEnd) grid.command('insert-below')
-      else showInfo('A query table’s row splits in the outline.')
+    if (!grid.hasQuery) {
+      if (grid.allowsNewRow()) await next({...deps, scopeRootId: grid.host.id}, trigger)
       return
     }
-    if (grid.allowsNewRow()) await next({...deps, scopeRootId: grid.host.id}, trigger)
+    if (editorView.state.selection.main.head !== editorView.state.doc.length) {
+      showInfo('A query table’s row splits in the outline.')
+    } else if ((await grid.drawnChildIds(block.id)).length > 0) {
+      await next(deps, trigger)
+    } else {
+      grid.command('insert-below')
+    }
   },
 }
 
-/** Shift+Tab on a row's own child: it becomes the row after that row. */
+/** Shift+Tab on a row's own child: the outline's outdent with the host as the
+ *  scope root, which places it right after the row, as a row. */
 const unnestChild = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
   actionId,
   context,
   wrap: async (deps, trigger, next) => {
-    const {block, renderScopeId, scopeRootId, uiStateBlock} = deps as BlockShortcutDependencies
+    const {block, renderScopeId, scopeRootId} = deps as BlockShortcutDependencies
     const grid = gridDrawing(renderScopeId, block?.id)
     const parentId = block?.peek()?.parentId
     if (!grid || !parentId || parentId !== scopeRootId || !grid.isRow(parentId)) {
       await next(deps, trigger)
       return
     }
-    await grid.unnestChild(block.id, parentId)
-    requestEditorFocusIfEditing(uiStateBlock)
+    if (grid.refusesUnderQuery() || !grid.allowsNewRow()) return
+    await next({...deps, scopeRootId: grid.host.id}, trigger)
   },
 })
 
+/** Whether `row` carries property values a merge would fold into another
+ *  block: any property but hidden, internal ones (its collapse flag). */
+const carriesValues = (row: Block): boolean => {
+  const data = row.peek()
+  if (!data) return false
+  const definitions = row.repo.propertySchemaResolverFor(data.workspaceId)
+  return Object.keys(data.properties).some(name => {
+    const definition = definitions.resolve(name)
+    return definition.status !== 'resolved' || !definition.schema.hidden
+  })
+}
+
 /** Backspace at the start of a row's text: the row merges into the last block
- *  drawn above it (the row above, or that row's last child), as the outline
- *  merges into the previous block. A row carrying property values is not
- *  merged here: the merge would fold its values into another block's. */
+ *  drawn above it, by the outline's own merge and its refusals. An empty row
+ *  with nothing under it is deleted. Refused: under a query (the row above
+ *  may be on another page), for a row carrying property values (they would
+ *  fold into another block), and into a table's view or column block (a
+ *  nested table's machinery, which the outline's walk reaches). */
 const mergeRowUp: ActionDispatchDecorator = {
   actionId: 'delete_empty_block_cm',
   context: EDITING,
@@ -107,35 +121,28 @@ const mergeRowUp: ActionDispatchDecorator = {
     const editDeps = deps as CodeMirrorEditModeDependencies
     const {block, editorView, uiStateBlock, renderScopeId} = editDeps
     const selection = editorView?.state.selection.main
-    const aboveId = grid && block ? grid.rowAbove(block.id) : undefined
+    const aboveId = grid?.rowAbove(block.id)
     if (!grid || !aboveId || !selection?.empty || selection.from !== 0) {
       await next(deps, trigger)
       return
     }
     trigger.preventDefault()
-    if (Object.keys(block.peek()?.properties ?? {}).length > 0) {
+    if (grid.refusesUnderQuery()) return
+    if (carriesValues(block)) {
       showInfo('This row has values: merge it in the outline.')
       return
     }
-    const repo = block.repo
-    const scope = displayScopeOf(editDeps)
-    const into = await getLastVisibleDescendant(repo.block(aboveId), {scopeRootId: aboveId, scopeRootForcesOpen: false, propertyDisplay: scope})
-    const intoData = into.peek() ?? await into.load()
-    const joinOffset = intoData?.content.length ?? 0
-    const content = editorView!.state.doc.toString()
-    const children = await visibleChildIds(block, scope)
-    if (content === '' && children.length === 0) {
+    const into = await grid.lastDrawnIn(aboveId)
+    const intoData = into.peek()
+    if (intoData && (hasBlockType(intoData, VIEW_TYPE) || hasBlockType(intoData, COLUMN_TYPE))) return
+    const liveContent = editorView!.state.doc.toString()
+    if (liveContent === '' && (await grid.drawnChildIds(block.id)).length === 0) {
       if (!await deleteBlockThroughUi(block)) return
-    } else {
-      if (children.length > 0 && into.id !== aboveId && (await visibleChildIds(into, scope)).length > 0) return
-      if (!await ensureDeletableThroughUi([block])) return
-      await repo.tx(async tx => {
-        await tx.update(block.id, {content})
-        await tx.run(merge, {intoId: into.id, fromId: block.id})
-      }, {scope: ChangeScope.BlockDefault, description: 'merge table row into the block above'})
+      await uiStateBlock.set(editorSelection, {blockId: into.id, start: intoData?.content.length ?? 0})
+      await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})
+      return
     }
-    await uiStateBlock.set(editorSelection, {blockId: into.id, start: joinOffset})
-    await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})
+    await mergeUp({from: block, into, liveContent, propertyDisplay: displayScopeOf(editDeps), uiStateBlock, renderScopeId})
   },
 }
 

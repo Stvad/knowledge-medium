@@ -29,7 +29,8 @@ import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, u
 import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { registerGrid, tableRenderScopeId } from './registry'
-import { MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, useRowGutter, type RowGutter } from './rowGutter'
+import { useIsMobile } from '@/utils/react'
+import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
 export const CELL_SURFACE = 'tables.cell'
@@ -43,7 +44,8 @@ interface TableState {
   contentColumn: number
   /** Rows made here that the query does not select. */
   unmatched: ReadonlySet<string>
-  gutter: RowGutter
+  /** The rows drawn. */
+  rows: ReadonlySet<string>
 }
 
 /** Set on the grid's root from the columns' widths; header and rows read them. */
@@ -54,6 +56,14 @@ const GRID_TEMPLATE: CSSProperties = {
 }
 
 const TableContext = createContext<TableState | null>(null)
+
+/** The visible table less the gutter. */
+const VISIBLE_WIDTH = `calc(var(${VIEW_WIDTH_VARIABLE}, 0px) - var(${GUTTER_VARIABLE}))`
+/** A row's body (its grid and children) is the header row's width: the
+ *  visible table, or the grid's minimum when wider. */
+const ROW_BODY: CSSProperties = {width: `max(var(${MIN_WIDTH_VARIABLE}), ${VISIBLE_WIDTH})`}
+/** A row's children wrap to the visible table, not the grid. */
+const ROW_NOTES: CSSProperties = {maxWidth: VISIBLE_WIDTH}
 
 /** The narrowest a column without a stored width gets; wider ones share the rest. */
 const defaultMinWidth = (column: TableColumn) => column.fieldId === null ? 192 : 144
@@ -154,7 +164,7 @@ const isPlainKey = (event: KeyboardEvent) => !event.metaKey && !event.ctrlKey &&
 const Cell = ({row, index, sticky, isContent, children}: {
   row: Block; index: number; sticky: boolean; isContent: boolean; children: ReactNode
 }) => {
-  const {controller, gutter} = useContext(TableContext)!
+  const {controller} = useContext(TableContext)!
   const click = (event: MouseEvent<HTMLDivElement>) => {
     if (!isOwnEvent(event)) return
     // Controls, links and editors keep their click; so does the row's own
@@ -194,7 +204,7 @@ const Cell = ({row, index, sticky, isContent, children}: {
   return (
     <div
       data-table-col={index}
-      className={`min-w-0 border-r border-border px-2 py-0.5 ${sticky ? `sticky ${gutter.frozenLeft} z-[1] bg-background` : ''}`}
+      className={`min-w-0 border-r border-border px-2 py-0.5 ${sticky ? 'sticky left-[var(--tables-gutter)] z-[1] bg-background' : ''}`}
       onClickCapture={click}
       onFocus={focus}
       onBlur={blur}
@@ -220,30 +230,29 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-/** A row's children as the outline draws them, minus its property rows: the
- *  grid draws those as cells, and a value block drawn twice in one scope would
- *  have two editors. The outline's own listing keeps a focused field row, which
- *  editing a list member makes the row's focused child. */
+/** A row's children as the outline draws them, minus what the grid draws
+ *  elsewhere in the same scope, where a second occurrence would have a second
+ *  editor: its property rows (its cells), and a child a query also selects as
+ *  a row. The outline's own listing keeps a focused field row, which editing
+ *  a list member makes the row's focused child. Accepted: a deeper descendant
+ *  a query also selects is drawn both as a row and under its ancestor. */
 const RowNotes = ({row}: {row: Block}) => {
   const {renderScopeId} = useBlockContext()
+  const {rows} = useContext(TableContext)!
   const ids = useChildIdsForMode(row, 'none')
   return (
     <PropertyRowListingContext value={null}>
-      {ids.map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
+      {ids.filter(id => !rows.has(id)).map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
     </PropertyRowListingContext>
   )
 }
 
-/** A row is a block: its bullet opens it, opens it in the sidebar and has
- *  its menu, and its expand toggle shows or hides its children, drawn below
- *  its cells as the outline draws them. The controls and the first column
- *  stay frozen when the grid scrolls sideways, so the frame is as wide as the
- *  grid: a sticky element cannot outrun its container. */
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) => {
-  const {columns, schemas, editable, contentColumn, unmatched, gutter} = useContext(TableContext)!
+  const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)
   const FrozenControls = useMemo(() => function FrozenControls() {
-    return <div className="sticky left-0 z-[2] self-stretch bg-background"><Controls/></div>
+    // The frame's 4px gap to the frozen first column is painted too, or scrolled cells show through it.
+    return <div className="sticky left-0 z-[2] self-stretch bg-background after:absolute after:inset-y-0 after:left-full after:w-1 after:bg-background after:content-['']"><Controls/></div>
   }, [Controls])
   return (
     <BlockFrame
@@ -251,7 +260,7 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) 
       className={`w-max min-w-full ${outside ? 'tm-table-row opacity-60' : 'tm-table-row'}`}
       frameProps={{'data-table-row': block.id, ...(outside ? {'data-table-unmatched': 'true', title: UNMATCHED_TITLE} : {})}}
     >
-      <div className="block-body border-b border-border" style={{width: gutter.bodyWidth}}>
+      <div className="block-body border-b border-border" style={ROW_BODY}>
         <div className="grid" style={GRID_TEMPLATE}>
           {columns.map((column, index) => (
             <Cell key={column.id} row={block} index={index} sticky={index === 0} isContent={index === contentColumn}>
@@ -263,7 +272,7 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) 
         </div>
         {/* As wide as the visible table, not the grid, and frozen with the
             first column, so a note reads without scrolling sideways. */}
-        <CollapsibleContent data-table-notes="true" className={gutter.notes.className} style={{maxWidth: gutter.notes.maxWidth}}>
+        <CollapsibleContent data-table-notes="true" className="sticky left-[var(--tables-gutter)]" style={ROW_NOTES}>
           <RowNotes row={block}/>
         </CollapsibleContent>
       </div>
@@ -454,6 +463,7 @@ const TableBody = ({
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
   useLayoutEffect(() => { controller.setSorted(order !== undefined) }, [controller, order])
+  useLayoutEffect(() => { controller.setDisplayScope(rowsDisplayScope) }, [controller, rowsDisplayScope])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
@@ -470,10 +480,12 @@ const TableBody = ({
   [columns, resizing])
   // The tracks reach the rows as CSS variables, so a resize restyles the root
   // and re-renders no row.
+  const isMobile = useIsMobile()
   const tracks = useMemo(() => ({
     [TRACKS_VARIABLE]: laidOut.map(columnTrack).join(' '),
     [MIN_WIDTH_VARIABLE]: `${minWidth(laidOut)}px`,
-  }) as CSSProperties, [laidOut])
+    [GUTTER_VARIABLE]: gutterWidth(isMobile),
+  }) as CSSProperties, [isMobile, laidOut])
   // The rows' scroller drives the header. The header also scrolls on its own
   // when a control in it takes focus; that one scroll is copied back.
   const header = useRef<HTMLDivElement>(null)
@@ -494,9 +506,8 @@ const TableBody = ({
     return () => observer.disconnect()
   }, [])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
-  const gutter = useRowGutter()
-  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched, gutter}),
-    [controller, columns, schemas, editable, contentColumn, unmatched, gutter])
+  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
+    [controller, columns, schemas, editable, contentColumn, unmatched, rowSet])
   const fieldNames = useQueryableFieldNames(repo, workspaceId)
   const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
   const onSort = useCallback((next: ViewSort | undefined) => {

@@ -154,15 +154,11 @@ export const tableShortcutActivation: ShortcutActivationContribution = activatio
   return [{context: role === 'cell' ? TABLE_EDIT_CONTEXT : TABLE_OUTLINE_EDIT_CONTEXT, dependencies: {gridCommand: grid.command}}]
 }
 
-type Applies = (deps: BaseShortcutDependencies, trigger: ActionTrigger) => boolean | Promise<boolean>
+type Applies = (deps: BaseShortcutDependencies, trigger: ActionTrigger, grid: GridController) => boolean | Promise<boolean>
 
-/** The outline's verbs walk the outline around a block. A row's text and a
- *  scalar value are each the root of their own scope, and around them the
- *  outline would step into property rows or children the grid never draws, or
- *  create a block it never shows: there the grid takes the verb. A list member
- *  is an outline block in its cell, and keeps the outline's verbs except a
- *  step out of the cell (`crossing`). A command that does not apply falls back
- *  to the verb. */
+/** The outline's verbs walk the outline around a block; on a block the grid
+ *  draws, `crossing` decides whether the grid takes the verb instead. A command
+ *  that does not apply falls back to the verb. */
 const redirect = (
   context: ActionContextType, actionId: string, command: GridCommand, applies: Applies,
 ): ActionDispatchDecorator => ({
@@ -172,7 +168,7 @@ const redirect = (
     const {block, renderScopeId} = deps as BlockShortcutDependencies
     const grid = gridDrawing(renderScopeId, block?.id)
     if (!grid) return next(deps, trigger)
-    const decided = applies(deps, trigger)
+    const decided = applies(deps, trigger, grid)
     if (typeof decided === 'boolean') return decided && grid.command(command) ? undefined : next(deps, trigger)
     // Awaited, not returned: a decline turned into a resolved `false` would read as handled.
     return decided.then(async taken => { if (!taken || !grid.command(command)) await next(deps, trigger) })
@@ -201,34 +197,44 @@ const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge): P
   return await nextVisibleBlock(block, surface) === null
 }
 
-/** Whether the grid takes a verb on `block`, the outline's otherwise.
+/** What the grid draws a block as, from the scope it is drawn in: a row's
+ *  text and a scalar value are their own scope roots; a list's member sits in
+ *  its field row's scope, a row's child in the row's. */
+type GridPlace = 'value' | 'rowText' | 'member' | 'rowChild'
+
+const placeOf = (grid: GridController, blockId: string, scopeRootId: string): GridPlace => {
+  const inRow = grid.isRow(scopeRootId)
+  return blockId === scopeRootId ? (inRow ? 'rowText' : 'value') : (inRow ? 'rowChild' : 'member')
+}
+
+/** Where a verb goes: past an edge, sideways (a column), or nowhere (it acts on the block). */
+type Step = Edge | 'sideways' | 'here'
+
+/** Whether the grid takes a verb on a block, the outline's otherwise.
  *  - A scalar value: always; the grid draws nothing around it.
  *  - A row's text: always, except down into its children when they show.
- *  - A list member: only a step out of the cell past `edge` (the field row,
- *    the scope root, is not drawn); with no edge, never.
+ *  - A list member: a step out of its cell (sideways, or past its first or
+ *    last block); the field row, its scope root, is not drawn.
  *  - A row's child: only down out of the last one; the row's text above it is
- *    drawn, so every other step is the outline's.
+ *    drawn, and sideways is the outline's.
  *  The walk is async, so the key's default is prevented first, as the
  *  outline's verbs do on the same test: otherwise the caret moves before
  *  either handler runs. */
-const crossing = (edge?: Edge): Applies => (deps, trigger) => {
-  const {block, renderScopeId} = deps as BlockShortcutDependencies
+const crossing = (step: Step): Applies => (deps, trigger, grid) => {
+  const {block} = deps as BlockShortcutDependencies
   const surface = outlineSurfaceOf(deps as BlockShortcutDependencies)
   if (!block || !surface) return true
-  const inRow = gridDrawing(renderScopeId, block.id)?.isRow(surface.scopeRootId) === true
-  const isRoot = block.id === surface.scopeRootId
-  if (isRoot && !(inRow && edge === 'bottom')) return true
-  if (!isRoot && (!edge || (inRow && edge !== 'bottom'))) return false
+  const place = placeOf(grid, block.id, surface.scopeRootId)
+  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : step === 'bottom' && place !== 'value'
+  if (!walks) return place === 'value' || place === 'rowText' || (place === 'member' && step === 'sideways')
   trigger.preventDefault()
-  return leavesScope(block, surface, isRoot ? 'bottom' : edge!)
+  return leavesScope(block, surface, step as Edge)
 }
 
-const always: Applies = () => true
-
 /** An editor verb: only at the editor's edge, then as `crossing`. */
-const leavingAt = (edge: Edge): Applies => (deps, trigger) => {
+const leavingAt = (edge: Edge): Applies => (deps, trigger, grid) => {
   const {editorView} = deps as CodeMirrorEditModeDependencies
-  return editorView !== undefined && atEditorEdge(editorView, edge) && crossing(edge)(deps, trigger)
+  return editorView !== undefined && atEditorEdge(editorView, edge) && crossing(edge)(deps, trigger, grid)
 }
 
 /** No block selection starts inside a grid. Block selection runs in the
@@ -309,13 +315,12 @@ const SELECTION_STARTS: readonly (readonly [ActionContextType, string])[] = [
 export const tableOutlineVerbRedirects = [
   redirect(NORMAL, 'move_down', 'down', crossing('bottom')),
   redirect(NORMAL, 'move_up', 'up', crossing('top')),
-  // Sideways always leaves a member's cell.
-  redirect(NORMAL, 'move_left', 'left', always),
-  redirect(NORMAL, 'move_right', 'right', always),
-  redirect(NORMAL, 'create_block_below_and_edit', 'insert-below', crossing()),
-  redirect(NORMAL, 'create_block_above_and_edit', 'insert-above', crossing()),
-  redirect(NORMAL, 'enter_edit_mode', 'open-start', crossing()),
-  redirect(NORMAL, 'enter_edit_mode_at_end', 'open', crossing()),
+  redirect(NORMAL, 'move_left', 'left', crossing('sideways')),
+  redirect(NORMAL, 'move_right', 'right', crossing('sideways')),
+  redirect(NORMAL, 'create_block_below_and_edit', 'insert-below', crossing('here')),
+  redirect(NORMAL, 'create_block_above_and_edit', 'insert-above', crossing('here')),
+  redirect(NORMAL, 'enter_edit_mode', 'open-start', crossing('here')),
+  redirect(NORMAL, 'enter_edit_mode_at_end', 'open', crossing('here')),
   // Arrows at an editor's edge leave the cell the way row mode moves.
   redirect(EDITING, 'move_up_from_cm_start', 'up', leavingAt('top')),
   redirect(EDITING, 'move_down_from_cm_end', 'down', leavingAt('bottom')),
