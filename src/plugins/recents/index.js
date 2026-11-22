@@ -1,1 +1,1 @@
-export{mj as OPEN_RECENTS_ACTION_ID,hj as openRecentsAction,gj as recentsHeaderItem,_j as recentsPlugin}from"../../../chunks/app-Bx8aI1mA.js";
+export{yj as OPEN_RECENTS_ACTION_ID,bj as openRecentsAction,xj as recentsHeaderItem,Sj as recentsPlugin}from"../../../chunks/app-DbbtfP1u.js";

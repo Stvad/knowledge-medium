@@ -1,1 +1,1 @@
-export{RX as srsReschedulingDataExtension}from"../../../chunks/app-Bx8aI1mA.js";
+export{UX as srsReschedulingDataExtension}from"../../../chunks/app-DbbtfP1u.js";
