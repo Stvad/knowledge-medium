@@ -1,0 +1,1 @@
+export{Jf as quotedInFooterContribution}from"../../../chunks/app-C76FqX8A.js";

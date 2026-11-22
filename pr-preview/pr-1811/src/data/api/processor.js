@@ -1,0 +1,1 @@
+export{spt as definePostCommitProcessor}from"../../../chunks/app-C76FqX8A.js";

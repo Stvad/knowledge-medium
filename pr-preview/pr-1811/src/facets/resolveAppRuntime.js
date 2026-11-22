@@ -1,0 +1,1 @@
+export{gI as resolveAppRuntime,_I as resolveAppRuntimeSync}from"../../chunks/app-C76FqX8A.js";

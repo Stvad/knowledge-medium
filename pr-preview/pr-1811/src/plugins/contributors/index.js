@@ -1,0 +1,1 @@
+export{Oh as contributorsPlugin}from"../../../chunks/app-C76FqX8A.js";

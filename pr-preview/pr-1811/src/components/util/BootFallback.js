@@ -1,0 +1,1 @@
+export{Mq as BootFallback}from"../../../chunks/app-C76FqX8A.js";

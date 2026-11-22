@@ -1,0 +1,1 @@
+export{nB as useShortcutSurfaceActivations}from"../../chunks/app-C76FqX8A.js";
