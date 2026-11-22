@@ -1,1 +1,1 @@
-export{DL as extensionPromptStore,OL as pendingExtensionPrompts}from"../../../chunks/app-DpsYxXSh.js";
+export{DL as extensionPromptStore,OL as pendingExtensionPrompts}from"../../../chunks/app-CLCwFE9g.js";

@@ -1,1 +1,1 @@
-export{JI as withRowSlide}from"../../chunks/app-DpsYxXSh.js";
+export{JI as withRowSlide}from"../../chunks/app-CLCwFE9g.js";
