@@ -7,7 +7,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from '
 import {ChangeScope} from '@/data/api'
 import {aliasesProp} from '@/data/properties'
 import {aliasDataExtension} from '@/plugins/alias/dataExtension.js'
-import {referencesDataExtension} from '../dataExtension.ts'
+import {referencesDataExtension} from '@/plugins/references/dataExtension.js'
 import {createStringValueHarness, queryProperty, type StringValueHarness} from '@/data/test/stringValueHarness'
 import {createTestDb, type TestDb} from '@/data/test/createTestDb'
 

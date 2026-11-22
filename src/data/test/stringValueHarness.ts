@@ -7,11 +7,13 @@ import type {Repo} from '@/data/repo'
 import type {AppExtension} from '@/facets/facet.js'
 import {resetTestDb, type TestDb} from './createTestDb'
 import {createTestRepo} from './createTestRepo'
+import {releaseTestRepos} from './testRepoScope'
 
 export const queryProperty = defineProperty('test:query', {
   codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 const options = {scope: ChangeScope.BlockDefault}
+const definitionId = 'definition'
 
 export interface StringValueHarness {
   readonly repo: Repo
@@ -37,19 +39,19 @@ export const createStringValueHarness = async (
   const {repo} = createTestRepo({db: db.db, user: {id: 'user-1'}, extensions})
   repo.setActiveWorkspaceId(workspaceId)
   await repo.tx(async tx => {
-    await tx.create({id: 'definition', workspaceId, parentId: null, orderKey: 'a0', content: queryProperty.name,
+    await tx.create({id: definitionId, workspaceId, parentId: null, orderKey: 'a0', content: queryProperty.name,
       properties: {types: ['property-schema']}})
     await tx.create({id: ownerId, workspaceId, parentId: null, orderKey: 'a9', content: 'host'})
   }, options)
   repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-definition', [{
-    metadata: {fieldId: 'definition', workspaceId, createdAt: 1, name: queryProperty.name,
+    metadata: {fieldId: definitionId, workspaceId, createdAt: 1, name: queryProperty.name,
       changeScope: queryProperty.changeScope, hidden: false, origin: 'user'},
     schema: queryProperty,
   }], {workspaceId})
   return {
     repo, workspaceId, ownerId,
     typeIntoValue: async text => {
-      const {valueId} = await repo.tx(tx => openPropertyValue(tx, ownerId, 'definition'), options)
+      const {valueId} = await repo.tx(tx => openPropertyValue(tx, ownerId, definitionId), options)
       await repo.tx(tx => tx.update(valueId, {content: text}), options)
       return valueId
     },
@@ -63,7 +65,7 @@ export const createStringValueHarness = async (
         ORDER BY v.order_key, v.id`, [ownerId])).map(row => row.content),
     dispose: async () => {
       await repo.awaitProcessors()
-      repo.stopSyncObserver()
+      await releaseTestRepos([repo])
     },
   }
 }
