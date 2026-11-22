@@ -198,7 +198,10 @@ const ColumnMenu = ({host, workspaceId, column, name, rowIds}: {
 }) => {
   const [types, setTypes] = useState<readonly TypeTarget[]>([])
   const fieldId = column.fieldId
+  // Looked up afresh on every open: the rows' types and the type's
+  // declaration may have changed since the last one.
   const open = (isOpen: boolean) => {
+    setTypes([])
     if (!isOpen || fieldId === null) return
     void typeTargetsFor(host.repo, workspaceId, rowIds, fieldId).then(setTypes, report('type lookup'))
   }

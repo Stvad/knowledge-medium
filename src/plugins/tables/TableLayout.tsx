@@ -265,7 +265,9 @@ interface GridProps {
 const TableGrid = (props: GridProps) => {
   const viewIds = useViewIds(props.host, props.workspaceId)
   if (viewIds === undefined) return null
-  if (viewIds.length === 0) return <NoColumns/>
+  if (viewIds.length === 0) return <p className="py-1 text-sm text-muted-foreground">
+    This table has no view. Show it as an outline and turn it into a table again to add one.
+  </p>
   return <TableView {...props} viewIds={viewIds}/>
 }
 
