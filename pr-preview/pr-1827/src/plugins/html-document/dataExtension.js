@@ -1,1 +1,1 @@
-export{PX as htmlDocumentDataExtension}from"../../../chunks/app-Bc0aU2WA.js";
+export{XX as htmlDocumentDataExtension}from"../../../chunks/app-CCQxzGq5.js";
