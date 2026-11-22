@@ -1629,7 +1629,11 @@ export const backfillBlocksFtsIfEmpty = async (
  *  rather than probed at random.
  *
  *  Two callers, for two exits: the sync observer at the end of each drain, and
- *  client bootstrap, for a process that died with the debt outstanding. */
+ *  client bootstrap, for a process that died with the debt outstanding.
+ *
+ *  One transaction however large the debt, accepted: a first sync's build holds
+ *  the write lock for tens of seconds (`scripts/bench/materialize.md`), and a
+ *  hold vouches that nothing is waiting on it. */
 export const buildDeferredSearchIndex = async (db: {
   getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
   writeTransaction: <T>(fn: (tx: {execute: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<T>) => Promise<T>

@@ -298,3 +298,41 @@ What it shows:
 
 Not measured: more than one sample per variant, WebKit, a database at the
 device's scale, or any slow-disk machine.
+
+## Deferred search index under the bulk hold
+
+`--bulk-load` (either runner) runs the production bulk hold: every window
+carries the bulk scope, so no row-event create is written and the search-index
+insert is deferred to `blocks_fts_owed`, and `buildDeferredSearchIndex` runs
+once after the last window, inside the wall time (`deferredIndexMs`). Before
+this change the hold only skipped the create event, which is
+`--drop-triggers blocks_row_event_insert` (variant H above).
+
+Measured 2026-11-21: headless Chromium, `OPFSWriteAheadVFS`, 150,000 encrypted
+rows with scattered ids, `initial`, `--cache-kb 15000` (4% of the file),
+`--window 20000`, two runs per variant interleaved (load average 7–23).
+
+| Variant | Rows/s | Upsert s | Deferred build s |
+| --- | ---: | ---: | ---: |
+| H: the hold as shipped before | 2,935 / 3,045 | 34.4 / 33.0 | |
+| B: `--bulk-load` | 3,829 / 3,960 | 20.2 / 19.5 | 3.8 / 3.7 |
+| BI: B + `--drop-indexes`, recreate counted | 5,560 / 5,300 | 8.4 / 9.1 | 3.8 / 3.8 |
+
+B's rows/s includes its build. BI's adds the 1.4–1.5 s of re-creating the
+twelve indexes to its wall time; its `--rebuild-derived` backfills are not
+counted, since production would not run them. H here reproduces the matrix's
+H (3,053 rows/s, 33.2 s upsert).
+
+So the deferral is worth about 1.3x, and dropping `blocks`' secondary indexes
+during the load would be worth about 1.4x on top. The indexes are not dropped:
+they are shared by every workspace on the device, and several production
+queries name one with `INDEXED BY`, which SQLite refuses at prepare time when
+the index is missing (one of them, the alias re-derive drain, is scheduled
+during a first drain).
+
+The build at the device's scale, on Node (better-sqlite3, the M2 Max, 256 MB
+cache as production sets it), rows seeded under the bulk scope with the
+fixture's content shape: 150,000 owed rows build in 1.8 s, 1,200,000 in 26.4 s
+(82,500 and 45,500 rows/s; the file is 1.0 GB at 1.2M). Chromium took about
+twice Node's time at 150k, so a 1.2M build there is likely about a minute; that
+last figure is reasoned, not measured.

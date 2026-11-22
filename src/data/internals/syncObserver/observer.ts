@@ -257,8 +257,9 @@ export interface BlocksSyncedObserver {
   isRematerializingWorkspace(workspaceId: string): boolean
   /** Treat `workspaceId`'s deliveries as a bulk load until the returned release
    *  is called: no 'create' event for the rows inserted into it
-   *  (`syncBulkLoadScope`), and bulk-sized windows for the whole drain, since
-   *  windows are not per workspace.
+   *  (`syncBulkLoadScope`), their search indexing deferred to one build at the
+   *  end of the drain (`blocks_fts_insert_deferred`), and bulk-sized windows
+   *  for the whole drain, since windows are not per workspace.
    *
    *  For a gate, which renders INSTEAD of the app: with no editor or plugin
    *  mounted nothing is waiting on the write lock, and what its workspace
