@@ -154,8 +154,9 @@ const useWithoutMovedFocusRows = (parent: Block, renderScopeId: unknown, queried
 export const useFocusPlacedChildIds = (parent: Block, renderScopeId: unknown, queried: string[]) => {
   const focusedChild = useFocusedChild(parent, renderScopeId)
   const listed = useWithoutMovedFocusRows(parent, renderScopeId, queried)
-  const childIds = useMemo(() => withFocusedChild(parent.repo, listed, focusedChild), [parent.repo, listed, focusedChild])
-  return {focusedChild, listed, childIds}
+  // Not memoised: a row placed outside `listed` sits by its siblings' order,
+  // which a move changes without changing `listed`.
+  return {focusedChild, listed, childIds: withFocusedChild(parent.repo, listed, focusedChild)}
 }
 
 /** `childIds` with `focused` at its sibling position when the listing left it

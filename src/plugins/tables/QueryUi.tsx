@@ -96,11 +96,9 @@ export const useOutsideQueryIds = (
   // Every child, as the outline lists them: a capped window would hide the ones past it.
   const children = useHandle(host.repo.query.childIds({id: host.id, propertyChildren: 'none'}), {selector: ids => ids})
   const {childIds, listed, focusedChild} = useFocusPlacedChildIds(host, renderScopeId, children ?? NO_IDS)
-  return useMemo(() => {
-    const drawn = new Set([...rows, ...viewIds])
-    if (focusedChild?.isFieldForm && !listed.includes(focusedChild.id)) drawn.add(focusedChild.id)
-    return childIds.filter(id => !drawn.has(id))
-  }, [childIds, focusedChild, listed, rows, viewIds])
+  const drawn = new Set([...rows, ...viewIds])
+  if (focusedChild?.isFieldForm && !listed.includes(focusedChild.id)) drawn.add(focusedChild.id)
+  return childIds.filter(id => !drawn.has(id))
 }
 
 /** Under a query, the host's children the query does not select, drawn as
