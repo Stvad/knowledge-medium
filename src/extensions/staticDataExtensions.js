@@ -1,1 +1,1 @@
-export{NX as staticDataExtensions}from"../../chunks/app-Bfy_C_ZT.js";
+export{NX as staticDataExtensions}from"../../chunks/app-6fvShRZz.js";
