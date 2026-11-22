@@ -1,0 +1,1 @@
+export{MA as openRecentsPage}from"../../../chunks/app-aHEj679w.js";

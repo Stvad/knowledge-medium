@@ -1,0 +1,1 @@
+export{XX as htmlDocumentDataExtension}from"../../../chunks/app-aHEj679w.js";

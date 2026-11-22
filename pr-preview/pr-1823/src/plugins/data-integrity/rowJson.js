@@ -1,0 +1,1 @@
+export{Dl as parsePropertiesJson}from"../../../chunks/app-aHEj679w.js";

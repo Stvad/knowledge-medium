@@ -1,0 +1,1 @@
+export{ec as propertiesMigrationPlugin}from"../../../chunks/app-aHEj679w.js";
