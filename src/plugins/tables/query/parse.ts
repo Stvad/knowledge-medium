@@ -330,6 +330,10 @@ const capabilityValue = (capability: WhereCapability<unknown>, text: string): un
 const operandCapability = (schema: AnyPropertySchema): WhereCapability<unknown> | undefined =>
   schema.codec.where ?? schema.codec.contains
 
+/** Whether `name=value` can be written for this property; otherwise only its presence can be tested. */
+export const takesOperand = (schema: AnyPropertySchema): boolean =>
+  isRefCodec(schema.codec) || isRefListCodec(schema.codec) || operandCapability(schema) !== undefined
+
 const operandProblem = (property: QueryProperty, text: string): string => {
   const {name, schema: {codec}} = property
   switch (operandCapability(property.schema)?.storage) {

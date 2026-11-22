@@ -5,7 +5,7 @@
 import { BREAK, OP_TEXT, type Operand, type QueryProperty, type QueryTerm, type QueryType } from './parse'
 
 const quote = (text: string) => `"${text.replace(/[\\"]/g, ch => `\\${ch}`)}"`
-const word = (text: string) => text && !BREAK.test(text) ? text : quote(text)
+export const word = (text: string) => text && !BREAK.test(text) ? text : quote(text)
 
 const propertyKey = (property: QueryProperty) => `${word(property.name)}^${word(property.fieldId)}`
 const typeRef = (type: QueryType) => `#${word(type.label)}^${word(type.id)}`
