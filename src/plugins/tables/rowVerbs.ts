@@ -63,13 +63,16 @@ const splitRow: ActionDispatchDecorator = {
       await next(deps, trigger)
       return
     }
+    const atEnd = editorView.state.selection.main.head === editorView.state.doc.length
+    const makesChild = atEnd && (await grid.drawnChildIds(block.id)).length > 0
     if (!grid.hasQuery) {
-      if (grid.allowsNewRow()) await next({...deps, scopeRootId: grid.host.id}, trigger)
+      // Only a new row counts against the row cap; a first child does not.
+      if (makesChild || grid.allowsNewRow()) await next({...deps, scopeRootId: grid.host.id}, trigger)
       return
     }
-    if (editorView.state.selection.main.head !== editorView.state.doc.length) {
+    if (!atEnd) {
       showInfo('A query table’s row splits in the outline.')
-    } else if ((await grid.drawnChildIds(block.id)).length > 0) {
+    } else if (makesChild) {
       await next(deps, trigger)
     } else {
       grid.command('insert-below')

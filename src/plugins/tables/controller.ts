@@ -189,6 +189,20 @@ export class GridController {
       {scopeRootId: rowId, scopeRootForcesOpen: false, propertyDisplay: this.displayScope}) : repo.block(rowId)
   }
 
+  /** ArrowDown from a row's text: its first drawn child, edited from its
+   *  start, or the next row in row mode when it draws none. */
+  private async editFirstDrawnIn(row: number) {
+    const moves = this.cursorMoves
+    const first = (await this.drawnChildIds(this.rowIds[row]!))[0]
+    if (this.cursorMoves !== moves) return
+    if (!first) {
+      this.focusRow(clamp(row + 1, this.rowIds.length - 1))
+      return
+    }
+    await this.uiStateBlock.set(editorSelection, {blockId: first, start: 0})
+    await focusBlock(this.uiStateBlock, first, {edit: true, renderScopeId: this.renderScopeId})
+  }
+
   /** ArrowUp from a row's text: the last block the row above draws, edited
    *  at its last line, or the row above in row mode when it draws nothing more. */
   private async editLastDrawnAbove(row: number) {
@@ -411,7 +425,9 @@ export class GridController {
         else this.focusRow(row - 1)
         return true
       case 'down':
-        this.focusRow(clamp(row + 1, this.rowIds.length - 1))
+        // From a row's text being edited, into its first drawn child.
+        if (onRow && !inRowMode) void this.editFirstDrawnIn(row)
+        else this.focusRow(clamp(row + 1, this.rowIds.length - 1))
         return true
       case 'leave':
         this.focusRow(row)

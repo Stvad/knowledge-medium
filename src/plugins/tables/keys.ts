@@ -212,7 +212,9 @@ type Step = Edge | 'sideways' | 'here'
 
 /** Whether the grid takes a verb on a block, the outline's otherwise.
  *  - A scalar value: always; the grid draws nothing around it.
- *  - A row's text: always, except down into its children when they show.
+ *  - A row's text: always; the grid steps into and out of what the rows
+ *    draw (`GridController` up and down), not the outline's walk, which a
+ *    row's own property display would send through its property rows.
  *  - A list member: a step out of its cell (sideways, or past its first or
  *    last block); the field row, its scope root, is not drawn.
  *  - A row's child: only down out of the last one; the row's text above it is
@@ -225,7 +227,7 @@ const crossing = (step: Step): Applies => (deps, trigger, grid) => {
   const surface = outlineSurfaceOf(deps as BlockShortcutDependencies)
   if (!block || !surface) return true
   const place = placeOf(grid, block.id, surface.scopeRootId)
-  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : step === 'bottom' && place !== 'value'
+  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : step === 'bottom' && place === 'rowChild'
   if (!walks) return place === 'value' || place === 'rowText' || (place === 'member' && step === 'sideways')
   trigger.preventDefault()
   return leavesScope(block, surface, step as Edge)

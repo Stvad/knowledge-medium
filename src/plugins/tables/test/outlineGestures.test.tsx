@@ -329,6 +329,25 @@ describe('a row draws its children', () => {
     await waitFor(() => expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE}))
   })
 
+  it('ArrowDown from a row’s text enters its first child even when the row shows its property rows', async () => {
+    const id = await note()
+    await repo.block('row-0').set(propertyDisplayProp, 'all')
+    mount()
+    press(await editAt('row-0', 'end'), 'ArrowDown')
+    await waitFor(() => expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE}))
+    expect(ui().peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('at the row cap, Enter still adds a first child under a row whose children show', async () => {
+    await note()
+    mount()
+    const view = await editAt('row-0', 'end')
+    vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'allowsNewRow').mockReturnValue(false)
+    press(view, 'Enter')
+    await waitFor(async () => expect(await contentsUnder('row-0')).toEqual(expect.arrayContaining(['', 'a note'])))
+    expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
+  })
+
   it('ArrowUp from the next row’s text edits the last child shown above it', async () => {
     const id = await note()
     mount()
