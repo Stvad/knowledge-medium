@@ -1,1 +1,0 @@
-export{kI as appUpdate,AI as useAppUpdateAvailable}from"../chunks/app-C1xECUnF.js";

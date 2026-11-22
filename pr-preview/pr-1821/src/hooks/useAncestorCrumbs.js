@@ -1,1 +1,0 @@
-export{UA as useAncestorCrumbs}from"../../chunks/app-C1xECUnF.js";

@@ -1,1 +1,0 @@
-export{R_ as lintExtensionSource}from"../../../chunks/app-C1xECUnF.js";

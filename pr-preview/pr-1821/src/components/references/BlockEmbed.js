@@ -1,1 +1,0 @@
-export{XP as BlockEmbed}from"../../../chunks/app-C1xECUnF.js";

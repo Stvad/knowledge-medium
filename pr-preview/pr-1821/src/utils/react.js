@@ -1,1 +1,0 @@
-export{Hz as useIsMobile,Uz as usePointerCoarse}from"../../chunks/app-C1xECUnF.js";

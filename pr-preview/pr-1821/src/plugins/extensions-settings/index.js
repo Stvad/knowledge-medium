@@ -1,1 +1,0 @@
-export{h_ as extensionsOverridesProp,g_ as extensionsPrefsType,Kr as extensionsSettingsPlugin}from"../../../chunks/app-C1xECUnF.js";

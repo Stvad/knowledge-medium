@@ -1,1 +1,0 @@
-export{rP as CommandPaletteHeaderItem}from"../../../chunks/app-C1xECUnF.js";

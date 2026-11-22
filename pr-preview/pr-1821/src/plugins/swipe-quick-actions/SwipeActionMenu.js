@@ -1,1 +1,0 @@
-export{mP as SwipeActionMenu}from"../../../chunks/app-C1xECUnF.js";

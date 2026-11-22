@@ -1,1 +1,0 @@
-export{Fq as propertyShapeLabel}from"../../../chunks/app-C1xECUnF.js";

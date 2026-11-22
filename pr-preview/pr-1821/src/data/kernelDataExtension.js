@@ -1,1 +1,0 @@
-export{h7 as kernelDataExtension}from"../../chunks/app-C1xECUnF.js";

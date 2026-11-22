@@ -1,1 +1,0 @@
-export{kU as declarationOnlyDefinitionForName,AU as declarationOnlyStatusText}from"../../../chunks/app-C1xECUnF.js";

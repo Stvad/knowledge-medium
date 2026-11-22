@@ -1,1 +1,0 @@
-export{f3 as powerSyncLogger}from"../../chunks/app-C1xECUnF.js";

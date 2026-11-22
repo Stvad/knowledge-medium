@@ -1,1 +1,0 @@
-export{MD as PromotableBreadcrumbList}from"../../../chunks/app-C1xECUnF.js";
