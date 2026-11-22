@@ -1,6 +1,6 @@
 # Headless client
 
-> **Status:** Slices 1 and 3 implemented; slice 1's hosted checks run on a scratch workspace, slice 2 run read-only on the real graph, and slice 4 cut over on 2026-11-22 (results in §4, §11 and §13). Last verified against code: 2026-11-22.
+> **Status:** Slices 1 and 3 implemented; slice 1's hosted checks run on a scratch workspace, slice 2 run read-only on the real graph, and slice 4 cut over and reverted on 2026-11-22 (results in §4, §11 and §13). Last verified against code: 2026-11-22.
 > Each claim is tagged **[read]** (seen in the code, by the author or a reviewer citing the line), **[measured]** (run or queried, with where) or **[reasoned]** (inferred; the slice that verifies it is named in [§13](#13-still-open)).
 > Not re-read since 2026-11-19: the §4 table, the row-level-security and per-user-row claims in §8, the count of app-side-only seed plugins in §10.
 
@@ -209,6 +209,8 @@ Slices 1 and 2 run every boot step with the role forced to read-only, so the gat
 4. **The real graph.** First open the workspace once in a browser as the host's account, so the first-open writes are made by the tab path and the host's own open should queue nothing; check `health`'s queue depth after it. Then stop the tab-pointed `agent-dispatch` and point it at the host's profile. Dispatch runs only there, so the claim race it documents does not widen.
 
    Run 2026-11-22 **[measured]**: the browser first-open step was skipped, since the workspace-level first-open rows already existed from the owner's tab and the host mints no per-user rows. The first writable open still queued 5 uploads, all rewrites of the derived `references` column on 3 blocks, flipping between two orderings eleven times in about 300 ms before settling; content untouched, and tab and host ended byte-identical (#1820). A test block written through the host reached the tab within seconds and its deletion followed. `agent-dispatch` was then pointed at the host's profile (with the dispatch profile's contributor) and restarted through its launchd job; it paired as the host account and registered its watcher. The first real mention was answered through the host in about 2.5 minutes, writing 744 blocks (24 comment threads with their property rows, and the streamed reply); the host's queue drained, nothing was rejected, no owner gained duplicate property rows, and the tab holds the same 744 rows.
+
+   Then reverted, by owner decision the same day: the main mention listener answers through the tab again, because a mention made in a tab is seen there first. Measured from the moment a mention first contained the trigger in the tab's local log to the daemon's claim, two mentions each: 11.5 s and 17.4 s through the tab, 49.1 s and 79.2 s through the host, whose path adds an upload, the server and a download. The host stays for agents with no tab open and for a second listener on its own trigger that shares the main listener's memory (being built).
 
 ### Owner verification for slice 1
 
