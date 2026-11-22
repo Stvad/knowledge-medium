@@ -33,23 +33,11 @@ import {
 } from '@/data/api'
 import type { Repo } from './repo'
 import { getBlockTypes } from './properties'
-import type { LoaderHandle } from './internals/handleStore'
 import { getResolvedProperty, peekResolvedProperty } from './internals/propertySchemaResolution'
 
 const liveSnapshot = (snapshot: BlockData | undefined): BlockData | undefined | null => {
   if (snapshot === undefined) return undefined
   return snapshot.deleted ? null : snapshot
-}
-
-const warnedChildGetters = new Set<string>()
-/** Once per getter per session: an installed extension still reading it is
- *  what the deprecation window exists to surface. */
-const warnDeprecatedChildGetter = (getter: 'childIds' | 'children'): void => {
-  if (warnedChildGetters.has(getter)) return
-  warnedChildGetters.add(getter)
-  console.warn(
-    `[Block.${getter}] is deprecated and will be removed: it lists children without property rows. `
-    + `Use repo.query.${getter}({id, propertyChildren: 'none'}) for that list.`)
 }
 
 export class Block implements Handle<BlockData | null> {
@@ -243,24 +231,7 @@ export class Block implements Handle<BlockData | null> {
   // A list of children is always a VIEW (which property rows it includes), so
   // the reader names it: a fixed view is `repo.query.children /
   // childIds({id, propertyChildren})`, the list a surface draws is
-  // `visibleChildIds(block, scope)` (`@/data/visibleChildren`). The two getters
-  // below answer one view without saying which.
-
-  /** @deprecated Removal planned for 2026-11-20. The mode-`none` child ids
-   *  (no property field row). Say the view instead:
-   *  `repo.query.childIds({id, propertyChildren: 'none'})`. */
-  get childIds(): LoaderHandle<string[]> {
-    warnDeprecatedChildGetter('childIds')
-    return this.repo.query.childIds({id: this.id, propertyChildren: 'none'})
-  }
-
-  /** @deprecated Removal planned for 2026-11-20. The mode-`none` child rows
-   *  (no property field row). Say the view instead:
-   *  `repo.query.children({id, propertyChildren: 'none'})`. */
-  get children(): LoaderHandle<BlockData[]> {
-    warnDeprecatedChildGetter('children')
-    return this.repo.query.children({id: this.id, propertyChildren: 'none'})
-  }
+  // `visibleChildIds(block, surface)` (`@/data/visibleChildren`).
 
   /** Parent as Block, or null only if this block has no parent
    *  (workspace root). Returns the identity-stable facade from

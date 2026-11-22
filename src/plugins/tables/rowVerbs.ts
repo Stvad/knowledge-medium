@@ -144,7 +144,7 @@ const mergeRowUp: ActionDispatchDecorator = {
       await focusBlock(uiStateBlock, into.id, {edit: true, renderScopeId})
       return
     }
-    await mergeUp({from: block, into, liveContent, propertyDisplay: displayScopeOf(editDeps), uiStateBlock, renderScopeId})
+    await mergeUp({from: block, into, liveContent, surface: {propertyDisplay: displayScopeOf(editDeps), renderScopeId}, uiStateBlock})
   },
 }
 

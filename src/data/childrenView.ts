@@ -1,0 +1,55 @@
+import type { BlockData } from '@/data/api'
+import type { Block } from '@/data/block'
+import type { LoaderHandle } from '@/data/internals/handleStore'
+import { childrenViewIn, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { combineLastContributionResult, defineFacet, type OptionalContributionResult } from '@/facets/facet'
+
+/** Where a child list is drawn: what a children view may key its answer on. */
+export interface ListingSurface {
+  readonly propertyDisplay: PropertyDisplayScopeLevels
+  /** The render scope the parent is drawn in; absent for a dispatch with no mount. */
+  readonly renderScopeId?: string
+  /** Root of the visible subtree the parent is drawn within. */
+  readonly scopeRootId?: string
+}
+
+export interface ChildrenViewContext {
+  parent: Block
+  /** `parent`'s row, loaded. */
+  data: BlockData
+  surface: ListingSurface
+}
+
+/** The children a surface draws under one parent, in drawn order. A layout
+ *  that draws a block's children its own way declares the same list here, so
+ *  every gesture that walks "as drawn" (the outline walkers, the edit policy,
+ *  Backspace-merge) walks what that layout draws. */
+export interface ChildrenView {
+  id: string
+  read(ctx: ChildrenViewContext): LoaderHandle<string[]>
+}
+
+export type ChildrenViewContribution = (ctx: ChildrenViewContext) => OptionalContributionResult<ChildrenView>
+
+/** The last contribution with an answer wins, by precedence; none answering
+ *  leaves the property-display default ({@link propertyDisplayChildrenView}). */
+export const childrenViewFacet = defineFacet<
+  ChildrenViewContribution,
+  (ctx: ChildrenViewContext) => ChildrenView | undefined
+>({
+  id: 'core.children-view',
+  combine: combineLastContributionResult<ChildrenViewContext, ChildrenView>(),
+  empty: () => () => undefined,
+  validate: (value): value is ChildrenViewContribution => typeof value === 'function',
+})
+
+/** The outline's own view: the parent's property display setting over the surface's. */
+export const propertyDisplayChildrenView: ChildrenView = {
+  id: 'core.property-display',
+  read: ({parent, data, surface}) =>
+    parent.repo.query.childIds({id: parent.id, propertyChildren: childrenViewIn(surface.propertyDisplay, data)}),
+}
+
+/** The view that decides what `ctx` draws. */
+export const childrenViewFor = (ctx: ChildrenViewContext): ChildrenView =>
+  ctx.parent.repo.facetRuntime?.read(childrenViewFacet)(ctx) ?? propertyDisplayChildrenView

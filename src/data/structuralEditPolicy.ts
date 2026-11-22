@@ -113,7 +113,9 @@ export const structuralEditPolicyForBlock = async (
   carrier: SurfaceCarrier,
 ): Promise<StructuralEditPolicy> => {
   const data = block.peek() ?? await block.load()
-  const childIds = await visibleChildIds(block, displayScopeOf(carrier))
+  const childIds = await visibleChildIds(block, {
+    propertyDisplay: displayScopeOf(carrier), renderScopeId: carrier.renderScopeId, scopeRootId: carrier.scopeRootId,
+  })
   const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
   return resolveStructuralEditPolicy({
     blockId: block.id,
