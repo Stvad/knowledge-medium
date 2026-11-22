@@ -1,1 +1,1 @@
-export{tL as ExtensionPromptDismissalStore,nL as extensionPromptDismissals,rL as useExtensionPromptDismissals}from"../../../chunks/app-Bsf4jZ8e.js";
+export{tL as ExtensionPromptDismissalStore,nL as extensionPromptDismissals,rL as useExtensionPromptDismissals}from"../../../chunks/app-D3pwnspo.js";

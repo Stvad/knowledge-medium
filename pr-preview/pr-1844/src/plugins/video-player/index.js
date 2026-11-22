@@ -1,1 +1,1 @@
-export{BT as videoPlayerPlugin}from"../../../chunks/app-Bsf4jZ8e.js";
+export{BT as videoPlayerPlugin}from"../../../chunks/app-D3pwnspo.js";
