@@ -1,1 +1,1 @@
-export{KW as declarationOnlyDefinitionForName,qW as declarationOnlyStatusText}from"../../../chunks/app-DWgHJORi.js";
+export{KW as declarationOnlyDefinitionForName,qW as declarationOnlyStatusText}from"../../../chunks/app-CClycd_4.js";

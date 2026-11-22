@@ -1,1 +1,1 @@
-export{G9 as kernelDataExtension}from"../../chunks/app-DWgHJORi.js";
+export{G9 as kernelDataExtension}from"../../chunks/app-CClycd_4.js";

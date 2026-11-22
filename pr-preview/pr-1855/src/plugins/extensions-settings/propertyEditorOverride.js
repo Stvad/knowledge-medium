@@ -1,1 +1,1 @@
-export{Vr as extensionsOverridesUi}from"../../../chunks/app-DWgHJORi.js";
+export{Vr as extensionsOverridesUi}from"../../../chunks/app-CClycd_4.js";
