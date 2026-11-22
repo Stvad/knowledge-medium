@@ -1,1 +1,1 @@
-export{P7 as kernelDataExtension}from"../../chunks/app-BMgcLL_i.js";
+export{F7 as kernelDataExtension}from"../../chunks/app-BgZ1iJNB.js";

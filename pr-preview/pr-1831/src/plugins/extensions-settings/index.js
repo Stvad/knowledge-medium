@@ -1,1 +1,1 @@
-export{j_ as extensionsOverridesProp,M_ as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-BMgcLL_i.js";
+export{j_ as extensionsOverridesProp,M_ as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-BgZ1iJNB.js";

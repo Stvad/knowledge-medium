@@ -1,1 +1,1 @@
-export{VU as typePropertyGroups}from"../../chunks/app-BMgcLL_i.js";
+export{VU as typePropertyGroups}from"../../chunks/app-BgZ1iJNB.js";

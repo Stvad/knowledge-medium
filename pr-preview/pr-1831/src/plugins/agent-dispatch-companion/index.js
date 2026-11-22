@@ -1,1 +1,1 @@
-export{Rg as agentDispatchCompanionPlugin}from"../../../chunks/app-BMgcLL_i.js";
+export{Rg as agentDispatchCompanionPlugin}from"../../../chunks/app-BgZ1iJNB.js";

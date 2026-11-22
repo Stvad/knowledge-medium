@@ -1,1 +1,1 @@
-export{xm as acceptSuggestion,Sm as appliedContent,Cm as rejectSuggestion}from"../../../chunks/app-BMgcLL_i.js";
+export{xm as acceptSuggestion,Sm as appliedContent,Cm as rejectSuggestion}from"../../../chunks/app-BgZ1iJNB.js";

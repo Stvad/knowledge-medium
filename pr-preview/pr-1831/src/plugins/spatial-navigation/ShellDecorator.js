@@ -1,1 +1,1 @@
-export{OE as SpatialNavigationShellDecorator}from"../../../chunks/app-BMgcLL_i.js";
+export{OE as SpatialNavigationShellDecorator}from"../../../chunks/app-BgZ1iJNB.js";

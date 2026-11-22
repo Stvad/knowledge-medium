@@ -1,1 +1,1 @@
-export{EO as WorkspaceSettingsDialog}from"../../../chunks/app-BMgcLL_i.js";
+export{EO as WorkspaceSettingsDialog}from"../../../chunks/app-BgZ1iJNB.js";
