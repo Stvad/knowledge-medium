@@ -1,1 +1,1 @@
-export{qp as annotationsPlugin}from"../../../chunks/app-Bo4esYbx.js";
+export{qp as annotationsPlugin}from"../../../chunks/app-CvP2wfaf.js";

@@ -1,1 +1,1 @@
-export{iB as useIsMobile,aB as usePointerCoarse}from"../../chunks/app-Bo4esYbx.js";
+export{iB as useIsMobile,aB as usePointerCoarse}from"../../chunks/app-CvP2wfaf.js";

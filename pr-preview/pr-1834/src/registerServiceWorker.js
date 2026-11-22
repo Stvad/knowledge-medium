@@ -1,1 +1,1 @@
-export{UI as checkForAppUpdate,WI as registerServiceWorker}from"../chunks/app-Bo4esYbx.js";
+export{UI as checkForAppUpdate,WI as registerServiceWorker}from"../chunks/app-CvP2wfaf.js";

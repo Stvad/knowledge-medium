@@ -1,1 +1,1 @@
-export{dB as BlockInfoDialog}from"../../../chunks/app-Bo4esYbx.js";
+export{dB as BlockInfoDialog}from"../../../chunks/app-CvP2wfaf.js";

@@ -1,1 +1,1 @@
-export{JD as PromotableBreadcrumbList}from"../../../chunks/app-Bo4esYbx.js";
+export{JD as PromotableBreadcrumbList}from"../../../chunks/app-CvP2wfaf.js";
