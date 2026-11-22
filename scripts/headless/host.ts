@@ -45,9 +45,7 @@ export async function serveDatabase(
   const {workspaceId} = config
   await db.waitForReady()
   const baseline = db.currentStatus.lastSyncedAt?.getTime()
-  // The first open follows the drain, so the statistics describe the downloaded
-  // graph and the ANALYZE does not compete with materializing it.
-  let analyzeCheck: AnalyzeCheck | undefined
+  let analyzeCheck!: AnalyzeCheck
   let analyzing: Promise<void> | undefined
   await initializeClientDatabase(db, 'node', {scheduleAnalyzeCheck: check => { analyzeCheck = check }})
   let gate: ReturnType<typeof startReadGate> | undefined
@@ -100,7 +98,10 @@ export async function serveDatabase(
       await untilStopped(Promise.all(namespaces), signal)
     }, visible => {
       if (visible) {
-        analyzing ??= analyzeCheck?.('first-open')
+        // The first open follows the drain, so the statistics describe the
+        // downloaded graph and the ANALYZE does not compete with materializing
+        // it. Once per process: what later growth owes is paid at the next start.
+        analyzing ??= analyzeCheck('first-open')
         releaseBulk?.()
         releaseBulk = undefined
         watchEventsRegistry.setTransport(transport)

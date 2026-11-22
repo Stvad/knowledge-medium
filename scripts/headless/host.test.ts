@@ -286,8 +286,8 @@ it('samples the persisted checkpoint only after the reopened database is ready',
   }
 }, 20_000)
 
-// A database of its own: the shared fixture already carries statistics.
-it('builds planner statistics over the drained rows once its gate first opens', async () => {
+// A database of its own: host runs on the shared fixture leave sqlite_stat1 behind.
+it('builds planner statistics over the drained rows when its gate first opens', async () => {
   const db = new PowerSyncDatabase({
     schema: createClientPowerSyncSchema(),
     database: {dbLocation: fixture.dir, dbFilename: 'analyze.db', readWorkerCount: 1},
@@ -297,15 +297,19 @@ it('builds planner statistics over the drained rows once its gate first opens', 
   const host = start(plaintext(), async () => {
     await deliver([serverWorkspace(testWorkspaceRow(workspaceId)), member, ...ids.map(id => stagedBlock(id, workspaceId))])
   }, db)
-  const recorded = () => db.getOptional<{stat: string}>(
-    "SELECT stat FROM sqlite_stat1 WHERE tbl = 'blocks' AND idx = 'idx_blocks_workspace_active'")
-  // Held until shutdown starts: the database must not close under it.
+  const liveRows = async () => (await db.get<{n: number}>(
+    'SELECT count(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0', [workspaceId])).n
+  // The check's last statement, held until shutdown starts: the database must
+  // not close under it, and `disconnect` is the step before the caller's close.
+  // Its row count at arrival shows the check started after the drain.
   const order: string[] = []
+  let rowsWhenHeld: number | undefined
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   const execute = db.execute.bind(db)
   vi.spyOn(db, 'execute').mockImplementation(async (sql, params) => {
     if (sql !== ANALYZE_OPTIMIZE_SQL) return execute(sql, params)
+    rowsWhenHeld = await liveRows()
     order.push('held')
     await held
     const result = await execute(sql, params)
@@ -326,9 +330,12 @@ it('builds planner statistics over the drained rows once its gate first opens', 
     release()
     await stopping
     expect(order).toEqual(['held', 'analyzed', 'disconnect'])
-    const {n} = await db.get<{n: number}>('SELECT count(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 0', [workspaceId])
+    const n = await liveRows()
     expect(n).toBeGreaterThanOrEqual(ids.length)
-    expect(Number((await recorded())?.stat.split(' ')[0])).toBe(n)
+    expect(rowsWhenHeld).toBe(n)
+    const recorded = await db.getOptional<{stat: string}>(
+      "SELECT stat FROM sqlite_stat1 WHERE tbl = 'blocks' AND idx = 'idx_blocks_workspace_active'")
+    expect(Number(recorded?.stat.split(' ')[0])).toBe(n)
   } finally {
     release()
     await host.stop()
