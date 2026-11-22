@@ -1,1 +1,1 @@
-export{EZ as htmlDocumentDataExtension}from"../../../chunks/app-hFI-T6Iq.js";
+export{EZ as htmlDocumentDataExtension}from"../../../chunks/app-BJryqiZw.js";

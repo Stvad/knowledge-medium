@@ -1,1 +1,1 @@
-export{Pet as agree,Fet as pluralize}from"../../chunks/app-hFI-T6Iq.js";
+export{Pet as agree,Fet as pluralize}from"../../chunks/app-BJryqiZw.js";

@@ -1,1 +1,1 @@
-export{WP as CommandPaletteHeaderItem}from"../../../chunks/app-hFI-T6Iq.js";
+export{WP as CommandPaletteHeaderItem}from"../../../chunks/app-BJryqiZw.js";

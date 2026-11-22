@@ -1,1 +1,1 @@
-export{BL as ClientLocalSettings,VL as clientLocalSettings}from"../../chunks/app-hFI-T6Iq.js";
+export{BL as ClientLocalSettings,VL as clientLocalSettings}from"../../chunks/app-BJryqiZw.js";

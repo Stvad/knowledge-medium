@@ -1,1 +1,1 @@
-export{GI as ExtensionPromptSurface,KI as extensionPromptsExtension}from"../../../chunks/app-hFI-T6Iq.js";
+export{GI as ExtensionPromptSurface,KI as extensionPromptsExtension}from"../../../chunks/app-BJryqiZw.js";

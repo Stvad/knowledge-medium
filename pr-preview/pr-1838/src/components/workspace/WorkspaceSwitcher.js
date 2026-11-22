@@ -1,1 +1,1 @@
-export{XO as WorkspaceSwitcher}from"../../../chunks/app-hFI-T6Iq.js";
+export{XO as WorkspaceSwitcher}from"../../../chunks/app-BJryqiZw.js";

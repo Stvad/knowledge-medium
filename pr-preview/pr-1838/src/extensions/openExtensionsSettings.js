@@ -1,1 +1,1 @@
-export{QR as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,$R as openExtensionsSettings}from"../../chunks/app-hFI-T6Iq.js";
+export{QR as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,$R as openExtensionsSettings}from"../../chunks/app-BJryqiZw.js";

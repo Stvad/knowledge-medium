@@ -1,1 +1,1 @@
-export{WL as dynamicExtensionsExtension}from"../../chunks/app-hFI-T6Iq.js";
+export{WL as dynamicExtensionsExtension}from"../../chunks/app-BJryqiZw.js";

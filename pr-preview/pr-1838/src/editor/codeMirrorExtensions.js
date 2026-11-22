@@ -1,1 +1,1 @@
-export{XQ as codeMirrorExtensionsFacet}from"../../chunks/app-hFI-T6Iq.js";
+export{XQ as codeMirrorExtensionsFacet}from"../../chunks/app-BJryqiZw.js";

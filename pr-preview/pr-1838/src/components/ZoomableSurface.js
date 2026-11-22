@@ -1,1 +1,1 @@
-export{sh as SurfaceZoomCrumbs,ch as ZoomableSurface}from"../../chunks/app-hFI-T6Iq.js";
+export{sh as SurfaceZoomCrumbs,ch as ZoomableSurface}from"../../chunks/app-BJryqiZw.js";

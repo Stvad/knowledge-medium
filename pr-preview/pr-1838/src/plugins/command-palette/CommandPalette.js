@@ -1,1 +1,1 @@
-export{vP as CommandPalette}from"../../../chunks/app-hFI-T6Iq.js";
+export{vP as CommandPalette}from"../../../chunks/app-BJryqiZw.js";

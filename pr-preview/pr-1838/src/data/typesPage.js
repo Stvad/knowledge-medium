@@ -1,1 +1,1 @@
-export{rut as getOrCreateTypesPage,iut as typesPageBlockId,aut as typesPageSpec}from"../../chunks/app-hFI-T6Iq.js";
+export{rut as getOrCreateTypesPage,iut as typesPageBlockId,aut as typesPageSpec}from"../../chunks/app-BJryqiZw.js";

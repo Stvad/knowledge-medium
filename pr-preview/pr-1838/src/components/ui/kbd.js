@@ -1,1 +1,1 @@
-export{JP as Kbd}from"../../../chunks/app-hFI-T6Iq.js";
+export{JP as Kbd}from"../../../chunks/app-BJryqiZw.js";

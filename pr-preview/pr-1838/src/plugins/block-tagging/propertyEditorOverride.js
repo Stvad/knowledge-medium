@@ -1,1 +1,1 @@
-export{Hf as blockTagsConfigUi}from"../../../chunks/app-hFI-T6Iq.js";
+export{Hf as blockTagsConfigUi}from"../../../chunks/app-BJryqiZw.js";

@@ -1,1 +1,1 @@
-export{vm as annotationsPlugin}from"../../../chunks/app-hFI-T6Iq.js";
+export{vm as annotationsPlugin}from"../../../chunks/app-BJryqiZw.js";

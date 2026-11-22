@@ -1,1 +1,1 @@
-export{rx as updateIndicatorPlugin}from"../../../chunks/app-hFI-T6Iq.js";
+export{rx as updateIndicatorPlugin}from"../../../chunks/app-BJryqiZw.js";

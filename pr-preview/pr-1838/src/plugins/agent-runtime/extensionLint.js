@@ -1,1 +1,1 @@
-export{Tv as lintExtensionSource}from"../../../chunks/app-hFI-T6Iq.js";
+export{Tv as lintExtensionSource}from"../../../chunks/app-BJryqiZw.js";

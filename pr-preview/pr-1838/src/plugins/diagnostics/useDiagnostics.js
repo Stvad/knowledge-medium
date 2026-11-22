@@ -1,1 +1,1 @@
-export{Iu as aggregateDiagnostics,Lu as useDiagnostics}from"../../../chunks/app-hFI-T6Iq.js";
+export{Iu as aggregateDiagnostics,Lu as useDiagnostics}from"../../../chunks/app-BJryqiZw.js";

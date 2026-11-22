@@ -1,1 +1,1 @@
-export{xO as getBreadcrumbContentPreview}from"../../../chunks/app-hFI-T6Iq.js";
+export{xO as getBreadcrumbContentPreview}from"../../../chunks/app-BJryqiZw.js";

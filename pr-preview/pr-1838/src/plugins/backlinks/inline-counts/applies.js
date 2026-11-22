@@ -1,1 +1,1 @@
-export{wx as inlineBacklinksApplies}from"../../../../chunks/app-hFI-T6Iq.js";
+export{wx as inlineBacklinksApplies}from"../../../../chunks/app-BJryqiZw.js";
