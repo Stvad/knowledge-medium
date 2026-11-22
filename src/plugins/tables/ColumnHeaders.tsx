@@ -185,9 +185,12 @@ const ResizeHandle = ({column, onPreview, commit}: {
     window.addEventListener('keydown', escape, true)
   }
 
+  // Wider than the line it shows, so a finger can take it.
   return <div data-table-resize={column.id} role="separator" aria-orientation="vertical" aria-label="Resize column"
-    className="absolute inset-y-0 -right-1 z-[2] w-2 cursor-col-resize touch-none hover:bg-ring/40"
-    onPointerDown={start}/>
+    className="group/resize absolute inset-y-0 -right-2 z-[2] flex w-4 cursor-col-resize touch-none justify-center"
+    onPointerDown={start}>
+    <div className="h-full w-0.5 group-hover/resize:bg-ring/60"/>
+  </div>
 }
 
 const ColumnMenu = ({host, workspaceId, column, name, rowIds}: {
