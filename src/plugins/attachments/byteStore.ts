@@ -44,9 +44,9 @@ const encodeSegment = (s: string): string => {
 }
 
 /** Inverse of {@link encodeSegment}: reverse the three sentinels, else
- *  `decodeURIComponent`. Maps an OPFS filename back to the content-key it encodes,
+ *  `decodeURIComponent`. Maps an object's file name back to the content-key it encodes,
  *  for enumerating a workspace's stored objects ({@link ByteStore.listWorkspaceKeys}). */
-const decodeSegment = (s: string): string => {
+export const decodeSegment = (s: string): string => {
   if (s === '%2Eempty') return ''
   if (s === '%2Edot') return '.'
   if (s === '%2Edotdot') return '..'

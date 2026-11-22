@@ -23,13 +23,15 @@
  * store and this queue are shared across the browser profile's accounts but drain
  * per-user under the active session, so every op is namespaced by the user.
  *
- * The production backing is IndexedDB (commit-durable — the cached connection +
- * commit fence come from the shared {@link IdbKeyedStore}); tests and the
+ * The browser's backing is IndexedDB (commit-durable — the cached connection +
+ * commit fence come from the shared {@link IdbKeyedStore}); a headless host's is
+ * {@link SqliteByteUploadStore}, a local table in its own database; tests and the
  * no-IndexedDB fallback use {@link InMemoryByteUploadStore}. Records are plain
  * JSON, so unlike the keyStore the IndexedDB implementation IS exercisable under
  * Node (fake-indexeddb).
  */
 
+import type { CommonPowerSyncDatabase } from '@powersync/common'
 import {
   IdbKeyedStore,
   idbKeyPrefix,
@@ -329,6 +331,142 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
 
   async clearForUser(userId: string): Promise<void> {
     await this.idb.deleteByPrefix(uploadUserPrefix(userId))
+  }
+}
+
+/** The local (never synced) table holding {@link SqliteByteUploadStore}'s records. */
+export const UPLOAD_QUEUE_TABLE = 'media_upload_queue'
+
+interface UploadQueueRow {
+  user_id: string
+  asset_block_id: string
+  workspace_id: string
+  content_hash: string
+  content_key: string
+  status: ByteUploadStatus
+  attempts: number
+  staged_at: number
+}
+
+type QueueSql = Pick<CommonPowerSyncDatabase, 'execute' | 'getAll' | 'getOptional'>
+type QueueDb = QueueSql & Pick<CommonPowerSyncDatabase, 'get' | 'writeTransaction'>
+
+const fromRow = (row: UploadQueueRow): ByteUploadRecord => ({
+  userId: row.user_id,
+  assetBlockId: row.asset_block_id,
+  workspaceId: row.workspace_id,
+  contentHash: row.content_hash,
+  contentKey: row.content_key,
+  status: row.status,
+  attempts: row.attempts,
+  stagedAt: row.staged_at,
+})
+
+const SELECT_RECORD = `SELECT * FROM ${UPLOAD_QUEUE_TABLE} WHERE user_id = ? AND asset_block_id = ?`
+
+/** The queue as a table in a device's own SQLite database: each write commits before
+ *  it resolves, and a read-modify-write is one transaction. For a client without
+ *  IndexedDB whose database is durable (the headless host). */
+export class SqliteByteUploadStore implements ByteUploadStore {
+  private readonly clock: () => number
+  private ready?: Promise<unknown>
+
+  constructor(private readonly db: QueueDb, now: () => number = () => Date.now()) {
+    this.clock = monotonicClock(now)
+  }
+
+  private table(): Promise<unknown> {
+    // A failed create is not memoized, so the next op tries again.
+    return (this.ready ??= this.db.execute(`CREATE TABLE IF NOT EXISTS ${UPLOAD_QUEUE_TABLE} (
+      user_id TEXT NOT NULL,
+      asset_block_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      content_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL,
+      staged_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, asset_block_id)
+    )`).catch((error: unknown) => {
+      this.ready = undefined
+      throw error
+    }))
+  }
+
+  private async put(sql: QueueSql, r: ByteUploadRecord): Promise<void> {
+    await sql.execute(
+      `INSERT OR REPLACE INTO ${UPLOAD_QUEUE_TABLE}
+       (user_id, asset_block_id, workspace_id, content_hash, content_key, status, attempts, staged_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [r.userId, r.assetBlockId, r.workspaceId, r.contentHash, r.contentKey, r.status, r.attempts, r.stagedAt],
+    )
+  }
+
+  async stage(input: StageInput): Promise<void> {
+    await this.table()
+    await this.put(this.db, stagedRecord(input, this.clock()))
+  }
+
+  async get(userId: string, assetBlockId: string): Promise<ByteUploadRecord | null> {
+    await this.table()
+    const row = await this.db.getOptional<UploadQueueRow>(SELECT_RECORD, [userId, assetBlockId])
+    return row ? fromRow(row) : null
+  }
+
+  async listByStatus(userId: string, status: ByteUploadStatus): Promise<ByteUploadRecord[]> {
+    await this.table()
+    const rows = await this.db.getAll<UploadQueueRow>(
+      `SELECT * FROM ${UPLOAD_QUEUE_TABLE} WHERE user_id = ? AND status = ?`, [userId, status])
+    return rows.map(fromRow)
+  }
+
+  async countByStatus(userId: string, status: ByteUploadStatus): Promise<number> {
+    await this.table()
+    const {n} = await this.db.get<{n: number}>(
+      `SELECT count(*) AS n FROM ${UPLOAD_QUEUE_TABLE} WHERE user_id = ? AND status = ?`, [userId, status])
+    return n
+  }
+
+  private async mutate(
+    userId: string,
+    assetBlockId: string,
+    fn: (r: ByteUploadRecord) => ByteUploadRecord,
+  ): Promise<void> {
+    await this.table()
+    await this.db.writeTransaction(async tx => {
+      const row = await tx.getOptional<UploadQueueRow>(SELECT_RECORD, [userId, assetBlockId])
+      if (row) await this.put(tx, fn(fromRow(row)))
+    })
+  }
+
+  async promote(userId: string, assetBlockId: string): Promise<void> {
+    await this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
+  }
+
+  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
+    )
+  }
+
+  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
+    )
+  }
+
+  async requeue(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r => requeued(r, expectedStagedAt, this.clock))
+  }
+
+  async delete(userId: string, assetBlockId: string): Promise<void> {
+    await this.table()
+    await this.db.execute(`DELETE FROM ${UPLOAD_QUEUE_TABLE} WHERE user_id = ? AND asset_block_id = ?`, [userId, assetBlockId])
+  }
+
+  async clearForUser(userId: string): Promise<void> {
+    await this.table()
+    await this.db.execute(`DELETE FROM ${UPLOAD_QUEUE_TABLE} WHERE user_id = ?`, [userId])
   }
 }
 
