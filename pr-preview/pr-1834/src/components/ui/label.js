@@ -1,0 +1,1 @@
+export{Ij as Label}from"../../../chunks/app-cb0xGPW9.js";

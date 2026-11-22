@@ -1,0 +1,1 @@
+export{Rg as agentDispatchCompanionPlugin}from"../../../chunks/app-cb0xGPW9.js";

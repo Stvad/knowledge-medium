@@ -1,0 +1,1 @@
+export{DR as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,OR as openExtensionsSettings}from"../../chunks/app-cb0xGPW9.js";

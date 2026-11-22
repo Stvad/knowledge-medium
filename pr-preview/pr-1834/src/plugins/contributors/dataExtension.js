@@ -1,0 +1,1 @@
+export{a0 as contributorsDataExtension}from"../../../chunks/app-cb0xGPW9.js";

@@ -1,0 +1,1 @@
+export{o4 as aliasDataExtension}from"../../../chunks/app-cb0xGPW9.js";

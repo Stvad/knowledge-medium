@@ -1,0 +1,1 @@
+export{VG as outlineSurfaceOf}from"../../chunks/app-cb0xGPW9.js";

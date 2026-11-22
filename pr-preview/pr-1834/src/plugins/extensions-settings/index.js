@@ -1,0 +1,1 @@
+export{j_ as extensionsOverridesProp,M_ as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-cb0xGPW9.js";

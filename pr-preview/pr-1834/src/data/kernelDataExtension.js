@@ -1,0 +1,1 @@
+export{F7 as kernelDataExtension}from"../../chunks/app-cb0xGPW9.js";

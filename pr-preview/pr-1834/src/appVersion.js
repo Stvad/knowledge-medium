@@ -1,0 +1,1 @@
+export{wu as appVersion}from"../chunks/app-cb0xGPW9.js";

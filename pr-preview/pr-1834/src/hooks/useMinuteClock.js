@@ -1,0 +1,1 @@
+export{jA as useMinuteClock}from"../../chunks/app-cb0xGPW9.js";

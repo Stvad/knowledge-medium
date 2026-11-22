@@ -1,0 +1,1 @@
+export{gU as BlockProperties}from"../../chunks/app-cb0xGPW9.js";

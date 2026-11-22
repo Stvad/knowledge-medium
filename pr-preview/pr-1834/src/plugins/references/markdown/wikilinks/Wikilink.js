@@ -1,0 +1,1 @@
+export{Jx as Wikilink}from"../../../../../chunks/app-cb0xGPW9.js";

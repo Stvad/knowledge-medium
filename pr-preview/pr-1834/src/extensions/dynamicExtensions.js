@@ -1,0 +1,1 @@
+export{yL as dynamicExtensionsExtension}from"../../chunks/app-cb0xGPW9.js";

@@ -1,0 +1,1 @@
+export{Co as tablesPlugin}from"../../../chunks/app-cb0xGPW9.js";
