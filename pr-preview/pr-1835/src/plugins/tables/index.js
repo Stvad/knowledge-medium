@@ -1,0 +1,1 @@
+export{So as tablesPlugin}from"../../../chunks/app-CwA-1EMf.js";

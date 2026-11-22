@@ -1,0 +1,1 @@
+export{MA as openRecentsPage}from"../../../chunks/app-CwA-1EMf.js";

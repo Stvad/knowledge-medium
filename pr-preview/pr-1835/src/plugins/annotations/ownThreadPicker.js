@@ -1,0 +1,1 @@
+export{Cm as moveCommentToOwnThread}from"../../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+"use client";export{dU as Collapsible,fU as CollapsibleContent,pU as CollapsibleTrigger}from"../../../chunks/app-CwA-1EMf.js";

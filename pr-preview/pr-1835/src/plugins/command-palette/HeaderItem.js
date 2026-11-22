@@ -1,0 +1,1 @@
+export{vP as CommandPaletteHeaderItem}from"../../../chunks/app-CwA-1EMf.js";

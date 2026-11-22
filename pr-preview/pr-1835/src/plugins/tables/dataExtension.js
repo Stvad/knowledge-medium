@@ -1,0 +1,1 @@
+export{KY as tablesDataExtension}from"../../../chunks/app-CwA-1EMf.js";

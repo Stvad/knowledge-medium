@@ -1,0 +1,1 @@
+export{XF as resolveStructuralEditPolicy,ZF as structuralEditPolicyForBlock}from"../../chunks/app-CwA-1EMf.js";

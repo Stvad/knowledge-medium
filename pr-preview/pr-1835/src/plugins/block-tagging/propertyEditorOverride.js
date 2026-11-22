@@ -1,0 +1,1 @@
+export{gf as blockTagsConfigUi}from"../../../chunks/app-CwA-1EMf.js";

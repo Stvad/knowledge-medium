@@ -1,0 +1,1 @@
+export{Ix as geoContentDecoratorContribution}from"../../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{xU as PropertyRow,SU as PropertyValueCell}from"../../../chunks/app-CwA-1EMf.js";

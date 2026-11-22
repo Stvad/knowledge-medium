@@ -1,0 +1,1 @@
+export{Og as contributorsPlugin}from"../../../chunks/app-CwA-1EMf.js";

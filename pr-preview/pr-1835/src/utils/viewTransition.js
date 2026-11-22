@@ -1,0 +1,1 @@
+export{QK as withMoveTransition}from"../../chunks/app-CwA-1EMf.js";

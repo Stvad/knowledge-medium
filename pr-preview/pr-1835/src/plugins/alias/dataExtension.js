@@ -1,0 +1,1 @@
+export{a4 as aliasDataExtension}from"../../../chunks/app-CwA-1EMf.js";

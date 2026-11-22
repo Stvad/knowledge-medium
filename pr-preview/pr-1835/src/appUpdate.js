@@ -1,0 +1,1 @@
+export{WI as appUpdate,GI as useAppUpdateAvailable}from"../chunks/app-CwA-1EMf.js";

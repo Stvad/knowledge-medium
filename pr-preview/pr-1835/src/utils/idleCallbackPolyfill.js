@@ -1,0 +1,1 @@
+export{St as installIdleCallbackPolyfill}from"../../chunks/app-CwA-1EMf.js";

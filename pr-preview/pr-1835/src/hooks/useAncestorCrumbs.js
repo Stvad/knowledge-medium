@@ -1,0 +1,1 @@
+export{ij as useAncestorCrumbs}from"../../chunks/app-CwA-1EMf.js";

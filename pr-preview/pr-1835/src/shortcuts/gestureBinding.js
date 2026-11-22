@@ -1,0 +1,1 @@
+export{tL as gestureBindingDescriptor,nL as matchesGestureEvent}from"../../chunks/app-CwA-1EMf.js";

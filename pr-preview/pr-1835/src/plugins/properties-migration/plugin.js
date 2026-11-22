@@ -1,0 +1,1 @@
+export{ec as propertiesMigrationPlugin}from"../../../chunks/app-CwA-1EMf.js";

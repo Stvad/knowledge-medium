@@ -1,0 +1,1 @@
+export{dF as BlockEmbed}from"../../../chunks/app-CwA-1EMf.js";

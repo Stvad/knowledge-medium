@@ -1,0 +1,1 @@
+export{EE as spatialNavigationShellDecorator}from"../../../chunks/app-CwA-1EMf.js";

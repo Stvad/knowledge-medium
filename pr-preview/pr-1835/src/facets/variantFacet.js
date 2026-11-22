@@ -1,0 +1,1 @@
+export{eU as defineVariant,tU as defineVariantFacet}from"../../chunks/app-CwA-1EMf.js";

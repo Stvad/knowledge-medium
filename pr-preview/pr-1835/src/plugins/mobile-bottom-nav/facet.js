@@ -1,0 +1,1 @@
+export{VD as mobileBottomNavItemsFacet}from"../../../chunks/app-CwA-1EMf.js";

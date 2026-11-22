@@ -1,0 +1,1 @@
+export{WU as declarationOnlyDefinitionForName,GU as declarationOnlyStatusText}from"../../../chunks/app-CwA-1EMf.js";

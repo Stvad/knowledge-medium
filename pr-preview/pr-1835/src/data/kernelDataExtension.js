@@ -1,0 +1,1 @@
+export{j7 as kernelDataExtension}from"../../chunks/app-CwA-1EMf.js";

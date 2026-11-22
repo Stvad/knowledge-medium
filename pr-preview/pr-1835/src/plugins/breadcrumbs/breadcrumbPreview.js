@@ -1,0 +1,1 @@
+export{YD as getBreadcrumbContentPreview}from"../../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{s1 as adoptTypedBlock,c1 as createTypedChild,Hut as derivedBlockId,l1 as getOrCreateTypedChild}from"../../chunks/app-CwA-1EMf.js";

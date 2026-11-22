@@ -1,0 +1,1 @@
+export{H4 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CwA-1EMf.js";

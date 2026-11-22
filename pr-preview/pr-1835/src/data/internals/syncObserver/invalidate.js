@@ -1,0 +1,1 @@
+export{g8 as applySyncInvalidation}from"../../../../chunks/app-CwA-1EMf.js";

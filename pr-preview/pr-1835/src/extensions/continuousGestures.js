@@ -1,0 +1,1 @@
+export{xz as GESTURE_ACTIVE,Sz as GESTURE_CANCEL,Cz as GESTURE_IDLE,wz as NO_BLOCK_GESTURES_ATTRIBUTE,Tz as TOUCH_HOLD_MS,Ez as TOUCH_SLOP_PX,Dz as allowsBlockGestures,Oz as continuousGestureRecognizersFacet,kz as createBlockGestureController,Az as enabledTouchAction,jz as suppressNextClick,Mz as unionTouchAction,Nz as useContinuousGestures}from"../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{KU as AddPropertyForm}from"../../../chunks/app-CwA-1EMf.js";

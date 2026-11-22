@@ -1,0 +1,1 @@
+export{rb as DATA_MODEL_GUIDE,ib as dataModelGuide}from"../../../chunks/app-CwA-1EMf.js";

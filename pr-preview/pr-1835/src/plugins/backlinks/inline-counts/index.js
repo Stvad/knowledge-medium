@@ -1,0 +1,1 @@
+export{Kb as inlineBacklinkCountsExtension}from"../../../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{Lg as agentDispatchCompanionPlugin}from"../../../chunks/app-CwA-1EMf.js";

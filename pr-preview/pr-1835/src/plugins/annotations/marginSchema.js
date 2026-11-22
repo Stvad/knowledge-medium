@@ -1,0 +1,1 @@
+export{M1 as annotationMarginOpenProp,N1 as annotationMarginShareProp}from"../../../chunks/app-CwA-1EMf.js";

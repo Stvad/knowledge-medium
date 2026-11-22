@@ -1,0 +1,1 @@
+export{xmt as definePostCommitProcessor}from"../../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{kg as contributorsCodeMirrorExtensions}from"../../../chunks/app-CwA-1EMf.js";

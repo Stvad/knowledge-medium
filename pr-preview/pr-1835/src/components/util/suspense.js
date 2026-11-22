@@ -1,0 +1,1 @@
+export{NJ as SuspenseFallback}from"../../../chunks/app-CwA-1EMf.js";

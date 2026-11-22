@@ -1,0 +1,1 @@
+export{Np as getExtraRoamProps}from"../../../chunks/app-CwA-1EMf.js";

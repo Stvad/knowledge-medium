@@ -1,0 +1,1 @@
+export{Wq as floatingAnchorFromRect,Gq as useAnchoredFloating}from"../../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{jb as updateIndicatorPlugin}from"../../../chunks/app-CwA-1EMf.js";

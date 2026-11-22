@@ -1,0 +1,1 @@
+export{hU as BlockProperties}from"../../chunks/app-CwA-1EMf.js";

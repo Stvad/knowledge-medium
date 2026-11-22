@@ -1,0 +1,1 @@
+export{NS as useIsReadOnly}from"../../chunks/app-CwA-1EMf.js";

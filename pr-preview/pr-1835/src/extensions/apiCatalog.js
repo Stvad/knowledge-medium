@@ -1,0 +1,1 @@
+export{D_ as extensionApiCatalog,O_ as extensionApiRuntimeExports}from"../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{vL as dynamicExtensionsExtension}from"../../chunks/app-CwA-1EMf.js";

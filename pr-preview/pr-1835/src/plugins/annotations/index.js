@@ -1,0 +1,1 @@
+export{Kp as annotationsPlugin}from"../../../chunks/app-CwA-1EMf.js";

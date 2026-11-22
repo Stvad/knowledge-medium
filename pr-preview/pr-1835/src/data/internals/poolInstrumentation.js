@@ -1,0 +1,1 @@
+export{k3 as instrumentAdapter}from"../../../chunks/app-CwA-1EMf.js";

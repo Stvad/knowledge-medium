@@ -1,0 +1,1 @@
+export{NI as appUpdatePromptExtension}from"../../../chunks/app-CwA-1EMf.js";

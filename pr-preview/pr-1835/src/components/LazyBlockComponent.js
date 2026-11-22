@@ -1,0 +1,1 @@
+export{$L as LazyBlockComponent}from"../../chunks/app-CwA-1EMf.js";

@@ -1,0 +1,1 @@
+export{M6 as FacetBridge}from"../../chunks/app-CwA-1EMf.js";

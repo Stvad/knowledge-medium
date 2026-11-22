@@ -1,0 +1,1 @@
+export{KD as usePromotableBreadcrumb}from"../../../chunks/app-CwA-1EMf.js";

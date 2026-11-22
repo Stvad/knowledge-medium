@@ -1,0 +1,1 @@
+export{BU as typePropertyGroups}from"../../chunks/app-CwA-1EMf.js";
