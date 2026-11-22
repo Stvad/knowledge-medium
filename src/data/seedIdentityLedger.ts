@@ -207,6 +207,7 @@ export const FROZEN_PROPERTY_SEEDS: readonly FrozenPropertySeed[] = [
   ['system:startup-metrics/property/startup-record', 'startupRecord', 'optional-json', 'object'],
   ['system:sync-metrics/property/sync-metrics-record', 'sync-metrics:record', 'optional-json', 'object'],
   ['system:tables/property/column-field', 'tables:columnField', 'optional-ref', 'ref'],
+  ['system:tables/property/column-hidden', 'tables:columnHidden', 'boolean', 'boolean'],
   ['system:tables/property/column-width', 'tables:columnWidth', 'optional-number', 'number'],
   ['system:todo/property/status', 'status', 'strict-enum', 'enum'],
   ['system:update-indicator/property/current-load-time', 'currentLoadTime', 'optional-number', 'number'],

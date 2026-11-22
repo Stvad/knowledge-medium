@@ -2,7 +2,7 @@ import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle } from '@/hooks/block'
-import { COLUMN_TYPE, VIEW_TYPE, columnFieldProp, columnWidthProp } from './schema'
+import { COLUMN_TYPE, VIEW_TYPE, columnFieldProp, columnHiddenProp, columnWidthProp } from './schema'
 
 /** Rows mount and stay mounted, so a table draws at most this many. */
 export const ROW_CAP = 300
@@ -15,6 +15,7 @@ export interface TableColumn {
   /** The property definition the column shows, or null for the row's own content. */
   readonly fieldId: string | null
   readonly width: number | undefined
+  readonly hidden: boolean
   /** The column block's own text; empty means "use the definition's name". */
   readonly label: string
 }
@@ -23,6 +24,7 @@ const columnOf = (data: BlockData): TableColumn => ({
   id: data.id,
   fieldId: safeDecodeRowProperty(data, columnFieldProp) ?? null,
   width: safeDecodeRowProperty(data, columnWidthProp),
+  hidden: safeDecodeRowProperty(data, columnHiddenProp) === true,
   label: data.content.trim(),
 })
 
