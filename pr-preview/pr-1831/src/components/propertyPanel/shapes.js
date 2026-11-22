@@ -1,0 +1,1 @@
+export{Zq as propertyShapeLabel}from"../../../chunks/app-BMgcLL_i.js";

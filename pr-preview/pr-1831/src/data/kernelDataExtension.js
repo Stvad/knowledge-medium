@@ -1,0 +1,1 @@
+export{P7 as kernelDataExtension}from"../../chunks/app-BMgcLL_i.js";

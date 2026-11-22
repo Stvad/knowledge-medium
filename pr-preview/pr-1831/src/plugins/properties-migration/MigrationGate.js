@@ -1,0 +1,1 @@
+export{nc as MigrationGate}from"../../../chunks/app-BMgcLL_i.js";

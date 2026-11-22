@@ -1,0 +1,1 @@
+export{iS as blockrefCompletionSource}from"../../chunks/app-BMgcLL_i.js";

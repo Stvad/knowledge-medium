@@ -1,0 +1,1 @@
+export{lht as CHANGE_SCOPE_POLICIES,uht as ChangeScope,dht as isChangeScope,fht as policyForScope,pht as scopeAllowedInReadOnly,mht as scopeIsUndoable,hht as scopePoliciesEquivalent,ght as scopeUploadsToServer,_ht as sourceForScope}from"../../../chunks/app-BMgcLL_i.js";

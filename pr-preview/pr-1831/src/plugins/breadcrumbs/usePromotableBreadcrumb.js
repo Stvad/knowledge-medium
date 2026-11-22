@@ -1,0 +1,1 @@
+export{qD as usePromotableBreadcrumb}from"../../../chunks/app-BMgcLL_i.js";

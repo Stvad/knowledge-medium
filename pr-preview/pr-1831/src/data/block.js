@@ -1,0 +1,1 @@
+export{j7 as Block,M7 as requireLoadedBlock}from"../../chunks/app-BMgcLL_i.js";

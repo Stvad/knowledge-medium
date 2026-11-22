@@ -1,0 +1,1 @@
+export{HD as mobileBottomNavItemsFacet}from"../../../chunks/app-BMgcLL_i.js";

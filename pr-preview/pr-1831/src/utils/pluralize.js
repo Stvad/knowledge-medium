@@ -1,0 +1,1 @@
+export{set as agree,cet as pluralize}from"../../chunks/app-BMgcLL_i.js";

@@ -1,0 +1,1 @@
+export{GI as appUpdate,KI as useAppUpdateAvailable}from"../chunks/app-BMgcLL_i.js";

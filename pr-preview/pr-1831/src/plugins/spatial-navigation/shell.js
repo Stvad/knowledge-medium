@@ -1,0 +1,1 @@
+export{DE as spatialNavigationShellDecorator}from"../../../chunks/app-BMgcLL_i.js";

@@ -1,0 +1,1 @@
+export{bf as blockTaggingDataExtension}from"../../../chunks/app-BMgcLL_i.js";

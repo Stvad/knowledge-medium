@@ -1,0 +1,1 @@
+export{Ol as parsePropertiesJson}from"../../../chunks/app-BMgcLL_i.js";

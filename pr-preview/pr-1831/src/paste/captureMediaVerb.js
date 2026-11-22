@@ -1,0 +1,1 @@
+export{KB as captureMediaVerb}from"../../chunks/app-BMgcLL_i.js";

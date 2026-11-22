@@ -1,0 +1,1 @@
+export{Ij as Label}from"../../../chunks/app-BMgcLL_i.js";

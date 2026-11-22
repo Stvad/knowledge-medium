@@ -1,0 +1,1 @@
+export{rV as useShortcutSurfaceActivations}from"../../chunks/app-BMgcLL_i.js";

@@ -1,0 +1,1 @@
+export{Cs as propertyReadContentContribution}from"../../../chunks/app-BMgcLL_i.js";

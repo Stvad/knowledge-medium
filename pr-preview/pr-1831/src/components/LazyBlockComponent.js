@@ -1,0 +1,1 @@
+export{eR as LazyBlockComponent}from"../../chunks/app-BMgcLL_i.js";

@@ -1,0 +1,1 @@
+export{fx as LazyBlockEntry}from"../../../chunks/app-BMgcLL_i.js";

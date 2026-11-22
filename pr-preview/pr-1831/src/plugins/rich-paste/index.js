@@ -1,0 +1,1 @@
+export{lC as richPastePlugin}from"../../../chunks/app-BMgcLL_i.js";

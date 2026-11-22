@@ -1,0 +1,1 @@
+export{PI as appUpdatePromptExtension}from"../../../chunks/app-BMgcLL_i.js";

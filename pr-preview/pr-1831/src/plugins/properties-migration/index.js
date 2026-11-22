@@ -1,0 +1,1 @@
+export{ac as migratePropertiesToBlocksAction,tc as propertiesMigrationPlugin}from"../../../chunks/app-BMgcLL_i.js";

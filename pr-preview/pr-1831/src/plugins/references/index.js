@@ -1,0 +1,1 @@
+export{Wx as referencesPlugin}from"../../../chunks/app-BMgcLL_i.js";

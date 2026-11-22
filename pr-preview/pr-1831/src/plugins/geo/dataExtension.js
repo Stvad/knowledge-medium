@@ -1,0 +1,1 @@
+export{EZ as geoDataExtension}from"../../../chunks/app-BMgcLL_i.js";

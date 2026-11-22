@@ -1,0 +1,1 @@
+export{GU as declarationOnlyDefinitionForName,KU as declarationOnlyStatusText}from"../../../chunks/app-BMgcLL_i.js";

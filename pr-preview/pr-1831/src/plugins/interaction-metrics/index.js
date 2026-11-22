@@ -1,0 +1,1 @@
+export{fa as interactionMetricsPlugin}from"../../../chunks/app-BMgcLL_i.js";

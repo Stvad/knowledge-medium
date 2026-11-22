@@ -1,0 +1,1 @@
+export{Yp as quotedInFooterContribution}from"../../../chunks/app-BMgcLL_i.js";

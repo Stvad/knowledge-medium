@@ -1,0 +1,1 @@
+export{qp as annotationsPlugin}from"../../../chunks/app-BMgcLL_i.js";

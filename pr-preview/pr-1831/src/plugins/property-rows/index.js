@@ -1,0 +1,1 @@
+export{Ss as propertyRowsPlugin}from"../../../chunks/app-BMgcLL_i.js";

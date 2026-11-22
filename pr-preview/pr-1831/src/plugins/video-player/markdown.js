@@ -1,0 +1,1 @@
+export{fT as videoPlayerMarkdownExtension}from"../../../chunks/app-BMgcLL_i.js";

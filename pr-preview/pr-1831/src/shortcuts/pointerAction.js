@@ -1,0 +1,1 @@
+export{iL as dispatchPointerAction,aL as setPointerActionDispatcher}from"../../chunks/app-BMgcLL_i.js";

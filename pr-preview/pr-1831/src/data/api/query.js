@@ -1,0 +1,1 @@
+export{gmt as defineQuery}from"../../../chunks/app-BMgcLL_i.js";

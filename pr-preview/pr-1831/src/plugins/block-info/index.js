@@ -1,0 +1,1 @@
+export{Ab as blockInfoPlugin}from"../../../chunks/app-BMgcLL_i.js";

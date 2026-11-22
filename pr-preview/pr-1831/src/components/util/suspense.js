@@ -1,0 +1,1 @@
+export{PJ as SuspenseFallback}from"../../../chunks/app-BMgcLL_i.js";

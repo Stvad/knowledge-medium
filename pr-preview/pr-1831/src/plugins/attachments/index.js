@@ -1,0 +1,1 @@
+export{pC as attachmentsPlugin}from"../../../chunks/app-BMgcLL_i.js";

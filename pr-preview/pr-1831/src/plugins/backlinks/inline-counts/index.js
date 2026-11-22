@@ -1,0 +1,1 @@
+export{qb as inlineBacklinkCountsExtension}from"../../../../chunks/app-BMgcLL_i.js";

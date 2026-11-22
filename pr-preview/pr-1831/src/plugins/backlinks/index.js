@@ -1,0 +1,1 @@
+export{Kb as backlinksPlugin}from"../../../chunks/app-BMgcLL_i.js";

@@ -1,0 +1,1 @@
+export{BB as defaultPasteDecision,VB as pasteDecisionVerb}from"../../chunks/app-BMgcLL_i.js";

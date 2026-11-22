@@ -1,0 +1,1 @@
+export{JN as useCommandPaletteActions}from"../../../chunks/app-BMgcLL_i.js";

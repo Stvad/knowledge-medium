@@ -1,0 +1,1 @@
+export{$K as withMoveTransition}from"../../chunks/app-BMgcLL_i.js";

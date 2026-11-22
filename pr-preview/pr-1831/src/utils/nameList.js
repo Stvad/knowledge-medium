@@ -1,0 +1,1 @@
+export{let as NAMES_IN_A_SENTENCE,uet as describeNames,det as firstFew}from"../../chunks/app-BMgcLL_i.js";

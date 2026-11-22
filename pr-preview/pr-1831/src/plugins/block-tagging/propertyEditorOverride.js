@@ -1,0 +1,1 @@
+export{_f as blockTagsConfigUi}from"../../../chunks/app-BMgcLL_i.js";

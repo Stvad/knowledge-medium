@@ -1,0 +1,1 @@
+export{kA as BlockLink}from"../../../chunks/app-BMgcLL_i.js";

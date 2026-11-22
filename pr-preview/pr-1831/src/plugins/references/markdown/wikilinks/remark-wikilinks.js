@@ -1,0 +1,1 @@
+export{Yx as remarkWikilinks}from"../../../../../chunks/app-BMgcLL_i.js";

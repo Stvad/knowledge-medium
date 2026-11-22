@@ -1,0 +1,1 @@
+export{kg as contributorsPlugin}from"../../../chunks/app-BMgcLL_i.js";

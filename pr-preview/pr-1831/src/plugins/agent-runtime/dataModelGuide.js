@@ -1,0 +1,1 @@
+export{ib as DATA_MODEL_GUIDE,ab as dataModelGuide}from"../../../chunks/app-BMgcLL_i.js";

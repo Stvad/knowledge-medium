@@ -1,0 +1,1 @@
+export{ij as BlockCrumbs}from"../../chunks/app-BMgcLL_i.js";

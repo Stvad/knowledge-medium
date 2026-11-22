@@ -1,0 +1,1 @@
+export{ntt as mergeProperties}from"../../chunks/app-BMgcLL_i.js";

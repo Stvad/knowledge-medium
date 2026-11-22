@@ -1,0 +1,1 @@
+export{ky as boundDisplayId,Ay as idMark}from"../../../../chunks/app-BMgcLL_i.js";

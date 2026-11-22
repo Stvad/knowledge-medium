@@ -1,0 +1,1 @@
+export{Jr as extensionsDataExtension}from"../../../chunks/app-BMgcLL_i.js";

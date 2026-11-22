@@ -1,0 +1,1 @@
+export{gut as deriveWorkspaceIdNamespace}from"../../../chunks/app-BMgcLL_i.js";

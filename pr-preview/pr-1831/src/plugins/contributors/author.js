@@ -1,0 +1,1 @@
+export{_v as authorIdOf}from"../../../chunks/app-BMgcLL_i.js";

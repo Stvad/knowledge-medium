@@ -1,0 +1,1 @@
+export{vct as MIGRATIONS_PAGE_ALIAS,yct as getOrCreateMigrationsPage,bct as migrationsPageBlockId,xct as migrationsPageSpec}from"../../chunks/app-BMgcLL_i.js";

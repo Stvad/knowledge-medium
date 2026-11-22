@@ -1,0 +1,1 @@
+export{yM as dailyDateWikilinkDecorator}from"../../../chunks/app-BMgcLL_i.js";

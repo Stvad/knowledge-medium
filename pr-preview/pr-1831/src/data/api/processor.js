@@ -1,0 +1,1 @@
+export{wmt as definePostCommitProcessor}from"../../../chunks/app-BMgcLL_i.js";

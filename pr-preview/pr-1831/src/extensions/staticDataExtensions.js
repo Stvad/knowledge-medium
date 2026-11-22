@@ -1,0 +1,1 @@
+export{MY as staticDataExtensions}from"../../chunks/app-BMgcLL_i.js";

@@ -1,0 +1,1 @@
+export{KR as PropertyDisplayScope}from"../../../chunks/app-BMgcLL_i.js";

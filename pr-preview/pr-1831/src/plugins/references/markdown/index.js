@@ -1,0 +1,1 @@
+export{Gx as referencesMarkdownExtension}from"../../../../chunks/app-BMgcLL_i.js";

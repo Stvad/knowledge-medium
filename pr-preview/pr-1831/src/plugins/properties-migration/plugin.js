@@ -1,0 +1,1 @@
+export{tc as propertiesMigrationPlugin}from"../../../chunks/app-BMgcLL_i.js";

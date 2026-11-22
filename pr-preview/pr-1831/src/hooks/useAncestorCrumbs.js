@@ -1,0 +1,1 @@
+export{aj as useAncestorCrumbs}from"../../chunks/app-BMgcLL_i.js";

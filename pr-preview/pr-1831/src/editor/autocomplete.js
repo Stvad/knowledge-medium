@@ -1,0 +1,1 @@
+export{_I as editorAutocompleteExtension}from"../../chunks/app-BMgcLL_i.js";

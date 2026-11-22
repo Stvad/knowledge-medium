@@ -1,0 +1,1 @@
+export{BF as ensureMetricsConsoleHook}from"../../chunks/app-BMgcLL_i.js";

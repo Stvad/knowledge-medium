@@ -1,0 +1,1 @@
+export{oi as perfMonitorPlugin}from"../../../chunks/app-BMgcLL_i.js";

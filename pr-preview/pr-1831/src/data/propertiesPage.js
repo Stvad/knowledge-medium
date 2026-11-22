@@ -1,0 +1,1 @@
+export{Nlt as getOrCreatePropertiesPage,Plt as propertiesPageBlockId,Flt as propertiesPageSpec}from"../../chunks/app-BMgcLL_i.js";

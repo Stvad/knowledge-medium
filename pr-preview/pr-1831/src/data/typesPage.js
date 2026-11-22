@@ -1,0 +1,1 @@
+export{Alt as getOrCreateTypesPage,jlt as typesPageBlockId,Mlt as typesPageSpec}from"../../chunks/app-BMgcLL_i.js";

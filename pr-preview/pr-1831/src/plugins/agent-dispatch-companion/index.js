@@ -1,0 +1,1 @@
+export{Rg as agentDispatchCompanionPlugin}from"../../../chunks/app-BMgcLL_i.js";

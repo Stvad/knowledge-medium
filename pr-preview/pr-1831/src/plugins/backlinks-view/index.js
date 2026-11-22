@@ -1,0 +1,1 @@
+export{zb as backlinksViewPlugin}from"../../../chunks/app-BMgcLL_i.js";
