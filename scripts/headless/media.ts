@@ -44,6 +44,7 @@ export function openHostMedia(
     uploadStore: new SqliteByteUploadStore(db),
   })
   let timer: ReturnType<typeof setInterval> | undefined
+  let reconciling: Promise<void> | undefined
   let stopped = false
   const agent: AgentMedia = {captureRefusal: () => null, resolve: lanes.resolver.resolve, capture: lanes.capture}
   return {
@@ -51,14 +52,16 @@ export function openHostMedia(
     health: lanes.counts,
     start(repo: Pick<Repo, 'load'>) {
       if (!writable || stopped || timer) return
-      void lanes.reconcile(repo)
+      reconciling = lanes.reconcile(repo).catch(error => console.warn('[headless media] reconcile failed', error))
       timer = setInterval(() => void lanes.drain(), MEDIA_DRAIN_INTERVAL_MS)
       timer.unref()
     },
-    /** Lets an upload in flight finish, so its queue update reaches the database. */
+    /** Lets the boot reconcile and an upload in flight finish, so their queue
+     *  updates reach the database before it closes. */
     async stop() {
       stopped = true
       clearInterval(timer)
+      await reconciling
       await lanes.settled()
     },
   }

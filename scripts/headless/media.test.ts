@@ -158,8 +158,9 @@ it('keeps an upload that could not reach Storage for the next process, which sen
     throw new Error('An encrypted upload needs no live mode read')
   }})
   next.start({load: async id => await fixture.db.getOptional<BlockData>('SELECT * FROM blocks WHERE id = ?', [id])})
-  await vi.waitFor(() => expect(storage.objects.size).toBe(1))
+  // Stopping at once still lets the boot reconcile and its upload finish.
   await next.stop()
+  expect(storage.objects.size).toBe(1)
   expect(await next.health()).toEqual({staged: 0, pending: 0, failed: 0})
   expect(await fixture.db.getOptional('SELECT 1 FROM blocks WHERE id = ?', [added.id])).not.toBeNull()
   expect(await next.agent.resolve({workspaceId, contentHash: await computeContentHash(IMAGE)}))
