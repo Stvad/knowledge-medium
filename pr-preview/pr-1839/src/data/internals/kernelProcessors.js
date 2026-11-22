@@ -1,0 +1,1 @@
+export{pet as KERNEL_PROCESSORS}from"../../../chunks/app-CSKRKmra.js";

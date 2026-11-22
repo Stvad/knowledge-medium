@@ -1,0 +1,1 @@
+export{M$ as annotationsDataExtension}from"../../../chunks/app-CSKRKmra.js";

@@ -1,0 +1,1 @@
+export{tu as parsePropertiesJson}from"../../../chunks/app-CSKRKmra.js";

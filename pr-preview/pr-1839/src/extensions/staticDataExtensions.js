@@ -1,0 +1,1 @@
+export{aX as staticDataExtensions}from"../../chunks/app-CSKRKmra.js";

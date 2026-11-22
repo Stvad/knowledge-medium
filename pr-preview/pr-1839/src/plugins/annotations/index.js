@@ -1,0 +1,1 @@
+export{bm as annotationsPlugin}from"../../../chunks/app-CSKRKmra.js";

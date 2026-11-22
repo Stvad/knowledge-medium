@@ -1,0 +1,1 @@
+export{bJ as usePropertySchemas}from"../../chunks/app-CSKRKmra.js";

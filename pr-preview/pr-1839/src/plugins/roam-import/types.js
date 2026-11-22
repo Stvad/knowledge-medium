@@ -1,0 +1,1 @@
+export{sm as getExtraRoamProps}from"../../../chunks/app-CSKRKmra.js";

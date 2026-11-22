@@ -1,0 +1,1 @@
+export{r2 as CHAR_COUNTER_TYPE,c2 as RAW_CHARACTER_COUNT_PROFILE_ID,l2 as WORDS_COUNT_PROFILE_ID,o2 as WORD_COUNTER_TYPE,lr as charCountDisplay,u2 as charLimitProp,d2 as charProfileProp,f2 as charScopeProp,tr as characterCountProfilesFacet,Xn as characterCounterPlugin,ar as textCountProfile}from"../../../chunks/app-CSKRKmra.js";

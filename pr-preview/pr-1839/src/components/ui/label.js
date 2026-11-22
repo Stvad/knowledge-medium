@@ -1,0 +1,1 @@
+export{lM as Label}from"../../../chunks/app-CSKRKmra.js";

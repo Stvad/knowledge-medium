@@ -1,0 +1,1 @@
+export{Gf as BlockTagsConfigEditor}from"../../../chunks/app-CSKRKmra.js";

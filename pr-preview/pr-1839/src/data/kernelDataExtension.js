@@ -1,0 +1,1 @@
+export{g9 as kernelDataExtension}from"../../chunks/app-CSKRKmra.js";

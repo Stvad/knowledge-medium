@@ -1,0 +1,1 @@
+export{ij as useMinuteClock}from"../../chunks/app-CSKRKmra.js";

@@ -1,0 +1,1 @@
+export{CH as ExtensionRenderBoundary}from"../../chunks/app-CSKRKmra.js";

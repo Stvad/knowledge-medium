@@ -1,0 +1,1 @@
+export{rx as blockInfoPlugin}from"../../../chunks/app-CSKRKmra.js";

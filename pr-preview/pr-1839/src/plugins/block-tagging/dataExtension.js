@@ -1,0 +1,1 @@
+export{qf as blockTaggingDataExtension}from"../../../chunks/app-CSKRKmra.js";

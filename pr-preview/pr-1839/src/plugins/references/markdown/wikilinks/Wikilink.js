@@ -1,0 +1,1 @@
+export{xS as Wikilink}from"../../../../../chunks/app-CSKRKmra.js";

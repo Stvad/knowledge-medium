@@ -1,0 +1,1 @@
+export{oE as DEFAULT_VIDEO_NOTES_PANE_RATIO,sE as VIDEO_NOTES_VIEW_MODE,cE as videoNotesPaneRatioProp}from"../../../chunks/app-CSKRKmra.js";

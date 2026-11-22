@@ -1,0 +1,1 @@
+export{p2 as backlinksDataExtension}from"../../../chunks/app-CSKRKmra.js";

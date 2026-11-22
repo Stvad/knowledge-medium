@@ -1,0 +1,1 @@
+export{sY as SuspenseFallback}from"../../../chunks/app-CSKRKmra.js";

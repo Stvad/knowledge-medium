@@ -1,0 +1,1 @@
+export{$ut as deriveWorkspaceIdNamespace}from"../../../chunks/app-CSKRKmra.js";

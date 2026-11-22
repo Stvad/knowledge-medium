@@ -1,0 +1,1 @@
+export{z3 as LOCAL_DB_VFS_OVERRIDE_KEY,B3 as LocalDbVfsHandoffError,V3 as asLostWriteAheadSupport,H3 as handoffErrorUserId,U3 as isLocalDbVfsHandoffError,W3 as markDbOpenFailure,G3 as prepareLocalDbForVfs,K3 as readLocalDbFileSizes,q3 as readLocalDbVfsOverride,J3 as resolveLocalDbVfs,Y3 as supportsWriteAheadVfs,X3 as tagHandoffErrorUserId}from"../../chunks/app-CSKRKmra.js";

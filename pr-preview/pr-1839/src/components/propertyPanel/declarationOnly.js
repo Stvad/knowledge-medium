@@ -1,0 +1,1 @@
+export{vW as declarationOnlyDefinitionForName,yW as declarationOnlyStatusText}from"../../../chunks/app-CSKRKmra.js";

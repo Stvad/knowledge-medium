@@ -1,0 +1,1 @@
+export{IR as defaultRegistry,PR as refreshRendererRegistry,FR as useRenderer}from"../../chunks/app-CSKRKmra.js";

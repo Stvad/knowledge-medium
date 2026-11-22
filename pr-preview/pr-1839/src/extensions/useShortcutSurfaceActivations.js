@@ -1,0 +1,1 @@
+export{AV as useShortcutSurfaceActivations}from"../../chunks/app-CSKRKmra.js";

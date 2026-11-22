@@ -1,0 +1,1 @@
+export{L4 as aliasDataExtension}from"../../../chunks/app-CSKRKmra.js";

@@ -1,0 +1,1 @@
+export{zF as BlockEmbed}from"../../../chunks/app-CSKRKmra.js";

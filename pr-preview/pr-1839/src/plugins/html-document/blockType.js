@@ -1,0 +1,1 @@
+export{kZ as htmlDocumentTypeSeed}from"../../../chunks/app-CSKRKmra.js";

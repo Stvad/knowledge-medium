@@ -1,0 +1,1 @@
+export{GR as DialogHost,KR as dialogAppMountExtension}from"../../chunks/app-CSKRKmra.js";

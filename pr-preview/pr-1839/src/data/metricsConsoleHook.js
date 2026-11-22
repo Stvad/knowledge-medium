@@ -1,0 +1,1 @@
+export{pI as ensureMetricsConsoleHook}from"../../chunks/app-CSKRKmra.js";

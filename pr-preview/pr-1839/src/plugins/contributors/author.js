@@ -1,0 +1,1 @@
+export{Wv as authorIdOf}from"../../../chunks/app-CSKRKmra.js";

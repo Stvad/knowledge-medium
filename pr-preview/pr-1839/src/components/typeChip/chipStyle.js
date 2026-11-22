@@ -1,0 +1,1 @@
+export{YF as chipStyle}from"../../../chunks/app-CSKRKmra.js";

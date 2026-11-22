@@ -1,0 +1,1 @@
+export{Wz as ConfirmBulkDeleteDialog}from"../../chunks/app-CSKRKmra.js";

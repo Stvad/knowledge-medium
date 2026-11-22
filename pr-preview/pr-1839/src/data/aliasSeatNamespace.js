@@ -1,0 +1,1 @@
+export{yut as aliasSeatNamespacesInTx,but as resolveAliasSeatNamespaces}from"../../chunks/app-CSKRKmra.js";

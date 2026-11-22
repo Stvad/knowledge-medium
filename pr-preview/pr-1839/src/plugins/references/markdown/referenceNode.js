@@ -1,0 +1,1 @@
+export{wS as EmbedComponent,TS as referenceTargetOf}from"../../../../chunks/app-CSKRKmra.js";

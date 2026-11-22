@@ -1,0 +1,1 @@
+export{vk as createEncryptedWorkspace}from"../../../../chunks/app-CSKRKmra.js";

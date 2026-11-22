@@ -1,0 +1,1 @@
+export{bO as usePromotableBreadcrumb}from"../../../chunks/app-CSKRKmra.js";

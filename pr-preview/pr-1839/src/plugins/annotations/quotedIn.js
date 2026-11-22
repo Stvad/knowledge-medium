@@ -1,0 +1,1 @@
+export{Sm as quotedInFooterContribution}from"../../../chunks/app-CSKRKmra.js";

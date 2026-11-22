@@ -1,0 +1,1 @@
+export{Wf as blockTagsConfigUi}from"../../../chunks/app-CSKRKmra.js";

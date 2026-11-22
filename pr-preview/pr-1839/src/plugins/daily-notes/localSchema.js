@@ -1,0 +1,1 @@
+export{p$ as dailyNotesLocalSchema}from"../../../chunks/app-CSKRKmra.js";

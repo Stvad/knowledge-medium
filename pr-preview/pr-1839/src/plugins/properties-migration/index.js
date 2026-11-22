@@ -1,0 +1,1 @@
+export{Mc as migratePropertiesToBlocksAction,Oc as propertiesMigrationPlugin}from"../../../chunks/app-CSKRKmra.js";

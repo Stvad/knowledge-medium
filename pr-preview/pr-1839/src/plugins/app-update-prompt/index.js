@@ -1,0 +1,1 @@
+export{sL as appUpdatePromptExtension}from"../../../chunks/app-CSKRKmra.js";

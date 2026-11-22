@@ -1,0 +1,1 @@
+export{BC as attachmentsPlugin}from"../../../chunks/app-CSKRKmra.js";

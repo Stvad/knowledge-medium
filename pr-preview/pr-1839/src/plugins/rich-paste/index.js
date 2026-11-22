@@ -1,0 +1,1 @@
+export{IC as richPastePlugin}from"../../../chunks/app-CSKRKmra.js";

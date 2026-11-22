@@ -1,0 +1,1 @@
+export{ngt as normalizeReferences}from"../../../chunks/app-CSKRKmra.js";

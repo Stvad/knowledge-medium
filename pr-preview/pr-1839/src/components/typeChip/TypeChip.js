@@ -1,0 +1,1 @@
+export{JF as TypeChip}from"../../../chunks/app-CSKRKmra.js";

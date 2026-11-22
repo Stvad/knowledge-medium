@@ -1,0 +1,1 @@
+export{wJ as propertyShapeLabel}from"../../../chunks/app-CSKRKmra.js";

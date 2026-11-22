@@ -1,0 +1,1 @@
+export{nb as boundDisplayId,rb as idMark}from"../../../../chunks/app-CSKRKmra.js";

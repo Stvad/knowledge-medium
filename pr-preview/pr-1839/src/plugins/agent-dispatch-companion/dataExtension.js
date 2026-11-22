@@ -1,0 +1,1 @@
+export{b3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-CSKRKmra.js";

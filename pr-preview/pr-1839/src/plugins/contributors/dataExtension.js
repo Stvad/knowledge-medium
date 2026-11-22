@@ -1,0 +1,1 @@
+export{I0 as contributorsDataExtension}from"../../../chunks/app-CSKRKmra.js";

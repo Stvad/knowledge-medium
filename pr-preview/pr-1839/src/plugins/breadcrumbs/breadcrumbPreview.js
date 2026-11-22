@@ -1,0 +1,1 @@
+export{CO as getBreadcrumbContentPreview}from"../../../chunks/app-CSKRKmra.js";

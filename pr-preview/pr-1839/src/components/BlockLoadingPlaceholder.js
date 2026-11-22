@@ -1,0 +1,1 @@
+export{NR as BlockLoadingPlaceholder}from"../../chunks/app-CSKRKmra.js";

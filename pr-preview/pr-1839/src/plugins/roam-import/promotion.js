@@ -1,0 +1,1 @@
+export{wp as computePromotedFromChildren,Tp as detectInlineAttribute}from"../../../chunks/app-CSKRKmra.js";

@@ -1,0 +1,1 @@
+export{xW as METADATA_ROW_GRID_STYLE,SW as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-CSKRKmra.js";

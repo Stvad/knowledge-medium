@@ -1,0 +1,1 @@
+export{tD as SpatialNavigationShellDecorator}from"../../../chunks/app-CSKRKmra.js";

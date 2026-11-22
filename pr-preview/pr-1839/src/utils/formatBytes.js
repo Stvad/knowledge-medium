@@ -1,0 +1,1 @@
+export{k8 as formatBytes}from"../../chunks/app-CSKRKmra.js";

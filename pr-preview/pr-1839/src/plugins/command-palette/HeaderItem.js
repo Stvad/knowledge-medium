@@ -1,0 +1,1 @@
+export{KP as CommandPaletteHeaderItem}from"../../../chunks/app-CSKRKmra.js";

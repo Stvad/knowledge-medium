@@ -1,0 +1,1 @@
+export{nj as BlockLink}from"../../../chunks/app-CSKRKmra.js";

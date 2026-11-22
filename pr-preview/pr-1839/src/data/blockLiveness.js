@@ -1,0 +1,1 @@
+export{BG as anyBlockTombstoned,VG as isBlockTombstoned}from"../../chunks/app-CSKRKmra.js";

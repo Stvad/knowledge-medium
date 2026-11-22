@@ -1,0 +1,1 @@
+export{ez as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,tz as openExtensionsSettings}from"../../chunks/app-CSKRKmra.js";

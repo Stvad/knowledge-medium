@@ -1,0 +1,1 @@
+export{TJ as adoptOrCreatePropertySchema}from"../../chunks/app-CSKRKmra.js";

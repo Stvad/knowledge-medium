@@ -1,0 +1,1 @@
+export{jL as dispatchPointerAction,ML as setPointerActionDispatcher}from"../../chunks/app-CSKRKmra.js";

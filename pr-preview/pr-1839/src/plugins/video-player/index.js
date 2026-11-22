@@ -1,0 +1,1 @@
+export{RT as videoPlayerPlugin}from"../../../chunks/app-CSKRKmra.js";

@@ -1,0 +1,1 @@
+export{bS as wikilinkMarkdownExtension}from"../../../../../chunks/app-CSKRKmra.js";

@@ -1,0 +1,1 @@
+export{CV as BlockEditor}from"../../chunks/app-CSKRKmra.js";

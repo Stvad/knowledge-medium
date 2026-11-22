@@ -1,0 +1,1 @@
+export{ix as BlockMetaCard}from"../../../chunks/app-CSKRKmra.js";

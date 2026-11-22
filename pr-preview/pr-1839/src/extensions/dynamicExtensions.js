@@ -1,0 +1,1 @@
+export{KL as dynamicExtensionsExtension}from"../../chunks/app-CSKRKmra.js";

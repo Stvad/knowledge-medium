@@ -1,0 +1,1 @@
+export{Ys as propertyRowsPlugin}from"../../../chunks/app-CSKRKmra.js";

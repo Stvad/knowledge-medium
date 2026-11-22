@@ -1,0 +1,1 @@
+export{LQ as matchCharTrigger}from"../../chunks/app-CSKRKmra.js";

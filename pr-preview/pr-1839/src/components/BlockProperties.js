@@ -1,0 +1,1 @@
+export{UU as BlockProperties}from"../../chunks/app-CSKRKmra.js";

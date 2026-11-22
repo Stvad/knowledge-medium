@@ -1,0 +1,1 @@
+export{mZ as preferredSpanReplacement}from"../../../chunks/app-CSKRKmra.js";

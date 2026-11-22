@@ -1,0 +1,1 @@
+export{bX as tablesDataExtension}from"../../../chunks/app-CSKRKmra.js";

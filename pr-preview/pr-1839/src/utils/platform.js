@@ -1,0 +1,1 @@
+export{bq as isIOS,xq as isMacPlatform}from"../../chunks/app-CSKRKmra.js";

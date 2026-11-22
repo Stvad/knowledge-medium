@@ -1,0 +1,1 @@
+export{kc as MigrationGate}from"../../../chunks/app-CSKRKmra.js";

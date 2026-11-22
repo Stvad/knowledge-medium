@@ -1,0 +1,1 @@
+export{GH as BLOCK_TITLE_TEXT_CLASS,KH as useBlockTitleTextClass}from"../../../chunks/app-CSKRKmra.js";

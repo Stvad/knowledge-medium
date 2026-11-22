@@ -1,0 +1,1 @@
+export{Ua as startupMetricsPlugin}from"../../../chunks/app-CSKRKmra.js";

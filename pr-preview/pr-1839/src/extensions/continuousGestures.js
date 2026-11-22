@@ -1,0 +1,1 @@
+export{Yz as GESTURE_ACTIVE,Xz as GESTURE_CANCEL,Zz as GESTURE_IDLE,Qz as NO_BLOCK_GESTURES_ATTRIBUTE,$z as TOUCH_HOLD_MS,eB as TOUCH_SLOP_PX,tB as allowsBlockGestures,nB as continuousGestureRecognizersFacet,rB as createBlockGestureController,iB as enabledTouchAction,aB as suppressNextClick,oB as unionTouchAction,sB as useContinuousGestures}from"../../chunks/app-CSKRKmra.js";

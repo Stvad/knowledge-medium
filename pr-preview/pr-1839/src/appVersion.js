@@ -1,0 +1,1 @@
+export{Zu as appVersion}from"../chunks/app-CSKRKmra.js";

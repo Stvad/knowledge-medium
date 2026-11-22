@@ -1,0 +1,1 @@
+export{u0 as annotationMarginOpenProp,d0 as annotationMarginShareProp}from"../../../chunks/app-CSKRKmra.js";
