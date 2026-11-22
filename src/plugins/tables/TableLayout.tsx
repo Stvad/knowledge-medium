@@ -151,6 +151,8 @@ const Cell = ({row, index, sticky, isContent, children}: {
 }) => {
   const {controller} = useContext(TableContext)!
   const click = (event: MouseEvent<HTMLDivElement>) => {
+    // A cell of a table nested in this one handles its own clicks.
+    if (!(event.target instanceof Element) || event.target.closest('[data-table-col]') !== event.currentTarget) return
     // Controls, links and editors keep their click; so does the row's own
     // text, which edits in place.
     if (isContent || isInteractive(event.target) || inOwnList(event.target, event.currentTarget)) {

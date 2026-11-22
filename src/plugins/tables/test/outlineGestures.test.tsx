@@ -328,6 +328,32 @@ describe('the grid around a list cell', () => {
   })
 })
 
+describe('a table nested in a list member', () => {
+  it('a click on the inner table’s member reaches it, past the outer cell', async () => {
+    const [alpha] = await memberIds()
+    await repo.tx(async tx => {
+      await tx.create({id: 'inner', workspaceId: WS, parentId: alpha!, orderKey: 'a0', content: 'Inner'})
+      await tx.create({id: 'inner-row', workspaceId: WS, parentId: 'inner', orderKey: 'a0', content: 'inner row'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.block('inner-row').set(tags, ['gamma'])
+    await repo.awaitReprojections()
+    await turnIntoTable(repo, 'inner')
+    mount()
+    const gamma = await waitFor(() => {
+      const node = [...document.querySelectorAll('[data-table-row="inner-row"] [data-table-list] [data-block-id]')]
+        .find(element => element.textContent?.includes('gamma'))
+      expect(node).toBeDefined()
+      return node!
+    })
+    // The outer cell's capture handler would stop it before the member's own click handling.
+    let reached = false
+    gamma.addEventListener('click', () => { reached = true })
+    fireEvent.click(gamma)
+    expect(reached).toBe(true)
+    expect(focused()?.blockId).not.toBe('row-0')
+  })
+})
+
 describe('normal mode on a list member', () => {
   // Without spatial navigation: its vertical move walks the laid-out DOM, which
   // happy-dom does not lay out. The browser check covers it.
