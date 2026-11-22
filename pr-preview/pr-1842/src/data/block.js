@@ -1,0 +1,1 @@
+export{f9 as Block,p9 as requireLoadedBlock}from"../../chunks/app-D-G6uRcc.js";

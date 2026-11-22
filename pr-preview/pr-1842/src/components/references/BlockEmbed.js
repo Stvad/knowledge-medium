@@ -1,0 +1,1 @@
+export{RF as BlockEmbed}from"../../../chunks/app-D-G6uRcc.js";

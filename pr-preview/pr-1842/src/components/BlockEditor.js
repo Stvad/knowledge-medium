@@ -1,0 +1,1 @@
+export{SV as BlockEditor}from"../../chunks/app-D-G6uRcc.js";

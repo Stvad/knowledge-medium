@@ -1,0 +1,1 @@
+export{MY as omnilinerNamespace}from"../../chunks/app-D-G6uRcc.js";

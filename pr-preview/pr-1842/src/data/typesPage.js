@@ -1,0 +1,1 @@
+export{fut as getOrCreateTypesPage,put as typesPageBlockId,mut as typesPageSpec}from"../../chunks/app-D-G6uRcc.js";

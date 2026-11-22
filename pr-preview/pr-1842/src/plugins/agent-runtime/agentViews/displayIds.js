@@ -1,0 +1,1 @@
+export{tb as boundDisplayId,nb as idMark}from"../../../../chunks/app-D-G6uRcc.js";

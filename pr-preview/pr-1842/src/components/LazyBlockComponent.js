@@ -1,0 +1,1 @@
+export{ER as LazyBlockComponent}from"../../chunks/app-D-G6uRcc.js";

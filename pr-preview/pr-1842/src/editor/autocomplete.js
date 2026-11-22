@@ -1,0 +1,1 @@
+export{UI as editorAutocompleteExtension}from"../../chunks/app-D-G6uRcc.js";

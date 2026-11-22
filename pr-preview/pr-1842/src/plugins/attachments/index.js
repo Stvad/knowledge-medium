@@ -1,0 +1,1 @@
+export{zC as attachmentsPlugin}from"../../../chunks/app-D-G6uRcc.js";

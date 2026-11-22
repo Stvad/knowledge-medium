@@ -1,0 +1,1 @@
+export{Fat as ancestorWalk}from"../../../chunks/app-D-G6uRcc.js";

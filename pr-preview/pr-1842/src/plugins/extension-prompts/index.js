@@ -1,0 +1,1 @@
+export{KI as ExtensionPromptSurface,qI as extensionPromptsExtension}from"../../../chunks/app-D-G6uRcc.js";

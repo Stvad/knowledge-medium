@@ -1,0 +1,1 @@
+export{Uv as authorIdOf}from"../../../chunks/app-D-G6uRcc.js";
