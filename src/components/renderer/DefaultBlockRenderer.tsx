@@ -826,18 +826,6 @@ export function DefaultBlockRenderer(
     }
   }, [block, resolveContext, gutterControls])
 
-  const BulletSlot = useMemo<ComponentType>(() => {
-    return function BlockBulletSlot() {
-      const isFocal = useIsFocalRender(block)
-      if (isFocal) return null
-      return (
-        <div className="block-controls flex items-center">
-          <BlockBullet block={block} resolveContext={resolveContext}/>
-        </div>
-      )
-    }
-  }, [block, resolveContext])
-
   // The opt-in interactive shell. Layouts render `<Shell>{shellProps => …}</Shell>`
   // to become focusable/editable; the shell's machinery (paste/click, shell
   // decorators, shortcut activations) only runs when mounted — see `BlockShell`.
@@ -876,7 +864,6 @@ export function DefaultBlockRenderer(
     Children: ChildrenSlot,
     Footer: FooterSlot,
     Controls: ControlsSlot,
-    Bullet: BulletSlot,
     Header: HeaderSlot,
     Shell: ShellSlot,
   }
