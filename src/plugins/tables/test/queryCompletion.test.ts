@@ -166,7 +166,7 @@ describe('completion inside the query fence', () => {
 
     const structure = await editor(valueId, fencedQuery('und|'), true)
     const [structureResult] = await answers(structure)
-    expect(structureResult!.options.map(o => o.label)).toContain('under')
+    expect(structureResult!.options.find(o => o.label === 'under')?.detail).toBe('structure')
   })
 })
 

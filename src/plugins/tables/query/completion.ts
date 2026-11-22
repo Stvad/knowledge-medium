@@ -61,7 +61,7 @@ export const queryTriggerAt = (line: string, col: number): QueryTrigger | null =
 
 export interface QueryCompletion {
   readonly label: string
-  readonly detail: 'type' | 'property' | 'field'
+  readonly detail: 'type' | 'property' | 'field' | 'structure'
   readonly insert: string
 }
 
@@ -93,7 +93,7 @@ const typeCompletion = (type: QueryType, resolver: QueryResolver): QueryCompleti
 type Key = {kind: 'property' | 'field' | 'structure'; name: string}
 
 const keyCompletion = ({kind, name}: Key, resolver: QueryResolver): QueryCompletion | undefined => {
-  if (kind === 'structure') return {label: name, detail: 'field', insert: `${name}=`}
+  if (kind === 'structure') return {label: name, detail: 'structure', insert: `${name}=`}
   if (kind === 'field') return resolver.field(name) ? {label: name, detail: 'field', insert: `${word(name)}=`} : undefined
   const property = resolver.propertyByName(name)
   if (!property) return undefined
