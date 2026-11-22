@@ -11,6 +11,9 @@ const common = {
   stateDir: z.string().trim().min(1),
   profile: z.string().trim().min(1).transform(normalizeProfileName),
   writable: z.boolean().default(false),
+  /** A user page whose preferences reads resolve against; unset reads the
+   *  host account's own. Writes never go there. */
+  preferencesPage: z.string().trim().min(1).optional(),
 }
 const configSchema = z.discriminatedUnion('mode', [
   z.strictObject({...common, mode: z.literal('e2ee'), keyFile: z.string().trim().min(1)}),

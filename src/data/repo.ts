@@ -139,7 +139,7 @@ import { awaitWriteAheadHeadroom } from './writeAheadLog'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
-import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
+import { ClientContext, type ClientContextReader, type LayoutSessionRouter, type PreferencesPage } from './clientContext'
 import type { TxDb, TxImpl } from './internals/txEngine'
 import { CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { ancestorWalk } from './internals/ancestorBatch'
@@ -395,6 +395,8 @@ export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
   user: User
+  /** See {@link PreferencesPage}. Unset: preferences read from `user`'s own page. */
+  preferencesPage?: PreferencesPage
   /** Read-only mode rejects `BlockDefault` / `References` writes
    *  (`ReadOnlyError`). `UiState` and `UserPrefs` writes still proceed
    *  and upload like any other write — any server-side RLS / FK
@@ -1175,7 +1177,7 @@ export class Repo {
       ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
-    this._client = new ClientContext({user: opts.user})
+    this._client = new ClientContext({user: opts.user, preferencesPage: opts.preferencesPage})
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
     this.newId = opts.newId ?? uuidv4
