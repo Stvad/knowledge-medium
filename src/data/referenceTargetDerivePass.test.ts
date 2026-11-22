@@ -430,6 +430,76 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     expect(await repo.load('named-value')).toMatchObject({content: '[[Late name]]', updatedAt: before!.updatedAt})
   })
 
+  /** A synced owner whose refList cell another device projected from
+   *  `[[name]]` value rows that this device has not stamped yet — the state a
+   *  fresh device's first open finds. `names` are the value rows' names, in
+   *  sibling order; `cell` is the stored value. */
+  const seedSyncedNamedRefList = async (
+    repo: Repo, names: readonly string[], cell: readonly string[],
+  ) => {
+    const schema = defineProperty('named-refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-refs', [{
+      metadata: {fieldId: 'named-ref-field', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    // `references` as the owner's own parse derives them from that cell, so
+    // the only write a pass could owe this row is a property one.
+    await seedRow({id: 'named-owner', properties: {[schema.name]: [...cell]},
+      references: cell.map(id => ({id, alias: id, sourceField: schema.name}))})
+    await seedRow({id: 'named-field', parentId: 'named-owner', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    for (const [i, name] of names.entries()) {
+      await seedRow({id: `named-value-${i}`, parentId: 'named-field', orderKey: `a${i}`, content: `[[${name}]]`})
+    }
+    return schema
+  }
+
+  const ownerWrites = async (): Promise<unknown[]> =>
+    sharedDb.db.getAll(`SELECT id FROM ps_crud WHERE data LIKE '%named-owner%'`)
+
+  it('never drops a list member whose name this device cannot resolve yet', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    // "Name C"'s page has not reached this device, so its row stays unstamped.
+    const schema = await seedSyncedNamedRefList(repo, ['Name A', 'Name C'], ['target-a', 'target-c'])
+
+    await runPass(repo)
+    await repo.awaitProcessors()
+
+    // Precondition: the sweep did stamp the sibling, so the resolved-values
+    // projection ran over this owner.
+    expect(await readColumn('named-value-0')).toBe('target-a')
+    expect(await readColumn('named-value-1')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c'])
+    expect(await ownerWrites()).toEqual([])
+  })
+
+  it('writes nothing when two members of one list resolve in different stamp chunks', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    await seedRow({id: 'target-b', properties: {[aliasesProp.name]: ['Name B']}})
+    const schema = await seedSyncedNamedRefList(repo, ['Name A'], ['target-a', 'target-b'])
+    // The sweep stamps in chunks of 200 in index (here insertion) order, so a
+    // full chunk of other resolvable rows puts the second member in the next.
+    for (let i = 0; i < 200; i += 1) {
+      await seedRow({id: `filler-target-${i}`, properties: {[aliasesProp.name]: [`Filler ${i}`]}})
+      await seedRow({id: `filler-${i}`, content: `[[Filler ${i}]]`})
+    }
+    await seedRow({id: 'named-value-1', parentId: 'named-field', orderKey: 'a1', content: '[[Name B]]'})
+
+    await runPass(repo)
+    await repo.awaitProcessors()
+
+    expect(await readColumn('named-value-0')).toBe('target-a')
+    expect(await readColumn('named-value-1')).toBe('target-b')
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-b'])
+    // The flap's first write dropped `target-b` and its second restored it;
+    // both uploaded.
+    expect(await ownerWrites()).toEqual([])
+  }, 20_000)
+
   it('projects the owner cell when the claim turns a marked row into a field row', async () => {
     await flipWorkspace()
     const repo = setup()

@@ -20,6 +20,7 @@ import { parseBlockRefs, parseReferences } from '@/plugins/references/referenceP
 import { foldBlocksInTx, mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 import {
+  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
   encodedPropertyValueToChildContents,
@@ -174,6 +175,27 @@ const expectEscapedEnvelope = (schema: typeof statusSchema, value: string, conte
   expect(content).not.toMatch(/[[(]/)
   expect(valueChildContentToEncoded(schema, content)).toBe(value)
 }
+
+describe('awaitsReferenceTarget', () => {
+  const refs = defineProperty('refs', {codec: codecs.refList(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+  const ref = defineProperty('ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
+  const words = defineProperty('words', {codec: codecs.list(codecs.string), defaultValue: [], changeScope: ChangeScope.BlockDefault})
+
+  it.each([
+    ['an unstamped named member', refs, '[[Name]]', null, true],
+    ['an unstamped named scalar', ref, '[[Name]]', null, true],
+    ['a stamped named member', refs, '[[Name]]', 'target', false],
+    // An id form decodes textually, before any stamp.
+    ['an id member', refs, '((target))', null, false],
+    // A marked row is a field row once its bit is stamped, never a value.
+    ['a marked row', refs, '::[[Name]]', null, false],
+    // Only a `ref` member reads the stamp; for text, `[[Name]]` is the value.
+    ['named text in a string list', words, '[[Name]]', null, false],
+    ['prose', refs, 'Name', null, false],
+  ] as const)('%s', (_case, schema, content, referenceTargetId, expected) => {
+    expect(awaitsReferenceTarget(schema, {content, referenceTargetId})).toBe(expected)
+  })
+})
 
 describe('dormant at properties_migration = cell', () => {
   it('setProperty writes the cell only — no field rows', async () => {

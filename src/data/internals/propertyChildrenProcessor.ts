@@ -58,6 +58,7 @@ import {
 } from '@/data/api'
 import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
+  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   encodedPropertyValueToChildContents,
   scalarValueRow,
@@ -127,8 +128,15 @@ export type ProjectableRow =
  * with no field rows at all, and a `full` re-projection there would read
  * "nothing parses" as "unset" and drive materialize into tombstoning the
  * very rows it just recognized.
+ *
+ * `resolved` — `full`, except that a field with a value row still awaiting its
+ * reference target ({@link awaitsReferenceTarget}) is left as it is. The pass
+ * was dispatched by a stamp, not by anything a user changed, and the stamps
+ * come in chunks: a sibling in a later chunk, or one whose target has not
+ * synced here, would otherwise be dropped from the cell and uploaded that way.
+ * The stamp that resolves it re-projects the field then.
  */
-export type ProjectionMode = 'full' | 'additive'
+export type ProjectionMode = 'full' | 'additive' | 'resolved'
 
 const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
   resolveFieldSchema: (fieldId) => {
@@ -239,23 +247,9 @@ const collectAffectedProjection = async (
  *  drop members that are about to become siblings anyway.
  *
  *  Denoted-value rule (§5): only DIRECT value children are read — a
- *  comment deep under a value child never re-projects the parent. */
-const projectedFieldValue = async (
-  tx: Tx,
-  schema: AnyPropertySchema,
-  fieldRows: readonly BlockData[],
-): Promise<unknown | undefined> => {
-  // §9 value set: `is_field_form IS NOT 1` children only — a nested marked row
-  // materialized under the field row is its own machinery, never a value
-  // candidate.
-  const perFieldRow: BlockData[][] = []
-  for (const fieldRow of fieldRows) {
-    perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
-  }
-  return projectFieldRowValues(schema, perFieldRow)
-}
-
-/** {@link projectedFieldValue} over values already read: each of one schema's
+ *  comment deep under a value child never re-projects the parent.
+ *
+ *  Over values already read: each of one schema's
  *  live field rows' value children, field rows and values both in
  *  `(order_key, id)` order. The read-only consistency audit recomputes cells
  *  through this, so it cannot disagree with the processor about what a cell
@@ -316,7 +310,14 @@ const reprojectOwner = async (
     // Editing the OWNER does not help — `collectAffectedProjection` maps a
     // CHANGED row through its own bit or its parent's.
     if (mode === 'additive' && fieldRows.length > 1) continue
-    const projected = await projectedFieldValue(tx, schema, fieldRows)
+    // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
+    // row materialized under the field row is its own machinery, never a value
+    // candidate.
+    const perFieldRow: BlockData[][] = []
+    for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
+    if (mode === 'resolved'
+      && perFieldRow.some(values => values.some(row => awaitsReferenceTarget(schema, row)))) continue
+    const projected = projectFieldRowValues(schema, perFieldRow)
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -1367,7 +1368,7 @@ export const PROJECT_RESOLVED_PROPERTY_VALUES_PROCESSOR = defineSameTxProcessor(
         if (row) rows.push(row)
       }
     }
-    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'full')
+    await reprojectOwnersForRowStates(ctx.tx, rows, lookupsFor(ctx, event.workspaceId), 'resolved')
   },
 })
 

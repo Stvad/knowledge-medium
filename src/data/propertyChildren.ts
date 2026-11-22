@@ -580,6 +580,19 @@ const contentToEncodedValue = (
   }
 }
 
+/** A value row that names its target (`[[name]]`) and has no target derived on
+ *  this device yet. Its member is UNKNOWN here, not absent: the decode above
+ *  refuses it only because the stamp that would answer it has not run, and
+ *  another device may have projected it into the cell. */
+export const awaitsReferenceTarget = (
+  schema: AnyPropertySchema,
+  row: Pick<BlockData, 'content'> & {readonly referenceTargetId?: string | null},
+): boolean => {
+  if (valueChildCodec(schema).type !== 'ref' || row.referenceTargetId != null) return false
+  const exact = parseExactReferenceBlockContent(row.content)
+  return exact !== null && !exact.fieldForm && !isIdCarryingReference(exact)
+}
+
 /** Encode ONE value child's content, at {@link valueChildCodec} grain — a
  *  whole scalar value, or one member of a multi-valued property. */
 export const encodedToValueChildContent = (
