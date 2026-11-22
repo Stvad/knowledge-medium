@@ -33,7 +33,7 @@ beforeEach(async () => {
 const drainStats = (over: Partial<SyncDrainStats>): SyncDrainStats => ({
   source: 'queue', completed: true, endedAtMs: 1000, wallMs: 20, windows: 1, rows: 5,
   applied: 5, deferred: 0, skippedStale: 0, quarantined: 0, deleted: 0,
-  readMs: 1, decodeMs: 1, writeMs: 1, invalidateMs: 1, bookkeepingMs: 1, ...over,
+  readMs: 1, decodeMs: 1, writeMs: 1, invalidateMs: 1, bookkeepingMs: 1, deferredIndexRows: 0, deferredIndexMs: 0, ...over,
 })
 
 describe('sync-metrics persistence', () => {

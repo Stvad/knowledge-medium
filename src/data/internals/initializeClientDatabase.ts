@@ -32,6 +32,7 @@ import {
   triggerRecreateStatements,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
+  buildDeferredSearchIndex,
   backfillBlockTypesIfEmpty,
   grandfatherWorkspaceFirstSync,
   ensureBlockUserUpdatedAtColumn,
@@ -176,6 +177,9 @@ export const initializeClientDatabase = async (
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockTypesIfEmpty(backfillDb)
   await backfillBlocksFtsIfEmpty(backfillDb)
+  // Before anything can search: a process that died mid bulk load left rows
+  // the index does not hold yet.
+  await buildDeferredSearchIndex(powerSyncDb)
   await grandfatherWorkspaceFirstSync(backfillDb)
   const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
   await applyLocalSchemaContributions(backfillDb, localSchemaContributions)

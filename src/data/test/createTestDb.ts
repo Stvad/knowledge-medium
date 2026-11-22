@@ -267,6 +267,7 @@ const RESET_CONTENT_TABLES = [
   'block_types',
   'blocks_fts', // virtual FTS table — DELETE clears its shadow tables safely
   'blocks_fts_rowids',
+  'blocks_fts_owed',
 ] as const
 const RESET_AUDIT_TABLES = ['row_events', 'command_events', 'ps_crud', 'ps_crud_rejected'] as const
 

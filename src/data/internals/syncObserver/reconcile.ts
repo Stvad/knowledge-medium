@@ -25,6 +25,7 @@ import {
 } from '@/sync/transform.js'
 import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.js'
 import { PENDING_UPLOAD_IDS_SQL } from '@/data/pendingUploadsSql.js'
+import { SELECT_ANY_BLOCKS_FTS_OWED_SQL } from '@/data/internals/clientSchema.js'
 
 /** Local state for the block id a staging row targets. */
 export interface LocalRowState {
@@ -310,7 +311,12 @@ export const stagedViewGapReason = async (
     return `more than ${STAGED_SCAN_LIMIT.toLocaleString()} synced rows are staged, `
       + 'so this device is behind on materializing them into `blocks`'
   }
-  return staged !== null ? 'synced rows are still draining into `blocks`' : null
+  if (staged !== null) return 'synced rows are still draining into `blocks`'
+  // The tail of the same drain: it resolves only once this is built.
+  if (await reader.getOptional(SELECT_ANY_BLOCKS_FTS_OWED_SQL) !== null) {
+    return 'the search index for rows synced in bulk is still being built'
+  }
+  return null
 }
 
 /**

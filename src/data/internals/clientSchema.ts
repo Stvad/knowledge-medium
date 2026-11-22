@@ -290,6 +290,19 @@ export const CREATE_BLOCKS_FTS_TABLE_SQL = `
   )
 `
 
+/** `blocks` rows inserted by a bulk load and not yet in `blocks_fts` — see
+ *  `blocks_fts_insert_deferred`. Empty outside a bulk drain.
+ *
+ *  No key and no index, so recording a row appends to the table's last page
+ *  instead of touching a random leaf of a uuid-keyed tree, which is the cost
+ *  the deferral exists to avoid. An id can appear twice (deleted and
+ *  re-inserted within a load); the build de-duplicates. */
+export const CREATE_BLOCKS_FTS_OWED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_fts_owed (
+    block_id TEXT NOT NULL
+  )
+`
+
 /** Quarantine for `ps_crud` rows whose upload the server refused with a
  *  permanent error (FK violation, RLS denial, insufficient privilege,
  *  4xx that can't recover on retry). The PowerSync upload handler moves
@@ -1002,9 +1015,11 @@ export const CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL = `
 `
 
 // ============================================================================
-// blocks_fts triggers (3) — same derived-index maintenance shape as
+// blocks_fts triggers (4) — same derived-index maintenance shape as
 // block_aliases/block_types, keyed through blocks_fts_rowids so updates
 // can delete by FTS rowid instead of scanning an UNINDEXED UUID column.
+// A bulk load's inserts are indexed later, in one pass, instead of per row
+// (`blocks_fts_insert_deferred`).
 // ============================================================================
 
 const blocksFtsInsertSql = (rowRef: 'NEW') => `
@@ -1024,8 +1039,22 @@ const blocksFtsInsertSql = (rowRef: 'NEW') => `
 export const CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_fts_insert
   AFTER INSERT ON blocks
+  WHEN NOT ${IN_BULK_LOAD_SQL}
   BEGIN
     ${blocksFtsInsertSql('NEW')}
+  END
+`
+
+/** The other half of `blocks_fts_insert`'s WHEN: a bulk load's insert is
+ *  recorded as owed, in the statement that inserts it, so no committed row can
+ *  be missing from the index without a `blocks_fts_owed` entry naming it.
+ *  {@link buildDeferredSearchIndex} pays the debt. */
+export const CREATE_BLOCKS_FTS_INSERT_DEFERRED_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_fts_insert_deferred
+  AFTER INSERT ON blocks
+  WHEN ${IN_BULK_LOAD_SQL}
+  BEGIN
+    INSERT INTO blocks_fts_owed (block_id) VALUES (NEW.id);
   END
 `
 
@@ -1178,6 +1207,32 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
       SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid
     )
 `
+
+export const SELECT_ANY_BLOCKS_FTS_OWED_SQL = `SELECT 1 FROM blocks_fts_owed LIMIT 1`
+
+/** The owed half of {@link BACKFILL_BLOCKS_FTS_ROWIDS_SQL}. Every owed row
+ *  that still exists gets a rowid, tombstones included, as
+ *  `blocks_fts_insert` gives one. */
+export const BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL = `
+  INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
+  SELECT id FROM blocks
+  WHERE id IN (SELECT block_id FROM blocks_fts_owed)
+  ORDER BY id
+`
+
+export const BUILD_OWED_BLOCKS_FTS_SQL = `
+  INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
+  SELECT r.fts_rowid, b.content, b.workspace_id, b.id
+  FROM blocks_fts_rowids r
+  JOIN blocks b ON b.id = r.block_id
+  WHERE r.block_id IN (SELECT block_id FROM blocks_fts_owed)
+    AND b.deleted = 0
+    AND b.content != ''
+    AND NOT EXISTS (SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid)
+  ORDER BY r.fts_rowid
+`
+
+export const CLEAR_BLOCKS_FTS_OWED_SQL = `DELETE FROM blocks_fts_owed`
 
 // ============================================================================
 // ANALYZE / planner stats. wa-sqlite has no automatic ANALYZE. The sharp edge
@@ -1391,6 +1446,7 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL,
   CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL,
   CREATE_BLOCKS_FTS_TABLE_SQL,
+  CREATE_BLOCKS_FTS_OWED_TABLE_SQL,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
@@ -1423,8 +1479,9 @@ const CLIENT_SCHEMA_BASE_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL,
-  // 3 blocks_fts-maintenance triggers
+  // 4 blocks_fts-maintenance triggers
   CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_FTS_INSERT_DEFERRED_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,
   // 2 blocks_synced change-capture triggers (Layout B observer detection)
@@ -1522,6 +1579,31 @@ export const backfillBlocksFtsIfEmpty = async (
   await db.execute(BACKFILL_BLOCKS_FTS_ROWIDS_SQL)
   await db.execute(BACKFILL_BLOCKS_FTS_SQL)
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
+}
+
+/** Index every row a bulk load deferred (`blocks_fts_insert_deferred`) and
+ *  clear the record of the debt, in one transaction so the clear can only
+ *  commit with the rows it vouches for. Returns how many owed entries it
+ *  cleared; 0 costs one empty read.
+ *
+ *  Reads each owed row as it is NOW: one updated since its insert was indexed
+ *  by `blocks_fts_update` (hence the `NOT EXISTS`), one deleted is skipped.
+ *  The rowid map is filled in id order, so its unique index is appended to
+ *  rather than probed at random.
+ *
+ *  Two callers, for two exits: the sync observer at the end of each drain, and
+ *  client bootstrap, for a process that died with the debt outstanding. */
+export const buildDeferredSearchIndex = async (db: {
+  getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
+  writeTransaction: <T>(fn: (tx: {execute: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<T>) => Promise<T>
+}): Promise<number> => {
+  if (await db.getOptional(SELECT_ANY_BLOCKS_FTS_OWED_SQL) === null) return 0
+  return db.writeTransaction(async tx => {
+    await tx.execute(BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL)
+    await tx.execute(BUILD_OWED_BLOCKS_FTS_SQL)
+    const cleared = await tx.execute(CLEAR_BLOCKS_FTS_OWED_SQL) as {rowsAffected?: number} | undefined
+    return cleared?.rowsAffected ?? 0
+  })
 }
 
 export const grandfatherWorkspaceFirstSync = async (
