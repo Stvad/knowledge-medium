@@ -1,1 +1,1 @@
-export{ly as PANEL_BOTTOM_CLEARANCE,uy as PANEL_RIGHT_CLEARANCE}from"../../chunks/app-B2LVM3rY.js";
+export{QS as PANEL_BOTTOM_CLEARANCE,$S as PANEL_CONTENT_RIGHT_INSET,eC as PANEL_RIGHT_CLEARANCE,tC as PANEL_TEXT_MIN_WIDTH_PX}from"../../chunks/app-DQYmysvq.js";

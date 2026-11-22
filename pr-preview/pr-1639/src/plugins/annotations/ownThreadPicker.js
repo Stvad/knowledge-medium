@@ -1,0 +1,1 @@
+export{lh as moveCommentToOwnThread}from"../../../chunks/app-DQYmysvq.js";

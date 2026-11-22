@@ -1,1 +1,1 @@
-export{Gv as referencesMarkdownExtension}from"../../../../chunks/app-B2LVM3rY.js";
+export{AS as referencesMarkdownExtension}from"../../../../chunks/app-DQYmysvq.js";
