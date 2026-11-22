@@ -1,1 +1,1 @@
-export{vc as propertyReferenceWarning,yc as referenceWarningMessage,bc as watchReferenceWarning}from"../../../chunks/app-BZv-MOfY.js";
+export{yc as propertyReferenceWarning,bc as referenceWarningMessage,xc as watchReferenceWarning}from"../../../chunks/app-w4KX0ukw.js";

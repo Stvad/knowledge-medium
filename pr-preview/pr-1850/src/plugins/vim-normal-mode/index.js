@@ -1,1 +1,1 @@
-export{OE as vimNormalModeInteractionExtension,kE as vimNormalModePlugin}from"../../../chunks/app-BZv-MOfY.js";
+export{kE as vimNormalModeInteractionExtension,AE as vimNormalModePlugin}from"../../../chunks/app-w4KX0ukw.js";

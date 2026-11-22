@@ -1,1 +1,1 @@
-export{G9 as loadTypeIdsByBlock}from"../../chunks/app-BZv-MOfY.js";
+export{J9 as loadTypeIdsByBlock}from"../../chunks/app-w4KX0ukw.js";

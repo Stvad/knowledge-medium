@@ -1,1 +1,1 @@
-export{Em as annotationsPlugin}from"../../../chunks/app-BZv-MOfY.js";
+export{Dm as annotationsPlugin}from"../../../chunks/app-w4KX0ukw.js";
