@@ -1,1 +1,1 @@
-export{Kpt as defineQuery}from"../../../chunks/app-C8zDBlNi.js";
+export{qpt as defineQuery}from"../../../chunks/app-DpIf-VCN.js";

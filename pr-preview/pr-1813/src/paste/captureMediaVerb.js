@@ -1,1 +1,1 @@
-export{kB as captureMediaVerb}from"../../chunks/app-C8zDBlNi.js";
+export{AB as captureMediaVerb}from"../../chunks/app-DpIf-VCN.js";

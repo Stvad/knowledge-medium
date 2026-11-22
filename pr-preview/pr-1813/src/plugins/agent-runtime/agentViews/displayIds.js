@@ -1,1 +1,1 @@
-export{fy as boundDisplayId,py as idMark}from"../../../../chunks/app-C8zDBlNi.js";
+export{py as boundDisplayId,my as idMark}from"../../../../chunks/app-DpIf-VCN.js";

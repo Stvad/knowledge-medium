@@ -1,1 +1,1 @@
-export{hc as dbMirrorRuntimeHealth}from"../../../chunks/app-C8zDBlNi.js";
+export{gc as dbMirrorRuntimeHealth}from"../../../chunks/app-DpIf-VCN.js";

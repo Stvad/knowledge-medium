@@ -1,1 +1,1 @@
-export{cO as WorkspaceSwitcher}from"../../../chunks/app-C8zDBlNi.js";
+export{lO as WorkspaceSwitcher}from"../../../chunks/app-DpIf-VCN.js";

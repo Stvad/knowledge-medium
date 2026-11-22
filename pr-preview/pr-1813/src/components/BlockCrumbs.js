@@ -1,1 +1,1 @@
-export{VA as BlockCrumbs}from"../../chunks/app-C8zDBlNi.js";
+export{HA as BlockCrumbs}from"../../chunks/app-DpIf-VCN.js";

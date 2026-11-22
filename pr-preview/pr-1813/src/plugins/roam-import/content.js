@@ -1,1 +1,1 @@
-export{xp as applyHeading,Sp as collectContentRefUids,Cp as rewriteRoamContent,wp as rewriteRoamHashtags}from"../../../chunks/app-C8zDBlNi.js";
+export{Sp as applyHeading,Cp as collectContentRefUids,wp as rewriteRoamContent,Tp as rewriteRoamHashtags}from"../../../chunks/app-DpIf-VCN.js";

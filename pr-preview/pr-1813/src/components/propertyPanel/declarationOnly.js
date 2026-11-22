@@ -1,1 +1,1 @@
-export{OU as declarationOnlyDefinitionForName,kU as declarationOnlyStatusText}from"../../../chunks/app-C8zDBlNi.js";
+export{kU as declarationOnlyDefinitionForName,AU as declarationOnlyStatusText}from"../../../chunks/app-DpIf-VCN.js";

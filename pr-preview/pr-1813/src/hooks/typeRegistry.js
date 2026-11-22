@@ -1,1 +1,1 @@
-export{CG as useTypes}from"../../chunks/app-C8zDBlNi.js";
+export{wG as useTypes}from"../../chunks/app-DpIf-VCN.js";

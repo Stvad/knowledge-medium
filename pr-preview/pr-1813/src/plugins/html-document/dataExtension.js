@@ -1,1 +1,1 @@
-export{NX as htmlDocumentDataExtension}from"../../../chunks/app-C8zDBlNi.js";
+export{PX as htmlDocumentDataExtension}from"../../../chunks/app-DpIf-VCN.js";

@@ -1,1 +1,1 @@
-export{So as tablesPlugin}from"../../../chunks/app-C8zDBlNi.js";
+export{So as tablesPlugin}from"../../../chunks/app-DpIf-VCN.js";

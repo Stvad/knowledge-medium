@@ -1,1 +1,1 @@
-export{X0 as pluginPrefsExtension,Z0 as pluginUIStateExtension}from"../../chunks/app-C8zDBlNi.js";
+export{Z0 as pluginPrefsExtension,Q0 as pluginUIStateExtension}from"../../chunks/app-DpIf-VCN.js";

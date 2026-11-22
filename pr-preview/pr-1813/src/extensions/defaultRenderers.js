@@ -1,1 +1,1 @@
-export{KL as defaultRegistry,qL as defaultRendererContributions,JL as defaultRenderersExtension}from"../../chunks/app-C8zDBlNi.js";
+export{qL as defaultRegistry,JL as defaultRendererContributions,YL as defaultRenderersExtension}from"../../chunks/app-DpIf-VCN.js";

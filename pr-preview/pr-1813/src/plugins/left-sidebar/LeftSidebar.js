@@ -1,1 +1,1 @@
-export{$D as LeftSidebar,eO as LeftSidebarCoreSection,tO as LeftSidebarShortcutsSection}from"../../../chunks/app-C8zDBlNi.js";
+export{eO as LeftSidebar,tO as LeftSidebarCoreSection,nO as LeftSidebarShortcutsSection}from"../../../chunks/app-DpIf-VCN.js";

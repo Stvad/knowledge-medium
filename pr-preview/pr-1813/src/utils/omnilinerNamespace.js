@@ -1,1 +1,1 @@
-export{UJ as omnilinerNamespace}from"../../chunks/app-C8zDBlNi.js";
+export{WJ as omnilinerNamespace}from"../../chunks/app-DpIf-VCN.js";

@@ -1,1 +1,1 @@
-export{ID as plainOutlinerPlugin}from"../../../chunks/app-C8zDBlNi.js";
+export{LD as plainOutlinerPlugin}from"../../../chunks/app-DpIf-VCN.js";

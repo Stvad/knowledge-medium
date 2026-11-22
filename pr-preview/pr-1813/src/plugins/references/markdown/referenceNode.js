@@ -1,1 +1,1 @@
-export{Px as EmbedComponent,Fx as referenceTargetOf}from"../../../../chunks/app-C8zDBlNi.js";
+export{Fx as EmbedComponent,Ix as referenceTargetOf}from"../../../../chunks/app-DpIf-VCN.js";

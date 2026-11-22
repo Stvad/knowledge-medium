@@ -1,1 +1,1 @@
-export{xg as agentDispatchCompanionPlugin}from"../../../chunks/app-C8zDBlNi.js";
+export{Sg as agentDispatchCompanionPlugin}from"../../../chunks/app-DpIf-VCN.js";
