@@ -7,6 +7,9 @@ import { COLUMN_TYPE, VIEW_TYPE, columnFieldProp, columnWidthProp } from './sche
 /** Rows mount and stay mounted, so a table draws at most this many. */
 export const ROW_CAP = 300
 
+/** A row added to a table already at the cap would not be drawn. */
+export const canAddRow = (rowCount: number): boolean => rowCount < ROW_CAP
+
 export interface TableColumn {
   readonly id: string
   /** The property definition the column shows, or null for the row's own content. */

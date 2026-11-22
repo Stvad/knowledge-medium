@@ -5,11 +5,13 @@
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import {
-  PropertyEditRefusedError, clearPropertyValue, openPropertyValue,
+  PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
 import { focusBlock, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
 import { CallbackSet } from '@/utils/callbackSet'
+import { showInfo } from '@/utils/toast'
+import { ROW_CAP, canAddRow } from './model'
 import { forgetCellEdit, openedCellEdit, peekValueOwner, reportRefusal } from './cellEdits'
 
 export type GridCommand =
@@ -31,6 +33,7 @@ const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.
 
 export class GridController {
   private rowIds: readonly string[] = []
+  private rowCount = 0
   private rowIndex = new Map<string, number>()
   private columns: readonly GridColumn[] = []
   private column = 0
@@ -47,6 +50,9 @@ export class GridController {
    *  otherwise open the cell again and replace the first character. */
   private opening: Promise<void> | null = null
   private typedAhead = ''
+  /** Bumped by every cursor move, so an open that finishes after the user
+   *  moved on does not pull focus back into its cell. */
+  private cursorMoves = 0
   private root: HTMLElement | null = null
 
   constructor(
@@ -57,9 +63,18 @@ export class GridController {
     private readonly parentRenderScopeId: string,
   ) {}
 
-  setRows(rowIds: readonly string[]) {
+  /** `rowCount` counts the host's rows past the drawn ones, for the cap. */
+  setRows(rowIds: readonly string[], rowCount: number) {
     this.rowIds = rowIds
+    this.rowCount = rowCount
     this.rowIndex = new Map(rowIds.map((id, index) => [id, index]))
+  }
+
+  /** Refuses, with a notice, a row the table would not draw. */
+  private refuseRowPastCap(): boolean {
+    if (canAddRow(this.rowCount)) return false
+    showInfo(`This table shows at most ${ROW_CAP} rows. Add more in the outline.`)
+    return true
   }
 
   setColumns(columns: readonly GridColumn[]) {
@@ -130,6 +145,7 @@ export class GridController {
     const next = clamp(column, this.columns.length - 1)
     if (next === this.column) return false
     this.column = next
+    this.cursorMoves++
     this.columnListeners.notify()
     const focused = this.focusedRow()
     if (focused) this.revealColumn(focused.row)
@@ -175,6 +191,7 @@ export class GridController {
     const element = this.rowElement(row)
     if (element) element.focus({preventScroll: true})
     else if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    this.cursorMoves++
     this.setPendingRow(rowId)
     this.focusWrite ??= this.writePendingFocus()
   }
@@ -268,6 +285,7 @@ export class GridController {
     const rowId = this.rowIds[row]
     const column = this.columns[this.column]
     if (!rowId || !column) return
+    const moves = this.cursorMoves
     const repo = this.host.repo
     const rowBlock = repo.block(rowId)
     if (column.fieldId === null) {
@@ -276,6 +294,7 @@ export class GridController {
         this.typedAhead = text + this.typedAhead
         await this.flushTypedAhead(rowBlock)
       }
+      if (this.cursorMoves !== moves) return
       const length = rowBlock.peek()?.content.length ?? 0
       return enterEditModeForBlock(rowBlock, this.uiStateBlock, this.renderScopeId, {start: atStart ? 0 : length})
     }
@@ -301,6 +320,14 @@ export class GridController {
       const value = repo.block(opened.valueId)
       await value.load()
       if (!column.list) await this.flushTypedAhead(value)
+      if (this.cursorMoves !== moves) {
+        // No editor will mount to finish this edit: finish it here, so a draft
+        // it created is not left set.
+        forgetCellEdit(opened.valueId, this.renderScopeId)
+        await repo.tx(tx => finishPropertyValueEdit(tx, rowId, fieldId, opened, value.peek()?.content ?? ''),
+          {scope: ChangeScope.BlockDefault, description: 'finish table cell edit'})
+        return
+      }
       const length = value.peek()?.content.length ?? 0
       await enterEditModeForBlock(value, this.uiStateBlock, this.renderScopeId, {start: atStart ? 0 : length})
     } catch (error) {
@@ -323,7 +350,7 @@ export class GridController {
   private async insertRow(row: number, side: 'below' | 'above'): Promise<void> {
     const rowId = this.rowIds[row]
     const repo = this.host.repo
-    if (!rowId || repo.isReadOnly) return
+    if (!rowId || repo.isReadOnly || this.refuseRowPastCap()) return
     const id = side === 'below'
       ? await repo.mutate.createSiblingBelow({siblingId: rowId})
       : await repo.mutate.createSiblingAbove({siblingId: rowId})
@@ -333,7 +360,7 @@ export class GridController {
   /** A new last row, editing its text. */
   async appendRow(): Promise<void> {
     const repo = this.host.repo
-    if (repo.isReadOnly) return
+    if (repo.isReadOnly || this.refuseRowPastCap()) return
     const id = await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
     if (id) await this.editNewRow(id)
   }

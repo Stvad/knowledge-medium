@@ -25,7 +25,7 @@ import { surfaceRenderScopeId } from '@/utils/renderScope'
 import { TABLE_SURFACE } from './cellEdits'
 import { CELL_CONTROL_SELECTOR, GridController, type GridColumn } from './controller'
 import { CELL_CONTEXT_KEY, GRID_CONTEXT_KEY, ROW_CONTEXT_KEY, TABLE_ROW_CONTEXT, TABLE_TYPING_CONTEXT, controlKeyCommand } from './keys'
-import { ROW_CAP, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
+import { ROW_CAP, canAddRow, useColumns, useRowIds, useViewIds, type TableColumn } from './model'
 import { registerGrid } from './registry'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
@@ -320,7 +320,7 @@ const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewI
   const names = useMemo(() => columns.map((column, index) => column.label ||
     (column.fieldId === null ? 'Title' : definitionsOf[index]?.name ?? 'Unknown property')), [columns, definitionsOf])
 
-  useLayoutEffect(() => { controller.setRows(shown) }, [controller, shown])
+  useLayoutEffect(() => { controller.setRows(shown, rowIds?.length ?? 0) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
@@ -363,8 +363,7 @@ const TableBody = ({host, renderScopeId, parentRenderScopeId, workspaceId, viewI
       {rowIds && rowIds.length > ROW_CAP && <p className="py-1 text-xs text-muted-foreground">
         Showing the first {ROW_CAP} rows.
       </p>}
-      {/* A row added past the cap would not be drawn. */}
-      {!repo.isReadOnly && rowIds && rowIds.length < ROW_CAP &&
+      {!repo.isReadOnly && rowIds && canAddRow(rowIds.length) &&
         <button type="button" className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
           onClick={() => { void controller.appendRow() }}>+ New row</button>}
     </div>
