@@ -1,1 +1,1 @@
-export{Ug as AnnotationSurfaceContext,Wg as providedHere,Gg as useAnnotationSurface}from"../../../chunks/app-CaiqMuIC.js";
+export{Ug as AnnotationSurfaceContext,Wg as providedHere,Gg as useAnnotationSurface}from"../../../chunks/app-C1Pwz8kQ.js";

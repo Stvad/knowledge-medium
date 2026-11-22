@@ -1,1 +1,1 @@
-export{VB as BlockInfoDialog}from"../../../chunks/app-CaiqMuIC.js";
+export{VB as BlockInfoDialog}from"../../../chunks/app-C1Pwz8kQ.js";

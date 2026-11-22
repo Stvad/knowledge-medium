@@ -1,1 +1,1 @@
-export{CX as tablesDataExtension}from"../../../chunks/app-CaiqMuIC.js";
+export{CX as tablesDataExtension}from"../../../chunks/app-C1Pwz8kQ.js";

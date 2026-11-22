@@ -1,1 +1,1 @@
-export{ZF as DEFAULT_TYPE_COLORS,QF as defaultTypeColor,$F as pickLeastUsedTypeColor}from"../../chunks/app-CaiqMuIC.js";
+export{ZF as DEFAULT_TYPE_COLORS,QF as defaultTypeColor,$F as pickLeastUsedTypeColor}from"../../chunks/app-C1Pwz8kQ.js";
