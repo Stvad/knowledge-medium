@@ -80,7 +80,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. Reset before any early return, or a
     // stale ⌘⇧V intent would skip the cut check on the next paste.
-    const intent = pasteIntentRef.current
+    // A surface that refuses Split takes every paste as one block: a split
+    // paste would make blocks it does not draw, and an armed cut would move
+    // blocks into it the same way.
+    const splitRefused = blockContext.disableBlockSplit === true
+    const intent = splitRefused ? 'single-block' : pasteIntentRef.current
     pasteIntentRef.current = 'split'
     if (repo.isReadOnly) return
     // Nothing to paste → leave it to the browser.
@@ -150,7 +154,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Re-read the caret: a media capture may have awaited above, so use the live selection.
     const insertAt = editorView.state.selection.main
 
-    if (decision.kind === 'single-block') {
+    if (decision.kind === 'single-block' || splitRefused) {
       const plan = planSingleBlockPaste(pasteText, {
         from: insertAt.from,
         to: insertAt.to,

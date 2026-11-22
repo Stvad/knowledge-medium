@@ -365,9 +365,12 @@ export class GridController {
     if (id) await this.editNewRow(id)
   }
 
-  /** A new row has only its text to fill in, in the column that shows it. */
+  /** A new row has only its text to fill in, in the column that shows it. A
+   *  view with no such column focuses the row instead: its text has nowhere
+   *  to be edited. */
   private async editNewRow(id: string) {
-    this.setColumn(Math.max(this.columns.findIndex(column => column.fieldId === null), 0))
-    await focusBlock(this.uiStateBlock, id, {edit: true, renderScopeId: this.renderScopeId})
+    const content = this.columns.findIndex(column => column.fieldId === null)
+    if (content >= 0) this.setColumn(content)
+    await focusBlock(this.uiStateBlock, id, {edit: content >= 0, renderScopeId: this.renderScopeId})
   }
 }

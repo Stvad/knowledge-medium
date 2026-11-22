@@ -141,10 +141,10 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderEditor = () => {
+  const renderEditor = ({disableBlockSplit = false} = {}) => {
     const view = render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root', disableBlockSplit}}>
           <ActiveContextsProvider>
             <CodeMirrorContentRenderer block={repo.block('block-1')} />
           </ActiveContextsProvider>
@@ -218,6 +218,17 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     await vi.waitFor(() => expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1))
     expect(vi.mocked(resolvePasteWithMediaCapture).mock.calls[0][1])
       .toMatchObject({intent: 'single-block', files: [], surface: 'editor'})
+  })
+
+  it('pastes as one block, with no armed cut, where Split is refused', async () => {
+    const {content, editorView} = renderEditor({disableBlockSplit: true})
+
+    act(() => { dispatchPaste(content, 'one\ntwo') })
+
+    await vi.waitFor(() => expect(editorView.state.doc.toString()).toContain('one\ntwo'))
+    expect(vi.mocked(resolvePasteWithMediaCapture).mock.calls[0][1]).toMatchObject({intent: 'single-block'})
+    expect(pasteArmedCut).not.toHaveBeenCalled()
+    expect(pasteEditModeMultilineText).not.toHaveBeenCalled()
   })
 
   it('skips the armed cut on the plain-text chord (Cmd+Shift+V)', async () => {

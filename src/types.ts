@@ -131,9 +131,9 @@ export interface BlockContextType {
      *  show. Only the completion is gated; typed or pasted reference text
      *  still parses as a field row. */
     disablePropertyFieldCompletion?: boolean
-    /** Refuse the Split block action for editors on this surface. Like every
-     *  context field it reaches the whole subtree, embeds and references
-     *  rendered inside the surface included. */
+    /** Refuse the Split block action for editors on this surface, and take
+     *  every paste there as one block. Like every context field it reaches the
+     *  whole subtree, embeds and references rendered inside the surface included. */
     disableBlockSplit?: boolean
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
