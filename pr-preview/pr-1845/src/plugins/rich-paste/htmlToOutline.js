@@ -1,1 +1,1 @@
-export{LC as convertClipboardHtml}from"../../../chunks/app-m-Ucc5LI.js";
+export{RC as convertClipboardHtml}from"../../../chunks/app-By_g4h5K.js";

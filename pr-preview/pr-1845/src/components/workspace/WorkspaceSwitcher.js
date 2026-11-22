@@ -1,1 +1,1 @@
-export{ZO as WorkspaceSwitcher}from"../../../chunks/app-m-Ucc5LI.js";
+export{QO as WorkspaceSwitcher}from"../../../chunks/app-By_g4h5K.js";

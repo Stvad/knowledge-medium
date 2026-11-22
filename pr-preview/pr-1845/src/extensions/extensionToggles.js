@@ -1,1 +1,1 @@
-export{ZL as extensionDisplayName,QL as extensionName,$L as userExtensionShellToggle,eR as userExtensionToggle}from"../../chunks/app-m-Ucc5LI.js";
+export{QL as extensionDisplayName,$L as extensionName,eR as userExtensionShellToggle,tR as userExtensionToggle}from"../../chunks/app-By_g4h5K.js";

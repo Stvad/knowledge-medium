@@ -1,1 +1,1 @@
-export{Eq as useActionContext,Dq as useActionContextActivations,Oq as useCodeMirrorEditModeShortcuts,kq as useModalShadowing,Aq as useNormalModeShortcuts,jq as usePropertyEditingShortcuts}from"../../chunks/app-m-Ucc5LI.js";
+export{Dq as useActionContext,Oq as useActionContextActivations,kq as useCodeMirrorEditModeShortcuts,Aq as useModalShadowing,jq as useNormalModeShortcuts,Mq as usePropertyEditingShortcuts}from"../../chunks/app-By_g4h5K.js";

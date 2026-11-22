@@ -1,1 +1,1 @@
-export{UT as VideoNotesLayout,WT as VideoNotesRenderer,GT as videoNotesLayoutContribution}from"../../../chunks/app-m-Ucc5LI.js";
+export{WT as VideoNotesLayout,GT as VideoNotesRenderer,KT as videoNotesLayoutContribution}from"../../../chunks/app-By_g4h5K.js";

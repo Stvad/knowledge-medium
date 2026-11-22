@@ -1,1 +1,1 @@
-export{QI as ExtensionPromptDismissalStore,$I as extensionPromptDismissals,eL as useExtensionPromptDismissals}from"../../../chunks/app-m-Ucc5LI.js";
+export{$I as ExtensionPromptDismissalStore,eL as extensionPromptDismissals,tL as useExtensionPromptDismissals}from"../../../chunks/app-By_g4h5K.js";

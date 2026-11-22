@@ -1,1 +1,1 @@
-export{uet as assertAliasClaimable,det as claimedAliases}from"../../chunks/app-m-Ucc5LI.js";
+export{det as assertAliasClaimable,fet as claimedAliases}from"../../chunks/app-By_g4h5K.js";

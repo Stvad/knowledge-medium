@@ -1,1 +1,1 @@
-export{wR as BlockChildren,TR as BlockComponent}from"../../chunks/app-m-Ucc5LI.js";
+export{TR as BlockChildren,ER as BlockComponent}from"../../chunks/app-By_g4h5K.js";

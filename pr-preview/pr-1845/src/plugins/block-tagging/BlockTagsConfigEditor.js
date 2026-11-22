@@ -1,1 +1,1 @@
-export{Wf as BlockTagsConfigEditor}from"../../../chunks/app-m-Ucc5LI.js";
+export{Gf as BlockTagsConfigEditor}from"../../../chunks/app-By_g4h5K.js";

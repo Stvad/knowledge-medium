@@ -1,1 +1,1 @@
-export{FR as defaultRegistry,IR as defaultRendererContributions,LR as defaultRenderersExtension}from"../../chunks/app-m-Ucc5LI.js";
+export{IR as defaultRegistry,LR as defaultRendererContributions,RR as defaultRenderersExtension}from"../../chunks/app-By_g4h5K.js";

@@ -1,1 +1,1 @@
-export{SV as BlockEditor}from"../../chunks/app-m-Ucc5LI.js";
+export{CV as BlockEditor}from"../../chunks/app-By_g4h5K.js";
