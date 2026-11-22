@@ -1,41 +1,32 @@
-import {chmod, mkdtemp, rm, writeFile} from 'node:fs/promises'
-import {tmpdir} from 'node:os'
-import {join} from 'node:path'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {mintWorkspaceKey} from '@/sync/keys/mintWorkspaceKey'
 import {getWorkspaceKeyStore, readUsableKeyRecord} from '@/sync/keys/keyStore'
 import {getModePin, setModePin, writePinUpgradeMarker} from '@/sync/keys/modePin'
 import {resolveWorkspaceEntry, type GateWorkspace} from '@/sync/keys/resolveWorkspaceEntry'
-import {openDeviceWorkspace} from './access'
-import type {HeadlessConfig} from './config'
+import {openDeviceWorkspace, type DeviceAccess} from './access'
 
 const user = 'member'
 const workspaceId = 'scratch'
-let dir: string
+let key: string
 let encryptedRow: GateWorkspace
 const plaintextRow: GateWorkspace = {name: null, wkCanary: null, encryptionMode: 'none'}
-const keyPath = () => join(dir, 'device.key')
-const config = (mode: HeadlessConfig['mode']): HeadlessConfig => {
-  const common = {stateDir: dir, workspaceId, profile: 'test'}
-  return mode === 'e2ee' ? {...common, mode, keyFile: keyPath()} : {...common, mode}
-}
+const config = (mode: DeviceAccess['mode']): DeviceAccess =>
+  mode === 'e2ee' ? {workspaceId, mode, key} : {workspaceId, mode}
 const pin = () => getModePin(user, workspaceId)
 const entry = (row: GateWorkspace) => resolveWorkspaceEntry(user, workspaceId, async () => row)
 const keys = () => readUsableKeyRecord(getWorkspaceKeyStore(), user, workspaceId)
 
 beforeEach(async () => {
   stubLocalStorage()
-  dir = await mkdtemp(join(tmpdir(), 'headless-access-'))
   const {canary, displayed} = await mintWorkspaceKey(workspaceId)
   encryptedRow = {name: null, wkCanary: canary, encryptionMode: 'e2ee'}
-  await writeFile(keyPath(), displayed, {mode: 0o600})
+  key = displayed
 })
 afterEach(async () => {
   vi.restoreAllMocks()
   await getWorkspaceKeyStore().clearForUser(user)
   vi.unstubAllGlobals()
-  await rm(dir, {force: true, recursive: true})
 })
 
 describe('workspace access', () => {
@@ -101,7 +92,7 @@ describe('workspace access', () => {
   })
 
   it('validates the key against the workspace canary before the first pin', async () => {
-    await writeFile(keyPath(), (await mintWorkspaceKey(workspaceId)).displayed)
+    key = (await mintWorkspaceKey(workspaceId)).displayed
     await expect(openDeviceWorkspace(config('e2ee'), user, encryptedRow)).rejects.toThrow('invalid-key')
     expect(pin()).toBeNull()
     expect(await keys()).toBeNull()
@@ -111,13 +102,6 @@ describe('workspace access', () => {
     await expect(openDeviceWorkspace(config('e2ee'), user, {...encryptedRow, wkCanary: null}))
       .rejects.toThrow('missing its key canary')
     expect(pin()).toBeNull()
-  })
-
-  it('refuses a group-readable key file', async () => {
-    await chmod(keyPath(), 0o640)
-    await expect(openDeviceWorkspace(config('e2ee'), user, encryptedRow)).rejects.toThrow('0600')
-    expect(pin()).toBeNull()
-    expect(await keys()).toBeNull()
   })
 
   it('refuses when the pin is correct but the unlocked key cannot be read back', async () => {
@@ -134,9 +118,9 @@ describe('workspace access', () => {
     expect(pin()).toBe('e2ee')
   })
 
-  it('reopens an already-unlocked encrypted workspace without reading the key file again', async () => {
+  it('reopens an already-unlocked encrypted workspace without using the key again', async () => {
     await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
-    await rm(keyPath())
+    key = (await mintWorkspaceKey(workspaceId)).displayed
     await openDeviceWorkspace(config('e2ee'), user, encryptedRow)
     expect(await keys()).not.toBeNull()
   })

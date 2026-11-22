@@ -19,13 +19,14 @@ import {noteColdFirstSync} from '@/data/workspaceFirstSync'
 import {untilStopped} from '@/utils/untilStopped'
 import type {User} from '@/types'
 import {resolveAppVersion} from '../app-version'
-import {openDeviceWorkspace} from './access'
+import {openDeviceWorkspace, type DeviceAccess} from './access'
 import {startReadGate} from './gate'
 import {openUploadHold} from './uploadHold'
 import {requirePreferencesPage} from './preferencesPage'
 import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
+import {readWorkspaceKey} from './workspaceKey'
 
 async function waitForWorkspace(db: PowerSyncDatabase, workspaceId: string, signal: AbortSignal) {
   for await (const result of db.watch(SELECT_LOCAL_WORKSPACE_BY_ID_SQL, [workspaceId], {signal})) {
@@ -45,6 +46,10 @@ export async function serveDatabase(
   connect = connectWorkspaceSync, register = connectBridge, releaseStaleQueue = false,
 ) {
   const {workspaceId} = config
+  // Before anything connects: a key that cannot be read fails the boot first.
+  const access: DeviceAccess = config.mode === 'e2ee'
+    ? {workspaceId, mode: 'e2ee', key: await readWorkspaceKey(config)}
+    : {workspaceId, mode: 'plaintext'}
   await db.waitForReady()
   const baseline = db.currentStatus.lastSyncedAt?.getTime()
   let analyzeCheck!: AnalyzeCheck
@@ -70,7 +75,7 @@ export async function serveDatabase(
     if (!existing) await connect(db, connector)
     const row = existing ?? await waitForWorkspace(db, workspaceId, signal)
     signal.throwIfAborted()
-    await openDeviceWorkspace(config, user.id, parseWorkspaceRow(row))
+    await openDeviceWorkspace(access, user.id, parseWorkspaceRow(row))
     if (existing) await connect(db, connector)
     const cold = !await db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
     // Before the Repo, whose observer starts draining as it is built.
