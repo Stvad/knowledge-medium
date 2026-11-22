@@ -1,1 +1,0 @@
-export{CD as spatialNavigationShellDecorator}from"../../../chunks/app-QjpWeW3O.js";

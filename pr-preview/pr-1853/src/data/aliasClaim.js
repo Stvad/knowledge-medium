@@ -1,1 +1,0 @@
-export{Bet as assertAliasClaimable,Vet as claimedAliases}from"../../chunks/app-QjpWeW3O.js";

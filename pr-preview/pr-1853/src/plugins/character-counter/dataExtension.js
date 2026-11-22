@@ -1,1 +1,0 @@
-export{A2 as characterCounterDataExtension}from"../../../chunks/app-QjpWeW3O.js";

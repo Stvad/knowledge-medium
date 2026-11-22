@@ -1,1 +1,0 @@
-export{JJ as usePropertySchemas}from"../../chunks/app-QjpWeW3O.js";
