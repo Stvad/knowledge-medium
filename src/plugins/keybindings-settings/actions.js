@@ -1,1 +1,1 @@
-export{AP as openKeybindingsSettingsAction}from"../../../chunks/app-6fvShRZz.js";
+export{AP as openKeybindingsSettingsAction}from"../../../chunks/app-Bx8aI1mA.js";

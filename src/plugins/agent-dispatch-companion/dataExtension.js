@@ -1,1 +1,1 @@
-export{J3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-6fvShRZz.js";
+export{J3 as agentDispatchCompanionDataExtension}from"../../../chunks/app-Bx8aI1mA.js";
