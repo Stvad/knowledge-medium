@@ -1,1 +1,1 @@
-export{SP as Kbd}from"../../../chunks/app-C-Tv0Su_.js";
+export{CP as Kbd}from"../../../chunks/app-DqaLLnnX.js";

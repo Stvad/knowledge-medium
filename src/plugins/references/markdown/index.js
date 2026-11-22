@@ -1,1 +1,1 @@
-export{Wx as referencesMarkdownExtension}from"../../../../chunks/app-C-Tv0Su_.js";
+export{Gx as referencesMarkdownExtension}from"../../../../chunks/app-DqaLLnnX.js";

@@ -1,1 +1,1 @@
-export{TP as swipeGestureActions,EP as swipeLeftOpenAction,DP as swipeLeftRevealAction,OP as swipeRightCloseAction}from"../../../chunks/app-C-Tv0Su_.js";
+export{EP as swipeGestureActions,DP as swipeLeftOpenAction,OP as swipeLeftRevealAction,kP as swipeRightCloseAction}from"../../../chunks/app-DqaLLnnX.js";

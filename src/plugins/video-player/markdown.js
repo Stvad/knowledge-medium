@@ -1,1 +1,1 @@
-export{dT as videoPlayerMarkdownExtension}from"../../../chunks/app-C-Tv0Su_.js";
+export{fT as videoPlayerMarkdownExtension}from"../../../chunks/app-DqaLLnnX.js";

@@ -1,1 +1,1 @@
-export{LU as Checkbox}from"../../../chunks/app-C-Tv0Su_.js";
+export{RU as Checkbox}from"../../../chunks/app-DqaLLnnX.js";
