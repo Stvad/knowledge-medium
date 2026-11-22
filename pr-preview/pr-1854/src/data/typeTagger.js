@@ -1,1 +1,1 @@
-export{X8 as TypeTagger,Z8 as applyTypeTagInTx}from"../../chunks/app-D8sw6OEX.js";
+export{Z8 as TypeTagger,Q8 as applyTypeTagInTx}from"../../chunks/app-BKUsP5s1.js";
