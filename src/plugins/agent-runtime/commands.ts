@@ -94,7 +94,7 @@ import {
 } from './presetIdentity.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
-import { getPluginPrefsBlock, readPluginPref } from '@/data/stateBlocks.js'
+import { getPluginPrefsBlock, readPluginPref, userPageBlockId } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
@@ -567,8 +567,10 @@ const readExtensionOverrides = async (
   workspaceId: string,
 ): Promise<Overrides | null> => {
   try {
+    // This device's own intent, not `preferencesRootId`: the loader and
+    // `setExtensionEnabled` both use the acting user's page.
     // A copy: with nothing stored this is the schema's shared default.
-    return new Map(await readPluginPref(repo, workspaceId, repo.user, extensionsPrefsType, extensionsOverridesProp))
+    return new Map(await readPluginPref(repo, userPageBlockId(workspaceId, repo.user.id), extensionsPrefsType, extensionsOverridesProp))
   } catch {
     return null
   }

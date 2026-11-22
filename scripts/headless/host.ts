@@ -21,6 +21,7 @@ import {resolveAppVersion} from '../app-version'
 import {openDeviceWorkspace} from './access'
 import {startReadGate} from './gate'
 import {openUploadHold} from './uploadHold'
+import {requirePreferencesPage} from './preferencesPage'
 import {executeHeadlessCommand} from './commands'
 import {connectBridge, type HostBridge} from './bridge'
 import type {HeadlessConfig} from './config'
@@ -71,7 +72,8 @@ export async function serveDatabase(
     await openDeviceWorkspace(config, user.id, parseWorkspaceRow(row))
     if (existing) await connect(db, connector)
     const cold = !await db.getOptional('SELECT 1 FROM blocks WHERE workspace_id = ? LIMIT 1', [workspaceId])
-    const active = new Repo({db, user, cache: new BlockCache(), syncObserverDeps: resolver, isReadOnly: true})
+    const preferencesPage = config.preferencesPage ? {workspaceId, userPageId: config.preferencesPage} : undefined
+    const active = new Repo({db, user, cache: new BlockCache(), syncObserverDeps: resolver, isReadOnly: true, preferencesPage})
     repo = active
     if (cold) releaseBulk = active.holdBulkSyncLoad(workspaceId)
     active.setActiveWorkspaceId(workspaceId)
@@ -94,6 +96,7 @@ export async function serveDatabase(
     })
     const transport = bridge.postEvent
     gate = startReadGate(db, active, workspaceId, baseline, async signal => {
+      if (preferencesPage) await requirePreferencesPage(active, preferencesPage)
       const namespaces = await openWorkspaceData(active, workspaceId, false, signal)
       await untilStopped(Promise.all(namespaces), signal)
     }, visible => {

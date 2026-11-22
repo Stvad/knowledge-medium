@@ -335,19 +335,31 @@ export const getPluginPrefsBlock = memoizeAsync(
  *  derived without loading or creating anything, for the reason
  *  `pluginUIStateBlockId` gives. */
 export const pluginPrefsBlockId = (workspaceId: string, userId: string, typeId: string): string =>
-  stateChildBlockId(stateChildBlockId(userPageBlockId(workspaceId, userId), USER_PREFS_PATH_PART), typeId)
+  pluginPrefsBlockIdUnder(userPageBlockId(workspaceId, userId), typeId)
 
-/** One plugin preference, read without creating the prefs subtree: the
- *  stored value, or the schema's default while the user has none. For read
- *  paths; a settings surface that writes uses `getPluginPrefsBlock`. */
+const pluginPrefsBlockIdUnder = (userPageId: string, typeId: string): string =>
+  stateChildBlockId(stateChildBlockId(userPageId, USER_PREFS_PATH_PART), typeId)
+
+/** The user page whose preferences this client's READS resolve against in
+ *  `workspaceId`: the page it was pointed at (`RepoOptions.preferencesPage`),
+ *  else the acting user's own. Never a write target — `getPluginPrefsBlock`
+ *  and the UI-state accessors always resolve the acting user's own page. */
+export const preferencesRootId = (repo: Repo, workspaceId: string): string => {
+  const page = repo.client.preferencesPage
+  return page?.workspaceId === workspaceId ? page.userPageId : userPageBlockId(workspaceId, repo.user.id)
+}
+
+/** One plugin preference under the user page `userPageId` (usually
+ *  `preferencesRootId`), read without creating the prefs subtree: the stored
+ *  value, or the schema's default while there is none. For read paths; a
+ *  settings surface that writes uses `getPluginPrefsBlock`. */
 export const readPluginPref = async <T>(
   repo: Repo,
-  workspaceId: string,
-  user: User,
+  userPageId: string,
   type: TypeContribution,
   schema: PropertySchema<T>,
 ): Promise<T> => {
-  const id = pluginPrefsBlockId(workspaceId, user.id, type.id)
+  const id = pluginPrefsBlockIdUnder(userPageId, type.id)
   const stored = (await repo.load(id)) ? repo.block(id).peekProperty(schema) : undefined
   return stored ?? schema.defaultValue
 }
