@@ -1,12 +1,8 @@
 import type { SubtreeRow } from '@/data/api'
-import { isResolvableFieldDefinition } from '@/data/internals/propertySchemaResolution'
+import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
 import { outlineSkippedFieldIds } from '@/data/propertyDefinitionRegistry'
-import type { Block } from '@/data/block'
-import type { OutlineSurface } from '@/data/outlineSurface'
 import {
   isLeftOutOfChildrenView,
-  isPropertyFieldInstance,
-  type IsPropertyFieldDefinition,
   type PropertyRowClassifier,
 } from '@/data/propertyChildren'
 import {
@@ -42,13 +38,6 @@ export const pruneSubtreeToDrawn = (
   return out
 }
 
-/** "Does this id name a property definition?" for `workspaceId`, by the repo's
- *  live registry: the recognition the outline's queries bind. */
-export const repoFieldDefinitionTest = (repo: Repo, workspaceId: string): IsPropertyFieldDefinition => {
-  const resolver = repo.propertySchemaResolverFor(workspaceId)
-  return fieldId => isResolvableFieldDefinition(resolver.resolveField(fieldId))
-}
-
 /** The classifier for `workspaceId` from the repo's live registry: the same
  *  recognition and skip set the outline's queries bind. */
 export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): PropertyRowClassifier => {
@@ -58,23 +47,6 @@ export const repoPropertyRowClassifier = (repo: Repo, workspaceId: string): Prop
     isFieldDefinition: repoFieldDefinitionTest(repo, workspaceId),
     isOutlineSkipped: fieldId => skipped.has(fieldId),
   }
-}
-
-/** Whether `surface` draws `block` as a property's NAME — the name beside its
- *  value, in place of the row's own `::((id))` text, with no text editor: a
- *  recognized field row listed under a parent whose listing there shows
- *  property rows. The surface's own root, and a field row in a listing that
- *  shows none (the focused one), are ordinary blocks showing their text.
- *  The imperative twin of `FieldRowRenderer`'s choice. */
-export const isDrawnAsPropertyName = async (
-  block: Block,
-  surface: Pick<OutlineSurface, 'scopeRootId' | 'propertyDisplay'>,
-): Promise<boolean> => {
-  if (!surface.propertyDisplay.childBacked || block.id === surface.scopeRootId) return false
-  const data = await block.load()
-  if (!data?.parentId) return false
-  if (!isPropertyFieldInstance(data, repoFieldDefinitionTest(block.repo, data.workspaceId))) return false
-  return childrenViewIn(surface.propertyDisplay, await block.repo.load(data.parentId)) !== 'none'
 }
 
 /** The subtree under `id` a copy carries (see {@link PropertyCopy}), in

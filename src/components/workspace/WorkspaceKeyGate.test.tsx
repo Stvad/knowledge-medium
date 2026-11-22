@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WorkspaceKeyGate, type WorkspaceGateDeps } from './WorkspaceKeyGate.tsx'
+import { WorkspaceKeyGate, workspaceGateDeps, type WorkspaceGateDeps } from './WorkspaceKeyGate.tsx'
 import { closeConversionFlow, conversionFlowTarget as conversionTarget } from './conversion/conversionFlowStore'
 import { notifyWorkspaceUnlocked } from './workspaceUnlocked'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
@@ -539,5 +539,23 @@ describe('WorkspaceKeyGate — finishing-upgrade', () => {
     fireEvent.click(screen.getByRole('button', {name: /try again/i}))
     await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1))
     expect(hasPinUpgradeMarker(USER, WS)).toBe(false)
+  })
+})
+
+describe('workspaceGateDeps', () => {
+  it('holds bulk drain windows around the gate drain, and gives them back when it fails', async () => {
+    const order: string[] = []
+    const repo = {
+      holdBulkSyncLoad: (workspaceId: string) => { order.push(`hold ${workspaceId}`); return () => { order.push('release') } },
+      drainSyncWorkspace: vi.fn(async () => { order.push('drain'); return {deferred: 0} }),
+    }
+    const deps = workspaceGateDeps(repo as never, 'ws')
+    await deps.drainWorkspace()
+    expect(order).toEqual(['hold ws', 'drain', 'release'])
+
+    order.length = 0
+    repo.drainSyncWorkspace.mockRejectedValueOnce(new Error('drain failed'))
+    await expect(deps.drainWorkspace()).rejects.toThrow('drain failed')
+    expect(order).toEqual(['hold ws', 'release'])
   })
 })

@@ -14,6 +14,7 @@ import { geoDataExtension } from '@/plugins/geo/dataExtension.js'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension.js'
 import { htmlDocumentDataExtension } from '@/plugins/html-document/dataExtension.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
+import { tablesDataExtension } from '@/plugins/tables/dataExtension.js'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension.js'
 import { todoDataExtension } from '@/plugins/todo/dataExtension.js'
 
@@ -43,4 +44,5 @@ export const staticDataExtensions: AppExtension[] = [
   attachmentsDataExtension,
   contributorsDataExtension,
   annotationsDataExtension,
+  tablesDataExtension,
 ]

@@ -1,8 +1,10 @@
 /*
  * A watcher's memory: one block per note under a `Memory` block that is a
- * direct child of the watched page. The run keeps it with the ordinary km
- * write tools; the daemon reports what changed, so a write to it is never
- * silent.
+ * direct child of the watched page, plus the shared notes its outline shows:
+ * the blocks its embeds (`!((id))`, `![[Page]]`) bring in, which other
+ * watchers' memories can embed too. The run keeps it with the ordinary km
+ * write tools; the daemon reports what changed in both, so a write to it is
+ * never silent. An embed past the outline's bounds is not a shared note.
  */
 
 /** The content that marks the memory block among the watched page's children. */
@@ -31,10 +33,20 @@ export const diffMemory = (before: MemoryEntry[], after: MemoryEntry[]): MemoryD
 
 const PREVIEW_CHARS = 60
 
+/** A reference reads as words rather than as a bare id: an embed as an embed
+ *  (of the page it names), an aliased link as its label, a plain ref as one. */
+const REFERENCE_WORDS: Array<[RegExp, string]> = [
+  [/!\(\([^()\s]+\)\)/g, 'embedded block'],
+  [/!\[\[([^[\]]+)\]\]/g, 'embedded $1'],
+  [/\[([^[\]]*)\]\(\(\([^()\s]+\)\)\)/g, '$1'],
+  [/\(\([^()\s]+\)\)/g, 'block ref'],
+]
+
 /** One line of plain text: brackets, parens and `#` go, so a preview can
  *  never form a page link, block ref or tag in the reply. */
 const preview = (content: string): string => {
-  const flat = content.replace(/[[\]()#]/g, '').replace(/\s+/g, ' ').trim()
+  const words = REFERENCE_WORDS.reduce((text, [pattern, word]) => text.replace(pattern, word), content)
+  const flat = words.replace(/[[\]()#]/g, '').replace(/\s+/g, ' ').trim()
   return flat.length > PREVIEW_CHARS ? `${flat.slice(0, PREVIEW_CHARS)}…` : flat
 }
 

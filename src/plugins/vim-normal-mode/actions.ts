@@ -30,7 +30,7 @@ import {
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 
-const JUMP_BLOCK_COUNT = 8
+export const JUMP_BLOCK_COUNT = 8
 
 /**
  * True when the panel's focus has moved off the row this invocation started

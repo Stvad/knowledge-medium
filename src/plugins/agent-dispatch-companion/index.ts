@@ -6,6 +6,7 @@ import { agentStatusChipContribution } from './AgentStatusChip.tsx'
 import { askAgentActions } from './askAgent.ts'
 import { cancelAgentActions } from './cancelAgent.ts'
 import { copyAgentResumeCommandActions } from './resumeCommand.ts'
+import { agentDispatchCompanionDataExtension } from './dataExtension.ts'
 
 const SOURCE = 'agent-dispatch-companion'
 
@@ -21,6 +22,7 @@ export const agentDispatchCompanionPlugin: AppExtension = systemToggle({
   description:
     'Status chips + Ask Agent action for blocks the agent-dispatch daemon processes.',
 }).of([
+  agentDispatchCompanionDataExtension,
   blockGutterItemsFacet.of(agentStatusChipContribution, { source: SOURCE }),
   ...askAgentActions.map(action => actionsFacet.of(action, { source: SOURCE })),
   ...cancelAgentActions.map(action => actionsFacet.of(action, { source: SOURCE })),

@@ -125,6 +125,37 @@ describe('Same-tx runner — field-watching dispatch', () => {
 })
 
 describe('Same-tx runner — event dispatch', () => {
+  it('runs an event-only transaction in an explicitly writable workspace', async () => {
+    const seen: string[] = []
+    env.repo.__setSameTxProcessorsForTesting([{
+      name: 'test.eventOnly', watches: {kind: 'event', events: ['test.refresh']},
+      apply: async (event, ctx) => {
+        seen.push(event.workspaceId)
+        await ctx.tx.create({id: 'event-result', workspaceId: event.workspaceId, parentId: null, orderKey: 'a0', content: 'derived'})
+      },
+    }])
+    await env.repo.tx(async tx => {
+      tx.emitEvent('test.refresh', {}, WS)
+    }, {scope: ChangeScope.References})
+    expect(seen).toEqual([WS])
+    expect((await env.repo.load('event-result'))?.content).toBe('derived')
+  })
+
+  it('requires an explicit workspace before the first write and forbids repinning', async () => {
+    await env.repo.tx(async tx => {
+      expect(() => tx.emitEvent('test.refresh', {})).toThrow()
+      tx.emitEvent('test.refresh', {}, WS)
+      expect(() => tx.emitEvent('test.refresh', {}, 'other-workspace')).toThrow()
+    }, {scope: ChangeScope.References, allowUnloadedWorkspace: true})
+  })
+
+  it('rejects an event-only transaction targeting a workspace whose registry is not open', async () => {
+    await env.repo.whenPropertyDefinitionsReady(WS)
+    await env.repo.tx(async tx => {
+      expect(() => tx.emitEvent('test.refresh', {}, 'closed-workspace')).toThrow()
+    }, {scope: ChangeScope.References})
+  })
+
   it('fires event watchers inside the active tx with read-your-own-writes DB access', async () => {
     const seenPayloads: unknown[] = []
     const watcher: AnySameTxProcessor = {

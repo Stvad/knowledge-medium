@@ -11,6 +11,7 @@ import {
   scopeRowBlockId,
   scopeRowSelector,
 } from '@/extensions/blockInteraction.js'
+import { allowsBlockGestures } from '@/extensions/continuousGestures.js'
 import { isPanelRenderScopeId } from '@/utils/renderScope.js'
 import { visibilityTargetFor } from '@/plugins/spatial-navigation/walker.js'
 import type { MoveTarget } from '@/data/mutators.js'
@@ -63,6 +64,7 @@ export const resolveDropTarget = (
   y: number,
   context: DropContext,
 ): DropTarget | null => {
+  if (!allowsBlockGestures(hit)) return null
   // Off every row but inside a panel (its margin, left of the outline
   // while dragging out to outdent): the panel's own outline.
   const hovered = hit?.closest<HTMLElement>(ROW_SELECTOR) ?? panelOutlineRoot(hit?.closest(PANEL_SELECTOR))

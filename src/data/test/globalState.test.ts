@@ -62,6 +62,7 @@ import {
   pluginPrefsBlockId,
   readPluginPref,
   resetBlockSelection,
+  userPageBlockId,
 } from '@/data/stateBlocks'
 import type { FulfilledThenable } from '@/utils/resolvedThenable'
 import type { Block } from '@/data/block'
@@ -272,14 +273,14 @@ describe('getPluginPrefsBlock', () => {
       (await env.h.db.getAll<{n: number}>('SELECT count(*) AS n FROM blocks'))[0].n
     const before = await blockCount()
 
-    expect(await readPluginPref(env.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBe(showPropertiesProp.defaultValue)
+    expect(await readPluginPref(env.repo, userPageBlockId(WS, USER.id), examplePrefsType, showPropertiesProp)).toBe(showPropertiesProp.defaultValue)
     expect(await blockCount()).toBe(before)
 
     const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
     expect(pluginPrefs.id).toBe(pluginPrefsBlockId(WS, USER.id, examplePrefsType.id))
     const fresh = await setup([examplePrefsType])
     try {
-      expect(await readPluginPref(fresh.repo, WS, USER, examplePrefsType, showPropertiesProp)).toBe(true)
+      expect(await readPluginPref(fresh.repo, userPageBlockId(WS, USER.id), examplePrefsType, showPropertiesProp)).toBe(true)
     } finally {
       await fresh.h.cleanup()
     }

@@ -11,7 +11,15 @@ import { encodeForWire, type GetCek } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { InvalidationRule } from '@/data/invalidation'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
-import { constMat, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
+import {
+  INSERT_BLOCK_SQL, constMat, drainStagingWindowOnce, noKey, stagingCiphertextParams, setupObserverTestDb,
+} from './test/harness.js'
+import type { SyncDrainStats } from './observer.js'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams, blockToSyncedRowParams } from '@/data/blockSchema'
+import { buildDeferredSearchIndex, syncBulkLoadScope } from '@/data/internals/clientSchema'
+import { initializeClientDatabase } from '@/data/internals/initializeClientDatabase'
+import { resetTestDb } from '@/data/test/createTestDb'
+import { DEFERRED_SEARCH_INDEX_GAP_REASON, stagedViewGapReason } from './reconcile.js'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -44,6 +52,15 @@ const unapplied = async (workspaceId: string): Promise<string[]> =>
     'SELECT id FROM blocks_synced WHERE workspace_id = ? AND needs_apply = 1 ORDER BY id',
     [workspaceId],
   )).map(row => row.id)
+
+/** One statement in a sync-applied transaction (source NULL) carrying `scope`,
+ *  as an observer window writes — `syncBulkLoadScope` for a bulk one. */
+const writeAsSync = (scope: string | null, sql: string, params: unknown[] = []) =>
+  env.db.writeTransaction(async (tx) => {
+    await tx.execute('UPDATE tx_context SET source = NULL, scope = ? WHERE id = 1', [scope])
+    await tx.execute(sql, params)
+    await tx.execute('UPDATE tx_context SET scope = NULL WHERE id = 1')
+  })
 
 const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> => {
   const t0 = Date.now()
@@ -790,5 +807,448 @@ describe('blocksSyncedObserver — cycle detection (§4.7)', () => {
     await observer.flush()
 
     expect(events).toEqual([])
+  })
+})
+
+describe('blocksSyncedObserver — drain stats', () => {
+  it('reports one summary per drain, summed over its windows', async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, onDrainStats: stats => seen.push(stats),
+    })
+    await observer.flush()
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({
+      source: 'queue', completed: true, windows: 3, rows: 5, applied: 5, deferred: 0, deleted: 0,
+    })
+    const { wallMs, readMs, decodeMs, writeMs, invalidateMs, bookkeepingMs } = seen[0]!
+    for (const stage of [readMs, decodeMs, writeMs, invalidateMs, bookkeepingMs]) {
+      expect(stage).toBeGreaterThan(0)
+    }
+    expect(readMs + decodeMs + writeMs + invalidateMs + bookkeepingMs).toBeLessThanOrEqual(wallMs)
+
+    // A flush with nothing queued ran no window, so it has nothing to report.
+    await observer.flush()
+    expect(seen).toHaveLength(1)
+
+    await observer.drainWorkspace('ws', 'all')
+    expect(seen[1]).toMatchObject({ source: 'workspace', completed: true, windows: 3, rows: 5, applied: 0 })
+  })
+
+  it('reports the windows a failed drain got through, marked incomplete', async () => {
+    for (let i = 0; i < 4; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 2) throw new Error('boom')
+      return 'copy'
+    }
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability, drainChunkSize: 2, onError: () => {}, onDrainStats: stats => seen.push(stats),
+    })
+    await expect(observer.flush()).rejects.toThrow('boom')
+    // The observer's own start-up drain may be the one that threw; either way
+    // exactly the first window was applied before the failure.
+    expect(seen[0]).toMatchObject({ source: 'queue', completed: false, windows: 1, rows: 2, applied: 2 })
+  })
+
+  it('keeps a drain intact when its stats listener throws', async () => {
+    await put(data({ id: 'b0', workspaceId: 'ws', content: 'c0' }))
+    const errors: unknown[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      onError: e => errors.push(e),
+      onDrainStats: () => { throw new Error('listener') },
+    })
+    await observer.flush().catch(() => {})
+    errors.length = 0
+    // A pass of our own, so the promise under test is the one that reported.
+    await expect(observer.drainWorkspace('ws', 'all')).resolves.toMatchObject({ scanned: 1 })
+    expect(errors).toEqual([new Error('listener')])
+  })
+
+})
+
+describe('blocksSyncedObserver — handle invalidation during a backlog', () => {
+  const stageFive = async () => {
+    for (let i = 0; i < 5; i++) await put(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` }))
+  }
+  const rowIds = (n: { rowIds?: ReadonlySet<string> | readonly string[] }) => [...(n.rowIds ?? [])].sort()
+
+  it('delivers the first window at once and the rest of the drain together', async () => {
+    await stageFive()
+    const { observer, notifications, staleMarks, cache } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
+    })
+    await observer.flush()
+
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3', 'b4']])
+    // Staleness is not part of what waits, and neither is the cache.
+    expect(staleMarks.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3'], ['b4']])
+    expect(cache.getSnapshot('b4')).toMatchObject({ content: 'c4' })
+  })
+
+  it('delivers the first window of a later drain at once too', async () => {
+    await stageFive()
+    const { observer, notifications } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000,
+    })
+    await observer.flush()
+    notifications.length = 0
+
+    // One transaction, so the second batch is one delivery and one drain.
+    await env.db.writeTransaction(async (tx) => {
+      for (let i = 5; i < 10; i++) {
+        await tx.execute(
+          BLOCKS_SYNCED_RAW_TABLE.put.sql,
+          blockToSyncedRowParams(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` })),
+        )
+      }
+    })
+    await observer.flush()
+    expect(notifications.map(rowIds)).toEqual([['b5', 'b6'], ['b7', 'b8', 'b9']])
+  })
+
+  it('delivers every window once the interval has passed', async () => {
+    await stageFive()
+    const { observer, notifications } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, backlogInvalidationIntervalMs: 0,
+    })
+    await observer.flush()
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3'], ['b4']])
+  })
+
+  it('still delivers what a failed drain had held back', async () => {
+    await stageFive()
+    let windows = 0
+    const getMaterializability: GetMaterializability = () => {
+      windows += 1
+      if (windows >= 3) throw new Error('boom')
+      return 'copy'
+    }
+    const { observer, notifications } = start({
+      getMaterializability, drainChunkSize: 2, backlogInvalidationIntervalMs: 60_000, onError: () => {},
+    })
+    await observer.flush().catch(() => {})
+    expect(notifications.map(rowIds)).toEqual([['b0', 'b1'], ['b2', 'b3']])
+  })
+})
+
+describe('blocksSyncedObserver — bulk windows', () => {
+  it('drains in bulk-sized windows while a hold is out, and in live ones after its release', async () => {
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({
+      getMaterializability: constMat('copy'), drainChunkSize: 2, bulkDrainChunkSize: 4,
+      onDrainStats: stats => seen.push(stats),
+    })
+    await observer.flush()
+    const stage = (from: number) => env.db.writeTransaction(async (tx) => {
+      for (let i = from; i < from + 6; i++) {
+        await tx.execute(
+          BLOCKS_SYNCED_RAW_TABLE.put.sql,
+          blockToSyncedRowParams(data({ id: `b${i}`, workspaceId: 'ws', content: `c${i}` })),
+        )
+      }
+    })
+
+    const release = observer.holdBulkLoad('ws')
+    const nested = observer.holdBulkLoad('ws')
+    nested()
+    nested() // a second call releases nothing further
+    await stage(0)
+    await observer.flush()
+    expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 2 })
+
+    release()
+    await stage(6)
+    await observer.flush()
+    expect(seen.at(-1)).toMatchObject({ rows: 6, windows: 3 })
+
+    // The workspace pass sizes its windows the same way.
+    const again = observer.holdBulkLoad('ws')
+    await observer.drainWorkspace('ws', 'all')
+    expect(seen.at(-1)).toMatchObject({ source: 'workspace', rows: 12, windows: 3 })
+    again()
+  })
+})
+
+describe('blocksSyncedObserver — a bulk load\'s change log', () => {
+  const events = () => env.db.getAll<{ block_id: string; kind: string }>(
+    'SELECT block_id, kind FROM row_events ORDER BY id',
+  )
+
+  it('logs no create for a row a bulk load inserts, and logs its later changes', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await observer.flush()
+
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await blocks()).toEqual([{ id: 'bulk', content: 'v1' }])
+    expect(await events()).toEqual([])
+
+    // Still under the hold: an UPDATE is a change to a row this device has.
+    await put(data({ id: 'bulk', workspaceId: 'ws', content: 'v2', updatedAt: 2 }))
+    await observer.flush()
+    expect(await events()).toEqual([{ block_id: 'bulk', kind: 'update' }])
+
+    // The hold names a workspace: another one's arrivals are logged throughout.
+    await put(data({ id: 'other', workspaceId: 'ws-other', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'other', kind: 'create' },
+    ])
+
+    release()
+    await put(data({ id: 'live', workspaceId: 'ws', content: 'v1', updatedAt: 1 }))
+    await observer.flush()
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'other', kind: 'create' },
+      { block_id: 'live', kind: 'create' },
+    ])
+  })
+
+  it('still logs a create for a local write that carries the bulk scope', async () => {
+    // DEFENCE IN DEPTH: no ChangeScope is the bulk scope, but a scope is a
+    // string an extension passes, and an unlogged local create has no undo.
+    await env.db.writeTransaction(async (tx) => {
+      await tx.execute(`UPDATE tx_context SET source = 'user', scope = '${syncBulkLoadScope(['ws'])}', tx_seq = 1 WHERE id = 1`)
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+           created_at, updated_at, created_by, updated_by, deleted)
+         VALUES ('local', 'ws', NULL, 'a0', '', '{}', '[]', 1, 1, 'u', 'u', 0)`,
+      )
+      await tx.execute('UPDATE tx_context SET source = NULL, scope = NULL, tx_seq = NULL WHERE id = 1')
+    })
+    expect(await events()).toEqual([{ block_id: 'local', kind: 'create' }])
+  })
+
+  it('logs no update for the derived columns a bulk load stamps on its own rows', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws' }))
+    await observer.flush()
+    release()
+
+    const stamp = (scope: string | null, set: string) => writeAsSync(scope, `UPDATE blocks SET ${set} WHERE id = 'bulk'`)
+    await stamp(syncBulkLoadScope(['ws']), `reference_target_id = 't1'`)
+    expect(await events()).toEqual([])
+    // Outside a bulk load the same stamp is an event, as it always was.
+    await stamp(null, `reference_target_id = 't2'`)
+    // And inside one, a change to a synced column still is.
+    await stamp(syncBulkLoadScope(['ws']), `content = 'changed', reference_target_id = 't3'`)
+    expect(await events()).toEqual([
+      { block_id: 'bulk', kind: 'update' },
+      { block_id: 'bulk', kind: 'update' },
+    ])
+  })
+
+  it('logs nothing for a held row whose reference the window itself stamps', async () => {
+    const { observer } = start({
+      getMaterializability: constMat('copy'),
+      referenceTargetLookups: () => ({ aliasTargetId: async () => null }),
+    })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'ref', workspaceId: 'ws', content: '((t1))' }))
+    await observer.flush()
+    release()
+
+    // The stamp happened, in the window's own transaction...
+    expect(await env.db.get<{ reference_target_id: string | null }>(
+      `SELECT reference_target_id FROM blocks WHERE id = 'ref'`,
+    )).toEqual({ reference_target_id: 't1' })
+    // ...and while its bulk scope was still set.
+    expect(await events()).toEqual([])
+  })
+
+  it('logs a create on a live pass whatever scope was left behind', async () => {
+    // DEFENCE IN DEPTH: nothing leaves a bulk scope committed, so this state is
+    // written by hand.
+    await env.db.execute('UPDATE tx_context SET scope = ? WHERE id = 1', [syncBulkLoadScope(['ws'])])
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    await put(data({ id: 'live', workspaceId: 'ws' }))
+    await observer.flush()
+    expect(await events()).toEqual([{ block_id: 'live', kind: 'create' }])
+  })
+
+  it('leaves no exemption behind for another source-NULL write', async () => {
+    const { observer } = start({ getMaterializability: constMat('copy') })
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'bulk', workspaceId: 'ws' }))
+    await observer.flush()
+    release()
+
+    expect(await env.db.get<{ scope: string | null }>('SELECT scope FROM tx_context WHERE id = 1'))
+      .toEqual({ scope: null })
+  })
+})
+
+describe('blocksSyncedObserver — a bulk load\'s search index', () => {
+  const owed = async () => (await env.db.getAll<{ block_id: string }>(
+    'SELECT block_id FROM blocks_fts_owed ORDER BY block_id',
+  )).map(row => row.block_id)
+  const indexed = () => env.db.getAll<{ block_id: string; workspace_id: string; content: string }>(
+    'SELECT block_id, workspace_id, content FROM blocks_fts ORDER BY block_id',
+  )
+
+  /** Everything a drain derives from `blocks`, except `row_events` (a bulk
+   *  load logs no creates by design) and the FTS rowid VALUES, which are
+   *  allocation order. */
+  const derivedState = async () => ({
+    blocks: await env.db.getAll('SELECT * FROM blocks ORDER BY id'),
+    aliases: await env.db.getAll('SELECT * FROM block_aliases ORDER BY block_id, alias'),
+    types: await env.db.getAll('SELECT * FROM block_types ORDER BY block_id, type'),
+    fts: await indexed(),
+    ftsRowids: await env.db.getAll('SELECT block_id FROM blocks_fts_rowids ORDER BY block_id'),
+    hits: await env.db.getAll(`SELECT block_id FROM blocks_fts WHERE blocks_fts MATCH 'para' ORDER BY block_id`),
+    owed: await owed(),
+  })
+
+  /** Two arrival rounds — the second updates, tombstones and hard-deletes rows
+   *  the first inserted — drained with or without a hold on 'ws'. */
+  const drainArrivals = async (hold: boolean) => {
+    const seen: SyncDrainStats[] = []
+    const { observer } = start({ getMaterializability: constMat('copy'), onDrainStats: s => seen.push(s) })
+    await observer.flush()
+    const release = hold ? observer.holdBulkLoad('ws') : () => {}
+    await env.db.writeTransaction(async (tx) => {
+      const rows = [
+        data({ id: 'page', workspaceId: 'ws', content: 'para page', properties: { alias: ['Page'], types: ['page'] } }),
+        data({ id: 'kid', workspaceId: 'ws', parentId: 'page', content: 'para child' }),
+        data({ id: 'empty', workspaceId: 'ws', parentId: 'page', content: '' }),
+        data({ id: 'tomb', workspaceId: 'ws', parentId: 'page', content: 'para gone', deleted: true }),
+        data({ id: 'edited', workspaceId: 'ws', parentId: 'page', content: 'para v1' }),
+        data({ id: 'removed', workspaceId: 'ws', parentId: 'page', content: 'para removed' }),
+        data({ id: 'other', workspaceId: 'ws-other', content: 'para elsewhere' }),
+      ]
+      for (const row of rows) await tx.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(row))
+    })
+    await observer.flush()
+    await put(data({ id: 'edited', workspaceId: 'ws', parentId: 'page', content: 'para v2', updatedAt: 2 }))
+    await put(data({ id: 'kid', workspaceId: 'ws', parentId: 'page', content: 'para child', deleted: true, updatedAt: 2 }))
+    await del('removed')
+    await observer.flush()
+    release()
+    observer.dispose()
+    return { state: await derivedState(), deferredEntries: seen.reduce((n, s) => n + s.deferredIndexEntries, 0) }
+  }
+
+  it('leaves blocks and everything derived from it as a drain without the hold does', async () => {
+    const live = await drainArrivals(false)
+    expect(live.deferredEntries).toBe(0)
+    await resetTestDb(env.db)
+    const bulk = await drainArrivals(true)
+    // The deferral engaged — every 'ws' insert of the first round — so the
+    // equality below is the build's doing, not the per-row trigger's.
+    expect(bulk.deferredEntries).toBe(6)
+    expect(bulk.state).toEqual(live.state)
+    expect(bulk.state.hits.length).toBeGreaterThan(0)
+  })
+
+  it('records what it defers in the window that inserts it, for the held workspace only', async () => {
+    await put(data({ id: 'held', workspaceId: 'ws', content: 'para held' }))
+    await put(data({ id: 'other', workspaceId: 'ws-other', content: 'para other' }))
+    await drainStagingWindowOnce(env.db, { getMaterializability: constMat('copy'), getCek: noKey }, { bulkLoadWorkspaceIds: ['ws'] })
+    expect(await owed()).toEqual(['held'])
+    expect(await indexed()).toEqual([{ block_id: 'other', workspace_id: 'ws-other', content: 'para other' }])
+    expect(await stagedViewGapReason(env.db)).toBe(DEFERRED_SEARCH_INDEX_GAP_REASON)
+
+    expect(await buildDeferredSearchIndex(env.db)).toBe(1)
+    expect(await owed()).toEqual([])
+    expect((await indexed()).map(row => row.block_id)).toEqual(['held', 'other'])
+    expect(await stagedViewGapReason(env.db)).toBeNull()
+  })
+
+  it('indexes the workspace pass a hold covers before the pass resolves', async () => {
+    const { observer } = start({ getMaterializability: constMat('defer') })
+    await put(data({ id: 'b1', workspaceId: 'ws', content: 'para one' }))
+    await observer.flush()
+    expect(await blocks()).toEqual([])
+    observer.dispose()
+
+    const unlocked = start({ getMaterializability: constMat('copy') })
+    const release = unlocked.observer.holdBulkLoad('ws')
+    await unlocked.observer.drainWorkspace('ws', 'all')
+    release()
+    expect(await owed()).toEqual([])
+    expect(await indexed()).toEqual([{ block_id: 'b1', workspace_id: 'ws', content: 'para one' }])
+  })
+
+  it('builds each owed row as it is now, not as it was inserted', async () => {
+    const bulk = syncBulkLoadScope(['ws'])
+    for (const id of ['edited', 'tombstoned', 'removed', 'reinserted']) {
+      await writeAsSync(bulk, INSERT_BLOCK_SQL, blockToRowParams(data({ id, workspaceId: 'ws', content: `para ${id}` })))
+    }
+    // Changes after the deferred insert, before the build. The edit is indexed
+    // by `blocks_fts_update`, so the build must not index it a second time.
+    await writeAsSync(null, `UPDATE blocks SET content = 'para edited v2' WHERE id = 'edited'`)
+    await writeAsSync(null, `UPDATE blocks SET deleted = 1 WHERE id = 'tombstoned'`)
+    await writeAsSync(null, `DELETE FROM blocks WHERE id IN ('removed', 'reinserted')`)
+    await writeAsSync(bulk, INSERT_BLOCK_SQL, blockToRowParams(data({ id: 'reinserted', workspaceId: 'ws', content: 'para again' })))
+    expect(await owed()).toEqual(['edited', 'reinserted', 'reinserted', 'removed', 'tombstoned'])
+
+    expect(await buildDeferredSearchIndex(env.db)).toBe(5)
+    expect(await indexed()).toEqual([
+      { block_id: 'edited', workspace_id: 'ws', content: 'para edited v2' },
+      { block_id: 'reinserted', workspace_id: 'ws', content: 'para again' },
+    ])
+    // A rowid for every row that exists, tombstones included, as the per-row
+    // trigger allocates them.
+    expect(await env.db.getAll('SELECT block_id FROM blocks_fts_rowids ORDER BY block_id')).toEqual([
+      { block_id: 'edited' }, { block_id: 'reinserted' }, { block_id: 'tombstoned' },
+    ])
+  })
+
+  it('builds in chunks, each clearing only the entries it indexed, rowids in arrival order', async () => {
+    // Not id order: FTS5 keys its doclists by rowid, and the per-row trigger
+    // hands rowids out as rows arrive.
+    const arrival = ['d', 'a', 'e', 'b', 'c']
+    for (const id of arrival) {
+      await writeAsSync(syncBulkLoadScope(['ws']), INSERT_BLOCK_SQL,
+        blockToRowParams(data({ id, workspaceId: 'ws', content: `para ${id}` })))
+    }
+    expect(await buildDeferredSearchIndex(env.db, 2)).toBe(5)
+    expect(await owed()).toEqual([])
+    expect((await env.db.getAll<{ block_id: string }>(
+      'SELECT block_id FROM blocks_fts ORDER BY rowid',
+    )).map(row => row.block_id)).toEqual(arrival)
+  })
+
+  it('still builds what committed windows deferred when a later step fails the drain', async () => {
+    let failing = false
+    const { observer } = start({
+      getMaterializability: constMat('copy'), bulkDrainChunkSize: 1,
+      onError: () => {},
+      getInvalidationRules: () => { if (failing) throw new Error('boom'); return [] },
+    })
+    await observer.flush()
+    const release = observer.holdBulkLoad('ws')
+    await put(data({ id: 'b1', workspaceId: 'ws', content: 'para one' }))
+    await put(data({ id: 'b2', workspaceId: 'ws', content: 'para two' }))
+    failing = true
+    // Window 1 commits b1, then its invalidation throws.
+    await expect(observer.flush()).rejects.toThrow('boom')
+    release()
+    expect(await blocks()).toEqual([{ id: 'b1', content: 'para one' }])
+    expect(await owed()).toEqual([])
+    expect(await indexed()).toEqual([{ block_id: 'b1', workspace_id: 'ws', content: 'para one' }])
+  })
+
+  it('pays a debt a dead process left, at the next boot, before anything reads', async () => {
+    // A committed bulk window whose drain never reached its build: the state
+    // a crash leaves, written by hand.
+    await writeAsSync(syncBulkLoadScope(['ws']), INSERT_BLOCK_SQL,
+      blockToRowParams(data({ id: 'orphan', workspaceId: 'ws', content: 'para orphan' })))
+    expect(await owed()).toEqual(['orphan'])
+    expect(await indexed()).toEqual([])
+
+    await initializeClientDatabase(env.db, 'node', { scheduleAnalyzeCheck: () => {} })
+    expect(await owed()).toEqual([])
+    expect(await indexed()).toEqual([{ block_id: 'orphan', workspace_id: 'ws', content: 'para orphan' }])
   })
 })

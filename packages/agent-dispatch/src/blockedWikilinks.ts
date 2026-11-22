@@ -1,6 +1,7 @@
 import type { BridgeGraph } from '@knowledge-medium/agent-cli/graph'
 import type { GraphMcpWriteGuard } from '@knowledge-medium/agent-cli/mcpServer'
 import { createPageName, neutralizeDisplayText, pageNameInTarget } from '@knowledge-medium/agent-cli/protocol'
+import { ATTRIBUTION_FIELDS } from './watchers.js'
 
 /** Dispatch-owned MCP policy: page aliases whose wikilinks the spawned
  *  agent write tools must refuse to create. JSON-array encoded; legacy
@@ -46,7 +47,8 @@ export const findBlockedRefInProperties = (
   guard: RefGuardSet,
 ): string | null => {
   if (!properties) return null
-  const blob = JSON.stringify(properties).normalize('NFC').toLowerCase()
+  const counted = Object.fromEntries(Object.entries(properties).filter(([name]) => !ATTRIBUTION_FIELDS.has(name)))
+  const blob = JSON.stringify(counted).normalize('NFC').toLowerCase()
   const contentHit = findBlockedRef(blob, guard)
   if (contentHit) return contentHit
   for (const id of guard.ids) {
@@ -124,13 +126,21 @@ interface DeleteGuardRow {
   id: string
   content?: string
   properties?: Record<string, unknown>
+  /** A property row, whose children are its values. Its own content is a
+   *  marker naming the property, checked like any row. */
+  fieldForm: boolean
+  /** Not checked: a value under a property row. Its owner's properties hold
+   *  the same value and are checked there, attribution left out. What is
+   *  written under a value is checked like any block. */
+  skip: boolean
 }
 
-const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
+const deleteGuardRowFromSqlRow = (row: unknown, underFieldRow: boolean): DeleteGuardRow | null => {
   if (!row || typeof row !== 'object') return null
-  const {id} = row as {id?: unknown}
+  const {id, is_field_form} = row as {id?: unknown, is_field_form?: unknown}
   if (typeof id !== 'string') return null
-  return {id, ...refsFromSqlRow(row)}
+  const fieldForm = is_field_form === 1
+  return {id, ...refsFromSqlRow(row), fieldForm, skip: underFieldRow}
 }
 
 export const createBlockedWikilinkWriteGuard = (
@@ -310,7 +320,7 @@ export const createBlockedWikilinkWriteGuard = (
 
     const assertNoBlockedRefsInLiveDescendants = async (rootId: string): Promise<void> => {
       const childRows = await graph.sqlAll(
-        `SELECT id, content, properties_json
+        `SELECT id, content, properties_json, is_field_form
          FROM blocks
         WHERE parent_id = ?
           AND deleted = 0
@@ -318,7 +328,7 @@ export const createBlockedWikilinkWriteGuard = (
         [rootId],
       )
       const stack = childRows.flatMap(row => {
-        const child = deleteGuardRowFromSqlRow(row)
+        const child = deleteGuardRowFromSqlRow(row, false)
         return child ? [child] : []
       })
       const seen = new Set<string>()
@@ -326,10 +336,10 @@ export const createBlockedWikilinkWriteGuard = (
         const row = stack.pop()!
         if (seen.has(row.id)) continue
         seen.add(row.id)
-        await assertNoBlockedRefs(row.content, row.properties)
+        if (!row.skip) await assertNoBlockedRefs(row.content, row.properties)
 
         const grandchildRows = await graph.sqlAll(
-          `SELECT id, content, properties_json
+          `SELECT id, content, properties_json, is_field_form
              FROM blocks
             WHERE parent_id = ?
               AND deleted = 0
@@ -337,7 +347,7 @@ export const createBlockedWikilinkWriteGuard = (
           [row.id],
         )
         for (const grandchildRow of grandchildRows) {
-          const grandchild = deleteGuardRowFromSqlRow(grandchildRow)
+          const grandchild = deleteGuardRowFromSqlRow(grandchildRow, row.fieldForm)
           if (grandchild) stack.push(grandchild)
         }
       }
@@ -409,7 +419,6 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs(operation.replacement)
           return
         case 'add_media':
-          // Defence in depth: dispatch never sets localMediaFiles, so this does not run today.
           // The file's name becomes the block's content.
           await assertNoBlockedRefs(operation.filename)
           return

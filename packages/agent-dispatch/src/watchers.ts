@@ -129,8 +129,9 @@ export const decidePending = ({source, nowMs, settleMs = 0, editingActiveAtMs = 
   return {pending: true, reason: 'pending'}
 }
 
-/** Reference fields through which the app credits a block's contributors. */
-const ATTRIBUTION_FIELDS = new Set(['attribution:creators', 'attribution:editors'])
+/** Reference fields through which the app credits a block's contributors.
+ *  Never a mention, so never something the write guard refuses either. */
+export const ATTRIBUTION_FIELDS: ReadonlySet<string> = new Set(['attribution:creators', 'attribution:editors'])
 
 /** A backlink is a mention unless attribution is its only reference to the
  *  target: were the target page the run's contributor, every block the run

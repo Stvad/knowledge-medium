@@ -23,6 +23,7 @@ const defaultIsAlive = (pid: number): boolean => {
 
 export interface PidfileArgs {
   file: string
+  daemonName?: string
   pid?: number
   /** Injectable for tests — liveness of a pid read from the file. */
   isAlive?: (pid: number) => boolean
@@ -37,8 +38,8 @@ const readPidfile = async (file: string): Promise<{exists: boolean, pid: number}
   }
 }
 
-const alreadyRunning = (pid: number): Error =>
-  new Error(`Another km-agent-dispatch is already running (pid ${pid}). Stop it first — two daemons double-claim tasks.`)
+const alreadyRunning = (daemonName: string, pid: number): Error =>
+  new Error(`Another ${daemonName} is already running (pid ${pid}). Stop it first.`)
 
 /** How old a takeover gate may be before it's presumed crashed-mid-
  *  takeover and cleared (the gated section contains no slow work). */
@@ -59,7 +60,7 @@ const GATE_STALE_MS = 10_000
  * releasePidfile by its live holder — so two creates can't both win,
  * and a rename can only replace the dead pid its holder just judged.
  */
-export const acquirePidfile = async ({file, pid = process.pid, isAlive = defaultIsAlive}: PidfileArgs): Promise<void> => {
+export const acquirePidfile = async ({file, daemonName = 'km-agent-dispatch', pid = process.pid, isAlive = defaultIsAlive}: PidfileArgs): Promise<void> => {
   await fs.mkdir(path.dirname(file), {recursive: true})
   const tmp = `${file}.${pid}.tmp`
 
@@ -67,7 +68,7 @@ export const acquirePidfile = async ({file, pid = process.pid, isAlive = default
     if (await createFileExclusive(file, `${pid}\n`)) return
 
     const {pid: existing} = await readPidfile(file)
-    if (existing && isAlive(existing) && existing !== pid) throw alreadyRunning(existing)
+    if (existing && isAlive(existing) && existing !== pid) throw alreadyRunning(daemonName, existing)
 
     // Stale takeover must be EXCLUSIVE: without a gate, two starters can
     // both judge the same dead pid stale and both replace the file, the
@@ -94,7 +95,7 @@ export const acquirePidfile = async ({file, pid = process.pid, isAlive = default
       // Re-judge under the gate — the file may have changed hands while
       // we were acquiring it.
       const recheck = await readPidfile(file)
-      if (recheck.pid && isAlive(recheck.pid) && recheck.pid !== pid) throw alreadyRunning(recheck.pid)
+      if (recheck.pid && isAlive(recheck.pid) && recheck.pid !== pid) throw alreadyRunning(daemonName, recheck.pid)
       // Vanished (holder released) — retry the exclusive create; a
       // blind rename here could clobber a rival's concurrent create.
       if (!recheck.exists) continue

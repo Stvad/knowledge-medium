@@ -20,11 +20,10 @@
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  */
 
+import { trackInitialDownload } from '@/data/internals/initialDownload.js'
 import {
   LogLevels,
   PowerSyncDatabase,
-  Schema,
-  SyncStreamConnectionMethod,
   WASQLiteOpenFactory,
   WASQLiteVFS,
   type DBAdapter,
@@ -43,51 +42,12 @@ import {
   tagHandoffErrorUserId,
   type LocalDbVfs,
 } from '@/data/localDbVfs.js'
-import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
+import { connectWorkspaceSync, createWorkspaceConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
 import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
-import {
-  BLOCKS_SYNCED_RAW_TABLE,
-  CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
-  CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
-  CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL,
-  CREATE_BLOCKS_SYNCED_TABLE_SQL,
-  CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
-  CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
-  dropStaleAnyFieldFormIndex,
-  CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
-  CREATE_BLOCKS_BEING_EDITED_INDEX_SQL,
-  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
-  CREATE_BLOCKS_TABLE_SQL,
-  CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-  CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL,
-  CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
-  ensureBlockLocalColumns,
-} from '@/data/blockSchema'
-import {
-  CREATE_WORKSPACES_TABLE_SQL,
-  CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
-  CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
-  WORKSPACES_RAW_TABLE,
-  WORKSPACE_MEMBERS_RAW_TABLE,
-  ensureWorkspaceE2eeColumns,
-  ensureWorkspacePropertiesMigrationColumn,
-  readWorkspaceEncryptionMode,
-} from '@/data/workspaceSchema'
-import {
-  CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS,
-  SELECT_CLIENT_SCHEMA_TRIGGERS_SQL,
-  triggerRecreateStatements,
-  backfillBlockAliasesIfEmpty,
-  backfillBlocksFtsIfEmpty,
-  backfillBlockTypesIfEmpty,
-  ensureBlockUserUpdatedAtColumn,
-  ensureClientSchemaStateValueColumn,
-  ensureStagingNeedsApplyColumn,
-  ensureUndoGroupIdColumns,
-} from '@/data/internals/clientSchema'
-import { runAnalyzeIfStale } from '@/data/maintenance'
+import { createClientPowerSyncSchema, initializeClientDatabase } from './internals/initializeClientDatabase.js'
+import { readWorkspaceEncryptionMode } from '@/data/workspaceSchema'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import {
@@ -103,31 +63,11 @@ import {
 } from '@/utils/dbForensicsHooks.js'
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
-  applyLocalSchemaContributions,
-  installedAnalyzeArmingProbes,
-  resolveLocalSchemaContributions,
-} from '@/data/localSchema.js'
-import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
-import {
   dbFilenameForUser,
   recordPreviewDatabaseForReaper,
 } from '@/data/localDbStorage.js'
 
-const appSchema = new Schema({})
-// Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
-// `blocks_synced` row_type emitted by the sync rules — into the raw
-// `blocks_synced` staging table; the Repo's sync observer then decrypts/copies
-// each into the app-visible plaintext `blocks` table. So `blocks` is NOT a raw
-// table here — it's a plain local table the observer owns. During the dual-run
-// window the sync rules still also emit a plain `blocks` row_type for old
-// clients; this client has no raw mapping for it, so PowerSync stashes it in
-// `ps_untyped` and ignores it.
-appSchema.withRawTables({
-  blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
-  workspaces: WORKSPACES_RAW_TABLE,
-  workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
-})
+const appSchema = createClientPowerSyncSchema()
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
@@ -437,6 +377,8 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
     return
   }
 
+  trackInitialDownload(db)
+
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and
   // we want render to proceed against the local cache.
@@ -453,147 +395,11 @@ const openLocalDb = async (userId: string, useRemoteSync: boolean): Promise<void
       // resolve mode 'none' (no-op); e2ee workspaces seal content columns; a
       // workspace the server calls e2ee but this device can't seal yet holds.
       // Same per-user resolver the observer deps draw from (`syncObserverDepsFor`).
-      const resolver = resolverForUser(userId)
-      await db.connect(createPowerSyncConnector({
-        dbFilename: dbFilenameForUser(userId),
-        encryption: {
-          getWorkspaceMode: resolver.getUploadMode,
-          getCek: resolver.getCek,
-        },
-      }), {
-        // Kept from 1.x, whose default it was; 2.x defaults to HTTP
-        // streaming, a switch that needs testing against the real service.
-        connectionMethod: SyncStreamConnectionMethod.WEB_SOCKET,
-      })
+      await connectWorkspaceSync(db, createWorkspaceConnector(dbFilenameForUser(userId), resolverForUser(userId)))
     })
     .catch((error) => {
       console.error(`PowerSync background connect failed for ${userId}:`, error)
     })
-}
-
-// One worker round trip for a run of parameterless statements: the adapter
-// steps every statement of an unbound `execute` string, and each `execute` is
-// otherwise several messages plus a lock cycle. Joined with the separator on
-// its own line so a trailing line comment in a statement cannot swallow it.
-// The trailing sentinel proves the LAST statement ran: an adapter that stepped
-// only the first would return no row, and on an upgrading device every earlier
-// statement is an IF NOT EXISTS no-op, so nothing else would notice.
-// The adapter returns the FIRST column-bearing result set, so the sentinel
-// proves completion only while no batched statement returns rows (no SELECT,
-// PRAGMA or RETURNING in a batch).
-export const BATCH_SENTINEL_SQL = 'SELECT 1 AS ok'
-const runBatch = async (
-  execute: (sql: string) => Promise<{rows?: {length: number}}>,
-  statements: readonly string[],
-): Promise<void> => {
-  const sql = [...statements, BATCH_SENTINEL_SQL].map(stmt => stmt.trim().replace(/;+$/, '')).join('\n;\n')
-  const result = await execute(sql)
-  if (!result.rows?.length) {
-    throw new Error('schema batch did not run to completion: the adapter executed a single statement')
-  }
-}
-const runDdl = (db: SchemaDb, statements: readonly string[]): Promise<void> =>
-  runBatch(sql => db.execute(sql), statements)
-
-/** The surface the client-schema initialisation needs; a structural type so a
- *  recording fake can pin the statement order. */
-export type SchemaDb = Pick<PowerSyncDatabase, 'execute' | 'getAll' | 'getOptional' | 'writeTransaction'>
-
-// The client-side schema on top of PowerSync's own: tables, indexes, column
-// migrations and triggers, in dependency order. Batches are bounded by the
-// steps that read the schema (`ensure*`, the stale-index probe), which must
-// see the preceding batch committed.
-export const initializeClientSchema = async (db: SchemaDb): Promise<void> => {
-
-  // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
-  // VFSes implement xShmMap (the wal-index shared-memory primitive
-  // SQLite needs for native WAL), so SQLite silently keeps rollback
-  // journal mode. Re-evaluate if PowerSync ever ships a WAL-capable
-  // browser VFS.
-
-  // Cache + temp-store tuning is passed to the open factory instead
-  // (`TOTAL_PAGE_CACHE_KB`, and PowerSync's `temporaryStorage`, which defaults
-  // to MEMORY): a pragma executed here takes the write lock and so reaches only
-  // the writer connection, leaving read-only connections on the 50 MB default.
-
-  // ── blocks + its indexes ──
-  // Layout B staging table (§9.2). The raw-table mapping above tells
-  // PowerSync how to write it, but does NOT create the local SQLite table —
-  // we run the DDL ourselves, same as `blocks`. This is the live landing zone
-  // for the `blocks_synced` sync stream; the Repo's observer materializes it
-  // into `blocks`.
-  await runDdl(db, [
-    CREATE_BLOCKS_TABLE_SQL,
-    CREATE_BLOCKS_SYNCED_TABLE_SQL,
-    CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
-    CREATE_BLOCKS_PARENT_DELETED_INDEX_SQL,
-    CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-    CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
-  ])
-  // Idempotent local migration: add the LOCAL-only derived columns
-  // (`reference_target_id`) to an existing `blocks` table. MUST run before
-  // the trigger recreate below — the row_events trigger bodies reference
-  // the column (SQLite accepts a CREATE TRIGGER against a missing column and
-  // only fails at fire time). `blocks_synced`
-  // deliberately does NOT get it (never synced; docs/properties-as-blocks-migration.html §11 slice A). The
-  // index is created after so it exists on upgrading devices too.
-  await ensureBlockLocalColumns(db)
-  await runDdl(db, [
-    CREATE_BLOCKS_BEING_EDITED_INDEX_SQL,
-    CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
-    CREATE_BLOCKS_REFERENCE_CANDIDATES_INDEX_SQL,
-    CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
-  ])
-  await dropStaleAnyFieldFormIndex(db)
-  await runDdl(db, [
-    CREATE_BLOCKS_ANY_FIELD_FORM_INDEX_SQL,
-    CREATE_WORKSPACES_TABLE_SQL,
-  ])
-  // Idempotent local migration: add `group_id` to an existing
-  // tx_context / row_events (undo grouping, issue #306). MUST run
-  // before ANY re-creation of the row_events trigger bodies — that
-  // includes `withTriggerSuspended` inside `ensureBlockUserUpdatedAtColumn`
-  // below (its backfill bracket re-installs blocks_row_event_update
-  // from the NEW constant, whose body references group_id), not just
-  // the trigger recreate at the end. Fresh DBs skip it (tables don't
-  // exist yet; the CREATEs carry the column).
-  await ensureUndoGroupIdColumns(db)
-  // Idempotent local migration: add `user_updated_at` to an existing
-  // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
-  // EXISTS above is a no-op when the table already exists) + one-shot
-  // backfill. See hydration-staleness-fix-handoff.md step 3.
-  await ensureBlockUserUpdatedAtColumn(db)
-  // After the migration above, not with the other blocks indexes: it is keyed
-  // on `user_updated_at`, which an upgrading device does not have until then.
-  await runDdl(db, [CREATE_BLOCKS_WORKSPACE_RECENT_INDEX_SQL])
-
-  // Idempotent local migration: add the E2EE columns to an existing
-  // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
-  // above is a no-op when the table already exists). §7 / e2ee-design.
-  await ensureWorkspaceE2eeColumns(db)
-  // Properties-as-blocks rollout lever (docs/properties-as-blocks-migration.html §6) — nullable; absence
-  // reads as 'cell' (dormant) via parseWorkspaceRow.
-  await ensureWorkspacePropertiesMigrationColumn(db)
-  // workspace_members, then tx_context / row_events / command_events /
-  // block_aliases / types / FTS and their indexes.
-  await runDdl(db, [
-    CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
-    CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
-    ...CLIENT_SCHEMA_NON_TRIGGER_STATEMENTS,
-  ])
-
-  // Triggers: drop + recreate only those whose stored text differs from the
-  // constant. One read on a settled database; the recreate runs in a
-  // transaction so a crash can't leave a trigger dropped. Every column the
-  // trigger bodies reference exists by now (the `ensure*` migrations above).
-  const storedTriggers = new Map(
-    (await db.getAll<{name: string; sql: string}>(SELECT_CLIENT_SCHEMA_TRIGGERS_SQL))
-      .map(row => [row.name, row.sql] as const),
-  )
-  const triggerStatements = triggerRecreateStatements(storedTriggers)
-  if (triggerStatements.length > 0) {
-    await db.writeTransaction(tx => runBatch(sql => tx.execute(sql), triggerStatements))
-  }
 }
 
 const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
@@ -605,96 +411,26 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     throw markDbOpenFailure(error)
   }
   markStartup('dbOpened')
-  await initializeClientSchema(powerSyncDb)
-  markStartup('clientSchemaApplied')
+  await initializeClientDatabase(powerSyncDb, 'web', {
+    onClientSchemaApplied: () => markStartup('clientSchemaApplied'),
+    scheduleAnalyzeCheck: check => {
+      // (a) Boot. scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap runs
+      // it inside the cold-start window on a busy load, and a real ANALYZE —
+      // on a cold fresh device, potentially every table at once — parks the
+      // single SQLite worker for seconds, so it must not land on first paint.
+      const scheduleCheck = (reason: string) => scheduleDeepIdle(() => void check(reason), CATCHUP_DEEP_IDLE)
+      scheduleCheck('boot')
 
-  // One-shot side-index backfills for users upgrading from a
-  // pre-index schema. Steady-state startups noop on a single LIMIT 1
-  // probe of `client_schema_state`.
-  const backfillDb = {
-    // Guarded: a LocalSchema statement/backfill that raw-writes a synced table
-    // (blocks/workspaces/workspace_members) leaves tx_context.source = NULL, so
-    // the upload trigger never fires and the write is local-only — it silently
-    // never syncs. The guard turns that class into a loud throw. Synced-table
-    // backfills must go through repo.tx (workspaceBackfillsFacet).
-    execute: guardSyncedTableWrites((sql: string, params?: unknown[]) =>
-      powerSyncDb.execute(sql, params as never[] | undefined)),
-    // Forwards params. Dropping them silently bound NULL for any `?` in a
-    // bootstrap read, so the query matched nothing and the caller read that as
-    // "not done yet" — a backfill/marker probe that can never see its own
-    // completion re-runs its scan on every boot.
-    getOptional: async <T,>(sql: string, params?: unknown[]) => {
-      const row = await powerSyncDb.getOptional<T>(sql, params as never[] | undefined)
-      return row ?? null
+      // (b) First sync of THIS session: a fresh device boots with an empty
+      // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and
+      // the observer materializes the rows, the table is large and the boot
+      // baseline is stale — re-check then so the user gets good plans the same
+      // session instead of after a reload. If the first sync already completed
+      // in a prior session, (a) covered it: `onFirstSync` would call back at once.
+      if (!powerSyncDb.currentStatus?.hasSynced) {
+        onFirstSync(powerSyncDb, () => scheduleCheck('first-sync'))
+      }
     },
-  }
-  // WITH the other one-shot backfills, not up with the CREATEs, because it is
-  // one: it reads a `client_schema_state` marker, and that table is created by
-  // `initializeClientSchema`. Its index follows it — on an upgrading device the ALTER and
-  // seed then run against an unindexed table instead of maintaining the index
-  // through every seeded row.
-  await ensureStagingNeedsApplyColumn({
-    ...backfillDb,
-    getAll: <T,>(sql: string) => powerSyncDb.getAll<T>(sql),
   })
-  // Same position, same reason: it ALTERs `client_schema_state`, which
-  // `initializeClientSchema` creates.
-  await ensureClientSchemaStateValueColumn(powerSyncDb)
-  await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_NEEDS_APPLY_INDEX_SQL)
-  await backfillBlockAliasesIfEmpty(backfillDb)
-  await backfillBlockTypesIfEmpty(backfillDb)
-  await backfillBlocksFtsIfEmpty(backfillDb)
-  const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
-  await applyLocalSchemaContributions(backfillDb, localSchemaContributions)
   markStartup('localSchemaApplied')
-
-  // ANALYZE off the cold-start path. wa-sqlite never auto-populates
-  // `sqlite_stat1`, so the planner makes pessimal join-order choices on
-  // `blocks` once a workspace is large (a 4-id `json_each` lookup can
-  // degenerate to a 4-second scan of the workspace partial index).
-  // `runAnalyzeIfStale` asks SQLite what is stale (`PRAGMA optimize`) and
-  // re-analyzes only that — a settled workspace pays ~nothing, and the boot
-  // after a release that adds an index pays one table rather than the whole
-  // file. See clientSchema / docs/pragma-optimize-spike.
-  //
-  // scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap means it WILL run
-  // inside the cold-start window on a busy load (its own doc says so). When
-  // this DOES fire it runs a real ANALYZE on the single SQLite worker — on a
-  // cold fresh device, potentially every table at once — and parking that
-  // worker for seconds IS the freeze this whole change is about, so it must
-  // not land on first paint.
-  //
-  const scheduleAnalyzeCheck = (reason: string) => {
-    scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(
-        backfillDb,
-        installedAnalyzeArmingProbes(),
-      ).then(({proposed, owed}) => {
-        // Silent when nothing was stale, which is every boot after the first —
-        // but when it DOES park the worker, say which tables it was for.
-        // Otherwise the only symptom of a mis-tuned staleness rule is an
-        // unexplained pause.
-        if (owed.length > 0) {
-          console.info(`[Repo] ANALYZE owed by a bulk write (${reason}):`, owed.join(', '))
-        }
-        if (proposed && proposed.length > 0) {
-          console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
-        }
-      }).catch(error => {
-        console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
-      })
-    }, CATCHUP_DEEP_IDLE)
-  }
-  scheduleAnalyzeCheck('boot')
-
-  // (b) First sync of THIS session: a fresh device boots with an empty
-  // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and
-  // the observer materializes the rows, the table is large and the boot
-  // baseline is stale — re-check then so the user gets good plans the same
-  // session instead of after a reload. One-shot; disposes after the first
-  // `hasSynced`. If the first sync already completed in a prior session,
-  // (a) above already covered it, so don't bother registering.
-  if (!powerSyncDb.currentStatus?.hasSynced) {
-    onFirstSync(powerSyncDb, () => scheduleAnalyzeCheck('first-sync'))
-  }
 }

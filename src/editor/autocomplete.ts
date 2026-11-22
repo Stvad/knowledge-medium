@@ -1,7 +1,6 @@
 /** Central autocompletion installer.
  *
- *  Calls `autocompletion()` exactly once per editor. No `override` —
- *  sources are collected from CodeMirror's `EditorState.languageData`
+ *  Sources are collected from CodeMirror's `EditorState.languageData`
  *  facet (the `autocomplete` field on each data entry), which plugins
  *  contribute to via their own `codeMirrorExtensionsFacet` registration.
  *  This is the CM-native contributory path; multiple language-data

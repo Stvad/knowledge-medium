@@ -27,13 +27,13 @@ describe('ConfirmBulkDeleteDialog', () => {
     renderDialog(1, 24)
     expect(screen.getByRole('heading').textContent).toBe('Delete 24 blocks?')
     expect(screen.getByText(/will be deleted/).textContent)
-      .toBe('This block and the 23 blocks nested under it will be deleted.')
+      .toBe('This block and 23 blocks nested under it will be deleted.')
   })
 
   it('splits selection from nesting for a multi-block gesture', () => {
     renderDialog(4, 30)
     expect(screen.getByText(/will be deleted/).textContent)
-      .toBe('4 selected blocks and the 26 blocks nested under them will be deleted.')
+      .toBe('4 selected blocks and 26 blocks nested under them will be deleted.')
   })
 
   it('wires the sentence up as the dialog description', () => {

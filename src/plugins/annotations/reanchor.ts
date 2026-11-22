@@ -8,7 +8,7 @@
 import {ChangeScope} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {recaptureAnchor, resolveAnchor, type RangeAnchor} from './anchor.ts'
-import {anchorFieldProps, anchorFieldValues, threadReplacementOf} from './schema.ts'
+import {anchorFieldProps, anchorFieldValues, annotationSourceContentProp, threadReplacementOf} from './schema.ts'
 import {AnchorChangedError, assertQuotable, assertSuggestionAnchor, threadAndTarget} from './threads.ts'
 
 /** A quoted thread keeps a quote. Its quoters show the root's content, so
@@ -45,5 +45,8 @@ export const reanchorThread = async (repo: Repo, threadId: string, anchor: Range
 
     await tx.update(threadId, {content: anchor?.quote ?? ''})
     await tx.setProperties(threadId, anchor ? {set: anchorFieldValues(anchor)} : {unset: anchorFieldProps})
+    if (anchor && threadReplacementOf(root) !== undefined) {
+      await tx.setProperty(threadId, annotationSourceContentProp, target.content)
+    }
   }, {scope: ChangeScope.BlockDefault, description: anchor ? 're-anchor thread' : 'anchor thread to block'})
 }

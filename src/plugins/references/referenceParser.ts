@@ -252,6 +252,10 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
   return references.sort((a, b) => a.startIndex - b.startIndex)
 }
 
+/** Whether a parsed `[[alias]]` is the `![[alias]]` page-embed form. */
+export const isPageEmbed = (content: string, ref: Pick<ParsedReference, 'startIndex'>): boolean =>
+  ref.startIndex > 0 && content[ref.startIndex - 1] === '!'
+
 /**
  * Parse every balanced `[[alias]]` pattern from text content. Nested
  * wikilinks emit both the outer and inner references, matching Roam's
@@ -787,8 +791,7 @@ const spliceFor = (
   // working late-binding embed they already are. (A wikilink→wikilink swap
   // is safe under `!` — still a page embed — so this is opt-in, not
   // automatic.)
-  if (rewrite.skipEmbeds
-    && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') return null
+  if (rewrite.skipEmbeds && isPageEmbed(content, mark)) return null
   return {start: mark.startIndex, end: mark.endIndex, text: rewrite.text}
 }
 

@@ -3,9 +3,8 @@
  * `backlinks.forBlock` with `filter`, and grouped backlinks' filtered set.
  *
  * What counts as a source at all is decided once, by the batch
- * (`sourceBatch.ts`): self, the edges another surface owns and property
- * machinery are excluded there. This route only narrows that set by the
- * filter, so the two can never disagree about which edges count.
+ * (`sourceBatch.ts`): self and the edges another surface owns are excluded
+ * there. This route only narrows that set by the filter.
  */
 
 import type { QueryCtx } from '@/data/api'

@@ -35,7 +35,7 @@ const bounded = (text: string | undefined): string => clip(text ?? '', AGENT_VIE
  *  those ancestors, so it reaches the mention however the thread view is cut;
  *  the view gives the authors. Throws when the thread can't be read. */
 export const loadThreadContext = async (
-  graph: Pick<Graph, 'comments' | 'getBlock'>,
+  graph: Pick<Graph, 'comments' | 'getBlock' | 'ancestors'>,
   source: BlockData,
   ancestors: readonly BlockData[],
 ): Promise<ThreadPromptContext | null> => {
@@ -44,9 +44,15 @@ export const loadThreadContext = async (
   const [thread] = (await graph.comments({thread: ancestors[rootIndex].id})).threads
   if (!thread) return null
   const target = thread.target ? await graph.getBlock(thread.target.id) : null
+  const targetAncestors = target ? await graph.ancestors(target.id) : []
+  const pageId = target
+    ? [target, ...targetAncestors].find(block => block.parentId === null)?.id ?? null
+    : null
   const authors = authorsById(thread.comments)
   return {
-    target: target && thread.target ? {content: bounded(target.content), path: thread.target.path} : null,
+    target: target && thread.target
+      ? {id: target.id, pageId, content: bounded(target.content), path: thread.target.path}
+      : null,
     quote: thread.quote,
     anchor: thread.anchor,
     // Absent from the view of an app older than edit suggestions.

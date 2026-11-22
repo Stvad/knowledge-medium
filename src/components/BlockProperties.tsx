@@ -1,3 +1,4 @@
+import {adoptOrCreatePropertySchema} from '@/data/propertySchemaCreation'
 /**
  * Property panel shell. The lookup chain/model lives in
  * `propertyPanel/model.ts`; row actions live in `propertyPanel/actions.ts`;
@@ -23,7 +24,7 @@ import {
   focusBlock,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
-import { caretNeighbour } from '@/utils/selection.js'
+import { nextVisibleBlock } from '@/utils/selection.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -178,7 +179,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay})
     if (!surface) return
 
-    const next = await caretNeighbour(block, surface, 'next')
+    const next = await nextVisibleBlock(block, surface)
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})
@@ -318,23 +319,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               openSchemaPanel(existingId)
               return schemas.get(trimmed)
             }
-            // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. A synthesized
-            // seed may not have materialized its definition row yet, so there
-            // is no panel to open; the form can still adopt its behavior.
-            const kernelSchema = schemas.get(trimmed)
-            if (kernelSchema) return kernelSchema
             try {
-              const schema = await block.repo.userSchemas.addSchema({
-                name: trimmed,
-                presetId,
-              })
+              const result = await adoptOrCreatePropertySchema(block.repo, {name: trimmed, presetId})
               const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-              if (newId) {
+              if (result.kind === 'created' && newId) {
                 flashRecent(trimmed)
                 openSchemaPanel(newId)
               }
-              return schema
+              return result.schema
             } catch (err) {
               console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
               return undefined

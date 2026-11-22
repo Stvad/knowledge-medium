@@ -12,7 +12,7 @@ Dispatch note-graph events to local agent CLIs. A backlink watcher can turn `[[c
                                               └──────────────────────────────────────┘
 ```
 
-Design notes: task state lives **in the graph** (`agent:*` block properties), so the daemon is restart-safe for mention watchers — it re-derives pending work from block properties, and a mention synced from your iPad triggers once the Mac client sees it. **Run exactly one daemon per fleet**, though: the claim is a plain property write with no cross-device compare-and-swap, so two daemons on two machines can both claim the same mention within sync latency (the claim-verify and pidfile only prevent *same-machine* double-claims). The bridge requires a live app tab; no tab → watchers idle.
+Design notes: task state lives **in the graph** (`agent:*` block properties), so the daemon is restart-safe for mention watchers — it re-derives pending work from block properties, and a mention synced from your iPad triggers once the Mac client sees it. **Give each trigger page exactly one daemon across the fleet**, though: the claim is a plain property write with no cross-device compare-and-swap, so two daemons watching the same page can both claim the same mention within sync latency (the claim-verify and pidfile only prevent a *same-instance, same-machine* double-claim). Daemons on different trigger pages are fine, including on one machine: see [A second listener](#a-second-listener). Active dispatch requires a writable client to claim work and post replies. The headless host defaults to a download-only connection and read-only token. Set `writable: true` for a scratch write test and run `pnpm agent --profile headless-scratch health` with the configured profile. The real-graph dispatch cutover is a separate deployment step. [Host setup and write verification](../../docs/headless-client.md#owner-verification-for-slice-3)
 
 ## Billing invariant (subscription, not API)
 
@@ -40,6 +40,24 @@ By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` 
 - **Approvals:** codex `exec` runs default to headless `approval_policy = "never"`; interactive `-a/--ask-for-approval` is not a supported exec-runner control. To route approval requests through Codex's classifier instead of a human prompt, set `"approvalPolicy": "on-request"` together with `"approvalsReviewer": "auto_review"` under the codex runner. Other non-`never` policies are rejected at config parse time because `codex exec` would not honor them here.
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
+
+## Upgrade to 0.9.6
+
+A second daemon can now run on the same machine, beside the first, on its own trigger page (see [A second listener](#a-second-listener)), named by the new top-level `instance` field. An existing config keeps its file paths and behaviour. Upgrade and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
+
+## Upgrade to 0.9.4
+
+Comment-thread requests now include the annotated block's ID and its containing root page's ID, so agents can address them directly instead of searching by text or breadcrumb. If the ancestry does not reach a root, the page ID is marked unavailable. Upgrade `@knowledge-medium/agent-dispatch` and restart the daemon; no app update is required.
+
+## Upgrade to 0.9.3
+
+0.9.3 requires `@knowledge-medium/agent-cli` 0.14.1. The status chip shows the oldest outstanding tool's age, with a warning when a `km:` call has waited more than 20 seconds. Other activities show age without warnings. Activity details remain in the title and menu, and the pill keeps the same width in every state.
+
+Upgrade both packages, reload the app, and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`. Older daemons retain the existing chip behavior without step ages.
+
+## Upgrade to 0.9.2
+
+0.9.2 requires `@knowledge-medium/agent-cli` 0.14.0. Runs now get `add_media`, which stores a file the run writes itself (such as an SVG) as a media block. It never reads a local path. Upgrade both packages and restart the daemon: `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
 
 ## Upgrade to 0.9.0
 
@@ -323,10 +341,54 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
    tail -f ~/Library/Logs/km-agent-dispatch.log
    ```
 
+## A second listener
+
+A second daemon can run on the same machine, beside the first, with its own trigger page and its own bridge profile, and read the first one's memory. For example, a listener on `[[Assistant (host)]]` that answers through a headless host's `headless` profile while `[[Assistant]]` keeps answering through the app tab:
+
+```jsonc
+// ~/.config/knowledge-medium/agent-dispatch-host.json
+{
+  "instance": "host",     // names this daemon's files; see below
+  "profile": "headless",  // a read-write profile on a writable host
+  "workspaceId": "YOUR_WORKSPACE_ID",
+  "watchers": [
+    {"kind": "backlinks", "name": "assistant-host", "target": "Assistant (host)"}
+  ]
+}
+```
+
+- **`instance`** gives the daemon its own pidfile, generated MCP config, state file (unless `statePath` is set) and watch-events registration: `daemon.pid`, `mcp.json` and `state.json` in `~/.config/knowledge-medium/agent-dispatch-host/`. A config without `instance` keeps the original files (`agent-dispatch.pid`, …). Two configs without one share a pidfile, so the second refuses to start.
+- **The rule: no two daemons watch the same `target`.** Nothing checks this across configs; two daemons on one page would both claim its mentions.
+- **Memory** is shared by embedding: the listener's own `Memory` block under `[[Assistant (host)]]` holds one block, `!((<id>))`, embedding the `Memory` block under `[[Assistant]]`. The prompt shows three levels below `Memory` (the embed, the block it brings in, that block's children), so embed that block itself, which puts the first daemon's notes at the third level. The listener's runs read the first daemon's notes as shared notes and change them only when asked; they save what they learn in the listener's own `Memory`, which the first daemon doesn't see. The `Memory changed during this run` line also lists changes the first daemon's runs make to the embedded notes meanwhile.
+- **Write guard:** each daemon refuses only its own targets, so a run of either can write the other's `[[target]]` and start one run there (`runsPerHour` bounds it).
+- **Threads:** a follow-up under the other daemon's reply resumes that daemon's session, without the other daemon knowing. Keep each thread to one trigger page.
+- `runsPerHour` and `maxConcurrent` hold per daemon. With `delivery: "channel"`, give it its own `channelPort` as well.
+
+To start it:
+
+1. Make the profile writable and select the contributor its writes are credited to, for example the first daemon's: `kmagent --profile agent-dispatch contributor list`, then `kmagent --profile headless contributor use <id> --workspace YOUR_WORKSPACE_ID`. For the headless host, see [Host setup and write verification](../../docs/headless-client.md#owner-verification-for-slice-3).
+2. Create the `[[Assistant (host)]]` page with a child block titled `Memory`, and under it one block `!((<id>))` with the id of `[[Assistant]]`'s `Memory` block (`kmagent --profile agent-dispatch subtree Assistant` prints it after the `^`).
+3. Run it once by hand: `km-agent-dispatch --config ~/.config/knowledge-medium/agent-dispatch-host.json --once` (from a checkout: `node packages/agent-dispatch/dist/daemon.js --config …`). Its first tick only records a baseline, so mention `[[Assistant (host)]]` after it.
+4. Install it under launchd as its own job, from a copy of the first one's plist:
+
+   ```bash
+   P=~/Library/LaunchAgents/org.knowledge-medium.agent-dispatch-host.plist
+   cp ~/Library/LaunchAgents/org.knowledge-medium.agent-dispatch.plist "$P"
+   plutil -replace Label -string org.knowledge-medium.agent-dispatch-host "$P"
+   plutil -insert ProgramArguments -string --config -append "$P"
+   plutil -insert ProgramArguments -string "$HOME/.config/knowledge-medium/agent-dispatch-host.json" -append "$P"
+   plutil -replace StandardOutPath -string "$HOME/Library/Logs/km-agent-dispatch-host.log" "$P"
+   plutil -replace StandardErrorPath -string "$HOME/Library/Logs/km-agent-dispatch-host.log" "$P"
+   launchctl load "$P"
+   tail -f ~/Library/Logs/km-agent-dispatch-host.log
+   ```
+
+   Restart it with `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch-host`; for a by-hand run, stop it with `launchctl bootout gui/$(id -u)/org.knowledge-medium.agent-dispatch-host`.
+
 ## How a mention task runs
 
 0. A watcher's **first tick establishes a baseline without firing**: pre-existing backlinks to `target` are history, not a backlog — pointing a watcher at an established page (hundreds of old mentions) must not claim and bill them. Only blocks **edited after** the baseline become tasks; editing an old mention deliberately re-surfaces it. Baselines persist in the state file — delete the watcher's `backlinkBaselines` entry there to re-baseline.
-1. Watcher sees a new backlink to `target` whose source block has no `agent:status` property (one batched SQL per tick — processed mentions stay cheap forever). A block that references the target only through attribution (`attribution:creators` / `attribution:editors`, which credit a contributor page) is not a mention, so the target page can double as the runs' contributor without every block a run writes summoning it again. A mention waits until it is ready, so the daemon doesn't claim (and bill) a request you are still writing:
+1. Watcher sees a new backlink to `target` whose source block has no `agent:status` property (one batched SQL per tick — processed mentions stay cheap forever). A block that references the target only through attribution (`attribution:creators` / `attribution:editors`, which credit a contributor page) is not a mention, so the target page can double as the runs' contributor without every block a run writes summoning it again. A property's value block (a child of a property row, in a workspace whose properties are stored as blocks) is never a mention source either: the property belongs to the block it is on, which is where the daemon judges it. A mention waits until it is ready, so the daemon doesn't claim (and bill) a request you are still writing:
    - **It leaves the editor.** Edit state lives on each panel's ui-state row, which syncs, so this works for a request written on another device as well as in the daemon's own tab. The mention fires `settleMs` (default 250 ms) after it leaves the editor, the time for the edit's last write to land. Pausing to think, or switching to another app, doesn't count as leaving; moving to another block does, including pressing Enter.
    - **Or neither its text nor its editor has moved for `editHoldMs`** (default 2 min) while it is still open. Typing and moving the caret count; switching to another app or locking the device does not, so a request left open that way fires after the cap. A closed tab or dead device leaves its flag set forever, so the flag can only hold a mention this long; the next sweep then claims it.
    - **Or you use Ask Agent**, which fires from inside the editor without waiting for you to leave. It covers the text as you asked about it: keep writing afterwards and the mention waits again.
@@ -339,7 +401,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 
 Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 65 min (the longest allowed run plus grace) is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
 
-**One daemon per fleet.** A pidfile prevents two daemons on one machine (launchd + a manual run would double-claim and double-bill). Across machines there is no claim atomicity over LWW sync — install the LaunchAgent on exactly one device.
+**One daemon per trigger page.** A pidfile prevents two daemons of one instance on one machine (launchd + a manual run would double-claim and double-bill). Across machines, and across instances, there is no claim atomicity over LWW sync, so no two daemons may watch the same `target`: install each LaunchAgent on exactly one device, and give each daemon on a machine its own targets.
 
 ## Memory
 
@@ -359,7 +421,7 @@ A `[[claude]]` you write inside the memory starts a run like anywhere else; chil
 
 ## Live progress
 
-Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …). The companion UI's status chip shows the persisted runner label next to elapsed time (`Claude · 12s · Searching the web`, `Codex · 12s · km: search`); the label is cleared the moment the run reaches a terminal state, so it never goes stale.
+Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …) — and `agent:activity-at`, its start time in epoch milliseconds. The companion UI's fixed-width status chip pairs a compact activity label (`Thinking`, `Reading`, `Writing`, …) with the current step age. Its title and menu show the runner, exact activity, time on this step, and total run time separately. A `km:` step outstanding for more than 20 seconds gets a warning; this is an early indication of a long wait, not proof of a bridge failure. Other steps show age without warnings. It uses a client-side clock, with no heartbeat writes. The label and timestamp clear together at a terminal state (`''` and `0` respectively). Without a step timestamp, the chip omits the step timer; total run time remains in the details when the claim timestamp is available.
 
 Set `"streamReply": true` on a backlinks watcher to also show the reply being **built live** as the run streams, instead of posting it once at the end. Each tick reconciles the reply to the growing text (throttled to roughly one write per 1.5s, writing only the diff), so leave it off for watchers where that write churn matters — the default (`false`) posts the whole reply in one shot when the run finishes.
 
@@ -385,7 +447,7 @@ Registrations are ephemeral tab state: they die with the tab and expire after 10
 
 ## Query watchers
 
-Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in `~/.config/knowledge-medium/agent-dispatch-state.json` (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
+Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in the state file, `~/.config/knowledge-medium/agent-dispatch-state.json` unless `statePath` or `instance` says otherwise (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
 
 ## km MCP server standalone
 
@@ -405,7 +467,7 @@ The same generic graph tools work from any MCP client — e.g. Claude Desktop / 
 
 Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). Deliberately excluded: `eval`, `sql execute`, extension lifecycle. The standalone `agent-cli` `km-mcp` server does not apply dispatch watcher-target guards; use `packages/agent-dispatch/dist/mcp.js` when the session is acting as part of an agent-dispatch watcher loop.
 
-Started this way, the server also offers `read_media`, and `add_media`, which uploads any local file the model names: keep it off your client's auto-approve list. Dispatch runs never get `add_media`. They do get `read_media`, whose images arrive inline; a non-image comes back as a file a run can open only if it has a tool for that.
+The server also offers `read_media` and `add_media`, and dispatch runs get both. `read_media` images arrive inline; a non-image comes back as a file a run can open only if it has a tool for that. `add_media` here stores only bytes the run passes in (`content`, such as an SVG it wrote): dispatch's server has no `path` argument, so no note can turn it into a read of this machine's files. Uploads sync to everyone in the workspace, like any other write.
 
 ## Security posture
 
@@ -448,7 +510,7 @@ Caveats, honestly: research preview (flag syntax/protocol may change — nothing
 
 - Waiting on `bridge/pairing` in the log → the daemon auto-starts the bridge and retries forever (reboot-safe); if it never pairs, run `kmagent --profile agent-dispatch connect` with the app tab open.
 - Config errors exit **0** (clean) so launchd doesn't hot-loop a restart that can't help — fix the config, then `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
-- `Another km-agent-dispatch is already running` → the pidfile guard; stop the launchd instance before running one by hand (`launchctl bootout gui/$(id -u)/org.knowledge-medium.agent-dispatch`).
+- `Another km-agent-dispatch is already running` → the pidfile guard; stop the launchd instance before running one by hand (`launchctl bootout gui/$(id -u)/org.knowledge-medium.agent-dispatch`, or the job of the config's `instance`).
 - `Page "claude" does not exist` → create the page (type `[[claude]]`, click it).
 - Daemon logs `no app tab connected` → watchers idle until a paired tab appears; they catch up on the next tick.
 - Runs fail instantly with auth errors → check `claude login` state on this machine and that nothing exports `ANTHROPIC_API_KEY` into launchd's environment (the daemon scrubs its children, but `claude` itself must be logged in).

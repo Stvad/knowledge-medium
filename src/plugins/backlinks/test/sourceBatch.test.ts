@@ -1,10 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { NO_REGISTRY_RECOGNITION_PARAMS } from '@/data/internals/treeQueries'
 import { BacklinkSourceBatcher } from '../sourceBatch.ts'
 
-/** A read surface with no machinery, whose statement answers each target in
- *  its chunk with the count in `counts`. Records the targets of every read. */
+/** A read surface whose statement answers each target in its chunk with the
+ *  count in `counts`. Records the targets of every read. */
 const fakeDb = (counts: Record<string, number>, failReads: number[] = []) => {
   const statements: string[][] = []
   return {
@@ -23,7 +22,7 @@ const fakeDb = (counts: Record<string, number>, failReads: number[] = []) => {
 const ALL_EDGES = {sql: '1', params: []}
 
 const countOf = (batcher: BacklinkSourceBatcher, target: string) =>
-  batcher.request('ws', target, 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES).then(r => r.value)
+  batcher.request('ws', target, 'count', ALL_EDGES)
 
 describe('BacklinkSourceBatcher', () => {
   it('answers each target from its own chunk when a wave exceeds the bind ceiling', async () => {
@@ -39,8 +38,8 @@ describe('BacklinkSourceBatcher', () => {
     const batcher = new BacklinkSourceBatcher(db)
     const fieldEdges = {sql: 'br.source_field = ?', params: ['annotation:target']}
     await Promise.all([
-      batcher.request('ws', 'a', 'count', NO_REGISTRY_RECOGNITION_PARAMS, ALL_EDGES),
-      batcher.request('ws', 'a', 'count', NO_REGISTRY_RECOGNITION_PARAMS, fieldEdges),
+      batcher.request('ws', 'a', 'count', ALL_EDGES),
+      batcher.request('ws', 'a', 'count', fieldEdges),
     ])
     expect(db.statements).toEqual([['a'], ['a', 'annotation:target']])
   })
@@ -51,21 +50,5 @@ describe('BacklinkSourceBatcher', () => {
     const settled = await Promise.allSettled(['a', 'b', 'c'].map(t => countOf(batcher, t)))
     expect(settled.map(s => s.status)).toEqual(['rejected', 'rejected', 'fulfilled'])
     expect(await countOf(batcher, 'a')).toBe(1)
-  })
-})
-
-describe('BacklinkSourceBatcher machinery probe', () => {
-  it('confines a failed probe to its own chunk', async () => {
-    let probes = 0
-    const db = {
-      ...fakeDb({a: 1, b: 2, c: 3}),
-      getOptional: async <T>(): Promise<T | null> => {
-        if (++probes === 1) throw new Error('probe failed')
-        return null
-      },
-    }
-    const batcher = new BacklinkSourceBatcher(db, 2)
-    const settled = await Promise.allSettled(['a', 'b', 'c'].map(t => countOf(batcher, t)))
-    expect(settled.map(s => s.status)).toEqual(['rejected', 'rejected', 'fulfilled'])
   })
 })

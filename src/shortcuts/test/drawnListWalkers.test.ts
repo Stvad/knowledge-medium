@@ -44,7 +44,6 @@ import {
 } from '@/shortcuts/types'
 import {
   blockAfterSubtreeRemoval,
-  caretNeighbour,
   getBlocksInRange,
   getLastVisibleDescendant,
   nextVisibleBlock,
@@ -114,6 +113,8 @@ const editorAt = (content: string, cursor: number): EditorView => {
     dispatch: vi.fn((spec: {changes?: {from: number; to: number; insert: string}}) => {
       if (spec.changes) text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
     }),
+    moveToLineBoundary: (_selection: unknown, forward: boolean) => ({head: forward ? text.length : 0}),
+    coordsAtPos: () => ({left: 0, right: 0, top: 0, bottom: 1}),
   }
   Object.defineProperty(view, 'state', {
     get: () => ({
@@ -234,17 +235,24 @@ describe('range selection and the data walker step onto drawn property rows', ()
   })
 })
 
-describe('the edit-mode caret passes a row drawn as a property\'s name', () => {
+describe('the edit-mode caret can land on a row drawn as a property\'s name', () => {
   const focusedId = (): string | undefined => peekFocusedBlockLocation(repo.block('ui'))?.blockId
 
-  it('ArrowRight at the end of `a` lands in the value, not on the name row', async () => {
+  it('ArrowRight at the end of `a` lands on the drawn name row', async () => {
     await pressInEditor('move_right_from_cm_end', 'a', 'end', NON_HIDDEN)
-    expect(focusedId()).toBe(draftRow)
+    expect(focusedId()).toBe(statusRow)
   })
 
-  it('ArrowLeft at the start of the value lands in `a`', async () => {
+  it('ArrowLeft at the start of the value lands on the drawn name row', async () => {
     await pressInEditor('move_left_from_cm_start', draftRow, 'start', NON_HIDDEN)
-    expect(focusedId()).toBe('a')
+    expect(focusedId()).toBe(statusRow)
+  })
+
+  it('ArrowDown from the preceding block and ArrowUp from its value land on the name row', async () => {
+    await pressInEditor('move_down_from_cm_end', 'a', 'end', NON_HIDDEN)
+    expect(focusedId()).toBe(statusRow)
+    await pressInEditor('move_up_from_cm_start', draftRow, 'start', NON_HIDDEN)
+    expect(focusedId()).toBe(statusRow)
   })
 
   it('a field row that is the surface root is an ordinary block, and the caret lands on it', async () => {
@@ -263,18 +271,17 @@ describe('the edit-mode caret passes a row drawn as a property\'s name', () => {
     expect(focusedId()).toBe(statusRow)
   })
 
-  it('Backspace on an emptied value lands in `a`', async () => {
+  it('Backspace on an emptied value lands on the drawn name row', async () => {
     await repo.tx(tx => tx.update(draftRow, {content: ''}), {scope: ChangeScope.BlockDefault})
     await pressInEditor('delete_empty_block_cm', draftRow, 'start', NON_HIDDEN)
-    expect(focusedId()).toBe('a')
+    expect(focusedId()).toBe(statusRow)
   })
 })
 
 describe('the caret leaving a block for its neighbour', () => {
-  it('passes name rows in both directions', async () => {
-    const todoRow = (await allChildren(soloStatusRow))[0]!.id
-    expect((await caretNeighbour(repo.block('solo'), DRAWN, 'next'))?.id).toBe(todoRow)
-    expect((await caretNeighbour(repo.block(todoRow), DRAWN, 'previous'))?.id).toBe('solo')
+  it('steps onto the drawn name row in both directions', async () => {
+    expect((await nextVisibleBlock(repo.block('solo'), DRAWN))?.id).toBe(soloStatusRow)
+    expect((await previousVisibleBlock(repo.block(soloStatusRow), DRAWN))?.id).toBe('solo')
   })
 })
 

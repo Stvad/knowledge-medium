@@ -26,7 +26,7 @@ describe('blockrefCompletionSource', () => {
 
     // "((foo" — cursor at position 5
     const result = await source(makeContext('((foo', 5))
-    expect(searchBlocks).toHaveBeenCalledWith('foo')
+    expect(searchBlocks.mock.calls[0][0]).toBe('foo')
     expect(result).toMatchObject({from: 2, to: 5})
     expect(result?.options.map(o => o.label)).toEqual(['first hit', 'second hit'])
   })
@@ -43,7 +43,7 @@ describe('blockrefCompletionSource', () => {
     const searchBlocks = vi.fn().mockResolvedValue([{id: 'b1', content: 'hi'}])
     const source = blockrefCompletionSource({searchBlocks})
     const result = await source(makeContext('((', 2, true))
-    expect(searchBlocks).toHaveBeenCalledWith('')
+    expect(searchBlocks.mock.calls[0][0]).toBe('')
     expect(result?.options).toHaveLength(1)
   })
 
@@ -66,7 +66,7 @@ describe('blockrefCompletionSource', () => {
     const searchBlocks = vi.fn().mockResolvedValue([{id: 'b1', content: 'a world block'}])
     const source = blockrefCompletionSource({searchBlocks})
     const result = await source(new CompletionContext(state, state.selection.main.from, false))
-    expect(searchBlocks).toHaveBeenCalledWith('world')
+    expect(searchBlocks.mock.calls[0][0]).toBe('world')
     expect(result).toMatchObject({from: 8, to: 13})
   })
 

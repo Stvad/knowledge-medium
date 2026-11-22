@@ -2,7 +2,7 @@ import { isEqual } from 'lodash-es'
 import type { BlockData } from '@/types'
 import { CallbackSet } from '@/utils/callbackSet'
 
-const deepFreeze = <T>(value: T): T => {
+export const deepFreeze = <T>(value: T): T => {
   if (value === null || typeof value !== 'object') return value
   if (Object.isFrozen(value)) return value
   Object.freeze(value)

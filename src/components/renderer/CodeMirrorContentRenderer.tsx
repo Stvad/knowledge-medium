@@ -1,6 +1,8 @@
 import { BlockRendererProps } from '@/types.js'
 import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef } from 'react'
-import { PropertyDisplayScopeContext } from '@/context/propertyDisplay'
+import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
+import { useHandle } from '@/hooks/block'
+import { isFieldValueChild } from '@/data/propertyChildren'
 import { EditorSelection } from '@codemirror/state'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
@@ -31,6 +33,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
   const propertyDisplay = useContext(PropertyDisplayScopeContext)
+  const field = useContext(PropertyFieldRowContext)
+  const propertyValueSchema = useHandle(block, {selector: row =>
+    field && row && row.parentId === field.id && isFieldValueChild(row) ? field.schema : undefined})
   // The editor draws the block's own text too, so it carries the same title
   // typography as the read renderer — otherwise a page title would shrink to
   // body size the moment you clicked into it. CodeMirror's theme sets
@@ -52,10 +57,13 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const pasteIntentRef = useRef<'split' | 'single-block'>('split')
 
   const extensions = useMemo(() => {
-    const fieldCreationExtension = createFieldCreationKeydownExtension(block, repo)
-    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block})
+    // Disabling Property rows also disables child-backed creation; panel creation is cell-backed only.
+    const fieldCreationExtension = propertyDisplay.childBacked ? [] : createFieldCreationKeydownExtension(block, repo)
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema,
+      childBacked: propertyDisplay.childBacked, disablePropertyFieldCompletion: blockContext.disablePropertyFieldCompletion,
+      renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
     return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
-  }, [block, repo, runtime])
+  }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, blockContext.disablePropertyFieldCompletion, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
   // (paste events can't see modifiers). Capture phase so we run before
@@ -72,7 +80,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. Reset before any early return, or a
     // stale ⌘⇧V intent would skip the cut check on the next paste.
-    const intent = pasteIntentRef.current
+    // A surface that refuses Split takes every paste as one block: a split
+    // paste would make blocks it does not draw, and an armed cut would move
+    // blocks into it the same way.
+    const splitRefused = blockContext.disableBlockSplit === true
+    const intent = splitRefused ? 'single-block' : pasteIntentRef.current
     pasteIntentRef.current = 'split'
     if (repo.isReadOnly) return
     // Nothing to paste → leave it to the browser.
@@ -145,7 +157,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // Re-read the caret: a media capture may have awaited above, so use the live selection.
     const insertAt = editorView.state.selection.main
 
-    if (decision.kind === 'single-block') {
+    if (decision.kind === 'single-block' || splitRefused) {
       const plan = planSingleBlockPaste(pasteText, {
         from: insertAt.from,
         to: insertAt.to,
