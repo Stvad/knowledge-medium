@@ -1,0 +1,1 @@
+export{Ypt as defineQuery}from"../../../chunks/app-CLmWkfm9.js";

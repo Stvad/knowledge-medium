@@ -1,0 +1,1 @@
+export{_J as BootFallback}from"../../../chunks/app-CLmWkfm9.js";

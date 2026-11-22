@@ -1,0 +1,1 @@
+export{hA as useMinuteClock}from"../../chunks/app-CLmWkfm9.js";

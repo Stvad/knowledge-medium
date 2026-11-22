@@ -1,0 +1,1 @@
+export{tf as blockTagsConfigUi}from"../../../chunks/app-CLmWkfm9.js";

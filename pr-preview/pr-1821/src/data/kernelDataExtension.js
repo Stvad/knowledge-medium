@@ -1,0 +1,1 @@
+export{h7 as kernelDataExtension}from"../../chunks/app-CLmWkfm9.js";

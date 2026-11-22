@@ -1,0 +1,1 @@
+export{jY as tablesDataExtension}from"../../../chunks/app-CLmWkfm9.js";

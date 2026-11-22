@@ -1,0 +1,1 @@
+export{gb as updateIndicatorPlugin}from"../../../chunks/app-CLmWkfm9.js";

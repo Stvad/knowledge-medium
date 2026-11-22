@@ -1,0 +1,1 @@
+export{HI as dispatchPointerAction,UI as setPointerActionDispatcher}from"../../chunks/app-CLmWkfm9.js";

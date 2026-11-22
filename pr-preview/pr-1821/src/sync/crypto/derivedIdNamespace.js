@@ -1,0 +1,1 @@
+export{Ylt as deriveWorkspaceIdNamespace}from"../../../chunks/app-CLmWkfm9.js";

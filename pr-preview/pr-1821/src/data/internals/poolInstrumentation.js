@@ -1,0 +1,1 @@
+export{p3 as instrumentAdapter}from"../../../chunks/app-CLmWkfm9.js";

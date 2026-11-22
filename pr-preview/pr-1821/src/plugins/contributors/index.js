@@ -1,0 +1,1 @@
+export{pg as contributorsPlugin}from"../../../chunks/app-CLmWkfm9.js";

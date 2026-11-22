@@ -1,0 +1,1 @@
+export{rL as dynamicExtensionsExtension}from"../../chunks/app-CLmWkfm9.js";

@@ -1,0 +1,1 @@
+export{Ad as srsBlockDateAdapter}from"../../../chunks/app-CLmWkfm9.js";

@@ -1,0 +1,1 @@
+export{Ha as startupMetricsPlugin}from"../../../chunks/app-CLmWkfm9.js";

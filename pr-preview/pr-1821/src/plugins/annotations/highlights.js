@@ -1,0 +1,1 @@
+export{rg as HIGHLIGHT_CLASS,ig as MOVED_HIGHLIGHT_CLASS,ag as SUGGESTION_HIGHLIGHT_CLASS,og as coveringStyle,sg as highlightClasses,cg as highlightField,lg as highlightRange,ug as highlightRanges,dg as threadHighlights,fg as threadHighlightsContribution}from"../../../chunks/app-CLmWkfm9.js";

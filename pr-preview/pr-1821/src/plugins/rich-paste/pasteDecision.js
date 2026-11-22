@@ -1,0 +1,1 @@
+export{JS as richPasteDecisionContribution}from"../../../chunks/app-CLmWkfm9.js";

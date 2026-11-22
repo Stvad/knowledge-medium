@@ -1,0 +1,1 @@
+export{flt as getOrCreatePropertiesPage,plt as propertiesPageBlockId,mlt as propertiesPageSpec}from"../../chunks/app-CLmWkfm9.js";

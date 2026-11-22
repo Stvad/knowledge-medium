@@ -1,0 +1,1 @@
+export{rM as dailyDateWikilinkDecorator}from"../../../chunks/app-CLmWkfm9.js";

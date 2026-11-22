@@ -1,0 +1,1 @@
+export{vk as usePendingInvitations}from"../../chunks/app-CLmWkfm9.js";

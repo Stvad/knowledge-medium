@@ -1,0 +1,1 @@
+export{rmt as definePostCommitProcessor}from"../../../chunks/app-CLmWkfm9.js";

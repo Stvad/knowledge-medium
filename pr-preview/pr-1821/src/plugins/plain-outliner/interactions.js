@@ -1,0 +1,1 @@
+export{BD as blockEditingContentRenderer}from"../../../chunks/app-CLmWkfm9.js";

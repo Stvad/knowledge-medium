@@ -1,0 +1,1 @@
+export{gY as staticDataExtensions}from"../../chunks/app-CLmWkfm9.js";

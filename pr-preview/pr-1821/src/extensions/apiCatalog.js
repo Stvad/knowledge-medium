@@ -1,0 +1,1 @@
+export{f_ as extensionApiCatalog,p_ as extensionApiRuntimeExports}from"../../chunks/app-CLmWkfm9.js";

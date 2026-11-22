@@ -1,0 +1,1 @@
+export{_lt as DerivedIdNamespaceUnavailableError,vlt as derivedIdNamespaceInTx,ylt as resolveDerivedIdNamespace}from"../../chunks/app-CLmWkfm9.js";

@@ -1,0 +1,1 @@
+export{H1 as contributorsDataExtension}from"../../../chunks/app-CLmWkfm9.js";

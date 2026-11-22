@@ -1,0 +1,1 @@
+export{U2 as aliasDataExtension}from"../../../chunks/app-CLmWkfm9.js";

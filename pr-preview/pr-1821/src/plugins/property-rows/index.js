@@ -1,0 +1,1 @@
+export{os as propertyRowsPlugin}from"../../../chunks/app-CLmWkfm9.js";

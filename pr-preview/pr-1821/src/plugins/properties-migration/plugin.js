@@ -1,0 +1,1 @@
+export{zs as propertiesMigrationPlugin}from"../../../chunks/app-CLmWkfm9.js";

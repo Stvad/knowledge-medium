@@ -1,0 +1,1 @@
+export{Hmt as CHANGE_SCOPE_POLICIES,Umt as ChangeScope,Wmt as isChangeScope,Gmt as policyForScope,Kmt as scopeAllowedInReadOnly,qmt as scopeIsUndoable,Jmt as scopePoliciesEquivalent,Ymt as scopeUploadsToServer,Xmt as sourceForScope}from"../../../chunks/app-CLmWkfm9.js";
