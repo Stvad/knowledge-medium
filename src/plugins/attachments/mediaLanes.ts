@@ -28,9 +28,9 @@ export interface MediaLaneDeps {
   readonly keys: Pick<SyncResolver, 'getMaterializability' | 'getCek' | 'getContentKeyHmac'>
   /** The server's workspace row read now (`fetchWorkspaceConversionState`). */
   readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
-  /** Whether this client may upload now. A drain asked for while it may not leaves
-   *  every record pending; uploading regardless would turn a demotion's 403 into a
-   *  permanent `failed`. */
+  /** Whether this client may upload now, asked before each record. A record reached
+   *  while it may not stays pending; uploading regardless would turn a demotion's 403
+   *  into a permanent `failed`. */
   readonly canDrain: () => boolean
 }
 
@@ -72,7 +72,8 @@ export const createMediaLanes = (deps: MediaLaneDeps): MediaLanes => {
         do {
           again = false
           try {
-            await drainUploads(userId, { store, byteStore, blobStore, readLiveWorkspace, ...keyDeps })
+            // Also the per-record gate, so a demotion mid-pass defers the records after it.
+            await drainUploads(userId, { store, byteStore, blobStore, readLiveWorkspace, ...keyDeps, isActiveUser: canDrain })
           } catch (error) {
             console.warn('[mediaLanes] drain failed', error)
           }
