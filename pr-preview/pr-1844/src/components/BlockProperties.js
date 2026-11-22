@@ -1,1 +1,1 @@
-export{KU as BlockProperties}from"../../chunks/app-BaDTmYNp.js";
+export{KU as BlockProperties}from"../../chunks/app-Bsf4jZ8e.js";

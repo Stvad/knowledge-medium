@@ -1,1 +1,1 @@
-export{QN as EXTENSIONS_PAGE_TITLE,$N as TUTORIAL_DEFAULT_TITLE,eP as TUTORIAL_VIM_TITLE,gE as onboardingPlugin,ZN as seedTutorial}from"../../../chunks/app-BaDTmYNp.js";
+export{QN as EXTENSIONS_PAGE_TITLE,$N as TUTORIAL_DEFAULT_TITLE,eP as TUTORIAL_VIM_TITLE,gE as onboardingPlugin,ZN as seedTutorial}from"../../../chunks/app-Bsf4jZ8e.js";

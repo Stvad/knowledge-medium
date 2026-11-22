@@ -1,1 +1,1 @@
-export{en as AppRuntimeProvider}from"../../chunks/app-BaDTmYNp.js";
+export{en as AppRuntimeProvider}from"../../chunks/app-Bsf4jZ8e.js";

@@ -1,1 +1,1 @@
-export{QR as Header}from"../../chunks/app-BaDTmYNp.js";
+export{QR as Header}from"../../chunks/app-Bsf4jZ8e.js";

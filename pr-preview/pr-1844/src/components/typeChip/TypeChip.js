@@ -1,1 +1,1 @@
-export{XF as TypeChip}from"../../../chunks/app-BaDTmYNp.js";
+export{XF as TypeChip}from"../../../chunks/app-Bsf4jZ8e.js";

@@ -1,1 +1,1 @@
-export{ov as extensionsOverridesProp,sv as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-BaDTmYNp.js";
+export{ov as extensionsOverridesProp,sv as extensionsPrefsType,qr as extensionsSettingsPlugin}from"../../../chunks/app-Bsf4jZ8e.js";

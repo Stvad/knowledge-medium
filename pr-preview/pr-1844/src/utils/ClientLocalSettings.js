@@ -1,1 +1,1 @@
-export{WL as ClientLocalSettings,GL as clientLocalSettings}from"../../chunks/app-BaDTmYNp.js";
+export{WL as ClientLocalSettings,GL as clientLocalSettings}from"../../chunks/app-Bsf4jZ8e.js";
