@@ -1,1 +1,1 @@
-export{yP as CommandPaletteHeaderItem}from"../../../chunks/app-DeOMtgw0.js";
+export{yP as CommandPaletteHeaderItem}from"../../../chunks/app-Bj39d0w4.js";

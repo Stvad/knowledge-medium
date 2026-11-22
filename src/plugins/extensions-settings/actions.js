@@ -1,1 +1,1 @@
-export{ai as openExtensionsSettingsAction}from"../../../chunks/app-DeOMtgw0.js";
+export{ai as openExtensionsSettingsAction}from"../../../chunks/app-Bj39d0w4.js";

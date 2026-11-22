@@ -1,1 +1,1 @@
-export{kI as approveExtensionHere}from"../../chunks/app-DeOMtgw0.js";
+export{kI as approveExtensionHere}from"../../chunks/app-Bj39d0w4.js";
