@@ -1,1 +1,1 @@
-export{Iq as adoptOrCreatePropertySchema}from"../../chunks/app-CLw8falt.js";
+export{Iq as adoptOrCreatePropertySchema}from"../../chunks/app-Bc0aU2WA.js";

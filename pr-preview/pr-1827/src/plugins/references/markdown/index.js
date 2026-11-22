@@ -1,1 +1,1 @@
-export{kx as referencesMarkdownExtension}from"../../../../chunks/app-CLw8falt.js";
+export{kx as referencesMarkdownExtension}from"../../../../chunks/app-Bc0aU2WA.js";

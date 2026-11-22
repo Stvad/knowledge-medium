@@ -1,1 +1,1 @@
-export{Yl as aggregateDiagnostics,Xl as useDiagnostics}from"../../../chunks/app-CLw8falt.js";
+export{Yl as aggregateDiagnostics,Xl as useDiagnostics}from"../../../chunks/app-Bc0aU2WA.js";

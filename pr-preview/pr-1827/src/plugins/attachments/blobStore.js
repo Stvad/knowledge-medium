@@ -1,1 +1,1 @@
-export{Vw as ATTACHMENTS_BUCKET,Hw as BlobPutError,Uw as createSupabaseBlobStore,Ww as isAlreadyExists}from"../../../chunks/app-CLw8falt.js";
+export{Vw as ATTACHMENTS_BUCKET,Hw as BlobPutError,Uw as createSupabaseBlobStore,Ww as isAlreadyExists}from"../../../chunks/app-Bc0aU2WA.js";
