@@ -144,6 +144,10 @@ const inOwnList = (target: EventTarget, cell: Element) => {
   return list !== null && list.closest('[data-table-col]') === cell
 }
 
+/** A cell's own event, not one of a table nested in it: that cell handles its own. */
+const isOwnEvent = (event: {target: EventTarget; currentTarget: EventTarget}) =>
+  event.target instanceof Element && event.target.closest('[data-table-col]') === event.currentTarget
+
 const isPlainKey = (event: KeyboardEvent) => !event.metaKey && !event.ctrlKey && !event.altKey
 
 const Cell = ({row, index, sticky, isContent, children}: {
@@ -151,8 +155,7 @@ const Cell = ({row, index, sticky, isContent, children}: {
 }) => {
   const {controller} = useContext(TableContext)!
   const click = (event: MouseEvent<HTMLDivElement>) => {
-    // A cell of a table nested in this one handles its own clicks.
-    if (!(event.target instanceof Element) || event.target.closest('[data-table-col]') !== event.currentTarget) return
+    if (!isOwnEvent(event)) return
     // Controls, links and editors keep their click; so does the row's own
     // text, which edits in place.
     if (isContent || isInteractive(event.target) || inOwnList(event.target, event.currentTarget)) {
@@ -164,15 +167,16 @@ const Cell = ({row, index, sticky, isContent, children}: {
     controller.focusCell(row.id, index, event.detail === 2)
   }
   const focus = (event: FocusEvent<HTMLDivElement>) => {
+    if (!isOwnEvent(event)) return
     if (event.target instanceof HTMLElement && event.target.matches(CELL_CONTROL_SELECTOR)) {
       controller.controlFocused(row.id, index, event.target)
     }
   }
   const blur = (event: FocusEvent<HTMLDivElement>) => {
-    if (event.target instanceof HTMLElement) controller.controlBlurred(event.target)
+    if (isOwnEvent(event) && event.target instanceof HTMLElement) controller.controlBlurred(event.target)
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!(event.target instanceof HTMLElement) || !event.target.matches(CELL_CONTROL_SELECTOR)) return
+    if (!isOwnEvent(event) || !(event.target instanceof HTMLElement) || !event.target.matches(CELL_CONTROL_SELECTOR)) return
     if (event.nativeEvent.isComposing) return
     const command = controlKeyCommand(event)
     if (command) {

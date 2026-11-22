@@ -35,6 +35,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import * as toast from '@/utils/toast'
 import { turnIntoTable } from '../convert'
 import { tablesPlugin } from '../index'
+import { CELL_CONTROL_SELECTOR } from '../controller'
 import { gridOfHost, tableRenderScopeId } from '../registry'
 
 const USER: User = {id: 'test-user', name: 'Test user'}
@@ -45,6 +46,8 @@ const PANEL = 'panel'
 const HOST = 'host'
 const PARENT_SCOPE = 'tables-gestures'
 const SCOPE = tableRenderScopeId(PARENT_SCOPE, HOST)
+const done = seedProperty({seedKey: 'test/property/tables-gesture-done', revision: 1,
+  name: 'gesture:done', preset: 'boolean', changeScope: ChangeScope.BlockDefault})
 const tags = seedProperty({seedKey: 'test/property/tables-gesture-tags', revision: 1,
   name: 'gesture:tags', preset: 'string-list', changeScope: ChangeScope.BlockDefault})
 
@@ -60,6 +63,7 @@ const configureRuntime = (...extra: AppExtension[]) => {
     [...defaults.globalActions, ...defaults.normalModeActions, ...defaults.editModeCMActions]
       .map(action => actionsFacet.of(action)),
     definitionSeedsFacet.of(tags, {source: 'test'}),
+    definitionSeedsFacet.of(done, {source: 'test'}),
     ...extra,
   ])
   repo.setFacetRuntime(runtime)
@@ -99,7 +103,7 @@ beforeEach(async () => {
     await tx.create({id: 'row-0', workspaceId: WS, parentId: HOST, orderKey: 'a0', content: 'first'})
     await tx.create({id: 'row-1', workspaceId: WS, parentId: HOST, orderKey: 'a1', content: 'second'})
   }, {scope: ChangeScope.BlockDefault})
-  await waitFor(() => expect(repo.propertySchemas.has(tags.name)).toBe(true))
+  await waitFor(() => expect(repo.propertySchemas.has(tags.name) && repo.propertySchemas.has(done.name)).toBe(true))
   await repo.awaitSeedMaterialization()
   await repo.block('row-0').set(tags, ['alpha', 'beta'])
   await repo.awaitReprojections()
@@ -348,6 +352,27 @@ describe('a table nested in a list member', () => {
     fireEvent.click(gamma)
     expect(reached).toBe(true)
     expect(focused()?.blockId).not.toBe('row-0')
+  })
+
+  it('an inner table’s control belongs to the inner grid alone', async () => {
+    const [alpha] = await memberIds()
+    await repo.tx(async tx => {
+      await tx.create({id: 'inner', workspaceId: WS, parentId: alpha!, orderKey: 'a0', content: 'Inner'})
+      await tx.create({id: 'inner-row', workspaceId: WS, parentId: 'inner', orderKey: 'a0', content: 'inner row'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.block('inner-row').set(done, true)
+    await repo.awaitReprojections()
+    await turnIntoTable(repo, 'inner')
+    mount()
+    const control = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>(`[data-table-row="inner-row"] ${CELL_CONTROL_SELECTOR}`)
+      expect(node).not.toBeNull()
+      return node!
+    })
+    act(() => { control.focus() })
+    // Each grid takes a focused control as its own synchronously: only the inner one may.
+    expect(gridOfHost(SCOPE, 'inner')!.isInControl()).toBe(true)
+    expect(gridOfHost(PARENT_SCOPE, HOST)!.isInControl()).toBe(false)
   })
 })
 
