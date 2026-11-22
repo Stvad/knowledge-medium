@@ -3,6 +3,8 @@
  *  blocks, with values on both sides of each day boundary. Times are in the
  *  fixture's UTC+2 local zone for created/updated and UTC for the date property. */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { codecs } from '@/data/api'
+import { queryableFieldsFacet } from '@/data/facets'
 import type { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { parseQuery } from '../query/parse'
@@ -84,5 +86,22 @@ describe('parsed terms in the engine', () => {
     ['(#book | refs=[[Mary]]) !#article', ['a', 'c']],
   ] as const)('%s', async (text, expected) => {
     expect(await run(text)).toEqual(expected)
+  })
+
+  it('compares a plugin field through its own encoder', async () => {
+    // test:score reads the stored rating, as a plugin field might; an engine field with a number encoder.
+    repo.setRuntimeContributions(queryableFieldsFacet, 'test', [{
+      name: 'test:score',
+      // NULL for a missing or malformed value, as the field contract asks.
+      value: alias => ({sql: `CASE WHEN json_type(${alias}.properties_json, '$.rating') IN ('integer', 'real')
+        THEN json_extract(${alias}.properties_json, '$.rating') END`, params: []}),
+      encode: operand => codecs.number.decode(operand),
+      dependencies: [workspaceId => ({kind: 'workspace', workspaceId})],
+    }])
+    try {
+      expect(await run('test:score>2')).toEqual(['a'])
+    } finally {
+      repo.setRuntimeContributions(queryableFieldsFacet, 'test', [])
+    }
   })
 })

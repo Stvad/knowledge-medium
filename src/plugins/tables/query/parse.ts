@@ -13,7 +13,7 @@
  *    assignee=[[Mary]]  owner=((id))         a reference property pointing at a block
  *    refs=[[Mary]]                           references the block through any field
  *    childof=self  childof=[[X]]  under=[[X]] direct parent / ancestor
- *    created>2026-01-01                      a queryable field; a date means the local day
+ *    created>2026-01-01  plugin:score>3       a queryable field; on created/updated a date means the local day
  *    status=open | priority>=3               one or-group
  *
  *  Terms read what is stored, as the engine compares it: a property's default
@@ -47,10 +47,16 @@ export interface QueryResolver {
   propertyById(fieldId: string): QueryProperty | undefined
   typeByLabel(label: string): QueryType | undefined
   typeById(id: string): QueryType | undefined
-  /** A queryable field (`created`, `updated`, a plugin's). */
-  isField(name: string): boolean
+  /** A queryable field (`created`, `updated`, a plugin's), and how it takes an operand. */
+  field(name: string): QueryField | undefined
   blockIdByAlias(alias: string): string | undefined
 }
+
+export type QueryField =
+  /** A timestamp (`created`, `updated`): a date-only operand means the local day. */
+  | {readonly kind: 'instant'}
+  /** Any other field: its own encoder decides the operand, tried as text, then as a number. */
+  | {readonly kind: 'value'; readonly encode: (operand: unknown) => unknown}
 
 export interface ParseOptions {
   /** The block `childof=self` names. */
@@ -86,7 +92,11 @@ export type QueryTerm = Span & (
   | {readonly kind: 'types'; readonly negated: boolean; readonly types: readonly QueryType[]}
   | {readonly kind: 'compare'; readonly property: QueryProperty; readonly op: CompareOp; readonly operand: Operand}
   | {readonly kind: 'presence'; readonly property: QueryProperty; readonly present: boolean}
-  | {readonly kind: 'field'; readonly field: string; readonly op: CompareOp; readonly operand: string}
+  | {
+    readonly kind: 'field'; readonly field: string; readonly op: CompareOp; readonly operand: string
+    /** What a value field compares the operand as; absent for an instant field. */
+    readonly encoded?: string | number
+  }
   | {readonly kind: 'refs' | 'under'; readonly target: RefOperand}
   | {readonly kind: 'childof'; readonly target: RefOperand}
   | {readonly kind: 'anyOf'; readonly alternatives: readonly AlternativeTerm[]}
@@ -354,9 +364,11 @@ const placementOf = (term: AlternativeTerm, options: ParseOptions): Placement =>
     case 'compare': return compareTerm(term)
     case 'presence': return {to: 'match', predicate: {where: {[term.property.name]: {exists: term.present}}}}
     case 'field': {
+      const to = term.op === 'ne' ? 'exclude' : 'match'
+      if (term.encoded !== undefined) return {to, predicate: {where: {[term.field]: operatorValue(term.op, term.encoded)}}}
       const day = dayBounds(term.operand, options.localDayStart ?? defaultLocalDayStart)
       const where = day ? dayRange(term.op, day, ms => ms) : operatorValue(term.op, Date.parse(term.operand))
-      return {to: term.op === 'ne' ? 'exclude' : 'match', predicate: {where: {[term.field]: where}}}
+      return {to, predicate: {where: {[term.field]: where}}}
     }
     case 'refs': return {to: 'match', predicate: {referencedBy: {id: term.target.id}}}
     case 'under': return {to: 'match', predicate: {scope: 'ancestor', id: term.target.id}}
@@ -407,11 +419,24 @@ const readStructural = (reader: Reader, key: ReservedKey, negated: boolean, op: 
   return key === 'childof' ? {kind: key, target, start, end: reader.i} : {kind: key, target, start, end: reader.i}
 }
 
-const readFieldTerm = (reader: Reader, field: string, op: CompareOp, start: number): QueryTerm => {
+/** The operand a value field's encoder takes: the text, or failing that its number. */
+const fieldValue = (encode: (operand: unknown) => unknown, text: string): string | number | undefined => {
+  if (encodes(encode, text)) return text
+  return NUMBER.test(text) && Number.isFinite(Number(text)) && encodes(encode, Number(text)) ? Number(text) : undefined
+}
+
+const readFieldTerm = (reader: Reader, name: string, field: QueryField, op: CompareOp, start: number): QueryTerm => {
   const operandStart = reader.i
-  const text = reader.bareWord()
-  if (!calendarDay(text) && !isInstant(text)) reader.fail(operandStart, `${field} takes a date like 2026-01-31 or an ISO instant`)
-  return {kind: 'field', field, op, operand: text, start, end: reader.i}
+  if (field.kind === 'instant') {
+    const text = reader.bareWord()
+    if (!calendarDay(text) && !isInstant(text)) reader.fail(operandStart, `${name} takes a date like 2026-01-31 or an ISO instant`)
+    return {kind: 'field', field: name, op, operand: text, start, end: reader.i}
+  }
+  const text = reader.name()
+  if (reader.i === operandStart) reader.fail(start, `Expected a value after ${OP_TEXT[op]}`)
+  const encoded = fieldValue(field.encode, text)
+  if (encoded === undefined) reader.fail(operandStart, `"${text}" is not a value of ${name}`)
+  return {kind: 'field', field: name, op, operand: text, encoded, start, end: reader.i}
 }
 
 const readCompare = (reader: Reader, property: QueryProperty, op: CompareOp, start: number): QueryTerm => {
@@ -450,16 +475,20 @@ const readKeyed = (reader: Reader, negated: boolean, start: number): QueryTerm =
 
   const {resolver} = reader
   const property = savedId !== undefined ? resolver.propertyById(savedId) : resolver.propertyByName(name)
-  const field = savedId === undefined && resolver.isField(name)
+  const field = savedId === undefined ? resolver.field(name) : undefined
   // The engine keys a property term by name, so a property named like a field
   // is ambiguous however it is addressed here.
-  if (property && resolver.isField(property.name)) {
+  if (property && resolver.field(property.name)) {
     reader.fail(start, `${property.name} is both a property and a field; rename the property to query it`, keyEnd)
   }
   if (field) {
-    if (op === undefined) reader.fail(start, `${name} is always set; compare it, as in ${name}>2026-01-01`, keyEnd)
+    if (op === undefined) {
+      reader.fail(start, field.kind === 'instant'
+        ? `${name} is always set; compare it, as in ${name}>2026-01-01`
+        : `${name} is a field; compare it with a value, as in ${name}=x`, keyEnd)
+    }
     if (negated) reader.fail(start, 'Write != instead of a leading !')
-    return readFieldTerm(reader, name, op, start)
+    return readFieldTerm(reader, name, field, op, start)
   }
   if (!property) {
     return reader.fail(start, savedId !== undefined ? `No property with id ${savedId}` : `No property or field named ${name}`, keyEnd)
