@@ -46,7 +46,8 @@ export const tableRoleOf = (blockId: string, context: BlockContextType | undefin
 export const TABLE_ROW_CONTEXT = 'tables.row'
 export const TABLE_TYPING_CONTEXT = 'tables.row-typing'
 export const TABLE_EDIT_CONTEXT = 'tables.edit'
-export const TABLE_LIST_EDIT_CONTEXT = 'tables.list-edit'
+/** Editing a block the grid draws as an outline block: a row's text or a list's member. */
+export const TABLE_OUTLINE_EDIT_CONTEXT = 'tables.outline-edit'
 
 export interface GridDependencies extends BaseShortcutDependencies {
   /** Returns false when the command does not apply, so the key falls through. */
@@ -71,7 +72,7 @@ export const tableActionContexts: ActionContextConfig[] = [
   context(TABLE_TYPING_CONTEXT, 'Table row (typing)', {priority: 'default'}),
   // An editor is an editable target, which the default filter turns away.
   context(TABLE_EDIT_CONTEXT, 'Table cell editing', {eventFilter: () => true}),
-  context(TABLE_LIST_EDIT_CONTEXT, 'Table list editing', {eventFilter: () => true}),
+  context(TABLE_OUTLINE_EDIT_CONTEXT, 'Table outline editing', {eventFilter: () => true}),
 ]
 
 /** A key an open completion already handled is not the grid's. */
@@ -135,8 +136,9 @@ export const tableActions: ActionConfig[] = [
   gridAction(TABLE_ROW_CONTEXT, 'clear', ['Delete', 'Backspace']),
   gridAction(TABLE_TYPING_CONTEXT, 'open', [...PRINTABLE, ...PRINTABLE.map(key => `Shift+${key}`)], {passKey: true}),
   ...editKeys,
-  // A list's members are outline blocks: Enter, Tab and Backspace stay the outline's.
-  gridAction(TABLE_LIST_EDIT_CONTEXT, 'leave', 'Escape', {yieldToEditor: true}),
+  // A row's text and a list's members are outline blocks: Enter, Tab and
+  // Backspace stay the outline's (`./rowVerbs` between rows).
+  gridAction(TABLE_OUTLINE_EDIT_CONTEXT, 'leave', 'Escape', {yieldToEditor: true}),
 ]
 
 /** Editing a cell, a list member or a row's text. Row mode is activated by
@@ -149,7 +151,7 @@ export const tableShortcutActivation: ShortcutActivationContribution = activatio
   if (activation.surface !== 'codemirror' || !activation.inEditMode) return null
   const role = tableRoleOf(activation.block.id, activation.blockContext)
   if (!role) return null
-  return [{context: role === 'member' ? TABLE_LIST_EDIT_CONTEXT : TABLE_EDIT_CONTEXT, dependencies: {gridCommand: grid.command}}]
+  return [{context: role === 'cell' ? TABLE_EDIT_CONTEXT : TABLE_OUTLINE_EDIT_CONTEXT, dependencies: {gridCommand: grid.command}}]
 }
 
 type Applies = (deps: BaseShortcutDependencies, trigger: ActionTrigger) => boolean | Promise<boolean>
@@ -191,27 +193,34 @@ const atEditorEdge = (view: EditorView, edge: Edge) => {
   }
 }
 
-/** Whether the outline's step from a list member past `edge` leaves its cell:
- *  from its first block upwards, where the outline's previous block is the
- *  field row, which the cell does not draw, and from its last block downwards,
- *  where the outline has nothing. False for a scope root itself. */
-const leavesList = async (block: Block, surface: OutlineSurface, edge: Edge): Promise<boolean> => {
+/** Whether the outline's step from `block` past `edge` leaves what its scope
+ *  draws: from the first block upwards onto the scope root, and from the last
+ *  block downwards, where the outline has nothing. */
+const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge): Promise<boolean> => {
   if (edge === 'top' || edge === 'start') return (await previousVisibleBlock(block, surface))?.id === surface.scopeRootId
   return await nextVisibleBlock(block, surface) === null
 }
 
-/** The grid takes the verb on a scope root (a row's text, a scalar value); on
- *  a list member only a step past `edge` out of the cell, and with no edge
- *  never. The walk is async, so the key's default is prevented first, as the
+/** Whether the grid takes a verb on `block`, the outline's otherwise.
+ *  - A scalar value: always; the grid draws nothing around it.
+ *  - A row's text: always, except down into its children when they show.
+ *  - A list member: only a step out of the cell past `edge` (the field row,
+ *    the scope root, is not drawn); with no edge, never.
+ *  - A row's child: only down out of the last one; the row's text above it is
+ *    drawn, so every other step is the outline's.
+ *  The walk is async, so the key's default is prevented first, as the
  *  outline's verbs do on the same test: otherwise the caret moves before
  *  either handler runs. */
 const crossing = (edge?: Edge): Applies => (deps, trigger) => {
-  const {block} = deps as BlockShortcutDependencies
+  const {block, renderScopeId} = deps as BlockShortcutDependencies
   const surface = outlineSurfaceOf(deps as BlockShortcutDependencies)
-  if (!block || !surface || block.id === surface.scopeRootId) return true
-  if (!edge) return false
+  if (!block || !surface) return true
+  const inRow = gridDrawing(renderScopeId, block.id)?.isRow(surface.scopeRootId) === true
+  const isRoot = block.id === surface.scopeRootId
+  if (isRoot && !(inRow && edge === 'bottom')) return true
+  if (!isRoot && (!edge || (inRow && edge !== 'bottom'))) return false
   trigger.preventDefault()
-  return leavesList(block, surface, edge)
+  return leavesScope(block, surface, isRoot ? 'bottom' : edge!)
 }
 
 const always: Applies = () => true

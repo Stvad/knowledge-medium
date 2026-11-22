@@ -3,6 +3,7 @@
  *  part of every row renderer's slot identity. Focus is always on a row block
  *  (app focus); only the column is held here. */
 import { ChangeScope } from '@/data/api'
+import { move, revealChildren } from '@/data/mutators'
 import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
@@ -75,6 +76,7 @@ export class GridController {
   private root: HTMLElement | null = null
   /** The query's terms; null when the rows are the host's children. */
   private queryTerms: readonly QueryTerm[] | null = null
+  private sorted = false
   /** Rows made here while a query is set, drawn for as long as the grid is
    *  mounted whether or not they match. */
   private created: readonly string[] = []
@@ -108,6 +110,66 @@ export class GridController {
     this.queryTerms = terms
   }
 
+  get hasQuery(): boolean {
+    return this.queryTerms !== null
+  }
+
+  /** Whether the rows are drawn in a sort's order rather than the host's. */
+  setSorted(sorted: boolean) {
+    this.sorted = sorted
+  }
+
+  /** Whether a row may be made here; refuses, with a notice, as the grid's own inserts do. */
+  allowsNewRow(): boolean {
+    return !this.refuseRowPastCap()
+  }
+
+  /** A query's rows live anywhere, and are what the query selects: making
+   *  one a child of another or the reverse is done in the outline. */
+  private refuseUnderQuery(): boolean {
+    if (!this.queryTerms) return false
+    showInfo('A query table’s rows are what the query selects: nest them in the outline.')
+    return true
+  }
+
+  /** Tab on a row: it becomes the last child of the row drawn above it, shown
+   *  under that row. Nothing above the first row: never the view block. */
+  async nestRow(rowId: string): Promise<void> {
+    const row = this.rowIndex.get(rowId)
+    if (!row || this.host.repo.isReadOnly || this.refuseUnderQuery()) return
+    const parentId = this.rowIds[row - 1]!
+    await this.host.repo.tx(async tx => {
+      await tx.run(move, {id: rowId, parentId, position: {kind: 'last'}})
+      await revealChildren(tx, parentId)
+    }, {scope: ChangeScope.BlockDefault, description: 'nest table row'})
+  }
+
+  /** Shift+Tab on a row's child: it becomes the row after that row. */
+  async unnestChild(childId: string, rowId: string): Promise<void> {
+    if (this.host.repo.isReadOnly || this.refuseUnderQuery() || this.refuseRowPastCap()) return
+    await this.host.repo.mutate.move({id: childId, parentId: this.host.id, position: {kind: 'after', siblingId: rowId}})
+  }
+
+  /** Move a row past the one drawn beside it. A sort or a query decides the
+   *  order the rows are drawn in, so there it is refused. */
+  async moveRow(rowId: string, step: -1 | 1): Promise<void> {
+    const row = this.rowIndex.get(rowId)
+    if (row === undefined || this.host.repo.isReadOnly) return
+    if (this.queryTerms || this.sorted) {
+      showInfo(this.queryTerms ? 'A query table’s rows are in the query’s order.' : 'This table is sorted: clear the sort to move rows.')
+      return
+    }
+    const siblingId = this.rowIds[row + step]
+    if (!siblingId) return
+    await this.host.repo.mutate.move({id: rowId, parentId: this.host.id, position: {kind: step < 0 ? 'before' : 'after', siblingId}})
+  }
+
+  /** The row drawn above `rowId`, if any. */
+  rowAbove(rowId: string): string | undefined {
+    const row = this.rowIndex.get(rowId)
+    return row ? this.rowIds[row - 1] : undefined
+  }
+
   readonly subscribeCreated = (listener: () => void) => this.createdListeners.add(listener)
   readonly getCreated = () => this.created
 
@@ -136,6 +198,10 @@ export class GridController {
       id = repo.block(id).peek()?.parentId
     }
     return undefined
+  }
+
+  isRow(blockId: string): boolean {
+    return this.rowIndex.has(blockId)
   }
 
   /** Focus on a cell's field row, which the grid does not draw (an outline

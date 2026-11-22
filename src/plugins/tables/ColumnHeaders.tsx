@@ -19,6 +19,7 @@ import {
   resizeColumn, setColumnHidden, typeTargetsFor, type ColumnDeletion, type TypeTarget,
 } from './columns'
 import { rowPropertyNames, type TableColumn } from './model'
+import { useRowGutter } from './rowGutter'
 import type { QueryClauses } from './query/parse'
 import { nextSort, type ViewSort } from './sort'
 
@@ -97,6 +98,7 @@ export const ColumnHeaders = ({
   host, workspaceId, columns, names, template, scrollRef, onFocus, rowIds, editable, onResizePreview, sort, sortable, onSort,
 }: HeaderProps) => {
   const rowRef = useRef<HTMLDivElement>(null)
+  const gutter = useRowGutter()
   /** The dragged column and where its drop indicator stands, in px from the row's left edge. */
   const [drag, setDrag] = useState<{columnId: string; indicator: number} | null>(null)
   /** A press on a header label: it becomes a reorder once it travels. */
@@ -141,12 +143,12 @@ export const ColumnHeaders = ({
   return (
     <div ref={scrollRef} onFocus={onFocus} {...headerSurface}
       className="sticky top-0 z-[2] overflow-hidden border-b border-border bg-background">
-      <div ref={rowRef} role="row" className={`relative grid text-sm font-medium ${ROW_BULLET_GUTTER}`} style={template}>
+      <div ref={rowRef} role="row" className={`relative grid text-sm font-medium ${gutter.margin}`} style={template}>
         {columns.map((column, index) => (
           <div key={column.id} role="columnheader" data-table-column={column.id}
             aria-sort={sort?.columnId === column.id ? SORT_ARIA[sort.direction] : undefined}
             // The frozen header sits above the other columns' resize strips (z-20).
-            className={`group relative flex min-w-0 items-center border-r border-border ${index === 0 ? 'sticky left-0 z-30 bg-background' : ''} ${drag?.columnId === column.id ? 'opacity-50' : ''}`}>
+            className={`group relative flex min-w-0 items-center border-r border-border ${index === 0 ? `sticky ${gutter.frozenLeft} z-30 bg-background ${gutter.cover}` : ''} ${drag?.columnId === column.id ? 'opacity-50' : ''}`}>
             <span data-table-column-drag="true"
               className={`min-w-0 flex-1 truncate px-2 py-1 ${editable ? 'cursor-grab touch-pan-y select-none' : ''}`}
               onPointerDown={event => reorder.onPointerDown(event, column.id)}
@@ -276,12 +278,6 @@ const ColumnMenu = ({host, workspaceId, column, name, rowIds, sort, onSort}: {
     </DropdownMenu>
   )
 }
-
-/** Where a row's bullet stands (its 20px link and the frame's 4px gap, see
- *  `TableRowLayout`), so the header's columns line up with the rows'. A margin
- *  on the row, not padding on the scroller: a scroller's padding moves where
- *  the frozen first column sticks, and the rows' scroller has none. */
-const ROW_BULLET_GUTTER = 'ml-6'
 
 /** Below the grid: add a column, and show the hidden ones again. */
 export const ColumnToolbar = ({host, workspaceId, query, viewId, columnNames, hidden, hiddenNames, hasContentColumn}: {
