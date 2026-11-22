@@ -1,3 +1,4 @@
+import { propertyEditorOverridesFacet } from '@/data/facets'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions'
 import { blockLayoutFacet, shortcutSurfaceActivationsFacet, type BlockLayoutContribution } from '@/extensions/blockInteraction'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core'
@@ -9,6 +10,9 @@ import { spatialNavExclusionsFacet } from '@/plugins/spatial-navigation/exclusio
 import { tableConversionActions } from './actions'
 import { cellEditorExtension } from './cellEdits'
 import { tablesDataExtension } from './dataExtension'
+import { queryPropertyUi } from './QueryUi'
+import { queryCompletionExtension } from './query/completion'
+import { tableRowVerbs } from './rowVerbs'
 import {
   tableActionContexts, tableActions, tableOutlineVerbRedirects, tableRoleOf, tableShortcutActivation,
 } from './keys'
@@ -42,8 +46,11 @@ export const tablesPlugin: AppExtension = systemToggle({
   shortcutSurfaceActivationsFacet.of(tableShortcutActivation, {source: SOURCE}),
   spatialNavExclusionsFacet.of(CELL_SURFACE, {source: SOURCE}),
   codeMirrorExtensionsFacet.of(cellEditorExtension, {source: SOURCE}),
+  codeMirrorExtensionsFacet.of(queryCompletionExtension, {source: SOURCE}),
+  propertyEditorOverridesFacet.of(queryPropertyUi, {source: SOURCE}),
   tableActionContexts.map(config => actionContextsFacet.of(config, {source: SOURCE})),
   [...tableActions, ...tableConversionActions].map(action => actionsFacet.of(action, {source: SOURCE})),
   tableOutlineVerbRedirects,
+  tableRowVerbs,
   tableVerticalSteps,
 ])

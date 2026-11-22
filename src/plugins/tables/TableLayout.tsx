@@ -7,7 +7,7 @@ import { LazyBlockComponent } from '@/components/LazyBlockComponent'
 import { BlockFrame } from '@/components/renderer/DefaultBlockRenderer'
 import { CollapsibleContent } from '@/components/ui/collapsible'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
-import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
+import { PropertyDisplayScopeContext, PropertyFieldRowContext, PropertyRowListingContext } from '@/context/propertyDisplay'
 import { type AnyPropertySchema, type BlockData, type TypedBlockQuery } from '@/data/api'
 import type { Block } from '@/data/block'
 import { useIsActivePanel, useUIStateBlock } from '@/data/globalState'
@@ -16,7 +16,7 @@ import { focusedBlockLocationFromProperties, isEditingProp } from '@/data/proper
 import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
-import { useContent, useHandle, useWorkspaceId } from '@/hooks/block'
+import { useChildIdsForMode, useContent, useHandle, useWorkspaceId } from '@/hooks/block'
 import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -30,6 +30,8 @@ import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { TABLE_CHILDREN_ATTRIBUTE, TABLE_HOST_ATTRIBUTE } from './navigation'
 import { registerGrid, tableRenderScopeId } from './registry'
+import { useIsMobile } from '@/utils/react'
+import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
 
 /** Spatial navigation skips cells: focus belongs on the row. */
 export const CELL_SURFACE = 'tables.cell'
@@ -43,17 +45,26 @@ interface TableState {
   contentColumn: number
   /** Rows made here that the query does not select. */
   unmatched: ReadonlySet<string>
+  /** The rows drawn. */
+  rows: ReadonlySet<string>
 }
 
 /** Set on the grid's root from the columns' widths; header and rows read them. */
 const TRACKS_VARIABLE = '--tables-tracks'
-const MIN_WIDTH_VARIABLE = '--tables-min-width'
 const GRID_TEMPLATE: CSSProperties = {
   gridTemplateColumns: `var(${TRACKS_VARIABLE})`,
   minWidth: `var(${MIN_WIDTH_VARIABLE})`,
 }
 
 const TableContext = createContext<TableState | null>(null)
+
+/** The visible table less the gutter. */
+const VISIBLE_WIDTH = `calc(var(${VIEW_WIDTH_VARIABLE}, 0px) - var(${GUTTER_VARIABLE}))`
+/** A row's body (its grid and children) is the header row's width: the
+ *  visible table, or the grid's minimum when wider. */
+const ROW_BODY: CSSProperties = {width: `max(var(${MIN_WIDTH_VARIABLE}), ${VISIBLE_WIDTH})`}
+/** A row's children wrap to the visible table, not the grid. */
+const ROW_NOTES: CSSProperties = {maxWidth: VISIBLE_WIDTH}
 
 /** The narrowest a column without a stored width gets; wider ones share the rest. */
 const defaultMinWidth = (column: TableColumn) => column.fieldId === null ? 192 : 144
@@ -194,7 +205,7 @@ const Cell = ({row, index, sticky, isContent, children}: {
   return (
     <div
       data-table-col={index}
-      className={`min-w-0 border-r border-border px-2 py-0.5 ${sticky ? 'sticky left-0 z-[1] bg-background' : ''}`}
+      className={`min-w-0 border-r border-border px-2 py-0.5 ${sticky ? 'sticky left-[var(--tables-gutter)] z-[1] bg-background' : ''}`}
       onClickCapture={click}
       onFocus={focus}
       onBlur={blur}
@@ -220,24 +231,39 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-/** A row keeps its bullet, so it opens, opens in the sidebar and has its menu
- *  as any block does; no expand control, since the grid draws no children.
- *  The header's `ROW_BULLET_GUTTER` matches the bullet's width. */
-const TableRowLayout: BlockLayout = ({block, Header, Shell, Bullet, Content}) => {
+/** A row's children as the outline draws them, minus what the grid draws
+ *  elsewhere in the same scope, where a second occurrence would have a second
+ *  editor: its property rows (its cells), and a child a query also selects as
+ *  a row (`GridController.childIdsOf`, the same list for the grid's walks).
+ *  The outline's own listing keeps a focused field row, which editing
+ *  a list member makes the row's focused child. Accepted: a deeper descendant
+ *  a query also selects is drawn both as a row and under its ancestor. */
+const RowNotes = ({row}: {row: Block}) => {
+  const {renderScopeId} = useBlockContext()
+  const {rows} = useContext(TableContext)!
+  const ids = useChildIdsForMode(row, 'none')
+  return (
+    <PropertyRowListingContext value={null}>
+      {ids.filter(id => !rows.has(id)).map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
+    </PropertyRowListingContext>
+  )
+}
+
+const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) => {
   const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!
   const outside = unmatched.has(block.id)
+  const FrozenControls = useMemo(() => function FrozenControls() {
+    // The frame's 4px gap to the frozen first column is painted too, or scrolled cells show through it.
+    return <div className="sticky left-0 z-[2] self-stretch bg-background after:absolute after:inset-y-0 after:left-full after:w-1 after:bg-background after:content-['']"><Controls/></div>
+  }, [Controls])
   return (
     <BlockFrame
-      block={block} Header={Header} Shell={Shell} Controls={Bullet}
-      className={outside ? 'tm-table-row opacity-60' : 'tm-table-row'}
+      block={block} Header={Header} Shell={Shell} Controls={FrozenControls}
+      className={`w-max min-w-full ${outside ? 'tm-table-row opacity-60' : 'tm-table-row'}`}
       frameProps={{'data-table-row': block.id, ...(outside ? {'data-table-unmatched': 'true', title: UNMATCHED_TITLE} : {})}}
     >
-      {/* `.block-body` clips horizontal overflow: it must be as wide as the
-          grid, so the overflow reaches the table's scroller. */}
-      <div className="block-body grow" style={{minWidth: GRID_TEMPLATE.minWidth}}>
-        {/* The border is on the grid, not the frame: the frame is only as wide
-            as the scroller, so a border there stops short once it scrolls. */}
-        <div className="grid border-b border-border" style={GRID_TEMPLATE}>
+      <div className="block-body border-b border-border" style={ROW_BODY}>
+        <div className="grid" style={GRID_TEMPLATE}>
           {columns.map((column, index) => (
             <Cell key={column.id} row={block} index={index} sticky={index === 0} isContent={index === contentColumn}>
               {column.fieldId === null
@@ -246,6 +272,11 @@ const TableRowLayout: BlockLayout = ({block, Header, Shell, Bullet, Content}) =>
             </Cell>
           ))}
         </div>
+        {/* As wide as the visible table, not the grid, and frozen with the
+            first column, so a note reads without scrolling sideways. */}
+        <CollapsibleContent data-table-notes="true" className="sticky left-[var(--tables-gutter)]" style={ROW_NOTES}>
+          <RowNotes row={block}/>
+        </CollapsibleContent>
       </div>
     </BlockFrame>
   )
@@ -396,7 +427,13 @@ const TableBody = ({
   const repo = host.repo
   const [controller] = useState(() => new GridController(host, uiStateBlock, renderScopeId, parentRenderScopeId))
   const gridId = useId()
-  const {childBacked} = useContext(PropertyDisplayScopeContext)
+  const displayScope = useContext(PropertyDisplayScopeContext)
+  const {childBacked} = displayScope
+  // The grid draws a row's properties as cells, so the rows' subtree lists no
+  // property rows among their children: one occurrence of each value block per
+  // scope, and the walks inside a row see what it draws. Accepted: a row's own
+  // display setting still wins over this, as everywhere.
+  const rowsDisplayScope = useMemo(() => ({...displayScope, panel: 'none' as const}), [displayScope])
   const selected = useRowIds(host, workspaceId, query?.clauses ?? null, order)
   const liveCreated = useLiveRows(repo, useSyncExternalStore(controller.subscribeCreated, controller.getCreated))
   const created = query ? liveCreated : NO_ROWS
@@ -427,6 +464,8 @@ const TableBody = ({
 
   useLayoutEffect(() => { if (rowIds) controller.setRows(shown, rowIds.length) }, [controller, rowIds, shown])
   useLayoutEffect(() => { controller.setQuery(query?.parsed.terms ?? null) }, [controller, query])
+  useLayoutEffect(() => { controller.setSorted(order !== undefined) }, [controller, order])
+  useLayoutEffect(() => { controller.setDisplayScope(rowsDisplayScope) }, [controller, rowsDisplayScope])
   useLayoutEffect(() => { controller.setColumns(gridColumns) }, [controller, gridColumns])
   useLayoutEffect(() => registerGrid(renderScopeId, controller), [controller, renderScopeId])
 
@@ -443,10 +482,12 @@ const TableBody = ({
   [columns, resizing])
   // The tracks reach the rows as CSS variables, so a resize restyles the root
   // and re-renders no row.
+  const isMobile = useIsMobile()
   const tracks = useMemo(() => ({
     [TRACKS_VARIABLE]: laidOut.map(columnTrack).join(' '),
     [MIN_WIDTH_VARIABLE]: `${minWidth(laidOut)}px`,
-  }) as CSSProperties, [laidOut])
+    [GUTTER_VARIABLE]: gutterWidth(isMobile),
+  }) as CSSProperties, [isMobile, laidOut])
   // The rows' scroller drives the header. The header also scrolls on its own
   // when a control in it takes focus; that one scroll is copied back.
   const header = useRef<HTMLDivElement>(null)
@@ -458,9 +499,17 @@ const TableBody = ({
     if (header.current && scroller.current) scroller.current.scrollLeft = header.current.scrollLeft
   })
   const rootRef = useCallback((element: HTMLDivElement | null) => { controller.setRoot(element) }, [controller])
+  // Written to the element, not through state: a resize re-renders no row.
+  useLayoutEffect(() => {
+    const element = scroller.current
+    if (!element) return
+    const observer = new ResizeObserver(() => element.style.setProperty(VIEW_WIDTH_VARIABLE, `${element.clientWidth}px`))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
   const contentColumn = columns.findIndex(column => column.fieldId === null)
-  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched}),
-    [controller, columns, schemas, editable, contentColumn, unmatched])
+  const table = useMemo<TableState>(() => ({controller, columns, schemas, editable, contentColumn, unmatched, rows: rowSet}),
+    [controller, columns, schemas, editable, contentColumn, unmatched, rowSet])
   const fieldNames = useQueryableFieldNames(repo, workspaceId)
   const sortable = useMemo(() => schemas.map(schema => isSortable(schema, fieldNames)), [fieldNames, schemas])
   const onSort = useCallback((next: ViewSort | undefined) => {
@@ -488,9 +537,11 @@ const TableBody = ({
       <div ref={scroller} data-table-scroller="true" {...{[NO_BLOCK_GESTURES_ATTRIBUTE]: 'true'}}
         className="overflow-x-auto overflow-y-hidden" onScroll={syncHeader}>
         <TableContext value={table}>
-          <NestedBlockContextProvider overrides={rowsOverrides}>
-            {shown.map(id => <TableRow key={id} id={id} renderScopeId={renderScopeId}/>)}
-          </NestedBlockContextProvider>
+          <PropertyDisplayScopeContext value={rowsDisplayScope}>
+            <NestedBlockContextProvider overrides={rowsOverrides}>
+              {shown.map(id => <TableRow key={id} id={id} renderScopeId={renderScopeId}/>)}
+            </NestedBlockContextProvider>
+          </PropertyDisplayScopeContext>
         </TableContext>
       </div>
       {rowIds && rowIds.length > ROW_CAP && <p className="py-1 text-xs text-muted-foreground">
@@ -508,13 +559,11 @@ const TableBody = ({
   )
 }
 
-/** Each row is the root of its own scope. The outline's indent, outdent,
- *  merge and vertical move would otherwise carry it into a subtree the grid
- *  never draws, or fold the first row into the view block; at a scope root the
- *  structural policy refuses them. Split would make a hidden first child there,
- *  so it is refused too. Deleting a row stays allowed. */
+/** Each row is the root of its own scope: what it draws is its text, its
+ *  cells and its children, and the outline's walks and structural edits stay
+ *  inside that. Gestures between rows are the grid's (`./keys`). */
 const TableRow = ({id, renderScopeId}: {id: string; renderScopeId: string}) => {
-  const overrides = useMemo(() => ({[ROW_CONTEXT_KEY]: id, scopeRootId: id, disableBlockSplit: true}), [id])
+  const overrides = useMemo(() => ({[ROW_CONTEXT_KEY]: id, scopeRootId: id}), [id])
   return (
     <NestedBlockContextProvider overrides={overrides}>
       <LazyBlockComponent blockId={id} renderScopeId={renderScopeId}/>

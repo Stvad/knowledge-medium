@@ -7,8 +7,11 @@ import { BREAK, OP_TEXT, type Operand, type QueryProperty, type QueryTerm, type 
 const quote = (text: string) => `"${text.replace(/[\\"]/g, ch => `\\${ch}`)}"`
 const word = (text: string) => text && !BREAK.test(text) ? text : quote(text)
 
-const propertyKey = (property: QueryProperty) => `${word(property.name)}^${word(property.fieldId)}`
-const typeRef = (type: QueryType) => `#${word(type.label)}^${word(type.id)}`
+/** A type or property by name alone, as hand-written query text names it. */
+export const typeName = (type: QueryType) => `#${word(type.label)}`
+export const propertyName = (property: QueryProperty) => word(property.name)
+export const propertyKey = (property: QueryProperty) => `${word(property.name)}^${word(property.fieldId)}`
+export const typeRef = (type: QueryType) => `#${word(type.label)}^${word(type.id)}`
 const operandText = (operand: Operand) => operand.kind === 'ref' ? operand.spelling : word(operand.value)
 
 export const formatTerm = (term: QueryTerm): string => {

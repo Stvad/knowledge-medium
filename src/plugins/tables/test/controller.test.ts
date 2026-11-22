@@ -111,4 +111,45 @@ describe('GridController', () => {
     expect(repo.block('ref-member').peek()?.referenceTargetId).toBe('target')
     expect(peekValueOwner(repo, 'nested')).toBeUndefined()
   })
+
+  describe('row gestures a query or a sort decides', () => {
+    const parentOf = async (id: string) => (await db.db.get<{parent_id: string}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id
+
+    it('nests no rows under a query', async () => {
+      const {controller, rowIds} = await setup(2)
+      controller.setRows(rowIds, rowIds.length)
+      controller.setQuery([{kind: 'property', text: 'x'} as never])
+      await controller.nestRow(rowIds[1]!)
+      expect(await parentOf(rowIds[1]!)).toBe('host')
+    })
+
+    it('nests a row under the row drawn above it, not the view', async () => {
+      const {controller, rowIds} = await setup(2)
+      controller.setRows(rowIds, rowIds.length)
+      await controller.nestRow(rowIds[0]!)
+      expect(await parentOf(rowIds[0]!)).toBe('host')
+      await controller.nestRow(rowIds[1]!)
+      expect(await parentOf(rowIds[1]!)).toBe(rowIds[0])
+    })
+
+    it('moves no rows when sorted or under a query', async () => {
+      const {controller, rowIds} = await setup(2)
+      controller.setRows(rowIds, rowIds.length)
+      controller.setSorted(true)
+      await controller.moveRow(rowIds[1]!, -1)
+      expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
+      controller.setSorted(false)
+      controller.setQuery([{kind: 'property', text: 'x'} as never])
+      await controller.moveRow(rowIds[1]!, -1)
+      expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
+    })
+  })
+
+  it('lists a row’s children without one it also draws as a row', async () => {
+    const {repo, controller, rowIds} = await setup(1)
+    const note = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'note'})
+    const alsoRow = await repo.mutate.createChild({parentId: rowIds[0]!, content: 'also a row'})
+    controller.setRows([rowIds[0]!, alsoRow!], 2)
+    expect(await controller.childIdsOf(rowIds[0]!)).toEqual([note])
+  })
 })
