@@ -1221,7 +1221,9 @@ export const SELECT_ANY_BLOCKS_FTS_OWED_SQL = `SELECT 1 FROM blocks_fts_owed LIM
 
 /** The owed entries one build chunk covers: the oldest `?`, as the rowid
  *  bound every statement of the chunk binds. Entries recorded after it read
- *  this get higher rowids and wait for a later chunk. */
+ *  this get higher rowids and wait for a later chunk. On the clear the bound
+ *  is correctness; on the two build statements it only sizes the chunk, since
+ *  a row built early is skipped as already indexed by the chunk that owns it. */
 const SELECT_OWED_CHUNK_BOUND_SQL = `
   SELECT max(rowid) AS upTo FROM (SELECT rowid FROM blocks_fts_owed ORDER BY rowid LIMIT ?)
 `
