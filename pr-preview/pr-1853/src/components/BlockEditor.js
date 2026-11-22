@@ -1,0 +1,1 @@
+export{BV as BlockEditor}from"../../chunks/app-BQKPjqVR.js";

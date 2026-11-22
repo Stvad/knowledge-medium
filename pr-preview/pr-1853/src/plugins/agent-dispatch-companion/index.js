@@ -1,0 +1,1 @@
+export{C_ as agentDispatchCompanionPlugin}from"../../../chunks/app-BQKPjqVR.js";

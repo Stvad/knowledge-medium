@@ -1,0 +1,1 @@
+export{zO as plainOutlinerPlugin}from"../../../chunks/app-BQKPjqVR.js";

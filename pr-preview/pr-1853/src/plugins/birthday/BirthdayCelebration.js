@@ -1,0 +1,1 @@
+export{pr as BirthdayCelebration}from"../../../chunks/app-BQKPjqVR.js";

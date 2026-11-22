@@ -1,0 +1,1 @@
+export{bgt as normalizeReferences}from"../../../chunks/app-BQKPjqVR.js";

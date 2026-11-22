@@ -1,0 +1,1 @@
+export{ygt as INFRASTRUCTURE_TYPE_DISPLAY}from"../../../chunks/app-BQKPjqVR.js";

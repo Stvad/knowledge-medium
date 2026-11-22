@@ -1,0 +1,1 @@
+export{g2 as isRetainableAbsentRef,_2 as projectPropertyReferences,v2 as projectedIdOf}from"../../../chunks/app-BQKPjqVR.js";

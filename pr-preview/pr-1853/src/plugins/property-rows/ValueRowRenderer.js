@@ -1,0 +1,1 @@
+export{cc as propertyReadContentContribution}from"../../../chunks/app-BQKPjqVR.js";

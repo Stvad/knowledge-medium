@@ -1,0 +1,1 @@
+export{GZ as htmlDocumentDataExtension}from"../../../chunks/app-BQKPjqVR.js";

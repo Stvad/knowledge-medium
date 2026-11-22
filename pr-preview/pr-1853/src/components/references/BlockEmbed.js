@@ -1,0 +1,1 @@
+export{QF as BlockEmbed}from"../../../chunks/app-BQKPjqVR.js";

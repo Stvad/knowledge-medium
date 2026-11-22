@@ -1,0 +1,1 @@
+export{LX as tablesDataExtension}from"../../../chunks/app-BQKPjqVR.js";

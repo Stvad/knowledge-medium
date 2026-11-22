@@ -1,0 +1,1 @@
+export{BR as BlockChildren,VR as BlockComponent}from"../../chunks/app-BQKPjqVR.js";

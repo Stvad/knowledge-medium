@@ -1,0 +1,1 @@
+export{KZ as htmlDocumentTypeSeed}from"../../../chunks/app-BQKPjqVR.js";

@@ -1,0 +1,1 @@
+export{IO as getBreadcrumbContentPreview}from"../../../chunks/app-BQKPjqVR.js";

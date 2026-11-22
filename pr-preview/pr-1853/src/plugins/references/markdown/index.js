@@ -1,0 +1,1 @@
+export{AS as referencesMarkdownExtension}from"../../../../chunks/app-BQKPjqVR.js";

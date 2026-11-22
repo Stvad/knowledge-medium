@@ -1,0 +1,1 @@
+export{YI as BlockPasteShellDecorator,XI as blockPasteShellDecorator}from"../../chunks/app-BQKPjqVR.js";

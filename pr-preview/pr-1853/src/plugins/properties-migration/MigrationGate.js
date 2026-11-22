@@ -1,0 +1,1 @@
+export{Vc as MigrationGate}from"../../../chunks/app-BQKPjqVR.js";

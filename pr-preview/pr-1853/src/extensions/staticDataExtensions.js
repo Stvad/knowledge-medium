@@ -1,0 +1,1 @@
+export{SX as staticDataExtensions}from"../../chunks/app-BQKPjqVR.js";

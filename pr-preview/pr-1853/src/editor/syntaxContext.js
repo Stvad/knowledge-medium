@@ -1,0 +1,1 @@
+export{XQ as isInsideLiteralMarkdown}from"../../chunks/app-BQKPjqVR.js";

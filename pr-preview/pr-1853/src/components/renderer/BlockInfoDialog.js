@@ -1,0 +1,1 @@
+export{tV as BlockInfoDialog}from"../../../chunks/app-BQKPjqVR.js";
