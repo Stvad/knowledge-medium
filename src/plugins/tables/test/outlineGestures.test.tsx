@@ -37,6 +37,7 @@ import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import * as toast from '@/utils/toast'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
+import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
 import { tablesPlugin } from '../index'
 import { CELL_CONTROL_SELECTOR } from '../controller'
@@ -608,6 +609,8 @@ describe('a table nested in a list member', () => {
   it('opening a list cell opens a member, not a member’s own property control', async () => {
     const [alpha, beta] = await memberIds()
     await repo.block(alpha!).set(done, true)
+    // Rows draw their subtree with property display `none`; the member's own setting draws its property rows.
+    await repo.block(alpha!).set(propertyDisplayProp, 'all')
     await repo.awaitReprojections()
     mount()
     const control = await waitFor(() => {
