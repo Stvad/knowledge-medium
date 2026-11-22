@@ -1,1 +1,1 @@
-export{qb as inlineBacklinkCountsExtension}from"../../../../chunks/app-DqaLLnnX.js";
+export{qb as inlineBacklinkCountsExtension}from"../../../../chunks/app-BpND7Qxz.js";

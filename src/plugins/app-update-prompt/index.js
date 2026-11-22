@@ -1,1 +1,1 @@
-export{PI as appUpdatePromptExtension}from"../../../chunks/app-DqaLLnnX.js";
+export{PI as appUpdatePromptExtension}from"../../../chunks/app-BpND7Qxz.js";

@@ -1,1 +1,1 @@
-export{TO as WorkspaceSwitcher}from"../../../chunks/app-DqaLLnnX.js";
+export{TO as WorkspaceSwitcher}from"../../../chunks/app-BpND7Qxz.js";
