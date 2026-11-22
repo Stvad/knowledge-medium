@@ -1217,34 +1217,44 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-/** The owed entries one build chunk covers: the oldest `?`, as the rowid
- *  bound every statement of the chunk binds. Entries recorded after it read
+/** The owed entries one build chunk covers: the oldest `?`, as the bound the
+ *  chunk's rowid allocation and clear bind. Entries recorded after it read
  *  this get higher rowids and wait for a later chunk. On the clear the bound
- *  is correctness; on the two build statements it only sizes the chunk, since
- *  a row built early is skipped as already indexed by the chunk that owns it. */
+ *  is correctness; on the allocation it only sizes the chunk, since a row
+ *  given its rowid early is indexed in that chunk and skipped by its own. */
 const SELECT_OWED_CHUNK_BOUND_SQL = `
   SELECT max(rowid) AS upTo FROM (SELECT rowid FROM blocks_fts_owed ORDER BY rowid LIMIT ?)
 `
 
+/** The rowid map's high-water mark before a chunk: every rowid the chunk
+ *  allocates is above it, since an INTEGER PRIMARY KEY takes max + 1. */
+const SELECT_BLOCKS_FTS_MAX_ROWID_SQL = `SELECT coalesce(max(fts_rowid), 0) AS maxRowid FROM blocks_fts_rowids`
+
 /** The owed half of {@link BACKFILL_BLOCKS_FTS_ROWIDS_SQL}. Every owed row
  *  that still exists gets a rowid, tombstones included, as
- *  `blocks_fts_insert` gives one. */
+ *  `blocks_fts_insert` gives one, and in ARRIVAL order (the owed table's), as
+ *  the per-row trigger would have: FTS5 keys its doclists by rowid, so the
+ *  order rowids follow is the locality every MATCH reads with. A row that
+ *  already has one keeps it (`OR IGNORE`) and was indexed when it got it. */
 const BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL = `
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
-  SELECT id FROM blocks
-  WHERE id IN (SELECT block_id FROM blocks_fts_owed WHERE rowid <= ?)
-  ORDER BY id
+  SELECT b.id
+  FROM blocks_fts_owed o
+  JOIN blocks b ON b.id = o.block_id
+  WHERE o.rowid <= ?
+  ORDER BY o.rowid
 `
 
+/** Index the rows the chunk just gave a rowid: exactly those above the
+ *  pre-chunk high-water mark. Ascending rowids, so FTS5 appends. */
 const BUILD_OWED_BLOCKS_FTS_SQL = `
   INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
   SELECT r.fts_rowid, b.content, b.workspace_id, b.id
   FROM blocks_fts_rowids r
   JOIN blocks b ON b.id = r.block_id
-  WHERE r.block_id IN (SELECT block_id FROM blocks_fts_owed WHERE rowid <= ?)
+  WHERE r.fts_rowid > ?
     AND ${searchIndexedRowSql('b')}
-    AND NOT EXISTS (SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid)
-  ORDER BY b.id
+  ORDER BY r.fts_rowid
 `
 
 const CLEAR_BLOCKS_FTS_OWED_CHUNK_SQL = `DELETE FROM blocks_fts_owed WHERE rowid <= ?`
@@ -1645,11 +1655,8 @@ export const backfillBlocksFtsIfEmpty = async (
  *  many owed entries it cleared; with nothing owed it is one write transaction
  *  holding one empty read.
  *
- *  Reads each owed row as it is NOW: one updated since its insert was indexed
- *  by `blocks_fts_update` (hence the `NOT EXISTS`), one deleted is skipped.
- *  Each chunk fills the rowid map in id order, so its unique index takes
- *  sorted runs rather than random probes, and `ORDER BY b.id` then hands FTS5
- *  ascending rowids without a sort.
+ *  Reads each owed row as it is NOW: one updated since its insert already has
+ *  a rowid from `blocks_fts_update`, which indexed it; one deleted is skipped.
  *
  *  Every read is inside the write transaction: a reader connection can lag
  *  the writer, and an owed table read there as empty would skip the build.
@@ -1671,14 +1678,16 @@ export const buildDeferredSearchIndex = async (
       const bound = await tx.getOptional<{upTo: number | null}>(SELECT_OWED_CHUNK_BOUND_SQL, [chunkSize])
       const upTo = bound?.upTo ?? null
       if (upTo === null) return null
+      const mark = await tx.getOptional<{maxRowid: number}>(SELECT_BLOCKS_FTS_MAX_ROWID_SQL)
       await tx.execute(BUILD_OWED_BLOCKS_FTS_ROWIDS_SQL, [upTo])
-      await tx.execute(BUILD_OWED_BLOCKS_FTS_SQL, [upTo])
+      await tx.execute(BUILD_OWED_BLOCKS_FTS_SQL, [mark?.maxRowid ?? 0])
       const result = await tx.execute(CLEAR_BLOCKS_FTS_OWED_CHUNK_SQL, [upTo]) as {rowsAffected?: number} | undefined
       return result?.rowsAffected ?? 0
     })
-    if (chunk === null) return cleared
+    if (chunk === null) break
     cleared += chunk
   }
+  return cleared
 }
 
 export const grandfatherWorkspaceFirstSync = async (
