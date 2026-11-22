@@ -1,7 +1,8 @@
 import { base64 } from '@scure/base'
 import type { AddMediaResult } from '@knowledge-medium/agent-cli/protocol'
 import type { Repo } from '@/data/repo'
-import { CAPTURE_FAILURE_MESSAGE, captureMediaFromFiles } from '@/plugins/attachments/assetUpload.js'
+import { CAPTURE_FAILURE_MESSAGE } from '@/plugins/attachments/assetUpload.js'
+import type { AgentMedia } from './protocol.ts'
 import { agentTxOptions } from './agentWrites.ts'
 import { refuseDanglingBlockRefs } from './blockRefTargets.ts'
 
@@ -24,12 +25,13 @@ const decode = (encoded: string): Uint8Array<ArrayBuffer> => {
 export const addMedia = async (
   repo: Repo,
   workspaceId: string,
+  capture: AgentMedia['capture'],
   input: AddMediaInput,
 ): Promise<AddMediaResult> => {
   const bytes = decode(input.base64)
   // The filename becomes the block's content.
   await refuseDanglingBlockRefs(repo, 'add-media', [input.filename])
-  const [captured] = await captureMediaFromFiles(
+  const [captured] = await capture(
     repo,
     workspaceId,
     [new File([bytes], input.filename ?? '', {type: input.mime ?? ''})],
