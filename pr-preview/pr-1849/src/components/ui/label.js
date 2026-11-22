@@ -1,1 +1,0 @@
-export{uM as Label}from"../../../chunks/app-C1Pwz8kQ.js";

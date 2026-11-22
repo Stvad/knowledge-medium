@@ -1,1 +1,0 @@
-export{XF as chipStyle}from"../../../chunks/app-C1Pwz8kQ.js";

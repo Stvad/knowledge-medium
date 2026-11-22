@@ -1,1 +1,0 @@
-export{B4 as aliasDataExtension}from"../../../chunks/app-C1Pwz8kQ.js";

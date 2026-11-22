@@ -1,2 +1,0 @@
-var e=/\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|svg|jpe?g|webp|gif|ico)$/,t=new Set([`script`,`style`,`worker`,`font`,`image`]),n=(n,r,i)=>i&&(t.has(n)||e.test(r)),r=async e=>{let t=new Uint8Array(await crypto.subtle.digest(`SHA-256`,e));return Array.from(t.subarray(0,8),e=>e.toString(16).padStart(2,`0`)).join(``)};export{e as ASSET_EXTENSION,r as contentDigest,n as isCacheableAsset};
-//# sourceMappingURL=assets.js.map

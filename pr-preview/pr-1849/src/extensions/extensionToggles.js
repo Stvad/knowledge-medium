@@ -1,1 +1,0 @@
-export{$L as extensionDisplayName,eR as extensionName,tR as userExtensionShellToggle,nR as userExtensionToggle}from"../../chunks/app-C1Pwz8kQ.js";

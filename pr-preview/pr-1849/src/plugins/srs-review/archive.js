@@ -1,1 +1,0 @@
-export{Sd as archiveSrsCard}from"../../../chunks/app-C1Pwz8kQ.js";
