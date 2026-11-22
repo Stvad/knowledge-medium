@@ -370,6 +370,9 @@ export interface BlockLayoutSlots {
   Footer: ComponentType
   /** Bullet + expand-collapse affordances; renders nothing when not appropriate (top-level). */
   Controls: ComponentType
+  /** The bullet alone (open, open in the sidebar, context menu), for a layout
+   *  that draws no children to expand; renders nothing at top level. */
+  Bullet: ComponentType
   /** Above-body sections contributed via `blockHeaderFacet` (top-level breadcrumbs by default). */
   Header: ComponentType
   /** Opt-in interactive block surface (shell props + decorators + shortcut

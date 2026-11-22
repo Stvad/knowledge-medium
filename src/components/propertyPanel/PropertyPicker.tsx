@@ -64,6 +64,7 @@ const filterSuggestions = (
   excludedNames: ReadonlySet<string>,
   filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
   definitions: PropertyDefinitionRegistrySnapshot | null,
+  preferredRank: ReadonlyMap<string, number>,
 ): readonly NameSuggestion[] => {
   const q = query.trim().toLowerCase()
   const out: NameSuggestion[] = []
@@ -73,9 +74,16 @@ const filterSuggestions = (
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
-    if (out.length >= MAX_SUGGESTIONS) break
   }
-  return out.sort((a, b) => a.schema.name.localeCompare(b.schema.name))
+  // Rank every match before cutting to the visible few, so a preferred name
+  // is never lost to iteration order. The name typed exactly comes first:
+  // Enter commits the top suggestion.
+  const rank = (suggestion: NameSuggestion) =>
+    suggestion.schema.name.toLowerCase() === q ? -1
+      : preferredRank.get(suggestion.schema.name) ?? Number.MAX_SAFE_INTEGER
+  return out
+    .sort((a, b) => rank(a) - rank(b) || a.schema.name.localeCompare(b.schema.name))
+    .slice(0, MAX_SUGGESTIONS)
 }
 
 export interface PropertyPickerProps {
@@ -94,6 +102,9 @@ export interface PropertyPickerProps {
    *  works for names not in `usePropertySchemas` — the predicate only
    *  gates EXISTING suggestions, not what the user can type. */
   filterSchema?: (schema: AnyPropertySchema) => boolean
+  /** Names to suggest ahead of the rest, in this order (e.g. the properties a
+   *  table's rows already have). The others follow alphabetically. */
+  preferredNames?: ReadonlyArray<string>
   /** Placeholder text shown in the name input. */
   placeholder?: string
   /** Optional className overrides for the input shell. */
@@ -118,6 +129,7 @@ export function PropertyPicker({
   onConfigureNewSchema,
   excludedNames,
   filterSchema,
+  preferredNames,
   placeholder = 'Field',
   inputClassName,
   autoFocus = false,
@@ -155,6 +167,11 @@ export function PropertyPicker({
     [excludedNames],
   )
 
+  const preferredRank = useMemo(
+    () => new Map((preferredNames ?? []).map((name, index) => [name, index])),
+    [preferredNames],
+  )
+
   const preset = presets.get(presetId)
 
   const focusNameInput = useCallback(() => {
@@ -179,8 +196,9 @@ export function PropertyPicker({
       excludedNamesSet,
       filterSchema,
       propertyDefinitions,
+      preferredRank,
     ),
-    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions],
+    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions, preferredRank],
   )
 
   const reset = useCallback(() => {

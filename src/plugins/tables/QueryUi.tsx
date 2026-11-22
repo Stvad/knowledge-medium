@@ -12,6 +12,7 @@ import { useUIStateBlock } from '@/data/globalState'
 import { focusBlock, focusedBlockLocationFromProperties, isEditingProp } from '@/data/properties'
 import { safeDecodeRowProperty } from '@/data/rowProperty'
 import { useHandle, useHandles } from '@/hooks/block'
+import { useFocusPlacedChildIds } from '@/hooks/focusedChild'
 import { openQueryValue } from './query/queryValue'
 import { useQueryFieldId, type TableQuery } from './query/source'
 import { queryProp } from './schema'
@@ -92,16 +93,27 @@ const QueryFieldRows = ({host, fieldId}: {host: Block; fieldId: string}) => {
   )
 }
 
+const NO_IDS: string[] = []
+
+/** The host's children the query does not select, in outline order, with the
+ *  focused one where the cache has it. A focused field row the listing leaves
+ *  out is the query's own, which `QueryFields` draws. */
+export const useOutsideQueryIds = (
+  host: Block, renderScopeId: unknown, rows: readonly string[], viewIds: readonly string[],
+): string[] => {
+  // Every child, as the outline lists them: a capped window would hide the ones past it.
+  const children = useHandle(host.repo.query.childIds({id: host.id, propertyChildren: 'none'}), {selector: ids => ids})
+  const {childIds, listed, focusedChild} = useFocusPlacedChildIds(host, renderScopeId, children ?? NO_IDS)
+  const drawn = new Set([...rows, ...viewIds])
+  if (focusedChild?.isFieldForm && !listed.includes(focusedChild.id)) drawn.add(focusedChild.id)
+  return childIds.filter(id => !drawn.has(id))
+}
+
 /** Under a query, the host's children the query does not select, drawn as
  *  ordinary outline below the grid: nothing under a table is invisible. */
 export const OutsideQuery = ({host, viewIds, rows}: {host: Block; viewIds: readonly string[]; rows: readonly string[]}) => {
   const {renderScopeId} = useBlockContext()
-  // Every child, as the outline lists them: a capped window would hide the ones past it.
-  const children = useHandle(host.repo.query.childIds({id: host.id, propertyChildren: 'none'}), {selector: ids => ids})
-  const outside = useMemo(() => {
-    const drawn = new Set([...rows, ...viewIds])
-    return (children ?? []).filter(id => !drawn.has(id))
-  }, [children, rows, viewIds])
+  const outside = useOutsideQueryIds(host, renderScopeId, rows, viewIds)
   if (outside.length === 0) return null
   return (
     <div data-table-outside-query="true" className="mt-1">

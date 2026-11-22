@@ -20,20 +20,28 @@ export const reportRefusal = (error: unknown) => {
   showError(error.message)
 }
 
-/** The owner and property of a value row, read from the cache: value → field row → owner. */
+/** The owner and property of a live value row, read from the cache: value → field row → owner. */
 export const peekValueOwner = (repo: Repo, valueId: string): {ownerId: string; fieldId: string} | undefined => {
-  const fieldRowId = repo.block(valueId).peek()?.parentId
-  const field = fieldRowId ? repo.block(fieldRowId).peek() : undefined
-  return field?.parentId && field.referenceTargetId ? {ownerId: field.parentId, fieldId: field.referenceTargetId} : undefined
+  const value = repo.block(valueId).peek()
+  const field = value?.parentId ? repo.block(value.parentId).peek() : undefined
+  return field?.isFieldForm && field.parentId && field.referenceTargetId
+    ? {ownerId: field.parentId, fieldId: field.referenceTargetId} : undefined
 }
 
-const opened = new Map<string, OpenedPropertyValue>()
+interface OpenedCellEdit {
+  edit: OpenedPropertyValue
+  ownerId: string
+  fieldId: string
+}
+
+const opened = new Map<string, OpenedCellEdit>()
 const editKey = (valueId: string, renderScopeId: string) => `${renderScopeId}\u0000${valueId}`
 
-/** Remember what `openPropertyValue` returned: only that result lets finishing
- *  remove a draft it created. */
-export const openedCellEdit = (edit: OpenedPropertyValue, renderScopeId: string): void => {
-  opened.set(editKey(edit.valueId, renderScopeId), edit)
+/** Remember what `openPropertyValue` returned, and for which property: only
+ *  that result lets finishing remove a draft it created, also once the draft
+ *  itself is gone. */
+export const openedCellEdit = (edit: OpenedPropertyValue, ownerId: string, fieldId: string, renderScopeId: string): void => {
+  opened.set(editKey(edit.valueId, renderScopeId), {edit, ownerId, fieldId})
 }
 
 export const forgetCellEdit = (valueId: string, renderScopeId: string): void => {
@@ -49,14 +57,19 @@ export const cellEditorExtension: CodeMirrorExtensionContribution = context => {
     destroy() {
       const finalText = view.state.doc.toString()
       // A remount (StrictMode, a reconfigure) destroys the view while the value
-      // is still being edited in a mounted table; any other teardown ends the edit.
+      // is still being edited in a mounted table; any other teardown ends the
+      // edit. A deleted value is not remounting, though focus may still name it.
       setTimeout(() => {
-        if (isEditingBlock(uiStateBlock, block.id, renderScopeId) && isGridMounted(renderScopeId)) return
+        if (block.peek() && isEditingBlock(uiStateBlock, block.id, renderScopeId) && isGridMounted(renderScopeId)) return
         const key = editKey(block.id, renderScopeId)
-        const edit = opened.get(key) ?? block.id
+        const draft = opened.get(key)
         opened.delete(key)
-        const owner = peekValueOwner(repo, block.id)
+        // A value the outline nested under another member is no longer an edit
+        // of this property. One it deleted blank (Backspace) still finishes, so
+        // the field its draft created goes too.
+        const owner = peekValueOwner(repo, block.id) ?? (draft && finalText === '' ? draft : undefined)
         if (!owner) return
+        const edit = draft?.edit ?? block.id
         void repo.tx(tx => finishPropertyValueEdit(tx, owner.ownerId, owner.fieldId, edit, finalText),
           {scope: ChangeScope.BlockDefault, description: 'finish table cell edit'})
           .catch(reportRefusal)

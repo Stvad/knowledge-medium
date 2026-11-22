@@ -24,7 +24,7 @@ export const isGridMounted = (renderScopeId: string): boolean => grids.has(rende
 export const gridOfHost = (parentRenderScopeId: string, hostId: string): GridController | undefined =>
   grids.get(tableRenderScopeId(parentRenderScopeId, hostId))
 
-/** The grid that draws `blockId` in `renderScopeId`, as a row or as one of a row's values. */
+/** The grid that draws `blockId` in `renderScopeId`: a row, or a block in one of its cells. */
 export const gridDrawing = (renderScopeId: string | undefined, blockId: string | undefined): GridController | undefined => {
   if (!renderScopeId || !blockId) return undefined
   const grid = grids.get(renderScopeId)

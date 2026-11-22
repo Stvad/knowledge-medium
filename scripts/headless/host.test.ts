@@ -70,8 +70,26 @@ function start(config: HeadlessConfig, connect: NonNullable<Parameters<typeof se
   }
 }
 
-const plaintext = (): HeadlessConfig => ({mode: 'plaintext', workspaceId, profile: 'fixture', stateDir: fixture.dir})
+const plaintext = (): Extract<HeadlessConfig, {mode: 'plaintext'}> => ({mode: 'plaintext', workspaceId, profile: 'fixture', stateDir: fixture.dir})
 const writable = () => ({...plaintext(), writable: true})
+
+it('fails an encrypted boot on a refused key command before connecting', async () => {
+  const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
+  const config: HeadlessConfig = {...plaintext(), mode: 'e2ee', keyCommand: [process.execPath, '-e', 'process.exitCode = 2']}
+  await expect(serveDatabase(fixture.db, config, user, new AbortController().signal, connect))
+    .rejects.toThrow(`Key command ${process.execPath} exited with status 2`)
+  expect(connect).not.toHaveBeenCalled()
+})
+
+it('stops an encrypted boot aborted while its key command runs, before connecting', async () => {
+  const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
+  const config: HeadlessConfig = {...plaintext(), mode: 'e2ee', keyCommand: [process.execPath, '-e', 'process.stdout.write("key")']}
+  const controller = new AbortController()
+  const run = serveDatabase(fixture.db, config, user, controller.signal, connect)
+  controller.abort(new Error('stopped'))
+  await expect(run).rejects.toThrow('stopped')
+  expect(connect).not.toHaveBeenCalled()
+})
 
 // This database boot took 0.36–1.45 s in the focused run.
 it.each(['e2ee', 'plaintext'] as const)('serves the complete %s cold download without queuing writes, returning device secrets or re-materializing it', async mode => {
