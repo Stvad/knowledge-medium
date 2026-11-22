@@ -6,10 +6,13 @@
  *  value block or mint a type. Outside the fence the value is an ordinary
  *  block, `#` included.
  *
- *  A pick inserts the saved form (`#label^typeId`, `name^fieldId`): the
- *  completion knows which definition was picked, and the id keeps the term on
- *  it through a rename or a second type with the same label. */
+ *  A pick inserts the name alone where the parser resolves that name to the
+ *  picked definition, for readable text; where it would not (a second type
+ *  with the same label, a property named like a structural key) it inserts the
+ *  saved form, `#label^typeId` or `name^fieldId`. */
 import type { CompletionSource } from '@codemirror/autocomplete'
+import { syntaxTree } from '@codemirror/language'
+import type { SyntaxNode } from '@lezer/common'
 import { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { isPropertyPickerName } from '@/components/propertyPanel/visibility'
@@ -20,140 +23,200 @@ import type { CodeMirrorExtensionContribution } from '@/editor/codeMirrorExtensi
 import { acceptCompletionInsert } from '@/editor/contentFlush'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
 import { queryProp } from '../schema'
-import { formatTerm, word } from './format'
-import { BREAK, RESERVED_KEYS, parseQuery, takesOperand, type QueryResolver, type QueryType } from './parse'
+import { propertyKey, propertyName, typeName, typeRef } from './format'
+import {
+  BREAK, RESERVED_KEYS, closingQuote, isPropertyAndField, isReservedKey, takesOperand, type QueryResolver, type QueryType,
+} from './parse'
 import { queryResolver } from './source'
 
-/** A term starts at the line start or after whitespace, `|` or a negating `!`;
- *  its name runs to the cursor in the parser's bare-word characters. */
-const TRIGGER = new RegExp(String.raw`(?:^|[\s|!])(#?)((?:(?!${BREAK.source}).)*)$`)
+const WORD = String.raw`(?:(?!${BREAK.source}).)*`
+/** A term starts at the text start, after whitespace, `|` or a group's `(`,
+ *  with an optional negating `!`, then a `#type` or a key, up to the cursor: a
+ *  bare word, or a type label still inside its opening quote. */
+const TERM_BEFORE = new RegExp(String.raw`(^|[\s|(])(!?)(?:(#?)(${WORD})|#"((?:[^"\\]|\\.)*))$`)
+const WORD_AFTER = new RegExp(`^${WORD}`)
+const OPERATOR_AFTER = /^(?:!=|<=|>=|=|<|>)/
+
+/** Whether `text` ends inside an operand: an open quote, `[…]` (a `[[page]]` or
+ *  a link's label), or a `((block id))`. A term never starts there. */
+const endsInOperand = (text: string): boolean => {
+  let brackets = 0
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '[') brackets++
+    else if (text[i] === ']') brackets = Math.max(0, brackets - 1)
+    else if (brackets > 0) continue
+    else if (text[i] === '"') {
+      i = closingQuote(text, i)
+      if (i < 0) return true
+    } else if (text.startsWith('((', i)) {
+      i = text.indexOf('))', i + 2) + 1
+      if (i <= 0) return true
+    }
+  }
+  return brackets > 0
+}
+
+/** How far a term's name runs past the cursor: the rest of its word or quote, and a saved `^id`. */
+const nameEndAfter = (after: string, quoted: boolean): number => {
+  const close = quoted ? closingQuote(`"${after}`, 0) : -1
+  let end = quoted ? (close < 0 ? after.length : close) : WORD_AFTER.exec(after)![0].length
+  if (after[end] !== '^') return end
+  end++
+  if (after[end] !== '"') return end + WORD_AFTER.exec(after.slice(end))![0].length
+  const idClose = closingQuote(after, end)
+  return idClose < 0 ? after.length : idClose + 1
+}
 
 export interface QueryTrigger {
   readonly kind: 'type' | 'key'
-  /** Offset in the line where the inserted text starts: the `#`, or the key's first character. */
+  /** The replaced range, as offsets into `before + after`: the `#` or the key's first character, to the end of the name. */
   readonly from: number
+  readonly to: number
+  /** What is typed of the name, up to the cursor. */
   readonly query: string
+  readonly negated: boolean
+  /** One side of a `|` group, where a negated or `childof=` term cannot stand. */
+  readonly alternative: boolean
+  /** An operator already follows the name, so a pick adds none. */
+  readonly operatorFollows: boolean
 }
 
-/** Whether `text` ends inside an open `"…"`. */
-const endsInQuote = (text: string): boolean => {
-  let open = false
-  for (let i = 0; i < text.length; i++) {
-    if (open && text[i] === '\\') i++
-    else if (text[i] === '"') open = !open
-  }
-  return open
-}
-
-/** The term name being typed at `col`, or null: not at a term's start, in the
- *  middle of a word, inside a quote, or an empty key. */
-export const queryTriggerAt = (line: string, col: number): QueryTrigger | null => {
-  const next = line[col]
-  if (next !== undefined && !BREAK.test(next)) return null
-  const prefix = line.slice(0, col)
-  const match = TRIGGER.exec(prefix)
+/** The term whose name is being typed at the cursor, or null where no term starts.
+ *  `before` is the query text up to the cursor, `after` the rest of its line. */
+export const queryTriggerAt = (before: string, after = ''): QueryTrigger | null => {
+  const match = TERM_BEFORE.exec(before)
   if (!match) return null
-  const [, hash, query] = match as unknown as [string, string, string]
-  const from = col - hash.length - query.length
-  if ((!hash && !query) || endsInQuote(prefix.slice(0, from))) return null
-  return {kind: hash ? 'type' : 'key', from, query}
+  const [, lead = '', bang = '', hash = '', bare, quotedLabel] = match
+  const quoted = quotedLabel !== undefined
+  const query = quoted ? quotedLabel.replace(/\\(.)/g, '$1') : bare ?? ''
+  const from = quoted ? before.length - quotedLabel.length - 2 : before.length - hash.length - query.length
+  if ((!quoted && !hash && !query) || endsInOperand(before.slice(0, from))) return null
+  const end = nameEndAfter(after, quoted)
+  return {
+    kind: quoted || hash ? 'type' : 'key',
+    from,
+    to: before.length + end,
+    query,
+    negated: bang === '!',
+    alternative: lead === '|' || lead === '(' || before.slice(0, from - bang.length).trimEnd().endsWith('|'),
+    operatorFollows: OPERATOR_AFTER.test(after.slice(end)),
+  }
 }
 
-export interface QueryCompletion {
+interface QueryCompletion {
   readonly label: string
-  readonly detail: 'type' | 'property' | 'field' | 'structure'
+  readonly detail: string
   readonly insert: string
 }
 
-/** What a query can name, before the resolver vets it. */
-export interface QueryVocabulary {
-  readonly types: readonly QueryType[]
+interface OfferedType extends QueryType {
+  /** Kernel and plugin plumbing (`hideFromCompletion`): still queryable, offered after the rest. */
+  readonly plumbing: boolean
+}
+
+/** What a query can name in this workspace, as the parser resolves it. */
+interface QueryVocabulary {
+  readonly types: readonly OfferedType[]
   readonly propertyNames: readonly string[]
   readonly fieldNames: readonly string[]
 }
 
 const RESULT_CAP = 12
 
-/** Labels containing the query, an exact match first, then prefixes, then the rest. */
-const ranked = <T,>(items: readonly T[], labelOf: (item: T) => string, query: string): T[] => {
+/** Labels containing the query: an exact match first, then prefixes, then the
+ *  rest; within each, the `later` items after the others. */
+const ranked = <T,>(items: readonly T[], labelOf: (item: T) => string, query: string, later: (item: T) => boolean = () => false): T[] => {
   const q = query.toLowerCase()
   const rank = (label: string) => label === q ? 0 : label.startsWith(q) ? 1 : 2
   return items
-    .filter(item => labelOf(item).toLowerCase().includes(q))
-    .sort((a, b) => rank(labelOf(a).toLowerCase()) - rank(labelOf(b).toLowerCase()) || labelOf(a).localeCompare(labelOf(b)))
+    .map(item => ({item, label: labelOf(item), rank: rank(labelOf(item).toLowerCase()) * 2 + (later(item) ? 1 : 0)}))
+    .filter(({label}) => label.toLowerCase().includes(q))
+    .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label))
+    .map(({item}) => item)
 }
 
-const parsesClean = (text: string, resolver: QueryResolver) => parseQuery(text, resolver).errors.length === 0
-
-const typeCompletion = (type: QueryType, resolver: QueryResolver): QueryCompletion | undefined => {
-  const insert = formatTerm({kind: 'types', negated: false, types: [type], start: 0, end: 0})
-  return parsesClean(insert, resolver) ? {label: type.label, detail: 'type', insert} : undefined
+const typeCompletions = (types: readonly OfferedType[], query: string, resolver: QueryResolver): QueryCompletion[] => {
+  const picks = ranked(types, type => type.label, query, type => type.plumbing).slice(0, RESULT_CAP)
+  // Types sharing a label are told apart by their ids.
+  const shared = (type: QueryType) => picks.some(other => other !== type && other.label === type.label)
+  return picks.map(type => ({
+    label: type.label,
+    detail: shared(type) ? type.id : 'type',
+    insert: resolver.typeByLabel(type.label)?.id === type.id ? typeName(type) : typeRef(type),
+  }))
 }
 
-type Key = {kind: 'property' | 'field' | 'structure'; name: string}
-
-const keyCompletion = ({kind, name}: Key, resolver: QueryResolver): QueryCompletion | undefined => {
-  if (kind === 'structure') return {label: name, detail: 'structure', insert: `${name}=`}
-  if (kind === 'field') return resolver.field(name) ? {label: name, detail: 'field', insert: `${word(name)}=`} : undefined
-  const property = resolver.propertyByName(name)
-  if (!property) return undefined
-  const key = formatTerm({kind: 'presence', property, present: true, start: 0, end: 0})
-  // A property named like a field is a term error however it is addressed.
-  if (!parsesClean(key, resolver)) return undefined
-  return {label: name, detail: 'property', insert: takesOperand(property.schema) ? `${key}=` : key}
-}
-
-/** The completions for a trigger, each vetted by parsing its text with the resolver the table parses with. */
-export const queryCompletions = (trigger: QueryTrigger, vocabulary: QueryVocabulary, resolver: QueryResolver): QueryCompletion[] => {
-  const vetted = <T,>(items: readonly T[], labelOf: (item: T) => string, complete: (item: T) => QueryCompletion | undefined) => {
-    const out: QueryCompletion[] = []
-    for (const item of ranked(items, labelOf, trigger.query)) {
-      const completion = complete(item)
-      if (completion) out.push(completion)
-      if (out.length === RESULT_CAP) break
-    }
-    return out
+const keyCompletions = (trigger: QueryTrigger, vocabulary: QueryVocabulary, resolver: QueryResolver): QueryCompletion[] => {
+  const operator = (takes: boolean) => takes && !trigger.negated && !trigger.operatorFollows ? '=' : ''
+  const keys: QueryCompletion[] = []
+  for (const name of vocabulary.propertyNames) {
+    const property = resolver.propertyByName(name)
+    if (!property || isPropertyAndField(resolver, name)) continue
+    const key = isReservedKey(name) ? propertyKey(property) : propertyName(property)
+    keys.push({label: name, detail: 'property', insert: key + operator(takesOperand(property.schema))})
   }
-  if (trigger.kind === 'type') return vetted(vocabulary.types, type => type.label, type => typeCompletion(type, resolver))
-  const keys: Key[] = [
-    ...vocabulary.propertyNames.map(name => ({kind: 'property' as const, name})),
-    ...vocabulary.fieldNames.map(name => ({kind: 'field' as const, name})),
-    ...RESERVED_KEYS.map(name => ({kind: 'structure' as const, name})),
-  ]
-  return vetted(keys, key => key.name, key => keyCompletion(key, resolver))
+  // A negated key can only test a property's presence.
+  if (!trigger.negated) {
+    for (const name of vocabulary.fieldNames) {
+      if (!isPropertyAndField(resolver, name)) keys.push({label: name, detail: 'field', insert: name + operator(true)})
+    }
+    for (const name of RESERVED_KEYS) {
+      if (!(trigger.alternative && name === 'childof')) keys.push({label: name, detail: 'structure', insert: name + operator(true)})
+    }
+  }
+  return ranked(keys, key => key.label, trigger.query).slice(0, RESULT_CAP)
+}
+
+const queryCompletions = (trigger: QueryTrigger, vocabulary: QueryVocabulary, resolver: QueryResolver): QueryCompletion[] => {
+  if (trigger.negated && trigger.alternative) return []
+  return trigger.kind === 'type' ? typeCompletions(vocabulary.types, trigger.query, resolver) : keyCompletions(trigger, vocabulary, resolver)
 }
 
 /** The workspace's vocabulary, as the property picker and the parser see it. */
-const vocabularyOf = (repo: Repo, workspaceId: string): QueryVocabulary => {
+const vocabularyOf = (repo: Repo, workspaceId: string, resolver: QueryResolver): QueryVocabulary => {
   const definitions = repo.propertyDefinitions
   const uis = repo.facetRuntime?.read(propertyEditorOverridesFacet) ?? new Map()
   return {
-    types: [...repo.types.values()].map(type => ({id: type.id, label: type.label ?? type.id})),
+    types: [...repo.types.values()].flatMap(contribution => {
+      const type = resolver.typeById(contribution.id)
+      return type ? [{...type, plumbing: contribution.hideFromCompletion === true}] : []
+    }),
     propertyNames: [...definitions?.definitionsByName.keys() ?? []]
-      .filter(name => isPropertyPickerName(name, repo.propertySchemas, uis, definitions)),
+      .filter(name => name !== queryProp.name && isPropertyPickerName(name, repo.propertySchemas, uis, definitions)),
     fieldNames: [...repo.facetRuntime?.read(queryableFieldsFacet, workspaceId)?.keys() ?? []],
   }
 }
 
-export const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => async context => {
+/** Where the query text of the fence at `pos` starts: the line after the opening fence. */
+const fenceContentStart = (state: EditorState, pos: number): number | undefined => {
+  for (let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
+    if (node.name === 'FencedCode') return state.doc.lineAt(node.from).to + 1
+  }
+  return undefined
+}
+
+const queryCompletionSource = (repo: Repo, block: Block): CompletionSource => context => {
   const {state, pos} = context
   if (!state.selection.main.empty || !isInsideLiteralMarkdown(state, pos)) return null
-  const line = state.doc.lineAt(pos)
-  const trigger = queryTriggerAt(line.text, pos - line.from)
+  const start = fenceContentStart(state, pos)
   const workspaceId = block.peek()?.workspaceId
-  if (!trigger || !workspaceId) return null
+  // `start > pos` is the opening fence line; defence in depth, since a reversed slice reads as no term anyway.
+  if (start === undefined || start > pos || !workspaceId) return null
+  const line = state.doc.lineAt(pos)
+  const trigger = queryTriggerAt(state.doc.sliceString(start, pos), state.doc.sliceString(pos, line.to))
+  if (!trigger) return null
   const resolver = queryResolver(repo, workspaceId, repo.propertyDefinitions, repo.types, new Map())
-  const completions = queryCompletions(trigger, vocabularyOf(repo, workspaceId), resolver)
+  const completions = queryCompletions(trigger, vocabularyOf(repo, workspaceId, resolver), resolver)
   if (completions.length === 0) return null
   return {
-    from: line.from + trigger.from,
-    to: pos,
+    from: start + trigger.from,
+    to: start + trigger.to,
     // Ranked and matched here; CodeMirror's filter would match the label against `#…`.
     filter: false,
     options: completions.map(completion => ({
       label: completion.label,
       detail: completion.detail,
-      type: completion.detail === 'type' ? 'class' : 'property',
+      type: trigger.kind === 'type' ? 'class' : 'property',
       apply: (view: EditorView, _option, from: number, to: number) => acceptCompletionInsert(view, {from, to, insert: completion.insert}),
     })),
   }

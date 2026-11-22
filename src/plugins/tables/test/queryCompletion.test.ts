@@ -26,7 +26,9 @@ const options = {scope: ChangeScope.BlockDefault}
 
 const user = (name: string, codec: AnyPropertySchema['codec']) =>
   defineProperty(name, {codec, defaultValue: undefined, changeScope: ChangeScope.BlockDefault}) as AnyPropertySchema
-const PROPERTIES = [user('status', codecs.string), user('stash', codecs.unsafeIdentity<unknown>()), user('created', codecs.string)]
+const PROPERTIES = [
+  user('status', codecs.string), user('stash', codecs.unsafeIdentity<unknown>()), user('created', codecs.string), user('under', codecs.string),
+]
 const fieldIdOf = (name: string) => `def-${name}`
 
 let db: TestDb
@@ -45,6 +47,7 @@ beforeEach(async () => {
     tablesDataExtension,
     typeSeedsFacet.of(seedType({seedKey: 'test/type/book', revision: 1, id: 'book', label: 'Book'}), {source: 'test'}),
     typeSeedsFacet.of(seedType({seedKey: 'test/type/other-book', revision: 1, id: 'other:book', label: 'Book'}), {source: 'test'}),
+    typeSeedsFacet.of(seedType({seedKey: 'test/type/zeta', revision: 1, id: 'zeta', label: 'Zeta'}), {source: 'test'}),
   ]}))
   repo.setActiveWorkspaceId(workspaceId)
   repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-definitions', PROPERTIES.map(schema => ({
@@ -72,7 +75,7 @@ beforeEach(async () => {
 const views: EditorView[] = []
 afterEach(() => { views.splice(0).forEach(view => view.destroy()) })
 
-/** An editor on `blockId` holding `doc`, the cursor at `|`, with the extensions
+/** An editor on `blockId` holding `doc`, the cursor at `‸`, with the extensions
  *  the renderer gives it: `asQueryValue` when it is drawn as the query's value. */
 const editor = async (blockId: string, docWithCursor: string, asQueryValue: boolean) => {
   const block = repo.block(blockId)
@@ -81,8 +84,8 @@ const editor = async (blockId: string, docWithCursor: string, asQueryValue: bool
   const view = new EditorView({
     parent: document.body,
     state: EditorState.create({
-      doc: docWithCursor.replace('|', ''),
-      selection: {anchor: docWithCursor.indexOf('|')},
+      doc: docWithCursor.replace('‸', ''),
+      selection: {anchor: docWithCursor.indexOf('‸')},
       extensions: [markdown({base: markdownLanguage}), supertagsCodeMirrorExtensions(context), queryCompletionExtension(context)],
     }),
   })
@@ -109,7 +112,7 @@ const resolver = () => queryResolver(repo, workspaceId, repo.propertyDefinitions
 
 describe('completion inside the query fence', () => {
   it('inserts the picked type as query text, tagging nothing and minting nothing', async () => {
-    const view = await editor(valueId, fencedQuery('status=open #bo|'), true)
+    const view = await editor(valueId, fencedQuery('status=open #bo‸'), true)
     const types = await typesOf(valueId)
     const before = typeCount()
 
@@ -117,19 +120,20 @@ describe('completion inside the query fence', () => {
     // Only the query's source answers: the type tag is off inside the fence.
     expect(results).toHaveLength(1)
     const [result] = results
-    const option = result!.options.find(o => o.label === 'Book' && o.detail === 'type')!
+    const option = result!.options.find(o => o.label === 'Book' && o.detail === 'book')!
     accept(view, result!, option)
 
-    expect(view.state.doc.toString()).toBe(fencedQuery('status=open #Book^book'))
+    expect(view.state.doc.toString()).toBe(fencedQuery('status=open #Book'))
     await repo.awaitProcessors()
     expect(await typesOf(valueId)).toEqual(types)
     expect(typeCount()).toBe(before)
   })
 
-  it('keeps the term on the picked type when two types share its label', async () => {
+  it('names a type by its label, and by its id where another type shares the label', async () => {
     const pickedIds: unknown[] = []
+    const texts: string[] = []
     for (const index of [0, 1]) {
-      const view = await editor(valueId, fencedQuery('#Bo|'), true)
+      const view = await editor(valueId, fencedQuery('#Bo‸'), true)
       const [result] = await answers(view)
       const books = result!.options.filter(o => o.label === 'Book')
       expect(books).toHaveLength(2)
@@ -137,43 +141,105 @@ describe('completion inside the query fence', () => {
       const parsed = parseQuery(queryTextOf(view.state.doc.toString()), resolver())
       expect(parsed.errors).toEqual([])
       pickedIds.push(parsed.query.types)
+      texts.push(queryTextOf(view.state.doc.toString()))
     }
     expect(pickedIds.flat().sort()).toEqual(['book', 'other:book'])
+    // `#Book` resolves to the first type with that label; the other needs its id.
+    expect(texts.sort()).toEqual(['#Book', '#Book^other:book'])
   })
 
   it('offers a property key with = and a presence-only one without', async () => {
-    const view = await editor(valueId, fencedQuery('#Book^book !st|'), true)
+    const view = await editor(valueId, fencedQuery('#Book^book st‸'), true)
     const [result] = await answers(view)
-    const byLabel = new Map(result!.options.map(o => [o.label, o]))
-    accept(view, result!, byLabel.get('status')!)
-    expect(view.state.doc.toString()).toBe(fencedQuery(`#Book^book !status^${fieldIdOf('status')}=`))
+    accept(view, result!, result!.options.find(o => o.label === 'status')!)
+    expect(view.state.doc.toString()).toBe(fencedQuery('#Book^book status='))
 
-    const presence = await editor(valueId, fencedQuery('sta|'), true)
+    const presence = await editor(valueId, fencedQuery('sta‸'), true)
     const [presenceResult] = await answers(presence)
     accept(presence, presenceResult!, presenceResult!.options.find(o => o.label === 'stash')!)
-    expect(presence.state.doc.toString()).toBe(fencedQuery(`stash^${fieldIdOf('stash')}`))
+    expect(presence.state.doc.toString()).toBe(fencedQuery('stash'))
     expect(parseQuery(queryTextOf(presence.state.doc.toString()), resolver()).errors).toEqual([])
   })
 
-  it('offers the queryable fields, never a property named like one, and the structural keys', async () => {
-    const view = await editor(valueId, fencedQuery('cre|'), true)
+  it('after a negating ! offers only property presence', async () => {
+    // `u` matches the field `updated` and the structural key `under` too.
+    const view = await editor(valueId, fencedQuery('!u‸'), true)
     const [result] = await answers(view)
-    const named = result!.options.filter(o => o.label === 'created')
-    expect(named.map(o => o.detail)).toEqual(['field'])
-    const created = named[0]!
-    accept(view, result!, created)
-    expect(view.state.doc.toString()).toBe(fencedQuery('created='))
+    expect(result!.options.map(o => [o.label, o.detail])).toEqual([['under', 'property'], ['status', 'property']])
+    accept(view, result!, result!.options.find(o => o.label === 'status')!)
+    const doc = view.state.doc.toString()
+    expect(doc).toBe(fencedQuery('!status'))
+    expect(parseQuery(queryTextOf(doc), resolver()).errors).toEqual([])
+  })
 
-    const structure = await editor(valueId, fencedQuery('und|'), true)
+  it('replaces the whole name being edited, keeping the operator after it', async () => {
+    for (const [before, picked, after] of [
+      ['#Boo‸^book status=x', 'Book', '#Book status=x'],
+      [`statu‸^${fieldIdOf('status')}=open`, 'status', 'status=open'],
+      ['sta‸=open', 'status', 'status=open'],
+      ['st‸tus!=open', 'status', 'status!=open'],
+    ] as const) {
+      const view = await editor(valueId, fencedQuery(before), true)
+      const [result] = await answers(view)
+      accept(view, result!, result!.options.find(o => o.label === picked && o.detail !== 'other:book')!)
+      expect(view.state.doc.toString()).toBe(fencedQuery(after))
+    }
+  })
+
+  it('offers the queryable fields and the structural keys, but no key a property and a field share', async () => {
+    const view = await editor(valueId, fencedQuery('upd‸'), true)
+    const [result] = await answers(view)
+    const updated = result!.options.find(o => o.label === 'updated')!
+    expect(updated.detail).toBe('field')
+    accept(view, result!, updated)
+    expect(view.state.doc.toString()).toBe(fencedQuery('updated='))
+
+    // A property here is named `created`, like the kernel field: the parser refuses the name either way.
+    const shared = await editor(valueId, fencedQuery('cre‸'), true)
+    expect(await answers(shared)).toEqual([])
+
+    const structure = await editor(valueId, fencedQuery('und‸'), true)
     const [structureResult] = await answers(structure)
-    expect(structureResult!.options.find(o => o.label === 'under')?.detail).toBe('structure')
+    expect(structureResult!.options.map(o => [o.detail, o.label])).toEqual([['property', 'under'], ['structure', 'under']])
+    // A property named like a structural key is addressed by its id: the bare name is structure.
+    accept(structure, structureResult!, structureResult!.options[0]!)
+    expect(structure.state.doc.toString()).toBe(fencedQuery(`under^${fieldIdOf('under')}=`))
+  })
+
+  it('offers on one side of a | group only what can stand there', async () => {
+    const [result] = await answers(await editor(valueId, fencedQuery('#Book^book | chi‸'), true))
+    expect(result?.options.map(o => o.label) ?? []).not.toContain('childof')
+    expect(await answers(await editor(valueId, fencedQuery('#Book^book | !st‸'), true))).toEqual([])
+    expect(await answers(await editor(valueId, fencedQuery('#Book^book | !#Bo‸'), true))).toEqual([])
+  })
+
+  it('never offers the query property itself', async () => {
+    const [result] = await answers(await editor(valueId, fencedQuery('tables‸'), true))
+    expect(result?.options.map(o => o.label) ?? []).not.toContain(queryProp.name)
+  })
+
+  it('offers plumbing types after the others', async () => {
+    const [result] = await answers(await editor(valueId, fencedQuery('#ta‸'), true))
+    const labels = result!.options.map(o => o.label)
+    expect(labels).toContain('Panel stack')
+    expect(labels.indexOf('Zeta')).toBeLessThan(labels.indexOf('Panel stack'))
+  })
+
+  it('reads the whole query before the cursor: a quote opened on an earlier line is still open', async () => {
+    const view = await editor(valueId, fencedQuery('status="a\nst‸'), true)
+    expect(await answers(view)).toEqual([])
+  })
+
+  it('offers nothing on the opening fence line', async () => {
+    const view = await editor(valueId, '```query st‸\n\n```', true)
+    expect(await answers(view)).toEqual([])
   })
 })
 
 describe('completion outside the query', () => {
   it('leaves # in the query value outside its fence as ordinary tagging', async () => {
     await repo.tx(tx => tx.update(valueId, {content: 'call #bo'}), options)
-    const view = await editor(valueId, 'call #bo|', true)
+    const view = await editor(valueId, 'call #bo‸', true)
     const results = await answers(view)
     expect(results).toHaveLength(1)
     const option = results[0]!.options.find(o => o.label === 'Book')!
@@ -184,29 +250,40 @@ describe('completion outside the query', () => {
 
   it('offers nothing in a query fence of any other block', async () => {
     await repo.tx(tx => tx.update('note', {content: fencedQuery('#bo')}), options)
-    const view = await editor('note', fencedQuery('#bo|'), false)
+    const view = await editor('note', fencedQuery('#bo‸'), false)
     expect(await answers(view)).toEqual([])
   })
 })
 
+const trigger = (before: string, after = '') => queryTriggerAt(before, after)
+
 describe('queryTriggerAt', () => {
   it.each([
-    ['#bo', {kind: 'type', from: 0, query: 'bo'}],
-    ['a=1 !#ar', {kind: 'type', from: 5, query: 'ar'}],
-    ['#a|#b', {kind: 'type', from: 3, query: 'b'}],
-    ['x !sta', {kind: 'key', from: 3, query: 'sta'}],
-    ['#', {kind: 'type', from: 0, query: ''}],
-  ])('%j', (line, trigger) => {
-    expect(queryTriggerAt(line, line.length)).toEqual(trigger)
+    ['#bo', {kind: 'type', from: 0, to: 3, query: 'bo'}],
+    ['a=1 !#ar', {kind: 'type', from: 5, to: 8, query: 'ar', negated: true}],
+    ['#a|#b', {kind: 'type', from: 3, to: 5, query: 'b', alternative: true}],
+    ['#a | sta', {kind: 'key', from: 5, to: 8, query: 'sta', alternative: true}],
+    ['(#bo', {kind: 'type', from: 1, to: 4, query: 'bo', alternative: true}],
+    ['x !sta', {kind: 'key', from: 3, to: 6, query: 'sta', negated: true}],
+    ['#', {kind: 'type', from: 0, to: 1, query: ''}],
+    ['#"Reading l', {kind: 'type', from: 0, to: 11, query: 'Reading l'}],
+    ['refs=[[a]] sta', {kind: 'key', from: 11, to: 14, query: 'sta'}],
+    ['refs=[[a "b]] sta', {kind: 'key', from: 14, to: 17, query: 'sta'}],
+    ['a="x y" sta', {kind: 'key', from: 8, to: 11, query: 'sta'}],
+  ])('%j', (before, expected) => {
+    expect(trigger(before)).toEqual({negated: false, alternative: false, operatorFollows: false, ...expected})
   })
 
   it.each([
-    ['status=op'], ['rank>=3'], ['#Book^bo'], ['x#bo'], ['label="a st'], ['owner=[[Ma'], ['owner=((01'], [''], ['a '],
-  ])('%j offers nothing', line => {
-    expect(queryTriggerAt(line, line.length)).toBeNull()
+    ['status=op'], ['rank>=3'], ['#Book^bo'], ['x#bo'], ['x!sta'], ['label="a st'], ['owner=[[Ma'], ['owner=((01'],
+    ['refs=[[My bo'], ['refs=[[a #bo'], ['owner=[my st'], ['owner=[x](((01 st'], [''], ['a '],
+  ])('%j offers nothing', before => {
+    expect(trigger(before)).toBeNull()
   })
 
-  it('offers nothing in the middle of a word', () => {
-    expect(queryTriggerAt('status', 3)).toBeNull()
+  it('runs the replaced range over the rest of the name and its saved id, and sees an operator after it', () => {
+    expect(trigger('sta', 'tus^def-status=open')).toMatchObject({from: 0, to: 17, query: 'sta', operatorFollows: true})
+    expect(trigger('#"Read', 'ing list"^rl x')).toMatchObject({from: 0, to: 18, query: 'Read'})
+    expect(trigger('st', ' rank=1')).toMatchObject({to: 2, operatorFollows: false})
   })
 })
