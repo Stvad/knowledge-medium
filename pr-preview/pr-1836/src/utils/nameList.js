@@ -1,0 +1,1 @@
+export{uet as NAMES_IN_A_SENTENCE,det as describeNames,fet as firstFew}from"../../chunks/app-D-5Oz8CN.js";

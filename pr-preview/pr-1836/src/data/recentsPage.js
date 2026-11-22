@@ -1,0 +1,1 @@
+export{F9 as getOrCreateRecentsPage,I9 as recentsPageBlockId,L9 as recentsPageSpec}from"../../chunks/app-D-5Oz8CN.js";

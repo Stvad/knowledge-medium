@@ -1,0 +1,1 @@
+export{Gx as referencesMarkdownExtension}from"../../../../chunks/app-D-5Oz8CN.js";

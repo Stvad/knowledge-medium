@@ -1,0 +1,1 @@
+export{M7 as Block,N7 as requireLoadedBlock}from"../../chunks/app-D-5Oz8CN.js";

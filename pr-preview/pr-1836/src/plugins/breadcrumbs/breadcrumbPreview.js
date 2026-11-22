@@ -1,0 +1,1 @@
+export{XD as getBreadcrumbContentPreview}from"../../../chunks/app-D-5Oz8CN.js";

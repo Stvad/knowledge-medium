@@ -1,0 +1,1 @@
+export{pz as BULK_DELETE_CONFIRM_THRESHOLD,mz as deleteBlockThroughUi,hz as deleteBlocksThroughUi,gz as ensureDeletableThroughUi}from"../../chunks/app-D-5Oz8CN.js";

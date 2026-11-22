@@ -1,0 +1,1 @@
+export{Jr as extensionsDataExtension}from"../../../chunks/app-D-5Oz8CN.js";

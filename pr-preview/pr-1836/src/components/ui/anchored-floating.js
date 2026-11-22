@@ -1,0 +1,1 @@
+export{Gq as floatingAnchorFromRect,Kq as useAnchoredFloating}from"../../../chunks/app-D-5Oz8CN.js";

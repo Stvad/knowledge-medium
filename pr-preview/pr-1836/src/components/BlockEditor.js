@@ -1,0 +1,1 @@
+export{XB as BlockEditor}from"../../chunks/app-D-5Oz8CN.js";
