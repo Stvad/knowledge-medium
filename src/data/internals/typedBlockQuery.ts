@@ -1,6 +1,8 @@
 import {
   isRefCodec,
   isRefListCodec,
+  normalizeTypeIds,
+  predicateHasConstraints,
   type AnyPropertySchema,
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
@@ -393,6 +395,31 @@ const compileReferencedBy = (
   }
 }
 
+/** The type-membership test on a `block_types` row: the one owner of the
+ *  top-level join's type term and the predicate `types` term. */
+const typeMembership = (alias: string, types: readonly string[]): CompiledClause => ({
+  sql: `${alias}.type IN (${types.map(() => '?').join(', ')})`,
+  params: types,
+})
+
+/** Predicate `types` against a row. An anyOf alternative takes the `IN` form so
+ *  SQLite's multi-index OR planner can drive it from the type index, as
+ *  `compileReferencedBy` does for references. */
+const compileTypesTerm = (
+  types: readonly string[], rowId: string, alternativeWorkspace?: string,
+): CompiledClause => {
+  const membership = typeMembership('pt', types)
+  return alternativeWorkspace === undefined
+    ? {
+      sql: `EXISTS (SELECT 1 FROM block_types pt WHERE pt.block_id = ${rowId} AND ${membership.sql})`,
+      params: membership.params,
+    }
+    : {
+      sql: `${rowId} IN (SELECT pt.block_id FROM block_types pt WHERE pt.workspace_id = ? AND ${membership.sql})`,
+      params: [alternativeWorkspace, ...membership.params],
+    }
+}
+
 const compilePredicateAgainstRow = (
   predicate: BlockPredicate,
   rowAlias: string,
@@ -405,6 +432,12 @@ const compilePredicateAgainstRow = (
   if (predicate.id !== undefined) {
     clauses.push(`${rowAlias}.id = ?`)
     params.push(predicate.id)
+  }
+
+  if (predicate.types?.length) {
+    const compiled = compileTypesTerm(predicate.types, `${rowAlias}.id`, alternativeWorkspace)
+    clauses.push(compiled.sql)
+    params.push(...compiled.params)
   }
 
   if (predicate.where !== undefined) {
@@ -444,6 +477,12 @@ const compileAncestorPredicate = (
   if (predicate.id !== undefined) {
     clauses.push('anc.id = ?')
     params.push(predicate.id)
+  }
+
+  if (predicate.types?.length) {
+    const compiled = compileTypesTerm(predicate.types, 'anc.id')
+    clauses.push(compiled.sql)
+    params.push(...compiled.params)
   }
 
   if (predicate.where !== undefined) {
@@ -488,8 +527,11 @@ const compileAlternatives = (
   }
 }
 
-const hasConstraints = (p: BlockPredicate): boolean =>
-  p.id !== undefined || p.referencedBy !== undefined || Object.keys(p.where ?? {}).length > 0
+const normalizePredicate = (p: BlockPredicate): BlockPredicate =>
+  p.types === undefined ? p : {...p, types: normalizeTypeIds(p.types)}
+
+const normalizePredicates = (predicates: readonly BlockPredicate[] | undefined): BlockPredicate[] =>
+  (predicates ?? []).map(normalizePredicate).filter(predicateHasConstraints)
 
 export const normalizeTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
@@ -498,14 +540,12 @@ export const normalizeTypedBlockQuery = (
   workspaceId: query.workspaceId,
   parentId: query.parentId,
   propertyChildren: query.propertyChildren,
-  types: query.types === undefined
-    ? undefined
-    : Array.from(new Set(query.types.map(type => type.trim()).filter(Boolean))).sort(),
+  types: query.types === undefined ? undefined : normalizeTypeIds(query.types),
   where: query.where,
   referencedBy: query.referencedBy,
-  match: query.match?.filter(hasConstraints) ?? [],
-  exclude: query.exclude?.filter(hasConstraints) ?? [],
-  anyOf: query.anyOf?.every(hasConstraints) ? query.anyOf : undefined,
+  match: normalizePredicates(query.match),
+  exclude: normalizePredicates(query.exclude),
+  anyOf: query.anyOf?.every(predicateHasConstraints) ? query.anyOf.map(normalizePredicate) : undefined,
   order: projection === 'count' ? undefined : query.order ?? 'created-asc',
 })
 
@@ -555,6 +595,7 @@ const boundsByWhere = (where: BlockPredicate['where'], context: WhereContext): b
 const selfPredicateNarrows = (predicate: BlockPredicate, context: WhereContext): boolean =>
   predicate.id !== undefined ||
   predicate.referencedBy !== undefined ||
+  (predicate.types?.length ?? 0) > 0 ||
   boundsByWhere(predicate.where, context)
 
 /** Bounding the SQL walk and receiving a new-row signal count different predicates. */
@@ -612,18 +653,19 @@ const candidateSource = (
   // `b.workspace_id = ?`. In the referencedBy branch there is no
   // `b.workspace_id = ?` to propagate from — scoping comes via
   // `br.workspace_id = ?` — and the planner uses the PK autoindex instead.
+  const membership = typeMembership('bt', types)
   const typeJoin = types.length > 0
     ? `
       JOIN block_types bt
         ON bt.block_id = b.id
        AND bt.workspace_id = b.workspace_id
-       AND bt.type IN (${types.map(() => '?').join(', ')})`
+       AND ${membership.sql}`
     : ''
 
   // Param order is statement order, and the join's placeholders sit in the FROM
   // clause — ahead of every WHERE placeholder — so the type params go first.
   // `params` is still empty here, so one push before the branch covers both.
-  params.push(...types)
+  params.push(...membership.params)
 
   if (normalized.referencedBy !== undefined) {
     from = `
@@ -639,7 +681,7 @@ const candidateSource = (
       // Without stats SQLite may sort all workspace rows to select one parent's children.
       index = ' INDEXED BY idx_blocks_parent_order'
     } else if (!types.length && normalized.anyOf?.length &&
-      normalized.anyOf.every(p => isSelfScope(p) && p.referencedBy)) {
+      normalized.anyOf.every(p => isSelfScope(p) && (p.referencedBy || p.types?.length))) {
       // Before ANALYZE SQLite can scan the workspace index for a disjunction of indexed source-id lists.
       index = ' INDEXED BY sqlite_autoindex_blocks_1'
     } else if (typeof normalized.order === 'object' && !types.length &&
