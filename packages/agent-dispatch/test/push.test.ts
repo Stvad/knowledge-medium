@@ -5,11 +5,12 @@ import {
   buildRegistrationWatchers,
   CLEAR_REGISTRATION_TIMEOUT_MS,
   clearPushRegistration,
-  PUSH_CONSUMER,
   REGISTRATION_REFRESH_MS,
   REGISTRATION_TTL_MS,
   startPushLoop,
 } from '../src/push'
+
+const PUSH_CONSUMER = 'agent-dispatch'
 
 const config = parseConfig({
     workspaceId: 'ws-test',
@@ -31,7 +32,10 @@ const settled = (consumer: string, watcher: string, seq: number) => ({
 /** Drive the loop through a script of nextEvents outcomes, then stop it.
  *  Each entry is either a response or an error to throw; when the script
  *  is exhausted the loop sees isStopping() === true. */
-const runLoop = async (script: Array<EventsNextResponse | Error>, overrides: {nowStep?: number} = {}) => {
+const runLoop = async (
+  script: Array<EventsNextResponse | Error>,
+  overrides: {nowStep?: number, config?: typeof config} = {},
+) => {
   const responses = [...script]
   let clock = 0
   const runCommands: Array<Record<string, unknown>> = []
@@ -53,7 +57,7 @@ const runLoop = async (script: Array<EventsNextResponse | Error>, overrides: {no
         return next
       }),
     },
-    config,
+    config: overrides.config ?? config,
     graph,
     requestTick,
     log,
@@ -77,7 +81,7 @@ describe('buildRegistrationWatchers', () => {
   it('clears the daemon consumer with an empty registration', async () => {
     const client = {runCommand: vi.fn(async () => ({}))}
 
-    await clearPushRegistration(client)
+    await clearPushRegistration(client, undefined)
 
     expect(client.runCommand).toHaveBeenCalledWith({
       type: 'watch-events',
@@ -89,6 +93,21 @@ describe('buildRegistrationWatchers', () => {
 })
 
 describe('startPushLoop', () => {
+  it('registers a named instance as its own consumer and ticks only on its events', async () => {
+    const hostConfig = parseConfig({
+      workspaceId: 'ws-test',
+      instance: 'host',
+      watchers: [{kind: 'backlinks', name: 'host-mentions', target: 'Assistant (host)'}],
+    })
+    const {runCommands, requestTick} = await runLoop([
+      {events: [settled(PUSH_CONSUMER, 'claude-mentions', 1)], nextSeq: 1},
+      {events: [settled('agent-dispatch-host', 'host-mentions', 2)], nextSeq: 2},
+    ], {config: hostConfig})
+
+    expect(runCommands[0]).toMatchObject({type: 'watch-events', consumer: 'agent-dispatch-host'})
+    expect(requestTick).toHaveBeenCalledTimes(1)
+  })
+
   it('registers once, then ticks on events for its consumer', async () => {
     const {runCommands, requestTick} = await runLoop([
       {events: [], nextSeq: 0},

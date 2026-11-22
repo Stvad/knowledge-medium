@@ -23,7 +23,10 @@
 import type { Repo, ViewGap } from '@/data/repo'
 import {
   DELETE_KEYED_MARKER_SQL,
+  RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX,
+  RECONCILE_RESCAN_MARKER_PREFIX,
   RECORD_KEYED_MARKER_SQL,
+  RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL,
   SELECT_KEYED_MARKER_SQL,
   WORKSPACE_FIRST_SYNC_MARKER_PREFIX,
 } from '@/data/internals/clientSchema'
@@ -74,4 +77,14 @@ export const recordWorkspaceFirstSync = async (db: MarkerDb, workspaceId: string
 /** For a workspace whose row is absent: whatever this device had of it is gone. */
 export const forgetWorkspaceFirstSync = async (db: MarkerDb, workspaceId: string): Promise<void> => {
   await db.execute(DELETE_KEYED_MARKER_SQL, [markerKey(workspaceId)])
+}
+
+/** Records {@link RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX} if no staged row of the
+ *  workspace has a cleared flag yet, so call it before a drain applies any. */
+export const noteColdFirstSync = async (db: MarkerDb, workspaceId: string): Promise<void> => {
+  await db.execute(RECORD_RECONCILE_FLAGS_TRUSTED_IF_COLD_SQL, [
+    `${RECONCILE_FLAGS_TRUSTED_MARKER_PREFIX}${workspaceId}`,
+    `${RECONCILE_RESCAN_MARKER_PREFIX}${workspaceId}`,
+    workspaceId,
+  ])
 }
