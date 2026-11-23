@@ -1,0 +1,1 @@
+export{Fj as useMinuteClock}from"../../chunks/app-nho46I3L.js";

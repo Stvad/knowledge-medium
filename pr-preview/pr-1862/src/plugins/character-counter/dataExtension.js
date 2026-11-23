@@ -1,0 +1,1 @@
+export{L2 as characterCounterDataExtension}from"../../../chunks/app-nho46I3L.js";

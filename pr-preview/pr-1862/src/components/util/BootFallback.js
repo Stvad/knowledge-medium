@@ -1,0 +1,1 @@
+export{VY as BootFallback}from"../../../chunks/app-nho46I3L.js";

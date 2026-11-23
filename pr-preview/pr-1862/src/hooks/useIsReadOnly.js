@@ -1,0 +1,1 @@
+export{AC as useIsReadOnly}from"../../chunks/app-nho46I3L.js";
