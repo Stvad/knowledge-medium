@@ -118,7 +118,6 @@ import {
 } from './graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
-  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
   fieldRowValues,
@@ -740,24 +739,23 @@ export const countConsumingParents = async (
  *
  *  THE BEFORE SIDE IS THE CHILDREN, not the stored cell: the cell is derived,
  *  and one that disagrees with its children is stale by definition — the next
- *  projection drops the difference whether or not this edit happens. */
+ *  projection drops the difference whether or not this edit happens. The one
+ *  exception is the projection's own: a member the rows cannot resolve yet is
+ *  held where the stored cell holds it ({@link projectFieldValue}). */
 const valuesLostBy = (
   change: DefinitionChange,
   perFieldRow: readonly (readonly BlockData[])[],
   projected: unknown,
+  stored: unknown,
 ): number => {
   // A SHORT-CIRCUIT, not a guard: deleting it changes no outcome, because a
   // rename re-spells nothing and both sides then project identically. It saves
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  // A value row awaiting its reference target holds a member the
-  // before-projection cannot read but another device may have stored.
-  const pending = perFieldRow.flat().filter(row => awaitsReferenceTarget(change.beforeSchema, row)).length
-  const held = pending + projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
-    change.beforeSchema,
-    unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow),
-  ))
+  // At cell grain, through the writers' own read, so a member the rows cannot
+  // resolve yet counts as held only where the stored cell holds it.
+  const held = projectedValueCount(change.beforeSchema, projectFieldValue(change.beforeSchema, perFieldRow, stored))
   return Math.max(0, held - projectedValueCount(change.schema, projected))
 }
 
@@ -869,10 +867,11 @@ const applyToParent = async (
     // gets published. A rename keeps the stored cell's members the rows cannot
     // read yet; a re-encode cannot carry old-encoded members across, so
     // `valuesLostBy` counts them and the edit refuses instead.
+    const stored = storedPropertyValue(parent.properties, change.oldName)
     const projected = change.encodingChanged
       ? childContentsToEncodedPropertyValue(change.schema, unionValuesAcrossFieldRows(change.schema, canonicalized))
-      : projectFieldValue(change.schema, canonicalized, storedPropertyValue(parent.properties, change.oldName))
-    const lost = valuesLostBy(change, perFieldRow, projected)
+      : projectFieldValue(change.schema, canonicalized, stored)
+    const lost = valuesLostBy(change, perFieldRow, projected, stored)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
       lostParents.add(parentId)

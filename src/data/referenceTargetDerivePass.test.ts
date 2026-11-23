@@ -589,6 +589,30 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     expect(await ownerWrites()).toEqual([])
   })
 
+  it('moving a whole field row away removes its members while a sibling field row is pending', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    // Two field rows for one definition: the moved one resolves, the other waits.
+    const schema = await seedSyncedNamedRefList(repo, ['Name C'], ['target-a', 'target-c'])
+    await seedRow({id: 'named-field-2', parentId: 'named-owner', orderKey: 'b0', content: '::((named-ref-field))',
+      referenceTargetId: 'named-ref-field', isFieldForm: true})
+    await seedRow({id: 'moved-value', parentId: 'named-field-2', content: '[[Name A]]'})
+    await seedRow({id: 'other-owner', orderKey: 'zz', content: 'other'})
+    await runPass(repo)
+    await repo.awaitProcessors()
+    expect(await readColumn('moved-value')).toBe('target-a')
+    expect(await readColumn('named-value-0')).toBeNull()
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c'])
+
+    await repo.tx(tx => tx.move('named-field-2', {parentId: 'other-owner', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-c'])
+    expect(await cellOf('other-owner', schema.name)).toEqual(['target-a'])
+  })
+
   it('a block merge keeps a pending member of the merged list', async () => {
     const {repo, schema} = await seedWithPendingSibling()
     await seedRow({id: 'into-owner', orderKey: 'zz', content: 'into'})

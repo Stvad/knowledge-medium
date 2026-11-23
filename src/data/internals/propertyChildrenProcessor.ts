@@ -156,10 +156,10 @@ type AffectedOwners = Map<string, AffectedOwner>
 
 interface AffectedOwner {
   readonly fields: Map<string, AnyPropertySchema>
-  /** Per field: the BEFORE states of its value rows this tx removed or
-   *  rewrote, so a projection holding a pending member still applies the
+  /** Per field, by row id: the BEFORE states of its value rows this tx removed
+   *  or rewrote, so a projection holding a pending member still applies the
    *  change ({@link projectFieldValue}). */
-  readonly departed: Map<string, BlockData[]>
+  readonly departed: Map<string, Map<string, BlockData>>
   /** A field or value row the user wrote in this tx (`SameTxCtx.hasUserWrite`)
    *  reaches this owner, so a changed cell is the user's edit of the owner and
    *  is stamped as `setProperty` stamps one. Otherwise the cell write is
@@ -374,7 +374,7 @@ const reprojectOwner = async (
     const perFieldRow: BlockData[][] = []
     for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
     const projected = projectFieldValue(
-      schema, perFieldRow, storedPropertyValue(nextProperties, schema.name), departed.get(fieldId))
+      schema, perFieldRow, storedPropertyValue(nextProperties, schema.name), [...departed.get(fieldId)?.values() ?? []])
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -437,13 +437,22 @@ export const reprojectOwnersForRowStates = async (
     const userEdited = row !== null && (isUserWrite?.(row.id) ?? false)
     await collectAffectedProjection(affected, row, lookups, readParent, userEdited)
   }
+  const addDeparted = (ownerId: string, fieldId: string, values: readonly BlockData[]): void => {
+    const owner = affected.get(ownerId)
+    if (owner === undefined) return
+    let rows = owner.departed.get(fieldId)
+    if (rows === undefined) owner.departed.set(fieldId, rows = new Map())
+    for (const value of values) rows.set(value.id, value)
+  }
   for (const row of departed) {
     const field = await valueChildField(row, readParent)
-    const owner = field === null ? undefined : affected.get(field.ownerId)
-    if (field === null || owner === undefined) continue
-    const rows = owner.departed.get(field.fieldId)
-    if (rows) rows.push(row)
-    else owner.departed.set(field.fieldId, [row])
+    if (field !== null) addDeparted(field.ownerId, field.fieldId, [row])
+    // A field row that moved or was re-targeted takes its values with it, and
+    // they do not change, so they depart through it.
+    const fieldId = row.isFieldForm === true ? getPropertyFieldTargetId(row) : undefined
+    if (fieldId !== undefined && row.parentId !== null) {
+      addDeparted(row.parentId, fieldId, await fieldValueChildren(tx, row.id))
+    }
   }
   for (const [parentId, owner] of affected) {
     await reprojectOwner(tx, parentId, owner, mode)

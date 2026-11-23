@@ -497,6 +497,24 @@ describe('rename', () => {
     expect(await cell('p')).toEqual({status: ['target-a', 'target-c']})
   })
 
+  it('does not refuse a scalar re-type over a pending sibling the cell never held', async () => {
+    await seedWorkspace('children')
+    const repo = await setupDefinition('ref')
+    await repo.tx(tx => tx.create({id: 'target-a', workspaceId: WS, parentId: null, orderKey: 'k-a', content: 'a'}),
+      {scope: ChangeScope.BlockDefault})
+    await createHost(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', schemaFor(repo, 'status'), 'target-a'), {scope: ChangeScope.BlockDefault})
+    const fieldRowId = (await liveFieldRow('p', FIELD_ID))!
+    await repo.tx(tx => tx.create({
+      id: 'pending-sibling', workspaceId: WS, parentId: fieldRowId, orderKey: 'zz', content: '[[Name C]]',
+    }), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    expect(await valueRowsOf('p')).toHaveLength(2)
+    expect(await cell('p')).toEqual({status: 'target-a'})
+
+    await expect(retype(repo, FIELD_ID, 'string')).resolves.toBeUndefined()
+  })
+
   it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
     const repo = await setupDefinition()
