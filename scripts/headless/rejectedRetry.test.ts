@@ -2,6 +2,7 @@
 import {randomUUID} from 'node:crypto'
 import {afterAll, afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest'
 import type {RejectedUpload} from '@/data/rejectedUploads'
+import {Repo} from '@/data/repo'
 import {createTestDb, resetTestDb} from '@/data/test/createTestDb'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {clearSyncState, serverWorkspace, stagedBlock, syncServer, testWorkspaceRow} from '@/data/test/syncCheckpoint'
@@ -29,6 +30,8 @@ beforeEach(async () => {
   stubLocalStorage()
   vi.stubGlobal('document', {querySelectorAll: () => [], baseURI: 'node:headless'})
   vi.spyOn(Object.getPrototypeOf(fixture.db.currentStatus), 'connected', 'get').mockReturnValue(true)
+  // Deferred seed writes can enter the queue after bootstrap has drained it.
+  vi.spyOn(Repo.prototype, 'scheduleWorkspaceSeedMaterialization').mockImplementation(() => {})
   rpc.mockImplementation(accepted)
 })
 afterEach(() => { rpc.mockReset(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -54,7 +57,7 @@ function start(config: HeadlessConfig, blocks: string[]) {
     update: (id: string, content: string) => execute({type: 'update-block', id, content, contributorId: null}),
     untilOpen: (readOnly: boolean) => vi.waitFor(async () => expect(await execute({type: 'health'}))
       .toMatchObject({host: {closedReason: null, readOnly}}), {timeout: 15_000}),
-    /** Uploads what the bootstrap queued (seed rows) so a test starts from an empty queue. */
+    /** Uploads the system-page writes so a test starts from an empty queue. */
     drainBootstrap: async () => {
       await vi.waitFor(async () => {
         await upload()
@@ -70,7 +73,6 @@ const quarantine = () => fixture.db.getAll('SELECT * FROM ps_crud_rejected ORDER
 const setRole = (role: string) => fixture.db.execute('UPDATE workspace_members SET role = ? WHERE id = ?', [role, member.id])
 const sentIds = () => JSON.stringify(rpc.mock.calls)
 
-// Each boots a writable host and drains its seed rows: 3–9 s under load, past 10 s at load 60.
 it('uploads a refused edit once after the role is restored, and refuses the retry while the role is viewer', async () => {
   const id = randomUUID()
   const host = start(writable, [id])
