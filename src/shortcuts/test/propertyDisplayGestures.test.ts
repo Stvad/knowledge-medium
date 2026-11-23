@@ -12,9 +12,11 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedProperty, type BlockData, type User } from '@/data/api'
+import { childrenViewFacet } from '@/data/childrenView'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
+import { focusBlock } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -111,5 +113,31 @@ describe('the block actions pass their surface\'s display scope', () => {
     }
     await indent.handler(deps, {kind: 'test'} as never)
     expect(await parentOf('b')).toBe(statusRow)
+  })
+
+  it('uses the focused children view for every block in a bulk indent', async () => {
+    await repo.tx(tx => tx.create({id: 'c', workspaceId: WS, parentId: 'owner', orderKey: 'a3', content: 'c'}),
+      {scope: ChangeScope.BlockDefault})
+    const renderScopeId = 'filtered-outline'
+    repo.setRuntimeContributions(childrenViewFacet, 'test.bulk-indent', [({parent, surface}) =>
+      parent.id === 'owner' && surface.renderScopeId === renderScopeId ? {
+        id: 'test.bulk-indent',
+        read: () => ({load: async () => {
+          const owned = await childIds(parent.id)
+          return ['c', 'b', 'a'].filter(id => owned.includes(id))
+        }}),
+      } : undefined])
+
+    const uiStateBlock = repo.block('page')
+    await focusBlock(uiStateBlock, 'a', {renderScopeId})
+    const {indentBlock} = createSharedBlockActions({repo})
+    const indent = applyToAllBlocksInSelection(bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock))
+    await indent.handler({
+      selectedBlocks: [repo.block('b'), repo.block('a')], anchorBlock: repo.block('b'),
+      uiStateBlock, scopeRootId: 'page', propertyDisplay: NON_HIDDEN,
+    }, {kind: 'test'} as never)
+
+    expect(await childIds('owner')).toEqual([statusRow, 'c'])
+    expect(await childIds('c')).toEqual(['b', 'a'])
   })
 })

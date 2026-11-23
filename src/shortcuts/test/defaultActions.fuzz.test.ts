@@ -82,6 +82,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
+import { Text } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -195,13 +196,14 @@ const makeSelection = (from: number, to = from) => ({
 })
 
 const fakeEditorView = (content: string, cursor: number): EditorView => {
-  let text = content
+  let doc = Text.of(content.split('\n'))
   let selection = makeSelection(Math.min(cursor, content.length))
   const view = {
     dom: document.createElement('div'),
     dispatch: (spec: {changes?: {from: number; to: number; insert: string}; selection?: unknown}) => {
       if (spec.changes) {
-        text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
+        const {from, to, insert} = spec.changes
+        doc = doc.replace(from, to, Text.of(insert.split('\n')))
       }
       const next = spec.selection
       if (next && typeof next === 'object' && 'anchor' in next) {
@@ -213,11 +215,7 @@ const fakeEditorView = (content: string, cursor: number): EditorView => {
   Object.defineProperty(view, 'state', {
     get: () => ({
       selection,
-      doc: {
-        length: text.length,
-        toString: () => text,
-        sliceString: (from: number, to = text.length) => text.slice(from, to),
-      },
+      doc,
     }),
   })
   return view as unknown as EditorView

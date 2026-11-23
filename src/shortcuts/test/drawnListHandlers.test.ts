@@ -21,6 +21,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditorView } from '@codemirror/view'
 import { ChangeScope, seedProperty, type BlockData, type User } from '@/data/api'
+import { childrenViewFacet } from '@/data/childrenView'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
@@ -303,6 +304,22 @@ describe('focus after a delete or a cut', () => {
 })
 
 describe('paste entry points', () => {
+  it('normal-mode paste-after reads the focused occurrence’s children view', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
+      childrenViewFacet.of(({parent, surface}) => parent.id === 'solo' && surface.renderScopeId === 'filtered'
+        ? {id: 'test.filtered', read: () => ({load: async () => []})}
+        : null),
+    ]))
+    vi.stubGlobal('navigator', {clipboard: {readText: vi.fn(async () => 'A pasted row')}})
+
+    await vimAction('paste_after').handler({...normalDeps('solo', NON_HIDDEN), renderScopeId: 'filtered'}, trigger)
+
+    expect((await allChildren('page')).map(({content}) => content)).toEqual(['owner', 'solo', 'A pasted row', 'after'])
+    expect((await allChildren('solo')).map(({id}) => id)).toEqual([soloStatusRow])
+  })
+
   it.each([
     [NON_HIDDEN, 'solo'],
     [NONE, 'page'],

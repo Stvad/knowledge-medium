@@ -522,26 +522,9 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
 
 // ──── outline gestures: indent / outdent / moveVertical ────
 
-/*
- * The three relative gestures resolve their anchors against the sibling list
- * **the caller sees**: `visibleChildrenOf` under the `propertyDisplay` scope of
- * the surface the gesture ran in (none given: mode `none`, every property row
- * left out). A plugin's children view is not consulted (`childrenViewFacet`). A hidden row can therefore neither be picked as a gesture's
- * target nor absorb a step aimed past it; where a moved block lands
- * *physically* relative to a hidden row carries no semantics. A drawn property
- * row is an ordinary row to all three, values included: a block moved in among
- * a field row's values becomes one, a value moved out leaves the property.
- *
- * The SUBJECT is always on the list: one the mode leaves out — the focused row
- * the outline keeps showing (`BlockChildren`) — sits where the outline draws
- * it ({@link withSubject}). An ANCHOR absent from the list makes the gesture a
- * clean **no-op** rather than a surprising relocation.
- *
- * Deliberate machinery movement is not blocked, it just doesn't go through an
- * outline gesture: `core.move` places a block at an explicit position on the
- * structural list, which is what materialization, merge, and the bridge use.
- */
-
+/** A gesture supplies its drawn anchor. Imperative callers omit it to resolve
+ *  the property-display list inside the transaction, including a retained
+ *  hidden subject. `core.move` always takes an explicit structural position. */
 const propertyDisplayArg = {propertyDisplay: propertyDisplayScopeSchema.optional()}
 
 /** `siblings` with the gesture's subject on it, and its index: a subject the
@@ -559,7 +542,24 @@ const withSubject = (
 
 // ──── indent ────
 
+const drawnAnchorSchema = z.object({parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional()})
+type DrawnAnchor = z.infer<typeof drawnAnchorSchema>
+
+/** Only live rows still under the parent drawn at dispatch can participate in a relative write. */
+export const liveChildAt = async (tx: Tx, id: string, parentId: string | null, boundaryId?: string) => {
+  const row = await tx.get(id)
+  if (row?.parentId !== parentId || row.deleted) return null
+  return boundaryId === undefined || await tx.isDescendantOf(id, boundaryId) ? row : null
+}
+
+/** `subjectParent` is the drawn parent before the gesture, including for an outdent or a move between parents. */
+async function anchoredSubject(tx: Tx, id: string, anchor: DrawnAnchor, subjectParent: string | null) {
+  const sibling = await liveChildAt(tx, anchor.siblingId, anchor.parentId)
+  return sibling ? liveChildAt(tx, id, subjectParent, anchor.boundaryId) : null
+}
+
 interface IndentArgs {
+  anchor?: DrawnAnchor
   id: string
   /** The display scope of the surface the gesture ran in (see the section
    *  note above). */
@@ -568,10 +568,17 @@ interface IndentArgs {
 
 export const indent = defineMutator<IndentArgs, void>({
   name: 'core.indent',
-  argsSchema: z.object({id: z.string(), ...propertyDisplayArg}),
+  argsSchema: z.object({id: z.string(), anchor: drawnAnchorSchema.optional(), ...propertyDisplayArg}),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `indent ${id}`,
-  apply: async (tx, {id, propertyDisplay}) => {
+  apply: async (tx, {id, propertyDisplay, anchor}) => {
+    if (anchor) {
+      const self = await anchoredSubject(tx, id, anchor, anchor.parentId)
+      if (!self) return
+      await relocateBlock(tx, self, anchor.siblingId, {kind: 'last'})
+      await revealChildren(tx, anchor.siblingId)
+      return
+    }
     const self = await requireBlock(tx, id)
     if (self.parentId === null) {
       // No parent — can't indent the root. Legacy was a no-op here.
@@ -591,6 +598,7 @@ export const indent = defineMutator<IndentArgs, void>({
 // ──── outdent ────
 
 interface OutdentArgs {
+  anchor?: DrawnAnchor
   id: string
   /** Optional surface boundary — the root of the visible subtree the
    *  caller renders (the panel's zoom root on the main outline, a
@@ -609,12 +617,19 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
   argsSchema: z.object({
     id: z.string(),
     scopeRootId: z.string().optional(),
+    anchor: drawnAnchorSchema.optional(),
     ...propertyDisplayArg,
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `outdent ${id}`,
-  apply: async (tx, {id, scopeRootId, propertyDisplay}) => {
+  apply: async (tx, {id, scopeRootId, propertyDisplay, anchor}) => {
+    if (anchor) {
+      const self = await anchoredSubject(tx, id, anchor, anchor.siblingId)
+      if (!self) return false
+      await relocateBlock(tx, self, anchor.parentId, {kind: 'after', siblingId: anchor.siblingId})
+      return true
+    }
     const self = await requireBlock(tx, id)
     if (self.parentId === null) return false  // already at root
     // Refuse to outdent past the surface boundary — a direct child of
@@ -646,7 +661,10 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
 
 // ──── moveVertical ────
 
+const moveAnchorSchema = drawnAnchorSchema.extend({fromParentId: z.string().optional()})
+
 interface MoveVerticalArgs {
+  anchor?: z.infer<typeof moveAnchorSchema>
   id: string
   /** -1 = up (toward the top of the visible list), +1 = down. */
   direction: -1 | 1
@@ -696,12 +714,25 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     id: z.string(),
     direction: z.union([z.literal(-1), z.literal(1)]),
     scopeRootId: z.string().optional(),
+    anchor: moveAnchorSchema.optional(),
     ...propertyDisplayArg,
   }),
   resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id, direction}) => `move ${id} ${direction === -1 ? 'up' : 'down'}`,
-  apply: async (tx, {id, direction, scopeRootId, propertyDisplay}) => {
+  apply: async (tx, {id, direction, scopeRootId, propertyDisplay, anchor}) => {
+    if (anchor) {
+      const self = await anchoredSubject(tx, id, anchor, anchor.fromParentId ?? anchor.parentId)
+      if (!self) return false
+      if (anchor.fromParentId !== undefined) {
+        if (!await liveChildAt(tx, anchor.fromParentId, anchor.parentId)) return false
+        await relocateBlock(tx, self, anchor.siblingId, {kind: direction < 0 ? 'last' : 'first'})
+        await revealChildren(tx, anchor.siblingId)
+      } else {
+        await relocateBlock(tx, self, anchor.parentId, {kind: direction < 0 ? 'before' : 'after', siblingId: anchor.siblingId})
+      }
+      return true
+    }
     const self = await requireBlock(tx, id)
     if (self.parentId === null) return false
     // The scope root anchors the view; it can't move within itself.
@@ -772,6 +803,8 @@ interface SplitArgs {
   after: string
   /** Defaults to `siblingBefore`. */
   placement?: SplitPlacement
+  /** The first drawn child when the view leaves earlier children out. */
+  firstChildBeforeId?: string
 }
 
 const splitIntoSiblingBefore = async (tx: Tx, self: BlockData, before: string, after: string): Promise<string> => {
@@ -801,9 +834,10 @@ const splitIntoSiblingBefore = async (tx: Tx, self: BlockData, before: string, a
   })
 }
 
-const splitIntoFirstChild = async (tx: Tx, self: BlockData, before: string, after: string): Promise<string> => {
+const splitIntoFirstChild = async (tx: Tx, self: BlockData, before: string, after: string, firstChildBeforeId?: string): Promise<string> => {
   await tx.update(self.id, {content: before})
-  return tx.run(createChild, {parentId: self.id, content: after, position: {kind: 'first'}, revealParent: true})
+  const position = firstChildBeforeId === undefined ? {kind: 'first' as const} : {kind: 'before' as const, siblingId: firstChildBeforeId}
+  return tx.run(createChild, {parentId: self.id, content: after, position, revealParent: true})
 }
 
 export const split = defineMutator<SplitArgs, string>({
@@ -813,6 +847,7 @@ export const split = defineMutator<SplitArgs, string>({
     before: z.string(),
     after: z.string(),
     placement: z.enum(SPLIT_PLACEMENTS).optional(),
+    firstChildBeforeId: z.string().optional(),
   }),
   resultSchema: z.string(),
   scope: ChangeScope.BlockDefault,
@@ -821,10 +856,10 @@ export const split = defineMutator<SplitArgs, string>({
   // current doc, sliced at the cursor). The mutator does NOT slice
   // self.content — debounced editors can leave SQL stale, and slicing
   // there would split the wrong text and lose the live edits.
-  apply: async (tx, {id, before, after, placement = 'siblingBefore'}) => {
+  apply: async (tx, {id, before, after, placement = 'siblingBefore', firstChildBeforeId}) => {
     const self = await requireBlock(tx, id)
     const newId = placement === 'firstChild'
-      ? await splitIntoFirstChild(tx, self, before, after)
+      ? await splitIntoFirstChild(tx, self, before, after, firstChildBeforeId)
       : await splitIntoSiblingBefore(tx, self, before, after)
     const [beforeId, afterId] = placement === 'firstChild' ? [id, newId] : [newId, id]
     tx.emitEvent(CORE_BLOCK_SPLIT_EVENT, {

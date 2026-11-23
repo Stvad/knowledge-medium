@@ -221,7 +221,7 @@ describe('DefaultBlockRenderer paste handling', () => {
         {/* The scope root is normally set by the panel/top-level surface
             that mounts the block; provide it here so the paste path
             resolves the same scopeRootId production would. */}
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root')}}>
           <ActiveContextsProvider>
             <DefaultBlockRenderer
               block={repo.block('block-1')}
@@ -264,7 +264,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       {decision: {kind: 'split'}, text: 'first\nsecond'},
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE},
+      {scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE},
     )
   })
 
@@ -278,7 +278,9 @@ describe('DefaultBlockRenderer paste handling', () => {
     })
 
     await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
-    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE})
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {
+      scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
+    })
     // A cut leaves the originals in place, so a text paste here would duplicate them.
     // Every mock here is already resolved, so one macrotask runs the handler's
     // whole continuation; the absence checks below can't run before it.

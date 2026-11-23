@@ -1,11 +1,12 @@
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type Tx } from '@/data/api'
 import type { Block } from '@/data/block'
 import { holdsSource } from '@/data/blockTypes'
-import { merge } from '@/data/mutators'
+import { deleteBlock, liveChildAt, merge } from '@/data/mutators'
 import { focusBlock } from '@/data/properties'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
 import { drawnChildrenOf } from '@/data/visibleChildren'
+import { nestedWriteLocation } from '@/utils/drawnWalk'
 import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
 
 /** The Roam rule both merge gestures refuse on: `into` and `from` each show
@@ -34,8 +35,24 @@ export interface MergeUpGesture {
   /** Where both are drawn; its render scope is where `into` takes focus. */
   surface: ListingSurface
   uiStateBlock: Block
+  /** For a member, its preceding sibling and their common data parent. */
+  anchor?: {parentId: string; siblingId: string}
   /** Runs once the merge is not refused, before it writes (the key's preventDefault). */
   onTaken?: () => void
+}
+
+/** Both endpoints must still occupy the captured parent edges when the editor's write commits. */
+export async function mergeCheck(from: Block, into: Block, surface: ListingSurface, anchor?: MergeUpGesture['anchor']) {
+  const [source, destination] = await Promise.all([from.load(), into.load()])
+  const drawn = await nestedWriteLocation(from, surface.renderScopeId)
+  if (!source || !destination || drawn === null) return null
+  const boundary = anchor?.parentId ?? drawn?.boundaryId
+  return async (tx: Tx) => {
+    if (!await liveChildAt(tx, from.id, anchor?.parentId ?? source.parentId, boundary)) return false
+    if (!await liveChildAt(tx, into.id, destination.parentId, boundary)) return false
+    if (!anchor) return source.parentId === null || tx.isDescendantOf(into.id, source.parentId)
+    return !!await liveChildAt(tx, anchor.siblingId, anchor.parentId) && await tx.isDescendantOf(into.id, anchor.siblingId)
+  }
 }
 
 /** Backspace at the start of `from`: its text joins `into`'s, its children
@@ -44,11 +61,13 @@ export interface MergeUpGesture {
  *  and where deleting `from` would be (a merge destroys it). Returns whether
  *  it merged. */
 export const mergeUp = async (
-  {from, into, liveContent, surface, uiStateBlock, onTaken}: MergeUpGesture,
+  {from, into, liveContent, surface, uiStateBlock, onTaken, anchor}: MergeUpGesture,
 ): Promise<boolean> => {
-  await Promise.all([from.load(), into.load()])
-  if (holdsSource(from) || holdsSource(into)) return false
-  if (await bothShowIndependentChildren({into, from}, surface)) return false
+  const current = await mergeCheck(from, into, surface, anchor)
+  if (!current) return false
+  const deleteLeaf = anchor && liveContent === '' &&
+    (await from.repo.query.childIds({id: from.id, propertyChildren: 'all'}).load()).length === 0
+  if (!deleteLeaf && (holdsSource(from) || holdsSource(into) || await bothShowIndependentChildren({into, from}, surface))) return false
   onTaken?.()
   const joinOffset = into.peek()?.content.length ?? 0
   if (!await ensureDeletableThroughUi([from])) return false
@@ -56,10 +75,18 @@ export const mergeUp = async (
   // the merge restores `from` with what was typed.
   flushPendingEditorContent()
   // One transaction: the live text first, so the merge concatenates it.
-  await from.repo.tx(async tx => {
+  const merged = await from.repo.tx(async tx => {
+    if (!await current(tx)) return false
+    if (deleteLeaf) {
+      if (await tx.hasChildren(from.id)) return false
+      await tx.run(deleteBlock, {id: from.id})
+      return true
+    }
     await tx.update(from.id, {content: liveContent})
     await tx.run(merge, {intoId: into.id, fromId: from.id})
+    return true
   }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
+  if (!merged) return false
   await focusBlock(uiStateBlock, into.id, {
     edit: true,
     renderScopeId: surface.renderScopeId,

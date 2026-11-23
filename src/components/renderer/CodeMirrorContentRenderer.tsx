@@ -111,6 +111,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
+    const surface = {scopeRootId: blockContext.scopeRootId, propertyDisplay, renderScopeId}
     const request = editorPasteRequest(content, block, intent, caret)
 
     // The stored row lags the view by the content debounce. Both writes below
@@ -123,10 +124,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
     // its target's content; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
-      const cutPaste = await pasteArmedCut(content.text, block, repo, {
-        scopeRootId: blockContext.scopeRootId,
-        propertyDisplay,
-      })
+      const cutPaste = await pasteArmedCut(content.text, block, repo, surface)
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
           void focusBlock(uiStateBlock, cutPaste.blocks[0].id, {renderScopeId})
@@ -169,22 +167,26 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, editorView.state.doc.toString(), {
+    const source = editorView.state.doc
+    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, source.toString(), {
       from: insertAt.from,
       to: insertAt.to,
     })
     if (!plan) return
 
-    editorView.dispatch({
-      changes: {from: 0, to: editorView.state.doc.length, insert: plan.targetContent},
-      selection: EditorSelection.cursor(plan.focusOffsetInTarget),
-    })
+    // A media capture can let the editor accrue more text after the first flush.
+    flushEditorContent(editorView)
+    const result = await pasteEditModeMultilineText(plan, block, repo, surface)
+    if (!result || editorRef.current?.view !== editorView) return
 
-    const result = await pasteEditModeMultilineText(plan, block, repo, {
-      scopeRootId: blockContext.scopeRootId,
-      propertyDisplay,
-    })
-    if (!result) return
+    // Dispatch only after the tx accepts the placement. A refused paste must
+    // not reach the editor's debounced content write.
+    if (editorView.state.doc === source) {
+      editorView.dispatch({
+        changes: {from: 0, to: source.length, insert: plan.targetContent},
+        selection: EditorSelection.cursor(plan.focusOffsetInTarget),
+      })
+    }
 
     await focusBlock(uiStateBlock, result.focusBlock.id, {
       edit: true,

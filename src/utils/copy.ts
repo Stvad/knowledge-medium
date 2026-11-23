@@ -170,6 +170,7 @@ export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
   properties?: PropertyCopy,
+  boundaryId?: string,
 ): Promise<'cut' | 'empty'> => {
   if (!blockIds.length) return 'empty'
   const first = repo.block(blockIds[0])
@@ -181,6 +182,7 @@ export const cutBlockIdsToClipboard = async (
   await armCut(data.markdown, {
     workspaceId,
     rootIds: blockIds,
+    boundaryId,
     undoTop: repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault),
   })
   return 'cut'

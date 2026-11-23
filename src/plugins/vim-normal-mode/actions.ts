@@ -13,7 +13,7 @@ import {
   previousDrawnStep,
   scopeRootRenderScope,
 } from '@/utils/selection.js'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { insertDrawnBlock } from '@/data/structuralInsert'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
@@ -32,6 +32,13 @@ import {
 } from '@/shortcuts/types.js'
 
 export const JUMP_BLOCK_COUNT = 8
+
+const createAndEdit = async (deps: BlockShortcutDependencies, kind: 'above' | 'below') => {
+  const {block, uiStateBlock} = deps
+  if (!block || !uiStateBlock) return
+  const target = await insertDrawnBlock(block, deps, {kind})
+  if (target) await focusBlock(uiStateBlock, target.id, {edit: target.edit ?? true, renderScopeId: target.renderScopeId})
+}
 
 /**
  * True when the panel's focus has moved off the row this invocation started
@@ -164,17 +171,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'create_block_below_and_edit',
       description: 'Create block below (or as child) and enter edit mode',
       handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock || !deps.scopeRootId) return
-
-        // child-first when the block shows children OR is the scope root
-        // (where a sibling would be created outside the visible surface —
-        // the "invisible block" bug). Otherwise a sibling below.
-        const {createBelowPlacement} = await structuralEditPolicyForBlock(block, deps)
-        const newId = createBelowPlacement === 'child-first'
-          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}, revealParent: true})
-          : await repo.mutate.createSiblingBelow({siblingId: block.id})
-        if (newId) await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
+        if (deps.scopeRootId) await createAndEdit(deps, 'below')
       },
       defaultBinding: {
         keys: 'o',
@@ -272,23 +269,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'create_block_above_and_edit',
       description: 'Create block above (or as child) and enter edit mode',
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        // sibling-above normally, but at the scope root (e.g. a backlink
-        // entry) a sibling above would land outside the visible surface —
-        // the "invisible block" bug — so the policy falls back to a first
-        // child, the only insertion point the surface can render. With no
-        // scope root (imperative/CLI dispatch) the policy yields
-        // 'sibling-above', preserving the plain create-above behaviour.
-        const {createAbovePlacement} = await structuralEditPolicyForBlock(block, deps)
-        const newId = createAbovePlacement === 'child-first'
-          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}, revealParent: true})
-          : await repo.mutate.createSiblingAbove({siblingId: block.id})
-        if (!newId) return
-        await focusBlock(uiStateBlock, newId, {edit: true, renderScopeId: deps.renderScopeId})
-      },
+      handler: (deps: BlockShortcutDependencies) => createAndEdit(deps, 'above'),
       defaultBinding: {
         keys: 'Shift+o',
       },
@@ -301,6 +282,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
           position: 'after',
           scopeRootId,
           propertyDisplay,
+          renderScopeId,
         })
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
@@ -316,6 +298,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
           position: 'before',
           scopeRootId,
           propertyDisplay,
+          renderScopeId,
         })
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },

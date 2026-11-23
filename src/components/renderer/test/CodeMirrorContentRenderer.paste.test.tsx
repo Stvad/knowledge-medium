@@ -72,8 +72,8 @@ vi.mock('@/paste/operations.ts', async importOriginal => {
     ...actual,
     pasteArmedCut: vi.fn(async () => null),
     pasteEditModeMultilineText: vi.fn(async () => null),
-    resolvePasteWithMediaCapture: vi.fn(async (_runtime: unknown, request: {text: string}) => ({
-      decision: {kind: 'split' as const},
+    resolvePasteWithMediaCapture: vi.fn(async (_runtime: unknown, request: {text: string; intent?: 'split' | 'single-block'}) => ({
+      decision: {kind: request.intent ?? 'split'},
       text: request.text,
     })),
   }
@@ -144,7 +144,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
   const renderEditor = ({disableBlockSplit = false} = {}) => {
     const view = render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root', disableBlockSplit}}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), disableBlockSplit}}>
           <ActiveContextsProvider>
             <CodeMirrorContentRenderer block={repo.block('block-1')} />
           </ActiveContextsProvider>
@@ -165,7 +165,9 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     act(() => { dispatchPaste(content, '- cut text') })
 
     await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
-    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE})
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {
+      scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
+    })
     // A cut leaves the originals in place, so a text paste here would duplicate them.
     // Every mock here is already resolved, so one macrotask runs the handler's
     // whole continuation; the absence checks below can't run before it.
@@ -197,6 +199,17 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
 
     await vi.waitFor(() => expect(resolvePasteWithMediaCapture).toHaveBeenCalledTimes(1))
     expect(pasteArmedCut).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a refused multiline paste out of the editor document', async () => {
+    const {content, editorView} = renderEditor()
+
+    await act(async () => { dispatchPaste(content, 'first\nsecond') })
+
+    expect(pasteEditModeMultilineText).toHaveBeenCalledWith(expect.anything(), repo.block('block-1'), repo, {
+      scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
+    })
+    expect(editorView.state.doc.toString()).toBe('Block')
   })
 
   // With the html-document plugin off, a document is edited here as text.

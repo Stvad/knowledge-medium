@@ -11,16 +11,17 @@
  *       x
  *     after
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { ChangeScope, defineQuery, type User } from '@/data/api'
-import { childrenViewFacet } from '@/data/childrenView'
+import { childrenViewFacet, surfaceOwnerFacet, type ChildrenOrder, type ChildrenView, type DrawnChild, type NestedSurface } from '@/data/childrenView'
 import { queriesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { indentDrawnBlock, memberMergePlacement, moveDrawnBlock, outdentDrawnBlock, structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { insertDrawnBlock, type InsertGesture } from '@/data/structuralInsert'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { visibleChildIds } from '@/data/visibleChildren'
@@ -108,5 +109,322 @@ describe('childrenViewFacet', () => {
     expect((await structuralEditPolicyForBlock(owner, {...carrier, renderScopeId: 'outline'})).createBelowPlacement).toBe('child-first')
     expect(await bothShowIndependentChildren({into: repo.block('other'), from: owner}, surfaceIn('bare'))).toBe(false)
     expect(await bothShowIndependentChildren({into: repo.block('other'), from: owner}, surfaceIn('outline'))).toBe(true)
+  })
+
+  it('passes placement to the winning insert hook and focuses its returned id in the source scope', async () => {
+    repo.setRuntimeContributions(childrenViewFacet, 'test.insert', [({parent}) => parent.id === 'owner' && {
+      id: 'test.insert',
+      read: () => ({load: async () => ['a', 'b', 'c']}),
+      insert: async (ctx, request) => {
+        expect(request).toMatchObject({block: {id: 'a'}, gesture: 'below', position: 'after'})
+        return ctx.parent.repo.mutate.createChild({parentId: ctx.parent.id, position: {kind: 'last'}, content: 'Custom insertion'})
+      },
+    }])
+
+    const inserted = await insertDrawnBlock(repo.block('a'), surfaceIn('outline'), {kind: 'below'})
+    expect(inserted?.renderScopeId).toBe('outline')
+    expect(await repo.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', 'b', 'c', inserted?.id])
+    expect((await repo.load(inserted!.id))?.content).toBe('Custom insertion')
+  })
+
+  it.each(['create', 'split'] as const)('anchors a first child on the first drawn member during %s', async kind => {
+    const owner = repo.block('owner')
+    const carrier = {...surfaceIn('elsewhere'), scopeRootId: owner.id}
+    const gesture: InsertGesture = kind === 'create'
+      ? {kind: 'below'}
+      : {kind: 'split', write: (_placement, commit) => commit('ow', 'ner')}
+    const inserted = await insertDrawnBlock(owner, carrier, gesture)
+
+    // The custom view begins at c, with b hidden and a drawn later.
+    expect(await repo.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', 'b', inserted?.id, 'c'])
+    expect((await repo.load(inserted!.id))?.content).toBe(kind === 'split' ? 'ner' : '')
+    expect(owner.peek()?.content).toBe(kind === 'split' ? 'ow' : 'owner')
+  })
+
+  it('refuses first-child split when the first drawn child has moved', async () => {
+    await repo.mutate.move({id: 'c', parentId: 'other', position: {kind: 'last'}})
+    const owner = repo.block('owner')
+    const carrier = {...surfaceIn('elsewhere'), scopeRootId: owner.id}
+    const split: InsertGesture = {kind: 'split', write: (_placement, commit) => commit('ow', 'ner')}
+
+    expect(await insertDrawnBlock(owner, carrier, split)).toBeNull()
+    expect(owner.peek()?.content).toBe('owner')
+    expect(await repo.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', 'b'])
+    expect(await repo.query.childIds({id: 'other', propertyChildren: 'none'}).load()).toEqual(['x', 'c'])
+  })
+
+  it.each(['move', 'delete'] as const)('refuses create and split after the anchor changes by %s', async change => {
+    let release!: () => void
+    let announce!: () => void
+    const resolveView = new Promise<void>(resolve => { release = resolve })
+    const ready = new Promise<void>(resolve => { announce = resolve })
+    let waiting = 0
+    repo.setRuntimeContributions(childrenViewFacet, 'test.delayed-insert', [({parent}) => parent.id === 'owner' && {
+      id: 'test.delayed-insert',
+      read: () => ({load: async () => ['a', 'b', 'c']}),
+      insert: async () => {
+        if (++waiting === 2) announce()
+        await resolveView
+        return undefined
+      },
+    }])
+    const source = repo.block('a')
+    const surface = surfaceIn('outline')
+    const create = insertDrawnBlock(source, surface, {kind: 'above'})
+    const split: InsertGesture = {kind: 'split', write: (_placement, commit) => commit('a', '')}
+    const splitWrite = insertDrawnBlock(source, surface, split)
+    await ready
+    if (change === 'move') {
+      await repo.mutate.move({id: source.id, parentId: 'other', position: {kind: 'last'}})
+    } else {
+      await repo.tx(tx => tx.delete(source.id), {scope: ChangeScope.BlockDefault})
+    }
+    release()
+    expect(await create).toBeNull()
+    expect(await splitWrite).toBeNull()
+    expect(await repo.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['b', 'c'])
+    expect(await repo.query.childIds({id: 'other', propertyChildren: 'none'}).load()).toEqual(change === 'move' ? ['x', 'a'] : ['x'])
+    if (change === 'move') expect(source.peek()?.content).toBe('a')
+  })
+
+  it('refuses a nested write when a higher ancestor leaves the projected member', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'branch', workspaceId: WS, parentId: 'x', orderKey: 'a0'})
+      await tx.create({id: 'leaf', workspaceId: WS, parentId: 'branch', orderKey: 'a0', content: 'leaf'})
+    }, {scope: ChangeScope.BlockDefault})
+    const outer = surfaceIn('outline')
+    const nested: NestedSurface = {kind: 'nested-surface', renderScopeId: 'nested', members: ['x'], order: 'query'}
+    repo.setRuntimeContributions(surfaceOwnerFacet, 'test.nested', [({renderScopeId}) => renderScopeId === 'nested' && {
+      blockId: 'owner', surface: outer,
+    }])
+    let release!: () => void
+    let announce!: () => void
+    const resolveInsert = new Promise<void>(resolve => { release = resolve })
+    const ready = new Promise<void>(resolve => { announce = resolve })
+    repo.setRuntimeContributions(childrenViewFacet, 'test.nested', [({parent}) => {
+      if (parent.id === 'owner') return {id: 'test.nested', read: () => ({load: async () => [nested]})}
+      if (parent.id !== 'branch') return undefined
+      return {
+        id: 'test.branch',
+        read: () => ({load: async () => ['leaf']}),
+        insert: async () => {
+          announce()
+          await resolveInsert
+          return undefined
+        },
+      }
+    }])
+
+    const carrier = {...outer, renderScopeId: 'nested', scopeRootId: 'x'}
+    const leaf = repo.block('leaf')
+    const write = insertDrawnBlock(leaf, carrier, {kind: 'above'})
+    await ready
+    await repo.mutate.move({id: 'branch', parentId: 'other', position: {kind: 'last'}})
+    release()
+    expect(await write).toBeNull()
+    expect(await insertDrawnBlock(leaf, carrier, {kind: 'above'})).toBeNull()
+    expect(await repo.query.childIds({id: 'branch', propertyChildren: 'none'}).load()).toEqual(['leaf'])
+  })
+})
+
+const customList = (owner: string, members: readonly DrawnChild[], order: ChildrenOrder = 'outline') => {
+  repo.setRuntimeContributions(childrenViewFacet, 'test.custom-list', [({parent}) => parent.id === owner && {
+    id: 'custom', order, read: () => ({load: async () => members}),
+  }])
+}
+
+const board = (members: string[], order: ChildrenOrder = 'outline', shared = false, allowsNewMember?: () => boolean, insert?: ChildrenView['insert']) => {
+  repo.setRuntimeContributions(surfaceOwnerFacet, 'test.owner', [({renderScopeId}) =>
+    renderScopeId === 'board' && {blockId: 'owner', surface: surfaceIn('outline')}])
+  repo.setRuntimeContributions(childrenViewFacet, 'test.board', [({parent, surface}) =>
+    parent.id === 'owner' && surface.renderScopeId === 'outline' && {
+      id: 'board', insert, read: () => ({load: async () => [{
+        kind: 'nested-surface' as const, renderScopeId: 'board', order, members, scopeRootId: shared ? 'owner' : undefined,
+        allowsNewMember,
+      }]}),
+    }])
+  return surfaceIn('board')
+}
+const structure = () => sharedDb.db.getAll<{id: string; parent_id: string | null; order_key: string}>(
+  'SELECT id, parent_id, order_key FROM blocks WHERE workspace_id = ? AND deleted = 0 ORDER BY parent_id, order_key, id', [WS],
+)
+
+describe('structural writes on a custom view', () => {
+  it.each([
+    ['foreign result', 'outline', 'x', 'after', {kind: 'below'}],
+    ['own query result', 'query', 'b', 'before', {kind: 'above'}],
+    ['foreign result split', 'outline', 'x', 'first', {
+      kind: 'split', write: (_placement, commit) => commit('', 'x'),
+    } satisfies InsertGesture],
+  ] as const)('refuses delegated placement for %s', async (_label, order, id, position, gesture) => {
+    const insert = vi.fn(async () => ({position}))
+    const surface = board([id], order, false, undefined, insert)
+    const before = await structure()
+    const writes = vi.spyOn(repo, 'tx')
+
+    expect(await insertDrawnBlock(repo.block(id), surface, gesture)).toBeNull()
+    expect(insert).toHaveBeenCalledOnce()
+    expect(writes).not.toHaveBeenCalled()
+    expect(await structure()).toEqual(before)
+    expect((await repo.load(id))?.content).toBe(id)
+  })
+
+  it('uses an explicit board insertion for a projected member', async () => {
+    const surface = board(['x'], 'query', false, undefined, ({parent}) => parent.repo.mutate.createChild({parentId: parent.id}))
+    const result = await insertDrawnBlock(repo.block('x'), surface, {kind: 'below'})
+    expect(result).toMatchObject({renderScopeId: 'board'})
+    expect((await repo.load(result!.id))?.parentId).toBe('owner')
+  })
+
+  it.each([false, true])('keeps default create within the row scope when shared scope is %s', async shared => {
+    const surface = board(['a', 'b'], 'outline', shared)
+    const result = await insertDrawnBlock(repo.block('a'), surface, {kind: 'above'})
+    expect((await repo.load(result!.id))?.parentId).toBe(shared ? 'owner' : 'a')
+    expect((await repo.query.childIds({id: shared ? 'owner' : 'a', propertyChildren: 'none'}).load())[0]).toBe(result!.id)
+  })
+
+  it('a stale occurrence cannot fall back to its ordinary source siblings', async () => {
+    await repo.mutate.createChild({parentId: 'other', id: 'y'})
+    const surface = board(['x'])
+    const before = await structure()
+    await indentDrawnBlock(repo.block('y'), surface)
+    expect(await structure()).toEqual(before)
+    expect(await memberMergePlacement(repo.block('y'), surface)).toBeNull()
+  })
+
+  it('ignores a subject or data parent missing from a partial local tree', async () => {
+    await sharedDb.db.execute("UPDATE blocks SET parent_id = 'missing-parent' WHERE id = 'b'")
+    repo = createTestRepo({db: sharedDb.db, user: USER}).repo
+    repo.setActiveWorkspaceId(WS)
+    expect((await repo.load('b'))?.parentId).toBe('missing-parent')
+    const resolveView = vi.fn(() => null)
+    repo.setRuntimeContributions(childrenViewFacet, 'test.live-parents', [resolveView])
+    const before = await structure()
+    await indentDrawnBlock(repo.block('absent'), surfaceIn('outline'))
+    await indentDrawnBlock(repo.block('b'), surfaceIn('outline'))
+    expect(resolveView).not.toHaveBeenCalled()
+    expect(await structure()).toEqual(before)
+  })
+
+  it.each([
+    ['foreign member', 'x', ['a', 'x'], 'outline'],
+    ['query member owned by its host', 'b', ['a', 'b'], 'query'],
+  ] as const)('refuses a %s before opening a write transaction', async (_, id, ids, order) => {
+    const surface = board([...ids], order)
+    const writes = vi.spyOn(repo, 'tx')
+    await indentDrawnBlock(repo.block(id), surface)
+    expect(writes).not.toHaveBeenCalled()
+    expect(await memberMergePlacement(repo.block(id), surface)).toBeNull()
+  })
+
+  it('a same-scope query refuses reparenting even when all its members are data children', async () => {
+    customList('owner', ['a', 'b', 'c'], 'query')
+    const before = await structure()
+    await indentDrawnBlock(repo.block('b'), surfaceIn('outline'))
+    expect(await structure()).toEqual(before)
+  })
+
+  it('an omitted member stays omitted from a custom list for both indent and move', async () => {
+    customList('owner', ['a', 'c'])
+    const before = await structure()
+    await indentDrawnBlock(repo.block('b'), surfaceIn('outline'))
+    expect(await moveDrawnBlock(repo.block('b'), surfaceIn('outline'), 1)).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('refuses Tab on the visible root even when it has a stored preceding sibling', async () => {
+    const before = await structure()
+    await indentDrawnBlock(repo.block('b'), {...surfaceIn('outline'), scopeRootId: 'b'})
+    expect(await structure()).toEqual(before)
+  })
+
+  it('empty Enter refuses an outdent after the subject leaves its original parent', async () => {
+    const before = await structure()
+    expect(await outdentDrawnBlock(repo.block('a'), surfaceIn('outline'), 'other')).toBeNull()
+    expect(await structure()).toEqual(before)
+  })
+
+  it('refuses to outdent a direct child beyond a root-level panel or projected root', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'result', parentId: null, workspaceId: WS, orderKey: 'b0'})
+      await tx.create({id: 'note', parentId: 'result', workspaceId: WS, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    const before = await structure()
+    expect(await outdentDrawnBlock(repo.block('owner'), surfaceIn('outline'))).toBe(false)
+    const projected = board(['result'])
+    expect(await outdentDrawnBlock(repo.block('note'), {...projected, scopeRootId: 'owner'})).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('a workspace root has no data parent to resolve as a block', async () => {
+    const root = repo.block('page')
+    const getBlock = vi.spyOn(repo, 'block')
+    await indentDrawnBlock(root, {...surfaceIn('outline'), scopeRootId: undefined})
+    expect(getBlock).not.toHaveBeenCalledWith(null)
+  })
+
+  it('a hidden non-root parent has no workspace-root fallback on outdent', async () => {
+    customList('page', ['other', 'after'])
+    const before = await structure()
+    expect(await outdentDrawnBlock(repo.block('a'), surfaceIn('outline'))).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('a full member list refuses to promote a note into it', async () => {
+    const surface = board(['a', 'b'], 'outline', false, () => false)
+    await repo.mutate.createChild({parentId: 'b', id: 'note'})
+    const before = await structure()
+    expect(await outdentDrawnBlock(repo.block('note'), {...surface, scopeRootId: 'b'})).toBeNull()
+    expect(await structure()).toEqual(before)
+  })
+
+  it('a nested member cannot move past the list just because the view also projects its owner’s ancestor', async () => {
+    const surface = board(['page', 'a', 'b'])
+    const before = await structure()
+    expect(await moveDrawnBlock(repo.block('b'), surface, 1)).toBe(false)
+    expect(await outdentDrawnBlock(repo.block('a'), surface)).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('the last note cannot move across the root to the next grid member', async () => {
+    const surface = board(['a', 'b'])
+    await repo.mutate.createChild({parentId: 'a', id: 'note'})
+    const before = await structure()
+    expect(await moveDrawnBlock(repo.block('note'), {...surface, scopeRootId: 'a'}, 1)).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('an opaque next slot cannot send a row into its parent’s next sibling', async () => {
+    customList('owner', ['a', 'b', {kind: 'nested-surface', renderScopeId: 'opaque'}])
+    const before = await structure()
+    expect(await moveDrawnBlock(repo.block('b'), surfaceIn('outline'), 1)).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('only a drawn outline parent order permits a cross-parent move', async () => {
+    customList('page', ['owner', 'other', 'after'], 'derived')
+    const before = await structure()
+    expect(await moveDrawnBlock(repo.block('c'), surfaceIn('outline'), 1)).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('a dispatch without a root has no cross-parent destination', async () => {
+    const before = await structure()
+    expect(await moveDrawnBlock(repo.block('c'), {...surfaceIn('outline'), scopeRootId: undefined}, 1)).toBe(false)
+    expect(await structure()).toEqual(before)
+  })
+
+  it('refuses missing or foreign merge predecessors and delegates shared-root notes to the outline', async () => {
+    let surface = board(['a', 'x', 'b'])
+    const load = vi.spyOn(repo, 'load')
+    expect(await memberMergePlacement(repo.block('a'), surface)).toBeNull()
+    expect(load).not.toHaveBeenCalledWith(undefined)
+    expect(await memberMergePlacement(repo.block('b'), surface)).toBeNull()
+    surface = board(['a', 'b'], 'outline', true)
+    expect(await memberMergePlacement(repo.block('a'), surface)).toBeUndefined()
+    expect(await memberMergePlacement(repo.block('b'), surface)).toBeUndefined()
+    await repo.mutate.createChild({parentId: 'a', id: 'nested-note'})
+    expect(await memberMergePlacement(repo.block('nested-note'), surface)).toBeUndefined()
+    expect(await memberMergePlacement(repo.block('b'), surfaceIn('outline'))).toBeUndefined()
   })
 })

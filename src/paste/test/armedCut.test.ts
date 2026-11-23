@@ -73,13 +73,15 @@ describe('armed cut across tabs (shared localStorage)', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it('a cut armed by another tab is visible here', async () => {
-    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a']})
+  it.each([undefined, 'result'])('a cut armed by another tab retains its boundary (%s)', async boundaryId => {
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], boundaryId})
     const written = [...store.entries()]
     disarmCut()
     // Another tab arming = another writer putting the same record in storage.
     for (const [key, value] of written) store.set(key, value)
-    expect((await matchArmedCut('- a', 'ws-1'))?.kind).toBe('match')
+    const match = await matchArmedCut('- a', 'ws-1')
+    expect(match?.kind).toBe('match')
+    expect(match?.cut.boundaryId).toBe(boundaryId)
   })
 
   it('keeps the cut in memory when storage reads work but writes fail', async () => {

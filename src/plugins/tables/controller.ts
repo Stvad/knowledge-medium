@@ -3,8 +3,9 @@
  *  part of every row renderer's slot identity. Focus is always on a row block
  *  (app focus); only the column is held here. */
 import { ChangeScope } from '@/data/api'
-import { move, revealChildren } from '@/data/mutators'
 import type { Block } from '@/data/block'
+import { createChild, createSiblingAbove, createSiblingBelow, liveChildAt } from '@/data/mutators'
+import type { ChildrenInsertRequest, InsertedBlock } from '@/data/structuralInsert'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
@@ -20,12 +21,12 @@ import { forgetCellEdit, openedCellEdit, reportRefusal } from './cellEdits'
 import { rowNotes } from './childrenViews'
 import { notesInScope, tableNotesScopeId } from './registry'
 import { moveVertical } from '@/plugins/spatial-navigation/actions'
-import { createQueryRow, rowBackfill } from './query/backfill'
+import { createQueryRowInTx, rowBackfill } from './query/backfill'
 import type { QueryTerm } from './query/parse'
 
 export type GridCommand =
   | 'left' | 'right' | 'up' | 'down' | 'next' | 'previous'
-  | 'open' | 'open-start' | 'leave' | 'clear' | 'insert-below' | 'insert-above'
+  | 'open' | 'open-start' | 'leave' | 'clear'
 
 /** What the controller needs of a column. */
 export interface GridColumn {
@@ -54,6 +55,8 @@ const ownControl = (cell: HTMLElement) =>
   [...cell.querySelectorAll<HTMLElement>(CELL_CONTROL_SELECTOR)].find(control => control.closest('[data-table-col]') === cell)
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
+
+type InsertOrigin = Pick<ChildrenInsertRequest, 'data' | 'boundaryId'>
 
 export class GridController {
   private rowIds: readonly string[] = []
@@ -132,37 +135,9 @@ export class GridController {
     return !this.refuseRowPastCap()
   }
 
-  /** A query's rows live anywhere, and are what the query selects: nesting
-   *  one under another, the reverse, or merging two is done in the outline. */
-  refusesUnderQuery(): boolean {
-    if (!this.queryTerms) return false
-    showInfo('A query table’s rows are what the query selects: nest or merge them in the outline.')
-    return true
-  }
-
-  /** Tab on a row: it becomes the last child of the row drawn above it, shown
-   *  under that row. Nothing above the first row: never the view block. */
-  async nestRow(rowId: string): Promise<void> {
-    const parentId = this.rowAbove(rowId)
-    if (!parentId || this.host.repo.isReadOnly || this.refusesUnderQuery()) return
-    await this.host.repo.tx(async tx => {
-      await tx.run(move, {id: rowId, parentId, position: {kind: 'last'}})
-      await revealChildren(tx, parentId)
-    }, {scope: ChangeScope.BlockDefault, description: 'nest table row'})
-  }
-
-  /** Move a row past the one drawn beside it. A sort or a query decides the
-   *  order the rows are drawn in, so there it is refused. */
-  async moveRow(rowId: string, step: -1 | 1): Promise<void> {
-    const row = this.rowIndex.get(rowId)
-    if (row === undefined || this.host.repo.isReadOnly) return
-    if (this.queryTerms || this.sorted) {
-      showInfo(this.queryTerms ? 'A query table’s rows are in the query’s order.' : 'This table is sorted: clear the sort to move rows.')
-      return
-    }
-    const siblingId = this.rowIds[row + step]
-    if (!siblingId) return
-    await this.host.repo.mutate.move({id: rowId, parentId: this.host.id, position: {kind: step < 0 ? 'before' : 'after', siblingId}})
+  get rowOrder() {
+    if (this.hasQuery) return 'query' as const
+    return this.sorted ? 'derived' as const : 'outline' as const
   }
 
   setSurfaces(rows: PropertyDisplayScopeLevels, owner: OutlineSurface | null) {
@@ -240,12 +215,6 @@ export class GridController {
       renderScopeId: this.notesScopeId(aboveId),
       selection: {line: 'last'},
     })
-  }
-
-  /** The row drawn above `rowId`, if any. */
-  rowAbove(rowId: string): string | undefined {
-    const row = this.rowIndex.get(rowId)
-    return row ? this.rowIds[row - 1] : undefined
   }
 
   readonly subscribeCreated = (listener: () => void) => this.createdListeners.add(listener)
@@ -499,9 +468,6 @@ export class GridController {
       case 'clear':
         void this.clear(row).catch(reportRefusal)
         return true
-      case 'insert-below': case 'insert-above':
-        void this.insertRow(row, command === 'insert-below' ? 'below' : 'above')
-        return true
     }
   }
 
@@ -586,59 +552,41 @@ export class GridController {
       {scope: ChangeScope.BlockDefault, description: 'clear table cell'})
   }
 
-  /** A new row beside the focused one, under the host, editing its text. A
-   *  query's rows live anywhere, so there it is a new row like "+ New row". */
-  private async insertRow(row: number, side: 'below' | 'above'): Promise<void> {
-    if (this.queryTerms) return this.appendRow()
-    const rowId = this.rowIds[row]
-    const repo = this.host.repo
-    if (!rowId || repo.isReadOnly || this.refuseRowPastCap()) return
-    const id = side === 'below'
-      ? await repo.mutate.createSiblingBelow({siblingId: rowId})
-      : await repo.mutate.createSiblingAbove({siblingId: rowId})
-    if (id) await this.editNewRow(id)
+  /** Place the first row above existing rows, after the view machinery. */
+  insertFirstRow(origin?: InsertOrigin): Promise<InsertedBlock | null> {
+    return this.insertNewRow(this.rowIds[0], 'before', origin)
   }
 
-  /** A new first row, editing its text: what the outline's "create below" makes
-   *  on a block that shows its children. Placed above the first row rather than
-   *  as the host's first child, so the view block stays first. */
-  insertFirstRow(): Promise<void> {
-    return this.rowIds.length > 0 ? this.insertRow(0, 'above') : this.appendRow()
-  }
-
-  /** A new last row, editing its text. Under a query it carries what the
-   *  query implies, so it matches when it can (`./query/backfill`). */
   async appendRow(): Promise<void> {
+    const target = await this.insertNewRow(undefined, 'after')
+    if (target) await focusBlock(this.uiStateBlock, target.id, {edit: target.edit, renderScopeId: target.renderScopeId})
+  }
+
+  /** A query places a sibling request as a new query row. The origin and
+   *  placement anchor are checked again in the writing transaction. */
+  async insertNewRow(rowId: string | undefined, side: 'before' | 'after', origin?: InsertOrigin): Promise<InsertedBlock | null> {
     const repo = this.host.repo
-    if (repo.isReadOnly || this.refuseRowPastCap()) return
-    const id = this.queryTerms
-      ? await this.createQueryRow(this.queryTerms)
-      : await repo.mutate.createChild({parentId: this.host.id, position: {kind: 'last'}})
-    if (!id) return
-    if (this.queryTerms) {
+    if (repo.isReadOnly || !this.allowsNewRow()) return null
+    const terms = this.queryTerms
+    const hostId = this.host.id
+    const id = await repo.tx(async tx => {
+      if (origin && !await liveChildAt(tx, origin.data.id, origin.data.parentId, origin.boundaryId)) return null
+      if (terms) return createQueryRowInTx(repo, tx, hostId, rowBackfill(terms))
+      if (rowId === undefined) return tx.run(createChild, {parentId: hostId, position: {kind: 'last'}})
+      if (!await liveChildAt(tx, rowId, hostId)) return null
+      return tx.run(side === 'before' ? createSiblingAbove : createSiblingBelow, {siblingId: rowId})
+    }, {scope: ChangeScope.BlockDefault, description: 'new table row'}).catch(error => {
+      if (!terms) throw error
+      showError(`Could not add a row: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    })
+    if (id === null) return null
+    if (terms) {
       this.created = [...this.created, id]
       this.createdListeners.notify()
     }
-    await this.editNewRow(id)
-  }
-
-  /** The query's parent can be gone or read-only by now; the transaction then
-   *  writes nothing, and the user is told. */
-  private async createQueryRow(terms: readonly QueryTerm[]): Promise<string | undefined> {
-    try {
-      return await createQueryRow(this.host.repo, this.host.id, rowBackfill(terms))
-    } catch (error) {
-      showError(`Could not add a row: ${error instanceof Error ? error.message : String(error)}`)
-      return undefined
-    }
-  }
-
-  /** A new row has only its text to fill in, in the column that shows it. A
-   *  view with no such column focuses the row instead: its text has nowhere
-   *  to be edited. */
-  private async editNewRow(id: string) {
     const content = this.columns.findIndex(column => column.fieldId === null)
     if (content >= 0) this.setColumn(content)
-    await focusBlock(this.uiStateBlock, id, {edit: content >= 0, renderScopeId: this.renderScopeId})
+    return {id, edit: content >= 0, renderScopeId: this.renderScopeId}
   }
 }

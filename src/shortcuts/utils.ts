@@ -1,4 +1,7 @@
 import type { Block } from '@/data/block'
+import { listingSurfaceOf } from '@/data/childrenView'
+import { outlineSurfaceOf, type SurfaceCarrier } from '@/data/outlineSurface'
+import { peekFocusedBlockLocation } from '@/data/properties'
 import {
   ActionConfig,
   ActionContextType,
@@ -10,6 +13,7 @@ import {
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
+import { surfaceForFocus } from '@/utils/drawnWalk'
 import { invokeAction } from './actionDispatch.ts'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
@@ -136,6 +140,15 @@ export interface ApplyToAllOptions {
   applyInReverseOrder?: boolean
 }
 
+/** The panel provides multi-select dependencies. Focus identifies the selection's rendered occurrence. */
+export async function surfaceForSelection(deps: MultiSelectModeDependencies): Promise<SurfaceCarrier> {
+  const surface = outlineSurfaceOf(deps)
+  const {uiStateBlock} = deps
+  const focused = peekFocusedBlockLocation(uiStateBlock)
+  if (surface && focused) return surfaceForFocus(uiStateBlock.repo.block(focused.blockId), focused.renderScopeId, surface)
+  return surface ?? listingSurfaceOf(deps)
+}
+
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
   {applyInReverseOrder}: ApplyToAllOptions = { applyInReverseOrder: false},
@@ -147,7 +160,8 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock, scopeRootId, propertyDisplay} = multiSelectDeps
+    const {selectedBlocks, uiStateBlock} = multiSelectDeps
+    const surface = await surfaceForSelection(multiSelectDeps)
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
@@ -168,8 +182,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
         const originalDeps = {
           block,
           uiStateBlock,
-          scopeRootId,
-          propertyDisplay,
+          ...surface,
         } as ShortcutDependenciesMap[T]
 
         await (runtime

@@ -10,7 +10,10 @@ import type { Block } from '@/data/block'
 import { childrenViewFacet, surfaceOwnerFacet, type ChildrenView, type NestedSurface } from '@/data/childrenView'
 import { queriesFacet } from '@/data/facets'
 import { hasBlockType } from '@/data/properties'
+import type { ChildrenInsertDecision, ChildrenInsertRequest } from '@/data/structuralInsert'
 import type { AppExtension } from '@/facets/facet'
+import { showInfo } from '@/utils/toast'
+import type { GridController } from './controller'
 import { gridInScope, gridOfHost, notesInScope, tableRenderScopeId } from './registry'
 import { hostChildrenQuery, queryFieldIdOf, TABLE_TYPE } from './schema'
 
@@ -50,7 +53,7 @@ const hostMembers = async (parent: Block, data: BlockData, renderScopeId: string
   const surface: NestedSurface = {
     kind: 'nested-surface',
     renderScopeId: tableRenderScopeId(renderScopeId, parent.id),
-    ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope}),
+    ...(grid && {members: grid.rows, order: grid.rowOrder, allowsNewMember: () => grid.allowsNewRow(), propertyDisplay: grid.rowsDisplayScope}),
   }
   const hasQuery = grid?.hasQuery
   const fieldId = queryFieldIdOf(repo.propertyDefinitions)
@@ -63,26 +66,65 @@ const hostMembers = async (parent: Block, data: BlockData, renderScopeId: string
   return [...fields, surface, ...outside]
 }
 
+async function insertInGrid(grid: GridController, request: ChildrenInsertRequest): Promise<ChildrenInsertDecision | null | undefined> {
+  const {block, data, gesture, surface, position} = request
+  if (surface.renderScopeId !== grid.renderScopeId) {
+    if (block.id !== grid.host.id || position !== 'first') return undefined
+    if (gesture === 'split') {
+      showInfo('Enter at the end of a table’s title adds a row; its title does not split.')
+      return null
+    }
+    return grid.insertFirstRow(request)
+  }
+
+  const isRow = grid.isRow(block.id)
+  const isVimCreate = gesture === 'above' || gesture === 'below'
+  // A scalar cell's editing root belongs to its row. Notes and list members
+  // insert on their own outline.
+  if (!isRow && !(isVimCreate && block.id === surface.scopeRootId)) return undefined
+  const rowIndex = grid.rowOf(block.id)
+  if (rowIndex === undefined || (isRow && !grid.hasQuery && data.parentId !== grid.host.id)) return null
+  if (gesture === 'split') {
+    if (grid.hasQuery) {
+      showInfo('A query table’s row splits in the outline.')
+      return null
+    }
+    if (!grid.allowsNewRow()) return null
+    return {position: 'before'}
+  }
+  if (!isVimCreate && position === 'first') {
+    return {position, renderScopeId: grid.notesScopeId(block.id)}
+  }
+  return grid.insertNewRow(grid.rows[rowIndex], gesture === 'above' ? 'before' : 'after', request)
+}
+
 const viewOf = (parent: Block, data: BlockData, renderScopeId: string | undefined): ChildrenView | null => {
   if (renderScopeId === undefined) return null
   const notes = notesInScope(renderScopeId)
-  if (notes?.rowId === parent.id) return {id: 'tables.row', read: () => rowNotes(parent, notes.grid.rows)}
+  if (notes?.rowId === parent.id) return {id: 'tables.row', order: 'outline', read: () => rowNotes(parent, notes.grid.rows)}
   const grid = gridInScope(renderScopeId)
   if (grid?.isRow(parent.id)) {
     const notesScope = grid.notesScopeId(parent.id)
-    if (notesScope === renderScopeId) return {id: 'tables.row', read: () => rowNotes(parent, grid.rows)}
+    if (notesScope === renderScopeId) return {id: 'tables.row', order: 'outline', read: () => rowNotes(parent, grid.rows)}
     const surface: NestedSurface = {
-      kind: 'nested-surface', renderScopeId: notesScope,
+      kind: 'nested-surface', renderScopeId: notesScope, order: 'outline',
       scopeRootId: parent.id, propertyDisplay: grid.rowsDisplayScope,
     }
     const load = async () => {
       const members = await rowNotes(parent, grid.rows).load()
       return members.length > 0 ? [{...surface, members}] : []
     }
-    return {id: 'tables.row', read: () => ({load})}
+    return {id: 'tables.row', order: 'outline', read: () => ({load})}
   }
   return hasBlockType(data, TABLE_TYPE)
-    ? {id: 'tables.host', read: () => ({load: () => hostMembers(parent, data, renderScopeId)})}
+    ? {
+      id: 'tables.host', order: 'outline',
+      read: () => ({load: () => hostMembers(parent, data, renderScopeId)}),
+      insert: async (_ctx, request) => {
+        const grid = gridOfHost(renderScopeId, parent.id)
+        return grid && insertInGrid(grid, request)
+      },
+    }
     : null
 }
 

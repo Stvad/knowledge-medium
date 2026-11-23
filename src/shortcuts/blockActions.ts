@@ -18,7 +18,7 @@ import {
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { outlineSurfaceOf, type OutlineSurface } from '@/data/outlineSurface.js'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { indentDrawnBlock, moveDrawnBlock, outdentDrawnBlock } from '@/data/structuralEditPolicy.js'
 import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
   ActionConfig,
@@ -88,17 +88,6 @@ const writeToClipboard = (text: string): void => {
   void writeTextToClipboard(text)
 }
 
-/** Move `block` one step up (-1) or down (+1) in the visible outline,
- *  crossing parent boundaries Roam/org-style and bounded by the
- *  surface's scope root. Delegates the tree logic to the
- *  `core.moveVertical` mutator (one transaction, undoable as a unit). */
-const reorderBlock = async (
-  repo: Repo,
-  direction: -1 | 1,
-  {block, scopeRootId, propertyDisplay}: BlockShortcutDependencies,
-): Promise<boolean> =>
-  repo.mutate.moveVertical({id: block.id, direction, scopeRootId, propertyDisplay})
-
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
     requestEditorFocus(uiStateBlock)
@@ -163,12 +152,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Indent block',
     icon: IndentIncrease,
     handler: async (deps: BlockShortcutDependencies) => {
-      // No-op on a scope root: indenting it would reparent the visible
-      // root under a sibling that lives outside the surface. The
-      // mutator separately no-ops when there's no previous sibling.
-      const {canIndent} = await structuralEditPolicyForBlock(deps.block, deps)
-      if (!canIndent) return
-      await repo.mutate.indent({id: deps.block.id, propertyDisplay: deps.propertyDisplay})
+      await indentDrawnBlock(deps.block, deps)
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -184,16 +168,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Outdent block',
     icon: IndentDecrease,
     handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock, scopeRootId, propertyDisplay} = deps
+      const {block, uiStateBlock, scopeRootId} = deps
       if (!scopeRootId) return
-
-      // Don't outdent the scope root itself; the mutator additionally
-      // refuses when the block is a direct child of the scope root
-      // (outdenting would escape the visible subtree).
-      const {canOutdent} = await structuralEditPolicyForBlock(block, deps)
-      if (!canOutdent) return
-
-      await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})
+      await outdentDrawnBlock(block, deps)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -209,7 +186,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ArrowUp,
     handler: async (deps: BlockShortcutDependencies) => {
       if (!deps.block) return
-      await withRowSlide(() => reorderBlock(repo, -1, deps))
+      await withRowSlide(() => moveDrawnBlock(deps.block, deps, -1))
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -226,7 +203,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ArrowDown,
     handler: async (deps: BlockShortcutDependencies) => {
       if (!deps.block) return
-      await withRowSlide(() => reorderBlock(repo, 1, deps))
+      await withRowSlide(() => moveDrawnBlock(deps.block, deps, 1))
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {

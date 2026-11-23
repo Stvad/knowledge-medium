@@ -38,10 +38,7 @@ export const visibleChildIds = async (
 ): Promise<string[]> =>
   (await drawnChildrenOf(parent, surface)).filter((child): child is string => typeof child === 'string')
 
-/** The property-display view of {@link visibleChildIds} inside a transaction.
- *  A plugin's view is not consulted here (a transaction cannot read a query
- *  handle), so a gesture on a block a plugin's view lists differently is that
- *  plugin's to handle (`childrenViewFacet`). */
+/** The transaction-local property-display list for writes without a drawn anchor. */
 export const visibleChildrenOf = async (
   tx: Tx,
   parentId: string | null,

@@ -70,10 +70,13 @@ function slotsOf(members: readonly DrawnChild[], withinScope = false): Slot[] {
 
 /** Only actual children of the owner may share its structural editing root.
  *  A projected member keeps its own boundary even under a shared-root declaration. */
+export const memberRootOf = (ownerId: string, nested: NestedSurface, member: Pick<BlockData, 'id' | 'parentId'>): string =>
+  nested.scopeRootId === ownerId && member.parentId === ownerId ? ownerId : member.id
+
 async function memberRoot(owner: Block, nested: NestedSurface, id: string): Promise<string> {
   if (nested.scopeRootId !== owner.id) return id
-  if ((await owner.repo.load(id))?.parentId !== owner.id) return id
-  return owner.id
+  const member = await owner.repo.load(id)
+  return member ? memberRootOf(owner.id, nested, member) : id
 }
 
 async function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): Promise<DrawnLocation> {
@@ -89,7 +92,7 @@ async function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): Pro
   }
 }
 
-const ownerOf = (repo: Repo, renderScopeId: string | undefined) =>
+export const ownerOf = (repo: Repo, renderScopeId: string | undefined) =>
   renderScopeId === undefined ? undefined : repo.facetRuntime?.read(surfaceOwnerFacet)({repo, renderScopeId})
 
 /** Declared surfaces participate in their owner's outline. An undeclared
@@ -105,7 +108,7 @@ export const scopeRootRenderScope = (repo: Repo, scopeRootId: string, renderScop
   return owner?.blockId === scopeRootId ? owner.surface.renderScopeId : renderScopeId
 }
 
-async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
+export async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
   const owner = ownerOf(repo, renderScopeId)
   if (!owner) return null
   const parent = {block: repo.block(owner.blockId), surface: owner.surface}
@@ -113,6 +116,28 @@ async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
   const nested = members.find((member): member is NestedSurface =>
     typeof member !== 'string' && member.renderScopeId === renderScopeId)
   return nested ? {nested, parent, members} : null
+}
+
+/** Undefined for the ordinary outline, null for an occurrence whose member is no longer drawn. */
+export async function nestedWriteLocation(block: Block, renderScopeId: string | undefined) {
+  if (!ownerOf(block.repo, renderScopeId)) return undefined
+  const drawn = await declarationOf(block.repo, renderScopeId)
+  if (!drawn) return null
+  const {nested, parent} = drawn
+  const member = nested.members?.includes(block.id)
+    ? block.peek() ?? await block.load()
+    : (await block.repo.query.ancestors({id: block.id}).load()).ancestors.find(row => nested.members?.includes(row.id))
+  if (!member) return null
+  const boundaryId = nested.order === 'query' ? member.id : memberRootOf(parent.block.id, nested, member)
+  return {...drawn, memberId: member.id, memberParentId: member.parentId, boundaryId}
+}
+
+/** A projected result bounds moves. Its own nested surfaces (such as row notes) inherit that boundary. */
+export async function foreignResultRootOf(location: Awaited<ReturnType<typeof nestedWriteLocation>>): Promise<string | null | undefined> {
+  if (!location) return location
+  const {memberParentId, memberId, parent} = location
+  if (memberParentId !== parent.block.id) return memberId
+  return foreignResultRootOf(await nestedWriteLocation(parent.block, parent.surface.renderScopeId))
 }
 
 /** Panel-level dispatch supplies the panel surface even when focus belongs
