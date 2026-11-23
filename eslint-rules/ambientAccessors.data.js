@@ -43,7 +43,7 @@ export const generatedEntries = [
     message: 'getActiveUserId() reads the ambient active-user global. Use the injected channel instead: repo.user.id (a Repo/Block is already in scope at every call site) or useUser() in a component.',
     allowIn: [
       'src/data/repoProvider.ts',
-      'src/plugins/attachments/assetUpload.ts',
+      'src/plugins/attachments/browserMedia.ts',
       'src/plugins/attachments/assetResolver.ts',
     ],
   },

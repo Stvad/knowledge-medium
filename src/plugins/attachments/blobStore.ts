@@ -78,7 +78,7 @@ export interface BlobStore {
    *  never actually saw was gone. NOTE this can't distinguish a genuinely-absent object
    *  from an RLS-DENIED one: Supabase Storage hides existence, so an unauthorized download
    *  returns a 404-shape too, which surfaces here as `null` ("path free"). That's benign
-   *  for recovery — the resulting re-drive is `isActiveUser`-gated (no PUT under the wrong
+   *  for recovery — the resulting re-drive is `canUpload`-gated (no PUT under the wrong
    *  session) and self-corrects via the drain's 409-verify. (This is the same direct RLS
    *  GET as {@link get}; the split is purely about turning the 404 into a value instead of
    *  a throw, which recovery branches on.) */
@@ -108,6 +108,10 @@ export interface SupabaseBlobStoreDeps {
    *  past the probe and is handled as a transient '400' by the classifier.) */
   getAccessToken: () => Promise<string | null>
 }
+
+/** Read the session used by this client's storage requests. */
+export const sessionAccessToken = async (client: SupabaseClient | null): Promise<string | null> =>
+  client ? (await client.auth.getSession()).data.session?.access_token ?? null : null
 
 // Storage error shapes vary by storage-api version. supabase-js surfaces
 // `statusCode = body.statusCode ?? body.code ?? String(httpStatus)` alongside a

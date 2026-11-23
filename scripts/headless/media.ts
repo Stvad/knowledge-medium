@@ -4,7 +4,7 @@ import type {SupabaseClient} from '@supabase/supabase-js'
 import type {Repo} from '@/data/repo'
 import {fetchWorkspaceConversionState} from '@/data/workspaceConversion'
 import type {AgentMedia} from '@/plugins/agent-runtime/protocol'
-import {createSupabaseBlobStore, NO_REMOTE_BLOB_STORE} from '@/plugins/attachments/blobStore'
+import {createSupabaseBlobStore, NO_REMOTE_BLOB_STORE, sessionAccessToken} from '@/plugins/attachments/blobStore'
 import {createMediaLanes, type MediaLaneDeps} from '@/plugins/attachments/mediaLanes'
 import {SqliteByteUploadStore} from '@/plugins/attachments/uploadStore'
 import {FsByteStore} from './byteStore'
@@ -16,20 +16,22 @@ export const MEDIA_DIR = 'media'
 const MEDIA_DRAIN_INTERVAL_MS = 5 * 60 * 1000
 
 /** What the host's media lanes reach beyond the device. */
-export type HostMediaRemote = Pick<MediaLaneDeps, 'blobStore' | 'readLiveWorkspace'>
+export type HostMediaRemote = Pick<MediaLaneDeps, 'blobStore' | 'getAccessToken' | 'readLiveWorkspace'>
 
 /** `client` is the app's signed-in singleton, which the live mode read also uses. */
-export const supabaseMediaRemote = (client: SupabaseClient): HostMediaRemote => ({
-  blobStore: createSupabaseBlobStore({
-    client,
-    getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
-  }),
-  readLiveWorkspace: workspaceId => fetchWorkspaceConversionState(workspaceId),
-})
+export const supabaseMediaRemote = (client: SupabaseClient): HostMediaRemote => {
+  const getAccessToken = () => sessionAccessToken(client)
+  return {
+    blobStore: createSupabaseBlobStore({client, getAccessToken}),
+    getAccessToken,
+    readLiveWorkspace: fetchWorkspaceConversionState,
+  }
+}
 
 /** For a host started without one: reads miss, and uploads stay pending. */
 export const NO_MEDIA_REMOTE: HostMediaRemote = {
   blobStore: NO_REMOTE_BLOB_STORE,
+  getAccessToken: async () => null,
   readLiveWorkspace: async () => ({kind: 'unavailable', error: new Error('This host has no media remote')}),
 }
 
@@ -50,6 +52,7 @@ export function openHostMedia({db, stateDir, userId, keys, writeRefusal, ...remo
     byteStore: new FsByteStore(join(stateDir, MEDIA_DIR)),
     uploadStore: new SqliteByteUploadStore(db),
     canDrain: () => writeRefusal() === null,
+    exclusive: work => work(),
   })
   let timer: ReturnType<typeof setInterval> | undefined
   let reconciling: Promise<void> | undefined

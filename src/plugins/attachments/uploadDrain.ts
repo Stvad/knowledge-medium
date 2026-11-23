@@ -84,9 +84,8 @@ export interface UploadDrainDeps {
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   /** The server's workspace row read NOW (`fetchWorkspaceConversionState`). */
   readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
-  /** May the bound user still upload? A session hold defers without consuming
-   *  the record's retry budget. Defaults to always-active. */
-  readonly isActiveUser?: () => boolean
+  /** Per-record write gate. See {@link import('./mediaLanes.js').MediaLaneDeps.canDrain}. Defaults to true. */
+  readonly canUpload?: () => boolean
   readonly now?: () => number
   readonly maxAttempts?: number
   readonly maxAgeMs?: number
@@ -109,7 +108,7 @@ interface DrainOneCtx {
   readonly getCek: GetCek
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
   readonly readLiveWorkspace: (workspaceId: string) => Promise<WorkspaceConversionRead>
-  readonly isActiveUser: () => boolean
+  readonly canUpload: () => boolean
   readonly now: () => number
   readonly maxAttempts: number
   readonly maxAgeMs: number
@@ -156,8 +155,8 @@ const drainOne = async (
   rec: ByteUploadRecord,
   ctx: DrainOneCtx,
 ): Promise<DrainOutcome> => {
-  // (0) The queued user's session must still be eligible for upload.
-  if (!ctx.isActiveUser()) return 'deferred'
+  // (0) Check upload permission before processing the record.
+  if (!ctx.canUpload()) return 'deferred'
 
   // (1) Can we encode for this workspace right now? defer/unexpected → leave pending.
   const mode = materializabilityToMode(await ctx.getMaterializability(rec.workspaceId))
@@ -210,7 +209,7 @@ const drainOne = async (
     return 'uploaded'
   } catch (err) {
     // The blob store may refuse a PUT after the session gate closes mid-record.
-    if (!ctx.isActiveUser()) return 'deferred'
+    if (!ctx.canUpload()) return 'deferred'
     if (err instanceof BlobPutError) {
       if (err.permanent) {
         await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
@@ -246,7 +245,7 @@ const verifyExistingOrQuarantine = async (
   try {
     stored = await ctx.blobStore.get(rec.workspaceId, objectKey)
   } catch {
-    if (!ctx.isActiveUser()) return 'deferred'
+    if (!ctx.canUpload()) return 'deferred'
     return retryOrFail(userId, rec, ctx) // exists, but the verify read failed — transient
   }
   const verified = await verifyObjectBytes(stored, mode, ctx.getCek, rec)
@@ -269,7 +268,7 @@ export const drainUploads = async (userId: string, deps: UploadDrainDeps): Promi
     getCek: deps.getCek,
     getContentKeyHmac: deps.getContentKeyHmac,
     readLiveWorkspace: deps.readLiveWorkspace,
-    isActiveUser: deps.isActiveUser ?? (() => true),
+    canUpload: deps.canUpload ?? (() => true),
     now: deps.now ?? (() => Date.now()),
     maxAttempts: deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
     maxAgeMs: deps.maxAgeMs ?? DEFAULT_MAX_AGE_MS,

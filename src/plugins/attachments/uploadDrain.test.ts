@@ -194,7 +194,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
       throw new Error('verification read failed')
     })
 
-    const summary = await drainUploads(USER, deps({ isActiveUser: () => writable, maxAttempts: 1 }))
+    const summary = await drainUploads(USER, deps({ canUpload: () => writable, maxAttempts: 1 }))
 
     expect(get).toHaveBeenCalledOnce()
     expect(summary).toEqual({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })
@@ -239,7 +239,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     await store.promote(USER, BLOCK)
     await byteStore.put(USER, WS, KEY, bytes(8))
 
-    const summary = await drainUploads(USER, deps({ isActiveUser: () => false }))
+    const summary = await drainUploads(USER, deps({ canUpload: () => false }))
 
     expect(summary).toMatchObject({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })
     expect(blobStore.puts).toHaveLength(0) // never touched Storage under the wrong account
@@ -300,7 +300,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
       throw new BlobPutError('access denied', true, 403)
     })
 
-    const summary = await drainUploads(USER, deps({ isActiveUser: () => writable }))
+    const summary = await drainUploads(USER, deps({ canUpload: () => writable }))
 
     expect(put).toHaveBeenCalledOnce()
     expect(summary).toEqual({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })

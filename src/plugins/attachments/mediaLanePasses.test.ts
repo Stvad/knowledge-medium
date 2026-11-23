@@ -11,7 +11,10 @@ const contentKey = (n: number) => String(n).repeat(64)
 const setup = () => {
   const uploadStore = new InMemoryByteUploadStore()
   const byteStore = new InMemoryByteStore()
-  const open = (blobStore: Partial<BlobStore>, hooks: Partial<Pick<MediaLaneDeps, 'exclusive' | 'afterPass' | 'canDrain'>> = {}) =>
+  const open = (
+    blobStore: Partial<BlobStore>,
+    options: Partial<Pick<MediaLaneDeps, 'exclusive' | 'afterPass' | 'canDrain' | 'getAccessToken'>> = {},
+  ) =>
     createMediaLanes({
       userId: USER,
       uploadStore,
@@ -27,7 +30,9 @@ const setup = () => {
         state: { encryptionMode: 'none', conversionPhase: null, wkCanary: null, ownerUserId: USER },
       }),
       canDrain: () => true,
-      ...hooks,
+      exclusive: work => work(),
+      getAccessToken: async () => 'test-token',
+      ...options,
     })
   const enqueue = async (n: number) => {
     const key = contentKey(n)
@@ -69,7 +74,7 @@ it('probes failed uploads and drains requeued bytes in one lock acquisition', as
     },
   })
 
-  await lanes.recover(async () => 'test-token')
+  await lanes.recover()
 
   expect(events).toEqual(['acquire', `probe:${contentKey(1)}`, `put:${contentKey(1)}`, 'release'])
   expect(await uploadStore.get(USER, id)).toBeNull()
@@ -80,9 +85,9 @@ it('keeps a failed record quarantined when recovery has no session token', async
   const id = await enqueue(1)
   await uploadStore.markFailed(USER, id)
   const probe = vi.fn(async () => null)
-  const lanes = open({ probe, put: async () => 'written' })
+  const lanes = open({ probe, put: async () => 'written' }, { getAccessToken: async () => null })
 
-  await lanes.recover(async () => null)
+  await lanes.recover()
 
   expect(probe).not.toHaveBeenCalled()
   expect(await uploadStore.get(USER, id)).toMatchObject({ status: 'failed' })
@@ -96,7 +101,7 @@ it('skips the recovery lock and status refresh while uploads are held', async ()
   const afterPass = vi.fn(async () => {})
   const lanes = open({}, { canDrain: () => false, exclusive, afterPass })
 
-  await lanes.recover(async () => 'test-token')
+  await lanes.recover()
 
   expect(exclusive).not.toHaveBeenCalled()
   expect(afterPass).not.toHaveBeenCalled()

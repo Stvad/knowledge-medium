@@ -5,13 +5,11 @@ import {
   getActiveSyncResolver,
   getActiveUserId,
 } from '@/data/repoProvider.js'
-import { buildBlobStore, getMediaLanesForUser } from './assetUpload.js'
+import { buildBlobStore, getMediaLanesForUser } from './browserMedia.js'
 import { getByteStore } from './byteStore.js'
 import { createAssetResolver, type AssetResolver } from './resolver.js'
 
 let singleton: AssetResolver | null = null
-
-export { buildBlobStore, remoteSyncGated } from './assetUpload.js'
 
 export const getAssetResolver = (): AssetResolver => {
   if (singleton) return singleton
@@ -28,5 +26,6 @@ export const getAssetResolver = (): AssetResolver => {
   return singleton
 }
 
+/** The per-user and ambient resolvers coalesce separately, so an account switch can cost a duplicate fetch. */
 export const getAssetResolverForUser = (userId: string): AssetResolver =>
   getMediaLanesForUser(userId).resolver
