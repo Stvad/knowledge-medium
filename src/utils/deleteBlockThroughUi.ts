@@ -22,7 +22,7 @@
  * discipline that's checked beats discipline that's remembered.
  */
 import { ChangeScope, type SubtreeRow } from '@/data/api'
-import { deleteBlock, liveChildAt } from '@/data/mutators'
+import { deleteBlock, type OccurrenceEdge } from '@/data/mutators'
 import type { Block } from '@/data/block.js'
 import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
@@ -72,12 +72,12 @@ export const deleteBlockThroughUi = async (
 /** Empty Backspace may wait for confirmation; the captured occurrence must survive until deletion. */
 export async function deleteAtOccurrenceThroughUi(
   block: Block,
-  expected: {parentId: string | null; boundaryId?: string; foreignRootId?: string; isCurrent: () => boolean},
+  expected: OccurrenceEdge & {isCurrent: () => boolean},
   beforeWrite: () => Promise<void>,
 ): Promise<boolean> {
   if (!await confirmTargets([block], beforeWrite)) return false
   return block.repo.tx(async tx => {
-    if (!await liveChildAt(tx, block.id, expected.parentId, expected.boundaryId, expected.foreignRootId) || !expected.isCurrent()) return false
+    if (!await expected.currentRow(tx) || !expected.isCurrent()) return false
     await tx.run(deleteBlock, {id: block.id})
     return true
   }, {scope: ChangeScope.BlockDefault, description: 'remove empty block'})

@@ -29,7 +29,7 @@ export interface ArmedCut {
   readonly workspaceId: string
   readonly rootIds: readonly string[]
   /** A cut from a projected result can complete only inside its subtree. */
-  readonly boundaryId?: string
+  readonly foreignRootId?: string
   /** SHA-256 of the clipboard text the cut wrote — never the text itself,
    *  so cut content doesn't sit in localStorage. */
   readonly textDigest: string
@@ -96,12 +96,18 @@ const writeRaw = (raw: string | null): void => {
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(item => typeof item === 'string' && item.length > 0)
 
+/** The clipboard record is shared across tabs. Keep its persisted field name stable. */
+type StoredArmedCut = Omit<ArmedCut, 'foreignRootId'> & {boundaryId?: string}
+
+const serializeCut = ({foreignRootId, ...cut}: ArmedCut): string =>
+  JSON.stringify({...cut, boundaryId: foreignRootId} satisfies StoredArmedCut)
+
 /** Another build (or a hand edit) may have written the key, so anything not
  *  exactly this shape reads as "nothing armed". */
 const parse = (raw: string | null): ArmedCut | null => {
   if (raw === null) return null
   try {
-    const value = JSON.parse(raw) as Partial<ArmedCut>
+    const value = JSON.parse(raw) as Partial<StoredArmedCut>
     if (typeof value.cutId !== 'string' || !value.cutId) return null
     if (typeof value.workspaceId !== 'string' || !value.workspaceId) return null
     if (typeof value.textDigest !== 'string' || !value.textDigest) return null
@@ -111,7 +117,7 @@ const parse = (raw: string | null): ArmedCut | null => {
       cutId: value.cutId,
       workspaceId: value.workspaceId,
       rootIds: value.rootIds,
-      ...(value.boundaryId === undefined ? {} : {boundaryId: value.boundaryId}),
+      ...(value.boundaryId === undefined ? {} : {foreignRootId: value.boundaryId}),
       textDigest: value.textDigest,
       pasted: value.pasted === true,
     }
@@ -156,10 +162,10 @@ const digest = async (text: string): Promise<string> => {
  *  clipboard content, which this record must not claim. */
 export const armCut = async (
   text: string,
-  {workspaceId, rootIds, boundaryId, undoTop}: {
+  {workspaceId, rootIds, foreignRootId, undoTop}: {
     workspaceId: string
     rootIds: readonly string[]
-    boundaryId?: string
+    foreignRootId?: string
     /** The cut workspace's top undo entry as the cut is armed; see
      *  {@link undoOrTakeBackCut}. */
     undoTop?: object | null
@@ -169,12 +175,12 @@ export const armCut = async (
     cutId: crypto.randomUUID(),
     workspaceId,
     rootIds: [...rootIds],
-    boundaryId,
+    foreignRootId,
     textDigest: await digest(text),
     pasted: false,
   }
   armedUndoTop = undoTop === undefined ? null : {cutId: cut.cutId, entry: undoTop}
-  writeRaw(JSON.stringify(cut))
+  writeRaw(serializeCut(cut))
 }
 
 /** Clear the armed cut — only if it is still `cutId` when one is given, so a
@@ -191,7 +197,7 @@ export const disarmCut = (cutId?: string): void => {
 export const markCutPasted = (cutId: string): void => {
   const current = getArmedCut()
   if (current?.cutId !== cutId || current.pasted) return
-  writeRaw(JSON.stringify({...current, pasted: true}))
+  writeRaw(serializeCut({...current, pasted: true}))
 }
 
 /** Tab-local: the undo entry on top when this tab armed the cut. */

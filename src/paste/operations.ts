@@ -3,7 +3,7 @@ import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { decodeRowProperty } from '@/data/rowProperty'
-import { deleteBlock, liveChildAt, moveBlocksInTx, revealChildren, type MoveTarget } from '@/data/mutators'
+import { captureOccurrenceEdge, deleteBlock, moveBlocksInTx, revealChildren, type MoveTarget, type OccurrenceEdge } from '@/data/mutators'
 import { listingSurfaceOf, type ListingSurface } from '@/data/childrenView'
 import { drawnChildrenOf, visibleChildrenOf } from '@/data/visibleChildren'
 import { pluralize } from '@/utils/pluralize.js'
@@ -168,7 +168,7 @@ const hasNoSiblingSlot = (target: BlockData, scopeRootId: string | undefined): b
   scopeRootId === target.id || target.parentId === null
 
 interface PasteSurface extends ListingSurface {
-  occurrence?: {parentId: string | null; hasDrawnChildren: boolean; boundaryId?: string; cutBoundaryId?: string}
+  occurrence?: OccurrenceEdge & {hasDrawnChildren: boolean}
 }
 
 /** Read the occurrence before taking the write lock. Its list determines the
@@ -182,17 +182,15 @@ const pasteSurfaceFor = async (
 
   const location = await nestedWriteLocation(block, renderScopeId)
   if (location === null) return null
-  const cutBoundaryId = location?.foreignRootId
-
-  const boundaryId = location?.boundaryId
-  const scoped = boundaryId === block.id ? {...surface, scopeRootId: boundaryId} : surface
+  const occurrence = captureOccurrenceEdge(block.id, data.parentId, location)
+  const scoped = occurrence.boundaryId === block.id ? {...surface, scopeRootId: block.id} : surface
   const drawn = await drawnChildrenOf(block, scoped)
-  return {...scoped, occurrence: {parentId: data.parentId, hasDrawnChildren: drawn.length > 0, boundaryId, cutBoundaryId}}
+  return {...scoped, occurrence: {...occurrence, hasDrawnChildren: drawn.length > 0}}
 }
 
 const currentPasteTarget = async (tx: Tx, id: string, surface: PasteSurface): Promise<BlockData | null> => {
   const {occurrence} = surface
-  if (occurrence) return liveChildAt(tx, id, occurrence.parentId, occurrence.boundaryId, occurrence.cutBoundaryId)
+  if (occurrence) return occurrence.currentRow(tx)
   const target = await tx.get(id)
   return target?.deleted ? null : target
 }
@@ -701,7 +699,7 @@ export async function pasteArmedCut(
       }
 
       const destination = await cutDestination(tx, target, {position, placement, surface})
-      for (const boundaryId of new Set([cut.boundaryId, surface.occurrence?.cutBoundaryId])) {
+      for (const boundaryId of new Set([cut.foreignRootId, surface.occurrence?.foreignRootId])) {
         if (boundaryId === undefined) continue
         const parentId = destination.move.parentId
         if (parentId === null || !await tx.isDescendantOf(parentId, boundaryId)) {

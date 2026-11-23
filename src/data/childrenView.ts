@@ -2,7 +2,6 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { OutlineSurface } from '@/data/outlineSurface'
 import type { Block } from '@/data/block'
-import type { LoaderHandle } from '@/data/internals/handleStore'
 import type { ChildrenInsertDecision, ChildrenInsertRequest } from '@/data/structuralInsert'
 import { childrenViewIn, displayScopeOf, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import { combineLastContributionResult, defineFacet, type OptionalContributionResult } from '@/facets/facet'
@@ -24,6 +23,8 @@ export const listingSurfaceOf = (carrier: Partial<ListingSurface>): ListingSurfa
   renderScopeId: carrier.renderScopeId,
   scopeRootId: carrier.scopeRootId,
 })
+
+export type { ChildrenInsertDecision, ChildrenInsertRequest } from './structuralInsert'
 
 export interface ChildrenViewContext {
   parent: Block
@@ -87,7 +88,10 @@ export interface ChildrenView {
   readonly order?: ChildrenOrder
   id: string
   /** Walks load the list. Anchored edits also peek its current publication on writer admission. */
-  read(ctx: ChildrenViewContext): Pick<LoaderHandle<readonly DrawnChild[]>, 'load'> & {peek?(): readonly DrawnChild[] | null | undefined}
+  read(ctx: ChildrenViewContext): {
+    load(): Promise<readonly DrawnChild[]>
+    peek?(): readonly DrawnChild[] | null | undefined
+  }
   /** Places a new block requested on this list or one of its nested surfaces.
    *  Return the focus target or an outline position, null on refusal, or undefined for ordinary placement. */
   insert?(ctx: ChildrenViewContext, request: ChildrenInsertRequest): Promise<ChildrenInsertDecision | null | undefined>

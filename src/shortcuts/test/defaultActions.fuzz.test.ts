@@ -8,9 +8,8 @@
  * harness (fake CodeMirror view, uiStateBlock wiring) this reuses.
  *
  * What this exercises that repoMutators.fuzz.test.ts (raw mutator
- * sequences) cannot: the HANDLER layer — structural-edit policy gating
- * (scope-root protection, canIndent/canOutdent/canMergeUp), visible-
- * block walks over collapse state, split-at-cursor case analysis,
+ * sequences) cannot: the HANDLER layer — structural edit boundaries,
+ * visible-block walks over collapse state, split-at-cursor case analysis,
  * focus handoff, and selection-state writes — dispatched through
  * `invokeAction` (the real choke point, actionDispatch.ts:46-49) with
  * deps synthesized the way the UI builds them.
@@ -56,13 +55,10 @@
  *  - scope-root protection: ROOT stays live and stays put —
  *    every structural handler must refuse to RELOCATE the scope root
  *    across the surface boundary: indent / outdent / merge-away
- *    (structuralEditPolicyForBlock; blockActions.ts indent/outdent
- *    guards, split_block_cm's isScopeRoot branch,
- *    delete_empty_block_cm's canMergeUp).
+ *    (`writeList` for indent and outdent, `insertDrawnBlock` for split,
+ *    `delete_empty_block_cm` for merge).
  *
- *    Explicit DELETE of the scope root is deliberately NOT in that set:
- *    it's the page-deletion gesture, and refusing it is the regression
- *    this oracle once encoded (see structuralEditPolicy's docblock).
+ *    Explicit Delete of the scope root is the page-deletion gesture.
  *    Deleting ROOT is legal but empties the seeded tree, leaving every
  *    later op in a sequence a no-op and the structural oracles nothing
  *    to check — so it's excluded from the op stream below, the same way

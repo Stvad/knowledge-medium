@@ -56,7 +56,7 @@ const ownControl = (cell: HTMLElement) =>
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), Math.max(max, 0))
 
-type InsertOrigin = Pick<ChildrenInsertRequest, 'data' | 'boundaryId' | 'foreignRootId' | 'isCurrent'>
+type InsertOrigin = Pick<ChildrenInsertRequest, 'stillCurrent'>
 
 export class GridController {
   private rowIds: readonly string[] = []
@@ -570,9 +570,8 @@ export class GridController {
     const terms = this.queryTerms
     const hostId = this.host.id
     const id = await repo.tx(async tx => {
-      if (origin && !await liveChildAt(tx, origin.data.id, origin.data.parentId, origin.boundaryId, origin.foreignRootId)) return null
+      if (origin && !await origin.stillCurrent(tx)) return null
       if (!terms && rowId !== undefined && !await liveChildAt(tx, rowId, hostId)) return null
-      if (origin?.isCurrent?.() === false) return null
       if (terms) return createQueryRowInTx(repo, tx, hostId, rowBackfill(terms))
       if (rowId === undefined) return tx.run(createChild, {parentId: hostId, position: {kind: 'last'}})
       return tx.run(side === 'before' ? createSiblingAbove : createSiblingBelow, {siblingId: rowId})

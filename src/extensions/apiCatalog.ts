@@ -317,9 +317,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/childrenView.js',
-    description: 'childrenViewFacet — a layout that draws a block\'s children its own way declares that list, and the walkers, edit policy and Backspace-merge walk it. Structural gestures use drawn sibling anchors, refuse reordering under derived orders, and consult the view for insertion.',
+    description: 'childrenViewFacet — a layout that draws a block\'s children its own way declares that list, and the walkers, edit policy and Backspace-merge walk it. Anchored edits peek the current list. Move requires outline order, and insert hooks use request.stillCurrent(tx) before writing.',
     exports: ['childrenViewFacet', 'propertyDisplayChildrenView', 'surfaceOwnerFacet'],
-    types: ['ChildrenView', 'ChildrenViewContext', 'ChildrenOrder', 'DrawnChild', 'ListingSurface', 'NestedSurface', 'SurfaceOwner'],
+    types: ['ChildrenView', 'ChildrenViewContext', 'ChildrenInsertRequest', 'ChildrenInsertDecision', 'ChildrenOrder', 'DrawnChild', 'ListingSurface', 'NestedSurface', 'SurfaceOwner'],
   },
   {
     category: 'data',

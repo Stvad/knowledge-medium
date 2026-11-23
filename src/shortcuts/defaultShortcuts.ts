@@ -12,7 +12,7 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { merge as mergeMutator } from '@/data/mutators'
+import { captureOccurrenceEdge, merge as mergeMutator } from '@/data/mutators'
 import { ChangeScope } from '@/data/api'
 import { holdsSource } from '@/data/blockTypes'
 import { bothShowIndependentChildren, mergeCheck, mergeUp } from './blockMergeGesture'
@@ -1013,9 +1013,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           // else on a block that survived, which is what "it looks like the
           // block vanished" means here.
           const landings: DrawnLocation[] = []
-          const location = await occurrence
-          const expected = {isCurrent, parentId: source.parentId, boundaryId: location?.boundaryId, foreignRootId: location?.foreignRootId}
-          const deleted = await deleteAtOccurrenceThroughUi(block, expected, async () => {
+          const expected = captureOccurrenceEdge(block.id, source.parentId, (await occurrence) ?? undefined)
+          const deleted = await deleteAtOccurrenceThroughUi(block, {...expected, isCurrent}, async () => {
             const previous = await previousDrawnStep(block, surface)
             if (!previous.block) return
             landings.push({block: previous.block, surface: previous.surface})
@@ -1273,14 +1272,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const renderScopeId = deps.renderScopeId ?? focusedOccurrenceInSelection(deps)?.renderScopeId
     const location = await nestedWriteLocation(selectedBlocks[0], renderScopeId)
     if (location === null) return
-    const boundaryId = location?.foreignRootId
-    if (boundaryId && selectedBlocks.some(block => block.id === boundaryId)) {
+    const foreignRootId = location?.foreignRootId
+    if (foreignRootId && selectedBlocks.some(block => block.id === foreignRootId)) {
       showInfo('Cut this result from its outline.')
       return
     }
     let outcome: 'cut' | 'empty'
     try {
-      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo, propertyDisplay, boundaryId)
+      outcome = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo, propertyDisplay, foreignRootId)
     } catch (error) {
       // A refused clipboard write armed nothing; keep the selection to retry.
       console.error('[cut] clipboard write failed', error)

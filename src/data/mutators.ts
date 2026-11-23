@@ -555,6 +555,19 @@ export const liveChildAt = async (tx: Tx, id: string, parentId: string | null, .
   return row
 }
 
+/** Captures the parent and roots the block must still be inside when the gesture writes. */
+export interface OccurrenceEdge {
+  readonly boundaryId?: string
+  readonly foreignRootId?: string
+  readonly currentRow: (tx: Tx) => Promise<BlockData | null>
+}
+
+export function captureOccurrenceEdge(
+  id: string, parentId: string | null, {boundaryId, foreignRootId}: Omit<OccurrenceEdge, 'currentRow'> = {},
+): OccurrenceEdge {
+  return {boundaryId, foreignRootId, currentRow: tx => liveChildAt(tx, id, parentId, boundaryId, foreignRootId)}
+}
+
 /** `subjectParent` is the drawn parent before the gesture, including for an outdent or a move between parents. */
 async function anchoredSubject(tx: Tx, id: string, anchor: DrawnAnchor, subjectParent: string | null) {
   if (anchor.changeCursor !== await tx.blockChangeCursor()) return null

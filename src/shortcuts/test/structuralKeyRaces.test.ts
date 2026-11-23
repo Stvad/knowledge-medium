@@ -120,6 +120,27 @@ const RACES = [
   },
 ] as const
 
+it.each([
+  {label: 'at a workspace root without a scope root', hasOuterView: false},
+  {label: 'inside a plain zoomed outline with a custom outer view', hasOuterView: true},
+])('resolves both queued Tabs $label', async ({hasOuterView}) => {
+  if (hasOuterView) {
+    await repo.tx(async tx => {
+      await tx.create({id: 'outside', workspaceId: WS, parentId: null, orderKey: 'a1'})
+      await tx.move('page', {parentId: 'outside', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(childrenViewFacet, 'test.outside', [({parent}) =>
+      parent.id === 'outside' && {id: 'test.outside', order: 'derived', read: () => childIds(parent.id)}])
+  }
+
+  const {indentBlock} = createSharedBlockActions({repo})
+  const tabDeps = hasOuterView ? deps('c') : {...deps('c'), scopeRootId: undefined, renderScopeId: undefined}
+  const tab = () => indentBlock.handler(tabDeps, trigger)
+  await queueBoth(tab, tab)
+
+  await expectStoredTree({page: ['a', 'b'], b1: ['c']})
+})
+
 describe.each(['plain', 'custom'] as const)('%s outline', kind => {
   beforeEach(() => {
     if (kind === 'custom') repo.setRuntimeContributions(childrenViewFacet, 'test.outline', [({parent, surface}) =>

@@ -1,146 +1,25 @@
 import { blockChangeCursor } from './blockChangeCursor'
 import { ChangeScope, type Tx } from './api'
 import { indent, liveChildAt, moveVertical, outdent } from './mutators'
-import { Block } from './block'
+import type { Block } from './block'
 import type { SurfaceCarrier } from './outlineSurface'
-import { isCollapsedProp } from './properties.js'
-import { childrenViewFor, surfaceOwnerFacet, listingSurfaceOf, propertyDisplayChildrenView, type ChildrenOrder, type ChildrenViewContext, type DrawnChild, type NestedSurface } from './childrenView'
-import { lastDrawnStep, nestedWriteLocation, unlistedSiblingIndexLoaded, type DrawnLocation } from '@/utils/drawnWalk'
+import { childrenViewFor, surfaceOwnerFacet, listingSurfaceOf, propertyDisplayChildrenView, type ChildrenOrder, type ListingSurface, type DrawnChild, type NestedSurface } from './childrenView'
+import { lastDrawnStep, nestedWriteLocation, unlistedSiblingIndexLoaded, type DrawnLocation, type NestedWriteLocation } from '@/utils/drawnWalk'
 import type { OutlineSurface } from './outlineSurface'
-import { drawnChildrenOf } from './visibleChildren'
-
-/**
- * Where a "new block below" gesture (vim `o`, Enter-at-end-of-line)
- * must place the created block so it lands somewhere the user can see.
- *  - `child-first`: insert as the block's first child.
- *  - `sibling-below`: insert as the next sibling.
- */
-export type CreateBelowPlacement = 'child-first' | 'sibling-below'
-
-/**
- * Where a "new block above" gesture (vim `O`) must place the created
- * block so it lands somewhere the user can see.
- *  - `child-first`: insert as the block's first child (used at the scope
- *    root, where a sibling above would land outside the visible surface).
- *  - `sibling-above`: insert as the previous sibling.
- */
-export type CreateAbovePlacement = 'child-first' | 'sibling-above'
-
-export interface StructuralEditPolicyInput {
-  /** Block the structural edit targets. */
-  blockId: string
-  /** Its data-tree parent (null at the workspace root). */
-  parentId: string | null
-  /** True when the block has children that are currently shown
-   *  (i.e. it has at least one child AND is not collapsed). */
-  hasUncollapsedChildren: boolean
-  /** Root of the visible subtree this block is rendered within — the
-   *  panel's zoom root for the main outline, the shown block for a
-   *  backlink entry, the embedded block for an embed, etc. `undefined`
-   *  when no scope is known (treated as "no scope root", so nothing is
-   *  considered the scope root). */
-  scopeRootId: string | undefined
-}
-
-/**
- * Scope-relative structural-edit policy for one block. Answers the
- * questions every structural mutation needs ("am I at the visible
- * boundary, and what may I do here?") from a single rule set, instead
- * of each call site re-deriving them from the panel's `topLevelBlockId`.
- *
- * The decisions hinge on whether the block is the *scope root* — the
- * top of the bounded subtree the current surface renders. A scope root
- * has no visible parent or siblings within the surface, so:
- *  - "new block below" must descend into a child (a sibling would land
- *    outside the surface, the classic "invisible sibling" bug);
- *  - indent / outdent / merge-into-previous are no-ops (they would
- *    restructure across the surface boundary).
- *
- * Every rule here is about MOVING structure across the surface boundary
- * — placing, reparenting, or merging a block somewhere the surface
- * cannot render. That's what makes them scope-relative.
- *
- * Deletion is deliberately not in this set — removing a subtree relocates
- * nothing across the boundary, and the inclusion criterion above is
- * exactly "moves structure across the boundary". A `canDelete:
- * !isScopeRoot` rule here once made page deletion unreachable from every
- * UI; don't reintroduce it.
- */
-export interface StructuralEditPolicy {
-  /** Is this block the root of its render scope? */
-  isScopeRoot: boolean
-  /** Does the block show at least one child in this scope? */
-  hasUncollapsedChildren: boolean
-  /** Placement for vim `o` / Enter-at-end. */
-  createBelowPlacement: CreateBelowPlacement
-  /** Placement for vim `O`. At the scope root a sibling above would land
-   *  outside the visible surface (the "invisible block" bug), so it
-   *  degenerates to a first child — the only insertion point relative to
-   *  the root the surface can actually render. */
-  createAbovePlacement: CreateAbovePlacement
-  /** May Tab indent this block within the surface? */
-  canIndent: boolean
-  /** May Shift+Tab outdent this block within the surface? The
-   *  fine-grained "already at the boundary" check still lives in the
-   *  `core.outdent` mutator (it returns `false` and the caller falls
-   *  back); this only gates the scope-root case the mutator can't see. */
-  canOutdent: boolean
-  /** May Backspace-at-start consume this block — merging it into the
-   *  previous visible block, or (when empty) removing it and putting the
-   *  cursor there? False at the scope root, where there is no previous
-   *  visible block inside the surface for the gesture to land on. Note
-   *  this gates the *Backspace* gesture, not deletion in general: an
-   *  explicit Delete on the scope root is allowed (see above). */
-  canMergeUp: boolean
-}
-
-export const resolveStructuralEditPolicy = (
-  {blockId, parentId, hasUncollapsedChildren, scopeRootId}: StructuralEditPolicyInput,
-): StructuralEditPolicy => {
-  const isScopeRoot = scopeRootId !== undefined && blockId === scopeRootId
-  return {
-    isScopeRoot,
-    hasUncollapsedChildren,
-    createBelowPlacement:
-      isScopeRoot || hasUncollapsedChildren ? 'child-first' : 'sibling-below',
-    createAbovePlacement: isScopeRoot ? 'child-first' : 'sibling-above',
-    canIndent: !isScopeRoot,
-    canOutdent: !isScopeRoot && parentId !== scopeRootId,
-    canMergeUp: !isScopeRoot,
-  }
-}
-
-/**
- * {@link resolveStructuralEditPolicy} for a live `Block`. `carrier` is what
- * the gesture knows of where it ran (its dependencies): "has children" means
- * children that surface draws. It may name no scope root (imperative
- * dispatch), and then no block is treated as one.
- */
-export const structuralEditPolicyForBlock = async (
-  block: Block,
-  carrier: SurfaceCarrier,
-): Promise<StructuralEditPolicy> => {
-  const data = block.peek() ?? await block.load()
-  const drawn = await drawnChildrenOf(block, listingSurfaceOf(carrier))
-  const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
-  return resolveStructuralEditPolicy({
-    blockId: block.id,
-    parentId: data?.parentId ?? null,
-    hasUncollapsedChildren: drawn.length > 0 && !isCollapsed,
-    scopeRootId: carrier.scopeRootId,
-  })
-}
 
 /** Only a synchronous peek is safe while holding the writer. Async loaders can need that same connection. */
-function publication(ctx: ChildrenViewContext, slots: readonly DrawnChild[], order: ChildrenOrder | undefined, nested?: NestedSurface) {
+function publication(parent: Block, surface: ListingSurface, slots: readonly DrawnChild[], order: ChildrenOrder | undefined, nested?: NestedSurface) {
   const ids = slots.map(slot => typeof slot === 'string' ? slot : null)
   return () => {
+    const data = parent.peek()
+    if (!data) return false
+    const ctx = {parent, data, surface}
     const view = childrenViewFor(ctx)
     const children = view.read(ctx).peek?.()
-    const surface = nested && children?.find((slot): slot is NestedSurface =>
+    const mounted = nested && children?.find((slot): slot is NestedSurface =>
       typeof slot !== 'string' && slot.renderScopeId === nested.renderScopeId)
-    const members = nested ? surface?.members : children
-    return (nested ? surface?.order : view.order) === order && surface?.scopeRootId === nested?.scopeRootId &&
+    const members = nested ? mounted?.members : children
+    return (nested ? mounted?.order : view.order) === order && mounted?.scopeRootId === nested?.scopeRootId &&
       members?.length === ids.length && members.every((slot, i) => (typeof slot === 'string' ? slot : null) === ids[i])
   }
 }
@@ -176,8 +55,9 @@ async function outlineArgs(block: Block, carrier: SurfaceCarrier) {
   return {id: block.id, propertyDisplay: carrier.propertyDisplay, scopeRootId: carrier.scopeRootId}
 }
 
-/** Same-scope views list own children, which may still be independently selected by a query. */
-export async function isSameScopeQueryMember(block: Block, carrier: SurfaceCarrier) {
+/** A projected result keeps its own structure when Backspace reaches it in the view. */
+export async function refusesMerge(block: Block, carrier: SurfaceCarrier, drawn: NestedWriteLocation | undefined) {
+  if (drawn?.memberId === block.id) return drawn.projected
   const row = block.peek() ?? await block.load()
   return !!row?.parentId && (await parentListing(block.repo.block(row.parentId), carrier))?.view.order === 'query'
 }
@@ -189,8 +69,7 @@ async function writeList(block: Block, carrier: SurfaceCarrier, retainHidden = f
   const row = block.peek() ?? await block.load()
   if (!row) return null
   const nestedCurrent = drawn && publication(
-    {parent: drawn.parent.block, data: (await drawn.parent.block.load())!, surface: drawn.parent.surface},
-    drawn.nested.members!, drawn.nested.order, drawn.nested,
+    drawn.parent.block, drawn.parent.surface, drawn.nested.members!, drawn.nested.order, drawn.nested,
   )
   if (drawn?.memberId === block.id) {
     const {nested, parent} = drawn
@@ -205,7 +84,7 @@ async function writeList(block: Block, carrier: SurfaceCarrier, retainHidden = f
   if (!listing) return null
   const {ctx, view} = listing
   let members = await view.read(ctx).load()
-  const current = publication(ctx, members, view.order)
+  const current = publication(owner, ctx.surface, members, view.order)
   let index = members.indexOf(block.id)
   if (index < 0 && retainHidden && view === propertyDisplayChildrenView) {
     const ids = members as readonly string[]
@@ -240,11 +119,13 @@ export async function indentDrawnBlock(block: Block, carrier: SurfaceCarrier): P
 export async function outdentDrawnBlock(
   block: Block, carrier: SurfaceCarrier, expectedParentId?: string | null,
 ): Promise<boolean | null> {
-  const plain = await outlineArgs(block, carrier)
-  if (plain) return block.repo.tx(async tx => {
+  const write = (args: Parameters<typeof outdent.apply>[1], lists: WriteList[]) => writeIfDrawn(block, lists, async tx => {
     if (expectedParentId !== undefined && !await liveChildAt(tx, block.id, expectedParentId)) return null
-    return tx.run(outdent, plain)
-  }, {scope: ChangeScope.BlockDefault, description: `outdent ${block.id}`})
+    const moved = await tx.run(outdent, args)
+    return moved || (args.anchor ? null : false)
+  })
+  const plain = await outlineArgs(block, carrier)
+  if (plain) return write(plain, [])
   const changeCursor = await blockChangeCursor(block.repo.db)
   const list = await writeList(block, carrier, true)
   if (!list || list.nested) return false
@@ -256,11 +137,10 @@ export async function outdentDrawnBlock(
   // The workspace's root list has no parent block to declare a view.
   if (!outer && (list.boundaryId || (await parent.load())?.parentId !== null)) return false
   if (destination?.allowsNewMember?.() === false) return null
-  const moved = await writeIfDrawn(block, outer ? [list, outer] : [list], tx => tx.run(outdent, {id: block.id, anchor: {
+  return write({id: block.id, anchor: {
     changeCursor, parentId: outer?.owner.id ?? null, siblingId: parent.id,
     boundaryId: outer?.boundaryId, foreignRootId: outer?.foreignRootId,
-  }}))
-  return moved || null
+  }}, outer ? [list, outer] : [list])
 }
 
 export async function moveDrawnBlock(block: Block, carrier: SurfaceCarrier, direction: -1 | 1): Promise<boolean> {
@@ -293,11 +173,10 @@ interface MergePlacement extends DrawnLocation {
 /** Undefined keeps the outline's empty-block deletion. Null refuses the gesture before either deletion or merge. */
 export async function memberMergePlacement(block: Block, surface: OutlineSurface, location = nestedWriteLocation(block, surface.renderScopeId)): Promise<MergePlacement | null | undefined> {
   const drawn = await location
-  if (drawn === null) return null
-  if (drawn?.memberId !== block.id) return await isSameScopeQueryMember(block, surface) ? null : undefined
+  if (drawn === null || await refusesMerge(block, surface, drawn)) return null
+  if (drawn?.memberId !== block.id) return undefined
   const {nested, parent} = drawn
   const index = nested.members!.indexOf(block.id)
-  if (drawn.projected) return null
   // Shared-root members use the ordinary outline merge and empty-block deletion.
   if (nested.scopeRootId === parent.block.id) return undefined
   const siblingId = nested.members![index - 1]

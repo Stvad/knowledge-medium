@@ -1,7 +1,7 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope, type Tx } from '@/data/api'
 import { indentDrawnBlock, moveDrawnBlock } from '@/data/structuralEditPolicy'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import { registerGrid, tableRenderScopeId } from '../registry'
@@ -115,17 +115,42 @@ describe('GridController', () => {
     expect((await rowsOf('host')).map(({id}) => id)).toEqual([rowIds[1]])
   })
 
-  it('inserts no query row when the gesture’s origin has changed parent', async () => {
+  it('checks the query-row origin in the writer after a queued move', async () => {
     const {repo, controller, rowIds} = await setup(2)
     const first = rowIds[0]!
     const second = rowIds[1]!
-    const data = (await repo.load(first))!
     controller.setRows(rowIds, rowIds.length)
     controller.setQuery([])
-    await repo.mutate.move({id: first, parentId: second, position: {kind: 'last'}})
 
-    expect(await controller.insertNewRow(first, 'after', {data})).toBeNull()
+    let announce!: () => void
+    let release!: () => void
+    const moved = new Promise<void>(resolve => { announce = resolve })
+    const canCommit = new Promise<void>(resolve => { release = resolve })
+    const moving = repo.tx(async tx => {
+      await tx.move(first, {parentId: second, orderKey: 'a0'})
+      announce()
+      await canCommit
+    }, options)
+    await moved
+
+    const seenParents: Array<string | null | undefined> = []
+    const stillCurrent = vi.fn(async (tx: Tx) => {
+      const origin = await tx.get(first)
+      seenParents.push(origin?.parentId)
+      return origin?.parentId === 'host'
+    })
+    const inserting = controller.insertNewRow(first, 'after', {stillCurrent})
+    try {
+      expect(stillCurrent).not.toHaveBeenCalled()
+    } finally {
+      release()
+    }
+
+    await moving
+    expect(await inserting).toBeNull()
+    expect(seenParents).toEqual([second])
     expect((await rowsOf('host')).map(({id}) => id)).toEqual([second])
+    expect((await children(second)).map(({id}) => id)).toEqual([first])
     expect(controller.getCreated()).toEqual([])
   })
 

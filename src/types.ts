@@ -151,8 +151,7 @@ export interface BlockContextType {
      *  the panel's `topLevelBlockId` — so a block rendered as a root in
      *  a nested surface behaves like one. Every surface that mounts a
      *  block as a bounded view declares it; absent only at the very top
-     *  layout boundary, before a panel sets it. See
-     *  `resolveStructuralEditPolicy`. */
+     *  layout boundary, before a panel sets it. */
     scopeRootId?: string
     /** Whether maximizing this pane would do anything, declared by the layout
      *  that owns the maximize rendering rule: false with a single pane

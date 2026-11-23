@@ -1,11 +1,11 @@
 import { ChangeScope, type Tx } from '@/data/api'
 import type { Block } from '@/data/block'
 import { holdsSource } from '@/data/blockTypes'
-import { deleteBlock, liveChildAt, merge } from '@/data/mutators'
+import { captureOccurrenceEdge, deleteBlock, liveChildAt, merge } from '@/data/mutators'
 import { focusBlock } from '@/data/properties'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
-import { isSameScopeQueryMember, type DrawnMergeAnchor } from '@/data/structuralEditPolicy'
+import { refusesMerge, type DrawnMergeAnchor } from '@/data/structuralEditPolicy'
 import { drawnChildrenOf } from '@/data/visibleChildren'
 import { nestedWriteLocation } from '@/utils/drawnWalk'
 import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
@@ -47,12 +47,13 @@ export interface MergeUpGesture {
 export async function mergeCheck(from: Block, into: Block, surface: ListingSurface, anchor?: MergeUpGesture['anchor']) {
   const [source, destination] = await Promise.all([from.load(), into.load()])
   const drawn = await nestedWriteLocation(from, surface.renderScopeId)
-  if (!source || !destination || drawn === null) return null
-  if (drawn?.memberId === from.id ? drawn.projected : await isSameScopeQueryMember(from, surface)) return null
-  const boundary = anchor?.parentId ?? drawn?.boundaryId
+  if (!source || !destination || drawn === null || await refusesMerge(from, surface, drawn)) return null
+  const roots = {boundaryId: anchor?.parentId ?? drawn?.boundaryId, foreignRootId: drawn?.foreignRootId}
+  const fromEdge = captureOccurrenceEdge(from.id, anchor?.parentId ?? source.parentId, roots)
+  const intoEdge = captureOccurrenceEdge(into.id, destination.parentId, roots)
   return async (tx: Tx) => {
-    if (!await liveChildAt(tx, from.id, anchor?.parentId ?? source.parentId, boundary, drawn?.foreignRootId)) return false
-    if (!await liveChildAt(tx, into.id, destination.parentId, boundary, drawn?.foreignRootId)) return false
+    if (!await fromEdge.currentRow(tx)) return false
+    if (!await intoEdge.currentRow(tx)) return false
     if (!anchor) return source.parentId === null || tx.isDescendantOf(into.id, source.parentId)
     return !!await liveChildAt(tx, anchor.siblingId, anchor.parentId) && await tx.isDescendantOf(into.id, anchor.siblingId)
   }

@@ -612,7 +612,7 @@ describe('the outline’s verbs between rows', () => {
 
         const notesScope = tableNotesScopeId(SCOPE, 'row-1')
         await cutByKey(first, notesScope)
-        await waitFor(() => expect(getArmedCut()).toMatchObject({rootIds: [first], boundaryId: 'row-1'}))
+        await waitFor(() => expect(getArmedCut()).toMatchObject({rootIds: [first], foreignRootId: 'row-1'}))
 
         expect((await pasteArmedCut(clipboardText, repo.block(source), repo))?.kind).toBe('refused')
         expect(await contentsUnder(source)).toEqual(['second'])

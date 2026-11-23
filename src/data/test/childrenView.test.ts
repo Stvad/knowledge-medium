@@ -17,10 +17,11 @@ import { ChangeScope, defineQuery, type User } from '@/data/api'
 import { childrenViewFacet, surfaceOwnerFacet, type ChildrenOrder, type ChildrenView, type DrawnChild, type NestedSurface } from '@/data/childrenView'
 import { queriesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { split } from '@/data/mutators'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
-import { indentDrawnBlock, memberMergePlacement, moveDrawnBlock, outdentDrawnBlock, structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { indentDrawnBlock, memberMergePlacement, moveDrawnBlock, outdentDrawnBlock } from '@/data/structuralEditPolicy'
 import { insertDrawnBlock, type InsertGesture } from '@/data/structuralInsert'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -102,11 +103,16 @@ describe('childrenViewFacet', () => {
     expect(await walk('page', 'outline', nextVisibleBlock)).toEqual(['owner', 'a', 'b', 'c', 'other', 'x', 'after'])
   })
 
-  it('decides whether a block shows children for the edit policy and the merge rule', async () => {
+  it.each([
+    ['bare', 'page'],
+    ['outline', 'owner'],
+  ])('places a new block below the owner in the %s surface under %s', async (scope, parentId) => {
+    const inserted = await insertDrawnBlock(repo.block('owner'), surfaceIn(scope), {kind: 'below'})
+    expect(await repo.load(inserted!.id)).toMatchObject({parentId, content: ''})
+  })
+
+  it('decides whether both merge blocks show children', async () => {
     const owner = repo.block('owner')
-    const carrier = {scopeRootId: 'page', propertyDisplay: DISPLAY}
-    expect((await structuralEditPolicyForBlock(owner, {...carrier, renderScopeId: 'bare'})).createBelowPlacement).toBe('sibling-below')
-    expect((await structuralEditPolicyForBlock(owner, {...carrier, renderScopeId: 'outline'})).createBelowPlacement).toBe('child-first')
     expect(await bothShowIndependentChildren({into: repo.block('other'), from: owner}, surfaceIn('bare'))).toBe(false)
     expect(await bothShowIndependentChildren({into: repo.block('other'), from: owner}, surfaceIn('outline'))).toBe(true)
   })
@@ -185,6 +191,68 @@ describe('childrenViewFacet', () => {
     expect(await repo.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['b', 'c'])
     expect(await repo.query.childIds({id: 'other', propertyChildren: 'none'}).load()).toEqual(change === 'move' ? ['x', 'a'] : ['x'])
     if (change === 'move') expect(source.peek()?.content).toBe('a')
+  })
+
+  it('tells an insert hook its origin is no longer current once the block moves', async () => {
+    let release!: () => void
+    const resolveView = new Promise<void>(resolve => { release = resolve })
+    const seen: boolean[] = []
+    repo.setRuntimeContributions(childrenViewFacet, 'test.checked-insert', [({parent}) => parent.id === 'owner' && {
+      id: 'test.checked-insert',
+      read: () => ({load: async () => ['a', 'b', 'c']}),
+      insert: async (ctx, request) => {
+        seen.push(await ctx.parent.repo.tx(tx => request.stillCurrent(tx), {scope: ChangeScope.BlockDefault}))
+        await resolveView
+        seen.push(await ctx.parent.repo.tx(tx => request.stillCurrent(tx), {scope: ChangeScope.BlockDefault}))
+        return null
+      },
+    }])
+    const write = insertDrawnBlock(repo.block('a'), surfaceIn('outline'), {kind: 'below'})
+    await vi.waitFor(() => expect(seen).toEqual([true]))
+    await repo.mutate.move({id: 'a', parentId: 'other', position: {kind: 'last'}})
+    release()
+    expect(await write).toBeNull()
+    expect(seen).toEqual([true, false])
+  })
+
+  it.each(['before', 'during'] as const)('refuses to split when the editor changes %s the insert hook', async timing => {
+    const source = repo.block('a')
+    await source.setContent('left right')
+    const before = await structure()
+    let current = timing === 'during'
+    let release!: () => void
+    const resume = new Promise<void>(resolve => { release = resolve })
+    const insert = vi.fn<NonNullable<ChildrenView['insert']>>(async (_ctx, request) => {
+      await resume
+      return repo.tx(async tx => {
+        if (!await request.stillCurrent(tx)) return null
+        return tx.run(split, {id: request.block.id, before: 'left ', after: 'right', placement: 'siblingBefore'})
+      }, {scope: ChangeScope.BlockDefault})
+    })
+    repo.setRuntimeContributions(childrenViewFacet, 'test.checked-split', [({parent}) => parent.id === 'owner' && {
+      id: 'test.checked-split',
+      read: () => ({load: async () => ['a', 'b', 'c']}),
+      insert,
+    }])
+
+    const write = insertDrawnBlock(source, surfaceIn('outline'), {
+      kind: 'split',
+      isCurrent: () => current,
+      write: (_placement, commit) => commit('left ', 'right'),
+    })
+    try {
+      if (timing === 'during') {
+        await vi.waitFor(() => expect(insert).toHaveBeenCalledTimes(1))
+        current = false
+      }
+    } finally {
+      release()
+    }
+
+    expect(await write).toBeNull()
+    expect(insert).toHaveBeenCalledTimes(timing === 'during' ? 1 : 0)
+    expect(await structure()).toEqual(before)
+    expect((await source.load())?.content).toBe('left right')
   })
 
   it('refuses a nested write when a higher ancestor leaves the projected member', async () => {
@@ -395,10 +463,20 @@ describe('structural writes on a custom view', () => {
     expect(await structure()).toEqual(before)
   })
 
-  it('empty Enter refuses an outdent after the subject leaves its original parent', async () => {
-    const before = await structure()
-    expect(await outdentDrawnBlock(repo.block('a'), surfaceIn('outline'), 'other')).toBeNull()
-    expect(await structure()).toEqual(before)
+  it('plain empty Enter refuses an outdent when the block moves before its write', async () => {
+    const block = repo.block('a')
+    await block.setContent('')
+    const runTx = repo.tx.bind(repo)
+    let afterMove: Awaited<ReturnType<typeof structure>> | undefined
+    vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, options) => {
+      await runTx(tx => tx.move(block.id, {parentId: 'other', orderKey: 'b0'}), {scope: ChangeScope.BlockDefault})
+      afterMove = await structure()
+      return runTx(fn, options)
+    })
+
+    expect(await insertDrawnBlock(block, surfaceIn('outline'), {kind: 'empty-enter'})).toBeNull()
+    expect(await repo.load(block.id)).toMatchObject({parentId: 'other', content: ''})
+    expect(await structure()).toEqual(afterMove)
   })
 
   it('refuses to outdent a direct child beyond a root-level panel or projected root', async () => {

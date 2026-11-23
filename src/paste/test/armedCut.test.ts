@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { armCut, disarmCut, getArmedCut, matchArmedCut, subscribeArmedCut } from '../armedCut'
+import { armCut, disarmCut, getArmedCut, markCutPasted, matchArmedCut, subscribeArmedCut } from '../armedCut'
 
 const cut = {workspaceId: 'ws-1', rootIds: ['a', 'b']}
 
@@ -73,15 +73,23 @@ describe('armed cut across tabs (shared localStorage)', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it.each([undefined, 'result'])('a cut armed by another tab retains its boundary (%s)', async boundaryId => {
-    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], boundaryId})
+  it.each([undefined, 'result'])('a cut armed by another tab retains its boundary (%s)', async foreignRootId => {
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], foreignRootId})
     const written = [...store.entries()]
     disarmCut()
-    // Another tab arming = another writer putting the same record in storage.
-    for (const [key, value] of written) store.set(key, value)
+    for (const [key, raw] of written) {
+      const record = JSON.parse(raw)
+      expect(record.boundaryId).toBe(foreignRootId)
+      expect(record).not.toHaveProperty('foreignRootId')
+      store.set(key, raw)
+    }
     const match = await matchArmedCut('- a', 'ws-1')
     expect(match?.kind).toBe('match')
-    expect(match?.cut.boundaryId).toBe(boundaryId)
+    expect(match?.cut.foreignRootId).toBe(foreignRootId)
+
+    markCutPasted(match!.cut.cutId)
+    expect(getArmedCut()).toMatchObject({pasted: true})
+    expect(getArmedCut()?.foreignRootId).toBe(foreignRootId)
   })
 
   it('keeps the cut in memory when storage reads work but writes fail', async () => {
@@ -100,7 +108,7 @@ describe('armed cut across tabs (shared localStorage)', () => {
   })
 
   it.each([['empty', ''], ['non-string', 7]])('refuses a cut with a %s result boundary', async (_, boundaryId) => {
-    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], boundaryId: 'result'})
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], foreignRootId: 'result'})
     for (const [key, raw] of store) store.set(key, JSON.stringify({...JSON.parse(raw), boundaryId}))
     expect(await matchArmedCut('- a', 'ws-1')).toBeNull()
   })

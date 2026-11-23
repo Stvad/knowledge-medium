@@ -70,7 +70,7 @@ function slotsOf(members: readonly DrawnChild[], withinScope = false): Slot[] {
 
 /** Only actual children of the owner may share its structural editing root.
  *  A projected member keeps its own boundary even under a shared-root declaration. */
-export const memberRootOf = (ownerId: string, nested: NestedSurface, member: Pick<BlockData, 'id' | 'parentId'>): string =>
+const memberRootOf = (ownerId: string, nested: NestedSurface, member: Pick<BlockData, 'id' | 'parentId'>): string =>
   nested.scopeRootId === ownerId && member.parentId === ownerId ? ownerId : member.id
 
 async function memberRoot(owner: Block, nested: NestedSurface, id: string): Promise<string> {
@@ -118,7 +118,7 @@ async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
   return nested ? {nested, parent, members} : null
 }
 
-type NestedWriteLocation = NonNullable<Awaited<ReturnType<typeof declarationOf>>> & {
+export type NestedWriteLocation = NonNullable<Awaited<ReturnType<typeof declarationOf>>> & {
   memberId: string
   projected: boolean
   boundaryId: string

@@ -27,7 +27,7 @@ import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
 import { pasteMultilineText } from '@/paste/operations'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { insertDrawnBlock } from '@/data/structuralInsert'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -206,10 +206,12 @@ describe('a nested surface among drawn children', () => {
     expect(await previousDrawnStep(repo.block('bare'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'q'}, crossed: true})
   })
 
-  it('counts as children the parent shows', async () => {
-    const carrier = {scopeRootId: 'page', propertyDisplay: DISPLAY}
-    expect((await structuralEditPolicyForBlock(repo.block('bare'), carrier)).createBelowPlacement).toBe('child-first')
-    expect((await structuralEditPolicyForBlock(repo.block('after'), carrier)).createBelowPlacement).toBe('sibling-below')
+  it.each([
+    ['bare', 'bare'],
+    ['after', 'page'],
+  ])('inserts below %s under %s when a nested surface is the only drawn child of bare', async (id, parentId) => {
+    const inserted = await insertDrawnBlock(repo.block(id), SURFACE_OF_PAGE(), {kind: 'below'})
+    expect(await repo.load(inserted!.id)).toMatchObject({parentId, content: ''})
   })
 
   it('Backspace does not merge a block into the one drawn above a nested surface', async () => {
