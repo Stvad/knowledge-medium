@@ -11,7 +11,7 @@ const contentKey = (n: number) => String(n).repeat(64)
 const setup = () => {
   const uploadStore = new InMemoryByteUploadStore()
   const byteStore = new InMemoryByteStore()
-  const open = (blobStore: Partial<BlobStore>, hooks: Pick<MediaLaneDeps, 'exclusive' | 'afterPass'> = {}) =>
+  const open = (blobStore: Partial<BlobStore>, hooks: Partial<Pick<MediaLaneDeps, 'exclusive' | 'afterPass' | 'canDrain'>> = {}) =>
     createMediaLanes({
       userId: USER,
       uploadStore,
@@ -85,6 +85,21 @@ it('keeps a failed record quarantined when recovery has no session token', async
   await lanes.recover(async () => null)
 
   expect(probe).not.toHaveBeenCalled()
+  expect(await uploadStore.get(USER, id)).toMatchObject({ status: 'failed' })
+})
+
+it('skips the recovery lock and status refresh while uploads are held', async () => {
+  const { open, enqueue, uploadStore } = setup()
+  const id = await enqueue(1)
+  await uploadStore.markFailed(USER, id)
+  const exclusive = vi.fn(async (work: () => Promise<void>) => work())
+  const afterPass = vi.fn(async () => {})
+  const lanes = open({}, { canDrain: () => false, exclusive, afterPass })
+
+  await lanes.recover(async () => 'test-token')
+
+  expect(exclusive).not.toHaveBeenCalled()
+  expect(afterPass).not.toHaveBeenCalled()
   expect(await uploadStore.get(USER, id)).toMatchObject({ status: 'failed' })
 })
 

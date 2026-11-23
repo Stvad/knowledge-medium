@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest'
+import type { Repo } from '@/data/repo.js'
 import { getAssetResolverForUser } from './assetResolver.js'
-import { getMediaLanesForUser } from './assetUpload.js'
+import { getMediaLanesForUser, runUploadReconcile } from './assetUpload.js'
 import { getByteStore } from './byteStore.js'
 import { refreshUploadLaneStatus, uploadLaneDiagnosticSource } from './uploadLaneStatus.js'
 import { getByteUploadStore } from './uploadStore.js'
@@ -8,6 +9,7 @@ import { getByteUploadStore } from './uploadStore.js'
 const session = vi.hoisted(() => ({
   userId: '',
   remote: false,
+  getSession: vi.fn(async () => ({ data: { session: { access_token: 'test-token' } } })),
   upload: vi.fn<() => Promise<{ error: { status: number } | null }>>(),
   download: vi.fn(),
   onReadWorkspace: vi.fn(),
@@ -25,7 +27,7 @@ vi.mock('@/data/repoProvider.js', () => ({
 }))
 vi.mock('@/services/supabase.js', () => ({
   supabase: {
-    auth: { getSession: async () => ({ data: { session: { access_token: 'test-token' } } }) },
+    auth: { getSession: session.getSession },
     storage: { from: () => ({ upload: session.upload, download: session.download }) },
   },
 }))
@@ -141,4 +143,28 @@ it('takes the browser lane lock and publishes a failed upload to diagnostics', a
 
   expect(session.lockNames).toEqual([`km-asset-upload-lane:${userId}`])
   expect(uploadLaneDiagnosticSource.getSnapshot()?.summary).toBe('1 media upload failed')
+})
+
+it('publishes existing failures at local-only boot without making a remote request', async () => {
+  const userId = session.userId = 'local-only-user'
+  session.remote = false
+  session.lockNames.length = 0
+  session.getSession.mockClear()
+  session.upload.mockClear()
+  session.download.mockClear()
+  session.onReadWorkspace.mockClear()
+  const store = getByteUploadStore()
+  await refreshUploadLaneStatus(store, null)
+  await enqueue(userId, 1, true)
+  await store.markFailed(userId, 'block-1')
+  const repo = { load: vi.fn() } as unknown as Repo
+
+  await runUploadReconcile(userId, repo)
+
+  expect(uploadLaneDiagnosticSource.getSnapshot()?.summary).toBe('1 media upload failed')
+  expect(session.lockNames).toEqual([])
+  expect(session.getSession).not.toHaveBeenCalled()
+  expect(session.upload).not.toHaveBeenCalled()
+  expect(session.download).not.toHaveBeenCalled()
+  expect(session.onReadWorkspace).not.toHaveBeenCalled()
 })

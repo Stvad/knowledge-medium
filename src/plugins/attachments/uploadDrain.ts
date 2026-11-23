@@ -205,7 +205,7 @@ const drainOne = async (
       }
     }
     const result = await ctx.blobStore.put(rec.workspaceId, objectKey.objectKey, sealed)
-    if (result === 'exists') return verifyExistingOrQuarantine(userId, rec, mode, objectKey.objectKey, ctx)
+    if (result === 'exists') return await verifyExistingOrQuarantine(userId, rec, mode, objectKey.objectKey, ctx)
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'uploaded'
   } catch (err) {
@@ -221,8 +221,7 @@ const drainOne = async (
       // the attempt budget on a refocus-driven retry. Age-bounded only.
       return deferTransientOrFail(userId, rec, ctx)
     }
-    // A non-BlobPutError throw is an ENCODE error — a persistent bug, not connectivity:
-    // attempt-bound it so it can't retry on every refocus indefinitely.
+    // Bound retries for local encoding and queue-write errors.
     return retryOrFail(userId, rec, ctx)
   }
 }
