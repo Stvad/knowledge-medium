@@ -32,7 +32,11 @@ export interface ChildrenViewContext {
 /** The children a surface draws under one parent, in drawn order. A layout
  *  that draws a block's children its own way declares the same list here, so
  *  every gesture that walks "as drawn" (the outline walkers, the edit policy,
- *  Backspace-merge) walks what that layout draws. */
+ *  Backspace-merge) walks what that layout draws.
+ *
+ *  The list holds the parent's own children, any subset in any order: the
+ *  walkers climb by a block's data parent, so a block listed under a parent it
+ *  is not a child of would be stepped into and never back out of. */
 export interface ChildrenView {
   id: string
   read(ctx: ChildrenViewContext): LoaderHandle<string[]>
