@@ -1,1 +1,0 @@
-export{VX as staticDataExtensions}from"../../chunks/app-DsCSZ3WM.js";

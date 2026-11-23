@@ -1,1 +1,0 @@
-export{AA as usePendingInvitations}from"../../chunks/app-DsCSZ3WM.js";

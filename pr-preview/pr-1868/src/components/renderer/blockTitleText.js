@@ -1,1 +1,0 @@
-export{vU as BLOCK_TITLE_TEXT_CLASS,yU as useBlockTitleTextClass}from"../../../chunks/app-DsCSZ3WM.js";

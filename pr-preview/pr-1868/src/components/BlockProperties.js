@@ -1,1 +1,0 @@
-export{gW as BlockProperties}from"../../chunks/app-DsCSZ3WM.js";

@@ -1,1 +1,0 @@
-export{UL as appUpdate,WL as useAppUpdateAvailable}from"../chunks/app-DsCSZ3WM.js";

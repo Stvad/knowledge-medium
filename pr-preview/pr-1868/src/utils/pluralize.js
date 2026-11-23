@@ -1,1 +1,0 @@
-export{Htt as agree,Utt as pluralize}from"../../chunks/app-DsCSZ3WM.js";

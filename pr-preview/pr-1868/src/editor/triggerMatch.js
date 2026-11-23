@@ -1,1 +1,0 @@
-export{F$ as matchCharTrigger}from"../../chunks/app-DsCSZ3WM.js";

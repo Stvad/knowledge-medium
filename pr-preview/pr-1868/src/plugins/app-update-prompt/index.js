@@ -1,1 +1,0 @@
-export{ML as appUpdatePromptExtension}from"../../../chunks/app-DsCSZ3WM.js";

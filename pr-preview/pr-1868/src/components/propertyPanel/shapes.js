@@ -1,1 +1,0 @@
-export{oY as propertyShapeLabel}from"../../../chunks/app-DsCSZ3WM.js";

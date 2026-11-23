@@ -1,1 +1,0 @@
-export{GW as declarationOnlyDefinitionForName,KW as declarationOnlyStatusText}from"../../../chunks/app-DsCSZ3WM.js";

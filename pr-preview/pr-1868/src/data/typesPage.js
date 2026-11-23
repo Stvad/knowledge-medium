@@ -1,1 +1,0 @@
-export{xdt as getOrCreateTypesPage,Sdt as typesPageBlockId,Cdt as typesPageSpec}from"../../chunks/app-DsCSZ3WM.js";

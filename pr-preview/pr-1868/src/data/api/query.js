@@ -1,1 +1,0 @@
-export{lgt as defineQuery}from"../../../chunks/app-DsCSZ3WM.js";

@@ -1,1 +1,0 @@
-export{nZ as tablesDataExtension}from"../../../chunks/app-DsCSZ3WM.js";

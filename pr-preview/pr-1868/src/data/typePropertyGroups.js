@@ -1,1 +1,0 @@
-export{VW as typePropertyGroups}from"../../chunks/app-DsCSZ3WM.js";

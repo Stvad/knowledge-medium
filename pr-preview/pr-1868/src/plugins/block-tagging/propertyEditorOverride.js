@@ -1,1 +1,0 @@
-export{rp as blockTagsConfigUi}from"../../../chunks/app-DsCSZ3WM.js";

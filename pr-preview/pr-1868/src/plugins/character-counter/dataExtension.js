@@ -1,1 +1,0 @@
-export{e4 as characterCounterDataExtension}from"../../../chunks/app-DsCSZ3WM.js";

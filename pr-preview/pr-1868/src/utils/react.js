@@ -1,1 +1,0 @@
-export{iV as useIsMobile,aV as usePointerCoarse}from"../../chunks/app-DsCSZ3WM.js";

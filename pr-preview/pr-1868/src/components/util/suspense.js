@@ -1,1 +1,0 @@
-export{UY as SuspenseFallback}from"../../../chunks/app-DsCSZ3WM.js";

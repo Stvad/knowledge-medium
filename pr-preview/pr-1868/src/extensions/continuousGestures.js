@@ -1,1 +1,0 @@
-export{SB as GESTURE_ACTIVE,CB as GESTURE_CANCEL,wB as GESTURE_IDLE,TB as NO_BLOCK_GESTURES_ATTRIBUTE,EB as TOUCH_HOLD_MS,DB as TOUCH_SLOP_PX,OB as allowsBlockGestures,kB as continuousGestureRecognizersFacet,AB as createBlockGestureController,jB as enabledTouchAction,MB as suppressNextClick,NB as unionTouchAction,PB as useContinuousGestures}from"../../chunks/app-DsCSZ3WM.js";

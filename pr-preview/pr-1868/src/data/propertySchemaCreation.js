@@ -1,1 +1,0 @@
-export{sY as adoptOrCreatePropertySchema}from"../../chunks/app-DsCSZ3WM.js";

@@ -1,1 +1,0 @@
-export{sft as deriveWorkspaceIdNamespace}from"../../../chunks/app-DsCSZ3WM.js";

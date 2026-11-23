@@ -1,1 +1,0 @@
-export{bC as useIsReadOnly}from"../../chunks/app-DsCSZ3WM.js";

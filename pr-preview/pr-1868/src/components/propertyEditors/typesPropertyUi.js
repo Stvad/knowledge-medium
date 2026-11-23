@@ -1,1 +1,0 @@
-export{fI as kernelPropertyUiExtension,pI as typesPropertyUi,mI as typesPropertyUiExtension}from"../../../chunks/app-DsCSZ3WM.js";

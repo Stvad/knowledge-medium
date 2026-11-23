@@ -1,1 +1,0 @@
-export{UI as withRowSlide}from"../../chunks/app-DsCSZ3WM.js";

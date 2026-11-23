@@ -1,1 +1,0 @@
-export{fet as Block,pet as requireLoadedBlock}from"../../chunks/app-DsCSZ3WM.js";

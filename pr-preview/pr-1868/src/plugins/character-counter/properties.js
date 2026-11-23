@@ -1,1 +1,0 @@
-export{o4 as RAW_CHARACTER_COUNT_PROFILE_ID,s4 as WORDS_COUNT_PROFILE_ID,c4 as charLimitProp,l4 as charProfileProp,u4 as charScopeProp}from"../../../chunks/app-DsCSZ3WM.js";

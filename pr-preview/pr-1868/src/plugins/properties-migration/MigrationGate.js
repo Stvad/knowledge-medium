@@ -1,1 +1,0 @@
-export{Hc as MigrationGate}from"../../../chunks/app-DsCSZ3WM.js";

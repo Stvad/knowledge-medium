@@ -1,1 +1,0 @@
-export{n_t as CHANGE_SCOPE_POLICIES,r_t as ChangeScope,i_t as isChangeScope,a_t as policyForScope,o_t as scopeAllowedInReadOnly,s_t as scopeIsUndoable,c_t as scopePoliciesEquivalent,l_t as scopeUploadsToServer,u_t as sourceForScope}from"../../../chunks/app-DsCSZ3WM.js";

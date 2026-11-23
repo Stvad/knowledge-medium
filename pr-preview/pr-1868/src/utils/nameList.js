@@ -1,1 +1,0 @@
-export{Wtt as NAMES_IN_A_SENTENCE,Gtt as describeNames,Ktt as firstFew}from"../../chunks/app-DsCSZ3WM.js";

@@ -1,1 +1,0 @@
-export{U4 as pluginPrefsExtension,W4 as pluginUIStateExtension}from"../../chunks/app-DsCSZ3WM.js";

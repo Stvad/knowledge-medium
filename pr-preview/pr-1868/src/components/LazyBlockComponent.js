@@ -1,1 +1,0 @@
-export{QR as LazyBlockComponent}from"../../chunks/app-DsCSZ3WM.js";

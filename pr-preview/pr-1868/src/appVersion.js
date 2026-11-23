@@ -1,1 +1,0 @@
-export{ud as appVersion}from"../chunks/app-DsCSZ3WM.js";
