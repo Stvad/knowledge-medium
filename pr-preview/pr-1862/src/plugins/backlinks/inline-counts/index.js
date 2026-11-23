@@ -1,1 +1,1 @@
-export{Ux as inlineBacklinkCountsExtension}from"../../../../chunks/app-CPgSTpGW.js";
+export{Ux as inlineBacklinkCountsExtension}from"../../../../chunks/app-jJF15_j7.js";

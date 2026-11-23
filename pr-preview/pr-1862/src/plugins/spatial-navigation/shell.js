@@ -1,1 +1,1 @@
-export{AD as spatialNavigationShellDecorator}from"../../../chunks/app-CPgSTpGW.js";
+export{AD as spatialNavigationShellDecorator}from"../../../chunks/app-jJF15_j7.js";

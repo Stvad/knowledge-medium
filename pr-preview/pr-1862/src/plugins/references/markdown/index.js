@@ -1,1 +1,1 @@
-export{VS as referencesMarkdownExtension}from"../../../../chunks/app-CPgSTpGW.js";
+export{VS as referencesMarkdownExtension}from"../../../../chunks/app-jJF15_j7.js";

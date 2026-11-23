@@ -1,1 +1,1 @@
-export{p1 as annotationsDataExtension}from"../../../chunks/app-CPgSTpGW.js";
+export{p1 as annotationsDataExtension}from"../../../chunks/app-jJF15_j7.js";

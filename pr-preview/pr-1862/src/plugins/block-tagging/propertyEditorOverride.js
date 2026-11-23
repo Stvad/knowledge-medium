@@ -1,1 +1,1 @@
-export{pp as blockTagsConfigUi}from"../../../chunks/app-CPgSTpGW.js";
+export{pp as blockTagsConfigUi}from"../../../chunks/app-jJF15_j7.js";

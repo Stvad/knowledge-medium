@@ -1,1 +1,1 @@
-export{Ak as WorkspaceSettingsDialog}from"../../../chunks/app-CPgSTpGW.js";
+export{Ak as WorkspaceSettingsDialog}from"../../../chunks/app-jJF15_j7.js";

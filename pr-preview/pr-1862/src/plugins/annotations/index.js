@@ -1,1 +1,1 @@
-export{Um as annotationsPlugin}from"../../../chunks/app-CPgSTpGW.js";
+export{Um as annotationsPlugin}from"../../../chunks/app-jJF15_j7.js";
