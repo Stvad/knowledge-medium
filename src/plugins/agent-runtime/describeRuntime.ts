@@ -48,9 +48,10 @@ const contextDependencyCatalog: Record<string, ContextDependencySchema> = {
     notes: 'renderScopeId is a rendered UI concept and is not accepted by the CLI bridge',
   },
   [ActionContextTypes.MULTI_SELECT_MODE]: {
-    acceptedKeys: ['uiStateBlock', 'selectedBlocks', 'anchorBlock'],
-    cliInputKeys: ['uiStateBlockId', 'selectedBlockIds', 'anchorBlockId'],
+    acceptedKeys: ['uiStateBlock', 'selectedBlocks', 'anchorBlock', 'scopeRootId'],
+    cliInputKeys: ['uiStateBlockId', 'selectedBlockIds', 'anchorBlockId', 'scopeRootId'],
     runnableFromCli: true,
+    notes: 'scopeRootId bounds indent/outdent/move to that subtree (otherwise each block by its own page); a panel uiStateBlockId supplies its top-level block',
   },
   [ActionContextTypes.EDIT_MODE_CM]: {
     acceptedKeys: ['uiStateBlock', 'block', 'editorView'],
