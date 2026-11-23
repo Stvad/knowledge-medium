@@ -1,1 +1,1 @@
-export{ZP as CommandPalette}from"../../../chunks/app-BS7mEYD-.js";
+export{GP as CommandPalette}from"../../../chunks/app-CDznvycP.js";

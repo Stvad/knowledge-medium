@@ -1,1 +1,1 @@
-export{fT as MEDIA_VIEWERS_FACET_ID,pT as isMediaViewerContribution,mT as mediaViewersFacet}from"../../../chunks/app-BS7mEYD-.js";
+export{oT as MEDIA_VIEWERS_FACET_ID,sT as isMediaViewerContribution,cT as mediaViewersFacet}from"../../../chunks/app-CDznvycP.js";

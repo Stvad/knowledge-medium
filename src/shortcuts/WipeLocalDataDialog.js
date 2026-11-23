@@ -1,1 +1,1 @@
-export{UI as WipeLocalDataDialog}from"../../chunks/app-BS7mEYD-.js";
+export{LI as WipeLocalDataDialog}from"../../chunks/app-CDznvycP.js";

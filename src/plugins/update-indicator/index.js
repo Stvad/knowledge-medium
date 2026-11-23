@@ -1,1 +1,1 @@
-export{Ox as updateIndicatorPlugin}from"../../../chunks/app-BS7mEYD-.js";
+export{Sx as updateIndicatorPlugin}from"../../../chunks/app-CDznvycP.js";
