@@ -23,7 +23,7 @@ import {
   focusBlock,
 } from '@/data/properties.js'
 import { Button } from './ui/button'
-import { nextVisibleBlock } from '@/utils/selection.js'
+import { nextDrawnStep } from '@/utils/selection.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -152,33 +152,25 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const focusBlockEditor = async (
     target: Block,
     selection: { start?: number; line?: 'first' | 'last'; x?: number },
+    targetRenderScopeId: string | undefined,
   ) => {
-    // Keep focus in the current render scope. In a nested surface
-    // (backlink/embed) the navigation target (next visible block, etc.)
-    // is resolved within that surface's scope, so focusing without the
-    // scope id would fall back to the panel-outline copy and the editor
-    // would appear not to move.
-    await focusBlock(uiStateBlock, target.id, {
-      edit: true,
-      selection,
-      ...(typeof renderScopeId === 'string' ? {renderScopeId} : {}),
-    })
+    await focusBlock(uiStateBlock, target.id, {edit: true, selection, renderScopeId: targetRenderScopeId})
     requestEditorFocus(uiStateBlock)
   }
 
   const focusThisBlockContentEnd = async () => {
     const data = block.peek() ?? await block.load()
-    await focusBlockEditor(block, {start: data?.content.length ?? 0})
+    await focusBlockEditor(block, {start: data?.content.length ?? 0}, renderScopeId)
   }
 
   const focusAfterProperties = async () => {
     const surface = outlineSurfaceOf({scopeRootId, scopeRootForcesOpen: !isNestedSurface, propertyDisplay, renderScopeId})
     if (!surface) return
 
-    const next = await nextVisibleBlock(block, surface)
+    const {block: next, surface: destination} = await nextDrawnStep(block, surface)
     if (!next) return
     await next.load()
-    await focusBlockEditor(next, {start: 0})
+    await focusBlockEditor(next, {start: 0}, destination.renderScopeId)
   }
 
   const handlePropertyRowKeyDown = (
@@ -191,7 +183,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     event.stopPropagation()
 
     const row = event.currentTarget
-    if (focusAdjacentPropertyRow(block.id, row, direction)) return
+    if (focusAdjacentPropertyRow(block.id, row, direction, renderScopeId)) return
 
     if (direction < 0) {
       void focusThisBlockContentEnd()

@@ -197,10 +197,10 @@ describe('vim normal mode', () => {
   it('jumpVisibleBlocks counts drawn rows as steps', async () => {
     const jump = (display: PropertyDisplayScopeLevels, from: string, direction: 'up' | 'down') =>
       jumpVisibleBlocks(repo.block(from), outlineSurfaceOf({scopeRootId: 'page', propertyDisplay: display})!, 2, direction)
-    expect((await jump(NON_HIDDEN, 'a', 'down'))?.id).toBe(draftRow)
-    expect((await jump(NONE, 'a', 'down'))?.id).toBe('solo')
-    expect((await jump(NON_HIDDEN, 'after', 'up'))?.id).toBe(soloStatusRow)
-    expect((await jump(NONE, 'after', 'up'))?.id).toBe('b')
+    expect((await jump(NON_HIDDEN, 'a', 'down'))?.block.id).toBe(draftRow)
+    expect((await jump(NONE, 'a', 'down'))?.block.id).toBe('solo')
+    expect((await jump(NON_HIDDEN, 'after', 'up'))?.block.id).toBe(soloStatusRow)
+    expect((await jump(NONE, 'after', 'up'))?.block.id).toBe('b')
   })
 
   it('jump_many_up counts drawn rows: eight steps from `after` reach `owner` or `page`', async () => {

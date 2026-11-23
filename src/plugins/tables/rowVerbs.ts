@@ -26,7 +26,7 @@ const EDITING = ActionContextTypes.EDIT_MODE_CM
 const rowGrid = (deps: BaseShortcutDependencies): GridController | undefined => {
   const {block, renderScopeId} = deps as BlockShortcutDependencies
   const grid = gridDrawing(renderScopeId, block?.id)
-  return block && grid?.isRow(block.id) ? grid : undefined
+  return block && grid?.renderScopeId === renderScopeId && grid?.isRow(block.id) ? grid : undefined
 }
 
 /** A verb the grid takes on a row; anywhere else the outline's runs. */
@@ -72,7 +72,7 @@ const splitRow: ActionDispatchDecorator = {
     if (!atEnd) {
       showInfo('A query table’s row splits in the outline.')
     } else if (makesChild) {
-      await next(deps, trigger)
+      await next({...deps, renderScopeId: grid.notesScopeId(block.id)}, trigger)
     } else {
       grid.command('insert-below')
     }

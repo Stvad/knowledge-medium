@@ -66,3 +66,17 @@ export const surfaceOfRenderScopeId = (renderScopeId: string): string | undefine
   const kind = renderScopeId.slice(0, renderScopeId.indexOf(':'))
   return kind.startsWith('surface.') ? kind.slice('surface.'.length) : undefined
 }
+
+/** The parts `surfaceRenderScopeId` joined; undefined for any other scope. */
+export const surfaceRenderScopeParts = (
+  renderScopeId: string,
+): {surface: string; occurrenceId: string; parentRenderScopeId: string} | undefined => {
+  const parts = /^surface\.([^:]*):([^:]*):([^:]*)$/.exec(renderScopeId)
+  if (!parts) return undefined
+  const [, surface, occurrence, parent] = parts
+  try {
+    return {surface, occurrenceId: decodeURIComponent(occurrence), parentRenderScopeId: decodeURIComponent(parent)}
+  } catch {
+    return undefined
+  }
+}

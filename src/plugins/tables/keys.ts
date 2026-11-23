@@ -16,7 +16,7 @@ import {
   type BlockShortcutDependencies, type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror'
-import { nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
+import { nextDrawnStep, previousDrawnStep } from '@/utils/selection'
 import { showInfo } from '@/utils/toast'
 import type { BlockContextType } from '@/types'
 import { CELL_CONTROL_SELECTOR, GridController, type GridCommand } from './controller'
@@ -191,10 +191,12 @@ const atEditorEdge = (view: EditorView, edge: Edge) => {
 
 /** Whether the outline's step from `block` past `edge` leaves what its scope
  *  draws: from the first block upwards onto the scope root, and from the last
- *  block downwards, where the outline has nothing. */
-const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge): Promise<boolean> => {
-  if (edge === 'top' || edge === 'start') return (await previousVisibleBlock(block, surface))?.id === surface.scopeRootId
-  return await nextVisibleBlock(block, surface) === null
+ *  block downwards, where the walk reaches another row of this grid or the
+ *  end. A destination outside the grid stays the outline's. */
+const leavesScope = async (block: Block, surface: OutlineSurface, edge: Edge, grid: GridController): Promise<boolean> => {
+  if (edge === 'top' || edge === 'start') return (await previousDrawnStep(block, surface)).block?.id === surface.scopeRootId
+  const next = await nextDrawnStep(block, surface)
+  return !next.block || (next.surface.renderScopeId === grid.renderScopeId && grid.isRow(next.block.id))
 }
 
 /** What the grid draws a block as, from the scope it is drawn in: a row's
@@ -222,15 +224,15 @@ type Step = Edge | 'sideways' | 'here'
  *  The walk is async, so the key's default is prevented first, as the
  *  outline's verbs do on the same test: otherwise the caret moves before
  *  either handler runs. */
-const crossing = (step: Step): Applies => (deps, trigger, grid) => {
+const crossing = (step: Step, includeRowNotes = true): Applies => (deps, trigger, grid) => {
   const {block} = deps as BlockShortcutDependencies
   const surface = outlineSurfaceOf(deps as BlockShortcutDependencies)
   if (!block || !surface) return true
   const place = placeOf(grid, block.id, surface.scopeRootId)
-  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : step === 'bottom' && place === 'rowChild'
+  const walks = place === 'member' ? step !== 'here' && step !== 'sideways' : includeRowNotes && step === 'bottom' && place === 'rowChild'
   if (!walks) return place === 'value' || place === 'rowText' || (place === 'member' && step === 'sideways')
   trigger.preventDefault()
-  return leavesScope(block, surface, step as Edge)
+  return leavesScope(block, surface, step as Edge, grid)
 }
 
 /** An editor verb: only at the editor's edge, then as `crossing`. */
@@ -239,12 +241,8 @@ const leavingAt = (edge: Edge): Applies => (deps, trigger, grid) => {
   return editorView !== undefined && atEditorEdge(editorView, edge) && crossing(edge)(deps, trigger, grid)
 }
 
-/** No block selection starts inside a grid. Block selection runs in the
- *  panel's own surface, whose walk follows the data tree: extended from a
- *  block the grid draws it reaches blocks it does not (a row's other
- *  properties, its children), which a selection's Delete would then remove.
- *  In an editor the key stays CodeMirror's own text selection. Every action
- *  that starts one is listed in `SELECTION_STARTS`. */
+/** Bulk selection stores block IDs, so a grid occurrence could turn a
+ *  selection gesture into an edit on its source outline. */
 const noBlockSelection = (context: ActionContextType, actionId: string): ActionDispatchDecorator => ({
   actionId,
   context,
@@ -315,7 +313,7 @@ const SELECTION_STARTS: readonly (readonly [ActionContextType, string])[] = [
 ]
 
 export const tableOutlineVerbRedirects = [
-  redirect(NORMAL, 'move_down', 'down', crossing('bottom')),
+  redirect(NORMAL, 'move_down', 'down', crossing('bottom', false)),
   redirect(NORMAL, 'move_up', 'up', crossing('top')),
   redirect(NORMAL, 'move_left', 'left', crossing('sideways')),
   redirect(NORMAL, 'move_right', 'right', crossing('sideways')),

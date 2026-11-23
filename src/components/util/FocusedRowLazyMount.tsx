@@ -14,8 +14,8 @@ const ANCESTOR_WALK_DELAY_MS = 150
 /**
  * Keeps the panel's focused row mounted, so a focus write that lands on a
  * lazy placeholder isn't a dead end (why that matters: `lazyMountRegistry`).
- * Focus targets come from the block model — `nextVisibleBlock` for the
- * keyboard, a search hit, a jump — which knows nothing about which rows
+ * Focus targets come from the block model — a drawn keyboard step,
+ * a search hit, a jump — which knows nothing about which rows
  * happen to be deferred.
  *
  * Three things it does, each for a reason the registry can't cover:
