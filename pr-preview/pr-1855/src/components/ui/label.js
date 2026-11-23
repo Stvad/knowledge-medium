@@ -1,1 +1,1 @@
-export{NM as Label}from"../../../chunks/app-DO2nCr4f.js";
+export{RM as Label}from"../../../chunks/app-r96OwSVe.js";

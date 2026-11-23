@@ -1,1 +1,1 @@
-export{UW as addProperty,WW as deleteProperty,GW as writeProperty}from"../../../chunks/app-DO2nCr4f.js";
+export{JW as addProperty,YW as deleteProperty,XW as writeProperty}from"../../../chunks/app-r96OwSVe.js";

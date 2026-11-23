@@ -1,1 +1,1 @@
-export{d2 as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,f2 as contributorProfilesByIdsQuery}from"../../../chunks/app-DO2nCr4f.js";
+export{g2 as CONTRIBUTOR_PROFILES_BY_IDS_QUERY,_2 as contributorProfilesByIdsQuery}from"../../../chunks/app-r96OwSVe.js";

@@ -1,1 +1,1 @@
-export{YW as METADATA_ROW_GRID_STYLE,XW as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-DO2nCr4f.js";
+export{eG as METADATA_ROW_GRID_STYLE,tG as PROPERTY_ROW_GRID_STYLE}from"../../../chunks/app-r96OwSVe.js";
