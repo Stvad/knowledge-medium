@@ -108,7 +108,8 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   if (uiStateBlock.repo.isReadOnly) return
 
   void resetBlockSelection(uiStateBlock)
-  // Before the edit flag, for the reason in enterEditModeForBlock.
+  // Before the edit flag: the editor places the caret in the commit that
+  // mounts it (see focusBlock's `selection`).
   if (selection) void uiStateBlock.set(editorSelection, selection)
   setIsEditing(uiStateBlock, true)
   requestEditorFocus(uiStateBlock)
@@ -208,13 +209,14 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'outdent_block',
     description: 'Outdent block',
     icon: IndentDecrease,
-    handler: async ({block, uiStateBlock, scopeRootId, propertyDisplay}: BlockShortcutDependencies) => {
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {block, uiStateBlock, scopeRootId, propertyDisplay} = deps
       if (!scopeRootId) return
 
       // Don't outdent the scope root itself; the mutator additionally
       // refuses when the block is a direct child of the scope root
       // (outdenting would escape the visible subtree).
-      const {canOutdent} = await structuralEditPolicyForBlock(block, {scopeRootId, propertyDisplay})
+      const {canOutdent} = await structuralEditPolicyForBlock(block, deps)
       if (!canOutdent) return
 
       await repo.mutate.outdent({id: block.id, scopeRootId, propertyDisplay})

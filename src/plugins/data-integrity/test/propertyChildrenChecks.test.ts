@@ -601,6 +601,7 @@ describe('property scans wait before each page', () => {
     }
   }, 20_000)
 
+  // This test took 0.75 s when rerun alone under load.
   it('gets the audit\'s hook, as does the divergence scan', async () => {
     await setMode('children')
     await insertRaw(...pageAndOneOwners())
@@ -620,6 +621,5 @@ describe('property scans wait before each page', () => {
 
     expect(inDivergence).toBe(true)
     expect(yields).toBe(beforeDivergence + 4)
-    // ~0.5s alone; timed out at 5.2s under a full gate at load 73.
   }, 20_000)
 })

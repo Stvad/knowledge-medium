@@ -526,7 +526,7 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
  * The three relative gestures resolve their anchors against the sibling list
  * **the caller sees**: `visibleChildrenOf` under the `propertyDisplay` scope of
  * the surface the gesture ran in (none given: mode `none`, every property row
- * left out). A hidden row can therefore neither be picked as a gesture's
+ * left out). A plugin's children view is not consulted (`childrenViewFacet`). A hidden row can therefore neither be picked as a gesture's
  * target nor absorb a step aimed past it; where a moved block lands
  * *physically* relative to a hidden row carries no semantics. A drawn property
  * row is an ordinary row to all three, values included: a block moved in among

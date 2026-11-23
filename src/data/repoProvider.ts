@@ -104,7 +104,7 @@ const resolverForUser = (userId: string): SyncResolver => {
  *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
  *  this — re-read at call time so an account switch is reflected.
  *
- *  @ambient allowIn: src/data/repoProvider.ts, src/plugins/attachments/assetUpload.ts, src/plugins/attachments/assetResolver.ts
+ *  @ambient allowIn: src/data/repoProvider.ts, src/plugins/attachments/browserMedia.ts, src/plugins/attachments/assetResolver.ts
  *  @ambientMessage getActiveUserId() reads the ambient active-user global. Use the injected channel instead: repo.user.id (a Repo/Block is already in scope at every call site) or useUser() in a component.
  */
 export const getActiveUserId = (): string | null => activeUserId
@@ -121,11 +121,8 @@ export const isRemoteSyncActive = (): boolean => activeRemoteSync
 export const getActiveSyncResolver = (): SyncResolver | null =>
   activeUserId ? resolverForUser(activeUserId) : null
 
-/** The §6 sync resolver for a SPECIFIC user (materializability / WK / K_id),
- *  regardless of who is active. The byte up-lane binds this at its entry boundary
- *  (capture / drain) so an operation initiated for one user can't read another
- *  user's keys if the active account switches mid-flight. (The read-path asset
- *  resolver legitimately follows the ACTIVE user instead — see assetResolver.ts.) */
+/** The §6 mode and keys for a bound user, including background attachment work.
+ *  The live asset renderer uses {@link getActiveSyncResolver} to follow account switches. */
 export const syncResolverForUser = (userId: string): SyncResolver => resolverForUser(userId)
 
 /** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from

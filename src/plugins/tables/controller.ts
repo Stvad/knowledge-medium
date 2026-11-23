@@ -8,7 +8,7 @@ import type { Block } from '@/data/block'
 import {
   PropertyEditRefusedError, clearPropertyValue, finishPropertyValueEdit, openPropertyValue,
 } from '@/data/internals/propertyValueEdits'
-import { editorSelection, focusBlock, hasBlockType, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { focusBlock, hasBlockType, isCollapsedProp, isEditingBlock, isFocusedBlock, peekFocusedBlockLocation } from '@/data/properties'
 import { NO_PROPERTY_DISPLAY_SCOPE, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import { getLastVisibleDescendant } from '@/utils/selection'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction'
@@ -217,8 +217,11 @@ export class GridController {
       this.focusRow(clamp(row + 1, this.rowIds.length - 1))
       return
     }
-    await this.uiStateBlock.set(editorSelection, {blockId: first, start: 0})
-    await focusBlock(this.uiStateBlock, first, {edit: true, renderScopeId: this.renderScopeId})
+    await focusBlock(this.uiStateBlock, first, {
+      edit: true,
+      renderScopeId: this.renderScopeId,
+      selection: {start: 0},
+    })
   }
 
   /** ArrowUp from a row's text: the last block the row above draws, edited
@@ -232,8 +235,11 @@ export class GridController {
       this.focusRow(row - 1)
       return
     }
-    await this.uiStateBlock.set(editorSelection, {blockId: target.id, line: 'last'})
-    await focusBlock(this.uiStateBlock, target.id, {edit: true, renderScopeId: this.renderScopeId})
+    await focusBlock(this.uiStateBlock, target.id, {
+      edit: true,
+      renderScopeId: this.renderScopeId,
+      selection: {line: 'last'},
+    })
   }
 
   /** The row drawn above `rowId`, if any. */

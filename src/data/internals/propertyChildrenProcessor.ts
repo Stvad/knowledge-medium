@@ -1438,6 +1438,15 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       for (const child of await ctx.tx.childrenOf(row.after.id, undefined)) {
         if (child.isFieldForm === true) rowStates.push(child)
       }
+      // A field row this tx deleted under the live owner is the children's
+      // word, which MATERIALIZE's revival leaves to this pass (`revivalCandidates`'
+      // `deletedOnItsOwn`). One the tx first revived (an eager write on the
+      // revived owner) is dead → dead net, so no field diff carries it here.
+      for (const child of await ctx.tx.deletedChildrenOf(row.after.id)) {
+        if (child.isFieldForm === true && await ctx.parentLivenessWhenTombstoned(child.id) === 'live') {
+          rowStates.push(child)
+        }
+      }
     }
     await reprojectOwnersForRowStates(
       ctx.tx,

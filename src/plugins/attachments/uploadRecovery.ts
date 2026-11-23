@@ -53,9 +53,8 @@
  * decodes REMOTE bytes and mutates the queue (`requeue` / `delete`). It NEVER touches the
  * LOCAL byte store — a `failed` record's local bytes are the only copy + the self-heal
  * source and stay put (the eviction-exemption invariant); only an explicit user discard
- * releases them (content-refcount-gated, §8/§9/§16). It does NOT run the drain itself; the
- * app wiring ({@link import('./assetUpload.js').runUploadRecovery}) drains the requeued
- * records after this pass, inside one lane lock.
+ * releases them (content-refcount-gated, §8/§9/§16). The shared lane
+ * ({@link import('./mediaLanes.js').MediaLanes.recover}) drains the requeued records under the same lock.
  */
 
 import { verifyObjectBytes } from '@/sync/byteTransform.js'
@@ -74,10 +73,8 @@ export interface UploadRecoveryDeps {
   readonly getCek: GetCek
   /** The workspace's K_id (§10), which keys an e2ee object's address. */
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
-  /** Is the QUEUED user still the active account? The probe / decode ride the active
-   *  session + resolve keys against the active user, so a mid-recovery account switch
-   *  must not verify/re-drive userA's record under userB. Defaults to always-active. */
-  readonly isActiveUser?: () => boolean
+  /** Per-record write gate. See {@link import('./mediaLanes.js').MediaLaneDeps.canDrain}. Defaults to true. */
+  readonly canUpload?: () => boolean
   /** The active session's access token (the same getter the blob store PUTs with); null
    *  ⟹ no live Supabase session. Required to TRUST a probe: with no token the read rides
    *  the anon role and an RLS-denied download is 404-shaped (existence-hiding), so a 404
@@ -106,7 +103,7 @@ interface RecoverOneCtx {
   readonly getMaterializability: GetMaterializability
   readonly getCek: GetCek
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
-  readonly isActiveUser: () => boolean
+  readonly canUpload: () => boolean
   readonly getAccessToken: () => Promise<string | null>
 }
 
@@ -115,9 +112,8 @@ const recoverOne = async (
   rec: ByteUploadRecord,
   ctx: RecoverOneCtx,
 ): Promise<RecoverOutcome> => {
-  // (0) Bind to the active account (same gate as the drain): a probe/decode under the
-  //     wrong session could 403 or open with the wrong key.
-  if (!ctx.isActiveUser()) return 'deferred'
+  // (0) Check upload permission before probing the record.
+  if (!ctx.canUpload()) return 'deferred'
 
   // (1) Can we decode for this workspace right now? A PRESENT object needs the key to
   //     hash-verify, and the absent branch's re-drive can only encode-to-upload when
@@ -157,7 +153,7 @@ const recoverOne = async (
   // (2b) The probe rode the AMBIENT session; re-confirm the queued user is still active before
   //      acting on its result, so an account switch during the probe can't requeue/clear
   //      userA's record off a read that ran (and maybe 404'd on RLS) under userB.
-  if (!ctx.isActiveUser()) return 'deferred'
+  if (!ctx.canUpload()) return 'deferred'
 
   // (3a) ABSENT → the path is free. Re-drive via the drain (requeue failed→pending); the
   //      `requeue` CAS on `stagedAt` drops the write if a re-paste re-armed the record
@@ -199,7 +195,7 @@ export const recoverFailedUploads = async (
     getMaterializability: deps.getMaterializability,
     getCek: deps.getCek,
     getContentKeyHmac: deps.getContentKeyHmac,
-    isActiveUser: deps.isActiveUser ?? (() => true),
+    canUpload: deps.canUpload ?? (() => true),
     getAccessToken: deps.getAccessToken ?? (async () => 'authed'),
   }
 
