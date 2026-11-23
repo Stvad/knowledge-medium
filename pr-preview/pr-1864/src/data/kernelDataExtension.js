@@ -1,1 +1,0 @@
-export{Q9 as kernelDataExtension}from"../../chunks/app-YOmO0SCq.js";

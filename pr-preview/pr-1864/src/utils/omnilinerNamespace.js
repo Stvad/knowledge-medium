@@ -1,1 +1,0 @@
-export{mX as omnilinerNamespace}from"../../chunks/app-YOmO0SCq.js";

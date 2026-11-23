@@ -1,1 +1,0 @@
-export{CF as CommandPaletteHeaderItem}from"../../../chunks/app-YOmO0SCq.js";
