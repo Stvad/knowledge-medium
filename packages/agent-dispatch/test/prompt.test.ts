@@ -132,12 +132,12 @@ describe('renderMentionPrompt in a comment thread', () => {
 })
 
 describe('renderMentionPrompt with a memory', () => {
-  const memory = {blockId: 'm-1', outline: 'Memory  ^m-1  · 1 children\n- replies short, no preamble  ^n-1', shared: false}
+  const memory = {blockId: 'm-1', index: '- replies short, no preamble (+1 child) ^n-1', shared: false}
 
   it('places the memory, with how to keep it, before the instructions in both default templates', () => {
     for (const [template, next] of [[undefined, 'How to work:'], [DEFAULT_MENTION_CHANNEL_PROMPT, 'Handle it now']] as const) {
       const prompt = renderMentionPrompt(template, {...context, memory})
-      const at = prompt.indexOf('- replies short, no preamble  ^n-1')
+      const at = prompt.indexOf(memory.index)
       expect(at).toBeGreaterThan(prompt.indexOf('Path from the page root'))
       expect(at).toBeLessThan(prompt.indexOf(next))
       expect(prompt).toContain('append_markdown with target m-1')
@@ -145,13 +145,22 @@ describe('renderMentionPrompt with a memory', () => {
     }
   })
 
-  it('frames embedded rows as shared notes only when the outline shows some', () => {
+  it('explains how to read details and retain them when consolidating notes', () => {
+    const prompt = renderMentionPrompt(undefined, {...context, memory})
+    expect(prompt).toContain('summary-only index')
+    expect(prompt).toMatch(/subtree.*get_block/)
+    expect(prompt).toContain('Save details as children')
+    expect(prompt).toContain('update the summary when those details change')
+    expect(prompt).toContain('preserve their details')
+  })
+
+  it('explains how shared notes can be used when the index includes them', () => {
     const own = renderMentionPrompt(undefined, {...context, memory})
     expect(own).not.toMatch(/shared/i)
     const shared = renderMentionPrompt(undefined, {...context, memory: {...memory, shared: true}})
-    expect(shared).toContain('is a shared note')
-    expect(shared).toContain('append_markdown with target m-1, never under a shared note.')
-    expect(shared).toContain('A shared note, and the note that embeds it, stay as they are unless the user asks.')
+    expect(shared).toContain('A row marked [shared] is a shared note')
+    expect(shared).toContain('Change a shared note, any of its descendants, or the note that embeds it only when the user explicitly asks.')
+    expect(shared).toContain('Never append under a shared note.')
   })
 
   it('appends the memory to a custom template that does not place it', () => {

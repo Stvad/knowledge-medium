@@ -120,6 +120,12 @@ describe('cliCommandFrom', () => {
       .toEqual({type: 'view-outline', ref: 'today', depth: 2})
   })
 
+  it('routes a memory index to the requested workspace and asks for shared root IDs with --json', () => {
+    const memory = tool('memory_index')
+    expect(cliCommandFrom(memory, 'Memory', {workspace: 'ws-2', json: true}))
+      .toEqual({type: 'view-memory-index', ref: 'Memory', workspaceId: 'ws-2', format: 'json'})
+  })
+
   it('maps --raw onto the stored command shapes', () => {
     expect(cliCommandFrom(tool('get_block'), 'b1', {raw: true})).toEqual({type: 'get-block', id: 'b1'})
     expect(cliCommandFrom(tool('subtree'), 'b1', {raw: true})).toEqual({type: 'get-subtree', rootId: 'b1'})

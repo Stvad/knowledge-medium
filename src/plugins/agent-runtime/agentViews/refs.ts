@@ -148,18 +148,10 @@ export const refLines = ({refs, omittedRefs}: RowRefs, indent = ''): string[] =>
 
 export const REFS_LEGEND = '↳ ((id)) "…" = the text that reference shows in the app; it is not part of the block\'s content.'
 
-/** The blocks `hosts` embed that a level of the outline can show: in host
- *  then mark order, none `placed`, each once, at most `budget`, and each a
- *  live block of the workspace with its visible child count. Only those are
- *  read. A page embed resolves its name as a page link does. */
-export const loadEmbedTargets = async (
-  repo: Repo,
-  workspaceId: string,
-  hosts: readonly BlockData[],
-  {budget, placed}: {budget: number, placed: (id: string) => boolean},
-): Promise<Array<{hostId: string, block: BlockData, childCount: number}>> => {
-  const picks: Array<{hostId: string, id: string}> = []
-  const picked = new Set<string>()
+/** Embed destinations in display order. Each page alias is resolved once per view. */
+export async function* embeddedRefs(
+  repo: Repo, workspaceId: string, hosts: readonly Pick<BlockData, 'id' | 'content'>[],
+) {
   const pageIds = new Map<string, string | null>()
   const pageId = async (alias: string): Promise<string | null> => {
     if (!pageIds.has(alias)) {
@@ -170,13 +162,31 @@ export const loadEmbedTargets = async (
   }
   for (const host of hosts) {
     for (const mark of contentMarks(host.content)) {
-      if (picks.length >= budget) break
       if (mark.kind === 'ref') continue
       const id = mark.kind === 'page-embed' ? await pageId(mark.alias) : mark.id
-      if (id === null || placed(id) || picked.has(id)) continue
-      picked.add(id)
-      picks.push({hostId: host.id, id})
+      if (id !== null) yield {hostId: host.id, id, kind: mark.kind}
     }
+  }
+}
+
+/** The blocks `hosts` embed that a level of the outline can show: in host
+ *  then mark order, none `placed`, each once, at most `budget`, and each a
+ *  live block of the workspace with its visible child count. Only those are
+ *  read. A page embed resolves its name as a page link does. */
+export const loadEmbedTargets = async (
+  repo: Repo,
+  workspaceId: string,
+  hosts: readonly BlockData[],
+  {budget, placed}: {budget: number, placed: (id: string) => boolean},
+): Promise<Array<{hostId: string, block: BlockData, childCount: number}>> => {
+  if (budget <= 0) return []
+  const picks: Array<{hostId: string, id: string}> = []
+  const picked = new Set<string>()
+  for await (const {hostId, id} of embeddedRefs(repo, workspaceId, hosts)) {
+    if (placed(id) || picked.has(id)) continue
+    picked.add(id)
+    picks.push({hostId, id})
+    if (picks.length >= budget) break
   }
   if (picks.length === 0) return []
   const ids = picks.map(pick => pick.id)

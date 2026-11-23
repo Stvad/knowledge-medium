@@ -2397,6 +2397,7 @@ const executeAttributedCommand = async (
     case 'view-backlinks':
     case 'view-grouped-backlinks':
     case 'view-search':
+    case 'view-memory-index':
       return runViewCommand(context.repo, command, assertedWorkspaceOverride(command.workspaceId))
 
     case 'read-media':

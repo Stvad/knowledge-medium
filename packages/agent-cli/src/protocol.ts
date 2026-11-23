@@ -666,13 +666,15 @@ const viewRefField = z.string().describe(
   + '(or [[Page name]]), or a date for its daily note (today, yesterday, 2026-06-18).',
 )
 
+// A view reads the open workspace, so naming a workspace routes the call
+// rather than widening what one tab reads.
+const viewWorkspaceField = z.string().optional().describe(
+  'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
+  + 'focused tab), and is refused when no connected tab does.',
+)
+
 const viewFields = {
-  // A view decodes values through the open workspace's registries, so naming
-  // a workspace routes the call rather than widening what one tab reads.
-  workspaceId: z.string().optional().describe(
-    'Workspace to read. The call goes to an app tab that has it open (default: the most recently '
-    + 'focused tab), and is refused when no connected tab does.',
-  ),
+  workspaceId: viewWorkspaceField,
   expandRefs: z.boolean().optional().describe(
     'Show what references display in the app (default true): each ((id)) is followed by a preview of its '
     + "target's text, and subtree expands embeds (!((id)), ![[Page]]) into rows carrying the embedded "
@@ -816,6 +818,20 @@ export const viewSearchCommandSchema = z.looseObject({
   ...contributorField,
   ...commandIdField,
 })
+
+export const viewMemoryIndexCommandSchema = z.looseObject({
+  type: z.literal('view-memory-index'),
+  ref: viewRefField,
+  workspaceId: viewWorkspaceField,
+  ...formatField,
+  ...contributorField,
+  ...commandIdField,
+})
+
+export interface MemoryIndexView {
+  text: string
+  sharedRoots: string[]
+}
 
 /** Comment threads, each with its anchor (block, exact, moved or stale), the
  *  quoted text, an excerpt and path of its target, and its comments nested as
@@ -1066,6 +1082,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   viewBacklinksCommandSchema,
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
+  viewMemoryIndexCommandSchema,
   commentsCommandSchema,
   readMediaCommandSchema,
   addMediaCommandSchema,
@@ -1131,6 +1148,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   viewBacklinksCommandSchema,
   viewGroupedBacklinksCommandSchema,
   viewSearchCommandSchema,
+  viewMemoryIndexCommandSchema,
   commentsCommandSchema,
   readMediaCommandSchema,
   addMediaCommandSchema,
@@ -1417,7 +1435,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   // The views read what the raw commands above read, so they classify the same.
   'view-block': {
     usage: 'kmagent get-block <ref> [--max-chars <n>] [--content-offset <n>] [--json]',
-    description: 'One block, for reading: its content (truncated past maxChars, with how to continue), breadcrumb, types, decoded properties, child and backlink counts.',
+    description: 'Read one block with its breadcrumb, types, decoded properties, and child and backlink counts. Content past maxChars is cut with instructions for continuing.',
     readOnly: true,
   },
   'view-outline': {
@@ -1438,6 +1456,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'view-search': {
     usage: 'kmagent search <query> [--limit <n>] [--offset <n>] [--types <type>…] [--under <ref>] [--include-extensions] [--json]',
     description: 'Full-text search over block content. Each hit: a snippet around the match, its breadcrumb and types; identical blocks are folded into one hit. Extension source is excluded unless asked for.',
+    readOnly: true,
+  },
+  'view-memory-index': {
+    usage: 'kmagent memory-index <ref> [--workspace <id>] [--json]',
+    description: 'List note summaries and child counts. Use subtree on a note ID to read its details. JSON includes the rendered index and the IDs of its shared roots.',
     readOnly: true,
   },
   'comments': {

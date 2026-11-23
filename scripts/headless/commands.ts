@@ -19,6 +19,7 @@ const commands: Record<KnownCommandType, 'always' | 'open' | 'writable' | {refus
   'get-subtree': 'open',
   'view-block': 'open',
   'view-outline': 'open',
+  'view-memory-index': 'open',
   'view-backlinks': 'open',
   'view-grouped-backlinks': 'open',
   'view-search': 'open',

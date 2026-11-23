@@ -4,7 +4,7 @@
  * business logic belongs in this package.
  */
 import type { BridgeClient } from './client.js'
-import { BEING_EDITED_BLOCKS_SQL, type CommentsView } from './protocol.js'
+import { BEING_EDITED_BLOCKS_SQL, type CommentsView, type MemoryIndexView } from './protocol.js'
 
 export interface HydratedRef {
   id: string
@@ -149,6 +149,15 @@ export const createBridgeGraph = (client: BridgeClient) => {
   const getSubtree = async (rootId: string): Promise<BlockData[]> => {
     const result = await client.runCommand({type: 'get-subtree', rootId})
     return Array.isArray(result) ? result as BlockData[] : []
+  }
+
+  const memoryIndex = async (ref: string): Promise<MemoryIndexView> => {
+    const result = await client.runCommand({type: 'view-memory-index', ref, format: 'json'})
+    const {text, sharedRoots} = asRecord(result, 'memory-index')
+    if (typeof text !== 'string' || !Array.isArray(sharedRoots) || sharedRoots.some(root => typeof root !== 'string')) {
+      throw new Error('Unexpected memory-index result shape')
+    }
+    return {text, sharedRoots}
   }
 
   const createBlock = async (
@@ -315,6 +324,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     getBlock,
     ancestors,
     getSubtree,
+    memoryIndex,
     createBlock,
     updateBlock,
     appendMarkdown,

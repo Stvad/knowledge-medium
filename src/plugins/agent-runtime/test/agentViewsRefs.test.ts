@@ -15,6 +15,7 @@ import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataE
 import { executeCommand } from '../commands'
 import { createTestAgentContext } from './createTestAgentContext'
 import type { AgentRuntimeContext } from '../protocol'
+import type { MemoryIndexView } from '@knowledge-medium/agent-cli/protocol'
 import type { OutlineView } from '../agentViews/outline'
 import type { BlockView } from '../agentViews/block'
 import type { BacklinksView } from '../agentViews/backlinks'
@@ -111,6 +112,82 @@ describe('contentMarks', () => {
   it('reads an empty-label ref as a plain one, as the renderer shows it', () => {
     const id = uuid('c0000001', 2)
     expect(contentMarks(`[](((${id})))`)).toEqual([{kind: 'ref', id}])
+  })
+})
+
+describe('memory index', () => {
+  const ROOT = uuid('d0000000', 1)
+
+  it('shows only note summaries, including direct block embeds and the notes on an embedded page', async () => {
+    await sharedMemory()
+    const host = uuid('a0000001', 4)
+    await createAll([
+      {id: host, content: '![[Guide]]', parentId: MEMORY_A},
+      {id: ROOT, content: 'Guide', properties: {alias: ['Guide']}},
+      {id: uuid('c0000001', 2), parentId: ROOT, content: 'Review checklist'},
+      {id: uuid('c0000001', 3), parentId: uuid('c0000001', 2), content: 'Checklist detail'},
+      {id: uuid('a0000001', 5), parentId: LOCAL, content: 'Private detail'},
+    ])
+    const index = await view<MemoryIndexView>({type: 'view-memory-index', ref: MEMORY_A, format: 'json'})
+    expect(index.sharedRoots).toEqual([SHARED, ROOT])
+    expect(index.text.split('\n')).toEqual([
+      `- [shared] Shared memory (+2 children) ^${SHARED}`,
+      `- Only for watcher A (+1 child) ^${LOCAL}`,
+      `- [shared] Review checklist (+1 child) ^${uuid('c0000001', 2)}`,
+    ])
+    expect(await view({type: 'view-memory-index', ref: '[[Guide]]'}))
+      .toBe(`- Review checklist (+1 child) ^${uuid('c0000001', 2)}`)
+  })
+
+  it('keeps a host with its own details or prose, and leaves unresolved embeds visible', async () => {
+    const annotated = uuid('d0000001', 2)
+    const prose = uuid('d0000001', 3)
+    const missing = uuid('d0000001', 4)
+    await createAll([
+      {id: ROOT, content: 'Index'},
+      {id: annotated, parentId: ROOT, content: `!((${SHARED}))`},
+      {id: LOCAL, parentId: annotated, content: 'Hidden detail'},
+      {id: prose, parentId: ROOT, content: `Read !((${SHARED})) before replying`},
+      {id: SHARED, parentId: ROOT, content: 'Also a direct child'},
+      {id: missing, parentId: ROOT, content: '![[Missing page]]'},
+    ])
+    const index = await view<MemoryIndexView>({type: 'view-memory-index', ref: ROOT, format: 'json'})
+    expect(index.text.split('\n')).toEqual([
+      `- !((${SHARED})) (+1 child) ^${annotated}`,
+      `- [shared] Also a direct child ^${SHARED}`,
+      `- Read !((${SHARED})) before replying ^${prose}`,
+      `- ![[Missing page]] ^${missing}`,
+    ])
+  })
+
+  it('keeps deleted, foreign and self embeds out of the shared comparison scope', async () => {
+    const foreign = uuid('f0000001', 1)
+    await createAll([
+      {id: ROOT, content: 'Index'},
+      {id: LOCAL, parentId: ROOT, content: `!((${foreign})) !((${ROOT})) !((${NOTE_1}))`},
+      {id: NOTE_1, content: 'Deleted summary'},
+    ])
+    await createAll([{id: foreign, workspaceId: 'ws-2', content: 'Foreign summary'}])
+    await sharedDb.db.execute('UPDATE blocks SET deleted = 1 WHERE id = ?', [NOTE_1])
+    const index = await view<MemoryIndexView>({type: 'view-memory-index', ref: ROOT, format: 'json'})
+    expect(index.sharedRoots).toEqual([])
+    expect(index.text).toBe(`- !((${foreign})) !((${ROOT})) !((${NOTE_1})) ^${LOCAL}`)
+  })
+
+  it('spends the budget on unique notes in outline order and identifies every omission', async () => {
+    const notes = Array.from({length: 102}, (_, i) => ({id: uuid('c0000001', i), content: `Summary ${i}`, parentId: ROOT}))
+    await createAll([
+      {id: ROOT, content: 'Guide', properties: {alias: ['Guide']}},
+      {id: MEMORY_A, content: 'Memory'},
+      {id: LOCAL, content: '![[Guide]]', parentId: MEMORY_A},
+      {id: MEMORY_B, content: '![[Guide]]', parentId: MEMORY_A},
+      ...notes,
+    ])
+    const index = await view<MemoryIndexView>({type: 'view-memory-index', ref: MEMORY_A, format: 'json'})
+    expect(index.sharedRoots).toEqual([ROOT])
+    const lines = index.text.split('\n')
+    expect(lines.slice(0, -1)).toEqual(notes.slice(0, 100).map(note => `- [shared] ${note.content} ^${note.id}`))
+    expect(lines.at(-1)).toBe(`Showing 100 of 102 notes. Omitted note IDs: [shared] ^${notes[100].id}, [shared] ^${notes[101].id}`)
   })
 })
 

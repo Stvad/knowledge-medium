@@ -20,6 +20,7 @@ import {
   viewBacklinksCommandSchema,
   viewBlockCommandSchema,
   viewGroupedBacklinksCommandSchema,
+  viewMemoryIndexCommandSchema,
   viewOutlineCommandSchema,
   viewSearchCommandSchema,
 } from './protocol.js'
@@ -131,6 +132,9 @@ export const GRAPH_READ_TOOLS: readonly GraphReadTool[] = [
     // No --raw: the stored search answer is whole rows, the unbounded shape
     // this view exists to replace (`kmagent raw` still sends one).
     cli: {verb: 'search', positional: {field: 'query', variadic: true}},
+  }),
+  wireTool('memory_index', 'view-memory-index', viewMemoryIndexCommandSchema, {
+    cli: {verb: 'memory-index', positional: {field: 'ref', variadic: false}},
   }),
   wireTool('page', 'page', pageCommandSchema, {
     cli: {verb: 'page', positional: {field: 'name', variadic: true}},
