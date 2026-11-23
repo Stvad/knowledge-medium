@@ -54,12 +54,12 @@ function start(config: HeadlessConfig, blocks: string[]) {
     update: (id: string, content: string) => execute({type: 'update-block', id, content, contributorId: null}),
     untilOpen: (readOnly: boolean) => vi.waitFor(async () => expect(await execute({type: 'health'}))
       .toMatchObject({host: {closedReason: null, readOnly}}), {timeout: 15_000}),
-    /** Uploads what the bootstrap queued (seed rows) so a test starts from an empty queue. */
+    // Draining the bootstrap queue exceeded 20 s in the loaded full suite.
     drainBootstrap: async () => {
       await vi.waitFor(async () => {
         await upload()
         expect(await db.getAll('SELECT 1 FROM ps_crud')).toEqual([])
-      }, {timeout: 20_000})
+      }, {timeout: 35_000})
       rpc.mockClear()
     },
   }
