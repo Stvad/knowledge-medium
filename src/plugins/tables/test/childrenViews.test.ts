@@ -75,6 +75,11 @@ describe('a table host’s drawn members', () => {
     expect(await previousDrawnStep(repo.block('after'), surface())).toMatchObject({block: {id: 'host'}, crossed: true})
   })
 
+  it('without a query, a child the grid does not draw (past its cap) is no child outside a query', async () => {
+    controller.setRows(['row-0'], ROWS.length)
+    expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([GRID])
+  })
+
   it('under a query: its field row, the grid, then its children outside the query', async () => {
     const {fieldRowId, valueId} = await withQuery()
     expect(await drawnChildrenOf(repo.block('host'), surface())).toEqual([fieldRowId, GRID, 'outside-0', 'outside-1'])
