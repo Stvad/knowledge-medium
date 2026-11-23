@@ -273,12 +273,12 @@ type ValueRowState = Pick<BlockData, 'id' | 'content'> & {readonly referenceTarg
  *  child-backed cell asks this, so none can disagree about a member this device
  *  cannot read yet.
  *
- *  It is {@link projectFieldRowValues} until a value row awaits its reference
- *  target ({@link awaitsReferenceTarget}). That member is unknown on this
- *  device, not absent, so the rows' lack of it is no evidence it was removed,
- *  and the write becomes `stored` with the caller's change applied
- *  ({@link withPendingMembersKept}). `departed` are the BEFORE states of the
- *  value rows that change removed or rewrote. */
+ *  It is {@link projectFieldRowValues} until a value row awaiting its reference
+ *  target ({@link awaitsReferenceTarget}) could be part of the value. That
+ *  member is unknown on this device, not absent, so the rows' lack of it is no
+ *  evidence it was removed, and the write becomes `stored` with the caller's
+ *  change applied ({@link withPendingMembersKept}). `departed` are the BEFORE
+ *  states of the value rows that change removed or rewrote. */
 export const projectFieldValue = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly ValueRowState[])[],
@@ -286,24 +286,46 @@ export const projectFieldValue = (
   departed: readonly ValueRowState[] = [],
 ): unknown | undefined => {
   const projected = projectFieldRowValues(schema, perFieldRow)
-  if (!perFieldRow.some(rows => rows.some(row => awaitsReferenceTarget(schema, row)))) return projected
-  const removed = departed.length === 0 ? undefined : projectFieldRowValues(schema, [departed])
-  return withPendingMembersKept(schema, stored, projected, Array.isArray(removed) ? removed : [])
+  if (!pendingCouldBeInValue(schema, perFieldRow)) return projected
+  return withPendingMembersKept(schema, stored, projected, departed.flatMap(row => valuesOfRow(schema, row)))
+}
+
+/** Any pending row of a list could be one of its members. A single value is its
+ *  first readable row's, so only a pending row before that one could be it. */
+const pendingCouldBeInValue = (
+  schema: AnyPropertySchema, perFieldRow: readonly (readonly ValueRowState[])[],
+): boolean => {
+  const rows = unionValuesAcrossFieldRows(schema, perFieldRow)
+  if (memberCodecOf(schema.codec) !== undefined) return rows.some(row => awaitsReferenceTarget(schema, row))
+  for (const row of rows) {
+    if (awaitsReferenceTarget(schema, row)) return true
+    if (valuesOfRow(schema, row).length > 0) return false
+  }
+  return false
+}
+
+/** What one value row reads as, as a list of values: a list member, or a
+ *  single value. */
+const valuesOfRow = (schema: AnyPropertySchema, row: ValueRowState): unknown[] => {
+  const value = projectFieldRowValues(schema, [[row]])
+  if (value === undefined) return []
+  return memberCodecOf(schema.codec) !== undefined && Array.isArray(value) ? value : [value]
 }
 
 /** `stored` with a change applied, while a pending member keeps the rows from
  *  answering for the whole value. A list holds each member as many times as
  *  the rows give it or as `stored` does less the copies the change `removed`,
  *  whichever is more: stored members first in stored order, then the projected
- *  ones it adds. Any other stored value is kept as it is. An absent key takes
- *  the projection. */
+ *  ones it adds. Any other stored value is kept, unless the change `removed`
+ *  it. An absent key takes the projection. */
 export const withPendingMembersKept = (
   schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined, removed: readonly unknown[],
 ): unknown | undefined => {
   if (stored === undefined) return projected
-  if (memberCodecOf(schema.codec) === undefined || !Array.isArray(stored) || !Array.isArray(projected)) {
-    return stored
+  if (memberCodecOf(schema.codec) === undefined) {
+    return removed.some(value => jsonValuesEqual(value, stored)) ? projected : stored
   }
+  if (!Array.isArray(stored) || !Array.isArray(projected)) return stored
   const countOf = (members: readonly unknown[]): Map<string, number> => {
     const counts = new Map<string, number>()
     for (const member of members) {

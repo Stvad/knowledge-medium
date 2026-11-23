@@ -613,6 +613,73 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     expect(await cellOf('other-owner', schema.name)).toEqual(['target-a'])
   })
 
+  /** A user-declared scalar `ref` keyed `named-ref-scalar`, stored `stored`,
+   *  with value rows of `contents` in sibling order. */
+  const seedScalarRef = async (repo: Repo, contents: readonly string[], stored: string) => {
+    const schema = defineProperty('named-ref', {codec: codecs.ref(), defaultValue: '', changeScope: ChangeScope.BlockDefault})
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-named-ref', [{
+      metadata: {fieldId: 'named-ref-scalar', workspaceId: WS, createdAt: 1, name: schema.name,
+        changeScope: schema.changeScope, hidden: false, origin: 'user' as const}, schema,
+    }], {workspaceId: WS})
+    await seedRow({id: 'scalar-owner', properties: {[schema.name]: stored},
+      references: [{id: stored, alias: stored, sourceField: schema.name}]})
+    await seedRow({id: 'scalar-field', parentId: 'scalar-owner', content: '::((named-ref-scalar))',
+      referenceTargetId: 'named-ref-scalar', isFieldForm: true})
+    for (const [i, content] of contents.entries()) {
+      await seedRow({id: `scalar-value-${i}`, parentId: 'scalar-field', orderKey: `a${i}`, content})
+    }
+    return schema
+  }
+
+  it('a scalar edit lands while a later sibling is pending', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    await seedRow({id: 'target-b', properties: {[aliasesProp.name]: ['Name B']}})
+    const schema = await seedScalarRef(repo, ['[[Name A]]', '[[Name C]]'], 'target-a')
+    await runPass(repo)
+    await repo.awaitProcessors()
+    expect(await readColumn('scalar-value-1')).toBeNull()
+
+    await repo.tx(tx => tx.update('scalar-value-0', {content: '[[Name B]]'}), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await readColumn('scalar-value-0')).toBe('target-b')
+    expect(await cellOf('scalar-owner', schema.name)).toBe('target-b')
+  })
+
+  it('a stamp still repairs a stale scalar while a later sibling is pending', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-b', properties: {[aliasesProp.name]: ['Name B']}})
+    const schema = await seedScalarRef(repo, ['[[Name B]]', '[[Name C]]'], 'target-a')
+
+    await runPass(repo)
+    await repo.awaitProcessors()
+
+    expect(await readColumn('scalar-value-0')).toBe('target-b')
+    expect(await readColumn('scalar-value-1')).toBeNull()
+    expect(await cellOf('scalar-owner', schema.name)).toBe('target-b')
+  })
+
+  it('a scalar keeps the stored value an earlier pending sibling may hold', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
+    await seedRow({id: 'target-b', properties: {[aliasesProp.name]: ['Name B']}})
+    const schema = await seedScalarRef(repo, ['[[Name C]]', '[[Name A]]'], 'target-c')
+    await runPass(repo)
+    await repo.awaitProcessors()
+    expect(await readColumn('scalar-value-0')).toBeNull()
+    expect(await cellOf('scalar-owner', schema.name)).toBe('target-c')
+
+    await repo.tx(tx => tx.update('scalar-value-1', {content: '[[Name B]]'}), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await readColumn('scalar-value-1')).toBe('target-b')
+    expect(await cellOf('scalar-owner', schema.name)).toBe('target-c')
+  })
+
   it('a block merge keeps a pending member of the merged list', async () => {
     const {repo, schema} = await seedWithPendingSibling()
     await seedRow({id: 'into-owner', orderKey: 'zz', content: 'into'})

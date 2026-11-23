@@ -216,7 +216,8 @@ describe('withPendingMembersKept', () => {
     ['a rewritten member is replaced', refs, ['a', 'c'], ['b'], ['a'], ['c', 'b']],
     ['a member removed and still projected stays in place', refs, ['a', 'c'], ['a'], ['a'], ['a', 'c']],
     ['one removed copy leaves one copy', refs, ['a', 'a', 'c'], [], ['a'], ['a', 'c']],
-    ['a scalar keeps its value', ref, 'a', 'b', ['a'], 'a'],
+    ['a scalar keeps its value', ref, 'a', 'b', ['x'], 'a'],
+    ['a scalar the change rewrote takes the projection', ref, 'a', 'b', ['a'], 'b'],
     ['a scalar is never unset', ref, 'a', undefined, [], 'a'],
     // Only a list's members are counted; any other array is one value.
     ['an array scalar keeps its value', shape, ['a'], ['a', 'b'], [], ['a']],
