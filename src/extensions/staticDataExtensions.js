@@ -1,1 +1,1 @@
-export{BX as staticDataExtensions}from"../../chunks/app-TmvAX5-z.js";
+export{BX as staticDataExtensions}from"../../chunks/app-CeZGnfJ7.js";

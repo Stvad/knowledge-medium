@@ -1,1 +1,1 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-TmvAX5-z.js";
+export{Kr as ExtensionsSettings}from"../../../chunks/app-CeZGnfJ7.js";
