@@ -1,1 +1,1 @@
-export{GI as withRowSlide}from"../../chunks/app-nczJPYjc.js";
+export{GI as withRowSlide}from"../../chunks/app-MQ8mmZ_s.js";

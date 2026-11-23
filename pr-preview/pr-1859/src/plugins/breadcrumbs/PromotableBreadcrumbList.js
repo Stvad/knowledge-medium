@@ -1,1 +1,1 @@
-export{KO as PromotableBreadcrumbList}from"../../../chunks/app-nczJPYjc.js";
+export{KO as PromotableBreadcrumbList}from"../../../chunks/app-MQ8mmZ_s.js";

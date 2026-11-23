@@ -1,1 +1,1 @@
-export{att as ALIAS_CLAIM_REDERIVE_PROCESSOR,ott as ALIAS_CLAIM_REDERIVE_PROCESSOR_NAME}from"../../../chunks/app-nczJPYjc.js";
+export{ott as ALIAS_CLAIM_REDERIVE_PROCESSOR,stt as ALIAS_CLAIM_REDERIVE_PROCESSOR_NAME}from"../../../chunks/app-MQ8mmZ_s.js";

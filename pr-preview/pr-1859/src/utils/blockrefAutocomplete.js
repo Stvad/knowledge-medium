@@ -1,1 +1,1 @@
-export{JS as blockrefCompletionSource}from"../../chunks/app-nczJPYjc.js";
+export{JS as blockrefCompletionSource}from"../../chunks/app-MQ8mmZ_s.js";

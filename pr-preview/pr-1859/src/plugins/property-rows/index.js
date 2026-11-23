@@ -1,1 +1,1 @@
-export{fc as propertyRowsPlugin}from"../../../chunks/app-nczJPYjc.js";
+export{fc as propertyRowsPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

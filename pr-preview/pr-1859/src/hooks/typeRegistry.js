@@ -1,1 +1,1 @@
-export{WK as useTypes}from"../../chunks/app-nczJPYjc.js";
+export{GK as useTypes}from"../../chunks/app-MQ8mmZ_s.js";

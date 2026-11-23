@@ -1,1 +1,1 @@
-export{Gc as propertiesMigrationPlugin}from"../../../chunks/app-nczJPYjc.js";
+export{Gc as propertiesMigrationPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

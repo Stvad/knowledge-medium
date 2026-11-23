@@ -1,1 +1,1 @@
-export{Uk as createEncryptedWorkspace}from"../../../../chunks/app-nczJPYjc.js";
+export{Uk as createEncryptedWorkspace}from"../../../../chunks/app-MQ8mmZ_s.js";

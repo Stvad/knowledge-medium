@@ -1,1 +1,1 @@
-export{ZX as tablesDataExtension}from"../../../chunks/app-nczJPYjc.js";
+export{QX as tablesDataExtension}from"../../../chunks/app-MQ8mmZ_s.js";
