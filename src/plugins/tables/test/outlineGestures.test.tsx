@@ -3,6 +3,7 @@ import { Suspense, useEffect } from 'react'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EditorView } from '@codemirror/view'
+import * as structuralEdits from '@/data/structuralEditPolicy'
 import { ChangeScope, seedProperty, type User } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -36,6 +37,8 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import * as toast from '@/utils/toast'
+import { disarmCut, getArmedCut } from '@/paste/armedCut'
+import { pasteArmedCut } from '@/paste/operations'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
 import { propertyDisplayProp } from '@/data/propertyDisplayMode'
 import { turnIntoTable } from '../convert'
@@ -174,7 +177,7 @@ const fieldRowId = async () => (await db.db.get<{id: string}>(
 /** The editor the table shows on `blockId`, once its edit-mode keys are live. */
 const editorOn = async (blockId: string) => {
   const view = await waitFor(() => {
-    const node = document.querySelector<HTMLElement>(`[data-table-grid] [data-block-id="${blockId}"] .cm-editor`)
+    const node = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"] .cm-editor`)
     expect(node).not.toBeNull()
     return EditorView.findFromDOM(node!)!
   })
@@ -427,6 +430,26 @@ describe('a row draws its children', () => {
 describe('the outline’s verbs between rows', () => {
   const contentOf = async (id: string) => (await repo.load(id))?.content
 
+  it('Enter at the end of the host title puts the first row after the view', async () => {
+    mount()
+    press(await editAt(HOST, 'end', PARENT_SCOPE), 'Enter')
+    await waitFor(async () => expect(await rowsUnderHost()).toHaveLength(3))
+    const [created, ...previous] = await rowsUnderHost()
+    expect(previous).toEqual(['row-0', 'row-1'])
+    expect((await children(HOST))[0]).toContain('tables:view')
+    await waitFor(() => expect(focused()).toEqual({blockId: created, renderScopeId: SCOPE}))
+  })
+
+  it('refuses a mid-text split of the table title when shown as the editing root', async () => {
+    mount()
+    const view = await editAt(HOST, 'start', PARENT_SCOPE)
+    act(() => { view.dispatch({selection: {anchor: 2}}) })
+    await act(async () => { await runActionById('split_block_cm', new KeyboardEvent('keydown', {key: 'Enter'})) })
+    expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
+    expect(await contentOf(HOST)).toBe('Table')
+    expect(view.state.doc.toString()).toBe('Table')
+  })
+
   it('Enter at the end of a row’s text adds the next row', async () => {
     mount()
     press(await editAt('row-0', 'end'), 'Enter')
@@ -437,6 +460,173 @@ describe('the outline’s verbs between rows', () => {
     expect(ui().peekProperty(isEditingProp)).toBe(true)
   })
 
+  it('Enter on an empty row creates another row beside it', async () => {
+    await repo.block('row-0').setContent('')
+    mount()
+    press(await editAt('row-0', 'end'), 'Enter')
+    await waitFor(async () => expect(await rowsUnderHost()).toHaveLength(3))
+    const [first, created, second] = await rowsUnderHost()
+    expect([first, second]).toEqual(['row-0', 'row-1'])
+    await waitFor(() => expect(focused()).toEqual({blockId: created, renderScopeId: SCOPE}))
+  })
+
+  it.each([
+    ['create_block_above_and_edit', 0],
+    ['create_block_below_and_edit', 1],
+  ] as const)('Vim %s places a grid row even when the current row has notes', async (actionId, index) => {
+    configureRuntime(vimNormalModePlugin({repo}))
+    await repo.mutate.createChild({parentId: 'row-0', content: 'Note'})
+    mount()
+    await act(async () => { await focusBlock(ui(), 'row-0', {renderScopeId: SCOPE}) })
+    await waitFor(() => expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({
+      block: {id: 'row-0'}, renderScopeId: SCOPE,
+    }))
+    await act(async () => { await runActionById(actionId, new KeyboardEvent('keydown')) })
+
+    const rows = await rowsUnderHost()
+    const created = rows[index]
+    expect(rows.filter(id => id !== created)).toEqual(['row-0', 'row-1'])
+    expect(await contentOf(created!)).toBe('')
+    expect(await contentsUnder('row-0')).toContain('Note')
+    await waitFor(() => expect(focused()).toEqual({blockId: created, renderScopeId: SCOPE}))
+  })
+
+  describe('Enter on a foreign query row', () => {
+    const source = '0190a0c0-0000-7000-8000-0000000000aa'
+    beforeEach(async () => {
+      await repo.tx(async tx => {
+        await tx.create({id: source, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'source'})
+        await tx.move('row-1', {parentId: source, orderKey: 'a0'})
+      }, {scope: ChangeScope.BlockDefault})
+      await db.db.execute("UPDATE blocks SET created_at = 100000 WHERE id = 'row-1'")
+      await repo.block(HOST).set(queryProp, `childof=((${source})) created<2000-01-01`)
+      await repo.awaitReprojections()
+    })
+
+    it('backfills and holds the new row in the grid when the query excludes it', async () => {
+      mount()
+      press(await editAt('row-1', 'end'), 'Enter')
+      const target = await waitFor(() => {
+        const location = focused()
+        expect(location).toMatchObject({renderScopeId: SCOPE})
+        expect(location?.blockId).not.toBe('row-1')
+        return location!.blockId
+      })
+      expect(await repo.load(target)).toMatchObject({parentId: source, content: ''})
+      expect(await contentsUnder(source)).toEqual(['second', ''])
+      expect(await rowsUnderHost()).toEqual(['row-0'])
+      await waitFor(() => expect(document.querySelector(`[data-table-row="${target}"][data-table-unmatched]`)).not.toBeNull())
+    })
+
+    it('inserts a query row when the caret moves while its Enter write waits', async () => {
+      mount()
+      const view = await editAt('row-1', 'end')
+      let announce!: () => void
+      let release!: () => void
+      const queued = new Promise<void>(resolve => { announce = resolve })
+      const write = new Promise<void>(resolve => { release = resolve })
+      const runTx = repo.tx.bind(repo)
+      vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
+        if (args[1].description === 'new table row') {
+          announce()
+          await write
+        }
+        return runTx(...args)
+      })
+
+      await act(async () => {
+        const entering = runActionById('split_block_cm', new KeyboardEvent('keydown', {key: 'Enter'}))
+        await queued
+        view.dispatch({selection: {anchor: 2}})
+        release()
+        await entering
+      })
+
+      expect(await contentsUnder(source)).toEqual(['second', ''])
+      expect(await rowsUnderHost()).toEqual(['row-0'])
+      const location = focused()
+      expect(location).toMatchObject({renderScopeId: SCOPE})
+      expect(location?.blockId).not.toBe('row-1')
+      expect(await repo.load(location!.blockId)).toMatchObject({parentId: source, content: ''})
+      expect(view.state.selection.main.head).toBe(2)
+    })
+
+    it('inserts under the foreign result when its notes show', async () => {
+      const note = await repo.mutate.createChild({parentId: 'row-1', content: 'existing note'})
+      mount()
+      press(await editAt('row-1', 'end'), 'Enter')
+      const notesScope = tableNotesScopeId(SCOPE, 'row-1')
+      const target = await waitFor(() => {
+        const location = focused()
+        expect(location).toMatchObject({renderScopeId: notesScope})
+        expect(location?.blockId).not.toBe(note)
+        return location!.blockId
+      })
+      expect(await repo.load(target)).toMatchObject({parentId: 'row-1', content: ''})
+      expect(await contentsUnder('row-1')).toEqual(['', 'existing note'])
+      expect(await contentsUnder(source)).toEqual(['second'])
+    })
+
+    it('refuses mid-text split without changing the result or its notes', async () => {
+      mount()
+      const view = await editAt('row-1', 'start')
+      act(() => { view.dispatch({selection: {anchor: 3}}) })
+      await act(async () => { await runActionById('split_block_cm', new KeyboardEvent('keydown', {key: 'Enter'})) })
+      expect(await contentsUnder(source)).toEqual(['second'])
+      expect(await contentsUnder('row-1')).toEqual([])
+      expect(view.state.doc.toString()).toBe('second')
+      expect(view.state.selection.main.head).toBe(3)
+    })
+
+    it('cuts notes only within their foreign result and leaves the result itself in place', async () => {
+      configureRuntime(vimNormalModePlugin({repo}))
+      const first = (await repo.mutate.createChild({parentId: 'row-1', content: 'First note'}))!
+      const last = (await repo.mutate.createChild({parentId: 'row-1', content: 'Last note'}))!
+      const info = vi.spyOn(toast, 'showInfo')
+      class CapturedClipboardItem {
+        constructor(readonly items: Record<string, Blob>) {}
+      }
+      let clipboardText = ''
+      const write = vi.fn(async ([item]: CapturedClipboardItem[]) => {
+        clipboardText = await item.items['text/plain'].text()
+      })
+      vi.stubGlobal('ClipboardItem', CapturedClipboardItem)
+      vi.stubGlobal('navigator', {platform: 'Linux', clipboard: {write}})
+      disarmCut()
+      mount()
+
+      const cutByKey = async (blockId: string, renderScopeId: string) => {
+        await act(async () => { await focusBlock(ui(), blockId, {renderScopeId}) })
+        await waitFor(() => expect(activeContexts.get(ActionContextTypes.NORMAL_MODE)).toMatchObject({
+          block: {id: blockId}, renderScopeId,
+        }))
+        const shell = document.querySelector(`[data-block-shell][data-block-id="${blockId}"]`)!
+        fireEvent.keyDown(shell, {key: 'x', code: 'KeyX', ctrlKey: true})
+      }
+
+      try {
+        await cutByKey('row-1', SCOPE)
+        await waitFor(() => expect(info).toHaveBeenCalledWith('Cut this result from its outline.'))
+        expect(write).not.toHaveBeenCalled()
+        expect(getArmedCut()).toBeNull()
+
+        const notesScope = tableNotesScopeId(SCOPE, 'row-1')
+        await cutByKey(first, notesScope)
+        await waitFor(() => expect(getArmedCut()).toMatchObject({rootIds: [first], foreignRootId: 'row-1'}))
+
+        expect((await pasteArmedCut(clipboardText, repo.block(source), repo))?.kind).toBe('refused')
+        expect(await contentsUnder(source)).toEqual(['second'])
+        expect(await contentsUnder('row-1')).toEqual(['First note', 'Last note'])
+
+        expect((await pasteArmedCut(clipboardText, repo.block(last), repo, {scopeRootId: 'row-1', renderScopeId: notesScope}))?.kind)
+          .toBe('moved')
+        expect(await contentsUnder('row-1')).toEqual(['Last note', 'First note'])
+      } finally {
+        disarmCut()
+      }
+    })
+  })
+
   it('Enter in the middle of a row’s text splits it into two rows', async () => {
     mount()
     const view = await editAt('row-1', 'start')
@@ -445,6 +635,17 @@ describe('the outline’s verbs between rows', () => {
     await waitFor(async () => expect(await rowsUnderHost()).toHaveLength(3))
     const [, head, tail] = await rowsUnderHost()
     expect([await contentOf(head!), tail, await contentOf(tail!)]).toEqual(['sec', 'row-1', 'ond'])
+  })
+
+  it('refuses a row split at the cap before cutting editor text', async () => {
+    mount()
+    const view = await editAt('row-1', 'start')
+    vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'allowsNewRow').mockReturnValue(false)
+    act(() => { view.dispatch({selection: {anchor: 3}}) })
+    await act(async () => { await runActionById('split_block_cm', new KeyboardEvent('keydown', {key: 'Enter'})) })
+    expect(await rowsUnderHost()).toEqual(['row-0', 'row-1'])
+    expect(await contentOf('row-1')).toBe('second')
+    expect(view.state.doc.toString()).toBe('second')
   })
 
   it('Tab nests a row under the row above, where it shows as its child', async () => {
@@ -458,18 +659,39 @@ describe('the outline’s verbs between rows', () => {
   it('Tab on the first row nests it nowhere', async () => {
     mount()
     const view = await editAt('row-0', 'end')
-    const nest = vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'nestRow')
+    const nest = vi.spyOn(structuralEdits, 'indentDrawnBlock')
     press(view, 'Tab')
-    await waitFor(() => expect(nest).toHaveBeenCalledWith('row-0'))
+    await waitFor(() => expect(nest).toHaveBeenCalledWith(repo.block('row-0'), expect.anything()))
     await act(() => nest.mock.results[0]!.value)
     expect((await repo.load('row-0'))?.parentId).toBe(HOST)
   })
 
-  it('Shift+Tab on a row’s child brings it back as the row after it', async () => {
-    const child = await repo.mutate.createChild({parentId: 'row-0', content: 'a note', position: {kind: 'last'}})
+  it.each([
+    {label: 'empty Enter adds a sibling note', action: 'split_block_cm', key: 'Enter', promote: false, atCap: false},
+    {label: 'Shift+Tab promotes a note to the next row', action: 'edit.cm.outdent_block', key: 'Tab', promote: true, atCap: false},
+    {label: 'Shift+Tab keeps the note under its row at capacity', action: 'edit.cm.outdent_block', key: 'Tab', promote: false, atCap: true},
+  ])('$label in a plain grid', async ({action, key, promote, atCap}) => {
+    const note = (await repo.mutate.createChild({parentId: 'row-0', position: {kind: 'last'}}))!
     mount()
-    press(await editAt(child!, 'end'), 'Tab', {shiftKey: true})
-    await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-0', child, 'row-1']))
+    const view = await editAt(note, 'end')
+    expect(view.state.doc.length).toBe(0)
+    expect(activeContexts.get(ActionContextTypes.EDIT_MODE_CM)).toMatchObject({scopeRootId: 'row-0', renderScopeId: SCOPE})
+    if (atCap) vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'allowsNewRow').mockReturnValue(false)
+
+    await act(async () => { await runActionById(action, new KeyboardEvent('keydown', {key, shiftKey: key === 'Tab'})) })
+
+    expect(await rowsUnderHost()).toEqual(promote ? ['row-0', note, 'row-1'] : ['row-0', 'row-1'])
+    expect((await repo.load(note))?.parentId).toBe(promote ? HOST : 'row-0')
+    const notes = await repo.query.childIds({id: 'row-0', propertyChildren: 'none'}).load()
+    if (key === 'Enter') {
+      const sibling = focused()?.blockId
+      expect(sibling).toBeDefined()
+      expect(sibling).not.toBe(note)
+      expect(notes).toEqual([note, sibling])
+      expect(await repo.load(sibling!)).toMatchObject({parentId: 'row-0', content: ''})
+    } else {
+      expect(notes).toEqual(promote ? [] : [note])
+    }
   })
 
   it('Backspace at the start of a row merges it into the row above', async () => {
@@ -490,7 +712,7 @@ describe('the outline’s verbs between rows', () => {
   it('a row with values is not merged away', async () => {
     mount()
     await waitFor(() => expect(document.querySelector('[data-table-row="row-0"]')).not.toBeNull())
-    await act(async () => { await gridOfHost(PARENT_SCOPE, HOST)!.moveRow('row-0', 1) })
+    await act(async () => { await repo.mutate.move({id: 'row-0', parentId: HOST, position: {kind: 'after', siblingId: 'row-1'}}) })
     await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-1', 'row-0']))
     const info = vi.spyOn(toast, 'showInfo')
     press(await editAt('row-0', 'start'), 'Backspace')
@@ -555,6 +777,56 @@ describe('the outline’s verbs between rows', () => {
     return id!
   }))
 
+  it.each(['empty row', 'nonempty row', 'empty note'] as const)('keeps new text during a pending Backspace on the %s', async kind => {
+    const isNote = kind === 'empty note'
+    const parentId = isNote ? 'row-1' : HOST
+    const id = isNote ? (await repo.mutate.createChild({parentId, content: ''}))! : 'row-1'
+    if (kind === 'empty row') await repo.block(id).setContent('')
+    const updated = ((await repo.load(id))?.content ?? '') + 'typed'
+
+    mount()
+    const view = await editAt(id, 'start')
+    let announce!: () => void
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { announce = resolve })
+    const resumed = new Promise<void>(resolve => { release = resolve })
+    const place = structuralEdits.memberMergePlacement
+    vi.spyOn(structuralEdits, 'memberMergePlacement').mockImplementationOnce(async (...args) => {
+      announce()
+      await resumed
+      return place(...args)
+    })
+
+    await act(async () => {
+      const pending = runActionById('delete_empty_block_cm', new KeyboardEvent('keydown', {key: 'Backspace'}))
+      await ready
+      view.dispatch({changes: {from: view.state.doc.length, insert: 'typed'}, selection: {anchor: 0}})
+      await repo.block(id).setContent(updated)
+      release()
+      await pending
+    })
+
+    expect((await repo.load(id))?.content).toBe(updated)
+    expect((await repo.load(id))?.parentId).toBe(parentId)
+    expect(await contentOf('row-0')).toBe('first')
+    expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE})
+  })
+
+  it('deletes an empty leaf after a nested table and focuses its title in the outer grid', async () => {
+    const note = (await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}}))!
+    const inner = (await repo.mutate.createChild({parentId: note, content: 'Inner row'}))!
+    await turnIntoTable(repo, note)
+    await repo.block('row-1').setContent('')
+    mount()
+    await editAt('row-1', 'start')
+
+    await backspace()
+
+    expect(await repo.load('row-1')).toBeNull()
+    expect(await repo.load(inner)).toMatchObject({parentId: note, content: 'Inner row'})
+    expect(focused()).toEqual({blockId: note, renderScopeId: SCOPE})
+  })
+
   it('merges no row into the query of a nested table ending the row above', () => refusedMerge(async () => {
     const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})
     await turnIntoTable(repo, id!)
@@ -588,9 +860,7 @@ describe('the outline’s verbs between rows', () => {
     await act(async () => { await runActionById('move_block_up_cm', new KeyboardEvent('keydown')) })
     await waitFor(async () => expect(await rowsUnderHost()).toEqual(['row-1', 'row-0']))
     await editorOn('row-1')
-    const move = vi.spyOn(gridOfHost(PARENT_SCOPE, HOST)!, 'moveRow')
     await act(async () => { await runActionById('move_block_up_cm', new KeyboardEvent('keydown')) })
-    await act(() => move.mock.results[0]!.value)
     expect(await rowsUnderHost()).toEqual(['row-1', 'row-0'])
     expect((await children(HOST))[0]).toContain('tables:view')
   })

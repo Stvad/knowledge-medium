@@ -1,8 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope } from '@/data/api'
-import { peekFocusedBlockLocation } from '@/data/properties'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope, type Tx } from '@/data/api'
+import { indentDrawnBlock, moveDrawnBlock } from '@/data/structuralEditPolicy'
+import { outlineSurfaceOf } from '@/data/outlineSurface'
+import { registerGrid, tableRenderScopeId } from '../registry'
+import { tableChildrenViews } from '../childrenViews'
 import { getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -13,7 +16,7 @@ import { tablesDataExtension } from '../dataExtension'
 import { ROW_CAP } from '../model'
 
 const workspaceId = 'ws-table-controller'
-const scope = 'tables:panel:host'
+const scope = tableRenderScopeId('panel', 'host')
 const options = {scope: ChangeScope.BlockDefault}
 
 let db: TestDb
@@ -33,7 +36,7 @@ const setup = async (rows: number) => {
       VALUES (?, 'test', 'test-user', 1, 1, 'none', 'children')`,
     [workspaceId],
   )
-  const {repo} = createTestRepo({db: db.db, user: {id: 'user-1'}, extensions: [tablesDataExtension]})
+  const {repo} = createTestRepo({db: db.db, user: {id: 'user-1'}, extensions: [tablesDataExtension, tableChildrenViews]})
   repo.setActiveWorkspaceId(workspaceId)
   await repo.tx(async tx => {
     await tx.create({id: 'host', workspaceId, parentId: null, orderKey: 'a0', content: 'Table'})
@@ -43,7 +46,7 @@ const setup = async (rows: number) => {
   }, options)
   await turnIntoTable(repo, 'host')
   const uiStateBlock = await getUIStateBlock(repo, workspaceId, {id: 'user-1', name: 'Test'}, {})
-  const controller = new GridController(repo.block('host'), uiStateBlock, scope, '')
+  const controller = new GridController(repo.block('host'), uiStateBlock, scope, 'panel')
   const rowIds = (await rowsOf('host')).map(row => row.id)
   return {repo, uiStateBlock, controller, rowIds}
 }
@@ -62,13 +65,13 @@ describe('GridController', () => {
   })
 
   it('inserts the first row above the first row, edited in the table’s scope', async () => {
-    const {controller, uiStateBlock, rowIds} = await setup(2)
+    const {controller, rowIds} = await setup(2)
     controller.setColumns([column('title', null)])
     controller.setRows(rowIds, rowIds.length)
-    await controller.insertFirstRow()
+    const target = await controller.insertFirstRow()
     const [created, ...rest] = await rowsOf('host')
     expect(rest.map(row => row.id)).toEqual(rowIds)
-    expect(peekFocusedBlockLocation(uiStateBlock)).toMatchObject({blockId: created!.id, renderScopeId: scope})
+    expect(target).toEqual({id: created!.id, renderScopeId: scope, edit: true})
     expect((await children('host'))[0]!.properties_json).toContain('tables:view')
   })
 
@@ -87,6 +90,68 @@ describe('GridController', () => {
     controller.setColumns([column('title', null)])
     await controller.insertFirstRow()
     expect(await rowsOf('host')).toHaveLength(2)
+  })
+
+  it('inserts nothing when the first drawn row has moved to a different parent', async () => {
+    const {repo, controller, rowIds} = await setup(2)
+    const first = rowIds[0]!
+    const second = rowIds[1]!
+    controller.setRows(rowIds, rowIds.length)
+    await repo.mutate.move({id: first, parentId: second, position: {kind: 'last'}})
+
+    await controller.insertFirstRow()
+
+    expect((await rowsOf('host')).map(({id}) => id)).toEqual([second])
+    expect((await children(second)).map(({id}) => id)).toEqual([first])
+  })
+
+  it('inserts nothing when the first drawn row was deleted', async () => {
+    const {repo, controller, rowIds} = await setup(2)
+    controller.setRows(rowIds, rowIds.length)
+    await repo.tx(tx => tx.delete(rowIds[0]!), options)
+
+    await controller.insertFirstRow()
+
+    expect((await rowsOf('host')).map(({id}) => id)).toEqual([rowIds[1]])
+  })
+
+  it('checks the query-row origin in the writer after a queued move', async () => {
+    const {repo, controller, rowIds} = await setup(2)
+    const first = rowIds[0]!
+    const second = rowIds[1]!
+    controller.setRows(rowIds, rowIds.length)
+    controller.setQuery([])
+
+    let announce!: () => void
+    let release!: () => void
+    const moved = new Promise<void>(resolve => { announce = resolve })
+    const canCommit = new Promise<void>(resolve => { release = resolve })
+    const moving = repo.tx(async tx => {
+      await tx.move(first, {parentId: second, orderKey: 'a0'})
+      announce()
+      await canCommit
+    }, options)
+    await moved
+
+    const seenParents: Array<string | null | undefined> = []
+    const stillCurrent = vi.fn(async (tx: Tx) => {
+      const origin = await tx.get(first)
+      seenParents.push(origin?.parentId)
+      return origin?.parentId === 'host'
+    })
+    const inserting = controller.insertNewRow(first, 'after', {stillCurrent})
+    try {
+      expect(stillCurrent).not.toHaveBeenCalled()
+    } finally {
+      release()
+    }
+
+    await moving
+    expect(await inserting).toBeNull()
+    expect(seenParents).toEqual([second])
+    expect((await rowsOf('host')).map(({id}) => id)).toEqual([second])
+    expect((await children(second)).map(({id}) => id)).toEqual([first])
+    expect(controller.getCreated()).toEqual([])
   })
 
   it('inserts nothing at the row cap', async () => {
@@ -113,34 +178,42 @@ describe('GridController', () => {
   })
 
   describe('row gestures a query or a sort decides', () => {
+    let release: (() => void) | undefined
+    afterEach(() => release?.())
+    async function gridWithRows() {
+      const grid = await setup(2)
+      grid.controller.parentSurface = outlineSurfaceOf({scopeRootId: 'host', renderScopeId: 'panel'})
+      release = registerGrid(scope, grid.controller)
+      return grid
+    }
     const parentOf = async (id: string) => (await db.db.get<{parent_id: string}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id
 
     it('nests no rows under a query', async () => {
-      const {controller, rowIds} = await setup(2)
+      const {repo, controller, rowIds} = await gridWithRows()
       controller.setRows(rowIds, rowIds.length)
       controller.setQuery([{kind: 'property', text: 'x'} as never])
-      await controller.nestRow(rowIds[1]!)
+      await indentDrawnBlock(repo.block(rowIds[1]!), controller.rowSurface(rowIds[1]!))
       expect(await parentOf(rowIds[1]!)).toBe('host')
     })
 
     it('nests a row under the row drawn above it, not the view', async () => {
-      const {controller, rowIds} = await setup(2)
+      const {repo, controller, rowIds} = await gridWithRows()
       controller.setRows(rowIds, rowIds.length)
-      await controller.nestRow(rowIds[0]!)
+      await indentDrawnBlock(repo.block(rowIds[0]!), controller.rowSurface(rowIds[0]!))
       expect(await parentOf(rowIds[0]!)).toBe('host')
-      await controller.nestRow(rowIds[1]!)
+      await indentDrawnBlock(repo.block(rowIds[1]!), controller.rowSurface(rowIds[1]!))
       expect(await parentOf(rowIds[1]!)).toBe(rowIds[0])
     })
 
     it('moves no rows when sorted or under a query', async () => {
-      const {controller, rowIds} = await setup(2)
+      const {repo, controller, rowIds} = await gridWithRows()
       controller.setRows(rowIds, rowIds.length)
       controller.setSorted(true)
-      await controller.moveRow(rowIds[1]!, -1)
+      await moveDrawnBlock(repo.block(rowIds[1]!), controller.rowSurface(rowIds[1]!), -1)
       expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
       controller.setSorted(false)
       controller.setQuery([{kind: 'property', text: 'x'} as never])
-      await controller.moveRow(rowIds[1]!, -1)
+      await moveDrawnBlock(repo.block(rowIds[1]!), controller.rowSurface(rowIds[1]!), -1)
       expect((await rowsOf('host')).map(row => row.id)).toEqual(rowIds)
     })
   })

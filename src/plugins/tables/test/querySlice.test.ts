@@ -10,12 +10,13 @@ import { getBlockTypes } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { GridController } from '../controller'
 import { turnIntoTable } from '../convert'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { tablesDataExtension } from '../dataExtension'
 import { rowQuery, type TableColumn } from '../model'
-import { createQueryRow, rowBackfill } from '../query/backfill'
-import { parseQuery } from '../query/parse'
+import { rowBackfill } from '../query/backfill'
+import { parseQuery, type QueryTerm } from '../query/parse'
 import { openQueryValue } from '../query/queryValue'
 import { queryResolver } from '../query/source'
 import { COLUMN_TYPE, VIEW_TYPE, queryProp } from '../schema'
@@ -74,11 +75,17 @@ const rows = (text: string) => repo.query.typedBlockIds(rowQuery('host', workspa
 
 describe('a new row in a query table', () => {
   const QUERY = `#page publish=article rank=3 due=2026-01-05 tags=x owner=((${OWNER})) state!=done rank>1 childof=((${PARENT}))`
+  const createRow = async (terms: readonly QueryTerm[]) => {
+    const controller = new GridController(repo.block('host'), repo.block('ui'), 'table', 'outline')
+    controller.setRows([], 0)
+    controller.setQuery(terms)
+    return (await controller.insertFirstRow())!.id
+  }
 
   it('carries what the query implies, so the query selects it', async () => {
     const {terms, errors} = parse(QUERY)
     expect(errors).toEqual([])
-    const id = await createQueryRow(repo, 'host', rowBackfill(terms))
+    const id = await createRow(terms)
 
     const row = await db.db.get<{parent_id: string; properties_json: string}>('SELECT parent_id, properties_json FROM blocks WHERE id = ?', [id])
     expect(row.parent_id).toBe(PARENT)
@@ -91,12 +98,12 @@ describe('a new row in a query table', () => {
   })
 
   it('is created under the host when the query names no parent', async () => {
-    const id = await createQueryRow(repo, 'host', rowBackfill(parse('publish=article').terms))
+    const id = await createRow(parse('publish=article').terms)
     expect((await db.db.get<{parent_id: string}>('SELECT parent_id FROM blocks WHERE id = ?', [id])).parent_id).toBe('host')
   })
 
   it('is one undo step', async () => {
-    const id = await createQueryRow(repo, 'host', rowBackfill(parse(QUERY).terms))
+    const id = await createRow(parse(QUERY).terms)
     await repo.undo()
     expect(await db.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])).toEqual({deleted: 1})
   })

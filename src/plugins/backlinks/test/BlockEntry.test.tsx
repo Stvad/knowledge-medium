@@ -204,12 +204,7 @@ describe('BlockEntry ancestors', () => {
 })
 
 describe('BlockEntry structural-edit scope', () => {
-  // The entry's shown block is the root of the only subtree this surface
-  // renders, so it must declare itself the scope root. That single
-  // override is what makes `resolveStructuralEditPolicy` treat `o` /
-  // Enter / Tab here as scope-root gestures — without it the policy sees
-  // an ordinary mid-tree block and `o` creates a sibling of the entry,
-  // which lives outside the panel: present in the DB, nowhere to render.
+  // Insertion at the entry's scope root must land inside the rendered subtree.
   it('declares the shown block as the render-scope root for the blocks it renders', () => {
     const source = {id: 'source-block'} as Block
 

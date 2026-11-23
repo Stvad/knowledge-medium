@@ -5,12 +5,16 @@
  *    column blocks are drawn nowhere, its rows only in the grid.
  *  - A row, in the grid's scope: its notes, the children `RowNotes` draws. */
 import { z } from 'zod'
-import { defineQuery, type BlockData, type Query } from '@/data/api'
+import { defineQuery, type BlockData, type Handle, type Query } from '@/data/api'
 import type { Block } from '@/data/block'
-import { childrenViewFacet, surfaceOwnerFacet, type ChildrenView, type NestedSurface } from '@/data/childrenView'
+import { childrenViewFacet, surfaceOwnerFacet, type ChildrenView, type DrawnChild, type NestedSurface } from '@/data/childrenView'
 import { queriesFacet } from '@/data/facets'
+import type { PropertyRowsResult } from '@/data/internals/kernelQueries'
 import { hasBlockType } from '@/data/properties'
+import type { ChildrenInsertDecision, ChildrenInsertRequest } from '@/data/structuralInsert'
 import type { AppExtension } from '@/facets/facet'
+import { showInfo } from '@/utils/toast'
+import type { GridController } from './controller'
 import { gridInScope, gridOfHost, notesInScope, tableRenderScopeId } from './registry'
 import { hostChildrenQuery, queryFieldIdOf, TABLE_TYPE } from './schema'
 
@@ -42,47 +46,102 @@ const rowNotesQuery: Query<{id: string; rows: string[]}, string[]> = defineQuery
 export const rowNotes = (row: Block, rows: readonly string[]) =>
   row.repo.query[ROW_NOTES_QUERY]({id: row.id, rows: [...rows]})
 
+const mapDrawnChildren = <T>(handle: Pick<Handle<T>, 'load' | 'peek'>, draw: (value: T) => readonly DrawnChild[]) => ({
+  load: async () => draw(await handle.load()),
+  peek: () => {
+    const value = handle.peek()
+    return value === undefined ? undefined : draw(value)
+  },
+})
+
 /** A host's query field rows (`QueryFields`), its grid, then under a query
  *  its children the query does not select (`OutsideQuery`, in the host's own scope). */
-const hostMembers = async (parent: Block, data: BlockData, renderScopeId: string) => {
+const hostMembers = (parent: Block, data: BlockData, renderScopeId: string) => {
   const {repo} = parent
   const grid = gridOfHost(renderScopeId, parent.id)
   const surface: NestedSurface = {
     kind: 'nested-surface',
     renderScopeId: tableRenderScopeId(renderScopeId, parent.id),
-    ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope}),
+    ...(grid && {members: grid.rows, order: grid.rowOrder, allowsNewMember: () => grid.allowsNewRow(), propertyDisplay: grid.rowsDisplayScope}),
   }
-  const hasQuery = grid?.hasQuery
   const fieldId = queryFieldIdOf(repo.propertyDefinitions)
-  const fields = fieldId === undefined
-    ? []
-    : (await repo.query.propertyRows({ownerId: parent.id, fieldId}).load()).fields.map(({field}) => field.id)
-  if (!hasQuery) return [...fields, surface]
-  const shown = new Set(surface.members)
-  const outside = (await repo.query.typedBlockIds(hostChildrenQuery(parent.id, data.workspaceId)).load()).filter(id => !shown.has(id))
-  return [...fields, surface, ...outside]
+  const fields = fieldId === undefined ? undefined : repo.query.propertyRows({ownerId: parent.id, fieldId})
+  const outside = grid?.hasQuery ? repo.query.typedBlockIds(hostChildrenQuery(parent.id, data.workspaceId)) : undefined
+  const draw = (fieldRows: PropertyRowsResult | undefined, hostChildren: readonly string[] | undefined) => {
+    const fieldIds = fieldRows?.fields.map(({field}) => field.id) ?? []
+    if (!hostChildren) return [...fieldIds, surface]
+    const shown = new Set(surface.members)
+    return [...fieldIds, surface, ...hostChildren.filter(id => !shown.has(id))]
+  }
+  return {
+    load: async () => draw(await fields?.load(), await outside?.load()),
+    peek: () => {
+      const fieldRows = fields?.peek()
+      const hostChildren = outside?.peek()
+      if ((fields && fieldRows === undefined) || (outside && hostChildren === undefined)) return undefined
+      return draw(fieldRows, hostChildren)
+    },
+  }
+}
+
+async function insertInGrid(grid: GridController, request: ChildrenInsertRequest): Promise<ChildrenInsertDecision | null | undefined> {
+  const {block, data, gesture, surface, position} = request
+  if (surface.renderScopeId !== grid.renderScopeId) {
+    if (block.id !== grid.host.id || position !== 'first') return undefined
+    if (gesture === 'split') {
+      showInfo('Enter at the end of a table’s title adds a row; its title does not split.')
+      return null
+    }
+    return grid.insertFirstRow(request)
+  }
+
+  const isRow = grid.isRow(block.id)
+  const isVimCreate = gesture === 'above' || gesture === 'below'
+  // A scalar cell's editing root belongs to its row. Notes and list members
+  // insert on their own outline.
+  if (!isRow && !(isVimCreate && block.id === surface.scopeRootId)) return undefined
+  const rowIndex = grid.rowOf(block.id)
+  if (rowIndex === undefined || (isRow && !grid.hasQuery && data.parentId !== grid.host.id)) return null
+  if (gesture === 'split') {
+    if (grid.hasQuery) {
+      showInfo('A query table’s row splits in the outline.')
+      return null
+    }
+    if (!grid.allowsNewRow()) return null
+    return {position: 'before'}
+  }
+  if (!isVimCreate && position === 'first') {
+    return {position, renderScopeId: grid.notesScopeId(block.id)}
+  }
+  return grid.insertNewRow(grid.rows[rowIndex], gesture === 'above' ? 'before' : 'after', request)
 }
 
 const viewOf = (parent: Block, data: BlockData, renderScopeId: string | undefined): ChildrenView | null => {
   if (renderScopeId === undefined) return null
   const notes = notesInScope(renderScopeId)
-  if (notes?.rowId === parent.id) return {id: 'tables.row', read: () => rowNotes(parent, notes.grid.rows)}
+  if (notes?.rowId === parent.id) return {id: 'tables.row', order: 'outline', read: () => rowNotes(parent, notes.grid.rows)}
   const grid = gridInScope(renderScopeId)
   if (grid?.isRow(parent.id)) {
     const notesScope = grid.notesScopeId(parent.id)
-    if (notesScope === renderScopeId) return {id: 'tables.row', read: () => rowNotes(parent, grid.rows)}
+    if (notesScope === renderScopeId) return {id: 'tables.row', order: 'outline', read: () => rowNotes(parent, grid.rows)}
     const surface: NestedSurface = {
-      kind: 'nested-surface', renderScopeId: notesScope,
+      kind: 'nested-surface', renderScopeId: notesScope, order: 'outline',
       scopeRootId: parent.id, propertyDisplay: grid.rowsDisplayScope,
     }
-    const load = async () => {
-      const members = await rowNotes(parent, grid.rows).load()
-      return members.length > 0 ? [{...surface, members}] : []
+    return {
+      id: 'tables.row', order: 'outline',
+      read: () => mapDrawnChildren(rowNotes(parent, grid.rows), members => members.length > 0 ? [{...surface, members}] : []),
     }
-    return {id: 'tables.row', read: () => ({load})}
   }
   return hasBlockType(data, TABLE_TYPE)
-    ? {id: 'tables.host', read: () => ({load: () => hostMembers(parent, data, renderScopeId)})}
+    ? {
+      id: 'tables.host', order: 'outline',
+      read: () => hostMembers(parent, data, renderScopeId),
+      insert: async (_ctx, request) => {
+        const grid = gridOfHost(renderScopeId, parent.id)
+        return grid && insertInGrid(grid, request)
+      },
+    }
     : null
 }
 

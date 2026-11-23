@@ -25,7 +25,9 @@ import { outlineSurfaceOf, type SurfaceCarrier } from '@/data/outlineSurface'
 import { editorSelection, focusBlock, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { pasteMultilineText } from '@/paste/operations'
+import { insertDrawnBlock } from '@/data/structuralInsert'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -147,6 +149,41 @@ const pressInEditor = async (actionId: string, blockId: string, cursor: 'start' 
 
 const contentOf = async (id: string) => (await repo.load(id))?.content
 
+describe('outdenting under an isolated member', () => {
+  const memberScope = () => ({...SURFACE_OF_PAGE(), renderScopeId: GRID_SCOPE, scopeRootId: 'r1'})
+  beforeEach(() => {
+    const members: readonly DrawnChild[] = [{kind: 'nested-surface', renderScopeId: GRID_SCOPE, members: ['r2', 'r1']}, 'tail']
+    repo.setRuntimeContributions(childrenViewFacet, 'test.isolated-grid', [({parent}) => parent.id === 'grid' && {
+      id: 'test.isolated-grid',
+      read: () => ({load: async () => members, peek: () => members}),
+    }])
+  })
+
+  it.each([
+    ['empty Enter adds a sibling note', 'split_block_cm', true],
+    ['Shift+Tab refuses to promote a note', 'edit.cm.outdent_block', false],
+  ] as const)('%s at the editing root', async (_, action, createsSibling) => {
+    await repo.mutate.createChild({parentId: 'r1', id: 'note', content: ''})
+    await pressInEditor(action, 'note', 'end', memberScope())
+
+    expect(await repo.query.childIds({id: 'grid', propertyChildren: 'none'}).load()).toEqual(['tail', 'r1', 'r2'])
+    expect((await repo.load('note'))?.parentId).toBe('r1')
+    const notes = await repo.query.childIds({id: 'r1', propertyChildren: 'none'}).load()
+    expect(notes).toHaveLength(createsSibling ? 2 : 1)
+    expect(notes[0]).toBe('note')
+    if (createsSibling) expect(await repo.load(notes[1]!)).toMatchObject({parentId: 'r1', content: ''})
+  })
+
+  it('empty Enter outdents a deeper note within the member', async () => {
+    await repo.mutate.createChild({parentId: 'r1', id: 'branch', content: 'Branch'})
+    await repo.mutate.createChild({parentId: 'branch', id: 'note', content: ''})
+    await pressInEditor('split_block_cm', 'note', 'end', memberScope())
+
+    expect(await repo.query.childIds({id: 'r1', propertyChildren: 'none'}).load()).toEqual(['branch', 'note'])
+    expect(await repo.query.childIds({id: 'branch', propertyChildren: 'none'}).load()).toEqual([])
+  })
+})
+
 describe('a nested surface among drawn children', () => {
   it('the walk passes over it, never into the data children it stands for, and says so', async () => {
     expect((await nextVisibleBlock(repo.block('host'), SURFACE_OF_PAGE()))?.id).toBe('q')
@@ -169,10 +206,12 @@ describe('a nested surface among drawn children', () => {
     expect(await previousDrawnStep(repo.block('bare'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'q'}, crossed: true})
   })
 
-  it('counts as children the parent shows', async () => {
-    const carrier = {scopeRootId: 'page', propertyDisplay: DISPLAY}
-    expect((await structuralEditPolicyForBlock(repo.block('bare'), carrier)).createBelowPlacement).toBe('child-first')
-    expect((await structuralEditPolicyForBlock(repo.block('after'), carrier)).createBelowPlacement).toBe('sibling-below')
+  it.each([
+    ['bare', 'bare'],
+    ['after', 'page'],
+  ])('inserts below %s under %s when a nested surface is the only drawn child of bare', async (id, parentId) => {
+    const inserted = await insertDrawnBlock(repo.block(id), SURFACE_OF_PAGE(), {kind: 'below'})
+    expect(await repo.load(inserted!.id)).toMatchObject({parentId, content: ''})
   })
 
   it('Backspace does not merge a block into the one drawn above a nested surface', async () => {
@@ -296,4 +335,50 @@ describe('ranges across drawn scopes', () => {
     expect(await extendSelection('projected-child', ui, repo, inner)).toBe(false)
     expect(peekFocusedBlockLocation(ui)).toEqual({blockId: 'projection', renderScopeId: OUTLINE_SCOPE})
   })
+})
+
+it('Backspace preserves an empty note and its child when the note leaves a result during confirmation', async () => {
+  await repo.mutate.createChild({parentId: 'projected-child', id: 'blank-note'})
+  await repo.mutate.createChild({parentId: 'blank-note', id: 'kept', content: 'Stored note'})
+  let moved = false
+  repo.setRuntimeContributions(blockDeletionGuardsFacet, 'test.move-note', [async () => {
+    if (!moved) {
+      moved = true
+      await repo.mutate.move({id: 'blank-note', parentId: 'after', position: {kind: 'last'}})
+    }
+    return null
+  }])
+  await pressInEditor('delete_empty_block_cm', 'blank-note', 'start', {
+    ...SURFACE_OF_PAGE(), renderScopeId: PROJECTION_SCOPE, scopeRootId: 'projected-child',
+  })
+  expect(await repo.load('blank-note')).toMatchObject({parentId: 'after'})
+  expect(await repo.load('kept')).toMatchObject({parentId: 'blank-note', content: 'Stored note'})
+})
+
+it.each([
+  ['indent', 'edit.cm.indent_block', 'r1', 'end'],
+  ['create', 'split_block_cm', 'r1', 'end'],
+  ['merge', 'delete_empty_block_cm', 'r1', 'start'],
+  ['outdent', 'edit.cm.outdent_block', 'child', 'end'],
+  ['paste', 'paste', 'r1', 'end'],
+] as const)('%s inside a nested grid refuses when the whole grid has left its outer result', async (_, action, subject, cursor) => {
+  await repo.mutate.createChild({parentId: 'r1', id: 'child', content: 'child'})
+  await repo.mutate.move({id: 'grid', parentId: 'projected-child', position: {kind: 'last'}})
+  const outer = {...SURFACE_OF_PAGE(), scopeRootId: 'projected-child', renderScopeId: PROJECTION_SCOPE}
+  repo.setRuntimeContributions(surfaceOwnerFacet, 'test.inner', [({renderScopeId}) =>
+    renderScopeId === GRID_SCOPE ? {blockId: 'grid', surface: outer} : null])
+  const tx = repo.tx.bind(repo)
+  vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+    await tx(t => t.move('grid', {parentId: 'after', orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+    return tx(fn, opts)
+  })
+  const scope = {...SURFACE_OF_PAGE(), renderScopeId: GRID_SCOPE, scopeRootId: 'grid'}
+  const rows = () => sharedDb.db.getAll("SELECT id,parent_id,order_key,content,deleted FROM blocks WHERE id != 'grid' ORDER BY id")
+  const before = await rows()
+  if (action === 'paste') await pasteMultilineText('new', repo.block(subject), repo, scope)
+  else await pressInEditor(action, subject, cursor, scope)
+  expect(await rows()).toEqual(before)
+  expect(await repo.load('grid')).toMatchObject({parentId: 'after'})
+  expect(await repo.load('r1')).toMatchObject({parentId: 'grid'})
+  expect(await repo.load('r2')).toMatchObject({parentId: 'grid'})
 })

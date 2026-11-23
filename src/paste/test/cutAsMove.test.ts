@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { childrenViewFacet } from '@/data/childrenView'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { HTML_DOCUMENT_TYPE } from '@/data/blockTypes'
@@ -191,6 +192,40 @@ describe('pasteArmedCut', () => {
 
     expect(await childIds('page')).toEqual(['b', 'x', 'y', 'blank', 'a', 'referrer'])
     expect((await repo.block('referrer').load())?.content).toBe('see ((blank))')
+  })
+
+  it('keeps a structurally childless target that draws a projected child surface', async () => {
+    await seedPage()
+    await createBlock('blank', '', 'page', 'a4')
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      childrenViewFacet.of(({parent}) => parent.id === 'blank'
+        ? {id: 'test.projection', read: () => ({load: async () => [
+          {kind: 'nested-surface', renderScopeId: 'projection', members: ['x']},
+        ]})}
+        : null),
+    ]))
+    await arm(['a'])
+
+    await pasteArmedCut(CUT_TEXT, repo.block('blank'), repo, {scopeRootId: 'page', renderScopeId: 'outline'})
+
+    expect(await childIds('page')).toEqual(['b', 'x', 'y', 'blank'])
+    expect(await childIds('blank')).toEqual(['a'])
+    expect(await childIds('x')).toEqual(['x1'])
+  })
+
+  it('keeps a blank target whose only stored child is hidden by its view', async () => {
+    await seedPage()
+    await createBlock('blank', '', 'page', 'a4')
+    await createBlock('hidden', 'Stored', 'blank', 'a0')
+    repo.setRuntimeContributions(childrenViewFacet, 'test.empty-list', [({parent}) => parent.id === 'blank' && {
+      id: 'empty-list', read: () => ({load: async () => []}),
+    }])
+    await arm(['a'])
+    await pasteArmedCut(CUT_TEXT, repo.block('blank'), repo, {scopeRootId: 'page', renderScopeId: 'outline'})
+    expect(await childIds('page')).toEqual(['b', 'x', 'y', 'blank', 'a'])
+    expect(await childIds('blank')).toEqual(['hidden'])
+    expect(await childIds('a')).toEqual(['a1'])
   })
 
   it('keeps a blank target that carries properties', async () => {

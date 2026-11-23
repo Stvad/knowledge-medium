@@ -28,7 +28,7 @@ import {
   selectionStateProp,
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
+import { insertDrawnBlock } from '@/data/structuralInsert'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { extendBlockSelectionAction } from '@/extensions/blockSelectionAction'
@@ -350,11 +350,15 @@ describe('merge targets are the drawn neighbours', () => {
 
 describe('a block whose only drawn children are property rows has children', () => {
   it('a new block below it goes in as its first child', async () => {
-    expect((await structuralEditPolicyForBlock(repo.block('solo'), DRAWN)).createBelowPlacement).toBe('child-first')
+    const inserted = await insertDrawnBlock(repo.block('solo'), DRAWN, {kind: 'below'})
+    expect(await parentOf(inserted!.id)).toBe('solo')
+    expect((await allChildren('solo'))[0]?.id).toBe(inserted!.id)
   })
 
   it('in mode none it has none, and a new block below is a sibling', async () => {
-    expect((await structuralEditPolicyForBlock(repo.block('solo'), HIDDEN)).createBelowPlacement).toBe('sibling-below')
+    const inserted = await insertDrawnBlock(repo.block('solo'), HIDDEN, {kind: 'below'})
+    expect(await parentOf(inserted!.id)).toBe('page')
+    expect((await allChildren('page')).map(child => child.id)).toEqual(['owner', 'solo', inserted!.id, 'after'])
   })
 
   it('a paste after it lands in its child list', async () => {

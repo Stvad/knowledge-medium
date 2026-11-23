@@ -30,7 +30,7 @@ export const unlistedSiblingIndex = (
 /** {@link unlistedSiblingIndex} for a walker, which cannot assume the
  *  siblings are in the cache (a mounted outline has them; the bridge and a
  *  cold walk do not): loads them first. */
-const unlistedSiblingIndexLoaded = async (
+export const unlistedSiblingIndexLoaded = async (
   repo: Repo,
   listedIds: readonly string[],
   row: BlockData,
@@ -70,10 +70,13 @@ function slotsOf(members: readonly DrawnChild[], withinScope = false): Slot[] {
 
 /** Only actual children of the owner may share its structural editing root.
  *  A projected member keeps its own boundary even under a shared-root declaration. */
+const memberRootOf = (ownerId: string, nested: NestedSurface, member: Pick<BlockData, 'id' | 'parentId'>): string =>
+  nested.scopeRootId === ownerId && member.parentId === ownerId ? ownerId : member.id
+
 async function memberRoot(owner: Block, nested: NestedSurface, id: string): Promise<string> {
   if (nested.scopeRootId !== owner.id) return id
-  if ((await owner.repo.load(id))?.parentId !== owner.id) return id
-  return owner.id
+  const member = await owner.repo.load(id)
+  return member ? memberRootOf(owner.id, nested, member) : id
 }
 
 async function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): Promise<DrawnLocation> {
@@ -89,30 +92,55 @@ async function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): Pro
   }
 }
 
-const ownerOf = (repo: Repo, renderScopeId: string | undefined) =>
+export const surfaceOwnerOf = (repo: Repo, renderScopeId: string | undefined) =>
   renderScopeId === undefined ? undefined : repo.facetRuntime?.read(surfaceOwnerFacet)({repo, renderScopeId})
 
 /** Declared surfaces participate in their owner's outline. An undeclared
  *  surface (such as an embed) remains an independent DOM outline. */
 export function outerRenderScopeId(repo: Repo, renderScopeId: string | undefined): string | undefined {
-  const owner = ownerOf(repo, renderScopeId)
+  const owner = surfaceOwnerOf(repo, renderScopeId)
   return owner ? outerRenderScopeId(repo, owner.surface.renderScopeId) : renderScopeId
 }
 
 /** A nested scope whose root is its owner draws the root in the enclosing scope. */
 export const scopeRootRenderScope = (repo: Repo, scopeRootId: string, renderScopeId: string | undefined): string | undefined => {
-  const owner = ownerOf(repo, renderScopeId)
+  const owner = surfaceOwnerOf(repo, renderScopeId)
   return owner?.blockId === scopeRootId ? owner.surface.renderScopeId : renderScopeId
 }
 
 async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
-  const owner = ownerOf(repo, renderScopeId)
-  if (!owner) return null
+  const owner = surfaceOwnerOf(repo, renderScopeId)
+  if (!owner) return undefined
   const parent = {block: repo.block(owner.blockId), surface: owner.surface}
   const members = await drawnChildrenOf(parent.block, parent.surface)
   const nested = members.find((member): member is NestedSurface =>
     typeof member !== 'string' && member.renderScopeId === renderScopeId)
   return nested ? {nested, parent, members} : null
+}
+
+export type NestedWriteLocation = NonNullable<Awaited<ReturnType<typeof declarationOf>>> & {
+  memberId: string
+  projected: boolean
+  boundaryId: string
+  foreignRootId?: string
+}
+
+/** Undefined for the ordinary outline, null for an occurrence whose member is no longer drawn. */
+export async function nestedWriteLocation(block: Block, renderScopeId: string | undefined): Promise<NestedWriteLocation | null | undefined> {
+  const drawn = await declarationOf(block.repo, renderScopeId)
+  if (!drawn) return drawn
+  const {nested, parent} = drawn
+  const member = nested.members?.includes(block.id)
+    ? block.peek() ?? await block.load()
+    : (await block.repo.query.ancestors({id: block.id}).load()).ancestors.find(row => nested.members?.includes(row.id))
+  if (!member) return null
+  const foreign = member.parentId !== parent.block.id
+  const projected = foreign || nested.order === 'query'
+  const enclosing = foreign ? undefined : await nestedWriteLocation(parent.block, parent.surface.renderScopeId)
+  if (enclosing === null) return null
+  return {...drawn, memberId: member.id, projected,
+    boundaryId: projected ? member.id : memberRootOf(parent.block.id, nested, member),
+    foreignRootId: foreign ? member.id : enclosing?.foreignRootId}
 }
 
 /** Panel-level dispatch supplies the panel surface even when focus belongs

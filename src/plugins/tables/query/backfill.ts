@@ -2,7 +2,7 @@
  *  parent its `childof=` term names, a type from each type term, and the value
  *  each `=` term names. Terms that name no single value (ranges, `!=`,
  *  presence, `under=`, an or-group) back-fill nothing. */
-import { ChangeScope, type AnyPropertySchema } from '@/data/api'
+import type { AnyPropertySchema, Tx } from '@/data/api'
 import { createChild } from '@/data/mutators'
 import type { Repo } from '@/data/repo'
 import { impliedValue, type QueryTerm } from './parse'
@@ -33,12 +33,10 @@ export const rowBackfill = (terms: readonly QueryTerm[]): RowBackfill => {
   return {parentId, types: [...new Set(types)], values}
 }
 
-/** Creates the row, last under its parent, with everything the query implies,
- *  in one transaction and one undo step. */
-export const createQueryRow = async (repo: Repo, hostId: string, backfill: RowBackfill): Promise<string> =>
-  repo.tx(async tx => {
-    const id = await tx.run(createChild, {parentId: backfill.parentId ?? hostId, position: {kind: 'last'}})
-    for (const type of backfill.types) await repo.addTypeInTx(tx, id, type)
-    for (const {schema, value} of backfill.values) await tx.setProperty(id, schema, value)
-    return id
-  }, {scope: ChangeScope.BlockDefault, description: 'new table row'})
+/** Creates the row last under its parent and fills in what the query implies. */
+export const createQueryRowInTx = async (repo: Repo, tx: Tx, hostId: string, backfill: RowBackfill): Promise<string> => {
+  const id = await tx.run(createChild, {parentId: backfill.parentId ?? hostId, position: {kind: 'last'}})
+  for (const type of backfill.types) await repo.addTypeInTx(tx, id, type)
+  for (const {schema, value} of backfill.values) await tx.setProperty(id, schema, value)
+  return id
+}
