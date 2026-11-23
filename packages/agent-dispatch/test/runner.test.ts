@@ -73,7 +73,7 @@ describe('buildClaudeArgs', () => {
 })
 
 describe('unexpectedClaudeInventory', () => {
-  const intended = {reported: ['Read'], serverNames: ['fixture']}
+  const intended = {acceptedBuiltIns: new Set(['Read']), serverNames: ['fixture']}
   const server = {name: 'fixture', source: 'dynamic'}
   const clean = {tools: ['Read', 'mcp__fixture__lookup'], mcp_servers: [server], plugins: [{source: 'fixture@builtin'}]}
 
@@ -409,7 +409,7 @@ describe('runClaude', () => {
 
   it.each(['\n', ''])('discards a buffered session after refusal with terminator %j', terminator => {
     const events: RunEvent[] = []
-    const parser = createStreamJsonParser(event => events.push(event), {reported: [], serverNames: []})
+    const parser = createStreamJsonParser(event => events.push(event), {acceptedBuiltIns: new Set<string>(), serverNames: []})
     const refused = JSON.stringify({...cleanInit, tools: ['Extra']})
     const buffered = JSON.stringify({...cleanInit, session_id: 'late'})
     parser.feed(`${refused}\n${buffered}${terminator}`)
@@ -441,7 +441,7 @@ describe('runClaude', () => {
     ['streamed unconfigured MCP tool', streamed(toolUse('mcp__other__marker')), 'mcp__other__marker'],
     ['finalized unrequested built-in', assistant(toolUse('Task'), toolUse('Write')), 'Write'],
     ['malformed streamed request', streamed({type: 'tool_use'}), 'malformed tool name'],
-    ['requested alias used as a reported name', assistant(toolUse('Agent')), 'Agent'],
+    ['alias for an unrequested tool', assistant(toolUse('TaskStop')), 'TaskStop'],
   ])('kills on %s after a clean init, before delivering activity', async (_, event, name) => {
     const events: RunEvent[] = []
     const result = await runClaude({...baseOptions, allowedTools: ['Agent'], onEvent: e => events.push(e)}, fakeProcess([
@@ -456,7 +456,7 @@ describe('runClaude', () => {
 
   it('ignores non-tool blocks and payloads outside tool request events', () => {
     const other = toolUse('Unused')
-    const parser = createStreamJsonParser(undefined, {reported: [], serverNames: []})
+    const parser = createStreamJsonParser(undefined, {acceptedBuiltIns: new Set<string>(), serverNames: []})
     const records = [
       cleanInit,
       assistant(null, {type: 'text', text: 'ok'}, {type: 'server_tool_use', name: 'server_operation'}),
@@ -468,6 +468,22 @@ describe('runClaude', () => {
     ]
     for (const record of records) expect(parser.feed(JSON.stringify(record) + '\n')).toBe(true)
     expect(parser.finish()?.resultText).toBe('ok')
+  })
+
+  it('accepts Task at init and Agent during a background subagent call', async () => {
+    const init = {...cleanInit, session_id: 'parent', tools: ['Task']}
+    const events: RunEvent[] = []
+    const script = [
+      init,
+      streamed(toolUse('Agent')),
+      assistant(toolUse('Agent')),
+      {type: 'result', result: 'Subagent launched'},
+      init,
+      {type: 'result', result: 'hi'},
+    ].map(streamResult).join('; ')
+    const result = await runClaude({...baseOptions, allowedTools: ['Agent'], onEvent: event => events.push(event)}, fakeProcess(script))
+    expect(result).toMatchObject({ok: true, resultText: 'hi'})
+    expect(events.map(event => event.kind)).toEqual(['session', 'activity', 'session'])
   })
 
   it('accepts reported aliases and configured MCP tools at init and during use', async () => {

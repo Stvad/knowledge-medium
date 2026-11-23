@@ -165,13 +165,14 @@ export const envForBilling = (
 
 const reportedToolNames = new Map([['Agent', 'Task'], ['KillShell', 'TaskStop']])
 
-/** The CLI accepts permission rule names on argv and reports canonical names in JSONL. */
+/** Init and tool-use events can use different names for the same requested tool. */
 const claudeToolSet = (options: AgentRunOptions) => {
   const requested = [...new Set(options.allowedTools.map(rule => rule.trim().split('(', 1)[0])
     .filter(name => !name.startsWith('mcp__')))]
+  const reported = requested.map(name => reportedToolNames.get(name) ?? name)
   return {
     requested,
-    reported: requested.map(name => reportedToolNames.get(name) ?? name),
+    acceptedBuiltIns: new Set([...requested, ...reported]),
     serverNames: options.mcpConfig?.serverNames ?? [],
   }
 }
@@ -205,11 +206,11 @@ export const buildClaudeArgs = (options: AgentRunOptions, tools = claudeToolSet(
 
 const startupHookEvents: ReadonlySet<unknown> = new Set(['hook_started', 'hook_progress', 'hook_response'])
 
-type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'reported' | 'serverNames'>
+type ClaudeToolSet = Pick<ReturnType<typeof claudeToolSet>, 'acceptedBuiltIns' | 'serverNames'>
 
 const unexpectedTool = (name: unknown, intended: ClaudeToolSet): string | null => {
   if (typeof name !== 'string') return 'malformed tool name'
-  if (intended.reported.includes(name) || intended.serverNames.some(server => name.startsWith(`mcp__${server}__`))) return null
+  if (intended.acceptedBuiltIns.has(name) || intended.serverNames.some(server => name.startsWith(`mcp__${server}__`))) return null
   return `tool ${name}`
 }
 
