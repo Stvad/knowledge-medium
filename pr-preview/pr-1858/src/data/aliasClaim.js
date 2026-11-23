@@ -1,1 +1,1 @@
-export{qet as assertAliasClaimable,Jet as claimedAliases}from"../../chunks/app-BLHUkaWi.js";
+export{qet as assertAliasClaimable,Jet as claimedAliases}from"../../chunks/app-BkYyt4se.js";
