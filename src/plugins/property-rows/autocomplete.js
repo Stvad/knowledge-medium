@@ -1,1 +1,1 @@
-export{kc as OUTLINE_PROPERTY_PRESET_ID,Ac as propertyAutocomplete,jc as propertyCompletionSource}from"../../../chunks/app-CXudEp8Z.js";
+export{kc as OUTLINE_PROPERTY_PRESET_ID,Ac as propertyAutocomplete,jc as propertyCompletionSource}from"../../../chunks/app-CCfXGceC.js";

@@ -1,1 +1,1 @@
-export{Vc as propertiesMigrationPlugin}from"../../../chunks/app-CXudEp8Z.js";
+export{Vc as propertiesMigrationPlugin}from"../../../chunks/app-CCfXGceC.js";

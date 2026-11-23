@@ -1,1 +1,1 @@
-export{_u as createUserActivity,vu as userActivity}from"../../chunks/app-CXudEp8Z.js";
+export{_u as createUserActivity,vu as userActivity}from"../../chunks/app-CCfXGceC.js";

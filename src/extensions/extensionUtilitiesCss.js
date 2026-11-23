@@ -1,1 +1,1 @@
-export{UR as ensureExtensionUtilitiesCss}from"../../chunks/app-CXudEp8Z.js";
+export{JR as ensureExtensionUtilitiesCss}from"../../chunks/app-CCfXGceC.js";
