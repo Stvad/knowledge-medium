@@ -1,0 +1,1 @@
+export{Um as annotationsPlugin}from"../../../chunks/app-DZ6Wed76.js";

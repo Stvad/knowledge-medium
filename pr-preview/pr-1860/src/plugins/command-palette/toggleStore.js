@@ -1,0 +1,1 @@
+export{SF as commandPaletteToggle}from"../../../chunks/app-DZ6Wed76.js";
