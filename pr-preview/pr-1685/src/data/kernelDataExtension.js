@@ -1,1 +1,1 @@
-export{s6 as kernelDataExtension}from"../../chunks/app-BDAd3sL6.js";
+export{Pet as kernelDataExtension}from"../../chunks/app-BzmoMuYr.js";

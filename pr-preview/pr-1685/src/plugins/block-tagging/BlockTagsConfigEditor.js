@@ -1,1 +1,1 @@
-export{Cu as BlockTagsConfigEditor}from"../../../chunks/app-BDAd3sL6.js";
+export{ip as BlockTagsConfigEditor}from"../../../chunks/app-BzmoMuYr.js";

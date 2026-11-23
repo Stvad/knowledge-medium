@@ -1,1 +1,1 @@
-export{Yat as deriveWorkspaceIdNamespace}from"../../../chunks/app-BDAd3sL6.js";
+export{Oft as deriveWorkspaceIdNamespace}from"../../../chunks/app-BzmoMuYr.js";

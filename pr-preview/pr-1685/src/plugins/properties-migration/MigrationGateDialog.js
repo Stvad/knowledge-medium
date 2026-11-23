@@ -1,1 +1,1 @@
-export{go as MigrationGateDialog}from"../../../chunks/app-BDAd3sL6.js";
+export{Uc as MigrationGateDialog}from"../../../chunks/app-BzmoMuYr.js";

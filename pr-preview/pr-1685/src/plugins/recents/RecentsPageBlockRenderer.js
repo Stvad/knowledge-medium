@@ -1,1 +1,1 @@
-export{BD as RecentsList,VD as RecentsPageBlockRenderer}from"../../../chunks/app-BDAd3sL6.js";
+export{yj as RecentsList,bj as RecentsPageBlockRenderer}from"../../../chunks/app-BzmoMuYr.js";

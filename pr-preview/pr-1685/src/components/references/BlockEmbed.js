@@ -1,1 +1,1 @@
-export{XM as BlockEmbed}from"../../../chunks/app-BDAd3sL6.js";
+export{dI as BlockEmbed}from"../../../chunks/app-BzmoMuYr.js";

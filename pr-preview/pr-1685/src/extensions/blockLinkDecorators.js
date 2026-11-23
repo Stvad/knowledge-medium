@@ -1,1 +1,1 @@
-export{XD as blockLinkDecoratorsFacet}from"../../chunks/app-BDAd3sL6.js";
+export{kj as blockLinkDecoratorsFacet}from"../../chunks/app-BzmoMuYr.js";

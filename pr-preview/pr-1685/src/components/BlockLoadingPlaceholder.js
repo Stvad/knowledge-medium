@@ -1,1 +1,1 @@
-export{VF as BlockLoadingPlaceholder}from"../../chunks/app-BDAd3sL6.js";
+export{hz as BlockLoadingPlaceholder}from"../../chunks/app-BzmoMuYr.js";
