@@ -1,1 +1,1 @@
-export{Oc as blockSetting,kc as cyclePropertyDisplayActions,Ac as propertyDisplayActions,jc as setBlockPropertyDisplay,Mc as setWorkspacePropertyDisplay}from"../../../chunks/app-Bt7LxnO-.js";
+export{Oc as blockSetting,kc as cyclePropertyDisplayActions,Ac as propertyDisplayActions,jc as setBlockPropertyDisplay,Mc as setWorkspacePropertyDisplay}from"../../../chunks/app-Dag6smUP.js";

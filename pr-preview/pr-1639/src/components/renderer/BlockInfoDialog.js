@@ -1,1 +1,1 @@
-export{yV as BlockInfoDialog}from"../../../chunks/app-Bt7LxnO-.js";
+export{yV as BlockInfoDialog}from"../../../chunks/app-Dag6smUP.js";
