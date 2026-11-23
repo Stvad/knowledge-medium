@@ -15,7 +15,7 @@ import { siblingPrecedes } from '@/data/orderKey'
 import type { OutlineSurface } from '@/data/outlineSurface'
 
 export * from './drawnWalk'
-import { nextDrawnStep, previousDrawnStep, selectionBoundaryOf } from './drawnWalk'
+import { type DrawnLocation, nextDrawnStep, previousDrawnStep, selectionBoundaryOf } from './drawnWalk'
 
 /** Walks ancestors via cache snapshots and returns the topmost block
  *  reachable. Used by some shortcut handlers that need to jump to
@@ -248,6 +248,21 @@ export async function commitSelectionRange(
   return true
 }
 
+/** Next selectable occurrence in this direction. Both ends of a range must
+ *  belong to its boundary, even when the walk passes through another one. */
+export async function stepInSelectionBoundary(
+  step: typeof previousDrawnStep, from: DrawnLocation, boundary: FocusedBlockLocation | null,
+): Promise<DrawnLocation | null> {
+  let cursor = from
+  for (;;) {
+    const next = await step(cursor.block, cursor.surface)
+    if (!next.block) return null
+    cursor = {block: next.block, surface: next.surface}
+    const there = await selectionBoundaryOf(cursor.block, cursor.surface.renderScopeId)
+    if (there === boundary || sameFocusedBlockLocation(there ?? undefined, boundary ?? undefined)) return cursor
+  }
+}
+
 /** Inclusive drawn range in document order. An unreachable anchor or a
  *  foreign-result boundary leaves the current selection alone. */
 export async function getBlocksInRange(
@@ -265,11 +280,9 @@ export async function getBlocksInRange(
     for (;;) {
       ids.push(cursor.block.id)
       if (cursor.block.id === endBlockId && (endScopeId === undefined || cursor.surface.renderScopeId === endScopeId)) return ids
-      const next = await step(cursor.block, cursor.surface)
-      if (!next.block) return null
-      const there = await selectionBoundaryOf(next.block, next.surface.renderScopeId)
-      if (boundary !== there && !sameFocusedBlockLocation(boundary ?? undefined, there ?? undefined)) return null
-      cursor = {block: next.block, surface: next.surface}
+      const next = await stepInSelectionBoundary(step, cursor, boundary)
+      if (!next) return null
+      cursor = next
     }
   }
   const forward = await collect(nextDrawnStep)

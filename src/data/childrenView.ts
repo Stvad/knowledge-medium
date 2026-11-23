@@ -37,12 +37,10 @@ export interface NestedSurface {
   readonly kind: 'nested-surface'
   readonly renderScopeId: string
   readonly members?: readonly string[]
-  /** Members sharing one editing root may merge with siblings inside it.
-   *  Omit when each member is the structural root of its own subtree. */
+  /** Set to the owner's id to share its editing root among its own children.
+   *  Every other member bounds edits and ranges within its own subtree. */
   readonly scopeRootId?: string
   readonly propertyDisplay?: PropertyDisplayScopeLevels
-  /** Each member's subtree bounds a selection range. */
-  readonly isolateSelection?: boolean
 }
 
 interface OwnerContext {

@@ -305,6 +305,18 @@ describe('a list cell draws its members as outline blocks', () => {
 describe('a row draws its children', () => {
   const note = () => repo.mutate.createChild({parentId: 'row-0', content: 'a note', position: {kind: 'last'}})
 
+  it('Delete at the end of the last note in a plain table keeps the next row intact', async () => {
+    const id = (await note())!
+    mount()
+    const editor = await editAt(id, 'end')
+    await act(async () => {
+      await runActionById('merge_next_block_cm', new KeyboardEvent('keydown', {key: 'Delete'}))
+    })
+    expect(editor.state.doc.toString()).toBe('a note')
+    expect(await repo.load(id)).toMatchObject({content: 'a note', parentId: 'row-0'})
+    expect(await repo.load('row-1')).toMatchObject({content: 'second', parentId: HOST})
+  })
+
   it('under its cells, once each, and its expand toggle hides them', async () => {
     const id = await note()
     mount()
@@ -814,6 +826,18 @@ describe('the outline around a table', () => {
       </RepoContext>,
     )
   }
+
+  it('Down from the last row without spatial navigation exits to the following outline block', async () => {
+    await mountPage()
+    await act(async () => { await focusBlock(ui(), 'row-1', {renderScopeId: SCOPE}) })
+    const grid = await waitFor(() => {
+      const grid = gridOfHost(PARENT_SCOPE, HOST)
+      expect(grid?.rows.at(-1)).toBe('row-1')
+      return grid!
+    })
+    expect(grid.command('down')).toBe(true)
+    await waitFor(() => expect(focused()).toEqual({blockId: 'after', renderScopeId: PARENT_SCOPE}))
+  })
 
   it('Backspace at the start of the block after a table merges it into nothing above', async () => {
     await mountPage()

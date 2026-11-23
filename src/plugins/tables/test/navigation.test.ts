@@ -300,6 +300,7 @@ describe('Up and Down around a table', () => {
   })
 
   it('with no drawn step to take (spatial navigation off), the grid’s Up at its first row still reaches the host', async () => {
+    await repo.tx(tx => tx.move('after', {parentId: null, orderKey: 'c0'}), options)
     await focusBlock(panel, 'row-0', {renderScopeId: TABLE})
     expect(controller.command('up')).toBe(true)
     await expectFocus('host', PAGE)

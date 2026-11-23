@@ -36,6 +36,7 @@ import {
   commitSelectionRange,
   findBestSelectionAnchorIndex,
   nextDrawnStep,
+  outerRenderScopeId,
   previousDrawnStep,
   selectionBoundaryOf,
 } from '@/utils/selection.js'
@@ -44,6 +45,7 @@ import {
   closestBlockAncestor,
   firstInstanceIn,
   horizontalNeighborPanel,
+  instanceAt,
   laneEdgeInstance,
   laneOf,
   lateralNeighbor,
@@ -51,7 +53,7 @@ import {
   OWN_CONTENT_LANE,
   panelById,
   panelOf,
-  nextRowInScope,
+  selectionTargetsFrom,
   panelRowsInOrder,
   type PanelRow,
   reservedRowBetween,
@@ -70,39 +72,40 @@ import { activeLayoutSessionElement } from '@/utils/layoutSessionDom'
 const excludedSurfacesFor = (uiStateBlock: Block): ReadonlySet<string> =>
   resolveSpatialNavExclusions(uiStateBlock.repo.facetRuntime)
 
-/**
- * Locate the anchor instance to walk from. Prefers the live DOM
- * instance for the focused block; if it's missing (e.g. a backlink
- * was just rescheduled and its entry unmounted while the proactive
- * recovery is still in its debounce window), falls back to the same
- * recovery anchor `PanelFocusRecovery` would pick. Without that
- * fallback, a keystroke during the window would return null →
- * `moveVertical` returns false → vim's data-model walker takes over
- * and may cross panels (see `moveVertical`'s false-return contract).
- */
+/** DOM-based gestures can settle on the same neighbour as PanelFocusRecovery
+ *  after a focused row disappears. A caller with an exact model origin can
+ *  walk from that occurrence even while its DOM row is missing. */
 const currentInstance = (
   deps: BlockShortcutDependencies,
+  exact?: FocusedBlockLocation,
 ): HTMLElement | null => {
   const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return null
   if (typeof document === 'undefined') return null
+  const excluded = excludedSurfacesFor(uiStateBlock)
+  if (exact) return instanceAt(uiStateBlock.id, exact, excluded)
   const focusedLocation = deps.renderScopeId
     ? {blockId: block.id, renderScopeId: deps.renderScopeId}
     : peekFocusedBlockLocation(uiStateBlock)
-  return resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excludedSurfacesFor(uiStateBlock))
+  return resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excluded)
 }
 
-/** For an unnamed reservation or a nested occurrence, the enclosing rendered
- *  scope can identify an isolated member. The row itself must belong to it. */
+/** A member's notes inherit its boundary. An unrelated embed inside that
+ *  member starts another boundary at the embedded occurrence. */
 const boundaryOfRow = async (row: PanelRow, uiStateBlock: Block, panel: HTMLElement): Promise<FocusedBlockLocation | undefined> => {
   const block = uiStateBlock.repo.block(row.blockId)
   let boundary = await selectionBoundaryOf(block, row.renderScopeId)
+  let branch: Pick<PanelRow, 'blockId' | 'renderScopeId'> = row
   let ancestor = closestBlockAncestor(row.element, panel)
   while (!boundary && ancestor) {
     const location = locationOf(ancestor)
     if (location && location.renderScopeId !== row.renderScopeId) {
       boundary = await selectionBoundaryOf(block, location.renderScopeId)
+      if (!boundary && await selectionBoundaryOf(block.repo.block(location.blockId), location.renderScopeId)) {
+        boundary = {blockId: branch.blockId, renderScopeId: branch.renderScopeId ?? location.renderScopeId}
+      }
     }
+    branch = location ?? branch
     ancestor = closestBlockAncestor(ancestor, panel)
   }
   return boundary ?? undefined
@@ -110,6 +113,13 @@ const boundaryOfRow = async (row: PanelRow, uiStateBlock: Block, panel: HTMLElem
 
 const sameSelectionBoundary = (a: FocusedBlockLocation | undefined, b: FocusedBlockLocation | undefined) =>
   a === b || sameFocusedBlockLocation(a, b)
+
+/** Declared nested scopes are part of their owner's outline. Undeclared
+ *  scopes, such as backlinks, keep their own spatial selection order. */
+const inOutlineOf = (uiStateBlock: Block, renderScopeId: string | undefined) => {
+  const outline = outerRenderScopeId(uiStateBlock.repo, renderScopeId)
+  return (row: PanelRow) => outerRenderScopeId(uiStateBlock.repo, row.renderScopeId) === outline
+}
 
 /** `rangeOrigin` stands in for the focused row as the cursor the range starts
  *  from — see `BlockPointerDependencies.rangeOrigin`. */
@@ -164,15 +174,14 @@ export const extendSelectionToSpatialTarget = async (
   const anchorBoundary = await boundaryOfRow(anchorRow, uiStateBlock, panel)
   if (!sameSelectionBoundary(anchorBoundary, targetBoundary)) return true
 
-  // A range must stay on one side of every isolated member boundary, even
-  // when it would skip a row from another scope while collecting blocks.
   const span = rows.slice(Math.min(anchorIndex, targetIndex), Math.max(anchorIndex, targetIndex) + 1)
-  for (const row of span.slice(1, -1)) {
-    if (!sameSelectionBoundary(await boundaryOfRow(row, uiStateBlock, panel), targetBoundary)) return true
+  const inAnchorOutline = inOutlineOf(uiStateBlock, anchorRow.renderScopeId)
+  const inScope = inAnchorOutline(targetRow) ? span.filter(inAnchorOutline) : span
+  const spanned: PanelRow[] = []
+  for (const row of inScope) {
+    if (!sameSelectionBoundary(await boundaryOfRow(row, uiStateBlock, panel), anchorBoundary)) continue
+    spanned.push(row)
   }
-  const spanned = anchorRow.renderScopeId === targetRow.renderScopeId
-    ? span.filter(row => row.renderScopeId === targetRow.renderScopeId)
-    : span
 
   return commitSelectionRange({
     uiStateBlock,
@@ -213,20 +222,16 @@ const extendSelectionVertical = async (
     return true
   }
 
-  const next = nextRowInScope(current, direction, excludedSurfaces)
-    ?? verticalNeighbor(current, direction, excludedSurfaces)
-  // NOT the same call as `moveVertical`'s boundary, though it looks like it.
-  // Declining here doesn't extend the selection by one row: the structural
-  // base re-derives the WHOLE range from the model, which sweeps in every
-  // unmounted row the spatial (DOM-order) range had skipped — one keystroke
-  // silently adding rows the user has never seen, straight into the path of
-  // `d` / delete. So the selection edge stays "handled", as the
-  // hidden-structural-siblings test above it has always specified. Shift+j
-  // therefore still stops at the last mounted row while `j` walks on; making
-  // those agree means teaching this path to extend onto a model-resolved row
-  // spatially, which is its own change.
-  if (!next) return true
-  await extendSelectionToSpatialTarget(deps, next)
+  // At the last mounted row, keep the range in spatial order. Falling
+  // through would let the structural base collect unmounted siblings.
+  const panel = panelOf(current)!
+  const candidates = selectionTargetsFrom(current, panel, direction, excludedSurfaces, inOutlineOf(uiStateBlock, currentLocation.renderScopeId))
+  const boundary = await boundaryOfRow({element: current, ...currentLocation}, uiStateBlock, panel)
+  for (const row of candidates) {
+    if (!sameSelectionBoundary(await boundaryOfRow(row, uiStateBlock, panel), boundary)) continue
+    await extendSelectionToSpatialTarget(deps, row.element)
+    break
+  }
   return true
 }
 
@@ -244,8 +249,8 @@ export const moveVertical = async (
   const expectedLocation = deps.renderScopeId
     ? {blockId: block.id, renderScopeId: deps.renderScopeId}
     : peekFocusedBlockLocation(uiStateBlock)
-  const current = currentInstance(deps)
-  if (!current) return !modelFallback && Boolean(expectedLocation)
+  const current = currentInstance(deps, modelFallback ? expectedLocation : undefined)
+  if (!current && !modelFallback) return Boolean(expectedLocation)
   const excludedSurfaces = excludedSurfacesFor(uiStateBlock)
 
   // Recovery-anchor settle: the focused block instance is gone (e.g. a
@@ -254,7 +259,7 @@ export const moveVertical = async (
   // on that target as if recovery had already run; further vertical
   // movement walks normally from there on the next keystroke. Walking past
   // it here would feel like one key press moved two blocks.
-  const currentLocation = locationOf(current)
+  const currentLocation = current ? locationOf(current) : expectedLocation
   if (!currentLocation) return false
 
   if (
@@ -287,6 +292,12 @@ export const moveVertical = async (
     !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
   ) return true
 
+  const takeModelStep = () => {
+    if (!modelFallback || !modelLocation) return false
+    void focusBlock(uiStateBlock, modelLocation.blockId, {renderScopeId: modelLocation.renderScopeId})
+    return true
+  }
+
   // The anchor itself can be torn out while the walk waits (a re-render, a
   // recycled lazy row, the panel unmounting under it). Everything below reads
   // the DOM through it, and a detached element still answers — from the dead
@@ -295,7 +306,7 @@ export const moveVertical = async (
   // goes through `panelOf(current)`, which in a detached subtree returns the
   // DEAD panel — so the scope edge would find a dead slot and write focus to a
   // row that no longer exists. Declining here is what keeps both on one DOM.
-  if (!current.isConnected) return false
+  if (!current?.isConnected) return takeModelStep()
 
   // Read the neighbour AFTER the walk, never before: resolving the `childIds`
   // that walk awaits is itself what mounts the rows under this one, so a
@@ -331,11 +342,7 @@ export const moveVertical = async (
       }
     }
 
-    if (!mountedBeforeModel && (!next || next !== modelRowSlot)) {
-      if (!modelFallback) return false
-      void focusBlock(uiStateBlock, modelLocation.blockId, {renderScopeId: modelLocation.renderScopeId})
-      return true
-    }
+    if (!mountedBeforeModel && (!next || next !== modelRowSlot)) return takeModelStep()
   } else if (surface) {
     // At the model boundary, another scope may reserve or mount the next row.
     const reserved = reservedRowBetween(current, next, direction, excludedSurfaces, {descend})

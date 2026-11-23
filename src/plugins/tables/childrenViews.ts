@@ -21,7 +21,6 @@ const nestedSurfaceSchema = z.object({
   members: z.array(z.string()).optional(),
   propertyDisplay: propertyDisplayScopeSchema.optional(),
   scopeRootId: z.string().optional(),
-  isolateSelection: z.boolean().optional(),
 }).strict()
 
 const ROW_NOTES_QUERY = 'tables.rowNotes'
@@ -109,7 +108,7 @@ const hostView = (parent: Block, data: BlockData, renderScopeId: string): Childr
       grid: {
         kind: 'nested-surface',
         renderScopeId: tableRenderScopeId(renderScopeId, parent.id),
-        ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope, isolateSelection: true}),
+        ...(grid && {members: grid.rows, propertyDisplay: grid.rowsDisplayScope}),
       },
     }),
   }

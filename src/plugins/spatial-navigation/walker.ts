@@ -1,4 +1,4 @@
-import { clamp } from 'lodash-es'
+import { clamp, partition } from 'lodash-es'
 import { getElementScrollportBounds, isElementProperlyVisible } from '@/utils/dom.js'
 import { BLOCK_CONTENT_VIEW_ATTRIBUTE } from '@/extensions/blockInteraction.js'
 import {
@@ -736,21 +736,20 @@ export const verticalNeighbor = (
     : lastInstanceIn(sibling, excludedSurfaces)
 }
 
-/** The nearest mounted row of `current`'s own scope in this panel, past any
- *  nested surface rendered in between. */
-export const nextRowInScope = (
+/** Selection extends within the cursor's declared outline first, then into the
+ *  other mounted scopes of its lane when that outline runs out. */
+export const selectionTargetsFrom = (
   current: HTMLElement,
+  panel: HTMLElement,
   direction: 'up' | 'down',
-  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
-): HTMLElement | null => {
-  const panel = panelOf(current)
-  const scope = locationOf(current)?.renderScopeId
-  if (!panel || scope === undefined) return null
-  const instances = panelInstances(panel, excludedSurfaces)
+  excludedSurfaces: ReadonlySet<string>,
+  inOutline: (row: PanelRow) => boolean,
+): PanelRow[] => {
+  const instances = laneInstances(panel, laneOf(current), excludedSurfaces)
   const from = instances.indexOf(current)
-  if (from === -1) return null
   const ahead = direction === 'down' ? instances.slice(from + 1) : instances.slice(0, from).reverse()
-  return ahead.find(el => locationOf(el)?.renderScopeId === scope) ?? null
+  const rows = ahead.map(element => ({element, ...locationOf(element)!}))
+  return partition(rows, inOutline).flat()
 }
 
 /** Can the user see this lane row: shown, and on screen within both its

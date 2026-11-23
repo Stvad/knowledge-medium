@@ -29,7 +29,7 @@ const PAGE = 'panel:page'
 const TABLE = tableRenderScopeId(PAGE, 'host')
 const ROWS = ['row-0', 'row-1']
 const grid = (members: readonly string[]) => ({
-  kind: 'nested-surface', renderScopeId: TABLE, members, isolateSelection: true, propertyDisplay: controller.rowsDisplayScope,
+  kind: 'nested-surface', renderScopeId: TABLE, members, propertyDisplay: controller.rowsDisplayScope,
 })
 
 let db: TestDb
@@ -99,11 +99,11 @@ describe('a table host’s drawn members', () => {
   it.each([
     {name: 'plain', rows: ROWS, sorted: false},
     {name: 'sorted', rows: [...ROWS].reverse(), sorted: true},
-  ])('stops an outline selection at the $name grid', async ({rows, sorted}) => {
+  ])('passes an outline selection over the $name grid and refuses a grid-row endpoint', async ({rows, sorted}) => {
     controller.setSorted(sorted)
     controller.setRows(rows, rows.length)
     expect(await getBlocksInRange('host', rows[0]!, surface(), repo, TABLE)).toEqual([])
-    expect(await getBlocksInRange('host', 'after', surface(), repo, PAGE)).toEqual([])
+    expect(await getBlocksInRange('host', 'after', surface(), repo, PAGE)).toEqual(['host', 'after'])
   })
 
   it('under a query: its field row, the grid, then its children outside the query', async () => {

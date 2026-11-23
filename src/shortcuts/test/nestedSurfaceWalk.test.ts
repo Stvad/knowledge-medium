@@ -22,7 +22,7 @@ import { childrenViewFacet, surfaceOwnerFacet, type DrawnChild } from '@/data/ch
 import { queriesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf, type SurfaceCarrier } from '@/data/outlineSurface'
-import { editorSelection, focusBlock, peekFocusedBlockLocation } from '@/data/properties'
+import { editorSelection, focusBlock, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
@@ -30,6 +30,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { getVimNormalModeActions, jumpVisibleBlocks } from '@/plugins/vim-normal-mode/actions'
+import { extendSelectionDown } from '@/shortcuts/blockActions'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
 import {
   ActionContextTypes, type ActionConfig, type ActionTrigger, type CodeMirrorEditModeDependencies,
@@ -44,7 +45,7 @@ const MEMBERS_QUERY = 'test.members'
 const PROJECTION_SCOPE = 'surface.test:projection'
 const OUTLINE_SCOPE = 'outline:page'
 const GRID_SCOPE = 'surface.test:live-grid'
-const GRID: DrawnChild = {kind: 'nested-surface', renderScopeId: GRID_SCOPE, members: ['r2', 'r1']}
+const GRID: DrawnChild = {kind: 'nested-surface', renderScopeId: GRID_SCOPE, scopeRootId: 'grid', members: ['r2', 'r1']}
 
 declare module '@/data/api' {
   interface QueryRegistry {
@@ -63,7 +64,7 @@ const membersQuery = defineQuery<{members: string[]}, DrawnChild[]>({
     if (member === AT_SURFACE) return SURFACE
     if (member === '<grid>') return GRID
     if (member === '<projection>') return {
-      kind: 'nested-surface', renderScopeId: PROJECTION_SCOPE, members: ['projected-child'], isolateSelection: true,
+      kind: 'nested-surface', renderScopeId: PROJECTION_SCOPE, scopeRootId: 'projection', members: ['survivor', 'projected-child'],
     }
     return member
   }),
@@ -232,7 +233,7 @@ describe('focus across a nested surface with drawn rows', () => {
 
   it('a normal-mode jump continues counting in the destination scope', async () => {
     const jump = await jumpVisibleBlocks(repo.block('grid'), SURFACE_OF_PAGE(), 2, 'down')
-    expect(jump).toMatchObject({block: {id: 'r1'}, surface: {renderScopeId: GRID_SCOPE, scopeRootId: 'r1'}})
+    expect(jump).toMatchObject({block: {id: 'r1'}, surface: {renderScopeId: GRID_SCOPE, scopeRootId: 'grid'}})
   })
 
   it('normal movement enters and exits the grid in drawn order', async () => {
@@ -262,9 +263,33 @@ describe('ranges across drawn scopes', () => {
     expect(peekFocusedBlockLocation(ui)).toEqual({blockId: 'r1', renderScopeId: GRID_SCOPE})
   })
 
-  it('stops a range before a foreign result, including one between two outer endpoints', async () => {
+  it('Backspace on a projected member cannot consume it into a local sibling sharing the declared root', async () => {
     const page = SURFACE_OF_PAGE()
-    expect(await getBlocksInRange('projection', 'empty', page, repo)).toEqual([])
+    const declared = {...page, scopeRootId: 'projection', renderScopeId: PROJECTION_SCOPE}
+    expect(await previousDrawnStep(repo.block('projected-child'), declared)).toMatchObject({block: {id: 'survivor'}, crossed: true})
+    expect(await nextDrawnStep(repo.block('survivor'), declared)).toMatchObject({block: {id: 'projected-child'}, crossed: true})
+    await pressInEditor('delete_empty_block_cm', 'projected-child', 'start', declared)
+    expect(await contentOf('projected-child')).toBe('projected')
+    expect(await contentOf('survivor')).toBe('survivor')
+  })
+
+  it('Shift+Down advances past a projected result without collecting its source', async () => {
+    const page = SURFACE_OF_PAGE()
+    const ui = repo.block('ui')
+    await focusBlock(ui, 'projection', {renderScopeId: OUTLINE_SCOPE})
+    await extendSelectionDown(ui, repo, page)
+    await extendSelectionDown(ui, repo, page)
+    expect(peekFocusedBlockLocation(ui)).toEqual({blockId: 'survivor', renderScopeId: PROJECTION_SCOPE})
+    await extendSelectionDown(ui, repo, page)
+    expect(peekFocusedBlockLocation(ui)).toEqual({blockId: 'empty', renderScopeId: OUTLINE_SCOPE})
+    expect(ui.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['projection'])
+  })
+
+  it('passes over a foreign result and refuses it as an endpoint', async () => {
+    const page = SURFACE_OF_PAGE()
+    await repo.tx(tx => tx.move('projected-child', {parentId: null, orderKey: 'd0'}), {scope: ChangeScope.BlockDefault})
+    expect(await getBlocksInRange('tail', 'empty', page, repo)).toEqual(['tail', 'projection'])
+    expect(await getBlocksInRange('empty', 'tail', page, repo)).toEqual(['tail', 'projection'])
     const ui = repo.block('ui')
     await focusBlock(ui, 'projection', {renderScopeId: OUTLINE_SCOPE})
     const inner = {...page, renderScopeId: PROJECTION_SCOPE}

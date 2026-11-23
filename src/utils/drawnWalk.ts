@@ -68,21 +68,39 @@ function slotsOf(members: readonly DrawnChild[], withinScope = false): Slot[] {
   return slots
 }
 
-function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): DrawnLocation {
+/** Only actual children of the owner may share its structural editing root.
+ *  A projected member keeps its own boundary even under a shared-root declaration. */
+async function memberRoot(owner: Block, nested: NestedSurface, id: string): Promise<string> {
+  if (nested.scopeRootId !== owner.id) return id
+  if ((await owner.repo.load(id))?.parentId !== owner.id) return id
+  return owner.id
+}
+
+async function locationAt(parent: DrawnLocation, slot: Exclude<Slot, null>): Promise<DrawnLocation> {
   if (typeof slot === 'string') return {block: parent.block.repo.block(slot), surface: parent.surface}
   return {
     block: parent.block.repo.block(slot.id),
     surface: {
       renderScopeId: slot.nested.renderScopeId,
       propertyDisplay: slot.nested.propertyDisplay ?? parent.surface.propertyDisplay,
-      scopeRootId: slot.nested.scopeRootId ?? slot.id,
+      scopeRootId: await memberRoot(parent.block, slot.nested, slot.id),
       scopeRootForcesOpen: false,
     },
   }
 }
 
+const ownerOf = (repo: Repo, renderScopeId: string | undefined) =>
+  renderScopeId === undefined ? undefined : repo.facetRuntime?.read(surfaceOwnerFacet)({repo, renderScopeId})
+
+/** Declared surfaces participate in their owner's outline. An undeclared
+ *  surface (such as an embed) remains an independent DOM outline. */
+export function outerRenderScopeId(repo: Repo, renderScopeId: string | undefined): string | undefined {
+  const owner = ownerOf(repo, renderScopeId)
+  return owner ? outerRenderScopeId(repo, owner.surface.renderScopeId) : renderScopeId
+}
+
 async function declarationOf(repo: Repo, renderScopeId: string | undefined) {
-  const owner = renderScopeId === undefined ? undefined : repo.facetRuntime?.read(surfaceOwnerFacet)({repo, renderScopeId})
+  const owner = ownerOf(repo, renderScopeId)
   if (!owner) return null
   const parent = {block: repo.block(owner.blockId), surface: owner.surface}
   const members = await drawnChildrenOf(parent.block, parent.surface)
@@ -110,10 +128,11 @@ export async function selectionBoundaryOf(block: Block, renderScopeId: string | 
   const declaration = await declarationOf(block.repo, renderScopeId)
   if (!declaration) return null
   const {nested, parent} = declaration
-  if (nested.isolateSelection) {
-    let id: string | null = block.id
-    while (id !== null && !nested.members?.includes(id)) id = (await block.repo.load(id))?.parentId ?? null
-    if (id !== null) return {blockId: id, renderScopeId: nested.renderScopeId}
+  let id: string | null = block.id
+  while (id !== null && !nested.members?.includes(id)) id = (await block.repo.load(id))?.parentId ?? null
+  if (id === null) return null
+  if (await memberRoot(parent.block, nested, id) === id) {
+    return {blockId: id, renderScopeId: nested.renderScopeId}
   }
   return selectionBoundaryOf(parent.block, parent.surface.renderScopeId)
 }
@@ -126,7 +145,8 @@ async function siblingsOf({block, surface}: DrawnLocation) {
     const slots = slotsOf(declaration.members)
     const at = slots.findIndex(slot => slot && typeof slot !== 'string' &&
       slot.nested === declaration.nested && slot.id === block.id)
-    return {parent: declaration.parent, slots, at, listed: true, isolated: !declaration.nested.scopeRootId || declaration.nested.isolateSelection}
+    const scopeRootId = await memberRoot(declaration.parent.block, declaration.nested, block.id)
+    return {parent: declaration.parent, slots, at, listed: true, source: {...surface, scopeRootId}}
   }
   if (block.id === surface.scopeRootId) return null
   const data = block.peek() ?? await block.load()
@@ -134,7 +154,7 @@ async function siblingsOf({block, surface}: DrawnLocation) {
   const parent = {block: block.repo.block(data.parentId), surface}
   const slots = slotsOf(await drawnChildrenOf(parent.block, surface))
   const at = slots.indexOf(block.id)
-  if (at >= 0) return {parent, slots, at, listed: true, isolated: false}
+  if (at >= 0) return {parent, slots, at, listed: true, source: surface}
 
   // An editor can retain a child hidden by the parent's display setting.
   const ids = slots.filter((slot): slot is string => typeof slot === 'string')
@@ -142,10 +162,10 @@ async function siblingsOf({block, surface}: DrawnLocation) {
   const before = ids[index]
   const last = ids.at(-1)
   const insertion = before !== undefined ? slots.indexOf(before) : last === undefined ? 0 : slots.indexOf(last) + 1
-  return {parent, slots, at: insertion, listed: false, isolated: false}
+  return {parent, slots, at: insertion, listed: false, source: surface}
 }
 
-function scan(parent: DrawnLocation, slots: readonly Slot[], from: number, direction: 1 | -1, fromScope = parent.surface.renderScopeId): DrawnStep {
+async function scan(parent: DrawnLocation, slots: readonly Slot[], from: number, direction: 1 | -1, source = parent.surface): Promise<DrawnStep> {
   let crossed = false
   for (let i = from; i >= 0 && i < slots.length; i += direction) {
     const slot = slots[i]
@@ -153,10 +173,10 @@ function scan(parent: DrawnLocation, slots: readonly Slot[], from: number, direc
       crossed = true
       continue
     }
-    const location = locationAt(parent, slot)
-    return {...location, crossed: crossed || fromScope !== location.surface.renderScopeId}
+    const location = await locationAt(parent, slot)
+    return {...location, crossed: crossed || source.renderScopeId !== location.surface.renderScopeId || source.scopeRootId !== location.surface.scopeRootId}
   }
-  return {block: null, surface: parent.surface, crossed: crossed || fromScope !== parent.surface.renderScopeId}
+  return {block: null, surface: parent.surface, crossed: crossed || source.renderScopeId !== parent.surface.renderScopeId}
 }
 
 async function edgeChild(location: DrawnLocation, direction: 1 | -1, withinScope = false): Promise<DrawnStep> {
@@ -177,8 +197,8 @@ export async function nextDrawnStep(block: Block, surface: OutlineSurface, desce
     crossed = first.crossed
   }
   for (let siblings = await siblingsOf(current); siblings; siblings = await siblingsOf(current)) {
-    const next = scan(siblings.parent, siblings.slots, siblings.at + Number(siblings.listed), 1, current.surface.renderScopeId)
-    crossed ||= siblings.isolated === true || next.crossed
+    const next = await scan(siblings.parent, siblings.slots, siblings.at + Number(siblings.listed), 1, siblings.source)
+    crossed ||= next.crossed
     if (next.block) return {...next, crossed}
     current = siblings.parent
   }
@@ -201,8 +221,8 @@ export async function lastDrawnStep(
 export async function previousDrawnStep(block: Block, surface: OutlineSurface): Promise<DrawnStep> {
   const siblings = await siblingsOf({block, surface})
   if (!siblings) return {block: null, surface, crossed: false}
-  const previous = scan(siblings.parent, siblings.slots, siblings.at - 1, -1, surface.renderScopeId)
-  const crossed = siblings.isolated === true || previous.crossed
+  const previous = await scan(siblings.parent, siblings.slots, siblings.at - 1, -1, siblings.source)
+  const crossed = previous.crossed
   if (!previous.block) return {...siblings.parent, crossed}
   const last = await lastDrawnStep(previous.block, previous.surface)
   return {...last, crossed: crossed || last.crossed}
@@ -228,7 +248,7 @@ export async function locationAfterSubtreeRemoval(
     for (let index = from; index >= 0 && index < slots.length; index += direction) {
       const slot = slots[index]
       if (slot == null) continue
-      const location = locationAt(parent, slot)
+      const location = await locationAt(parent, slot)
       // A projected sibling may live anywhere, including under a removed root.
       if (typeof slot === 'string'
         ? !removedRoots.has(slot)

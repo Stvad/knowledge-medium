@@ -31,6 +31,8 @@ import {
 import {
   locationAfterSubtreeRemoval,
   extendSelection,
+  selectionBoundaryOf,
+  stepInSelectionBoundary,
   nextDrawnStep,
   previousDrawnStep,
   surfaceForFocus,
@@ -131,8 +133,9 @@ async function extendVerticalSelection(
     if (block.id === here.scopeRootId && !(await previousDrawnStep(block, here)).block) return false
     return extendSelection(block.id, uiStateBlock, repo, here, {clearEditing})
   }
-  const next = await step(block, here)
-  if (!next.block) return false
+  const boundary = await selectionBoundaryOf(block, here.renderScopeId)
+  const next = await stepInSelectionBoundary(step, {block, surface: here}, boundary)
+  if (!next) return false
   return extendSelection(next.block.id, uiStateBlock, repo, next.surface, {clearEditing})
 }
 
