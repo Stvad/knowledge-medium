@@ -27,6 +27,7 @@ import { extendSelectionDown } from '@/shortcuts/blockActions.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
 import {
   getSpatialNavigationActions,
+  moveVertical,
   getSpatialNavigationDispatchDecorators,
 } from '@/plugins/spatial-navigation/actions.js'
 import {
@@ -489,6 +490,23 @@ describe('spatial navigation selection actions', () => {
 })
 
 describe('spatial navigation shift-click selection', () => {
+  it.each([
+    { name: 'the focused occurrence', cursorId: 'X', anchorId: 'A' },
+    { name: 'the saved anchor occurrence', cursorId: 'A', anchorId: 'X' },
+  ])('refuses when $name belongs to a different foreign member', async ({cursorId, anchorId}) => {
+    await declareForeignMembers()
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline'},
+      {blockId: 'C', renderScopeId: 'panel:outline'},
+      {blockId: 'X', renderScopeId: FOREIGN_SCOPE},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, cursorId, {renderScopeId: cursorId === 'X' ? FOREIGN_SCOPE : 'panel:outline'})
+    await panel.set(selectionStateProp, {selectedBlockIds: [anchorId], anchorBlockId: anchorId})
+    await shiftClick({block: env.repo.block('C'), uiStateBlock: panel, targetElement: blockNavItem('C')})
+    expect(panel.peekProperty(selectionStateProp)).toEqual({selectedBlockIds: [anchorId], anchorBlockId: anchorId})
+  })
+
   it('extends within one foreign member when the note renders in its own scope', async () => {
     await declareForeignMembers(true)
     const noteScope = 'embed:foreign-note'
@@ -842,6 +860,42 @@ describe('spatial navigation jump-to-edge actions', () => {
 })
 
 describe('spatial navigation vertical actions', () => {
+  it.each([
+    {blockId: 'B1', renderScopeId: FOREIGN_SCOPE},
+    {deferredBlockId: 'B1', deferredScopeId: FOREIGN_SCOPE},
+  ])('skips a stale mounted or reserved row in the model destination scope (%j)', async staleRow => {
+    await declareForeignMembers()
+    buildPanelDom([{blockId: 'B', renderScopeId: 'panel:outline', nested: [
+      staleRow, {blockId: 'X', renderScopeId: FOREIGN_SCOPE},
+    ]}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+    await moveVertical({
+      block: env.repo.block('B'), uiStateBlock: panel, renderScopeId: 'panel:outline', scopeRootId: 'top',
+    }, 'down', {modelFallback: true})
+    await waitFor(() => expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X', renderScopeId: FOREIGN_SCOPE,
+    }))
+  })
+
+  it.each([
+    {blockId: 'B1', renderScopeId: 'embed:current-note'},
+    {deferredBlockId: 'B1', deferredScopeId: 'embed:current-note'},
+  ])('grid-style exit skips a mounted or reserved current subtree entry (%j)', async note => {
+    buildPanelDom([
+      {blockId: 'B', renderScopeId: 'grid', nested: [note]},
+      {blockId: 'X', renderScopeId: 'panel:outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'grid'})
+    await moveVertical({
+      block: env.repo.block('B'), uiStateBlock: panel, renderScopeId: 'grid', scopeRootId: 'B',
+    }, 'down', {descend: false, modelFallback: true})
+    await waitFor(() => expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X', renderScopeId: 'panel:outline',
+    }))
+  })
+
   it('delegates to the outline model when the next model row is excluded from the DOM walk', async () => {
     const scope = 'panel:outline'
     const excluded = 'grid-cell'
