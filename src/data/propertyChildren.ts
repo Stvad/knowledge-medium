@@ -595,7 +595,8 @@ const contentToEncodedValue = (
 /** A value row that names its target (`[[name]]`) and has no target derived on
  *  this device yet. Its member is UNKNOWN here, not absent: the decoder refuses
  *  it only because the stamp that would answer it has not run, and another
- *  device may have projected it into the cell. */
+ *  device may have projected it into the cell. A `::[[name]]` FIELD row awaiting
+ *  its target is not a field row yet, so its values are outside this. */
 export const awaitsReferenceTarget = (
   schema: AnyPropertySchema,
   row: Exclude<ValueChildContent, string>,

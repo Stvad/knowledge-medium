@@ -11,7 +11,7 @@
  * Each check answers one question through the code that owns it, so the audit
  * cannot disagree with the writer: coverage is `surveyPropertyCellCoverage`
  * (also behind `audit-properties`), and divergence recomputes cells through
- * `projectFieldRowValues`, the PROJECT processor's own projection.
+ * `projectFieldValue`, the value every cell writer projects.
  */
 import type { ResolvedPropertySchema } from '@/data/api'
 import type { Repo } from '@/data/repo'
@@ -21,7 +21,7 @@ import {
   surveyPropertyCellCoverage,
   type PropertyCellCoverageBucket,
 } from '@/data/internals/propertyCellBackfill'
-import { projectFieldRowValues } from '@/data/internals/propertyChildrenProcessor'
+import { projectFieldValue } from '@/data/internals/propertyChildrenProcessor'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 import { buildInClause, MAX_IDS_PER_IN_CLAUSE } from '@/data/internals/sqlBinds'
 import { propertyFieldRowsForParentsSql } from '@/data/internals/treeQueries'
@@ -224,8 +224,8 @@ export const runPropertyCellDivergenceCheck = async (
           continue
         }
         fieldsChecked += 1
-        const projected = projectFieldRowValues(schema, rows.map(row => valuesOf.get(row.id) ?? []))
         const stored = Object.hasOwn(cell, schema.name) ? cell[schema.name] : undefined
+        const projected = projectFieldValue(schema, rows.map(row => valuesOf.get(row.id) ?? []), stored)
         const kind = divergenceOf(stored, projected)
         if (kind === null) continue
         divergentCells += 1

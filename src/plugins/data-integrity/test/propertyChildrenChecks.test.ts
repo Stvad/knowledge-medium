@@ -50,6 +50,15 @@ const ownerProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+const linksProp = seedProperty({
+  seedKey: 'test/property/links',
+  revision: 1,
+  name: 'demo:links',
+  preset: 'refList',
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+
 const PROPERTY_CHECKS = [
   'property_field_row_duplicates',
   'property_cell_coverage',
@@ -78,6 +87,7 @@ const installRuntime = () => {
     kernelDataExtension,
     definitionSeedsFacet.of(statusProp, { source: 'test' }),
     definitionSeedsFacet.of(ownerProp, { source: 'test' }),
+    definitionSeedsFacet.of(linksProp, { source: 'test' }),
   ], { repo, workspaceId: WS, safeMode: false }))
   repo.setActiveWorkspaceId(WS)
 }
@@ -349,6 +359,17 @@ describe('property_cell_divergence', () => {
     expect((await audit()).property_cell_divergence).toMatchObject({
       status: 'anomaly', byKind: { cellExtra: 1, cellMissing: 0, cellDiffers: 0 },
     })
+  })
+
+  it('reads a list holding a member its rows cannot resolve yet as the writer does', async () => {
+    await insertRaw(
+      owner('o1', { [linksProp.name]: ['target-a', 'target-c'] }),
+      fieldRow('f1', 'o1', linksProp.name),
+      valueChild('v-a', 'f1', '((target-a))', { orderKey: 'a0', referenceTargetId: 'target-a' }),
+      valueChild('v-c', 'f1', '[[Name C]]', { orderKey: 'a1' }),
+    )
+
+    expect((await audit()).property_cell_divergence).toMatchObject({ status: 'ok', fieldsChecked: 1, divergentCells: 0 })
   })
 
   it('projects only live, unmarked value children in order, as the processor does', async () => {

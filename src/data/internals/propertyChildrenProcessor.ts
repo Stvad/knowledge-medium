@@ -117,7 +117,8 @@ export type ProjectableRow =
 /**
  * `full` — the projection is authoritative: children are truth, so a field
  * set with no parseable value UNSETS the owner's key (§9's default-value
- * rule). Only correct inside a `settledWrites` processor, which stops the
+ * rule), except as {@link projectFieldValue} holds a member awaiting its
+ * reference target. Only correct inside a `settledWrites` processor, which stops the
  * follow-on materialize reading that unset as a user deleting the key.
  *
  * `additive` — the caller did not observe user intent and its write is NOT
@@ -155,6 +156,10 @@ type AffectedOwners = Map<string, AffectedOwner>
 
 interface AffectedOwner {
   readonly fields: Map<string, AnyPropertySchema>
+  /** Per field: the BEFORE states of its value rows this tx removed or
+   *  rewrote, so a projection holding a pending member still applies the
+   *  change ({@link projectFieldValue}). */
+  readonly departed: Map<string, BlockData[]>
   /** A field or value row the user wrote in this tx (`SameTxCtx.hasUserWrite`)
    *  reaches this owner, so a changed cell is the user's edit of the owner and
    *  is stamped as `setProperty` stamps one. Otherwise the cell write is
@@ -181,7 +186,7 @@ const addAffectedProjection = (
   if (!schema) return
   let owner = out.get(parentId)
   if (owner === undefined) {
-    owner = {fields: new Map(), userEdited: false}
+    owner = {fields: new Map(), departed: new Map(), userEdited: false}
     out.set(parentId, owner)
   }
   owner.fields.set(fieldId, schema)
@@ -216,14 +221,21 @@ const collectAffectedProjection = async (
     addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups, userEdited)
   }
 
-  if (row.parentId === null) return
+  const field = await valueChildField(row, readParent)
+  if (field !== null) addAffectedProjection(out, field.ownerId, field.fieldId, lookups, userEdited)
+}
+
+/** The row as a VALUE child: its field row's owner and field. Only a marked
+ *  parent is a field row, and only a non-marked row is its value. */
+const valueChildField = async (
+  row: ProjectableRow, readParent: ParentReader,
+): Promise<{ownerId: string; fieldId: string} | null> => {
+  if (row.parentId === null) return null
   const parent = await readParent(row.parentId)
-  if (parent === null || parent.parentId === null) return
-  // The row as a VALUE child (parent = field row → owning block): only a
-  // marked parent is a field row, and only a non-marked row is its value.
-  if (parent.isFieldForm === true && isFieldValueChild(row)) {
-    addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups, userEdited)
-  }
+  if (parent === null || parent.parentId === null) return null
+  if (parent.isFieldForm !== true || !isFieldValueChild(row)) return null
+  const fieldId = getPropertyFieldTargetId(parent)
+  return fieldId === undefined ? null : {ownerId: parent.parentId, fieldId}
 }
 
 /** The value a schema's field rows project onto their owner's cell, in
@@ -239,9 +251,8 @@ const collectAffectedProjection = async (
  *  drop members that are about to become siblings anyway.
  *
  *  Over values already read: each of one schema's live field rows' value
- *  children, field rows and values both in `(order_key, id)` order. The
- *  read-only consistency audit recomputes cells through this, so it cannot
- *  disagree with the processor about what a cell should hold. */
+ *  children, field rows and values both in `(order_key, id)` order. Cell
+ *  WRITERS and the read-only audit go through {@link projectFieldValue}. */
 export const projectFieldRowValues = (
   schema: AnyPropertySchema,
   perFieldRow: readonly (readonly (Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null})[])[],
@@ -256,32 +267,64 @@ export const projectFieldRowValues = (
     schema, unionValuesAcrossFieldRows(schema, perFieldRow))
 }
 
-/** What a field writes while one of its value rows still awaits its reference
+type ValueRowState = Pick<BlockData, 'id' | 'content'> & {readonly referenceTargetId?: string | null}
+
+/** The value a field's rows give its owner's cell. Every writer of a
+ *  child-backed cell asks this, so none can disagree about a member this device
+ *  cannot read yet.
+ *
+ *  It is {@link projectFieldRowValues} until a value row awaits its reference
  *  target ({@link awaitsReferenceTarget}). That member is unknown on this
- *  device, not absent, so the projection's lack of it is no evidence it was
- *  removed: the write may only ADD. A list keeps every stored member, counted
- *  with multiplicity, and gains the projected members it lacks; any other
- *  stored value is kept as it is. Accepted cost: a removal made on this device
- *  reaches the cell only once the pending member resolves. */
+ *  device, not absent, so the rows' lack of it is no evidence it was removed,
+ *  and the write becomes `stored` with the caller's change applied
+ *  ({@link withPendingMembersKept}). `departed` are the BEFORE states of the
+ *  value rows that change removed or rewrote. */
+export const projectFieldValue = (
+  schema: AnyPropertySchema,
+  perFieldRow: readonly (readonly ValueRowState[])[],
+  stored: unknown,
+  departed: readonly ValueRowState[] = [],
+): unknown | undefined => {
+  const projected = projectFieldRowValues(schema, perFieldRow)
+  if (!perFieldRow.some(rows => rows.some(row => awaitsReferenceTarget(schema, row)))) return projected
+  const removed = departed.length === 0 ? undefined : projectFieldRowValues(schema, [departed])
+  return withPendingMembersKept(schema, stored, projected, Array.isArray(removed) ? removed : [])
+}
+
+/** `stored` with a change applied, while a pending member keeps the rows from
+ *  answering for the whole value. A list holds each member as many times as
+ *  the rows give it or as `stored` does less the copies the change `removed`,
+ *  whichever is more: stored members first in stored order, then the projected
+ *  ones it adds. Any other stored value is kept as it is. An absent key takes
+ *  the projection. */
 export const withPendingMembersKept = (
-  schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined,
+  schema: AnyPropertySchema, stored: unknown, projected: unknown | undefined, removed: readonly unknown[],
 ): unknown | undefined => {
   if (stored === undefined) return projected
   if (memberCodecOf(schema.codec) === undefined || !Array.isArray(stored) || !Array.isArray(projected)) {
     return stored
   }
-  const unmatched = new Map<string, number>()
-  for (const member of stored) {
-    const key = persistedJsonKey(member)
-    unmatched.set(key, (unmatched.get(key) ?? 0) + 1)
+  const countOf = (members: readonly unknown[]): Map<string, number> => {
+    const counts = new Map<string, number>()
+    for (const member of members) {
+      const key = persistedJsonKey(member)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return counts
   }
-  const added = projected.filter(member => {
+  const inStored = countOf(stored)
+  const inProjected = countOf(projected)
+  const inRemoved = countOf(removed)
+  const taken = new Map<string, number>()
+  const take = (member: unknown): boolean => {
     const key = persistedJsonKey(member)
-    const left = unmatched.get(key) ?? 0
-    unmatched.set(key, left - 1)
-    return left <= 0
-  })
-  return [...stored, ...added]
+    const held = Math.max(inProjected.get(key) ?? 0, (inStored.get(key) ?? 0) - (inRemoved.get(key) ?? 0))
+    const already = taken.get(key) ?? 0
+    if (already >= held) return false
+    taken.set(key, already + 1)
+    return true
+  }
+  return [...stored.filter(take), ...projected.filter(take)]
 }
 
 /** Re-project ONE owner's cell for every field of it this pass touched.
@@ -292,7 +335,7 @@ export const withPendingMembersKept = (
 const reprojectOwner = async (
   tx: Tx,
   parentId: string,
-  {fields, userEdited}: AffectedOwner,
+  {fields, departed, userEdited}: AffectedOwner,
   mode: ProjectionMode,
 ): Promise<void> => {
   const parent = await tx.get(parentId)
@@ -330,10 +373,8 @@ const reprojectOwner = async (
     // deep under a value child never re-projects the owner.
     const perFieldRow: BlockData[][] = []
     for (const fieldRow of fieldRows) perFieldRow.push(await fieldValueChildren(tx, fieldRow.id))
-    const fromChildren = projectFieldRowValues(schema, perFieldRow)
-    const projected = perFieldRow.flat().some(row => awaitsReferenceTarget(schema, row))
-      ? withPendingMembersKept(schema, storedPropertyValue(nextProperties, schema.name), fromChildren)
-      : fromChildren
+    const projected = projectFieldValue(
+      schema, perFieldRow, storedPropertyValue(nextProperties, schema.name), departed.get(fieldId))
     if (projected === undefined) {
       // LIVE field rows with no parseable value ⇒ key unset (default-value
       // rule, §9). A key with NO field rows AT ALL is only reachable here via
@@ -366,14 +407,19 @@ const reprojectOwner = async (
  *
  * `isUserWrite` is the tx's `SameTxCtx.hasUserWrite` (see
  * `AffectedOwner.userEdited`); repair paths omit it, since nothing they
- * project is a user's edit.
+ * project is a user's edit. `departed` are the BEFORE states of the tx's
+ * changed rows (`AffectedOwner.departed`); a stamp repair has none, since a
+ * row before its stamp reads as no member.
  */
 export const reprojectOwnersForRowStates = async (
   tx: Tx,
   rowStates: Iterable<ProjectableRow | null>,
   lookups: ProjectionLookups,
   mode: ProjectionMode,
-  isUserWrite?: SameTxCtx['hasUserWrite'],
+  {isUserWrite, departed = []}: {
+    readonly isUserWrite?: SameTxCtx['hasUserWrite']
+    readonly departed?: Iterable<BlockData>
+  } = {},
 ): Promise<void> => {
   const affected: AffectedOwners = new Map()
   // Collection reads; re-projection writes. Keeping them as two loops is what
@@ -390,6 +436,14 @@ export const reprojectOwnersForRowStates = async (
   for (const row of rowStates) {
     const userEdited = row !== null && (isUserWrite?.(row.id) ?? false)
     await collectAffectedProjection(affected, row, lookups, readParent, userEdited)
+  }
+  for (const row of departed) {
+    const field = await valueChildField(row, readParent)
+    const owner = field === null ? undefined : affected.get(field.ownerId)
+    if (field === null || owner === undefined) continue
+    const rows = owner.departed.get(field.fieldId)
+    if (rows) rows.push(row)
+    else owner.departed.set(field.fieldId, [row])
   }
   for (const [parentId, owner] of affected) {
     await reprojectOwner(tx, parentId, owner, mode)
@@ -1354,7 +1408,10 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       // Authoritative: this processor's writes ARE settled, which is what
       // makes the lossy unset safe here and nowhere else.
       'full',
-      ctx.hasUserWrite,
+      {
+        isUserWrite: ctx.hasUserWrite,
+        departed: event.changedRows.flatMap(row => row.before === null ? [] : [row.before]),
+      },
     )
   },
 })
@@ -1411,7 +1468,7 @@ export const requestCellProjection = (
   // stamped. Defence in depth: the edited value row is itself a user write, so
   // the ordinary projection has already stamped the owner.
   let edited = owners.get(owner.id)
-  if (!edited) owners.set(owner.id, edited = {fields: new Map(), userEdited: true})
+  if (!edited) owners.set(owner.id, edited = {fields: new Map(), departed: new Map(), userEdited: true})
   edited.fields.set(fieldId, schema)
 }
 

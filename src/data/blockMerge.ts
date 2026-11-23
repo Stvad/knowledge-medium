@@ -8,15 +8,15 @@ import {
 } from '@/data/api'
 import { keysBetween } from './orderKey'
 import {
-  childContentsToEncodedPropertyValue,
   fieldRowValues,
   getPropertyFieldTargetId,
-  unionValuesAcrossFieldRows,
 } from './propertyChildren'
 import {
   collapseDuplicateFieldRow,
   materializePropertyChildrenForExistingRow,
+  projectFieldValue,
 } from './internals/propertyChildrenProcessor'
+import { storedPropertyValue } from './rowProperty'
 import { mergeProperties } from './mergeProperties'
 import { blockTypeLabelProp } from './properties'
 
@@ -148,10 +148,7 @@ export const foldBlocksInTx = async (
       if (schema === null) continue
       const perFieldRow = await fieldRowValues(tx, children, fieldId, isFieldDefinition)
       if (perFieldRow === null) continue
-      const projected = childContentsToEncodedPropertyValue(
-        schema,
-        unionValuesAcrossFieldRows(schema, perFieldRow),
-      )
+      const projected = projectFieldValue(schema, perFieldRow, storedPropertyValue(mergedProperties, schema.name))
       // `undefined` = nothing under the rows parses. Leave the merged bag's own
       // answer alone rather than unsetting: §9's unset is PROJECT's call to
       // make on a settled write, not a merge's.

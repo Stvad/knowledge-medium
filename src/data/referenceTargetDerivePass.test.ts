@@ -21,6 +21,7 @@ import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { REFERENCE_TARGET_STAMP_CHUNK, type Repo } from './repo'
+import { mergeBlocksInTx } from './blockMerge'
 
 const WS = 'ws-derive-pass'
 /** A real fieldId is the definition block's UUID. No assertion here turns on
@@ -543,32 +544,9 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // Measured at 1.4–3.8s under a loaded machine: two stamp chunks.
   }, 20_000)
 
-  it("a user's removal waits for a pending sibling, then lands", async () => {
-    await flipWorkspace()
-    const repo = setup()
-    await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
-    const schema = await seedSyncedNamedRefList(repo, ['Name A', 'Name C'], ['target-a', 'target-c'])
-    await runPass(repo)
-    await repo.awaitProcessors()
-    expect(await readColumn('named-value-1')).toBeNull()
-
-    await repo.tx(tx => tx.delete('named-value-0'), {scope: ChangeScope.BlockDefault})
-    await repo.awaitProcessors()
-    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c'])
-
-    await repo.tx(async tx => {
-      await tx.create({id: 'target-c', workspaceId: WS, parentId: null, orderKey: 'a9', content: 'target'})
-      await tx.setProperty('target-c', aliasesProp, ['Name C'])
-    }, {scope: ChangeScope.BlockDefault})
-    await repo.awaitProcessors()
-    await vi.waitFor(async () => {
-      await repo.awaitReferenceTargetDerive()
-      expect(await readColumn('named-value-1')).toBe('target-c')
-      expect(await cellOf('named-owner', schema.name)).toEqual(['target-c'])
-    })
-  })
-
-  it('a user edit of one member keeps a pending sibling and adds the new member', async () => {
+  /** A synced `[target-a, target-c]` list whose `[[Name C]]` row this device
+   *  cannot stamp, after the sweep has run. */
+  const seedWithPendingSibling = async () => {
     await flipWorkspace()
     const repo = setup()
     await seedRow({id: 'target-a', properties: {[aliasesProp.name]: ['Name A']}})
@@ -576,18 +554,51 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     const schema = await seedSyncedNamedRefList(repo, ['Name A', 'Name C'], ['target-a', 'target-c'])
     await runPass(repo)
     await repo.awaitProcessors()
+    expect(await readColumn('named-value-0')).toBe('target-a')
     expect(await readColumn('named-value-1')).toBeNull()
+    return {repo, schema}
+  }
+
+  it("a user's removal lands at once while a sibling is pending", async () => {
+    const {repo, schema} = await seedWithPendingSibling()
+
+    await repo.tx(tx => tx.delete('named-value-0'), {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-c'])
+  })
+
+  it('a user edit of one member keeps a pending sibling and replaces the edited one', async () => {
+    const {repo, schema} = await seedWithPendingSibling()
 
     await repo.tx(tx => tx.update('named-value-0', {content: '[[Name B]]'}), {scope: ChangeScope.BlockDefault})
     await repo.awaitProcessors()
 
     expect(await readColumn('named-value-0')).toBe('target-b')
-    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c', 'target-b'])
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-c', 'target-b'])
+  })
 
-    await repo.tx(tx => tx.setProperty('named-owner', schema, ['target-c', 'target-b']),
-      {scope: ChangeScope.BlockDefault})
+  it('an edit that keeps a member writes nothing while a sibling is pending', async () => {
+    const {repo, schema} = await seedWithPendingSibling()
+
+    await repo.tx(tx => tx.update('named-value-0', {content: '[[Name A]] '}), {scope: ChangeScope.BlockDefault})
     await repo.awaitProcessors()
-    expect(await repo.load('named-value-1')).toMatchObject({content: '[[Name C]]', deleted: false})
+
+    expect(await readColumn('named-value-0')).toBe('target-a')
+    expect(await cellOf('named-owner', schema.name)).toEqual(['target-a', 'target-c'])
+    expect(await ownerWrites()).toEqual([])
+  })
+
+  it('a block merge keeps a pending member of the merged list', async () => {
+    const {repo, schema} = await seedWithPendingSibling()
+    await seedRow({id: 'into-owner', orderKey: 'zz', content: 'into'})
+
+    await repo.tx(async tx => {
+      await mergeBlocksInTx(tx, {into: (await tx.get('into-owner'))!, from: (await tx.get('named-owner'))!})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    expect(await cellOf('into-owner', schema.name)).toEqual(['target-a', 'target-c'])
   })
 
   it('with nothing left pending, a stamp still repairs a stale member', async () => {

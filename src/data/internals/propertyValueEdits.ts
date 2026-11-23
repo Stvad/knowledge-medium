@@ -46,6 +46,7 @@ const readPropertyRows = async (tx: Tx, ownerId: string, fieldId: string) => {
     throw new PropertyEditRefusedError('resolve-in-outline', 'The property has rows linked across workspaces.')
   }
   const perField = fields.map(group => group.children.filter(isFieldValueChild))
+  // Mid-tx the cell is stale, so it is no base to hold a pending member against.
   const stored = hasPendingCellProjection(tx, ownerId, fieldId)
     ? projectFieldRowValues(schema, perField) : storedPropertyValue(owner.properties, schema.name)
   return {owner, fieldId, schema, fields, perField, values: perField.flat(), stored}

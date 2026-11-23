@@ -204,20 +204,24 @@ describe('withPendingMembersKept', () => {
   const shape = defineProperty('shape', {codec: codecs.unsafeIdentity<string[]>(), defaultValue: [], changeScope: ChangeScope.BlockDefault})
 
   it.each([
-    ['an absent key takes the projection', refs, undefined, ['a'], ['a']],
-    ['a list keeps a member the projection lacks', refs, ['a', 'b'], ['a'], ['a', 'b']],
-    ['a list is never emptied', refs, ['a'], [], ['a']],
-    ['a list is never unset', refs, ['a'], undefined, ['a']],
-    ['a malformed list cell is kept as it is', refs, 'a', ['b'], 'a'],
-    ['a list gains a projected member, after its own', refs, ['a', 'b'], ['c', 'a'], ['a', 'b', 'c']],
-    ['a list keeps its order when nothing is added', refs, ['b', 'a'], ['a', 'b'], ['b', 'a']],
-    ['copies are counted', refs, ['a'], ['a', 'a'], ['a', 'a']],
-    ['a scalar keeps its value', ref, 'a', 'b', 'a'],
-    ['a scalar is never unset', ref, 'a', undefined, 'a'],
+    ['an absent key takes the projection', refs, undefined, ['a'], [], ['a']],
+    ['a list keeps a member the projection lacks', refs, ['a', 'b'], ['a'], [], ['a', 'b']],
+    ['a list is never emptied', refs, ['a'], [], [], ['a']],
+    ['a list is never unset', refs, ['a'], undefined, [], ['a']],
+    ['a malformed list cell is kept as it is', refs, 'a', ['b'], [], 'a'],
+    ['a list gains a projected member, after its own', refs, ['a', 'b'], ['c', 'a'], [], ['a', 'b', 'c']],
+    ['a list keeps its order when nothing is added', refs, ['b', 'a'], ['a', 'b'], [], ['b', 'a']],
+    ['copies are counted', refs, ['a'], ['a', 'a'], [], ['a', 'a']],
+    ['a removed member leaves', refs, ['a', 'c'], [], ['a'], ['c']],
+    ['a rewritten member is replaced', refs, ['a', 'c'], ['b'], ['a'], ['c', 'b']],
+    ['a member removed and still projected stays in place', refs, ['a', 'c'], ['a'], ['a'], ['a', 'c']],
+    ['one removed copy leaves one copy', refs, ['a', 'a', 'c'], [], ['a'], ['a', 'c']],
+    ['a scalar keeps its value', ref, 'a', 'b', ['a'], 'a'],
+    ['a scalar is never unset', ref, 'a', undefined, [], 'a'],
     // Only a list's members are counted; any other array is one value.
-    ['an array scalar keeps its value', shape, ['a'], ['a', 'b'], ['a']],
-  ] as const)('%s', (_case, schema, stored, projected, expected) => {
-    expect(withPendingMembersKept(schema, stored, projected)).toEqual(expected)
+    ['an array scalar keeps its value', shape, ['a'], ['a', 'b'], [], ['a']],
+  ] as const)('%s', (_case, schema, stored, projected, removed, expected) => {
+    expect(withPendingMembersKept(schema, stored, projected, removed)).toEqual(expected)
   })
 })
 

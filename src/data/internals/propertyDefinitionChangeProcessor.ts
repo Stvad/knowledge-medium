@@ -96,7 +96,8 @@ import {
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import { isResolvableFieldDefinition } from './propertySchemaResolution'
 import { presetConfigProp, presetIdProp } from '@/data/properties'
-import { peekRowProperty } from '@/data/rowProperty'
+import { peekRowProperty, storedPropertyValue } from '@/data/rowProperty'
+import { projectFieldValue } from './propertyChildrenProcessor'
 import { jsonValuesEqual } from './jsonCanonical'
 import {
   deriveReferenceColumns,
@@ -117,6 +118,7 @@ import {
 } from './graphBackfillClaim'
 import { PROPERTY_CELL_BACKFILL_ID } from './propertyCellBackfill'
 import {
+  awaitsReferenceTarget,
   childContentsToEncodedPropertyValue,
   convertValueChildContent,
   fieldRowValues,
@@ -749,7 +751,10 @@ const valuesLostBy = (
   // rebuilding the before-projection over every value of every consumer on the
   // commonest edit there is.
   if (!change.encodingChanged) return 0
-  const held = projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
+  // A value row awaiting its reference target holds a member the
+  // before-projection cannot read but another device may have stored.
+  const pending = perFieldRow.flat().filter(row => awaitsReferenceTarget(change.beforeSchema, row)).length
+  const held = pending + projectedValueCount(change.beforeSchema, childContentsToEncodedPropertyValue(
     change.beforeSchema,
     unionValuesAcrossFieldRows(change.beforeSchema, perFieldRow),
   ))
@@ -860,14 +865,13 @@ const applyToParent = async (
       }
       canonicalized.push(group)
     }
-    // Union ACROSS field rows, the same rule the projection runs, over the
-    // CANONICAL text because that is what gets published. Both this and
-    // `childContentsToEncodedPropertyValue` own what a definition's value is at
-    // either grain — a list property is N sibling value children, and a
-    // first-parseable-wins read here would publish one member and let
-    // MATERIALIZE reap the rest.
-    const canonicalContents = unionValuesAcrossFieldRows(change.schema, canonicalized)
-    const projected = childContentsToEncodedPropertyValue(change.schema, canonicalContents)
+    // The projection's own value, over the CANONICAL text because that is what
+    // gets published. A rename keeps the stored cell's members the rows cannot
+    // read yet; a re-encode cannot carry old-encoded members across, so
+    // `valuesLostBy` counts them and the edit refuses instead.
+    const projected = change.encodingChanged
+      ? childContentsToEncodedPropertyValue(change.schema, unionValuesAcrossFieldRows(change.schema, canonicalized))
+      : projectFieldValue(change.schema, canonicalized, storedPropertyValue(parent.properties, change.oldName))
     const lost = valuesLostBy(change, perFieldRow, projected)
     if (lost > 0) {
       lostByField.set(change.fieldId, (lostByField.get(change.fieldId) ?? 0) + lost)
