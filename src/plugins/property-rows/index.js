@@ -1,1 +1,1 @@
-export{vc as propertyRowsPlugin}from"../../../chunks/app-CDjA44s0.js";
+export{vc as propertyRowsPlugin}from"../../../chunks/app-CYZ5ccsU.js";

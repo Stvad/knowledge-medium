@@ -1,1 +1,1 @@
-export{S1 as COMMENT_LINKS_FOR_BLOCK_QUERY,C1 as THREAD_IDS_FOR_BLOCK_QUERY,w1 as commentLinksForBlockQuery,T1 as threadIdsForBlockQuery}from"../../../chunks/app-CDjA44s0.js";
+export{w1 as COMMENT_LINKS_FOR_BLOCK_QUERY,T1 as THREAD_IDS_FOR_BLOCK_QUERY,E1 as commentLinksForBlockQuery,D1 as threadIdsForBlockQuery}from"../../../chunks/app-CYZ5ccsU.js";
