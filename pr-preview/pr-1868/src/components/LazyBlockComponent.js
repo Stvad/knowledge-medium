@@ -1,1 +1,1 @@
-export{QR as LazyBlockComponent}from"../../chunks/app-D52m2qj5.js";
+export{QR as LazyBlockComponent}from"../../chunks/app-DsCSZ3WM.js";

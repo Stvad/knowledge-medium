@@ -1,2 +1,2 @@
-import{Nft as e}from"../../chunks/app-D52m2qj5.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
+import{Ift as e}from"../../chunks/app-DsCSZ3WM.js";var t=(t,n,r)=>e({namespace:n,key:`${t}:${r}`});export{t as pluginBlockId};
 //# sourceMappingURL=pluginIds.js.map
