@@ -155,6 +155,12 @@ describe('a nested surface among drawn children', () => {
     expect(await previousDrawnStep(repo.block('c2'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'c1'}, crossed: true})
   })
 
+  it('stays inside a zoomed root even when it has a data parent', async () => {
+    const zoom = {...SURFACE_OF_PAGE(), scopeRootId: 'host'}
+    expect((await previousDrawnStep(repo.block('host'), zoom)).block).toBeNull()
+    expect((await nextDrawnStep(repo.block('q'), zoom)).block).toBeNull()
+  })
+
   it('the descent into a parent whose children end in it steps back to the block drawn before it', async () => {
     expect((await getLastVisibleDescendant(repo.block('host'), SURFACE_OF_PAGE())).id).toBe('q')
     expect((await getLastVisibleDescendant(repo.block('bare'), SURFACE_OF_PAGE())).id).toBe('bare')

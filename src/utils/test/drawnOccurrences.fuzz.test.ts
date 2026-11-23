@@ -65,7 +65,7 @@ it('walks the exact rendered occurrences forward and backward through nested sur
 
     // Render the generated tree into one occurrence list. Each group of
     // marked siblings is drawn under the same wrapper, at the first mark.
-    const render = (index: number, surface: OutlineSurface) => {
+    const render = (index: number, surface: OutlineSurface, visible: boolean) => {
       const id = idOf(index)
       const ordered = [...children[index]!].sort((a, b) => input[a - 1]!.drawnRank - input[b - 1]!.drawnRank)
       const nested = ordered.filter(child => input[child - 1]!.inNestedSurface)
@@ -73,22 +73,22 @@ it('walks the exact rendered occurrences forward and backward through nested sur
       const nestedScope = `surface:${id}`
       const members: DrawnChild[] = []
       views.set(id, members)
-      expected.push({id, renderScopeId: surface.renderScopeId, scopeRootId: surface.scopeRootId})
-      if (index !== 0 && input[index - 1]!.collapsed) return
+      if (visible) expected.push({id, renderScopeId: surface.renderScopeId, scopeRootId: surface.scopeRootId})
+      const showChildren = visible && (index === 0 || !input[index - 1]!.collapsed)
       for (const child of ordered) {
         if (child === firstNested) {
           members.push({kind: 'nested-surface', renderScopeId: nestedScope, members: nested.map(idOf)})
           owners.set(nestedScope, {blockId: id, surface})
           for (const row of nested) {
-            render(row, {...surface, renderScopeId: nestedScope, scopeRootId: idOf(row), scopeRootForcesOpen: false})
+            render(row, {...surface, renderScopeId: nestedScope, scopeRootId: idOf(row), scopeRootForcesOpen: false}, showChildren)
           }
         } else if (!input[child - 1]!.inNestedSurface) {
           members.push(idOf(child))
-          render(child, surface)
+          render(child, surface, showChildren)
         }
       }
     }
-    render(0, panel)
+    render(0, panel, true)
 
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
