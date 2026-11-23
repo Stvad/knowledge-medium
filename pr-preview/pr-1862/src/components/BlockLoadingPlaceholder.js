@@ -1,1 +1,1 @@
-export{mz as BlockLoadingPlaceholder}from"../../chunks/app-Bmm-TDll.js";
+export{mz as BlockLoadingPlaceholder}from"../../chunks/app-CPgSTpGW.js";

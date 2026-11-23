@@ -1,1 +1,1 @@
-export{lQ as htmlDocumentDataExtension}from"../../../chunks/app-Bmm-TDll.js";
+export{lQ as htmlDocumentDataExtension}from"../../../chunks/app-CPgSTpGW.js";

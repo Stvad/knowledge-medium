@@ -1,1 +1,1 @@
-export{wv as extensionApiCatalog,Tv as extensionApiRuntimeExports}from"../../chunks/app-Bmm-TDll.js";
+export{wv as extensionApiCatalog,Tv as extensionApiRuntimeExports}from"../../chunks/app-CPgSTpGW.js";

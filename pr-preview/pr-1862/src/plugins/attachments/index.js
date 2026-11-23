@@ -1,1 +1,1 @@
-export{lw as attachmentsPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{lw as attachmentsPlugin}from"../../../chunks/app-CPgSTpGW.js";

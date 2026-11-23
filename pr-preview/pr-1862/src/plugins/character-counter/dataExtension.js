@@ -1,1 +1,1 @@
-export{L2 as characterCounterDataExtension}from"../../../chunks/app-Bmm-TDll.js";
+export{L2 as characterCounterDataExtension}from"../../../chunks/app-CPgSTpGW.js";

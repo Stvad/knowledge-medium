@@ -1,1 +1,1 @@
-export{gI as BlockEmbed}from"../../../chunks/app-Bmm-TDll.js";
+export{gI as BlockEmbed}from"../../../chunks/app-CPgSTpGW.js";

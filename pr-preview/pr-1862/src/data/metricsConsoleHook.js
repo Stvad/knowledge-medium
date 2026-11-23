@@ -1,1 +1,1 @@
-export{WI as ensureMetricsConsoleHook}from"../../chunks/app-Bmm-TDll.js";
+export{WI as ensureMetricsConsoleHook}from"../../chunks/app-CPgSTpGW.js";

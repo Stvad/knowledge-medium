@@ -1,1 +1,1 @@
-export{yV as BlockInfoDialog}from"../../../chunks/app-Bmm-TDll.js";
+export{yV as BlockInfoDialog}from"../../../chunks/app-CPgSTpGW.js";

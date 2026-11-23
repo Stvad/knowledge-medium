@@ -1,1 +1,1 @@
-export{ok as blockEditingContentRenderer}from"../../../chunks/app-Bmm-TDll.js";
+export{ok as blockEditingContentRenderer}from"../../../chunks/app-CPgSTpGW.js";

@@ -1,1 +1,1 @@
-export{tY as usePropertySchemas}from"../../chunks/app-Bmm-TDll.js";
+export{tY as usePropertySchemas}from"../../chunks/app-CPgSTpGW.js";

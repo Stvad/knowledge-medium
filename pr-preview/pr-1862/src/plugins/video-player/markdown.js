@@ -1,1 +1,1 @@
-export{hE as videoPlayerMarkdownExtension}from"../../../chunks/app-Bmm-TDll.js";
+export{hE as videoPlayerMarkdownExtension}from"../../../chunks/app-CPgSTpGW.js";

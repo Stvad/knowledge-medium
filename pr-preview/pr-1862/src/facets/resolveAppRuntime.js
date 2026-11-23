@@ -1,1 +1,1 @@
-export{CR as resolveAppRuntime,wR as resolveAppRuntimeSync}from"../../chunks/app-Bmm-TDll.js";
+export{CR as resolveAppRuntime,wR as resolveAppRuntimeSync}from"../../chunks/app-CPgSTpGW.js";

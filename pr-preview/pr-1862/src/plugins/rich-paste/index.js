@@ -1,1 +1,1 @@
-export{aw as richPastePlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{aw as richPastePlugin}from"../../../chunks/app-CPgSTpGW.js";

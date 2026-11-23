@@ -1,1 +1,1 @@
-export{BP as keybindingOverridesProp,VP as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{BP as keybindingOverridesProp,VP as keybindingsPrefsType,jr as keybindingsSettingsPlugin}from"../../../chunks/app-CPgSTpGW.js";

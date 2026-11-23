@@ -1,1 +1,1 @@
-export{Xv as lintExtensionSource}from"../../../chunks/app-Bmm-TDll.js";
+export{Xv as lintExtensionSource}from"../../../chunks/app-CPgSTpGW.js";

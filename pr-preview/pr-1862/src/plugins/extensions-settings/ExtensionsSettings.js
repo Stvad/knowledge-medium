@@ -1,1 +1,1 @@
-export{Kr as ExtensionsSettings}from"../../../chunks/app-Bmm-TDll.js";
+export{Kr as ExtensionsSettings}from"../../../chunks/app-CPgSTpGW.js";

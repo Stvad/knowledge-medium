@@ -1,1 +1,1 @@
-export{uQ as htmlDocumentTypeSeed}from"../../../chunks/app-Bmm-TDll.js";
+export{uQ as htmlDocumentTypeSeed}from"../../../chunks/app-CPgSTpGW.js";

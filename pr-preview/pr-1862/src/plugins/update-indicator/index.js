@@ -1,1 +1,1 @@
-export{Ox as updateIndicatorPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{Ox as updateIndicatorPlugin}from"../../../chunks/app-CPgSTpGW.js";

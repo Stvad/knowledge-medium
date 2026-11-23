@@ -1,1 +1,1 @@
-export{mE as videoPlayerPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{mE as videoPlayerPlugin}from"../../../chunks/app-CPgSTpGW.js";

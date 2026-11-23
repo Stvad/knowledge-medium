@@ -1,1 +1,1 @@
-export{LP as openKeybindingsSettingsAction}from"../../../chunks/app-Bmm-TDll.js";
+export{LP as openKeybindingsSettingsAction}from"../../../chunks/app-CPgSTpGW.js";

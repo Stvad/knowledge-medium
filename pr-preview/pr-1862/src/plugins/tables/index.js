@@ -1,1 +1,1 @@
-export{ho as tablesPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{ho as tablesPlugin}from"../../../chunks/app-CPgSTpGW.js";

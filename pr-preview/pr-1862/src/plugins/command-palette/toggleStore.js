@@ -1,1 +1,1 @@
-export{wF as commandPaletteToggle}from"../../../chunks/app-Bmm-TDll.js";
+export{wF as commandPaletteToggle}from"../../../chunks/app-CPgSTpGW.js";

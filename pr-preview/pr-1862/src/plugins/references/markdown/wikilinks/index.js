@@ -1,1 +1,1 @@
-export{US as wikilinkMarkdownExtension}from"../../../../../chunks/app-Bmm-TDll.js";
+export{US as wikilinkMarkdownExtension}from"../../../../../chunks/app-CPgSTpGW.js";

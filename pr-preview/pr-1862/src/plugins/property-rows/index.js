@@ -1,1 +1,1 @@
-export{vc as propertyRowsPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{vc as propertyRowsPlugin}from"../../../chunks/app-CPgSTpGW.js";

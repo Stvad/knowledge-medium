@@ -1,1 +1,1 @@
-export{p1 as annotationsDataExtension}from"../../../chunks/app-Bmm-TDll.js";
+export{p1 as annotationsDataExtension}from"../../../chunks/app-CPgSTpGW.js";

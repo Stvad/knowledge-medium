@@ -1,1 +1,1 @@
-export{eC as blockrefCompletionSource}from"../../chunks/app-Bmm-TDll.js";
+export{eC as blockrefCompletionSource}from"../../chunks/app-CPgSTpGW.js";

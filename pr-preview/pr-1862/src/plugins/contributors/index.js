@@ -1,1 +1,1 @@
-export{T_ as contributorsPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{T_ as contributorsPlugin}from"../../../chunks/app-CPgSTpGW.js";

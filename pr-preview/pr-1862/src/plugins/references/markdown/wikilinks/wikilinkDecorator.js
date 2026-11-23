@@ -1,1 +1,1 @@
-export{TN as isWikilinkDisplayParts,EN as resolveWikilinkDisplay,DN as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-Bmm-TDll.js";
+export{TN as isWikilinkDisplayParts,EN as resolveWikilinkDisplay,DN as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-CPgSTpGW.js";

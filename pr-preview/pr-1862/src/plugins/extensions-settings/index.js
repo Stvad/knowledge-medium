@@ -1,1 +1,1 @@
-export{Dv as extensionsOverridesProp,Ov as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{Dv as extensionsOverridesProp,Ov as extensionsPrefsType,zr as extensionsSettingsPlugin}from"../../../chunks/app-CPgSTpGW.js";

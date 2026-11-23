@@ -1,1 +1,1 @@
-export{BL as appUpdatePromptExtension}from"../../../chunks/app-Bmm-TDll.js";
+export{BL as appUpdatePromptExtension}from"../../../chunks/app-CPgSTpGW.js";

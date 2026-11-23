@@ -1,1 +1,1 @@
-export{iz as BlockChildren,az as BlockComponent}from"../../chunks/app-Bmm-TDll.js";
+export{iz as BlockChildren,az as BlockComponent}from"../../chunks/app-CPgSTpGW.js";

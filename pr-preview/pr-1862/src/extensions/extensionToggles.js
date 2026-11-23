@@ -1,1 +1,1 @@
-export{jR as extensionDisplayName,MR as extensionName,NR as userExtensionShellToggle,PR as userExtensionToggle}from"../../chunks/app-Bmm-TDll.js";
+export{jR as extensionDisplayName,MR as extensionName,NR as userExtensionShellToggle,PR as userExtensionToggle}from"../../chunks/app-CPgSTpGW.js";

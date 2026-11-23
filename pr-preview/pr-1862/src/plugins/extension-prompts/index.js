@@ -1,1 +1,1 @@
-export{EL as ExtensionPromptSurface,DL as extensionPromptsExtension}from"../../../chunks/app-Bmm-TDll.js";
+export{EL as ExtensionPromptSurface,DL as extensionPromptsExtension}from"../../../chunks/app-CPgSTpGW.js";

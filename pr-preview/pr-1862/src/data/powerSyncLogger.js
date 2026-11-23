@@ -1,1 +1,1 @@
-export{V6 as powerSyncLogger}from"../../chunks/app-Bmm-TDll.js";
+export{V6 as powerSyncLogger}from"../../chunks/app-CPgSTpGW.js";

@@ -1,1 +1,1 @@
-export{nn as staticAppExtensions}from"../../chunks/app-Bmm-TDll.js";
+export{nn as staticAppExtensions}from"../../chunks/app-CPgSTpGW.js";

@@ -1,1 +1,1 @@
-export{PF as SwipeActionMenu}from"../../../chunks/app-Bmm-TDll.js";
+export{PF as SwipeActionMenu}from"../../../chunks/app-CPgSTpGW.js";

@@ -1,1 +1,1 @@
-export{TR as dynamicExtensionsExtension}from"../../chunks/app-Bmm-TDll.js";
+export{TR as dynamicExtensionsExtension}from"../../chunks/app-CPgSTpGW.js";

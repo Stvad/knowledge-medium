@@ -1,1 +1,1 @@
-export{G0 as annotationMarginOpenProp,K0 as annotationMarginShareProp}from"../../../chunks/app-Bmm-TDll.js";
+export{G0 as annotationMarginOpenProp,K0 as annotationMarginShareProp}from"../../../chunks/app-CPgSTpGW.js";

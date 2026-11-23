@@ -1,1 +1,1 @@
-export{iU as ExtensionRenderBoundary}from"../../chunks/app-Bmm-TDll.js";
+export{iU as ExtensionRenderBoundary}from"../../chunks/app-CPgSTpGW.js";

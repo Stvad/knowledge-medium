@@ -1,1 +1,1 @@
-export{LA as PendingInvitations}from"../../../chunks/app-Bmm-TDll.js";
+export{LA as PendingInvitations}from"../../../chunks/app-CPgSTpGW.js";

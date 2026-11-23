@@ -1,1 +1,1 @@
-export{Ex as blockInfoPlugin}from"../../../chunks/app-Bmm-TDll.js";
+export{Ex as blockInfoPlugin}from"../../../chunks/app-CPgSTpGW.js";
