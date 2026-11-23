@@ -416,14 +416,12 @@ describe('runClaude', () => {
     expect(result.stderr).toContain('Unrequested')
   })
 
-  it('discards complete and unterminated events buffered after a refusal', () => {
+  it.each(['\n', ''])('discards a buffered session after refusal with terminator %j', terminator => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event), {builtIns: [], serverNames: []})
-    parser.feed([
-      JSON.stringify({...cleanInit, tools: ['Extra']}),
-      JSON.stringify({...cleanInit, session_id: 'late'}),
-      JSON.stringify({...cleanInit, session_id: 'unterminated'}),
-    ].join('\n'))
+    const refused = JSON.stringify({...cleanInit, tools: ['Extra']})
+    const buffered = JSON.stringify({...cleanInit, session_id: 'late'})
+    parser.feed(`${refused}\n${buffered}${terminator}`)
     parser.finish()
     expect(events).toEqual([])
   })
