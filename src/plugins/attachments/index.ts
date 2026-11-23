@@ -2,15 +2,15 @@
  * The `attachments` plugin (design §11) — packages the media block model + its
  * renderer, mirroring the video-player plugin's facet wiring.
  *
- * Scope: the `media` block TYPE + its property schemas (typeSeedsFacet /
- * definitionSeedsFacet), the {@link MediaBlockRenderer} (blockRenderersFacet), the
- * boot upload reconciler (appMountsFacet), and the paste rule that turns a file paste
- * into a media capture (pasteDecisionVerb decorator). Everything the feature adds is
- * gated on this one toggle — disable it and a file paste falls through to a text
- * paste, no media blocks are minted, and the renderer/reconciler aren't mounted.
+ * Scope: the {@link MediaBlockRenderer} (blockRenderersFacet), the boot upload
+ * reconciler and down-lane (appMountsFacet), and the paste rule that turns a file
+ * paste into a media capture (pasteDecisionVerb decorator), with the data extension
+ * (the media type and its properties) inside the same toggle. Disable it and a file
+ * paste falls through to a text paste, no tab mints media blocks, and the
+ * renderer/reconciler aren't mounted. The data runtime registers the media type
+ * regardless, as it does todo's.
  */
 
-import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import type { AppExtension } from '@/facets/facet.js'
@@ -32,20 +32,12 @@ import { retryFailedUploadsAction } from './retryUploadsAction.js'
 import { cleanupAttachmentsAction } from './cleanupAttachments.js'
 import { attachmentsDataExtension } from './dataExtension.js'
 import { uploadLaneDiagnosticSource } from './uploadLaneStatus.js'
-import {
-  ASSETS_TYPE_CONTRIBUTION,
-  MEDIA_PROPERTY_SCHEMAS,
-  MEDIA_TYPE_CONTRIBUTION,
-} from './mediaBlock.js'
 
 export const attachmentsPlugin: AppExtension = systemToggle({
   id: 'system:attachments',
   name: 'Attachments',
   description: 'Image & file attachments — content-addressed media blocks embedded via !((id)).',
 }).of([
-  typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'attachments' }),
-  typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'attachments' }),
-  MEDIA_PROPERTY_SCHEMAS.map((schema) => definitionSeedsFacet.of(schema, { source: 'attachments' })),
   blockRenderersFacet.of({ id: 'media', renderer: MediaBlockRenderer }, { source: 'attachments' }),
   // The image + audio + PDF mime-family viewers. A video plugin registers its own viewer
   // on this facet and the renderer dispatches to it — no renderer change.
@@ -68,8 +60,8 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   // The §9 explicit-user-retry surface: the failed-uploads diagnostics warning's Retry
   // button (and a command-palette entry) force-run recovery over the failed records.
   actionsFacet.of(retryFailedUploadsAction, { source: 'attachments' }),
-  // The attachment cleaner: Storage access for the conversion flow, and the owner's
-  // standalone Clean up attachments gesture.
+  // The media and Assets types with their properties, the Assets page, and the
+  // attachment cleaner's Storage access for the conversion flow.
   attachmentsDataExtension,
   actionsFacet.of(cleanupAttachmentsAction, { source: 'attachments' }),
   dialogAppMountExtension, // the gesture's dialog

@@ -21,7 +21,7 @@ import {Repo} from '@/data/repo'
 import type {SyncDrainStats} from '@/data/internals/syncObserver/observer'
 import {stubLocalStorage} from '@/data/test/e2eeFixtures'
 import {statusProp} from '@/plugins/todo/schema'
-import {serveDatabase} from './host'
+import {serveDatabase, type ServeOptions} from './host'
 import {assertReadSurface} from './test/readSurface'
 import type {HeadlessConfig} from './config'
 
@@ -55,15 +55,15 @@ afterEach(async () => {
 })
 afterAll(async () => { await fixture.cleanup() })
 
-function start(config: HeadlessConfig, connect: NonNullable<Parameters<typeof serveDatabase>[4]>, db = fixture.db) {
+function start(config: HeadlessConfig, connect: NonNullable<ServeOptions['connect']>, db = fixture.db) {
   const controller = new AbortController()
   type Execute = (cmd: KnownAgentCommand) => Promise<unknown>
   let registered!: (execute: Execute) => void
   const ready = new Promise<Execute>(resolve => { registered = resolve })
-  const run = serveDatabase(db, config, user, controller.signal, connect, async (_c, _u, execute) => {
+  const run = serveDatabase(db, config, user, controller.signal, {connect, register: async (_c, _u, execute) => {
     registered(execute)
     return {postEvent: async () => {}, close: async () => {}}
-  })
+  }})
   return {
     execute: (cmd: KnownAgentCommand) => Promise.race([ready, run.then(() => { throw new Error('Host stopped') })]).then(fn => fn(cmd)),
     stop: () => { controller.abort(); return run },
@@ -76,7 +76,7 @@ const writable = () => ({...plaintext(), writable: true})
 it('fails an encrypted boot on a refused key command before connecting', async () => {
   const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
   const config: HeadlessConfig = {...plaintext(), mode: 'e2ee', keyCommand: [process.execPath, '-e', 'process.exitCode = 2']}
-  await expect(serveDatabase(fixture.db, config, user, new AbortController().signal, connect))
+  await expect(serveDatabase(fixture.db, config, user, new AbortController().signal, {connect}))
     .rejects.toThrow(`Key command ${process.execPath} exited with status 2`)
   expect(connect).not.toHaveBeenCalled()
 })
@@ -85,7 +85,7 @@ it('stops an encrypted boot aborted while its key command runs, before connectin
   const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
   const config: HeadlessConfig = {...plaintext(), mode: 'e2ee', keyCommand: [process.execPath, '-e', 'process.stdout.write("key")']}
   const controller = new AbortController()
-  const run = serveDatabase(fixture.db, config, user, controller.signal, connect)
+  const run = serveDatabase(fixture.db, config, user, controller.signal, {connect})
   controller.abort(new Error('stopped'))
   await expect(run).rejects.toThrow('stopped')
   expect(connect).not.toHaveBeenCalled()
@@ -284,7 +284,7 @@ it('holds a rejoining editor read-only behind a durable materialization gap unti
 it('preserves an existing upload queue and refuses before connecting', async () => {
   await fixture.db.execute("INSERT INTO ps_crud (data) VALUES ('{}')")
   const connect = vi.fn(async () => { throw new Error('Unexpected connection attempt') })
-  const run = serveDatabase(fixture.db, plaintext(), user, new AbortController().signal, connect)
+  const run = serveDatabase(fixture.db, plaintext(), user, new AbortController().signal, {connect})
   await expect(run).rejects.toThrow('queued writes')
   expect(connect).not.toHaveBeenCalled()
   expect(await fixture.db.get('SELECT data FROM ps_crud')).toEqual({data: '{}'})

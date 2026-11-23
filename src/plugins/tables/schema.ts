@@ -41,8 +41,8 @@ export const columnHiddenProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** The table's query, on the host: its value block holds the query text in a
- *  code fence. Unset means the rows are the host's children. */
+/** The table's query, on the host: its value block's text is the query.
+ *  Unset means the rows are the host's children. */
 export const queryProp = seedProperty({
   seedKey: 'system:tables/property/query',
   revision: 1,

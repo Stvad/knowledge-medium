@@ -32,34 +32,11 @@ import {
   syncResolverForUser,
 } from '@/data/repoProvider.js'
 import { supabase } from '@/services/supabase.js'
-import { BlobPutError, createSupabaseBlobStore, type BlobStore } from './blobStore.js'
+import { createSupabaseBlobStore, NO_REMOTE_BLOB_STORE, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import { createAssetResolver, type AssetResolver } from './resolver.js'
 
 let singleton: AssetResolver | null = null
-
-/** A blob store for a build with no remote object store (local-only / unauthed):
- *  `get` always misses, so the resolver serves LOCAL byte-store hits and fails
- *  closed (`fetch-failed`) only on a true miss. Every write throws: a delete that
- *  resolved here would read as confirmed with nothing deleted. */
-export const NO_REMOTE_BLOB_STORE: BlobStore = {
-  put: async () => {
-    throw new BlobPutError('no remote object store configured', false, undefined, 'no_remote')
-  },
-  get: async () => {
-    throw new Error('no remote object store configured')
-  },
-  // Throw (not a 404-null) so the §9 recovery probe treats local-only as TRANSIENT and
-  // DEFERS — never mistaking "no remote configured" for "path free" and re-driving an
-  // upload there's nowhere to send. (Recovery is gated off in local-only anyway; this
-  // only covers a mode flip mid-lane.)
-  probe: async () => {
-    throw new Error('no remote object store configured')
-  },
-  delete: async () => {
-    throw new Error('no remote object store configured')
-  },
-}
 
 /** Wrap the remote blob store so it's consulted ONLY while the active session has
  *  remote sync on; in local-only mode it behaves as {@link NO_REMOTE_BLOB_STORE} (a

@@ -71,7 +71,7 @@ export const nextVisibleBlock = async (
 
   // Step into the first child if expanded.
   if (isExpanded(current, surface)) {
-    const childIds = await visibleChildIds(current, surface.propertyDisplay)
+    const childIds = await visibleChildIds(current, surface)
     if (childIds.length > 0) return repo.block(childIds[0])
   }
 
@@ -84,7 +84,7 @@ export const nextVisibleBlock = async (
     const parent = repo.block(parentId)
     // The climb reads the parent's own row next (`walker.peek()`).
     await parent.load()
-    const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
+    const siblingIds = await visibleChildIds(parent, surface)
     const idx = siblingIds.indexOf(walker.id)
     const nextIdx = idx !== -1 ? idx + 1 : await unlistedSiblingIndexLoaded(repo, siblingIds, data)
     if (nextIdx < siblingIds.length) {
@@ -113,7 +113,7 @@ export const previousVisibleBlock = async (
 
   const parent = repo.block(parentId)
   await parent.load()
-  const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
+  const siblingIds = await visibleChildIds(parent, surface)
   const idx = siblingIds.indexOf(current.id)
   const prevIdx = (idx !== -1 ? idx : await unlistedSiblingIndexLoaded(repo, siblingIds, data)) - 1
 
@@ -165,7 +165,7 @@ export const blockAfterSubtreeRemoval = async (
 
   const parent = repo.block(data.parentId)
   await parent.load()
-  const siblingIds = await visibleChildIds(parent, surface.propertyDisplay)
+  const siblingIds = await visibleChildIds(parent, surface)
   const listedAt = siblingIds.indexOf(current.id)
   const idx = listedAt !== -1 ? listedAt : await unlistedSiblingIndexLoaded(repo, siblingIds, data)
 
@@ -191,7 +191,7 @@ export const getLastVisibleDescendant = async (
   let current = block
   while (true) {
     if (!isExpanded(current, surface)) return current
-    const childIds = await visibleChildIds(current, surface.propertyDisplay)
+    const childIds = await visibleChildIds(current, surface)
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
     await current.load()

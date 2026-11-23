@@ -44,9 +44,9 @@ const encodeSegment = (s: string): string => {
 }
 
 /** Inverse of {@link encodeSegment}: reverse the three sentinels, else
- *  `decodeURIComponent`. Maps an OPFS filename back to the content-key it encodes,
+ *  `decodeURIComponent`. Maps an object's file name back to the content-key it encodes,
  *  for enumerating a workspace's stored objects ({@link ByteStore.listWorkspaceKeys}). */
-const decodeSegment = (s: string): string => {
+export const decodeSegment = (s: string): string => {
   if (s === '%2Eempty') return ''
   if (s === '%2Edot') return '.'
   if (s === '%2Edotdot') return '..'
@@ -78,10 +78,15 @@ export interface ByteStore {
  *  `.`/`..`/empty id (reachable: a local account id is the typed username) is remapped
  *  to a collision-free sentinel the File System API accepts, rather than throwing. */
 export const assetPathSegments = (userId: string, workspaceId: string, contentKey: string): string[] => [
+  ...workspacePathSegments(userId, workspaceId),
+  encodeSegment(contentKey),
+]
+
+/** The directory segments holding one (user, workspace)'s objects. */
+export const workspacePathSegments = (userId: string, workspaceId: string): string[] => [
   ASSETS_ROOT,
   encodeSegment(userId),
   encodeSegment(workspaceId),
-  encodeSegment(contentKey),
 ]
 
 /** One writer per object across tabs: a failed write then removes only a file
@@ -110,7 +115,7 @@ export class InMemoryByteStore implements ByteStore {
    *  the two can't drift. The remainder after it is the {@link encodeSegment}-escaped
    *  content-key. */
   private wsPrefix(userId: string, workspaceId: string): string {
-    return `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
+    return `${workspacePathSegments(userId, workspaceId).join('/')}/`
   }
 
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
@@ -198,7 +203,7 @@ export class OpfsByteStore implements ByteStore {
     if (cached) return cached
     // Don't cache a FAILED resolve (e.g. a create:false miss on a not-yet-created dir),
     // so a later put() with create:true still gets to make it.
-    const pending = this.walk([ASSETS_ROOT, encodeSegment(userId), encodeSegment(workspaceId)], create).catch(
+    const pending = this.walk(workspacePathSegments(userId, workspaceId), create).catch(
       (err) => {
         this.wsDirCache.delete(cacheKey)
         throw err
