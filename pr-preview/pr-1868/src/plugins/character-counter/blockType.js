@@ -1,0 +1,1 @@
+export{Q2 as CHAR_COUNTER_TYPE,$2 as CHAR_COUNTER_TYPE_CONTRIBUTIONS,e4 as COUNTER_TYPES,t4 as WORD_COUNTER_TYPE,n4 as wordCounterInitialValues}from"../../../chunks/app-DwCC3QFk.js";

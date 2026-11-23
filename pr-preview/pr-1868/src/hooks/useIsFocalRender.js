@@ -1,0 +1,1 @@
+export{rW as isFocalRender,iW as useIsFocalRender}from"../../chunks/app-DwCC3QFk.js";

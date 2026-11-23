@@ -1,0 +1,1 @@
+export{Dj as useMinuteClock}from"../../chunks/app-DwCC3QFk.js";

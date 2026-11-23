@@ -1,0 +1,1 @@
+export{RX as staticDataExtensions}from"../../chunks/app-DwCC3QFk.js";

@@ -1,0 +1,1 @@
+export{rH as useShortcutSurfaceActivations}from"../../chunks/app-DwCC3QFk.js";

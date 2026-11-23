@@ -1,0 +1,1 @@
+export{ztt as agree,Btt as pluralize}from"../../chunks/app-DwCC3QFk.js";

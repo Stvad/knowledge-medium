@@ -1,0 +1,1 @@
+export{fet as kernelDataExtension}from"../../chunks/app-DwCC3QFk.js";

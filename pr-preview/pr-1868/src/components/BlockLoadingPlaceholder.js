@@ -1,0 +1,1 @@
+export{oz as BlockLoadingPlaceholder}from"../../chunks/app-DwCC3QFk.js";

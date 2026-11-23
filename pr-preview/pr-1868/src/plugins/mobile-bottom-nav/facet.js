@@ -1,0 +1,1 @@
+export{RO as mobileBottomNavItemsFacet}from"../../../chunks/app-DwCC3QFk.js";

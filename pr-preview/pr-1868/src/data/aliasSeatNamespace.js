@@ -1,0 +1,1 @@
+export{wdt as aliasSeatNamespacesInTx,Tdt as resolveAliasSeatNamespaces}from"../../chunks/app-DwCC3QFk.js";

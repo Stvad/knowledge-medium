@@ -1,0 +1,1 @@
+export{QQ as geoDataExtension}from"../../../chunks/app-DwCC3QFk.js";

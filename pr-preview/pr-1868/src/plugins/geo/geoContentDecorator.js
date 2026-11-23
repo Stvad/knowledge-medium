@@ -1,0 +1,1 @@
+export{CS as geoContentDecoratorContribution}from"../../../chunks/app-DwCC3QFk.js";

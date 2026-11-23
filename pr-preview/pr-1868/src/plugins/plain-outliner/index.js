@@ -1,0 +1,1 @@
+export{YO as plainOutlinerPlugin}from"../../../chunks/app-DwCC3QFk.js";

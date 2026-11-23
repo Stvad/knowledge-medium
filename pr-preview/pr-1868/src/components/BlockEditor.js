@@ -1,0 +1,1 @@
+export{XV as BlockEditor}from"../../chunks/app-DwCC3QFk.js";

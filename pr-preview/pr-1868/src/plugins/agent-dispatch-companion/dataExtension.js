@@ -1,0 +1,1 @@
+export{h6 as agentDispatchCompanionDataExtension}from"../../../chunks/app-DwCC3QFk.js";

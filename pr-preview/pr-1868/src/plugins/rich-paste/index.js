@@ -1,0 +1,1 @@
+export{YC as richPastePlugin}from"../../../chunks/app-DwCC3QFk.js";

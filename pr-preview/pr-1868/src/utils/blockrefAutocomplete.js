@@ -1,0 +1,1 @@
+export{WS as blockrefCompletionSource}from"../../chunks/app-DwCC3QFk.js";

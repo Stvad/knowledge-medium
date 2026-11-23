@@ -1,0 +1,1 @@
+export{M3 as aliasDataExtension}from"../../../chunks/app-DwCC3QFk.js";

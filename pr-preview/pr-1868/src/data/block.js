@@ -1,0 +1,1 @@
+export{let as Block,uet as requireLoadedBlock}from"../../chunks/app-DwCC3QFk.js";

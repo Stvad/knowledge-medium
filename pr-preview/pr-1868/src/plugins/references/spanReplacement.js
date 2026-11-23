@@ -1,0 +1,1 @@
+export{lQ as preferredSpanReplacement}from"../../../chunks/app-DwCC3QFk.js";

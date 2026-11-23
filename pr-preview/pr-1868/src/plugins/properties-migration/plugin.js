@@ -1,0 +1,1 @@
+export{Vc as propertiesMigrationPlugin}from"../../../chunks/app-DwCC3QFk.js";

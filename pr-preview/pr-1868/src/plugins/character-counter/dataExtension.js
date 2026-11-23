@@ -1,0 +1,1 @@
+export{Z2 as characterCounterDataExtension}from"../../../chunks/app-DwCC3QFk.js";
