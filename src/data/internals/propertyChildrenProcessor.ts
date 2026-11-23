@@ -271,7 +271,7 @@ type ValueRowState = Pick<BlockData, 'id' | 'content'> & {readonly referenceTarg
 
 /** The value a field's rows give its owner's cell. Every writer of a
  *  child-backed cell asks this, so none can disagree about a member this device
- *  cannot read yet.
+ *  cannot read yet; a block merge is the exception, and says why.
  *
  *  It is {@link projectFieldRowValues} until a value row awaiting its reference
  *  target ({@link awaitsReferenceTarget}) could be part of the value. That
@@ -466,14 +466,21 @@ export const reprojectOwnersForRowStates = async (
     if (rows === undefined) owner.departed.set(fieldId, rows = new Map())
     for (const value of values) rows.set(value.id, value)
   }
-  for (const row of departed) {
-    const field = await valueChildField(row, readParent)
+  // Departures are judged entirely BEFORE the tx: a row's field and owner as
+  // they were, and a moved field row's values as they were.
+  const before = new Map<string, BlockData>()
+  for (const row of departed) before.set(row.id, row)
+  const readBefore: ParentReader = async (id) => before.get(id) ?? readParent(id)
+  for (const row of before.values()) {
+    const field = await valueChildField(row, readBefore)
     if (field !== null) addDeparted(field.ownerId, field.fieldId, [row])
-    // A field row that moved or was re-targeted takes its values with it, and
-    // they do not change, so they depart through it.
+    // A field row that moved or was re-targeted takes its values with it, so
+    // they depart through it, whether or not they changed too. Accepted: a
+    // value created or moved in under it in the same tx reads as one it held.
     const fieldId = row.isFieldForm === true ? getPropertyFieldTargetId(row) : undefined
     if (fieldId !== undefined && row.parentId !== null) {
-      addDeparted(row.parentId, fieldId, await fieldValueChildren(tx, row.id))
+      const values = await fieldValueChildren(tx, row.id)
+      addDeparted(row.parentId, fieldId, values.map(value => before.get(value.id) ?? value))
     }
   }
   for (const [parentId, owner] of affected) {

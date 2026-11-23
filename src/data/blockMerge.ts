@@ -14,9 +14,8 @@ import {
 import {
   collapseDuplicateFieldRow,
   materializePropertyChildrenForExistingRow,
-  projectFieldValue,
+  projectFieldRowValues,
 } from './internals/propertyChildrenProcessor'
-import { storedPropertyValue } from './rowProperty'
 import { mergeProperties } from './mergeProperties'
 import { blockTypeLabelProp } from './properties'
 
@@ -148,7 +147,10 @@ export const foldBlocksInTx = async (
       if (schema === null) continue
       const perFieldRow = await fieldRowValues(tx, children, fieldId, isFieldDefinition)
       if (perFieldRow === null) continue
-      const projected = projectFieldValue(schema, perFieldRow, storedPropertyValue(mergedProperties, schema.name))
+      // The plain projection, not `projectFieldValue`'s hold of a pending
+      // member: MATERIALIZE runs next and cannot yet match a pending row to the
+      // member it stands for (#1861), so holding it here mints a duplicate row.
+      const projected = projectFieldRowValues(schema, perFieldRow)
       // `undefined` = nothing under the rows parses. Leave the merged bag's own
       // answer alone rather than unsetting: §9's unset is PROJECT's call to
       // make on a settled write, not a merge's.
