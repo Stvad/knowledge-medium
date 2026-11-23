@@ -1,22 +1,3 @@
-/**
- * Billing posture — what a spawned run's tokens bill to, and how loudly
- * the daemon says so at startup.
- *
- * The guard we care about is "don't SILENTLY bill usage-based API on an
- * unattended daemon by accident". Two vectors:
- *  - Ambient env credentials (ANTHROPIC_API_KEY, OPENAI_API_KEY, …): the
- *    common accident — a key exported for something else leaks into the
- *    child. Handled by scrubbing in `billing: 'subscription'` mode
- *    (runner.ts / codexRunner.ts), and reported here by NAME so the log
- *    confirms the scrub is doing something. (Never the value — these are
- *    secrets.)
- *  - A key stored via the CLI's own login (`claude` / `codex`
- *    `--with-api-key`, or an `apiKeyHelper`): lives in auth.json, OUTSIDE
- *    the env, so scrubbing can't reach it. We can't safely mutate the
- *    login, so we don't detect the value — we just warn that the vector
- *    exists and to verify the login. Turning a silent gap into a visible
- *    one is the honest version of the guard.
- */
 import { BILLING_ENV_DENYLIST } from './runner.js'
 import { CODEX_BILLING_ENV_DENYLIST } from './codexRunner.js'
 import type { DaemonConfig } from './config.js'
@@ -56,9 +37,9 @@ export const reportBillingPosture = (config: DaemonConfig, env: NodeJS.ProcessEn
     lines.push('billing=api — credential env is NOT scrubbed; spawned runs may bill usage-based API/credits')
     if (present.length > 0) lines.push(`  usage-based credentials in env: ${present.join(', ')}`)
   } else {
-    lines.push('billing=subscription — spawned runs bill your CLI plan login (OAuth)')
+    lines.push('billing=subscription — scrubbing credential env for CLI plan login (OAuth)')
     if (present.length > 0) lines.push(`  scrubbing from run env: ${present.join(', ')}`)
-    lines.push('  note: a key stored via `claude`/`codex` login (auth.json / apiKeyHelper) is NOT env-scrubbable — verify your login if unsure')
+    lines.push('  note: Claude project/local settings (including apiKeyHelper) and a Codex API login in auth.json can still select usage-based billing')
   }
   return {mode: config.billing, present, lines}
 }

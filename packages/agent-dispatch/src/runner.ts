@@ -8,10 +8,8 @@
  * Opt into usage-based billing per config (`billing: 'api'`), which
  * skips the scrub (see config.ts + AgentRunOptions.billing).
  *
- * Permissions: no permission-mode bypass. Print mode fails closed —
- * anything outside --allowedTools is denied. Graph access comes from
- * the km MCP tools; per-watcher config can add more (e.g. Bash for a
- * repo-scoped watcher), which is a deliberate opt-in.
+ * Each live run checks the CLI's startup tool and MCP inventories
+ * before accepting progress or a result.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import type { ClaudeEffort, CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
@@ -58,7 +56,7 @@ export interface AgentRunOptions extends CommonRunOptions {
   claudeBin: string
   allowedTools: string[]
   effort?: ClaudeEffort
-  mcpConfigPath?: string
+  mcpConfig?: {path: string, serverNames: readonly string[]}
   /** Which CLI the engine should dispatch this run to (daemon.ts's
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
@@ -139,8 +137,8 @@ export const formatRunUsage = (usage: RunUsage): string => [
 /** Env vars that would redirect billing away from the subscription
  *  (API key / bearer token beat OAuth in claude's credential order;
  *  the cloud-provider switches and a proxy base URL reroute entirely).
- *  NOT airtight: a user-level settings.json apiKeyHelper can still
- *  flip billing outside env reach — the README says to check that. */
+ *  User settings are excluded. Trusted project/local or managed settings
+ *  can still configure credentials outside the inherited environment. */
 export const BILLING_ENV_DENYLIST = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
@@ -181,21 +179,17 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
   // stream-json in print mode requires --verbose; --include-partial-
   // messages turns on the incremental stream_event lines (below) so
   // activity/text can be reported before the run finishes.
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
+  const args = [
+    '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    '--setting-sources', 'project,local', '--strict-mcp-config',
+  ]
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
   if (options.model) args.push('--model', options.model)
   if (options.effort) args.push('--effort', options.effort)
-  if (options.mcpConfigPath) {
-    // strict: spawned runs get OUR mcp config only, not the user's
-    // globally-registered servers.
-    args.push('--mcp-config', options.mcpConfigPath, '--strict-mcp-config')
-  }
-  // --allowedTools only pre-approves: an offered tool that needs no approval
-  // (read-only Bash, Read, Glob, Grep, subagents, auto-memory writes) runs
-  // anyway, so the offered set is the boundary. Offer only the built-ins the
-  // allow list names: every request carries each one offered, skills included.
-  // Skill is unusable under --disable-slash-commands, so an allow list naming
-  // it drops the flag, which also lets a prompt starting with `/` run a command.
+  if (options.mcpConfig) args.push('--mcp-config', options.mcpConfig.path)
+  // Settings scope and --tools reduce what Claude loads. Its init inventory
+  // is checked independently because plugins can register additional tools.
+  // Skill also needs slash commands enabled.
   const offeredTools = builtInToolsAllowed(options.allowedTools)
   if (!offeredTools.includes('Skill')) args.push('--disable-slash-commands')
   args.push('--tools', offeredTools.join(','))
@@ -203,6 +197,32 @@ export const buildClaudeArgs = (options: AgentRunOptions): string[] => {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
   return args
+}
+
+const startupHookEvents: ReadonlySet<unknown> = new Set(['hook_started', 'hook_progress', 'hook_response'])
+
+interface ClaudeToolSet {
+  builtIns: readonly string[]
+  serverNames: readonly string[]
+}
+
+export const unexpectedClaudeInventory = (init: Record<string, unknown>, intended: ClaudeToolSet): string[] => {
+  const extras: string[] = []
+  if (!Array.isArray(init.tools)) extras.push('missing or malformed tools list')
+  else for (const tool of init.tools) {
+    if (typeof tool !== 'string') extras.push('malformed tool name')
+    else if (!intended.builtIns.includes(tool) && !intended.serverNames.some(name => tool.startsWith(`mcp__${name}__`))) {
+      extras.push(`tool ${tool}`)
+    }
+  }
+  if (!Array.isArray(init.mcp_servers)) extras.push('missing or malformed mcp_servers list')
+  else for (const server of init.mcp_servers) {
+    if (!isRecord(server) || typeof server.name !== 'string') extras.push('malformed MCP server')
+    else if (!intended.serverNames.includes(server.name) || server.source !== 'dynamic') {
+      extras.push(`MCP server ${server.name} (expected a configured server with dynamic source)`)
+    }
+  }
+  return extras
 }
 
 /** Humanize a tool name for the `activity` event — this is what a user
@@ -233,7 +253,9 @@ export interface ParsedClaudeResult {
  *  Never throws: unparseable/unknown lines and events are silently
  *  skipped, and `onEvent` dispatch is wrapped so a broken consumer can't
  *  kill the run. */
-export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
+export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void, intended?: ClaudeToolSet) => {
+  let initPassed = false
+  let refusal: string | null = null
   let buffer = ''
   let result: ParsedClaudeResult | null = null
   let textAccumulator = ''
@@ -353,9 +375,24 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
     } catch {
       return
     }
-    if (!parsed || typeof parsed !== 'object') return
+    if (!isRecord(parsed)) return
+    if (intended) {
+      // SessionStart hooks can report progress before Claude publishes its inventory.
+      if (parsed.type === 'system' && startupHookEvents.has(parsed.subtype)) return
+      if (parsed.type === 'system' && parsed.subtype === 'init') {
+        const extras = unexpectedClaudeInventory(parsed, intended)
+        if (extras.length) {
+          refusal = `Unexpected Claude init inventory: ${extras.join(', ')}`
+          return
+        }
+        initPassed = true
+      } else if (!initPassed) {
+        refusal = 'Claude emitted a stream event before a validated init'
+        return
+      }
+    }
     try {
-      handleLine(parsed as Record<string, unknown>)
+      handleLine(parsed)
     } catch {
       // A malformed-but-valid-JSON line shouldn't take down the parser.
     }
@@ -364,15 +401,16 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   const feed = (chunk: string) => {
     buffer += chunk
     let newlineIndex: number
-    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+    while (!refusal && (newlineIndex = buffer.indexOf('\n')) !== -1) {
       const line = buffer.slice(0, newlineIndex)
       buffer = buffer.slice(newlineIndex + 1)
       feedLine(line)
     }
+    return refusal === null
   }
 
   const finish = (): ParsedClaudeResult | null => {
-    if (buffer.length > 0) {
+    if (buffer.length > 0 && !refusal) {
       feedLine(buffer)
       buffer = ''
     }
@@ -382,7 +420,7 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   /** The session id even when no `result` line arrived (timeout/crash). */
   const sessionId = (): string | null => result?.sessionId ?? initSessionId
 
-  return {feed, finish, sessionId}
+  return {feed, finish, sessionId, refusal: () => refusal}
 }
 
 export type { SpawnImpl }
@@ -392,14 +430,21 @@ export const runClaude = async (
   spawnImpl?: SpawnImpl,
 ): Promise<AgentRunResult> => {
   const args = buildClaudeArgs(options)
-  const parser = createStreamJsonParser(options.onEvent)
+  const parser = createStreamJsonParser(options.onEvent, {
+    builtIns: builtInToolsAllowed(options.allowedTools),
+    serverNames: options.mcpConfig?.serverNames ?? [],
+  })
+  const env = envForBilling(options.env ?? process.env, options.billing)
+  // Convenience for daemons launched inside a desktop session. The init
+  // check also covers plugin sources that this process does not know about.
+  delete env.CLAUDE_CODE_PLUGIN_DIRS
 
   const {exitCode, timedOut, stderr} = await runJsonlProcess({
     bin: options.claudeBin,
     args,
     prompt: options.prompt,
     cwd: options.cwd,
-    env: envForBilling(options.env ?? process.env, options.billing),
+    env,
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
     signal: options.signal,
@@ -407,6 +452,13 @@ export const runClaude = async (
   })
 
   const parsed = parser.finish()
+  const refusal = parser.refusal()
+  if (refusal) {
+    return {
+      ok: false, resultText: '', sessionId: null, exitCode, timedOut, raw: null, usage: null,
+      stderr: `${refusal}. Run on a host without Claude plugins and start the daemon outside a desktop session.`,
+    }
+  }
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError
 
   return {

@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process'
 import {
   BILLING_ENV_DENYLIST,
   buildClaudeArgs,
+  unexpectedClaudeInventory,
   formatRunUsage,
   createStreamJsonParser,
   runClaude,
@@ -22,7 +23,7 @@ const baseOptions: AgentRunOptions = {
 describe('buildClaudeArgs', () => {
   it('builds a print-mode stream-json run WITHOUT the prompt in argv (stdin carries it)', () => {
     expect(buildClaudeArgs(baseOptions)).toEqual([
-      '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+      '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--setting-sources', 'project,local', '--strict-mcp-config',
       '--disable-slash-commands', '--tools', '',
     ])
   })
@@ -33,18 +34,18 @@ describe('buildClaudeArgs', () => {
       resumeSessionId: 'sess-1',
       model: 'claude-sonnet-5',
       effort: 'high',
-      mcpConfigPath: '/tmp/km.json',
+      mcpConfig: {path: 'dispatch.json', serverNames: ['km']},
       allowedTools: ['mcp__km__get_block', 'mcp__km__search'],
     })
     expect(args).toEqual([
       '-p',
       '--output-format', 'stream-json',
       '--verbose',
-      '--include-partial-messages',
+      '--include-partial-messages', '--setting-sources', 'project,local', '--strict-mcp-config',
       '--resume', 'sess-1',
       '--model', 'claude-sonnet-5',
       '--effort', 'high',
-      '--mcp-config', '/tmp/km.json', '--strict-mcp-config',
+      '--mcp-config', 'dispatch.json',
       '--disable-slash-commands', '--tools', '',
       '--allowedTools', 'mcp__km__get_block,mcp__km__search',
     ])
@@ -68,6 +69,29 @@ describe('buildClaudeArgs', () => {
     const args = buildClaudeArgs({...baseOptions, allowedTools: ['mcp__km__search', 'Bash', 'Skill']})
     expect(args).not.toContain('--disable-slash-commands')
     expect(args[args.indexOf('--tools') + 1]).toBe('Bash,Skill')
+  })
+})
+
+describe('unexpectedClaudeInventory', () => {
+  const intended = {builtIns: ['Read'], serverNames: ['fixture']}
+  const server = {name: 'fixture', source: 'dynamic'}
+  const clean = {tools: ['Read', 'mcp__fixture__lookup'], mcp_servers: [server]}
+
+  it('accepts a requested built-in and tools of a configured server', () => {
+    expect(unexpectedClaudeInventory(clean, intended)).toEqual([])
+  })
+
+  it.each([
+    ['extra built-in', {...clean, tools: ['Read', 'Edit']}, 'Edit'],
+    ['extra MCP tool', {...clean, tools: ['mcp__fixture2__lookup']}, 'mcp__fixture2__lookup'],
+    ['extra server', {...clean, mcp_servers: [{name: 'other', source: 'dynamic'}]}, 'other'],
+    ['unexpected source for an expected server', {...clean, mcp_servers: [{...server, source: 'plugin'}]}, 'fixture'],
+    ['missing tools', {mcp_servers: []}, 'tools'],
+    ['missing servers', {tools: []}, 'mcp_servers'],
+    ['malformed tool', {...clean, tools: [null]}, 'tool'],
+    ['malformed server', {...clean, mcp_servers: [null]}, 'server'],
+  ] as const)('reports %s', (_, init, detail) => {
+    expect(unexpectedClaudeInventory(init, intended).join(' ')).toContain(detail)
   })
 })
 
@@ -334,7 +358,7 @@ describe('createStreamJsonParser', () => {
 })
 
 /** Run the real runner against a scripted `node -e` child. */
-const fakeClaude = (script: string): SpawnImpl =>
+const fakeProcess = (script: string): SpawnImpl =>
   ((_bin: string, _args: readonly string[], options: object) =>
     spawn(process.execPath, ['-e', script], options)) as SpawnImpl
 
@@ -343,7 +367,75 @@ const fakeClaude = (script: string): SpawnImpl =>
 const streamResult = (obj: Record<string, unknown>) =>
   `process.stdout.write(JSON.stringify(${JSON.stringify(obj)}) + '\\n')`
 
+const cleanInit = {type: 'system', subtype: 'init', tools: [], mcp_servers: []}
+const fakeClaude = (script: string): SpawnImpl => fakeProcess(streamResult(cleanInit) + '; ' + script)
+
 describe('runClaude', () => {
+  it.each([
+    ['unexpected inventory', {...cleanInit, tools: ['NewBuiltin']}, 'NewBuiltin'],
+    ['assistant before init', {type: 'assistant', message: {content: [{type: 'text', text: 'early'}]}}, 'before'],
+    ['tool before init', {type: 'user', message: {content: [{type: 'tool_result'}]}}, 'before'],
+    ['delta before init', {type: 'stream_event'}, 'before'],
+    ['assistant with hook subtype before init', {type: 'assistant', subtype: 'hook_started'}, 'before'],
+    ['task before init', {type: 'system', subtype: 'task_started'}, 'before'],
+    ['result before init', {type: 'result', result: 'early'}, 'before'],
+  ])('kills the child on %s and discards buffered output', async (_, first, detail) => {
+    const events: RunEvent[] = []
+    const script = [
+      streamResult(first as Record<string, unknown>),
+      streamResult({...cleanInit, session_id: 'late'}),
+      streamResult({type: 'result', result: 'late success'}),
+      'setInterval(() => {}, 60_000)',
+    ].join('; ')
+    const result = await runClaude({...baseOptions, onEvent: event => events.push(event)}, fakeProcess(script))
+    expect(result).toMatchObject({ok: false, timedOut: false, exitCode: null, resultText: '', sessionId: null})
+    expect(result.stderr).toContain(detail)
+    expect(result.stderr).toContain('desktop')
+    expect(events).toEqual([])
+  })
+
+  it('keeps waiting for init through startup hook notifications', async () => {
+    const hooks = ['hook_started', 'hook_progress', 'hook_response'].map(subtype => streamResult({type: 'system', subtype}))
+    const final = streamResult({type: 'result', result: 'ok'})
+    const run = (...tail: string[]) => runClaude(baseOptions, fakeProcess([...hooks, ...tail].join('; ')))
+    expect((await run(streamResult(cleanInit), final)).ok).toBe(true)
+    expect((await run(final)).stderr).toContain('before a validated init')
+  })
+
+  it('rejects a changed inventory at EOF even after a success result', async () => {
+    const result = await runClaude(baseOptions, fakeClaude([
+      streamResult({type: 'result', result: 'earlier turn', session_id: 'previous'}),
+      `process.stdout.write(JSON.stringify(${JSON.stringify({...cleanInit, tools: ['Unrequested']})}))`,
+    ].join('; ')))
+    expect(result).toMatchObject({ok: false, exitCode: 0, resultText: '', sessionId: null})
+    expect(result.stderr).toContain('Unrequested')
+  })
+
+  it('discards an unterminated session event buffered after a refusal', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event), {builtIns: [], serverNames: []})
+    parser.feed(JSON.stringify({...cleanInit, tools: ['Extra']}) + '\n' + JSON.stringify({...cleanInit, session_id: 'late'}))
+    parser.finish()
+    expect(events).toEqual([])
+  })
+
+  it('accepts the server names passed with the generated config', async () => {
+    const result = await runClaude({
+      ...baseOptions, allowedTools: ['Read'], mcpConfig: {path: 'dispatch.json', serverNames: ['fixture']},
+    }, fakeProcess([
+      streamResult({...cleanInit, tools: ['Read', 'mcp__fixture__lookup'], mcp_servers: [{name: 'fixture', source: 'dynamic'}]}),
+      streamResult({type: 'result', result: 'ok'}),
+    ].join('; ')))
+    expect(result.ok).toBe(true)
+  })
+
+  it.each(['subscription', 'api'] as const)('removes inherited plugin directories with %s billing', async billing => {
+    const result = await runClaude({
+      ...baseOptions, billing, env: {...process.env, CLAUDE_CODE_PLUGIN_DIRS: 'synthetic'},
+    }, fakeClaude("console.log(JSON.stringify({type: 'result', result: String('CLAUDE_CODE_PLUGIN_DIRS' in process.env)}))"))
+    expect(result.resultText).toBe('false')
+  })
+
   it('reports the run\'s token usage from the result line', async () => {
     const result = await runClaude(baseOptions, fakeClaude(streamResult({
       type: 'result', result: 'hi', session_id: 's1', is_error: false,
@@ -436,7 +528,7 @@ describe('runClaude', () => {
         signal: controller.signal,
         onEvent: event => { if (event.kind === 'session') controller.abort() },
       },
-      fakeClaude(`${streamResult({type: 'system', subtype: 'init', session_id: 'sess-killed'})}; setTimeout(() => {}, 60_000)`),
+      fakeProcess(`${streamResult({...cleanInit, session_id: 'sess-killed'})}; setTimeout(() => {}, 60_000)`),
     )
     expect(result.ok).toBe(false)
     expect(result.sessionId).toBe('sess-killed')
@@ -480,14 +572,14 @@ describe('runClaude', () => {
   it('reports progress events observed during the run, mirroring the final result', async () => {
     const events: RunEvent[] = []
     const script = [
-      streamResult({type: 'system', subtype: 'init', session_id: 'sess-e2e'}),
+      streamResult({...cleanInit, session_id: 'sess-e2e'}),
       streamResult({type: 'assistant', message: {content: [{type: 'tool_use', id: 'tool-get-block', name: 'mcp__km__get_block'}]}}),
       streamResult({type: 'stream_event', event: {type: 'message_start'}}),
       streamResult({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'partial'}}}),
       streamResult({type: 'result', result: 'final answer', session_id: 'sess-e2e', is_error: false}),
     ].join('; ')
 
-    const result = await runClaude({...baseOptions, onEvent: event => events.push(event)}, fakeClaude(script))
+    const result = await runClaude({...baseOptions, onEvent: event => events.push(event)}, fakeProcess(script))
 
     expect(result).toMatchObject({ok: true, resultText: 'final answer', sessionId: 'sess-e2e'})
     expect(events).toEqual([

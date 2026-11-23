@@ -75,11 +75,9 @@ const claudeEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
 const claudeRunnerSchema = z.strictObject({
   executor: z.literal('claude'),
   ...runnerBase,
-  /** `claude --effort`. Unset, a run takes the effort its model has in the
-   *  user's Claude Code settings. */
+  /** `claude --effort`. If unset, Claude uses its default or a project/local setting. */
   effort: claudeEffortSchema.optional(),
-  /** EXTRA --allowedTools entries beyond the km MCP graph tools.
-   *  Empty by default: mention tasks get graph access only, no Bash. */
+  /** Additional Claude tool entries beyond the graph tools and defaultAllowedTools. */
   allowedTools: z.array(z.string()).default([]),
 })
 
@@ -284,16 +282,9 @@ const rawConfigSchema = z.strictObject({
   claudeBin: z.string().default('claude'),
   /** Path/name of the codex CLI, for watchers with `runner.executor: 'codex'`. */
   codexBin: z.string().default('codex'),
-  /** Which account a run's tokens bill to. 'subscription' (default,
-   *  safe): scrub every API-key/token/provider-reroute env var from the
-   *  child so an ambient key can't SILENTLY redirect an unattended
-   *  daemon onto usage-based billing — the CLI's plan login (OAuth) then
-   *  wins. 'api': deliberately opt IN to usage-based billing/credits —
-   *  the scrub is skipped and the CLI uses whatever credential the env
-   *  or login provides. Making it a config field (not an env accident)
-   *  is the point: possible on purpose, hard by accident. NB: a key
-   *  stored via `claude`/`codex` login (auth.json / apiKeyHelper) lives
-   *  outside the env and CANNOT be scrubbed — see the startup log. */
+  /** Subscription mode removes known credential and provider overrides from
+   *  the child environment. API mode retains them. Claude project/local
+   *  settings and stored Codex API logins can still select usage-based billing. */
   billing: z.enum(['subscription', 'api']).default('subscription'),
   /** Tools EVERY spawned Claude run may use, beyond the km MCP graph
    *  tools; per-watcher `runner.allowedTools` adds on top. Defaults to
