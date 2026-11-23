@@ -1,1 +1,1 @@
-export{WP as shortcutHelpToggle}from"../../../chunks/app-NiFa047w.js";
+export{WP as shortcutHelpToggle}from"../../../chunks/app-BLHUkaWi.js";
