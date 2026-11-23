@@ -1,0 +1,1 @@
+export{Kx as DEFAULT_BACKLINKS_VIEW_ID,qx as FLAT_BACKLINKS_VIEW_ID,Jx as GROUPED_BACKLINKS_VIEW_ID,Yx as backlinksViewProp,Xx as defaultBacklinksViewIdForBlock}from"../../../chunks/app-ie06-VDz.js";

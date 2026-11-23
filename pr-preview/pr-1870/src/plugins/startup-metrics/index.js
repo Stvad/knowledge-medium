@@ -1,0 +1,1 @@
+export{Fa as startupMetricsPlugin}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{$2 as RAW_CHARACTER_COUNT_PROFILE_ID,e4 as WORDS_COUNT_PROFILE_ID,t4 as charLimitProp,n4 as charProfileProp,r4 as charScopeProp}from"../../../chunks/app-ie06-VDz.js";

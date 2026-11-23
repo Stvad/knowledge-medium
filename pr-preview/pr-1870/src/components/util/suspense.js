@@ -1,0 +1,1 @@
+export{zY as SuspenseFallback}from"../../../chunks/app-ie06-VDz.js";

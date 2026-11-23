@@ -1,0 +1,1 @@
+export{yR as dynamicExtensionsExtension}from"../../chunks/app-ie06-VDz.js";

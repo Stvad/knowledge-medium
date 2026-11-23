@@ -1,0 +1,1 @@
+export{sp as blockTagsConfigUi}from"../../../chunks/app-ie06-VDz.js";

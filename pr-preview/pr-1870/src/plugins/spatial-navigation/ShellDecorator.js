@@ -1,0 +1,1 @@
+export{TD as SpatialNavigationShellDecorator}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{JS as blockrefCompletionSource}from"../../chunks/app-ie06-VDz.js";

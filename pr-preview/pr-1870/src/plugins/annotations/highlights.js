@@ -1,0 +1,1 @@
+export{l_ as HIGHLIGHT_CLASS,u_ as MOVED_HIGHLIGHT_CLASS,d_ as SUGGESTION_HIGHLIGHT_CLASS,f_ as coveringStyle,p_ as highlightClasses,m_ as highlightField,h_ as highlightRange,g_ as highlightRanges,__ as threadHighlights,v_ as threadHighlightsContribution}from"../../../chunks/app-ie06-VDz.js";

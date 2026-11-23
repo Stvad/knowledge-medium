@@ -1,0 +1,1 @@
+export{nR as gestureBindingDescriptor,rR as matchesGestureEvent}from"../../chunks/app-ie06-VDz.js";

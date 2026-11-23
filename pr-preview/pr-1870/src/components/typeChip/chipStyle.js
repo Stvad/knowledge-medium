@@ -1,0 +1,1 @@
+export{bI as chipStyle}from"../../../chunks/app-ie06-VDz.js";

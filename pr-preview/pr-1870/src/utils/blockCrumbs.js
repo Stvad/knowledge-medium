@@ -1,0 +1,1 @@
+export{iM as CRUMB_ELLIPSIS,aM as CRUMB_MAX_CHARS,oM as CRUMB_MAX_SEGMENTS,sM as collapseCrumbs,cM as crumbsFromAncestors}from"../../chunks/app-ie06-VDz.js";

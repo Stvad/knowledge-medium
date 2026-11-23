@@ -1,0 +1,1 @@
+export{md as appVersion}from"../chunks/app-ie06-VDz.js";

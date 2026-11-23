@@ -1,0 +1,1 @@
+export{C1 as annotationsDataExtension}from"../../../chunks/app-ie06-VDz.js";

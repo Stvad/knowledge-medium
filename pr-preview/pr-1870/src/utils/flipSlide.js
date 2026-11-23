@@ -1,0 +1,1 @@
+export{GI as withRowSlide}from"../../chunks/app-ie06-VDz.js";

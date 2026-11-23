@@ -1,0 +1,1 @@
+export{gg as confirmThreadDeletion}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{UW as typePropertyGroups}from"../../chunks/app-ie06-VDz.js";

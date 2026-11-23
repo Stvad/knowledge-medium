@@ -1,0 +1,1 @@
+export{cz as BlockLoadingPlaceholder}from"../../chunks/app-ie06-VDz.js";

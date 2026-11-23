@@ -1,0 +1,1 @@
+export{vW as BlockProperties}from"../../chunks/app-ie06-VDz.js";

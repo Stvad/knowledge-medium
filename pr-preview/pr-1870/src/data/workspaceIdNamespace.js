@@ -1,0 +1,1 @@
+export{xdt as DerivedIdNamespaceUnavailableError,Sdt as derivedIdNamespaceInTx,Cdt as resolveDerivedIdNamespace}from"../../chunks/app-ie06-VDz.js";

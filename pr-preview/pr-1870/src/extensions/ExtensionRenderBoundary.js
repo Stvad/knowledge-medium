@@ -1,0 +1,1 @@
+export{QH as ExtensionRenderBoundary}from"../../chunks/app-ie06-VDz.js";

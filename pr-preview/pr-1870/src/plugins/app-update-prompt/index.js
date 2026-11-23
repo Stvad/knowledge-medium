@@ -1,0 +1,1 @@
+export{PL as appUpdatePromptExtension}from"../../../chunks/app-ie06-VDz.js";

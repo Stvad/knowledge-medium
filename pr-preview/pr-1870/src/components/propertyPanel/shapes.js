@@ -1,0 +1,1 @@
+export{nY as propertyShapeLabel}from"../../../chunks/app-ie06-VDz.js";

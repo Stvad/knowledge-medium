@@ -1,0 +1,1 @@
+export{DS as geoContentDecoratorContribution}from"../../../chunks/app-ie06-VDz.js";

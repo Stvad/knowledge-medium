@@ -1,0 +1,1 @@
+export{cgt as definePostCommitProcessor}from"../../../chunks/app-ie06-VDz.js";

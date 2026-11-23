@@ -1,0 +1,1 @@
+export{kz as OPEN_EXTENSIONS_SETTINGS_ACTION_ID,Az as openExtensionsSettings}from"../../chunks/app-ie06-VDz.js";

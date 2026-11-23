@@ -1,0 +1,1 @@
+export{LX as staticDataExtensions}from"../../chunks/app-ie06-VDz.js";

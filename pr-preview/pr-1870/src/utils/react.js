@@ -1,0 +1,1 @@
+export{oV as useIsMobile,sV as usePointerCoarse}from"../../chunks/app-ie06-VDz.js";

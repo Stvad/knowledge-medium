@@ -1,0 +1,1 @@
+export{egt as defineQuery}from"../../../chunks/app-ie06-VDz.js";

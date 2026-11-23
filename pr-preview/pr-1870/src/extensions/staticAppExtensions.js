@@ -1,0 +1,1 @@
+export{nn as staticAppExtensions}from"../../chunks/app-ie06-VDz.js";

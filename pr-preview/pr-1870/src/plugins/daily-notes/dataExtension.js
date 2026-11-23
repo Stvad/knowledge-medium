@@ -1,0 +1,1 @@
+export{r1 as dailyNotesDataExtension}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{gdt as getOrCreatePropertiesPage,_dt as propertiesPageBlockId,vdt as propertiesPageSpec}from"../../chunks/app-ie06-VDz.js";

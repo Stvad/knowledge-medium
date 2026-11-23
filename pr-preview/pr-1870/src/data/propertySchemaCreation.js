@@ -1,0 +1,1 @@
+export{rY as adoptOrCreatePropertySchema}from"../../chunks/app-ie06-VDz.js";

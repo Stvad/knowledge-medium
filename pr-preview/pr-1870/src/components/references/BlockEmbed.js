@@ -1,0 +1,1 @@
+export{uI as BlockEmbed}from"../../../chunks/app-ie06-VDz.js";

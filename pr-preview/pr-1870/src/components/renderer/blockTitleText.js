@@ -1,0 +1,1 @@
+export{bU as BLOCK_TITLE_TEXT_CLASS,xU as useBlockTitleTextClass}from"../../../chunks/app-ie06-VDz.js";

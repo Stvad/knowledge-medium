@@ -1,0 +1,1 @@
+export{Ant as mergeProperties}from"../../chunks/app-ie06-VDz.js";

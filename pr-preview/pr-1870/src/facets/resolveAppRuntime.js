@@ -1,0 +1,1 @@
+export{_R as resolveAppRuntime,vR as resolveAppRuntimeSync}from"../../chunks/app-ie06-VDz.js";

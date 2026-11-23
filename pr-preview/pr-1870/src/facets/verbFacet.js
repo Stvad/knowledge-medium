@@ -1,0 +1,1 @@
+export{c6 as defineVerbFacet}from"../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{rM as useAncestorCrumbs}from"../../chunks/app-ie06-VDz.js";

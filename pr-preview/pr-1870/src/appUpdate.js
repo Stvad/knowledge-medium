@@ -1,0 +1,1 @@
+export{GL as appUpdate,KL as useAppUpdateAvailable}from"../chunks/app-ie06-VDz.js";

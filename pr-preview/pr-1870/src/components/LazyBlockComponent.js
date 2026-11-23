@@ -1,0 +1,1 @@
+export{ez as LazyBlockComponent}from"../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{B5 as applySyncInvalidation}from"../../../../chunks/app-ie06-VDz.js";

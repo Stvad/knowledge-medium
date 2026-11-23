@@ -1,0 +1,1 @@
+export{mC as blockDragPlugin}from"../../../chunks/app-ie06-VDz.js";

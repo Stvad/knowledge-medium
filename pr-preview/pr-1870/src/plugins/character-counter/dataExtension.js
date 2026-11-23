@@ -1,0 +1,1 @@
+export{q2 as characterCounterDataExtension}from"../../../chunks/app-ie06-VDz.js";

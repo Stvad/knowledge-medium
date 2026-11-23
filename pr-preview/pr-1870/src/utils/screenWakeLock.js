@@ -1,0 +1,1 @@
+export{d as holdScreenWakeLock}from"../../chunks/app-ie06-VDz.js";

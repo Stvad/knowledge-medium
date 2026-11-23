@@ -1,0 +1,1 @@
+export{ip as appendTagToBlocks,ap as appendTagToContent}from"../../../chunks/app-ie06-VDz.js";

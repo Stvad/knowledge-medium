@@ -1,0 +1,1 @@
+export{qW as declarationOnlyDefinitionForName,JW as declarationOnlyStatusText}from"../../../chunks/app-ie06-VDz.js";

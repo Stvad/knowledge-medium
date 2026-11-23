@@ -1,0 +1,1 @@
+export{rw as attachmentsPlugin}from"../../../chunks/app-ie06-VDz.js";

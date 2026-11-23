@@ -1,0 +1,1 @@
+export{QV as BlockEditor}from"../../chunks/app-ie06-VDz.js";

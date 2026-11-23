@@ -1,0 +1,1 @@
+export{kj as useMinuteClock}from"../../chunks/app-ie06-VDz.js";

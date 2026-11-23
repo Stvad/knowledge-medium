@@ -1,0 +1,1 @@
+export{pc as propertyReadContentContribution}from"../../../chunks/app-ie06-VDz.js";

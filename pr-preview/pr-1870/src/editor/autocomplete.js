@@ -1,0 +1,1 @@
+export{_L as editorAutocompleteExtension}from"../../chunks/app-ie06-VDz.js";

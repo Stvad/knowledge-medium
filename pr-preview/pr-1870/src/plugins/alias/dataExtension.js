@@ -1,0 +1,1 @@
+export{O3 as aliasDataExtension}from"../../../chunks/app-ie06-VDz.js";

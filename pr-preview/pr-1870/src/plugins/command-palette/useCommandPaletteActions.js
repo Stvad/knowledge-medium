@@ -1,0 +1,1 @@
+export{KP as useCommandPaletteActions}from"../../../chunks/app-ie06-VDz.js";

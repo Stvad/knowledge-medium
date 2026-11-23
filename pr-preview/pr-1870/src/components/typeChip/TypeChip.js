@@ -1,0 +1,1 @@
+export{yI as TypeChip}from"../../../chunks/app-ie06-VDz.js";

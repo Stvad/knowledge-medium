@@ -1,0 +1,1 @@
+export{YS as backlinkCompletionSource,XS as createBacklinkAutocomplete,ZS as isInsideBacklinkBrackets}from"../../chunks/app-ie06-VDz.js";

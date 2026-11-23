@@ -1,0 +1,1 @@
+export{QP as COMMAND_PALETTE_ACTION_ID,$P as COMMAND_PALETTE_CONTEXT,eF as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,tF as commandPaletteActionContext}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{bQ as htmlDocumentTypeSeed}from"../../../chunks/app-ie06-VDz.js";

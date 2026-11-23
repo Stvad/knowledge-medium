@@ -1,0 +1,1 @@
+export{cet as kernelDataExtension}from"../../chunks/app-ie06-VDz.js";

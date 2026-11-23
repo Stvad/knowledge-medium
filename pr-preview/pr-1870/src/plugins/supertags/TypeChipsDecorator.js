@@ -1,0 +1,1 @@
+export{in as typeChipsDecoratorContribution}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{zm as quotedInFooterContribution}from"../../../chunks/app-ie06-VDz.js";

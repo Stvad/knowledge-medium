@@ -1,0 +1,1 @@
+export{GK as useTypes}from"../../chunks/app-ie06-VDz.js";

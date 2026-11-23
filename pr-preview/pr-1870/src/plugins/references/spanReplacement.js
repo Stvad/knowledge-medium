@@ -1,0 +1,1 @@
+export{aQ as preferredSpanReplacement}from"../../../chunks/app-ie06-VDz.js";

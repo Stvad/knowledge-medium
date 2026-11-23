@@ -1,0 +1,1 @@
+export{i1 as dailyNotesLocalSchema}from"../../../chunks/app-ie06-VDz.js";

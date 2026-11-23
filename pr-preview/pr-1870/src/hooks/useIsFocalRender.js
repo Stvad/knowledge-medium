@@ -1,0 +1,1 @@
+export{aW as isFocalRender,oW as useIsFocalRender}from"../../chunks/app-ie06-VDz.js";

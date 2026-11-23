@@ -1,0 +1,1 @@
+export{sy as authorIdOf}from"../../../chunks/app-ie06-VDz.js";

@@ -1,0 +1,1 @@
+export{wm as getExtraRoamProps}from"../../../chunks/app-ie06-VDz.js";

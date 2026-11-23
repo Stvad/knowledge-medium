@@ -1,0 +1,1 @@
+export{rW as defineVariant,iW as defineVariantFacet}from"../../chunks/app-ie06-VDz.js";

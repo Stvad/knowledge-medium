@@ -1,0 +1,1 @@
+export{jV as canConvertEmptyChildBlockToProperty,MV as convertEmptyChildBlockToProperty}from"../../chunks/app-ie06-VDz.js";

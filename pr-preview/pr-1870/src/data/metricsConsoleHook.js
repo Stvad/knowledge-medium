@@ -1,0 +1,1 @@
+export{RI as ensureMetricsConsoleHook}from"../../chunks/app-ie06-VDz.js";

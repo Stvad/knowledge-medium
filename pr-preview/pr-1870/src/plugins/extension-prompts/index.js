@@ -1,0 +1,1 @@
+export{bL as ExtensionPromptSurface,xL as extensionPromptsExtension}from"../../../chunks/app-ie06-VDz.js";
