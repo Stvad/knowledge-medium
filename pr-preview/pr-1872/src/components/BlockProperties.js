@@ -1,1 +1,0 @@
-export{CW as BlockProperties}from"../../chunks/app-BrVTuSmk.js";

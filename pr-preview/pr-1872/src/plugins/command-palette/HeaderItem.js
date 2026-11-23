@@ -1,1 +1,0 @@
-export{hF as CommandPaletteHeaderItem}from"../../../chunks/app-BrVTuSmk.js";

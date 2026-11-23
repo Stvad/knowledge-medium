@@ -1,1 +1,0 @@
-export{hN as dailyDateWikilinkDecorator}from"../../../chunks/app-BrVTuSmk.js";

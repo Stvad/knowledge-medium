@@ -1,1 +1,0 @@
-export{Det as kernelDataExtension}from"../../chunks/app-BrVTuSmk.js";

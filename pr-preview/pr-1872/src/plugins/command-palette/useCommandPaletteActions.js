@@ -1,1 +1,0 @@
-export{WP as useCommandPaletteActions}from"../../../chunks/app-BrVTuSmk.js";

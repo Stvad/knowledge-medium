@@ -1,1 +1,0 @@
-export{WC as aliasCollisionRejectionToast}from"../../../chunks/app-BrVTuSmk.js";

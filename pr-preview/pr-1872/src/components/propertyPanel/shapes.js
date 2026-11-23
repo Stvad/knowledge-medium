@@ -1,1 +1,0 @@
-export{vY as propertyShapeLabel}from"../../../chunks/app-BrVTuSmk.js";

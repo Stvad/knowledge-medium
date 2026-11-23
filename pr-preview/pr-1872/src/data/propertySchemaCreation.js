@@ -1,1 +1,0 @@
-export{yY as adoptOrCreatePropertySchema}from"../../chunks/app-BrVTuSmk.js";

@@ -1,1 +1,0 @@
-export{rU as ExtensionRenderBoundary}from"../../chunks/app-BrVTuSmk.js";

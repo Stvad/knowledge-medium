@@ -1,1 +1,0 @@
-export{t3 as pluginPrefsExtension,n3 as pluginUIStateExtension}from"../../chunks/app-BrVTuSmk.js";

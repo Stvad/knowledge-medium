@@ -1,1 +1,0 @@
-export{Udt as DerivedIdNamespaceUnavailableError,Wdt as derivedIdNamespaceInTx,Gdt as resolveDerivedIdNamespace}from"../../chunks/app-BrVTuSmk.js";

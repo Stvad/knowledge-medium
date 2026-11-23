@@ -1,1 +1,0 @@
-export{QW as declarationOnlyDefinitionForName,$W as declarationOnlyStatusText}from"../../../chunks/app-BrVTuSmk.js";

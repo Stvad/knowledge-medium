@@ -1,1 +1,0 @@
-export{mZ as tablesDataExtension}from"../../../chunks/app-BrVTuSmk.js";

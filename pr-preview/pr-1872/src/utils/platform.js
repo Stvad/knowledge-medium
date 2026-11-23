@@ -1,1 +1,0 @@
-export{Zq as isIOS,Qq as isMacPlatform}from"../../chunks/app-BrVTuSmk.js";

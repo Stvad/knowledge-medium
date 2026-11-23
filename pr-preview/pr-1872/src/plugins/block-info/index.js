@@ -1,1 +1,0 @@
-export{gx as blockInfoPlugin}from"../../../chunks/app-BrVTuSmk.js";

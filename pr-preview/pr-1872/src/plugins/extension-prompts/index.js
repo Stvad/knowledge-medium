@@ -1,1 +1,0 @@
-export{CL as ExtensionPromptSurface,wL as extensionPromptsExtension}from"../../../chunks/app-BrVTuSmk.js";

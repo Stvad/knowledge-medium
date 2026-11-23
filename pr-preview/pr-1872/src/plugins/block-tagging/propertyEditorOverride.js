@@ -1,1 +1,0 @@
-export{rp as blockTagsConfigUi}from"../../../chunks/app-BrVTuSmk.js";

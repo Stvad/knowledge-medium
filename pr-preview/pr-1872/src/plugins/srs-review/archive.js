@@ -1,1 +1,0 @@
-export{Pd as archiveSrsCard}from"../../../chunks/app-BrVTuSmk.js";

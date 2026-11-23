@@ -1,1 +1,0 @@
-export{cI as BlockEmbed}from"../../../chunks/app-BrVTuSmk.js";

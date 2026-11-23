@@ -1,1 +1,0 @@
-export{xft as deriveWorkspaceIdNamespace}from"../../../chunks/app-BrVTuSmk.js";

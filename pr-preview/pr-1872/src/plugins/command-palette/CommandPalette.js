@@ -1,1 +1,0 @@
-export{UP as CommandPalette}from"../../../chunks/app-BrVTuSmk.js";

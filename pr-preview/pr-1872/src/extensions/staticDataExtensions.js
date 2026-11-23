@@ -1,1 +1,0 @@
-export{$X as staticDataExtensions}from"../../chunks/app-BrVTuSmk.js";

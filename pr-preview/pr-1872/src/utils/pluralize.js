@@ -1,1 +1,0 @@
-export{ent as agree,tnt as pluralize}from"../../chunks/app-BrVTuSmk.js";

@@ -1,1 +1,0 @@
-export{vx as updateIndicatorPlugin}from"../../../chunks/app-BrVTuSmk.js";
