@@ -23,11 +23,18 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations'
 import { CodeMirrorContentRenderer } from '../CodeMirrorContentRenderer'
+import { flushEditorContent } from '@/editor/contentFlush'
 import { NO_PROPERTY_DISPLAY_SCOPE } from '@/data/propertyDisplayMode'
 import { richPasteDecisionContribution } from '@/plugins/rich-paste/pasteDecision'
+import { showError } from '@/utils/toast.js'
 
 const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
+
+vi.mock('@/utils/toast.js', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/toast.js')>(),
+  showError: vi.fn(),
+}))
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -98,6 +105,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     vi.mocked(pasteArmedCut).mockClear()
     vi.mocked(pasteEditModeMultilineText).mockClear()
     vi.mocked(resolvePasteWithMediaCapture).mockClear()
+    vi.mocked(showError).mockClear()
 
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
@@ -143,7 +151,7 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
   const renderEditor = ({disableBlockSplit = false} = {}) => {
     const view = render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root', disableBlockSplit}}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), disableBlockSplit}}>
           <ActiveContextsProvider>
             <CodeMirrorContentRenderer block={repo.block('block-1')} />
           </ActiveContextsProvider>
@@ -164,7 +172,9 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     act(() => { dispatchPaste(content, '- cut text') })
 
     await vi.waitFor(() => expect(pasteArmedCut).toHaveBeenCalledTimes(1))
-    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {scopeRootId: 'root', propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE})
+    expect(pasteArmedCut).toHaveBeenCalledWith('- cut text', repo.block('block-1'), repo, {
+      scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
+    })
     // A cut leaves the originals in place, so a text paste here would duplicate them.
     // Every mock here is already resolved, so one macrotask runs the handler's
     // whole continuation; the absence checks below can't run before it.
@@ -202,11 +212,15 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
     {from: 10, to: 14, expected: 'Block\nSee Title here'},
     {from: 6, to: 14, expected: 'Block\n## **Title** here'},
   ])('pastes a web heading according to its position on a later line ($from)', async ({from, to, expected}) => {
+    const actual = await vi.importActual<typeof import('@/paste/operations')>('@/paste/operations')
     const {content, editorView} = renderEditor()
-    await act(async () => {
-      editorView.dispatch({changes: {from: 5, insert: '\nSee this here'}, selection: {anchor: to, head: from}})
-      dispatchPaste(content, '\nTitle\n', '<h2><strong>Title</strong></h2>')
-      await vi.waitFor(() => expect(editorView.state.doc.toString()).toBe(expected))
+    await vi.mocked(pasteEditModeMultilineText).withImplementation(actual.pasteEditModeMultilineText, async () => {
+      await act(async () => {
+        editorView.dispatch({changes: {from: 5, insert: '\nSee this here'}, selection: {anchor: to, head: from}})
+        dispatchPaste(content, '\nTitle\n', '<h2><strong>Title</strong></h2>')
+        await vi.waitFor(() => expect(editorView.state.doc.toString()).toBe(expected))
+        await vi.mocked(pasteEditModeMultilineText).mock.results[0]?.value
+      })
     })
   })
 
@@ -224,6 +238,100 @@ describe('CodeMirrorContentRenderer armed-cut paste', () => {
       finishCutCheck()
       await vi.waitFor(() => expect(editorView.state.doc.toString()).toBe('Block Title'))
     })
+  })
+
+  it('keeps a refused multiline paste out of the editor document', async () => {
+    const {content, editorView} = renderEditor()
+
+    await act(async () => { dispatchPaste(content, 'first\nsecond') })
+
+    expect(pasteEditModeMultilineText).toHaveBeenCalledWith(expect.anything(), repo.block('block-1'), repo, {
+      scopeRootId: 'root', renderScopeId: outlineRenderScopeId('root'), propertyDisplay: NO_PROPERTY_DISPLAY_SCOPE,
+    }, expect.any(Function))
+    expect(editorView.state.doc.toString()).toBe('Block')
+  })
+
+  const storedLines = async (editor: EditorView) => {
+    flushEditorContent(editor)
+    await repo.tx(async () => {}, {scope: ChangeScope.BlockDefault})
+    return (await sharedDb.db.getAll<{content: string}>(
+      "SELECT content FROM blocks WHERE parent_id = 'root' AND deleted = 0 ORDER BY order_key, id",
+    )).map(row => row.content)
+  }
+
+  it.each(['typing', 'moving the caret', 'closing the editor'])('refuses the whole multiline paste when %s outruns the view read', async change => {
+    const actual = await vi.importActual<typeof import('@/paste/operations')>('@/paste/operations')
+    const {content, editorView} = renderEditor()
+    let resume!: () => void
+    const pending = new Promise<void>(resolve => { resume = resolve })
+    vi.mocked(pasteEditModeMultilineText).mockImplementationOnce(async (...args) => {
+      await pending
+      return actual.pasteEditModeMultilineText(...args)
+    })
+    act(() => { dispatchPaste(content, 'first\nsecond') })
+    await vi.waitFor(() => expect(pasteEditModeMultilineText).toHaveBeenCalledOnce())
+    act(() => {
+      if (change === 'closing the editor') cleanup()
+      else if (change === 'moving the caret') editorView.dispatch({selection: {anchor: 1}})
+      else editorView.dispatch({changes: {from: editorView.state.doc.length, insert: '!'}})
+    })
+    await act(async () => {
+      resume()
+      await vi.mocked(pasteEditModeMultilineText).mock.results[0]!.value
+    })
+    await act(async () => {
+      expect(await storedLines(editorView)).toEqual([change === 'typing' ? 'Block!' : 'Block'])
+    })
+    expect(showError).toHaveBeenCalledExactlyOnceWith("Couldn't paste here. Try again.")
+  })
+
+  it('reports a refused multiline paste when the stored text changed', async () => {
+    const actual = await vi.importActual<typeof import('@/paste/operations')>('@/paste/operations')
+    const {content, editorView} = renderEditor()
+    const accept = vi.fn()
+    vi.mocked(pasteEditModeMultilineText).mockImplementationOnce(async (plan, block, repo, surface, acceptEditorEdit) => {
+      await repo.tx(tx => tx.update(block.id, {content: 'Changed elsewhere'}), {scope: ChangeScope.BlockDefault})
+      accept.mockImplementation(acceptEditorEdit!)
+      return actual.pasteEditModeMultilineText(plan, block, repo, surface, accept)
+    })
+
+    await act(async () => {
+      dispatchPaste(content, 'first\nsecond')
+      await vi.waitFor(() => expect(pasteEditModeMultilineText).toHaveBeenCalledOnce())
+      await vi.mocked(pasteEditModeMultilineText).mock.results[0]!.value
+    })
+
+    expect(showError).toHaveBeenCalledExactlyOnceWith("Couldn't paste here. Try again.")
+    expect(accept).not.toHaveBeenCalled()
+    expect(await storedLines(editorView)).toEqual(['Changed elsewhere'])
+  })
+
+  it('keeps typing after acceptance on the pasted line while the transaction finishes', async () => {
+    const actual = await vi.importActual<typeof import('@/paste/operations')>('@/paste/operations')
+    const {content, editorView} = renderEditor()
+    vi.mocked(pasteEditModeMultilineText).mockImplementationOnce((plan, block, repo, surface, accept) =>
+      actual.pasteEditModeMultilineText(plan, block, repo, surface, () => {
+        const accepted = accept!()
+        expect(editorView.state.doc.toString()).toBe('first')
+        editorView.dispatch({changes: {from: editorView.state.doc.length, insert: '!'}})
+        return accepted
+      }))
+    await act(async () => { dispatchPaste(content, 'first\nsecond') })
+    await vi.waitFor(() => expect(pasteEditModeMultilineText).toHaveBeenCalledOnce())
+    await act(async () => { await vi.mocked(pasteEditModeMultilineText).mock.results[0]!.value })
+    expect(await storedLines(editorView)).toEqual(['first!', 'secondBlock'])
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('rolls back an accepted editor edit and preserves later typing if the write returns no result', async () => {
+    const {content, editorView} = renderEditor()
+    vi.mocked(pasteEditModeMultilineText).mockImplementationOnce(async (_plan, _block, _repo, _surface, accept) => {
+      expect(accept!()).toBe(true)
+      editorView.dispatch({changes: {from: editorView.state.doc.length, insert: '!'}})
+      return null
+    })
+    await act(async () => { dispatchPaste(content, 'first\nsecond') })
+    expect(await storedLines(editorView)).toEqual(['Block!'])
   })
 
   // With the html-document plugin off, a document is edited here as text.

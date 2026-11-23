@@ -3,9 +3,11 @@ import { useCallback, useContext, useMemo, ClipboardEvent, KeyboardEvent, useRef
 import { PropertyDisplayScopeContext, PropertyFieldRowContext } from '@/context/propertyDisplay'
 import { useHandle } from '@/hooks/block'
 import { isFieldValueChild } from '@/data/propertyChildren'
-import { EditorSelection } from '@codemirror/state'
-import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { EditorSelection, type ChangeSet } from '@codemirror/state'
+import { ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { ExternalChange, type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BLOCK_EDITOR_BASIC_SETUP, createMinimalMarkdownConfig } from '@/utils/codemirror.js'
+import { showError } from '@/utils/toast.js'
 import { BlockEditor } from '@/components/BlockEditor.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { focusBlock } from '@/data/properties.js'
@@ -26,6 +28,14 @@ import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 import { useBlockTitleTextClass } from './blockTitleText.js'
 import { useGutterText } from './BlockGutter.js'
+
+/** Map pending paste inverses through typing so a failed write rolls back only the paste. */
+const pasteEdits = ViewPlugin.fromClass(class {
+  readonly pending = new Set<{inverse: ChangeSet}>()
+  update(update: ViewUpdate) {
+    for (const paste of this.pending) paste.inverse = paste.inverse.map(update.changes)
+  }
+})
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -62,7 +72,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block, uiStateBlock, propertyValueSchema,
       childBacked: propertyDisplay.childBacked, disablePropertyFieldCompletion: blockContext.disablePropertyFieldCompletion,
       renderScopeId: typeof blockContext.renderScopeId === 'string' ? blockContext.renderScopeId : undefined})
-    return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension])
+    return createMinimalMarkdownConfig([...pluginExtensions, fieldCreationExtension, pasteEdits])
   }, [block, repo, runtime, uiStateBlock, blockContext.renderScopeId, blockContext.disablePropertyFieldCompletion, propertyDisplay.childBacked, propertyValueSchema])
 
   // Latch the paste chord's Shift state before the paste event fires
@@ -100,6 +110,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const renderScopeId = typeof blockContext.renderScopeId === 'string'
       ? blockContext.renderScopeId
       : undefined
+    const surface = {scopeRootId: blockContext.scopeRootId, propertyDisplay, renderScopeId}
 
     // The stored row lags the view by the content debounce. Both writes below
     // need it current: the cut move reads it (a blank target is replaced), and
@@ -111,10 +122,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // ⌘V of a cut moves the cut blocks, into source too, since a move never writes
     // its target's content; ⌘⇧V still asks for its plain text.
     if (intent === 'split') {
-      const cutPaste = await pasteArmedCut(content.text, block, repo, {
-        scopeRootId: blockContext.scopeRootId,
-        propertyDisplay,
-      })
+      const cutPaste = await pasteArmedCut(content.text, block, repo, surface)
       if (cutPaste) {
         if (cutPaste.kind === 'moved' && cutPaste.blocks[0]) {
           void focusBlock(uiStateBlock, cutPaste.blocks[0].id, {renderScopeId})
@@ -161,22 +169,40 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, editorView.state.doc.toString(), {
+    const source = editorView.state.doc
+    const plan = planEditModeMultilinePaste(decision.blocks ?? pasteText, source.toString(), {
       from: insertAt.from,
       to: insertAt.to,
     })
     if (!plan) return
 
-    editorView.dispatch({
-      changes: {from: 0, to: editorView.state.doc.length, insert: plan.targetContent},
-      selection: EditorSelection.cursor(plan.focusOffsetInTarget),
-    })
-
-    const result = await pasteEditModeMultilineText(plan, block, repo, {
-      scopeRootId: blockContext.scopeRootId,
-      propertyDisplay,
-    })
-    if (!result) return
+    // A media capture can let the editor accrue more text after the first flush.
+    flushEditorContent(editorView)
+    const edit = editorView.state.changes({from: insertAt.from, to: source.length, insert: plan.targetContent.slice(insertAt.from)})
+    const pending = {inverse: edit.invert(source)}
+    const tracker = editorView.plugin(pasteEdits)!
+    const accept = () => {
+      if (editorRef.current?.view !== editorView || editorView.state.doc !== source || !editorView.state.selection.main.eq(insertAt)) return false
+      editorView.dispatch({
+        changes: edit, selection: EditorSelection.cursor(plan.focusOffsetInTarget), annotations: ExternalChange.of(true),
+      })
+      tracker.pending.add(pending)
+      return true
+    }
+    let result
+    try {
+      result = await pasteEditModeMultilineText(plan, block, repo, surface, accept)
+    } finally {
+      if (tracker.pending.delete(pending) && !result) {
+        editorView.dispatch({changes: pending.inverse})
+        flushEditorContent(editorView)
+      }
+    }
+    if (!result) {
+      showError("Couldn't paste here. Try again.")
+      return
+    }
+    if (editorRef.current?.view !== editorView) return
 
     await focusBlock(uiStateBlock, result.focusBlock.id, {
       edit: true,

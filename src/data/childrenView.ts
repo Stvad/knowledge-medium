@@ -2,7 +2,7 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { OutlineSurface } from '@/data/outlineSurface'
 import type { Block } from '@/data/block'
-import type { LoaderHandle } from '@/data/internals/handleStore'
+import type { ChildrenInsertDecision, ChildrenInsertRequest } from '@/data/structuralInsert'
 import { childrenViewIn, displayScopeOf, type PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import { combineLastContributionResult, defineFacet, type OptionalContributionResult } from '@/facets/facet'
 
@@ -24,6 +24,8 @@ export const listingSurfaceOf = (carrier: Partial<ListingSurface>): ListingSurfa
   scopeRootId: carrier.scopeRootId,
 })
 
+export type { ChildrenInsertDecision, ChildrenInsertRequest } from './structuralInsert'
+
 export interface ChildrenViewContext {
   parent: Block
   /** `parent`'s row, loaded. */
@@ -34,6 +36,9 @@ export interface ChildrenViewContext {
 /** An ordered list drawn in another render scope. Omit members for an opaque
  *  surface. A block occurs at most once in a render scope. */
 export interface NestedSurface {
+  readonly order?: ChildrenOrder
+  /** Opts into Shift+Tab promoting a member's child past its editing root, subject to capacity. */
+  readonly allowsNewMember?: () => boolean
   readonly kind: 'nested-surface'
   readonly renderScopeId: string
   readonly members?: readonly string[]
@@ -80,10 +85,20 @@ export const isNestedSurface = (child: DrawnChild): child is NestedSurface => ty
  *  Strings name the parent's own children. A nested surface can list blocks
  *  from any parent, and declares its owner through surfaceOwnerFacet. */
 export interface ChildrenView {
+  readonly order?: ChildrenOrder
   id: string
-  /** A query handle, or any loader: only its `load` is read. */
-  read(ctx: ChildrenViewContext): Pick<LoaderHandle<readonly DrawnChild[]>, 'load'>
+  /** Walks load the list. Structural edits peek its published membership inside the writer. */
+  read(ctx: ChildrenViewContext): {
+    load(): Promise<readonly DrawnChild[]>
+    peek?(): readonly DrawnChild[] | null | undefined
+  }
+  /** Places a new block requested on this list or one of its nested surfaces.
+   *  Return the focus target or an outline position, null on refusal, or undefined for ordinary placement. */
+  insert?(ctx: ChildrenViewContext, request: ChildrenInsertRequest): Promise<ChildrenInsertDecision | null | undefined>
 }
+
+/** A query selects members independently of data parentage, even when a result happens to be an own child. */
+export type ChildrenOrder = 'outline' | 'derived' | 'query'
 
 export type ChildrenViewContribution = (ctx: ChildrenViewContext) => OptionalContributionResult<ChildrenView>
 
@@ -92,10 +107,7 @@ export type ChildrenViewContribution = (ctx: ChildrenViewContext) => OptionalCon
  *  A view replaces the list outright: one that extends the default reads
  *  `propertyDisplayChildrenView` itself.
  *
- *  Read-side only: the structural mutators (indent, outdent, move, paste's
- *  placement) resolve their anchors on the property-display list inside the
- *  transaction (`visibleChildrenOf`). A view whose list differs from that one
- *  handles those verbs on its blocks itself. */
+ *  A view can supply insertion behavior for the list it draws. */
 export const childrenViewFacet = defineFacet<
   ChildrenViewContribution,
   (ctx: ChildrenViewContext) => ChildrenView | undefined
@@ -109,6 +121,7 @@ export const childrenViewFacet = defineFacet<
 /** The outline's own view: the parent's property display setting over the surface's. */
 export const propertyDisplayChildrenView: ChildrenView = {
   id: 'core.property-display',
+  order: 'outline',
   read: ({parent, data, surface}) =>
     parent.repo.query.childIds({id: parent.id, propertyChildren: childrenViewIn(surface.propertyDisplay, data)}),
 }

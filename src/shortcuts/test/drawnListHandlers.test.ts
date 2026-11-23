@@ -21,6 +21,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditorView } from '@codemirror/view'
 import { ChangeScope, seedProperty, type BlockData, type User } from '@/data/api'
+import { childrenViewFacet, surfaceOwnerFacet, type NestedSurface } from '@/data/childrenView'
 import { definitionSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
@@ -303,6 +304,49 @@ describe('focus after a delete or a cut', () => {
 })
 
 describe('paste entry points', () => {
+  it.each([
+    {selectedId: 'solo', parentId: 'page', expected: ['owner', 'solo', 'A pasted row', 'after']},
+    {selectedId: 'after', parentId: 'after', expected: ['A pasted row']},
+  ])('uses a focused result’s scope only when it is selected (%#)', async ({selectedId, parentId, expected}) => {
+    const uiStateBlock = repo.block('ui')
+    const panel = outlineSurfaceOf({scopeRootId: 'page', renderScopeId: 'outline:page', propertyDisplay: NONE})!
+    const result: NestedSurface = {kind: 'nested-surface', renderScopeId: 'test.selection-result', members: ['after']}
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
+      surfaceOwnerFacet.of(({renderScopeId}) => renderScopeId === result.renderScopeId
+        ? {blockId: 'owner', surface: panel}
+        : null),
+      childrenViewFacet.of(({parent}) => parent.id === 'owner'
+        ? {id: 'test.result', read: () => ({load: async () => [result]})}
+        : null),
+    ]))
+    vi.stubGlobal('navigator', {clipboard: {readText: vi.fn(async () => 'A pasted row')}})
+    await focusBlock(uiStateBlock, 'after', {renderScopeId: result.renderScopeId})
+    expect(peekFocusedBlockLocation(uiStateBlock)).toEqual({blockId: 'after', renderScopeId: result.renderScopeId})
+
+    await defaultAction('paste_after_selection', ActionContextTypes.MULTI_SELECT_MODE)
+      .handler({...multiDeps([selectedId], NONE), ...panel}, trigger)
+
+    expect((await allChildren(parentId)).map(({content}) => content)).toEqual(expected)
+  })
+
+  it('normal-mode paste-after reads the focused occurrence’s children view', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(statusProp, {source: 'test'}),
+      childrenViewFacet.of(({parent, surface}) => parent.id === 'solo' && surface.renderScopeId === 'filtered'
+        ? {id: 'test.filtered', read: () => ({load: async () => []})}
+        : null),
+    ]))
+    vi.stubGlobal('navigator', {clipboard: {readText: vi.fn(async () => 'A pasted row')}})
+
+    await vimAction('paste_after').handler({...normalDeps('solo', NON_HIDDEN), renderScopeId: 'filtered'}, trigger)
+
+    expect((await allChildren('page')).map(({content}) => content)).toEqual(['owner', 'solo', 'A pasted row', 'after'])
+    expect((await allChildren('solo')).map(({id}) => id)).toEqual([soloStatusRow])
+  })
+
   it.each([
     [NON_HIDDEN, 'solo'],
     [NONE, 'page'],
