@@ -599,5 +599,6 @@ describe('property scans wait before each page', () => {
 
     expect(inDivergence).toBe(true)
     expect(yields).toBe(beforeDivergence + 4)
-  })
+    // ~0.5s alone; timed out at 5.2s under a full gate at load 73.
+  }, 20_000)
 })
