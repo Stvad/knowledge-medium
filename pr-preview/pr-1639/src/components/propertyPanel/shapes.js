@@ -1,1 +1,0 @@
-export{aY as propertyShapeLabel}from"../../../chunks/app-Dag6smUP.js";

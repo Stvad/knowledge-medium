@@ -1,1 +1,0 @@
-export{lw as attachmentsPlugin}from"../../../chunks/app-Dag6smUP.js";

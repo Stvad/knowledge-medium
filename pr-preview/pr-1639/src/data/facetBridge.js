@@ -1,1 +1,0 @@
-export{K8 as FacetBridge}from"../../chunks/app-Dag6smUP.js";

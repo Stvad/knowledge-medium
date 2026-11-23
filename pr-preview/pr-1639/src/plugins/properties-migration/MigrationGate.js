@@ -1,1 +1,0 @@
-export{Qc as MigrationGate}from"../../../chunks/app-Dag6smUP.js";

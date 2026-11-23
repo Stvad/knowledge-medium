@@ -1,1 +1,0 @@
-export{Vdt as deriveWorkspaceIdNamespace}from"../../../chunks/app-Dag6smUP.js";

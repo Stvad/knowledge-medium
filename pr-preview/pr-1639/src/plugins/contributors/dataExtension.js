@@ -1,1 +1,0 @@
-export{_2 as contributorsDataExtension}from"../../../chunks/app-Dag6smUP.js";

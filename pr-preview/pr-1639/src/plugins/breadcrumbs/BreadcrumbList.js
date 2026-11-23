@@ -1,1 +1,0 @@
-export{nk as BreadcrumbList}from"../../../chunks/app-Dag6smUP.js";

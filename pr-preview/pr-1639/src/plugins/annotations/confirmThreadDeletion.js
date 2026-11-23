@@ -1,1 +1,0 @@
-export{Sg as confirmThreadDeletion}from"../../../chunks/app-Dag6smUP.js";

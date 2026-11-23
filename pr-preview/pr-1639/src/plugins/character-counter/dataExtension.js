@@ -1,1 +1,0 @@
-export{L2 as characterCounterDataExtension}from"../../../chunks/app-Dag6smUP.js";

@@ -1,1 +1,0 @@
-export{Lj as openRecentsPage}from"../../../chunks/app-Dag6smUP.js";

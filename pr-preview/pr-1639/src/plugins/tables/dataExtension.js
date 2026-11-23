@@ -1,1 +1,0 @@
-export{tZ as tablesDataExtension}from"../../../chunks/app-Dag6smUP.js";

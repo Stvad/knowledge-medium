@@ -1,1 +1,0 @@
-export{YL as checkForAppUpdate,XL as registerServiceWorker}from"../chunks/app-Dag6smUP.js";
