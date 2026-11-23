@@ -1,1 +1,0 @@
-export{_k as getOrCreateShortcutsBlock,vk as journalShortcutBlockId,yk as shortcutsBlockId}from"../../../chunks/app-MQ8mmZ_s.js";

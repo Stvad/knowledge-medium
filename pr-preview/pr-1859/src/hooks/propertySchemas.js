@@ -1,1 +1,0 @@
-export{QJ as usePropertySchemas}from"../../chunks/app-MQ8mmZ_s.js";

@@ -1,1 +1,0 @@
-export{oV as useIsMobile,sV as usePointerCoarse}from"../../chunks/app-MQ8mmZ_s.js";

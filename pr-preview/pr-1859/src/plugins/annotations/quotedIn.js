@@ -1,1 +1,0 @@
-export{zm as quotedInFooterContribution}from"../../../chunks/app-MQ8mmZ_s.js";

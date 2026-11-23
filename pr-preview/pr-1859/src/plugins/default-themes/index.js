@@ -1,1 +1,0 @@
-export{dj as DEFAULT_THEME_ID_DARK,fj as DEFAULT_THEME_ID_LIGHT,XA as defaultThemeContributions,YA as defaultThemesPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

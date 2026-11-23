@@ -1,1 +1,0 @@
-export{bx as blockInfoPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

@@ -1,1 +1,0 @@
-export{up as blockTaggingDataExtension}from"../../../chunks/app-MQ8mmZ_s.js";

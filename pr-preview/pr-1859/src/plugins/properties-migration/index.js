@@ -1,1 +1,0 @@
-export{Yc as migratePropertiesToBlocksAction,Gc as propertiesMigrationPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

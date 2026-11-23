@@ -1,1 +1,0 @@
-export{A0 as adoptTypedBlock,j0 as createTypedChild,Oft as derivedBlockId,M0 as getOrCreateTypedChild}from"../../chunks/app-MQ8mmZ_s.js";

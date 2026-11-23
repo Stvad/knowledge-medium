@@ -1,1 +1,0 @@
-export{Qr as perfMonitorPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

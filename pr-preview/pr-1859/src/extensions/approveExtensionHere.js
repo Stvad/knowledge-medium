@@ -1,1 +1,0 @@
-export{kL as approveExtensionHere}from"../../chunks/app-MQ8mmZ_s.js";

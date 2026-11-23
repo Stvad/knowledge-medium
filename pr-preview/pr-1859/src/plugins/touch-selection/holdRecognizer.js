@@ -1,1 +1,0 @@
-export{dC as BLOCK_HOLD_GESTURE,fC as BLOCK_HOLD_RECOGNIZER_ID,pC as blockHoldRecognizer}from"../../../chunks/app-MQ8mmZ_s.js";

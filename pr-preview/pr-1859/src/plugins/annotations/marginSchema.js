@@ -1,1 +1,0 @@
-export{t2 as annotationMarginOpenProp,n2 as annotationMarginShareProp}from"../../../chunks/app-MQ8mmZ_s.js";

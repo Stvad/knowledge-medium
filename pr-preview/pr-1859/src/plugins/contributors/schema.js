@@ -1,1 +1,0 @@
-export{I2 as CONTRIBUTOR_TYPE,L2 as attributionCreatorsProp,R2 as attributionEditorsProp,z2 as contributorForProp,B2 as contributorKindOf,V2 as contributorKindProp,H2 as contributorProfileType,U2 as contributorRoleProp}from"../../../chunks/app-MQ8mmZ_s.js";

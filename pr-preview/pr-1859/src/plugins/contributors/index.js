@@ -1,1 +1,0 @@
-export{y_ as contributorsPlugin}from"../../../chunks/app-MQ8mmZ_s.js";

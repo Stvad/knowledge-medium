@@ -1,1 +1,0 @@
-export{XJ as floatingAnchorFromRect,ZJ as useAnchoredFloating}from"../../../chunks/app-MQ8mmZ_s.js";

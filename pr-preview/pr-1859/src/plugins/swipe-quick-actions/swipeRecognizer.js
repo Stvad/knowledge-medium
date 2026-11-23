@@ -1,1 +1,0 @@
-export{kF as SWIPE_QUICK_ACTIONS_GESTURE_ID,AF as SWIPE_TRIGGER_PX,jF as swipeRecognizer}from"../../../chunks/app-MQ8mmZ_s.js";

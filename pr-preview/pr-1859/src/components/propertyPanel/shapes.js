@@ -1,1 +1,0 @@
-export{nY as propertyShapeLabel}from"../../../chunks/app-MQ8mmZ_s.js";

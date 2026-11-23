@@ -1,1 +1,0 @@
-export{eK as MOBILE_BREAKPOINT_QUERY,tK as POINTER_COARSE_QUERY,nK as isMobileViewport,rK as isPointerCoarse}from"../../chunks/app-MQ8mmZ_s.js";
