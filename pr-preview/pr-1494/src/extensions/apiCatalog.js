@@ -1,1 +1,1 @@
-export{vv as extensionApiCatalog,yv as extensionApiRuntimeExports}from"../../chunks/app-DmX0OER4.js";
+export{mv as extensionApiCatalog,hv as extensionApiRuntimeExports}from"../../chunks/app-BfZp2UIG.js";

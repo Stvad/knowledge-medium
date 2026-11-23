@@ -1,1 +1,1 @@
-export{pc as propertyReadContentContribution}from"../../../chunks/app-DmX0OER4.js";
+export{lc as propertyReadContentContribution}from"../../../chunks/app-BfZp2UIG.js";

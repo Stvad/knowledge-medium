@@ -1,1 +1,1 @@
-export{XI as resolveStructuralEditPolicy,ZI as structuralEditPolicyForBlock}from"../../chunks/app-DmX0OER4.js";
+export{JI as resolveStructuralEditPolicy,YI as structuralEditPolicyForBlock}from"../../chunks/app-BfZp2UIG.js";

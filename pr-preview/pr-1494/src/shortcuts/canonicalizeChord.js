@@ -1,1 +1,1 @@
-export{qq as canonicalizeChord,Jq as matchesMouseEvent,Yq as normalizeChord,Xq as normalizeChordSequence,Zq as pointerBindingDescriptor,Qq as splitPressTokens,$q as toChordArray}from"../../chunks/app-DmX0OER4.js";
+export{Zq as canonicalizeChord,Qq as matchesMouseEvent,$q as normalizeChord,eJ as normalizeChordSequence,tJ as pointerBindingDescriptor,nJ as splitPressTokens,rJ as toChordArray}from"../../chunks/app-BfZp2UIG.js";
