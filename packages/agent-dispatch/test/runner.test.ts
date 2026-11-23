@@ -454,16 +454,20 @@ describe('runClaude', () => {
     expect(events).toEqual([])
   })
 
-  it('ignores non-tool blocks and payloads outside tool request events', async () => {
+  it('ignores non-tool blocks and payloads outside tool request events', () => {
     const other = toolUse('Unused')
-    const script = [
+    const parser = createStreamJsonParser(undefined, {reported: [], serverNames: []})
+    const records = [
+      cleanInit,
       assistant(null, {type: 'text', text: 'ok'}, {type: 'server_tool_use', name: 'server_operation'}),
       {type: 'assistant', message: {content: 'text'}},
+      {type: 'assistant', message: null},
       {type: 'system', event: {type: 'content_block_start', content_block: other}},
       {type: 'stream_event', event: {type: 'content_block_delta', content_block: other}},
       {type: 'result', result: 'ok'},
-    ].map(streamResult).join('; ')
-    expect((await runClaude(baseOptions, fakeClaude(script))).ok).toBe(true)
+    ]
+    for (const record of records) expect(parser.feed(JSON.stringify(record) + '\n')).toBe(true)
+    expect(parser.finish()?.resultText).toBe('ok')
   })
 
   it('accepts reported aliases and configured MCP tools at init and during use', async () => {
