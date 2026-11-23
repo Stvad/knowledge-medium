@@ -1,1 +1,1 @@
-export{tk as Breadcrumbs}from"../../../chunks/app-CeZGnfJ7.js";
+export{tk as Breadcrumbs}from"../../../chunks/app-BS7mEYD-.js";
