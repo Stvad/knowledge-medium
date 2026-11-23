@@ -131,10 +131,11 @@ describe('a nested surface among drawn children', () => {
     expect(await previousDrawnStep(repo.block('c2'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'c1'}, crossed: true})
   })
 
-  it('the last drawn block of a parent whose children end in it is the parent itself', async () => {
-    expect((await getLastVisibleDescendant(repo.block('host'), SURFACE_OF_PAGE())).id).toBe('host')
+  it('the descent into a parent whose children end in it steps back to the block drawn before it', async () => {
+    expect((await getLastVisibleDescendant(repo.block('host'), SURFACE_OF_PAGE())).id).toBe('q')
+    expect((await getLastVisibleDescendant(repo.block('bare'), SURFACE_OF_PAGE())).id).toBe('bare')
     expect(await previousDrawnStep(repo.block('after'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'bare'}, crossed: true})
-    expect(await previousDrawnStep(repo.block('bare'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'host'}, crossed: true})
+    expect(await previousDrawnStep(repo.block('bare'), SURFACE_OF_PAGE())).toMatchObject({block: {id: 'q'}, crossed: true})
   })
 
   it('counts as children the parent shows', async () => {

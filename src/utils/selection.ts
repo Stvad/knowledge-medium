@@ -60,7 +60,9 @@ export interface DrawnStep {
 
 /** Where `current` sits among its parent's drawn children: its index, or for a
  *  row the list leaves out, the index it is drawn at (`unlistedSiblingIndex`),
- *  as a position before which it sits. */
+ *  as a position before which it sits. An unlisted row sorting after every
+ *  listed block sits right after the last of them, before a trailing surface:
+ *  it has an order key, and a surface has none to sort against. */
 const positionAmong = async (
   repo: Repo,
   members: readonly DrawnChild[],
@@ -70,7 +72,11 @@ const positionAmong = async (
   if (listedAt !== -1) return {at: listedAt, listed: true}
   const ids = members.filter((member): member is string => !isNestedSurface(member))
   const before = ids[await unlistedSiblingIndexLoaded(repo, ids, current)]
-  return {at: before === undefined ? members.length : members.indexOf(before), listed: false}
+  const lastBlock = ids.at(-1)
+  return {
+    at: before !== undefined ? members.indexOf(before) : lastBlock === undefined ? 0 : members.indexOf(lastBlock) + 1,
+    listed: false,
+  }
 }
 
 /** The next block in the order `surface` draws, walking *relatively* —
@@ -203,22 +209,22 @@ export const blockAfterSubtreeRemoval = async (
   const parent = repo.block(data.parentId)
   await parent.load()
   const siblingIds = await visibleChildIds(parent, surface)
-  const listedAt = siblingIds.indexOf(current.id)
-  const idx = listedAt !== -1 ? listedAt : await unlistedSiblingIndexLoaded(repo, siblingIds, data)
+  const {at, listed} = await positionAmong(repo, siblingIds, data)
 
-  const next = siblingIds.slice(listedAt !== -1 ? idx + 1 : idx).find(id => !leaving.has(id))
+  const next = siblingIds.slice(listed ? at + 1 : at).find(id => !leaving.has(id))
   if (next !== undefined) return repo.block(next)
-  const previous = siblingIds.slice(0, idx).reverse().find(id => !leaving.has(id))
+  const previous = siblingIds.slice(0, at).reverse().find(id => !leaving.has(id))
   if (previous !== undefined) return repo.block(previous)
   return parent
 }
 
 /** Last drawn descendant of `block` (deepest, last child of last child, etc.)
- *  and whether what is drawn last under it is a nested surface. The descent
- *  stops at a block that does not show its children (`isExpanded`) or has
- *  none, which is `previousDrawnStep`'s contract (don't dive into a collapsed
- *  sibling), and at one whose drawn children end in a nested surface: the
- *  surface's rows are not the walk's to name, so that block, `crossed`. */
+ *  and whether the walk to it passed over a nested surface drawn after it. The
+ *  descent stops at a block that does not show its children (`isExpanded`) or
+ *  has none, which is `previousDrawnStep`'s contract (don't dive into a
+ *  collapsed sibling). A surface's rows are not the walk's to name: one drawn
+ *  last steps the descent back to the block drawn before it, as the sibling
+ *  loop of `previousDrawnStep` does. */
 const lastDrawnStep = async (
   block: Block,
   surface: OutlineSurface,
@@ -226,12 +232,14 @@ const lastDrawnStep = async (
   const repo = block.repo
   await block.load()
   let current = block
+  let crossed = false
   while (true) {
-    if (!isExpanded(current, surface)) return {block: current, crossed: false}
-    const last = (await drawnChildrenOf(current, surface)).at(-1)
-    if (last === undefined) return {block: current, crossed: false}
-    if (isNestedSurface(last)) return {block: current, crossed: true}
-    current = repo.block(last)
+    if (!isExpanded(current, surface)) return {block: current, crossed}
+    const members = await drawnChildrenOf(current, surface)
+    let index = members.length - 1
+    for (; index >= 0 && isNestedSurface(members[index]!); index--) crossed = true
+    if (index < 0) return {block: current, crossed}
+    current = repo.block(members[index] as string)
     await current.load()
   }
 }

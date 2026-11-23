@@ -16,7 +16,7 @@ import { focusedBlockLocationFromProperties, isEditingProp } from '@/data/proper
 import { safeDecodeRowProperty, storedPropertyValue } from '@/data/rowProperty'
 import { NO_BLOCK_GESTURES_ATTRIBUTE } from '@/extensions/continuousGestures'
 import type { BlockLayout } from '@/extensions/blockInteraction'
-import { useContent, useHandle, useWorkspaceId } from '@/hooks/block'
+import { useChildIdsForMode, useContent, useHandle, useWorkspaceId } from '@/hooks/block'
 import { isSingleValueProperty, resolveFieldDefinition, usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -29,7 +29,7 @@ import { AddQueryButton, OutsideQuery, QueryErrors, QueryFields, useEditingIn, u
 import { useTableQuery, type TableQuery } from './query/source'
 import { isSortable, sortOrder, useQueryableFieldNames, useViewSort, writeSort, type ViewSort } from './sort'
 import { TABLE_CHILDREN_ATTRIBUTE, TABLE_HOST_ATTRIBUTE } from './navigation'
-import { rowNotes } from './childrenViews'
+import { notesAmong } from './childrenViews'
 import { registerGrid, tableRenderScopeId } from './registry'
 import { useIsMobile } from '@/utils/react'
 import { GUTTER_VARIABLE, MIN_WIDTH_VARIABLE, VIEW_WIDTH_VARIABLE, gutterWidth } from './rowGutter'
@@ -232,22 +232,20 @@ const ValueCellBody = ({row, column, schema, editable}: {
 
 const UNMATCHED_TITLE = 'Not selected by the query. It stays here while the table is open.'
 
-/** A row's notes (`rowNotes`, the list the outline's walks read too). The
+/** A row's notes (`notesAmong`, the rule the outline's walks read too). The
  *  outline's own listing keeps a focused field row, which editing a list
  *  member makes the row's focused child. Accepted: a deeper descendant a query
  *  also selects is drawn both as a row and under its ancestor. */
 const RowNotes = ({row}: {row: Block}) => {
   const {renderScopeId} = useBlockContext()
   const {rows} = useContext(TableContext)!
-  const ids = useHandle(rowNotes(row, rows), {selector: ids => ids}) ?? NO_NOTES
+  const ids = notesAmong(useChildIdsForMode(row, 'none'), id => rows.has(id))
   return (
     <PropertyRowListingContext value={null}>
       {ids.map(id => <LazyBlockComponent key={id} blockId={id} renderScopeId={renderScopeId}/>)}
     </PropertyRowListingContext>
   )
 }
-
-const NO_NOTES: readonly string[] = []
 
 const TableRowLayout: BlockLayout = ({block, Header, Shell, Controls, Content}) => {
   const {columns, schemas, editable, contentColumn, unmatched} = useContext(TableContext)!

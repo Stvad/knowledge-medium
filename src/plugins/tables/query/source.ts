@@ -11,7 +11,7 @@ import { useHandle, useHandles, useStableJson } from '@/hooks/block'
 import { useTypes } from '@/hooks/typeRegistry'
 import { usePropertyDefinitions } from '@/plugins/property-rows/fieldRow'
 import { parseOutermostReferences } from '@/plugins/references/referenceParser'
-import { queryProp } from '../schema'
+import { queryFieldIdOf, queryProp } from '../schema'
 import { parseQuery, type ParsedQuery, type QueryClauses, type QueryProperty, type QueryResolver } from './parse'
 
 const propertyOf = (definitions: PropertyDefinitionRegistrySnapshot | null, fieldId: string | undefined): QueryProperty | undefined => {
@@ -75,9 +75,8 @@ export interface TableQuery {
 
 const SELECTS_NOTHING: QueryClauses = {anyOf: []}
 
-/** The query property's definition id in this workspace, once its seed is materialized. */
-export const useQueryFieldId = (repo: Repo): string | undefined =>
-  usePropertyDefinitions(repo)?.definitionsByName.get(queryProp.name)?.[0]?.fieldId
+/** The query property's definition id in this workspace (`queryFieldIdOf`). */
+export const useQueryFieldId = (repo: Repo): string | undefined => queryFieldIdOf(usePropertyDefinitions(repo))
 
 /** The host's parsed query; null when the host has none (its rows are its
  *  children), undefined until its names first resolve. */
