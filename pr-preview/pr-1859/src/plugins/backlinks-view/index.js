@@ -1,0 +1,1 @@
+export{kx as backlinksViewPlugin}from"../../../chunks/app-fvGsszat.js";

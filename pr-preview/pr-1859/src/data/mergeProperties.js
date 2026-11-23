@@ -1,0 +1,1 @@
+export{vnt as mergeProperties}from"../../chunks/app-fvGsszat.js";

@@ -1,0 +1,1 @@
+export{Xq as withMoveTransition}from"../../chunks/app-fvGsszat.js";

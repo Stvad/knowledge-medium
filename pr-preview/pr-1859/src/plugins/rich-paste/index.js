@@ -1,0 +1,1 @@
+export{$C as richPastePlugin}from"../../../chunks/app-fvGsszat.js";

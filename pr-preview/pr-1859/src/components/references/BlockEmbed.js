@@ -1,0 +1,1 @@
+export{rI as BlockEmbed}from"../../../chunks/app-fvGsszat.js";

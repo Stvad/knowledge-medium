@@ -1,0 +1,1 @@
+export{NO as mobileBottomNavItemsFacet}from"../../../chunks/app-fvGsszat.js";

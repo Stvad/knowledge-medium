@@ -1,0 +1,1 @@
+export{xF as SwipeActionMenu}from"../../../chunks/app-fvGsszat.js";

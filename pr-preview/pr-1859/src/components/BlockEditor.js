@@ -1,0 +1,1 @@
+export{GV as BlockEditor}from"../../chunks/app-fvGsszat.js";

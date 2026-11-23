@@ -1,0 +1,1 @@
+export{Kk as MAX_OBJECT_BYTES,qk as encodeBytes,Jk as encodedSize,Yk as fitsObjectLimit,Xk as verifyObjectBytes}from"../../chunks/app-fvGsszat.js";

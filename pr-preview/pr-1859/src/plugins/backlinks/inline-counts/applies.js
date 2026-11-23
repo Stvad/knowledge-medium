@@ -1,0 +1,1 @@
+export{Ux as inlineBacklinksApplies}from"../../../../chunks/app-fvGsszat.js";

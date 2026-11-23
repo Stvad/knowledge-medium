@@ -1,0 +1,1 @@
+export{wV as canConvertEmptyChildBlockToProperty,TV as convertEmptyChildBlockToProperty}from"../../chunks/app-fvGsszat.js";

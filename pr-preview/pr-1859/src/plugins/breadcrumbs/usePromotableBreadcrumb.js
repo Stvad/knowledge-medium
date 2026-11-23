@@ -1,0 +1,1 @@
+export{RO as usePromotableBreadcrumb}from"../../../chunks/app-fvGsszat.js";

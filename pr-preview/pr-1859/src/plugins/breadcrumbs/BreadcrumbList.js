@@ -1,0 +1,1 @@
+export{UO as BreadcrumbList}from"../../../chunks/app-fvGsszat.js";

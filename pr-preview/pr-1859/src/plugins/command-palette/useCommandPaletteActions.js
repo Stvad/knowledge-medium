@@ -1,0 +1,1 @@
+export{zP as useCommandPaletteActions}from"../../../chunks/app-fvGsszat.js";

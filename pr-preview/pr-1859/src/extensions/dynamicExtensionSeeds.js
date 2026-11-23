@@ -1,0 +1,1 @@
+export{pR as bindExtensionPropertyOverride,mR as bindExtensionPropertySeed,hR as bindExtensionTypeSeed,gR as extensionPropertySeedKey,_R as extensionTypeSeedKey}from"../../chunks/app-fvGsszat.js";

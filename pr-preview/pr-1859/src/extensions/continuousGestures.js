@@ -1,0 +1,1 @@
+export{_B as GESTURE_ACTIVE,vB as GESTURE_CANCEL,yB as GESTURE_IDLE,bB as NO_BLOCK_GESTURES_ATTRIBUTE,xB as TOUCH_HOLD_MS,SB as TOUCH_SLOP_PX,CB as allowsBlockGestures,wB as continuousGestureRecognizersFacet,TB as createBlockGestureController,EB as enabledTouchAction,DB as suppressNextClick,OB as unionTouchAction,kB as useContinuousGestures}from"../../chunks/app-fvGsszat.js";

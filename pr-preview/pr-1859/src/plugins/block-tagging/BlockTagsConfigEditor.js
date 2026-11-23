@@ -1,0 +1,1 @@
+export{cp as BlockTagsConfigEditor}from"../../../chunks/app-fvGsszat.js";

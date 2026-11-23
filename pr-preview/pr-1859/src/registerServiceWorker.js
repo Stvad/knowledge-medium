@@ -1,0 +1,1 @@
+export{IL as checkForAppUpdate,LL as registerServiceWorker}from"../chunks/app-fvGsszat.js";

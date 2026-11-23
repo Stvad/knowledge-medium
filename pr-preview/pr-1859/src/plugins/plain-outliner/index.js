@@ -1,0 +1,1 @@
+export{WO as plainOutlinerPlugin}from"../../../chunks/app-fvGsszat.js";

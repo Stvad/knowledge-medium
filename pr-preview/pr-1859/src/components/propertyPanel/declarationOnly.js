@@ -1,0 +1,1 @@
+export{BW as declarationOnlyDefinitionForName,VW as declarationOnlyStatusText}from"../../../chunks/app-fvGsszat.js";

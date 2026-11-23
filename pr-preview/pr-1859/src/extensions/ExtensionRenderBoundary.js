@@ -1,0 +1,1 @@
+export{GH as ExtensionRenderBoundary}from"../../chunks/app-fvGsszat.js";

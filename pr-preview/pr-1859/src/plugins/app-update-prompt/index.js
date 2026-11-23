@@ -1,0 +1,1 @@
+export{DL as appUpdatePromptExtension}from"../../../chunks/app-fvGsszat.js";

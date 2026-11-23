@@ -1,0 +1,1 @@
+export{BO as BreadcrumbRenderer}from"../../../chunks/app-fvGsszat.js";

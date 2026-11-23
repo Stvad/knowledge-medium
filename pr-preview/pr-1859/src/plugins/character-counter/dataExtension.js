@@ -1,0 +1,1 @@
+export{F2 as characterCounterDataExtension}from"../../../chunks/app-fvGsszat.js";

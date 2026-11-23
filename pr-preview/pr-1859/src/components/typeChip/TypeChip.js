@@ -1,0 +1,1 @@
+export{fI as TypeChip}from"../../../chunks/app-fvGsszat.js";

@@ -1,0 +1,1 @@
+export{Zl as dataIntegrityPlugin}from"../../../chunks/app-fvGsszat.js";

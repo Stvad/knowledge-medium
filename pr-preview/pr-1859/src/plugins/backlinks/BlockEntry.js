@@ -1,0 +1,1 @@
+export{nS as LazyBlockEntry}from"../../../chunks/app-fvGsszat.js";

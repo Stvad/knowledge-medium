@@ -1,0 +1,1 @@
+export{Sj as useMinuteClock}from"../../chunks/app-fvGsszat.js";

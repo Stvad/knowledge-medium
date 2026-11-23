@@ -1,0 +1,1 @@
+export{gg as confirmThreadDeletion}from"../../../chunks/app-fvGsszat.js";

@@ -1,0 +1,1 @@
+export{JJ as propertyShapeLabel}from"../../../chunks/app-fvGsszat.js";

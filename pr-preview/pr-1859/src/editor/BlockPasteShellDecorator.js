@@ -1,0 +1,1 @@
+export{eL as BlockPasteShellDecorator,tL as blockPasteShellDecorator}from"../../chunks/app-fvGsszat.js";

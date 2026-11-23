@@ -1,0 +1,1 @@
+export{vD as SpatialNavigationShellDecorator}from"../../../chunks/app-fvGsszat.js";

@@ -1,0 +1,1 @@
+export{h2 as contributorsDataExtension}from"../../../chunks/app-fvGsszat.js";

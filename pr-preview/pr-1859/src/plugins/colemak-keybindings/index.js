@@ -1,0 +1,1 @@
+export{nD as COLEMAK_KEYBINDINGS_PLUGIN_ID,rD as colemakKeybindingsPlugin,iD as colemakMovementKeybindingOverrides}from"../../../chunks/app-fvGsszat.js";

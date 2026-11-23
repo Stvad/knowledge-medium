@@ -1,0 +1,1 @@
+export{$B as useIsMobile,eV as usePointerCoarse}from"../../chunks/app-fvGsszat.js";

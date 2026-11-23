@@ -1,0 +1,1 @@
+export{K2 as backlinksDataExtension}from"../../../chunks/app-fvGsszat.js";

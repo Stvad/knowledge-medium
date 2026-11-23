@@ -1,0 +1,1 @@
+export{vu as parsePropertiesJson}from"../../../chunks/app-fvGsszat.js";

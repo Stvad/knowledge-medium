@@ -1,0 +1,1 @@
+export{ZL as dispatchPointerAction,QL as setPointerActionDispatcher}from"../../chunks/app-fvGsszat.js";

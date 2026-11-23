@@ -1,0 +1,1 @@
+export{BS as blockrefMarkdownExtension}from"../../../../../chunks/app-fvGsszat.js";

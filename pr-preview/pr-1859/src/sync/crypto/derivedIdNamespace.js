@@ -1,0 +1,1 @@
+export{Vdt as deriveWorkspaceIdNamespace}from"../../../chunks/app-fvGsszat.js";

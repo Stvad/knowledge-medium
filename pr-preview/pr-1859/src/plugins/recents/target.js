@@ -1,0 +1,1 @@
+export{wj as openRecentsPage}from"../../../chunks/app-fvGsszat.js";

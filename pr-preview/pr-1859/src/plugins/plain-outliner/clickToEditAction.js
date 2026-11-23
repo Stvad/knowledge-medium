@@ -1,0 +1,1 @@
+export{GO as ENTER_BLOCK_EDIT_MODE_ACTION_ID,KO as enterBlockEditModeOnClickAction}from"../../../chunks/app-fvGsszat.js";

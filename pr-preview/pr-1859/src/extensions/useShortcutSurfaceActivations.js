@@ -1,0 +1,1 @@
+export{QV as useShortcutSurfaceActivations}from"../../chunks/app-fvGsszat.js";

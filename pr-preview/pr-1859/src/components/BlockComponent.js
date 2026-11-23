@@ -1,0 +1,1 @@
+export{GR as BlockChildren,KR as BlockComponent}from"../../chunks/app-fvGsszat.js";

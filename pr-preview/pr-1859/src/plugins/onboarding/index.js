@@ -1,0 +1,1 @@
+export{mP as EXTENSIONS_PAGE_TITLE,hP as TUTORIAL_DEFAULT_TITLE,gP as TUTORIAL_VIM_TITLE,jE as onboardingPlugin,pP as seedTutorial}from"../../../chunks/app-fvGsszat.js";

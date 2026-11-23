@@ -1,0 +1,1 @@
+export{iz as defaultRegistry,az as defaultRendererContributions,oz as defaultRenderersExtension}from"../../chunks/app-fvGsszat.js";

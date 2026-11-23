@@ -1,0 +1,1 @@
+export{tV as __resetDialogsForTests,nV as getDialogQueue,rV as isDialogOpenForWorkspace,iV as openDialog,aV as subscribeDialogs}from"../../chunks/app-fvGsszat.js";

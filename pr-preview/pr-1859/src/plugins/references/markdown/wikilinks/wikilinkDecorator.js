@@ -1,0 +1,1 @@
+export{fN as isWikilinkDisplayParts,pN as resolveWikilinkDisplay,mN as wikilinkDisplayDecoratorFacet}from"../../../../../chunks/app-fvGsszat.js";

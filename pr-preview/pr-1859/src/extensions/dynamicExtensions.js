@@ -1,0 +1,1 @@
+export{fR as dynamicExtensionsExtension}from"../../chunks/app-fvGsszat.js";

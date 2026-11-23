@@ -1,0 +1,1 @@
+export{GP as COMMAND_PALETTE_ACTION_ID,KP as COMMAND_PALETTE_CONTEXT,qP as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,JP as commandPaletteActionContext}from"../../../chunks/app-fvGsszat.js";

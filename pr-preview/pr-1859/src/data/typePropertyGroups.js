@@ -1,0 +1,1 @@
+export{IW as typePropertyGroups}from"../../chunks/app-fvGsszat.js";

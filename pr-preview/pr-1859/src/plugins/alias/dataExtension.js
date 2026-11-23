@@ -1,0 +1,1 @@
+export{g3 as aliasDataExtension}from"../../../chunks/app-fvGsszat.js";

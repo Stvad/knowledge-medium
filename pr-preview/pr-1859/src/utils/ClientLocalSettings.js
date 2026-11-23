@@ -1,0 +1,1 @@
+export{cR as ClientLocalSettings,lR as clientLocalSettings}from"../../chunks/app-fvGsszat.js";

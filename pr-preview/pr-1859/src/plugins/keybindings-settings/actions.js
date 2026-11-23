@@ -1,0 +1,1 @@
+export{wP as openKeybindingsSettingsAction}from"../../../chunks/app-fvGsszat.js";

@@ -1,0 +1,1 @@
+export{vI as CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,yI as OPEN_PREFERENCES_ACTION_ID,bI as RELOAD_IN_SAFE_MODE_ACTION_ID,xI as defaultActionContextsExtension,SI as defaultActionsExtension,CI as getDefaultActionGroups,wI as getDefaultActions}from"../../chunks/app-fvGsszat.js";

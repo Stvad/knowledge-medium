@@ -1,0 +1,1 @@
+export{vR as extensionDisplayName,yR as extensionName,bR as userExtensionShellToggle,xR as userExtensionToggle}from"../../chunks/app-fvGsszat.js";

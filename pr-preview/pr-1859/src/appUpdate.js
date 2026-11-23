@@ -1,0 +1,1 @@
+export{RL as appUpdate,zL as useAppUpdateAvailable}from"../chunks/app-fvGsszat.js";

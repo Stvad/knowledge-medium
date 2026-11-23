@@ -1,0 +1,1 @@
+export{d1 as annotationsDataExtension}from"../../../chunks/app-fvGsszat.js";

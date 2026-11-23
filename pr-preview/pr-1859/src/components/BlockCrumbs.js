@@ -1,0 +1,1 @@
+export{Yj as BlockCrumbs}from"../../chunks/app-fvGsszat.js";

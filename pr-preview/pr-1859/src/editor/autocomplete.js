@@ -1,0 +1,1 @@
+export{uL as editorAutocompleteExtension}from"../../chunks/app-fvGsszat.js";

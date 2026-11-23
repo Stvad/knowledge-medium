@@ -1,0 +1,1 @@
+export{y_ as contributorsPlugin}from"../../../chunks/app-fvGsszat.js";

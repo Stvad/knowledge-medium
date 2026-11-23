@@ -1,0 +1,1 @@
+export{DM as Label}from"../../../chunks/app-fvGsszat.js";

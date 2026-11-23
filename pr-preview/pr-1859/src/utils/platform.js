@@ -1,0 +1,1 @@
+export{Wq as isIOS,Gq as isMacPlatform}from"../../chunks/app-fvGsszat.js";

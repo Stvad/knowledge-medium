@@ -1,0 +1,1 @@
+export{uF as CommandPaletteHeaderItem}from"../../../chunks/app-fvGsszat.js";

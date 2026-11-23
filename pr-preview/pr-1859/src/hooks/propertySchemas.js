@@ -1,0 +1,1 @@
+export{WJ as usePropertySchemas}from"../../chunks/app-fvGsszat.js";

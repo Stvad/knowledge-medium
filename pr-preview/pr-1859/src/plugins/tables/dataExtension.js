@@ -1,0 +1,1 @@
+export{WX as tablesDataExtension}from"../../../chunks/app-fvGsszat.js";

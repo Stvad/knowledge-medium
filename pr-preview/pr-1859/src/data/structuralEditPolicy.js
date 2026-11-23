@@ -1,0 +1,1 @@
+export{HI as resolveStructuralEditPolicy,UI as structuralEditPolicyForBlock}from"../../chunks/app-fvGsszat.js";

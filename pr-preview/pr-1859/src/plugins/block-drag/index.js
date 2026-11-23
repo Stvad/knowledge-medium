@@ -1,0 +1,1 @@
+export{mC as blockDragPlugin}from"../../../chunks/app-fvGsszat.js";
