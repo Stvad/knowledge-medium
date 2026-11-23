@@ -21,7 +21,8 @@
  * A bare `block.delete()` in handler code is an ESLint error pointing here —
  * discipline that's checked beats discipline that's remembered.
  */
-import type { SubtreeRow } from '@/data/api'
+import { ChangeScope, type SubtreeRow } from '@/data/api'
+import { deleteBlock, liveChildAt } from '@/data/mutators'
 import type { Block } from '@/data/block.js'
 import { repoFieldDefinitionTest } from '@/data/internals/propertySchemaResolution'
 import { isPropertyFieldInstance } from '@/data/propertyChildren'
@@ -66,8 +67,21 @@ export interface DeleteThroughUiOptions {
 export const deleteBlockThroughUi = async (
   block: Block,
   options?: DeleteThroughUiOptions,
-): Promise<boolean> =>
-  deleteBlocksThroughUi([block], options)
+): Promise<boolean> => deleteBlocksThroughUi([block], options)
+
+/** Empty Backspace may wait for confirmation; the captured occurrence must survive until deletion. */
+export async function deleteAtOccurrenceThroughUi(
+  block: Block,
+  expected: {parentId: string | null; boundaryId?: string; foreignRootId?: string; isCurrent: () => boolean},
+  beforeWrite: () => Promise<void>,
+): Promise<boolean> {
+  if (!await confirmTargets([block], beforeWrite)) return false
+  return block.repo.tx(async tx => {
+    if (!await liveChildAt(tx, block.id, expected.parentId, expected.boundaryId, expected.foreignRootId) || !expected.isCurrent()) return false
+    await tx.run(deleteBlock, {id: block.id})
+    return true
+  }, {scope: ChangeScope.BlockDefault, description: 'remove empty block'})
+}
 
 /** Batch form: refuses the WHOLE call if any block is protected, rather than
  *  half-deleting the set. One toast, and the user's selection is intact so they
@@ -91,6 +105,19 @@ export const deleteBlocksThroughUi = async (
   // without this the dialog says "25 selected blocks" over a 20-block total
   // and the write repeats itself.
   const targets = [...new Map(blocks.map(block => [block.id, block])).values()]
+  if (!await confirmTargets(targets, beforeWrite)) return false
+  const write = async (): Promise<void> => {
+    // Leaf-first so each removal can't disturb the next. Owned here, with the
+    // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one
+    // list in outline order and neither ordering can be got wrong at a site.
+    // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
+    for (const block of targets.toReversed()) await block.delete()
+  }
+  await (animate ? withMoveTransition(write) : write())
+  return true
+}
+
+async function confirmTargets(targets: readonly Block[], beforeWrite?: DeleteThroughUiOptions['beforeWrite']): Promise<boolean> {
   if (!await ensureDeletableThroughUi(targets)) return false
   if (!await confirmBulkDeleteThroughUi(targets)) return false
   if (beforeWrite) {
@@ -100,14 +127,6 @@ export const deleteBlocksThroughUi = async (
     // being such work: without it this is the pass above.
     if (!await ensureDeletableThroughUi(targets)) return false
   }
-  const write = async (): Promise<void> => {
-    // Leaf-first so each removal can't disturb the next. Owned here, with the
-    // ancestor-first order `countBlocksRemovedBy` wants, so callers pass one
-    // list in outline order and neither ordering can be got wrong at a site.
-    // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point
-    for (const block of targets.toReversed()) await block.delete()
-  }
-  await (animate ? withMoveTransition(write) : write())
   return true
 }
 

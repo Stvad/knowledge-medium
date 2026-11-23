@@ -7,13 +7,14 @@ import type { SurfaceCarrier } from '@/data/outlineSurface'
 import { outdentDrawnBlock, structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import { nestedWriteLocation } from '@/utils/drawnWalk'
 
-export type InsertGesture =
+export type InsertGesture = (
   | {kind: 'above' | 'below' | 'enter' | 'empty-enter'}
   | {
     kind: 'split'
     /** Save and re-arm the live editor around the transactional split. */
     write(placement: SplitPlacement, commit: (before: string, after: string) => Promise<string | null>): Promise<string | null>
   }
+) & {isCurrent?: () => boolean}
 
 export type InsertPosition = 'first' | 'last' | 'before' | 'after'
 
@@ -24,8 +25,11 @@ export interface ChildrenInsertRequest {
   gesture: InsertGesture['kind']
   /** The nested editing root the block's ancestry must still reach. */
   boundaryId?: string
+  foreignRootId?: string
   /** First or last child of the block, or a sibling before or after it. */
   position: InsertPosition
+  /** Async insert hooks should check this in their writing transaction before creating a block. */
+  readonly isCurrent?: () => boolean
 }
 
 export interface InsertedBlock {
@@ -60,7 +64,7 @@ async function insertInDataOrder(
   const childPosition = await childPositionFor(request, renderScopeId)
   const childAnchorId = childPosition && 'siblingId' in childPosition ? childPosition.siblingId : undefined
   const currentAtPosition = async (tx: Tx) => {
-    const current = await liveChildAt(tx, id, data.parentId, boundaryId)
+    const current = await liveChildAt(tx, id, data.parentId, boundaryId, request.foreignRootId)
     if (!current) return null
     if (childAnchorId !== undefined && !await liveChildAt(tx, childAnchorId, id)) return null
     return current
@@ -78,7 +82,7 @@ async function insertInDataOrder(
   }
 
   const newId = await repo.tx(async tx => {
-    if (!await currentAtPosition(tx)) return null
+    if (!await currentAtPosition(tx) || request.isCurrent?.() === false) return null
     if (childPosition) return tx.run(createChild, {parentId: id, position: childPosition, revealParent: true})
     return tx.run(position === 'before' ? createSiblingAbove : createSiblingBelow, {siblingId: id})
   }, options)
@@ -89,11 +93,16 @@ async function insertWithView(parent: Block, surface: ListingSurface, request: C
   const data = parent.peek() ?? await parent.load()
   if (!data) return undefined
   const ctx = {parent, data, surface}
-  const answer = await childrenViewFor(ctx).insert?.(ctx, request)
+  const view = childrenViewFor(ctx)
+  const sameScopeQuery = view.order === 'query' && surface.renderScopeId === request.surface.renderScopeId
+  const needsExplicitPlacement = (position: InsertPosition) => gesture.kind === 'split' || position === 'before' || position === 'after'
+  if (view.insert && request.isCurrent?.() === false) return null
+  const answer = await view.insert?.(ctx, request)
+  if (answer === undefined && sameScopeQuery && needsExplicitPlacement(request.position)) return null
   if (typeof answer === 'string') return {id: answer, renderScopeId: request.surface.renderScopeId}
   if (answer && 'position' in answer) {
     const {position, renderScopeId} = answer
-    if (projected && (gesture.kind === 'split' || position === 'before' || position === 'after')) return null
+    if ((projected || sameScopeQuery) && needsExplicitPlacement(position)) return null
     return insertInDataOrder({...request, position}, gesture, renderScopeId)
   }
   return answer
@@ -113,12 +122,15 @@ export async function insertDrawnBlock(block: Block, carrier: SurfaceCarrier, ge
   const declaration = await nestedWriteLocation(block, carrier.renderScopeId)
   if (declaration === null) return null
   const direct = declaration?.memberId === block.id ? declaration : undefined
-  const projected = direct !== undefined && (direct.nested.order === 'query' || direct.parent.block.id !== data.parentId)
+  const projected = direct?.projected ?? false
   const scopeRootId = direct?.boundaryId ?? carrier.scopeRootId
   const surface = listingSurfaceOf({...carrier, scopeRootId})
   const policy = await structuralEditPolicyForBlock(block, surface)
   const position = positionFor(gesture.kind, policy.isScopeRoot, policy.hasUncollapsedChildren)
-  const request = {block, data, surface, gesture: gesture.kind, position, boundaryId: declaration?.boundaryId} satisfies ChildrenInsertRequest
+  const request: ChildrenInsertRequest = {
+    block, data, surface, gesture: gesture.kind, position,
+    boundaryId: declaration?.boundaryId, foreignRootId: declaration?.foreignRootId, isCurrent: gesture.isCurrent,
+  }
 
   // The owner can place a nested member beside the others even when editing the member is scoped to its own subtree.
   if (declaration && (direct || policy.isScopeRoot)) {
@@ -134,7 +146,7 @@ export async function insertDrawnBlock(block: Block, carrier: SurfaceCarrier, ge
     if (result !== undefined) return result
   }
   if (gesture.kind === 'empty-enter' && position === 'after' && policy.canOutdent) {
-    const moved = await outdentDrawnBlock(block, surface, data.parentId)
+    const moved = await outdentDrawnBlock(block, surface, data.parentId, gesture.isCurrent)
     if (moved !== false) return null
   }
   return insertInDataOrder(request, gesture)

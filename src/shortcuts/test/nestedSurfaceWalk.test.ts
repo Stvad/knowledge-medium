@@ -25,6 +25,8 @@ import { outlineSurfaceOf, type SurfaceCarrier } from '@/data/outlineSurface'
 import { editorSelection, focusBlock, peekFocusedBlockLocation, selectionStateProp } from '@/data/properties'
 import type { PropertyDisplayScopeLevels } from '@/data/propertyDisplayMode'
 import type { Repo } from '@/data/repo'
+import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { pasteMultilineText } from '@/paste/operations'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -296,4 +298,50 @@ describe('ranges across drawn scopes', () => {
     expect(await extendSelection('projected-child', ui, repo, inner)).toBe(false)
     expect(peekFocusedBlockLocation(ui)).toEqual({blockId: 'projection', renderScopeId: OUTLINE_SCOPE})
   })
+})
+
+it('Backspace preserves an empty note and its child when the note leaves a result during confirmation', async () => {
+  await repo.mutate.createChild({parentId: 'projected-child', id: 'blank-note'})
+  await repo.mutate.createChild({parentId: 'blank-note', id: 'kept', content: 'Stored note'})
+  let moved = false
+  repo.setRuntimeContributions(blockDeletionGuardsFacet, 'test.move-note', [async () => {
+    if (!moved) {
+      moved = true
+      await repo.mutate.move({id: 'blank-note', parentId: 'after', position: {kind: 'last'}})
+    }
+    return null
+  }])
+  await pressInEditor('delete_empty_block_cm', 'blank-note', 'start', {
+    ...SURFACE_OF_PAGE(), renderScopeId: PROJECTION_SCOPE, scopeRootId: 'projected-child',
+  })
+  expect(await repo.load('blank-note')).toMatchObject({parentId: 'after'})
+  expect(await repo.load('kept')).toMatchObject({parentId: 'blank-note', content: 'Stored note'})
+})
+
+it.each([
+  ['indent', 'edit.cm.indent_block', 'r1', 'end'],
+  ['create', 'split_block_cm', 'r1', 'end'],
+  ['merge', 'delete_empty_block_cm', 'r1', 'start'],
+  ['outdent', 'edit.cm.outdent_block', 'child', 'end'],
+  ['paste', 'paste', 'r1', 'end'],
+] as const)('%s inside a nested grid refuses when the whole grid has left its outer result', async (_, action, subject, cursor) => {
+  await repo.mutate.createChild({parentId: 'r1', id: 'child', content: 'child'})
+  await repo.mutate.move({id: 'grid', parentId: 'projected-child', position: {kind: 'last'}})
+  const outer = {...SURFACE_OF_PAGE(), scopeRootId: 'projected-child', renderScopeId: PROJECTION_SCOPE}
+  repo.setRuntimeContributions(surfaceOwnerFacet, 'test.inner', [({renderScopeId}) =>
+    renderScopeId === GRID_SCOPE ? {blockId: 'grid', surface: outer} : null])
+  const tx = repo.tx.bind(repo)
+  vi.spyOn(repo, 'tx').mockImplementationOnce(async (fn, opts) => {
+    await tx(t => t.move('grid', {parentId: 'after', orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+    return tx(fn, opts)
+  })
+  const scope = {...SURFACE_OF_PAGE(), renderScopeId: GRID_SCOPE, scopeRootId: 'grid'}
+  const rows = () => sharedDb.db.getAll("SELECT id,parent_id,order_key,content,deleted FROM blocks WHERE id != 'grid' ORDER BY id")
+  const before = await rows()
+  if (action === 'paste') await pasteMultilineText('new', repo.block(subject), repo, scope)
+  else await pressInEditor(action, subject, cursor, scope)
+  expect(await rows()).toEqual(before)
+  expect(await repo.load('grid')).toMatchObject({parentId: 'after'})
+  expect(await repo.load('r1')).toMatchObject({parentId: 'grid'})
+  expect(await repo.load('r2')).toMatchObject({parentId: 'grid'})
 })

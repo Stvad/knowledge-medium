@@ -18,7 +18,7 @@ import {
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
 import { FacetRuntime } from '@/facets/facet.js'
-import { foreignResultRootOf, nestedWriteLocation } from '@/utils/drawnWalk'
+import { nestedWriteLocation } from '@/utils/drawnWalk'
 import { captureMediaVerb } from './captureMediaVerb.js'
 import { isBlankContent, shellPasteRequest } from './clipboard.js'
 import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
@@ -174,7 +174,7 @@ interface PasteSurface extends ListingSurface {
 /** Read the occurrence before taking the write lock. Its list determines the
  *  placement branch. The transaction computes order keys from its own rows. */
 const pasteSurfaceFor = async (
-  block: Block, data: BlockData, options: Partial<ListingSurface>, intent: 'text' | 'cut' = 'text',
+  block: Block, data: BlockData, options: Partial<ListingSurface>,
 ): Promise<PasteSurface | null> => {
   const surface = listingSurfaceOf(options)
   const {renderScopeId} = surface
@@ -182,8 +182,7 @@ const pasteSurfaceFor = async (
 
   const location = await nestedWriteLocation(block, renderScopeId)
   if (location === null) return null
-  const cutBoundaryId = intent === 'cut' ? await foreignResultRootOf(location) : undefined
-  if (cutBoundaryId === null) return null
+  const cutBoundaryId = location?.foreignRootId
 
   const boundaryId = location?.boundaryId
   const scoped = boundaryId === block.id ? {...surface, scopeRootId: boundaryId} : surface
@@ -193,7 +192,7 @@ const pasteSurfaceFor = async (
 
 const currentPasteTarget = async (tx: Tx, id: string, surface: PasteSurface): Promise<BlockData | null> => {
   const {occurrence} = surface
-  if (occurrence) return liveChildAt(tx, id, occurrence.parentId, occurrence.boundaryId)
+  if (occurrence) return liveChildAt(tx, id, occurrence.parentId, occurrence.boundaryId, occurrence.cutBoundaryId)
   const target = await tx.get(id)
   return target?.deleted ? null : target
 }
@@ -508,6 +507,7 @@ export async function pasteEditModeMultilineText(
   pasteTarget: Block,
   repo: Repo,
   options: Partial<ListingSurface> = {},
+  acceptEditorEdit?: () => boolean,
 ): Promise<EditModeMultilinePasteResult | null> {
   const targetData = pasteTarget.peek() ?? await pasteTarget.load()
   if (!targetData) return null
@@ -522,6 +522,7 @@ export async function pasteEditModeMultilineText(
   await repo.tx(async tx => {
     const target = await currentPasteTarget(tx, pasteTarget.id, surface)
     if (!target || normalizeEditorLineEndings(target.content) !== expectedContent) return
+    if (acceptEditorEdit && !acceptEditorEdit()) return
 
     // `visible`: the slot right after the edited line is its first-child slot
     // once the block has children, so a paste stays contiguous with the line it
@@ -609,12 +610,11 @@ const cutDestination = async (
   target: BlockData,
   options: PlacementOptions,
 ): Promise<{move: MoveTarget; replacesTarget: boolean}> => {
-  const children = await tx.childrenOf(target.id, target.workspaceId)
   // A referenced target is never replaced: deleting it would rewrite every
   // `((ref))` to it into its (empty) text.
-  const replaceable = isBlankContent(target.content) && children.length === 0 &&
+  const replaceable = isBlankContent(target.content) &&
     Object.keys(target.properties).length === 0 && !hasNoSiblingSlot(target, options.surface.scopeRootId) &&
-    !options.surface.occurrence?.hasDrawnChildren &&
+    !options.surface.occurrence?.hasDrawnChildren && !await tx.hasChildren(target.id) &&
     !await tx.hasLiveReferrer(target.id, target.workspaceId)
   if (replaceable) {
     return {move: {parentId: target.parentId, position: {kind: 'before', siblingId: target.id}}, replacesTarget: true}
@@ -674,7 +674,7 @@ export async function pasteArmedCut(
 
   let result: CutMoveResult
   try {
-    const surface = await pasteSurfaceFor(pasteTarget, targetData, listing, 'cut')
+    const surface = await pasteSurfaceFor(pasteTarget, targetData, listing)
     if (!surface) {
       showError(PASTE_DESTINATION_UNAVAILABLE)
       return {kind: 'refused'}

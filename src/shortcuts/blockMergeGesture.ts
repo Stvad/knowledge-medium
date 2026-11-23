@@ -5,6 +5,7 @@ import { deleteBlock, liveChildAt, merge } from '@/data/mutators'
 import { focusBlock } from '@/data/properties'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent'
 import type { ListingSurface } from '@/data/childrenView'
+import { isSameScopeQueryMember, type DrawnMergeAnchor } from '@/data/structuralEditPolicy'
 import { drawnChildrenOf } from '@/data/visibleChildren'
 import { nestedWriteLocation } from '@/utils/drawnWalk'
 import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi'
@@ -36,9 +37,10 @@ export interface MergeUpGesture {
   surface: ListingSurface
   uiStateBlock: Block
   /** For a member, its preceding sibling and their common data parent. */
-  anchor?: {parentId: string; siblingId: string}
+  anchor?: DrawnMergeAnchor
   /** Runs once the merge is not refused, before it writes (the key's preventDefault). */
   onTaken?: () => void
+  isCurrent?: () => boolean
 }
 
 /** Both endpoints must still occupy the captured parent edges when the editor's write commits. */
@@ -46,10 +48,11 @@ export async function mergeCheck(from: Block, into: Block, surface: ListingSurfa
   const [source, destination] = await Promise.all([from.load(), into.load()])
   const drawn = await nestedWriteLocation(from, surface.renderScopeId)
   if (!source || !destination || drawn === null) return null
+  if (drawn?.memberId === from.id ? drawn.projected : await isSameScopeQueryMember(from, surface)) return null
   const boundary = anchor?.parentId ?? drawn?.boundaryId
   return async (tx: Tx) => {
-    if (!await liveChildAt(tx, from.id, anchor?.parentId ?? source.parentId, boundary)) return false
-    if (!await liveChildAt(tx, into.id, destination.parentId, boundary)) return false
+    if (!await liveChildAt(tx, from.id, anchor?.parentId ?? source.parentId, boundary, drawn?.foreignRootId)) return false
+    if (!await liveChildAt(tx, into.id, destination.parentId, boundary, drawn?.foreignRootId)) return false
     if (!anchor) return source.parentId === null || tx.isDescendantOf(into.id, source.parentId)
     return !!await liveChildAt(tx, anchor.siblingId, anchor.parentId) && await tx.isDescendantOf(into.id, anchor.siblingId)
   }
@@ -61,13 +64,13 @@ export async function mergeCheck(from: Block, into: Block, surface: ListingSurfa
  *  and where deleting `from` would be (a merge destroys it). Returns whether
  *  it merged. */
 export const mergeUp = async (
-  {from, into, liveContent, surface, uiStateBlock, onTaken, anchor}: MergeUpGesture,
+  {from, into, liveContent, surface, uiStateBlock, onTaken, anchor, isCurrent}: MergeUpGesture,
 ): Promise<boolean> => {
   const current = await mergeCheck(from, into, surface, anchor)
   if (!current) return false
   const deleteLeaf = anchor && liveContent === '' &&
     (await from.repo.query.childIds({id: from.id, propertyChildren: 'all'}).load()).length === 0
-  if (!deleteLeaf && (holdsSource(from) || holdsSource(into) || await bothShowIndependentChildren({into, from}, surface))) return false
+  if (!deleteLeaf && (anchor?.deleteOnly || holdsSource(from) || holdsSource(into) || await bothShowIndependentChildren({into, from}, surface))) return false
   onTaken?.()
   const joinOffset = into.peek()?.content.length ?? 0
   if (!await ensureDeletableThroughUi([from])) return false
@@ -77,8 +80,9 @@ export const mergeUp = async (
   // One transaction: the live text first, so the merge concatenates it.
   const merged = await from.repo.tx(async tx => {
     if (!await current(tx)) return false
+    if (deleteLeaf && await tx.hasChildren(from.id)) return false
+    if (isCurrent?.() === false) return false
     if (deleteLeaf) {
-      if (await tx.hasChildren(from.id)) return false
       await tx.run(deleteBlock, {id: from.id})
       return true
     }

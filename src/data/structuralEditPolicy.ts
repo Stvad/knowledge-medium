@@ -1,8 +1,10 @@
 import { Block } from './block'
+import { ChangeScope } from './api'
+import { outdent } from './mutators'
 import type { SurfaceCarrier } from './outlineSurface'
 import { isCollapsedProp } from './properties.js'
 import { childrenViewFor, listingSurfaceOf, propertyDisplayChildrenView, type ChildrenOrder, type DrawnChild, type NestedSurface } from './childrenView'
-import { lastDrawnStep, nestedWriteLocation, unlistedSiblingIndex, type DrawnLocation } from '@/utils/drawnWalk'
+import { lastDrawnStep, nestedWriteLocation, unlistedSiblingIndexLoaded, type DrawnLocation } from '@/utils/drawnWalk'
 import type { OutlineSurface } from './outlineSurface'
 import { drawnChildrenOf } from './visibleChildren'
 
@@ -135,6 +137,20 @@ interface WriteList {
   order: ChildrenOrder
   nested?: NestedSurface
   boundaryId?: string
+  foreignRootId?: string
+}
+
+async function parentListing(owner: Block, carrier: SurfaceCarrier) {
+  const data = owner.peek() ?? await owner.load()
+  if (!data) return null
+  const ctx = {parent: owner, data, surface: listingSurfaceOf(carrier)}
+  return {ctx, view: childrenViewFor(ctx)}
+}
+
+/** Same-scope views list own children, which may still be independently selected by a query. */
+export async function isSameScopeQueryMember(block: Block, carrier: SurfaceCarrier) {
+  const row = block.peek() ?? await block.load()
+  return !!row?.parentId && (await parentListing(block.repo.block(row.parentId), carrier))?.view.order === 'query'
 }
 
 /** A foreign result bounds structural writes to its own subtree, including when the notes also appear as query results. */
@@ -143,34 +159,32 @@ async function writeList(block: Block, carrier: SurfaceCarrier, retainHidden = f
   if (drawn === null) return null
   const row = block.peek() ?? await block.load()
   if (!row) return null
-  if (drawn?.nested.members?.includes(block.id)) {
+  if (drawn?.memberId === block.id) {
     const {nested, parent} = drawn
-    if (row.parentId !== parent.block.id || nested.order === 'query') return null
+    if (drawn.projected) return null
     const members = nested.members!
     return {owner: parent.block, members, index: members.indexOf(block.id), order: nested.order ?? 'derived', nested,
-      boundaryId: parent.block.id}
+      boundaryId: parent.block.id, foreignRootId: drawn.foreignRootId}
   }
   if (!row.parentId || block.id === carrier.scopeRootId) return null
   const owner = block.repo.block(row.parentId)
-  const data = owner.peek() ?? await owner.load()
-  if (!data) return null
-  const ctx = {parent: owner, data, surface: listingSurfaceOf(carrier)}
-  const view = childrenViewFor(ctx)
+  const listing = await parentListing(owner, carrier)
+  if (!listing) return null
+  const {ctx, view} = listing
   let members = await view.read(ctx).load()
   let index = members.indexOf(block.id)
   if (index < 0 && retainHidden && view === propertyDisplayChildrenView) {
     const ids = members as readonly string[]
-    await Promise.all(ids.map(id => block.repo.load(id)))
-    index = unlistedSiblingIndex(block.repo, ids, row)
+    index = await unlistedSiblingIndexLoaded(block.repo, ids, row)
     members = [...ids.slice(0, index), block.id, ...ids.slice(index)]
   }
   if (index < 0 || view.order === 'query') return null
-  return {owner, members, index, order: view.order ?? 'derived', boundaryId: drawn?.boundaryId}
+  return {owner, members, index, order: view.order ?? 'derived', boundaryId: drawn?.boundaryId, foreignRootId: drawn?.foreignRootId}
 }
 
 function adjacent(list: WriteList, direction: -1 | 1) {
   const near = list.members[list.index + direction]
-  return typeof near === 'string' ? {parentId: list.owner.id, siblingId: near, boundaryId: list.boundaryId} : null
+  return typeof near === 'string' ? {parentId: list.owner.id, siblingId: near, boundaryId: list.boundaryId, foreignRootId: list.foreignRootId} : null
 }
 
 export async function indentDrawnBlock(block: Block, carrier: SurfaceCarrier): Promise<void> {
@@ -180,21 +194,26 @@ export async function indentDrawnBlock(block: Block, carrier: SurfaceCarrier): P
 }
 
 /** True on a move, false at an ordinary boundary, null when the drawn placement refused or expired. */
-export async function outdentDrawnBlock(block: Block, carrier: SurfaceCarrier, expectedParentId?: string | null): Promise<boolean | null> {
+export async function outdentDrawnBlock(
+  block: Block, carrier: SurfaceCarrier, expectedParentId?: string | null, isCurrent?: () => boolean,
+): Promise<boolean | null> {
   const list = await writeList(block, carrier, true)
   if (!list || list.nested) return false
   const parent = list.owner
   if (expectedParentId !== undefined && expectedParentId !== parent.id) return null
   const outer = await writeList(parent, carrier)
-  if (!outer) {
-    // The workspace's root list has no parent block to declare a view.
-    if (!list.boundaryId && parent.id !== carrier.scopeRootId && (await parent.load())?.parentId === null) {
-      return await block.repo.mutate.outdent({id: block.id, anchor: {parentId: null, siblingId: parent.id, boundaryId: list.boundaryId}}) || null
-    }
-    return false
-  }
-  if (outer.nested?.allowsNewMember?.() === false) return null
-  return await block.repo.mutate.outdent({id: block.id, anchor: {parentId: outer.owner.id, siblingId: parent.id, boundaryId: outer.boundaryId}}) || null
+  // The workspace's root list has no parent block to declare a view.
+  if (!outer && (list.boundaryId || parent.id === carrier.scopeRootId || (await parent.load())?.parentId !== null)) return false
+  if (outer?.nested?.allowsNewMember?.() === false) return null
+  const args = {id: block.id, anchor: {
+    parentId: outer?.owner.id ?? null, siblingId: parent.id,
+    boundaryId: outer?.boundaryId, foreignRootId: outer?.foreignRootId,
+  }}
+  const moved = isCurrent === undefined
+    ? await block.repo.mutate.outdent(args)
+    : await block.repo.tx(async tx => isCurrent() && tx.run(outdent, args),
+      {scope: ChangeScope.BlockDefault, description: `outdent ${block.id}`})
+  return moved || null
 }
 
 export async function moveDrawnBlock(block: Block, carrier: SurfaceCarrier, direction: -1 | 1): Promise<boolean> {
@@ -210,22 +229,29 @@ export async function moveDrawnBlock(block: Block, carrier: SurfaceCarrier, dire
   return !!neighbour && block.repo.mutate.moveVertical({id: block.id, direction, anchor: {...neighbour, fromParentId: list.owner.id}})
 }
 
+export interface DrawnMergeAnchor {
+  parentId: string
+  siblingId: string
+  /** A crossed surface can supply a focus target after leaf deletion. */
+  deleteOnly?: boolean
+}
+
 interface MergePlacement extends DrawnLocation {
-  anchor?: {parentId: string; siblingId: string; boundaryId?: string}
+  anchor: DrawnMergeAnchor
 }
 
 /** Undefined keeps the outline's empty-block deletion. Null refuses the gesture before either deletion or merge. */
-export async function memberMergePlacement(block: Block, surface: OutlineSurface): Promise<MergePlacement | null | undefined> {
-  const drawn = await nestedWriteLocation(block, surface.renderScopeId)
-  if (!drawn) return drawn
+export async function memberMergePlacement(block: Block, surface: OutlineSurface, location = nestedWriteLocation(block, surface.renderScopeId)): Promise<MergePlacement | null | undefined> {
+  const drawn = await location
+  if (drawn === null) return null
+  if (drawn?.memberId !== block.id) return await isSameScopeQueryMember(block, surface) ? null : undefined
   const {nested, parent} = drawn
-  if (!nested.members?.includes(block.id)) return undefined
-  const index = nested.members.indexOf(block.id)
-  if (nested.order === 'query' || (await block.load())?.parentId !== parent.block.id) return null
+  const index = nested.members!.indexOf(block.id)
+  if (drawn.projected) return null
   // Shared-root members use the ordinary outline merge and empty-block deletion.
   if (nested.scopeRootId === parent.block.id) return undefined
-  const siblingId = nested.members[index - 1]
+  const siblingId = nested.members![index - 1]
   if (!siblingId || (await block.repo.load(siblingId))?.parentId !== parent.block.id) return null
-  const last = await lastDrawnStep(block.repo.block(siblingId), {...surface, scopeRootId: siblingId})
-  return last.crossed ? null : {...last, anchor: {parentId: parent.block.id, siblingId, boundaryId: parent.block.id}}
+  const last = await lastDrawnStep(block.repo.block(siblingId), {...surface, scopeRootId: siblingId}, {withinScope: true})
+  return {...last, anchor: {parentId: parent.block.id, siblingId, deleteOnly: last.crossed}}
 }

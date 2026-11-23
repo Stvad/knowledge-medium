@@ -1780,6 +1780,50 @@ describe('default CodeMirror shortcuts', () => {
     expect(await childIds('other')).toEqual(change === 'anchor moves' ? ['source'] : [])
   })
 
+  it.each(['empty Enter', 'Enter at end', 'before an insert hook'] as const)('keeps the current edit when %s resolves after the editor changes', async kind => {
+    const {repo} = env
+    const empty = kind === 'empty Enter'
+    const content = empty ? '' : 'original'
+    const hooked = kind === 'before an insert hook'
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'container', workspaceId: WS, parentId: 'root', orderKey: 'a0'})
+      await tx.create({id: 'source', workspaceId: WS, parentId: 'container', orderKey: 'a0', content})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    let announce!: () => void
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { announce = resolve })
+    const viewRead = new Promise<void>(resolve => { release = resolve })
+    const insert = vi.fn(async () => repo.mutate.createChild({parentId: 'container', content: 'New'}))
+    repo.setRuntimeContributions(childrenViewFacet, 'test.delayed-enter', [({parent}) => {
+      if (hooked && parent.id === 'container') return {id: 'test.insert', read: () => ({load: async () => ['source']}), insert}
+      if (parent.id !== 'source') return undefined
+      return {id: 'test.delayed-enter', read: () => ({load: async () => { announce(); await viewRead; return [] }})}
+    }])
+    const uiStateBlock = repo.block('ui')
+    const view = codeMirrorEditorView(content, content.length)
+    const action = findEditModeAction(repo, 'split_block_cm')
+    const pending = action.handler({block: repo.block('source'), editorView: view, uiStateBlock, scopeRootId: 'root'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    await ready
+    if (empty) {
+      view.dispatch({changes: {from: 0, insert: 'late'}, selection: {anchor: 4}})
+      await repo.block('source').setContent('late')
+    } else {
+      view.dispatch({selection: {anchor: 1}})
+    }
+    release()
+    await pending
+
+    expect(insert.mock.calls).toHaveLength(0)
+    expect(await childIds('root')).toEqual(['container'])
+    expect(await childIds('container')).toEqual(['source'])
+    expect((await repo.load('source'))?.content).toBe(empty ? 'late' : content)
+    expect(view.state.selection.main.head).toBe(empty ? 4 : 1)
+  })
+
   // Scope-root behaviour: when the focused block is the root of the
   // surface's visible subtree (e.g. a backlink entry's shown block,
   // where scopeRootId === the block's own id) a "new block below" must

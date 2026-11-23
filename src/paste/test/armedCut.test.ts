@@ -99,6 +99,12 @@ describe('armed cut across tabs (shared localStorage)', () => {
     expect(getArmedCut()?.rootIds).toEqual(['a'])
   })
 
+  it.each([['empty', ''], ['non-string', 7]])('refuses a cut with a %s result boundary', async (_, boundaryId) => {
+    await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a'], boundaryId: 'result'})
+    for (const [key, raw] of store) store.set(key, JSON.stringify({...JSON.parse(raw), boundaryId}))
+    expect(await matchArmedCut('- a', 'ws-1')).toBeNull()
+  })
+
   it('ignores a malformed record rather than acting on it', async () => {
     await armCut('- a', {workspaceId: 'ws-1', rootIds: ['a']})
     for (const key of store.keys()) store.set(key, '{"rootIds": 3}')

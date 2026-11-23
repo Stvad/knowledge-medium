@@ -118,3 +118,12 @@ it('a previous descendant cannot follow its whole branch onto another page durin
   await moveAway('a')
   expect(await repo.tx(tx => current!(tx), {scope: ChangeScope.BlockDefault})).toBe(false)
 })
+
+it('a preceding row folded under another local row is no longer a merge sibling', async () => {
+  await repo.mutate.createChild({id: 'third', parentId: 'owner'})
+  await repo.mutate.move({id: 'a', parentId: 'third', position: {kind: 'last'}})
+  const before = await rows()
+  expect(await mergeUp({from: repo.block('b'), into: repo.block('note'), liveContent: 'edited',
+    surface: listingSurfaceOf({}), uiStateBlock: repo.block('ui'), anchor})).toBe(false)
+  expect(await rows()).toEqual(before)
+})

@@ -518,6 +518,36 @@ describe('the outline’s verbs between rows', () => {
       await waitFor(() => expect(document.querySelector(`[data-table-row="${target}"][data-table-unmatched]`)).not.toBeNull())
     })
 
+    it('leaves the query rows unchanged when its Enter write waits and the caret moves', async () => {
+      mount()
+      const view = await editAt('row-1', 'end')
+      let announce!: () => void
+      let release!: () => void
+      const queued = new Promise<void>(resolve => { announce = resolve })
+      const write = new Promise<void>(resolve => { release = resolve })
+      const runTx = repo.tx.bind(repo)
+      vi.spyOn(repo, 'tx').mockImplementation(async (...args: Parameters<Repo['tx']>) => {
+        if (args[1].description === 'new table row') {
+          announce()
+          await write
+        }
+        return runTx(...args)
+      })
+
+      await act(async () => {
+        const entering = runActionById('split_block_cm', new KeyboardEvent('keydown', {key: 'Enter'}))
+        await queued
+        view.dispatch({selection: {anchor: 2}})
+        release()
+        await entering
+      })
+
+      expect(await contentsUnder(source)).toEqual(['second'])
+      expect(await rowsUnderHost()).toEqual(['row-0'])
+      expect(focused()).toEqual({blockId: 'row-1', renderScopeId: SCOPE})
+      expect(view.state.selection.main.head).toBe(2)
+    })
+
     it('inserts under the foreign result when its notes show', async () => {
       const note = await repo.mutate.createChild({parentId: 'row-1', content: 'existing note'})
       mount()
@@ -722,6 +752,56 @@ describe('the outline’s verbs between rows', () => {
     await turnIntoTable(repo, id!)
     return id!
   }))
+
+  it.each(['empty row', 'nonempty row', 'empty note'] as const)('keeps new text during a pending Backspace on the %s', async kind => {
+    const isNote = kind === 'empty note'
+    const parentId = isNote ? 'row-1' : HOST
+    const id = isNote ? (await repo.mutate.createChild({parentId, content: ''}))! : 'row-1'
+    if (kind === 'empty row') await repo.block(id).setContent('')
+    const updated = ((await repo.load(id))?.content ?? '') + 'typed'
+
+    mount()
+    const view = await editAt(id, 'start')
+    let announce!: () => void
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { announce = resolve })
+    const resumed = new Promise<void>(resolve => { release = resolve })
+    const place = structuralEdits.memberMergePlacement
+    vi.spyOn(structuralEdits, 'memberMergePlacement').mockImplementationOnce(async (...args) => {
+      announce()
+      await resumed
+      return place(...args)
+    })
+
+    await act(async () => {
+      const pending = runActionById('delete_empty_block_cm', new KeyboardEvent('keydown', {key: 'Backspace'}))
+      await ready
+      view.dispatch({changes: {from: view.state.doc.length, insert: 'typed'}, selection: {anchor: 0}})
+      await repo.block(id).setContent(updated)
+      release()
+      await pending
+    })
+
+    expect((await repo.load(id))?.content).toBe(updated)
+    expect((await repo.load(id))?.parentId).toBe(parentId)
+    expect(await contentOf('row-0')).toBe('first')
+    expect(focused()).toEqual({blockId: id, renderScopeId: SCOPE})
+  })
+
+  it('deletes an empty leaf after a nested table and focuses its title in the outer grid', async () => {
+    const note = (await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}}))!
+    const inner = (await repo.mutate.createChild({parentId: note, content: 'Inner row'}))!
+    await turnIntoTable(repo, note)
+    await repo.block('row-1').setContent('')
+    mount()
+    await editAt('row-1', 'start')
+
+    await backspace()
+
+    expect(await repo.load('row-1')).toBeNull()
+    expect(await repo.load(inner)).toMatchObject({parentId: note, content: 'Inner row'})
+    expect(focused()).toEqual({blockId: note, renderScopeId: SCOPE})
+  })
 
   it('merges no row into the query of a nested table ending the row above', () => refusedMerge(async () => {
     const id = await repo.mutate.createChild({parentId: 'row-0', content: 'Nested', position: {kind: 'last'}})

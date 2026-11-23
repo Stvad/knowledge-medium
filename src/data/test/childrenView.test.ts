@@ -251,6 +251,59 @@ const structure = () => sharedDb.db.getAll<{id: string; parent_id: string | null
 
 describe('structural writes on a custom view', () => {
   it.each([
+    ['above', 'a', 'above'],
+    ['below', 'a', 'below'],
+    ['empty Enter', 'a', 'empty-enter'],
+    ['split', 'a', 'split'],
+    ['scope-root split', 'owner', 'split'],
+  ] as const)('keeps a same-scope query list intact for default %s placement', async (_, id, kind) => {
+    customList('owner', ['a'], 'query')
+    const block = repo.block(id)
+    const content = kind === 'empty-enter' ? '' : 'prefix tail'
+    await block.setContent(content)
+    const before = await structure()
+    const gesture: InsertGesture = kind === 'split'
+      ? {kind, write: (_placement, commit) => commit('prefix ', 'tail')}
+      : {kind}
+
+    const surface = surfaceIn('outline')
+    expect(await insertDrawnBlock(block, id === 'owner' ? {...surface, scopeRootId: id} : surface, gesture)).toBeNull()
+    expect(await structure()).toEqual(before)
+    expect((await block.load())?.content).toBe(content)
+  })
+
+  it('requires the same-scope query hook to create a sibling result', async () => {
+    const owner = repo.block('owner')
+    let insert: NonNullable<ChildrenView['insert']> = async () => ({position: 'after'})
+    repo.setRuntimeContributions(childrenViewFacet, 'test.query-insert', [({parent}) => parent.id === owner.id && {
+      id: 'query-insert', order: 'query', read: () => ({load: async () => ['a']}),
+      insert: (ctx, request) => insert(ctx, request),
+    }])
+    const block = repo.block('a')
+    const surface = surfaceIn('outline')
+    expect(await insertDrawnBlock(block, surface, {kind: 'below'})).toBeNull()
+
+    insert = ({parent}) => parent.repo.mutate.createChild({parentId: parent.id, content: 'New result'})
+    const result = await insertDrawnBlock(block, surface, {kind: 'below'})
+    expect(await repo.load(result!.id)).toMatchObject({parentId: owner.id, content: 'New result'})
+  })
+
+  it('uses an outline list inside a query view', async () => {
+    const scope = board(['a', 'b'], 'outline', true)
+    repo.setRuntimeContributions(childrenViewFacet, 'test.board', [({parent, surface}) =>
+      parent.id === 'owner' && surface.renderScopeId === 'outline' && {
+        id: 'board', order: 'query', read: () => ({load: async () => [{
+          kind: 'nested-surface', renderScopeId: 'board', order: 'outline', members: ['a', 'b'], scopeRootId: 'owner',
+        }]}),
+      }])
+
+    const inserted = await insertDrawnBlock(repo.block('a'), scope, {kind: 'below'})
+
+    expect(inserted).toMatchObject({renderScopeId: 'board'})
+    expect(await repo.query.childIds({id: 'owner', propertyChildren: 'none'}).load()).toEqual(['a', inserted!.id, 'b', 'c'])
+  })
+
+  it.each([
     ['foreign result', 'outline', 'x', 'after', {kind: 'below'}],
     ['own query result', 'query', 'b', 'before', {kind: 'above'}],
     ['foreign result split', 'outline', 'x', 'first', {
@@ -321,6 +374,7 @@ describe('structural writes on a custom view', () => {
     customList('owner', ['a', 'b', 'c'], 'query')
     const before = await structure()
     await indentDrawnBlock(repo.block('b'), surfaceIn('outline'))
+    expect(await memberMergePlacement(repo.block('b'), surfaceIn('outline'))).toBeNull()
     expect(await structure()).toEqual(before)
   })
 
@@ -334,7 +388,9 @@ describe('structural writes on a custom view', () => {
 
   it('refuses Tab on the visible root even when it has a stored preceding sibling', async () => {
     const before = await structure()
-    await indentDrawnBlock(repo.block('b'), {...surfaceIn('outline'), scopeRootId: 'b'})
+    const scope = {...surfaceIn('outline'), scopeRootId: 'b'}
+    await indentDrawnBlock(repo.block('b'), scope)
+    expect(await outdentDrawnBlock(repo.block('b'), scope)).toBe(false)
     expect(await structure()).toEqual(before)
   })
 
@@ -367,6 +423,7 @@ describe('structural writes on a custom view', () => {
     customList('page', ['other', 'after'])
     const before = await structure()
     expect(await outdentDrawnBlock(repo.block('a'), surfaceIn('outline'))).toBe(false)
+    expect(await moveDrawnBlock(repo.block('c'), surfaceIn('outline'), 1)).toBe(false)
     expect(await structure()).toEqual(before)
   })
 
@@ -404,6 +461,8 @@ describe('structural writes on a custom view', () => {
   it('only a drawn outline parent order permits a cross-parent move', async () => {
     customList('page', ['owner', 'other', 'after'], 'derived')
     const before = await structure()
+    expect(await moveDrawnBlock(repo.block('c'), surfaceIn('outline'), 1)).toBe(false)
+    customList('page', ['owner'])
     expect(await moveDrawnBlock(repo.block('c'), surfaceIn('outline'), 1)).toBe(false)
     expect(await structure()).toEqual(before)
   })

@@ -214,6 +214,20 @@ describe('pasteArmedCut', () => {
     expect(await childIds('x')).toEqual(['x1'])
   })
 
+  it('keeps a blank target whose only stored child is hidden by its view', async () => {
+    await seedPage()
+    await createBlock('blank', '', 'page', 'a4')
+    await createBlock('hidden', 'Stored', 'blank', 'a0')
+    repo.setRuntimeContributions(childrenViewFacet, 'test.empty-list', [({parent}) => parent.id === 'blank' && {
+      id: 'empty-list', read: () => ({load: async () => []}),
+    }])
+    await arm(['a'])
+    await pasteArmedCut(CUT_TEXT, repo.block('blank'), repo, {scopeRootId: 'page', renderScopeId: 'outline'})
+    expect(await childIds('page')).toEqual(['b', 'x', 'y', 'blank', 'a'])
+    expect(await childIds('blank')).toEqual(['hidden'])
+    expect(await childIds('a')).toEqual(['a1'])
+  })
+
   it('keeps a blank target that carries properties', async () => {
     await seedPage()
     await createBlock('blank', '', 'page', 'a4', {[isCollapsedProp.name]: true})

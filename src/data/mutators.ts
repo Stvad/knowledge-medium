@@ -542,20 +542,23 @@ const withSubject = (
 
 // ──── indent ────
 
-const drawnAnchorSchema = z.object({parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional()})
+const drawnAnchorSchema = z.object({parentId: z.string().nullable(), siblingId: z.string(), boundaryId: z.string().optional(), foreignRootId: z.string().optional()})
 type DrawnAnchor = z.infer<typeof drawnAnchorSchema>
 
 /** Only live rows still under the parent drawn at dispatch can participate in a relative write. */
-export const liveChildAt = async (tx: Tx, id: string, parentId: string | null, boundaryId?: string) => {
+export const liveChildAt = async (tx: Tx, id: string, parentId: string | null, ...boundaries: (string | undefined)[]) => {
   const row = await tx.get(id)
   if (row?.parentId !== parentId || row.deleted) return null
-  return boundaryId === undefined || await tx.isDescendantOf(id, boundaryId) ? row : null
+  for (const root of new Set(boundaries)) {
+    if (root !== undefined && !await tx.isDescendantOf(id, root)) return null
+  }
+  return row
 }
 
 /** `subjectParent` is the drawn parent before the gesture, including for an outdent or a move between parents. */
 async function anchoredSubject(tx: Tx, id: string, anchor: DrawnAnchor, subjectParent: string | null) {
   const sibling = await liveChildAt(tx, anchor.siblingId, anchor.parentId)
-  return sibling ? liveChildAt(tx, id, subjectParent, anchor.boundaryId) : null
+  return sibling ? liveChildAt(tx, id, subjectParent, anchor.boundaryId, anchor.foreignRootId) : null
 }
 
 interface IndentArgs {

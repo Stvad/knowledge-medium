@@ -20,7 +20,6 @@ import {
   nextDrawnStep,
   previousDrawnStep,
   getRootBlock,
-  foreignResultRootOf,
   locationAfterSubtreeRemoval,
   nestedWriteLocation,
   type DrawnLocation,
@@ -34,7 +33,7 @@ import {
   topLevelBlockIdProp,
   setIsEditing,
 } from '@/data/properties.js'
-import { memberMergePlacement, structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { memberMergePlacement } from '@/data/structuralEditPolicy.js'
 import { insertDrawnBlock, type InsertGesture } from '@/data/structuralInsert'
 import { flushPendingEditorContent } from '@/data/pendingEditorContent.js'
 import { outlineSurfaceOf } from '@/data/outlineSurface'
@@ -62,7 +61,7 @@ import {
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard, cutBlockIdsToClipboard } from '@/utils/copy.js'
 import {
-  deleteBlockThroughUi,
+  deleteAtOccurrenceThroughUi,
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
@@ -171,13 +170,15 @@ const writeWithEditorRearmed = async <T>(
 const insertGestureAtCursor = (editorView: EditorView): InsertGesture => {
   const {doc} = editorView.state
   const cursorPos = editorView.state.selection.main.head
-  if (cursorPos === doc.length) return {kind: doc.length === 0 ? 'empty-enter' : 'enter'}
+  const isCurrent = () => editorView.state.doc === doc && editorView.state.selection.main.head === cursorPos
+  if (cursorPos === doc.length) return {kind: doc.length === 0 ? 'empty-enter' : 'enter', isCurrent}
 
   return {
     kind: 'split',
+    isCurrent,
     write: async (placement, commit) => {
       // A view can resolve asynchronously. Keep a newer edit or caret position intact.
-      if (editorView.state.doc !== doc || editorView.state.selection.main.head !== cursorPos) return null
+      if (!isCurrent()) return null
       const before = doc.sliceString(0, cursorPos)
       const after = doc.sliceString(cursorPos)
       return writeWithEditorRearmed(editorView, placement === 'firstChild'
@@ -974,18 +975,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Only act when the cursor is at position 0 with no selection;
         // otherwise codemirror's default backspace handles it.
-        const sel = editorView.state.selection.main
+        const {doc, selection: {main: sel}} = editorView.state
+        const isCurrent = () => editorView.state.doc.toString() === doc.toString() && editorView.state.selection.main.empty && editorView.state.selection.main.head === 0
         if (!(sel.empty && sel.from === 0)) return
 
         const surface = outlineSurfaceOf(deps)
         if (!surface) return
 
-        // Don't merge the scope root into a block outside the surface —
-        // there's no visible previous block to merge into here.
-        const {canMergeUp} = await structuralEditPolicyForBlock(block, deps)
+        const source = block.peek() ?? await block.load()
+        if (!source) return
+        const occurrence = nestedWriteLocation(block, surface.renderScopeId)
+        const canMergeUp = block.id !== surface.scopeRootId
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
-        const liveContent = editorView.state.doc.toString()
+        const liveContent = doc.toString()
 
         // Empty block: delete it and move focus up. Both branches are gated on
         // `canMergeUp` because both are the same gesture — "consume this block
@@ -994,7 +997,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // about deletability: explicit Delete on the scope root IS allowed
         // (page deletion), it just isn't something Backspace should trigger on
         // an accidentally-emptied page.
-        const member = await memberMergePlacement(block, surface)
+        const member = await memberMergePlacement(block, surface, occurrence)
         if (member === null) return
         // A member's children survive empty Backspace by following the merge into its predecessor.
         if (liveContent === '' && !member) {
@@ -1010,16 +1013,16 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           // else on a block that survived, which is what "it looks like the
           // block vanished" means here.
           const landings: DrawnLocation[] = []
-          const deleted = await deleteBlockThroughUi(block, {
-            beforeWrite: async () => {
-              const previous = await previousDrawnStep(block, surface)
-              if (!previous.block) return
-              landings.push({block: previous.block, surface: previous.surface})
-              if (previous.crossed) {
-                const fallback = await locationAfterSubtreeRemoval(block, surface, new Set([block.id]))
-                if (fallback) landings.push(fallback)
-              }
-            },
+          const location = await occurrence
+          const expected = {isCurrent, parentId: source.parentId, boundaryId: location?.boundaryId, foreignRootId: location?.foreignRootId}
+          const deleted = await deleteAtOccurrenceThroughUi(block, expected, async () => {
+            const previous = await previousDrawnStep(block, surface)
+            if (!previous.block) return
+            landings.push({block: previous.block, surface: previous.surface})
+            if (previous.crossed) {
+              const fallback = await locationAfterSubtreeRemoval(block, surface, new Set([block.id]))
+              if (fallback) landings.push(fallback)
+            }
           })
           if (!deleted) return
           for (const target of landings) {
@@ -1045,7 +1048,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (!previous.block || (!member && (!canMergeUp || ('crossed' in previous && previous.crossed) || previous.block.id === surface.scopeRootId))) return
         await mergeUp({
           from: block, into: previous.block, liveContent, surface: previous.surface, uiStateBlock,
-          anchor: member?.anchor,
+          anchor: member?.anchor, isCurrent,
           // Vestigial, and kept only because it costs nothing: the event has
           // finished dispatching by now (every step above awaits), and block
           // editors pass `defaultKeymap: false`, so Backspace at offset 0 has
@@ -1270,8 +1273,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const focused = peekFocusedBlockLocation(uiStateBlock)
     const focusedScope = selectedBlocks.some(block => block.id === focused?.blockId) ? focused?.renderScopeId : undefined
     const renderScopeId = deps.renderScopeId ?? focusedScope
-    const boundaryId = await foreignResultRootOf(await nestedWriteLocation(selectedBlocks[0], renderScopeId))
-    if (boundaryId === null) return
+    const location = await nestedWriteLocation(selectedBlocks[0], renderScopeId)
+    if (location === null) return
+    const boundaryId = location?.foreignRootId
     if (boundaryId && selectedBlocks.some(block => block.id === boundaryId)) {
       showInfo('Cut this result from its outline.')
       return
